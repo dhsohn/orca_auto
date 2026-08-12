@@ -52,12 +52,16 @@ def _upstream_orca_observations(workspace_dir: Path, report_data: Any) -> list[d
         resolved_workspace = workspace_dir.expanduser().resolve(strict=True)
     except OSError:
         return upstream
-    for result in report_data.orca_results:
-        href = _text(result.report_href)
-        if not href or Path(href).is_absolute():
+    for machine_value in report_data.consumed_orca_machine_paths:
+        try:
+            machine_path = Path(machine_value)
+        except TypeError:
             continue
-        machine_path = (workspace_dir / href).parent / MACHINE_OBSERVATION_FILE
-        if machine_path.is_symlink():
+        if (
+            not machine_path.is_absolute()
+            or machine_path.name != MACHINE_OBSERVATION_FILE
+            or machine_path.is_symlink()
+        ):
             # The writer never publishes through a symlink; do not accept one
             # as lineage either.
             continue
@@ -65,7 +69,9 @@ def _upstream_orca_observations(workspace_dir: Path, report_data: Any) -> list[d
             resolved_machine = machine_path.resolve(strict=True)
         except OSError:
             continue
-        if not resolved_machine.is_relative_to(resolved_workspace):
+        if resolved_machine.name != MACHINE_OBSERVATION_FILE or not resolved_machine.is_relative_to(
+            resolved_workspace
+        ):
             continue
         try:
             payload_text = read_confined_text(

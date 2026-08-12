@@ -90,6 +90,7 @@ class OrcaStageResult:
     imaginary_count: int | None
     attempt_count: int
     report_href: str | None
+    machine_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -110,6 +111,7 @@ class WorkflowReportData:
     orca_results: tuple[OrcaStageResult, ...]
     crest_conformer_total: int | None
     xtb_candidate_total: int | None
+    consumed_orca_machine_paths: tuple[Path, ...] = ()
 
 
 def _text(value: Any) -> str:
@@ -740,6 +742,7 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
         imaginary_count=imaginary_count,
         attempt_count=attempt_count,
         report_href=report_href,
+        machine_path=report_json_path if report_payload is not None else None,
     )
 
 
@@ -787,6 +790,7 @@ def collect_workflow_report_data(
     stage_rows: list[WorkflowStageRow] = []
     failure_rows: list[WorkflowFailureRow] = []
     orca_results: list[OrcaStageResult] = []
+    consumed_orca_machine_paths: list[Path] = []
     crest_total: int | None = None
     xtb_total: int | None = None
     for stage in _stage_dicts(payload):
@@ -811,6 +815,8 @@ def collect_workflow_report_data(
             xtb_total = (xtb_total or 0) + candidates
         elif stage_kind == "orca_stage":
             result = _orca_stage_result(stage, workspace_dir)
+            if result.machine_path is not None:
+                consumed_orca_machine_paths.append(result.machine_path)
             # A relaxed scan is a prerequisite, not a TS candidate: keep it in
             # the stage chain but out of the ranked candidate table so its
             # non-stationary energy never sets the ΔE baseline.
@@ -862,6 +868,7 @@ def collect_workflow_report_data(
         orca_results=_with_relative_energies(orca_results),
         crest_conformer_total=crest_total,
         xtb_candidate_total=xtb_total,
+        consumed_orca_machine_paths=tuple(consumed_orca_machine_paths),
     )
 
 

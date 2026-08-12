@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_STATE_FILE
+from orca_auto.core.artifacts import (
+    RUN_REPORT_JSON_FILE,
+    RUN_STATE_FILE,
+    WORKFLOW_SI_MD_FILE,
+)
 from orca_auto.core.machine_observation import machine_json_bytes
 from orca_auto.flow.workflow import report as workflow_report
+from orca_auto.flow.workflow.machine import write_workflow_machine_observation
 from orca_auto.flow.workflow.report import (
     _energy_axis_ticks,
     _tick_label,
@@ -41,6 +49,12 @@ def _write_multi_xyz(path: Path, frames: int) -> None:
     for index in range(frames):
         blocks.append(f"3\n -100.{index:04d}\nH 0 0 0\nO 1 0 0\nO 3 0 0\n")
     path.write_text("".join(blocks), encoding="utf-8")
+
+
+def _validate_common_machine(path: Path) -> None:
+    validator = os.environ.get("FACTORY_MACHINE_CONTRACT_VALIDATOR")
+    if validator:
+        subprocess.run([sys.executable, validator, "--machine", str(path)], check=True)
 
 
 def _write_orca_generation_report(job_dir: Path, report: dict[str, Any]) -> Path:
@@ -234,6 +248,55 @@ def test_collect_ranks_orca_results_and_counts_funnel(tmp_path: Path) -> None:
     assert data.orca_results[0].imaginary_count == 0
     assert data.orca_results[0].report_href is not None
     assert "orca_b" in data.orca_results[0].report_href
+
+
+def test_relaxed_scan_without_html_is_preserved_in_workflow_lineage(
+    tmp_path: Path,
+) -> None:
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_relaxed_scan",
+        energy=-100.001,
+        reason="normal_termination",
+    )
+    stage = _orca_stage(
+        "orca_relaxed_scan",
+        generation,
+        status="completed",
+        label="relaxed_scan",
+    )
+    stage["task"] = {
+        "engine": "orca",
+        "status": "completed",
+        "task_kind": "relaxed_scan",
+    }
+    (generation / "job_report.html").unlink()
+    payload = _payload(tmp_path, [stage])
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    upstream_machine = generation / RUN_REPORT_JSON_FILE
+    assert [row.stage_id for row in data.stage_rows] == ["orca_relaxed_scan"]
+    assert data.orca_results == ()
+    assert data.consumed_orca_machine_paths == (upstream_machine,)
+    assert write_workflow_html_report(tmp_path, payload) == tmp_path / "workflow_report.html"
+    (tmp_path / WORKFLOW_SI_MD_FILE).write_text("# Supporting information\n", encoding="utf-8")
+
+    workflow_machine = write_workflow_machine_observation(tmp_path, payload)
+
+    assert workflow_machine == tmp_path / RUN_REPORT_JSON_FILE
+    _validate_common_machine(workflow_machine)
+    observation = json.loads(workflow_machine.read_text(encoding="utf-8"))
+    upstream_observation = json.loads(upstream_machine.read_text(encoding="utf-8"))
+    assert observation["payload"]["data"]["results"]["orca_results"] == []
+    assert observation["lineage"]["upstream"] == [
+        {
+            "producer": upstream_observation["producer"],
+            "operation_id": "orca_relaxed_scan",
+            "byte_sha256": hashlib.sha256(upstream_machine.read_bytes()).hexdigest(),
+        }
+    ]
+    assert not (generation / "job_report.html").exists()
 
 
 def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: Path) -> None:

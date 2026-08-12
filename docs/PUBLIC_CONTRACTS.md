@@ -413,6 +413,14 @@ last and is immutable. Consumers must reject hash or receipt mismatches rather
 than reconstructing metadata from nearby files. Internal `job_state.json`, queue
 rows, locks, and workflow state are never alternate public machine contracts.
 
+A workflow observation records every verified ORCA `machine.json` that the
+workflow consumed directly in `lineage.upstream`, including prerequisite
+`relaxed_scan` stages that are intentionally absent from the ranked ORCA results
+table. The optional co-located HTML report is not lineage authority. Symlinked,
+external, or otherwise unverified machine observations are omitted. Already
+published terminal workflow observations are not rewritten or backfilled; this
+applies to future publications.
+
 `engine_payload.final_result`, when present, contains:
 
 - `status`
