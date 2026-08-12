@@ -1232,6 +1232,210 @@ def test_append_workflow_journal_event_writes_jsonl_and_returns_event(
     assert notifications[2]["event"]["reason"] == "xtb_ts_guess_ready"
 
 
+def test_append_workflow_journal_event_is_idempotent_for_caller_owned_event_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    notifications: list[str] = []
+    _patch_file_locks(monkeypatch)
+    monkeypatch.setattr(
+        workflow_journal,
+        "_maybe_notify_journal_event",
+        lambda event, workflow_root: notifications.append(str(event["event_id"])),
+    )
+    kwargs: dict[str, Any] = {
+        "event_id": "wf_evt_cancel_stable",
+        "occurred_at": "2026-08-12T03:58:00+00:00",
+        "event_type": "workflow_status_changed",
+        "workflow_id": "wf_cancel_stable",
+        "previous_status": "running",
+        "status": "cancelled",
+        "reason": "cancel_requested",
+        "worker_session_id": "workflow_cancel",
+    }
+
+    first = registry.append_workflow_journal_event(tmp_path, **kwargs)
+    second = registry.append_workflow_journal_event(tmp_path, **kwargs)
+
+    assert second == first
+    assert notifications == ["wf_evt_cancel_stable"]
+    assert len(registry.workflow_journal_path(tmp_path).read_text().splitlines()) == 1
+
+    with pytest.raises(ValueError, match="event id already exists with different content"):
+        registry.append_workflow_journal_event(tmp_path, **{**kwargs, "status": "failed"})
+
+
+def test_append_workflow_journal_event_reestablishes_durability_for_existing_event(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    kwargs: dict[str, Any] = {
+        "event_id": "wf_evt_retry_durability",
+        "occurred_at": "2026-08-12T04:00:30+00:00",
+        "event_type": "workflow_status_changed",
+        "workflow_id": "wf_retry_durability",
+        "previous_status": "running",
+        "status": "cancelled",
+    }
+    real_fsync = workflow_journal.os.fsync
+    fsync_attempts = 0
+    fsynced_directories: list[Path] = []
+
+    def fail_first_fsync(descriptor: int) -> None:
+        nonlocal fsync_attempts
+        fsync_attempts += 1
+        if fsync_attempts == 1:
+            raise OSError("injected journal fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(workflow_journal.os, "fsync", fail_first_fsync)
+    monkeypatch.setattr(
+        workflow_journal,
+        "fsync_directory",
+        lambda path: fsynced_directories.append(Path(path)),
+    )
+
+    with pytest.raises(OSError, match="injected journal fsync failure"):
+        registry.append_workflow_journal_event(tmp_path, **kwargs)
+
+    event = registry.append_workflow_journal_event(tmp_path, **kwargs)
+
+    assert event["event_id"] == "wf_evt_retry_durability"
+    assert fsync_attempts == 2
+    assert fsynced_directories == [tmp_path.resolve()]
+    assert len(registry.workflow_journal_path(tmp_path).read_text().splitlines()) == 1
+
+
+def test_append_workflow_journal_event_bounds_existing_event_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    kwargs: dict[str, Any] = {
+        "event_id": "wf_evt_bounded_lookup",
+        "occurred_at": "2026-08-12T04:00:45+00:00",
+        "event_type": "workflow_status_changed",
+        "workflow_id": "wf_bounded_lookup",
+        "previous_status": "running",
+        "status": "cancelled",
+    }
+    first = registry.append_workflow_journal_event(tmp_path, **kwargs)
+    real_read = workflow_journal.read_confined_tail_lines
+    observed_limits: list[int | None] = []
+
+    def bounded_read(*args: Any, **kwargs: Any) -> list[str]:
+        observed_limits.append(kwargs.get("max_bytes"))
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(workflow_journal, "read_confined_tail_lines", bounded_read)
+
+    assert registry.append_workflow_journal_event(tmp_path, **kwargs) == first
+    assert observed_limits and all(
+        isinstance(limit, int) and limit > 0 for limit in observed_limits
+    )
+
+
+def test_append_workflow_journal_event_fails_closed_when_lookup_exceeds_bound(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    kwargs: dict[str, Any] = {
+        "event_id": "wf_evt_outside_bounded_tail",
+        "occurred_at": "2026-08-12T04:00:50+00:00",
+        "event_type": "workflow_status_changed",
+        "workflow_id": "wf_outside_bounded_tail",
+        "previous_status": "running",
+        "status": "cancelled",
+    }
+    path = registry.workflow_journal_path(tmp_path)
+    original = json.dumps({"event_id": "other"}) + "\n"
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        workflow_journal,
+        "read_confined_tail_lines",
+        lambda *args, **kwargs: [],
+    )
+
+    def reject_oversized_lookup(*args: Any, **kwargs: Any) -> str:
+        assert kwargs["max_bytes"] == workflow_journal.CALLER_EVENT_LOOKUP_MAX_BYTES
+        raise ValueError("workflow journal exceeds its read limit")
+
+    monkeypatch.setattr(workflow_journal, "read_confined_text", reject_oversized_lookup)
+
+    with pytest.raises(ValueError, match="exceeds its read limit"):
+        registry.append_workflow_journal_event(tmp_path, **kwargs)
+
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_append_workflow_journal_event_separates_a_truncated_tail(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    path = registry.workflow_journal_path(tmp_path)
+    path.write_text('{"event_id":"truncated"', encoding="utf-8")
+
+    event = registry.append_workflow_journal_event(
+        tmp_path,
+        event_id="wf_evt_after_truncated_tail",
+        occurred_at="2026-08-12T04:00:00+00:00",
+        event_type="workflow_status_changed",
+        workflow_id="wf_after_truncated_tail",
+        previous_status="running",
+        status="cancelled",
+    )
+
+    assert registry.list_workflow_journal(tmp_path) == [event]
+    assert path.read_text(encoding="utf-8").splitlines() == [
+        '{"event_id":"truncated"',
+        json.dumps(event, ensure_ascii=True),
+    ]
+
+
+def test_append_workflow_journal_event_fsyncs_before_notification(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _patch_file_locks(monkeypatch)
+    fsynced_descriptors: list[int] = []
+    fsynced_directories: list[Path] = []
+    monkeypatch.setattr(
+        workflow_journal.os,
+        "fsync",
+        lambda descriptor: fsynced_descriptors.append(descriptor),
+    )
+    monkeypatch.setattr(
+        workflow_journal,
+        "fsync_directory",
+        lambda path: fsynced_directories.append(Path(path)),
+        raising=False,
+    )
+
+    def assert_durable_before_notification(event: dict[str, Any], workflow_root: Path) -> None:
+        assert event["event_id"] == "wf_evt_durable"
+        assert fsynced_descriptors
+        assert fsynced_directories == [tmp_path.resolve()]
+
+    monkeypatch.setattr(
+        workflow_journal,
+        "_maybe_notify_journal_event",
+        assert_durable_before_notification,
+    )
+
+    registry.append_workflow_journal_event(
+        tmp_path,
+        event_id="wf_evt_durable",
+        occurred_at="2026-08-12T04:01:00+00:00",
+        event_type="workflow_status_changed",
+        workflow_id="wf_durable",
+        previous_status="running",
+        status="cancelled",
+    )
+
+
 def test_list_workflow_journal_uses_append_commit_order_and_applies_bounded_limit(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -15,7 +15,7 @@ from orca_auto.core.statuses import (
     is_stage_cancellable_status,
     is_stage_terminal_status,
 )
-from orca_auto.core.utils import normalize_text
+from orca_auto.core.utils import normalize_text, timestamped_token
 from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.services import (
     OrchestrationServices,
@@ -119,6 +119,65 @@ _CANCEL_TARGET_HANDLERS: dict[str, _CancelTargetHandler] = {
     "xtb": _cancel_xtb_target,
     "orca": _cancel_orca_target,
 }
+
+_CANCELLATION_TRANSITIONS_KEY = "cancellation_status_transitions"
+_CANCELLATION_EVENT_STATUSES = frozenset(
+    {STATUS_CANCEL_REQUESTED, STATUS_CANCELLED, STATUS_CANCEL_FAILED, STATUS_FAILED}
+)
+
+
+def _record_cancellation_status_transition(
+    payload: dict[str, Any],
+    *,
+    previous_status: str,
+    status: str,
+    occurred_at: str,
+) -> list[dict[str, str]]:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        payload["metadata"] = metadata
+    raw_transitions = metadata.get(_CANCELLATION_TRANSITIONS_KEY)
+    transitions: list[dict[str, str]] = []
+    if isinstance(raw_transitions, list):
+        for raw in raw_transitions[:8]:
+            if not isinstance(raw, dict):
+                continue
+            raw_previous = normalize_text(raw.get("previous_status")).lower()
+            raw_status = normalize_text(raw.get("status")).lower()
+            event_id = normalize_text(raw.get("event_id"))
+            event_occurred_at = normalize_text(raw.get("occurred_at"))
+            if (
+                not raw_previous
+                or raw_previous == raw_status
+                or raw_status not in _CANCELLATION_EVENT_STATUSES
+                or not event_id
+                or not event_occurred_at
+            ):
+                continue
+            transition = {
+                "event_id": event_id,
+                "occurred_at": event_occurred_at,
+                "previous_status": raw_previous,
+                "status": raw_status,
+            }
+            if transition not in transitions:
+                transitions.append(transition)
+    candidate = {
+        "event_id": timestamped_token("wf_evt"),
+        "occurred_at": occurred_at,
+        "previous_status": previous_status,
+        "status": status,
+    }
+    if (
+        previous_status
+        and previous_status != status
+        and status in _CANCELLATION_EVENT_STATUSES
+        and candidate not in transitions
+    ):
+        transitions.append(candidate)
+    metadata[_CANCELLATION_TRANSITIONS_KEY] = transitions
+    return transitions
 
 
 def _cancel_engine_target(
@@ -237,6 +296,7 @@ def cancel_materialized_workflow(
         )
         with lock_context:
             payload = resolved.persistence.load_workflow_payload(workspace_dir)
+            previous_status = str(payload.get("status") or "").strip().lower()
             identity_error = ""
             try:
                 validate_workflow_workspace_identity(
@@ -282,16 +342,52 @@ def cancel_materialized_workflow(
             failed = cancellation["failed"]
 
             payload_view = WorkflowPayloadView(payload)
+            pending_child_cancellation = any(
+                stage_view.status_pair().any_status(STATUS_CANCEL_REQUESTED)
+                for stage_view in payload_view.stage_views
+            )
             if identity_error:
                 payload_view.set_status(STATUS_FAILED)
             else:
                 payload_view.set_status(
                     STATUS_CANCEL_REQUESTED
-                    if any(item.get("status") == STATUS_CANCEL_REQUESTED for item in cancelled)
+                    if pending_child_cancellation
                     else STATUS_CANCEL_FAILED
                     if failed
                     else STATUS_CANCELLED
                 )
+            current_status = str(payload_view.raw.get("status") or "").strip().lower()
+            event_workflow_id = (
+                workspace_dir.name
+                if identity_error
+                else str(payload.get("workflow_id") or workspace_dir.name)
+            )
+            pending_transitions = _record_cancellation_status_transition(
+                payload,
+                previous_status=previous_status,
+                status=current_status,
+                occurred_at=resolved.clock.now_utc_iso(),
+            )
+            resolved.persistence.write_workflow_payload(workspace_dir, payload)
+            resolved.persistence.sync_workflow_registry(
+                workflow_root_path,
+                workspace_dir,
+                payload,
+            )
+            for transition in list(pending_transitions):
+                resolved.events.append_workflow_journal_event(
+                    workflow_root_path,
+                    event_id=transition["event_id"],
+                    occurred_at=transition["occurred_at"],
+                    event_type="workflow_status_changed",
+                    workflow_id=event_workflow_id,
+                    template_name=str(payload.get("template_name") or ""),
+                    previous_status=transition["previous_status"],
+                    status=transition["status"],
+                    reason="cancel_requested",
+                    worker_session_id="workflow_cancel",
+                )
+                pending_transitions.remove(transition)
             resolved.persistence.write_workflow_payload(workspace_dir, payload)
             resolved.persistence.sync_workflow_registry(
                 workflow_root_path,
@@ -299,11 +395,7 @@ def cancel_materialized_workflow(
                 payload,
             )
             return {
-                "workflow_id": (
-                    workspace_dir.name
-                    if identity_error
-                    else payload.get("workflow_id") or workspace_dir.name
-                ),
+                "workflow_id": event_workflow_id,
                 "workspace_dir": str(workspace_dir),
                 "status": payload_view.raw.get("status", ""),
                 "cancelled": cancelled,

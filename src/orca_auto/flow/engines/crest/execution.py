@@ -72,6 +72,9 @@ from orca_auto.flow.engines.crest.terminal import (
     mark_queue_terminal as _terminal_mark_queue_terminal,
 )
 from orca_auto.flow.engines.crest.terminal import (
+    sync_job_tracking as _terminal_sync_job_tracking,
+)
+from orca_auto.flow.engines.crest.terminal import (
     write_execution_artifacts as _terminal_write_execution_artifacts,
 )
 from orca_auto.flow.engines.crest.terminal import (
@@ -304,6 +307,52 @@ def build_worker_execution_dependencies(
 
 def default_worker_execution_dependencies() -> WorkerExecutionDependencies:
     return build_worker_execution_dependencies()
+
+
+def publish_pending_cancel(entry: Any, *, config_path: str) -> None:
+    cfg = load_config(config_path)
+    dependencies = default_worker_execution_dependencies()
+    context = _build_execution_context(
+        cfg,
+        entry,
+        dependencies=dependencies,
+        verify_execution_snapshot=False,
+    )
+    result = _engine_execution.build_terminal_result_from_context(
+        _queue_artifacts.build_terminal_result,
+        context,
+        identity_fields=_engine_execution.object_attribute_fields(context, "mode"),
+        status="cancelled",
+        reason="cancel_requested",
+        exit_code=1,
+    )
+    pending_state = _engine_execution.require_pending_cancel_state_for_entry(
+        load_state(context.job_dir),
+        entry=entry,
+        engine="crest",
+        job_dir=context.job_dir,
+    )
+    if not state_matches_job(
+        pending_state,
+        selected_input_xyz=context.selected_xyz,
+        mode=context.mode,
+        molecule_key=context.molecule_key,
+    ):
+        raise ValueError("Pending cancellation state does not match the queued CREST job")
+    pending_status = pending_state.get("status")
+    already_cancelled = (
+        str(pending_status.get("state") or "").strip().lower() == "cancelled"
+        if isinstance(pending_status, dict)
+        else False
+    )
+    if not already_cancelled:
+        dependencies.artifacts.write_execution_artifacts(entry, result)
+    _terminal_sync_job_tracking(
+        cfg,
+        context,
+        result,
+        tracking_deps=dependencies.tracking,
+    )
 
 
 def _write_execution_artifacts(entry: Any, result: CrestRunResult) -> None:

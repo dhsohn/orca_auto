@@ -26,6 +26,7 @@ class InternalEngineSubmitterDeps:
     queue_entries_with_roots_fn: Callable[[Any], list[tuple[Any, Any]]]
     request_cancel_fn: Callable[..., Any | None]
     display_status_fn: Callable[[Any], str]
+    before_pending_cancel_fn: Callable[..., Any] | None = None
 
 
 @dataclass(frozen=True)

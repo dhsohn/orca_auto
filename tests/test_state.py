@@ -186,6 +186,37 @@ class TestState(unittest.TestCase):
             self.assertEqual(list(reaction.glob("*.tmp.*")), [])
             self.assertEqual(list(generation.glob("*.tmp.*")), [])
 
+    def test_queue_identity_survives_state_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            inp = reaction / "rxn.inp"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            state = new_state(reaction, inp, max_retries=1)
+            state["queue_id"] = "q-orca-round-trip"
+            state["queue_generation"] = "a" * 64
+
+            save_state(reaction, state)
+            loaded = load_state(reaction)
+            assert loaded is not None
+            self.assertEqual(loaded["queue_id"], "q-orca-round-trip")
+            self.assertEqual(loaded["queue_generation"], "a" * 64)
+
+            save_state(reaction, loaded)
+            raw = json.loads((reaction / "job_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(raw["job"]["queue_id"], "q-orca-round-trip")
+            self.assertEqual(raw["job"]["generation"], "a" * 64)
+
+    def test_direct_state_keeps_queue_identity_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            reaction = Path(td)
+            inp = reaction / "rxn.inp"
+            inp.write_text("! Opt\n", encoding="utf-8")
+            save_state(reaction, new_state(reaction, inp, max_retries=1))
+
+            raw = json.loads((reaction / "job_state.json").read_text(encoding="utf-8"))
+            self.assertEqual(raw["job"]["queue_id"], "")
+            self.assertEqual(raw["job"]["generation"], "")
+
     def test_write_report_files_skips_publication_without_verified_generation(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)

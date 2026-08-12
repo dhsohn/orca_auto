@@ -75,6 +75,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Pending xTB/CREST workflow-child cancellation now publishes same-generation
+  terminal state before the queue row becomes terminal. Workflow cancellation
+  persists one stable journal transition before best-effort notification and
+  recovers interrupted payload/registry or uncertain journal writes without
+  adopting a successor generation; replay of an existing event does not resend
+  the notification. Standalone engine cancellation also adopts a concurrent
+  same-generation `cancelled` row while rejecting a successor generation.
+- Standalone `run-dir --json` now writes exactly one JSON document to stdout,
+  using the same submission result as the human renderer instead of printing
+  `key: value` lines.
+- Queued standalone ORCA root and generation `job_state.json` now preserve the
+  queue id and immutable generation identity from the claimed row. Direct
+  unqueued runs keep those fields empty, and mutable run/replay metadata no
+  longer changes the generation token.
+
 - Submitting to a queue whose worker is already running no longer logs a
   warning with a full traceback when the worker retires the snapshot intent
   marker first. Once the durable queue row is committed, the worker's

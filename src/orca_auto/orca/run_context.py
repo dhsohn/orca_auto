@@ -68,6 +68,8 @@ class RunExecutionContext:
     admission_app_name: str | None
     admission_task_id: str | None
     execution_provenance: dict[str, Any] | None = None
+    queue_id: str | None = None
+    queue_generation: str | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +188,8 @@ def resolve_execution_context(
     admission_app_name: str | None,
     admission_task_id: str | None,
     execution_provenance: Mapping[str, Any] | None = None,
+    queue_id: str | None = None,
+    queue_generation: str | None = None,
     load_config_fn: Callable[[Any], AppConfig],
     select_latest_inp_fn: Callable[[Path], Path],
     logger: Any,
@@ -231,6 +235,8 @@ def resolve_execution_context(
         execution_provenance=(
             dict(execution_provenance) if isinstance(execution_provenance, Mapping) else None
         ),
+        queue_id=str(queue_id or "").strip() or None,
+        queue_generation=str(queue_generation or "").strip() or None,
     )
 
 

@@ -18,6 +18,7 @@ from .artifacts import (
 )
 from .definition_builder import (
     build_engine_runtime_roots,
+    build_lazy_engine_callback,
     build_lazy_queue_worker_runner,
     build_lazy_worker_child_runner,
     build_queue_engine_definition,
@@ -87,6 +88,7 @@ __all__ = [
     "EngineWorkerChild",
     "build_engine_artifact_payload",
     "build_engine_runtime_roots",
+    "build_lazy_engine_callback",
     "build_lazy_queue_worker_runner",
     "build_lazy_worker_child_runner",
     "build_queue_engine_definition",

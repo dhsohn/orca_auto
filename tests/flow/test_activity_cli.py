@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -765,6 +765,136 @@ def test_cancel_activity_routes_crest_and_orca_targets(monkeypatch: pytest.Monke
     assert crest_payload["result"]["config_path"] == str(Path("/tmp/crest.yaml").resolve())
     assert orca_payload["status"] == "failed"
     assert orca_payload["result"]["repo_root"] == "/tmp/orca-repo"
+
+
+def test_cancel_standalone_queue_adopts_same_generation_cancelled_race(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pending = QueueEntry(
+        queue_id="xtb-q-race",
+        app_name="orca_auto_xtb",
+        task_id="xtb-task-race",
+        task_kind="xtb_opt",
+        engine="xtb",
+        enqueued_at="2026-08-12T00:00:00+00:00",
+        metadata={"generation": "same", "job_type": "opt"},
+    )
+    cancelled = QueueEntry(
+        **{
+            **pending.__dict__,
+            "status": QueueStatus.CANCELLED,
+            "finished_at": "2026-08-12T00:01:00+00:00",
+        }
+    )
+    entry = _activity_cancel.find_engine_catalog_entry_by_source_id("orca_auto_xtb")
+    assert entry is not None
+    record = activity.ActivityRecord(
+        "xtb-q-race",
+        "job",
+        "xtb",
+        "pending",
+        "XTB race",
+        "orca_auto_xtb",
+        "",
+        "",
+        "xtb-q-race",
+    )
+    resolved = _activity_model.ResolvedActivitySources(
+        None,
+        None,
+        str(tmp_path / "xtb.yaml"),
+        None,
+    )
+    queue_snapshots = iter(([pending], [cancelled]))
+
+    monkeypatch.setattr(_activity_cancel, "engine_queue_roots", lambda *_a, **_k: (tmp_path,))
+    monkeypatch.setattr(_activity_cancel, "list_queue", lambda _root: next(queue_snapshots))
+    monkeypatch.setattr(_activity_cancel, "request_cancel", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        _activity_cancel,
+        "get_engine_definition",
+        lambda _engine: SimpleNamespace(cancellation_hooks=None),
+    )
+
+    result = _activity_cancel.cancel_standalone_queue_engine_activity(
+        entry,
+        record,
+        resolved,
+        cast(_activity_model.ActivityCancelRequest, None),
+    )
+
+    assert result == {
+        "status": "cancelled",
+        "queue_id": "xtb-q-race",
+        "job_id": "xtb-task-race",
+    }
+
+
+def test_cancel_standalone_queue_rejects_successor_generation_race(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    pending = QueueEntry(
+        queue_id="xtb-q-race",
+        app_name="orca_auto_xtb",
+        task_id="xtb-task-race",
+        task_kind="xtb_opt",
+        engine="xtb",
+        enqueued_at="2026-08-12T00:00:00+00:00",
+        metadata={"generation": "original", "job_type": "opt"},
+    )
+    successor = QueueEntry(
+        **{
+            **pending.__dict__,
+            "status": QueueStatus.CANCELLED,
+            "finished_at": "2026-08-12T00:01:00+00:00",
+            "metadata": {"generation": "successor", "job_type": "opt"},
+        }
+    )
+    entry = _activity_cancel.find_engine_catalog_entry_by_source_id("orca_auto_xtb")
+    assert entry is not None
+    record = activity.ActivityRecord(
+        "xtb-q-race",
+        "job",
+        "xtb",
+        "pending",
+        "XTB race",
+        "orca_auto_xtb",
+        "",
+        "",
+        "xtb-q-race",
+    )
+    resolved = _activity_model.ResolvedActivitySources(
+        None,
+        None,
+        str(tmp_path / "xtb.yaml"),
+        None,
+    )
+    queue_snapshots = iter(([pending], [successor]))
+
+    monkeypatch.setattr(_activity_cancel, "engine_queue_roots", lambda *_a, **_k: (tmp_path,))
+    monkeypatch.setattr(_activity_cancel, "list_queue", lambda _root: next(queue_snapshots))
+    monkeypatch.setattr(_activity_cancel, "request_cancel", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        _activity_cancel,
+        "get_engine_definition",
+        lambda _engine: SimpleNamespace(cancellation_hooks=None),
+    )
+
+    result = _activity_cancel.cancel_standalone_queue_engine_activity(
+        entry,
+        record,
+        resolved,
+        cast(_activity_model.ActivityCancelRequest, None),
+    )
+
+    assert result == {
+        "status": "failed",
+        "reason": "queue_target_already_terminal",
+        "queue_id": "xtb-q-race",
+        "job_id": "xtb-task-race",
+    }
 
 
 def test_clear_activities_clears_workflow_and_engine_terminal_sources(monkeypatch) -> None:

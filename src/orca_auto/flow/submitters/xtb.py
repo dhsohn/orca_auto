@@ -8,6 +8,7 @@ from orca_auto.core.engines import own_engine_accept_entry
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.engines.xtb import queue_runtime as _queue_runtime
 from orca_auto.flow.engines.xtb import submission as _submission
+from orca_auto.flow.engines.xtb.execution import publish_pending_cancel as _publish_pending_cancel
 
 from .internal_engine_builder import build_internal_engine_module_submitter
 from .internal_engine_models import InternalEngineSubmitterDeps
@@ -22,6 +23,10 @@ load_queue_config = _queue_runtime.load_config
 queue_entries_with_roots = _queue_runtime.queue_entries_with_roots
 record_queued = _submission._record_queued
 resolve_job_dir = _submission.resolve_job_dir
+
+
+def _before_pending_cancel(entry: object, *, config_path: str) -> None:
+    _publish_pending_cancel(entry, config_path=config_path)
 
 
 def _extra_fields(submission: Any | None, entry: Any | None) -> dict[str, Any]:
@@ -55,6 +60,7 @@ def _submitter_deps() -> InternalEngineSubmitterDeps:
             **kwargs,
         ),
         display_status_fn=display_status,
+        before_pending_cancel_fn=_before_pending_cancel,
     )
 
 

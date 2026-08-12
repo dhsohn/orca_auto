@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from contextlib import nullcontext
 from pathlib import Path
@@ -7,7 +8,9 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.messaging import SendResult, render_discord_embed
 from orca_auto.flow import orchestration, registry, runtime
+from orca_auto.flow.registry import _notifications as registry_notifications
 from orca_auto.flow.registry import store as registry_store
 from tests.flow.orchestration_services import orchestration_services
 
@@ -121,6 +124,7 @@ def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_p
             }
         ],
     }
+    events: list[dict[str, Any]] = []
 
     deps = orchestration_services(
         overrides={
@@ -129,6 +133,9 @@ def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_p
             "load_workflow_payload": lambda workspace_dir: payload,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
+            "append_workflow_journal_event": lambda workflow_root, **kwargs: events.append(
+                {"workflow_root": workflow_root, **kwargs}
+            ),
         }
     )
 
@@ -141,6 +148,430 @@ def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_p
     assert result["status"] == "cancelled"
     assert result["cancelled"] == [{"stage_id": "stage_local", "mode": "local"}]
     assert result["failed"] == []
+    assert len(events) == 1
+    assert events[0]["workflow_root"] == tmp_path.resolve()
+    assert events[0]["event_id"].startswith("wf_evt_")
+    assert events[0]["occurred_at"]
+    assert {
+        key: value for key, value in events[0].items() if key not in {"event_id", "occurred_at"}
+    } == {
+        "workflow_root": tmp_path.resolve(),
+        "event_type": "workflow_status_changed",
+        "workflow_id": "wf_cancel_02",
+        "template_name": "",
+        "previous_status": "running",
+        "status": "cancelled",
+        "reason": "cancel_requested",
+        "worker_session_id": "workflow_cancel",
+    }
+
+    repeated = orchestration.cancel_materialized_workflow(
+        target="wf_cancel_02",
+        workflow_root=tmp_path,
+        services=deps,
+    )
+
+    assert repeated["status"] == "cancelled"
+    assert len(events) == 1
+
+
+def test_cancel_materialized_workflow_journals_and_notifies_terminal_transition_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_cancel_notify_once",
+        "template_name": "conformer_screening",
+        "status": "running",
+        "stages": [],
+    }
+    messages: list[Any] = []
+
+    class RecordingChannel:
+        def send(self, message: Any, *, silent: bool = False) -> SendResult:
+            messages.append(message)
+            return SendResult(sent=True)
+
+    monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_DISABLED", raising=False)
+    monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_EVENTS", raising=False)
+    monkeypatch.setattr(
+        registry_notifications,
+        "messenger_channel_from_env",
+        lambda: RecordingChannel(),
+    )
+    deps = orchestration_services(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / "wf_cancel_notify_once"
+            ),
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
+            "append_workflow_journal_event": registry.append_workflow_journal_event,
+        }
+    )
+
+    first = orchestration.cancel_materialized_workflow(
+        target="wf_cancel_notify_once",
+        workflow_root=tmp_path,
+        services=deps,
+    )
+    second = orchestration.cancel_materialized_workflow(
+        target="wf_cancel_notify_once",
+        workflow_root=tmp_path,
+        services=deps,
+    )
+
+    assert first["status"] == second["status"] == "cancelled"
+    [event] = registry.list_workflow_journal(tmp_path)
+    assert event["event_type"] == "workflow_status_changed"
+    assert event["previous_status"] == "running"
+    assert event["status"] == "cancelled"
+    assert len(messages) == 1
+    embed = render_discord_embed(messages[0])
+    assert embed["title"] == "Status changed"
+    fields = {item["name"]: item["value"] for item in embed["fields"]}
+    assert fields["Status"] == "`running` → `cancelled`"
+
+
+def test_cancel_materialized_workflow_retries_event_after_registry_sync_failure(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_cancel_registry_retry",
+        "status": "running",
+        "stages": [],
+    }
+    sync_attempts = 0
+    events: list[dict[str, Any]] = []
+
+    def sync_once_then_succeed(*_args: Any) -> None:
+        nonlocal sync_attempts
+        sync_attempts += 1
+        if sync_attempts == 1:
+            raise OSError("registry durability barrier failed")
+
+    deps = orchestration_services(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / "wf_cancel_registry_retry"
+            ),
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": sync_once_then_succeed,
+            "append_workflow_journal_event": lambda workflow_root, **kwargs: events.append(
+                {"workflow_root": workflow_root, **kwargs}
+            ),
+        }
+    )
+
+    with pytest.raises(OSError, match="registry durability barrier failed"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_cancel_registry_retry",
+            workflow_root=tmp_path,
+            services=deps,
+        )
+
+    assert payload["status"] == "cancelled"
+    result = orchestration.cancel_materialized_workflow(
+        target="wf_cancel_registry_retry",
+        workflow_root=tmp_path,
+        services=deps,
+    )
+
+    assert result["status"] == "cancelled"
+    assert sync_attempts == 3
+    assert len(events) == 1
+    assert events[0]["previous_status"] == "running"
+    assert events[0]["status"] == "cancelled"
+
+
+def test_cancel_materialized_workflow_preserves_pending_child_status_on_retry(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_cancel_requested_retry",
+        "status": "running",
+        "stages": [
+            {
+                "stage_id": "stage_xtb_pending",
+                "status": "running",
+                "metadata": {"queue_id": "q_xtb_pending"},
+                "task": {"engine": "xtb", "status": "running"},
+            }
+        ],
+    }
+    cancel_calls = 0
+    sync_attempts = 0
+    events: list[dict[str, Any]] = []
+
+    def request_cancel(**_kwargs: Any) -> dict[str, Any]:
+        nonlocal cancel_calls
+        cancel_calls += 1
+        return {"status": "cancel_requested", "queue_id": "q_xtb_pending"}
+
+    def sync_once_then_succeed(*_args: Any) -> None:
+        nonlocal sync_attempts
+        sync_attempts += 1
+        if sync_attempts == 1:
+            raise OSError("registry durability barrier failed")
+
+    deps = orchestration_services(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / "wf_cancel_requested_retry"
+            ),
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": sync_once_then_succeed,
+            "xtb_cancel_target": request_cancel,
+            "append_workflow_journal_event": lambda workflow_root, **kwargs: events.append(
+                {"workflow_root": workflow_root, **kwargs}
+            ),
+        }
+    )
+
+    with pytest.raises(OSError, match="registry durability barrier failed"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_cancel_requested_retry",
+            workflow_root=tmp_path,
+            xtb_config="/tmp/xtb.yaml",
+            services=deps,
+        )
+
+    assert payload["status"] == "cancel_requested"
+    result = orchestration.cancel_materialized_workflow(
+        target="wf_cancel_requested_retry",
+        workflow_root=tmp_path,
+        xtb_config="/tmp/xtb.yaml",
+        services=deps,
+    )
+
+    assert result["status"] == "cancel_requested"
+    assert payload["stages"][0]["status"] == "cancel_requested"
+    assert payload["stages"][0]["task"]["status"] == "cancel_requested"
+    assert cancel_calls == 1
+    assert [(event["previous_status"], event["status"]) for event in events] == [
+        ("running", "cancel_requested")
+    ]
+
+
+def test_cancel_materialized_workflow_retries_uncertain_journal_append_once(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_cancel_journal_retry",
+        "status": "running",
+        "stages": [],
+    }
+    durable_events: dict[str, dict[str, Any]] = {}
+    append_attempts = 0
+
+    def append_once_then_report_uncertain(_workflow_root: Path, **event: Any) -> dict[str, Any]:
+        nonlocal append_attempts
+        append_attempts += 1
+        event_id = str(event["event_id"])
+        existing = durable_events.setdefault(event_id, dict(event))
+        if append_attempts == 1:
+            raise OSError("journal append outcome uncertain")
+        return existing
+
+    deps = orchestration_services(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / "wf_cancel_journal_retry"
+            ),
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
+            "append_workflow_journal_event": append_once_then_report_uncertain,
+        }
+    )
+
+    with pytest.raises(OSError, match="journal append outcome uncertain"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_cancel_journal_retry",
+            workflow_root=tmp_path,
+            services=deps,
+        )
+
+    pending = payload["metadata"]["cancellation_status_transitions"]
+    assert len(pending) == 1
+    event_id = pending[0]["event_id"]
+    result = orchestration.cancel_materialized_workflow(
+        target="wf_cancel_journal_retry",
+        workflow_root=tmp_path,
+        services=deps,
+    )
+
+    assert result["status"] == "cancelled"
+    assert append_attempts == 2
+    assert list(durable_events) == [event_id]
+    assert payload["metadata"]["cancellation_status_transitions"] == []
+
+
+def test_cancel_materialized_workflow_recovers_journal_after_directory_fsync_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from orca_auto.flow.workflow import journal as workflow_journal
+
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_cancel_directory_fsync_retry",
+        "status": "running",
+        "stages": [],
+    }
+    directory_fsync_attempts = 0
+    messages: list[Any] = []
+
+    class RecordingChannel:
+        def send(self, message: Any, *, silent: bool = False) -> SendResult:
+            messages.append(message)
+            return SendResult(sent=True)
+
+    def fail_first_directory_fsync(_path: Path) -> None:
+        nonlocal directory_fsync_attempts
+        directory_fsync_attempts += 1
+        if directory_fsync_attempts == 1:
+            raise OSError("journal directory durability barrier failed")
+
+    monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_DISABLED", raising=False)
+    monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_EVENTS", raising=False)
+    monkeypatch.setattr(
+        registry_notifications,
+        "messenger_channel_from_env",
+        lambda: RecordingChannel(),
+    )
+    monkeypatch.setattr(workflow_journal, "fsync_directory", fail_first_directory_fsync)
+    deps = orchestration_services(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / "wf_cancel_directory_fsync_retry"
+            ),
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "write_workflow_payload": lambda workspace_dir, current_payload: None,
+            "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
+            "append_workflow_journal_event": registry.append_workflow_journal_event,
+        }
+    )
+
+    with pytest.raises(OSError, match="journal directory durability barrier failed"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_cancel_directory_fsync_retry",
+            workflow_root=tmp_path,
+            services=deps,
+        )
+
+    assert messages == []
+    assert len(payload["metadata"]["cancellation_status_transitions"]) == 1
+
+    result = orchestration.cancel_materialized_workflow(
+        target="wf_cancel_directory_fsync_retry",
+        workflow_root=tmp_path,
+        services=deps,
+    )
+
+    assert result["status"] == "cancelled"
+    assert directory_fsync_attempts == 2
+    assert len(registry.list_workflow_journal(tmp_path)) == 1
+    assert messages == []
+    assert payload["metadata"]["cancellation_status_transitions"] == []
+
+
+def test_cancel_materialized_workflow_retries_after_child_cancel_before_payload_write(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from orca_auto.core.queue import QueueStatus, enqueue, list_queue
+    from orca_auto.flow.submitters import xtb as xtb_submitter
+
+    queue_root = tmp_path / "queue"
+    child = enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="xtb-child",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={"job_dir": str(tmp_path / "xtb-child"), "job_type": "opt"},
+    )
+    durable_payload: dict[str, Any] = {
+        "workflow_id": "wf_child_cancel_payload_retry",
+        "status": "running",
+        "stages": [
+            {
+                "stage_id": "stage_xtb",
+                "status": "queued",
+                "metadata": {"queue_id": child.queue_id},
+                "task": {"engine": "xtb", "status": "queued"},
+            }
+        ],
+    }
+    writes = 0
+
+    def load_payload(_workspace_dir: Path) -> dict[str, Any]:
+        return copy.deepcopy(durable_payload)
+
+    def write_once_then_persist(_workspace_dir: Path, payload: dict[str, Any]) -> None:
+        nonlocal writes, durable_payload
+        writes += 1
+        if writes == 1:
+            raise OSError("parent payload durability barrier failed")
+        durable_payload = copy.deepcopy(payload)
+
+    monkeypatch.setattr(xtb_submitter, "load_queue_config", lambda _path: object())
+    monkeypatch.setattr(
+        xtb_submitter,
+        "queue_entries_with_roots",
+        lambda _cfg: [(queue_root, current) for current in list_queue(queue_root)],
+    )
+    monkeypatch.setattr(
+        xtb_submitter,
+        "_before_pending_cancel",
+        lambda _entry, *, config_path: None,
+    )
+    deps = orchestration_services(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / "wf_child_cancel_payload_retry"
+            ),
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": load_payload,
+            "write_workflow_payload": write_once_then_persist,
+            "sync_workflow_registry": lambda workflow_root, workspace_dir, payload: None,
+            "xtb_cancel_target": xtb_submitter.cancel_target,
+        }
+    )
+
+    with pytest.raises(OSError, match="parent payload durability barrier failed"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_child_cancel_payload_retry",
+            workflow_root=tmp_path,
+            xtb_config="/tmp/xtb.yaml",
+            services=deps,
+        )
+
+    [cancelled_child] = list_queue(queue_root)
+    assert cancelled_child.status == QueueStatus.CANCELLED
+    assert durable_payload["status"] == "running"
+
+    result = orchestration.cancel_materialized_workflow(
+        target="wf_child_cancel_payload_retry",
+        workflow_root=tmp_path,
+        xtb_config="/tmp/xtb.yaml",
+        services=deps,
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["failed"] == []
+    assert result["cancelled"] == [{"stage_id": "stage_xtb", "status": "cancelled"}]
+    assert durable_payload["status"] == "cancelled"
+    assert durable_payload["stages"][0]["status"] == "cancelled"
+    assert durable_payload["stages"][0]["task"]["status"] == "cancelled"
 
 
 def test_cancel_materialized_workflow_reports_cancel_failed_when_stage_cancellation_fails(
