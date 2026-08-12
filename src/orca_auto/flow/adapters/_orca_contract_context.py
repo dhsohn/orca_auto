@@ -84,7 +84,6 @@ def explicit_queue_entry(request: LoadRequest, roots: LoadRoots) -> dict[str, An
         return None
     return _local_lookup.find_queue_entry_impl(
         allowed_root=roots.allowed,
-        target="",
         queue_id=request.queue_id,
         run_id=request.run_id,
         reaction_dir=request.reaction_dir,
