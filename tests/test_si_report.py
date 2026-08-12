@@ -17,6 +17,7 @@ from orca_auto.orca.report.si import (
     structure_kind,
     write_si_block,
 )
+from tests.engine_artifact_helpers import report_generation_target
 
 
 def _out_text(
@@ -199,13 +200,6 @@ def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
         assert collect_si_block(reaction_dir, state) is None, name
 
 
-def _generation_target(reaction_dir: Path) -> tuple[Path, tuple[int, int]]:
-    generation = reaction_dir / "20260714-224054-959479f2"
-    generation.mkdir(exist_ok=True)
-    status = generation.stat()
-    return generation, (status.st_dev, status.st_ino)
-
-
 def test_write_si_block_writes_irc_summary_without_coordinates(tmp_path: Path) -> None:
     irc_summary = """
 ----------------------
@@ -226,7 +220,7 @@ Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
 
     assert structure_kind(Path(state["selected_inp"])) is None
     assert collect_si_block(reaction_dir, state) is None
-    generation, identity = _generation_target(reaction_dir)
+    generation, identity = report_generation_target(reaction_dir)
     path = write_si_block(reaction_dir, state, generation_target=(generation, identity))
 
     assert path == generation / "si_block.md"
@@ -297,7 +291,7 @@ def test_write_si_block_removes_stale_file_for_blockless_job(tmp_path: Path) -> 
         tmp_path, "reused_dir", inp_text=_TS_INP, out_text=_out_text(freqs=(-512.3, 120.0))
     )
 
-    generation, identity = _generation_target(reaction_dir)
+    generation, identity = report_generation_target(reaction_dir)
     target = (generation, identity)
     path = write_si_block(reaction_dir, state, generation_target=target)
     assert path is not None and path.exists()

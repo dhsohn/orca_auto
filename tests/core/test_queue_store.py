@@ -19,6 +19,7 @@ from orca_auto.core.queue.enqueue_publication import repair_enqueue_publication
 from orca_auto.core.queue.generation import (
     queue_entries_same_generation,
     queue_entry_generation_token,
+    visible_generation_children,
 )
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
@@ -2103,3 +2104,38 @@ def test_mark_status_replays_same_terminal_side_effect_under_lock(
     assert replayed is not None
     assert replayed.status == QueueStatus.CANCELLED
     assert calls == ["repair"]
+
+
+def test_same_second_generations_order_by_recency(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    # Same second-resolution timestamp; the hex suffixes reverse-sort against
+    # the actual creation order.
+    older = job_dir / "20260717-120000-ffffffff"
+    newer = job_dir / "20260717-120000-00000000"
+    older.mkdir()
+    newer.mkdir()
+    base_ns = 1_700_000_000_000_000_000
+    os.utime(older, ns=(base_ns, base_ns))
+    os.utime(newer, ns=(base_ns + 2_000_000_000, base_ns + 2_000_000_000))
+
+    children = visible_generation_children(job_dir)
+
+    assert [entry.name for entry in children] == [newer.name, older.name]
+
+
+def test_distinct_second_generations_still_order_by_name(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    older = job_dir / "20260717-120000-aaaaaaaa"
+    newer = job_dir / "20260717-120001-aaaaaaaa"
+    older.mkdir()
+    newer.mkdir()
+    # Even with a misleading mtime, a later timestamp prefix wins.
+    base_ns = 1_700_000_000_000_000_000
+    os.utime(older, ns=(base_ns + 9_000_000_000, base_ns + 9_000_000_000))
+    os.utime(newer, ns=(base_ns, base_ns))
+
+    children = visible_generation_children(job_dir)
+
+    assert [entry.name for entry in children] == [newer.name, older.name]

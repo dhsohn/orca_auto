@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 from orca_auto.core.messaging import render_discord_embed
 from orca_auto.flow.registry import _notifications as notifications
@@ -183,3 +186,16 @@ def test_workflow_event_renders_workspace_directory(tmp_path) -> None:
 
     assert fields["Directory"] == f"`{workspace}`"
     assert "Worker session" not in fields
+
+
+@pytest.mark.parametrize("event_type", ["worker_cycle_started", "worker_cycle_finished"])
+def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str) -> None:
+    event = {
+        "event_type": event_type,
+        "worker_session_id": "wf_worker_20260717_074850_deadbeef",
+        "metadata": {"cycle_started_at": "2026-07-17T10:00:00+00:00"},
+    }
+
+    rendered = str(render_discord_embed(notifications.journal_event_message(event, tmp_path)))
+
+    assert "wf_worker_20260717_074850_deadbeef" in rendered

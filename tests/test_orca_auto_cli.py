@@ -27,34 +27,6 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_common, "shared_workflow_root_from_config", lambda config_path: None)
 
 
-class _FakeWorkerProcess:
-    def __init__(self, poll_values: list[int | None]) -> None:
-        self._poll_values = list(poll_values)
-        self._terminal_returncode: int | None = None
-        self.terminate_calls = 0
-        self.kill_calls = 0
-
-    def poll(self) -> int | None:
-        if self._terminal_returncode is not None:
-            return self._terminal_returncode
-        if self._poll_values:
-            value = self._poll_values.pop(0)
-            if value is not None:
-                self._terminal_returncode = value
-            return value
-        return None
-
-    def terminate(self) -> None:
-        self.terminate_calls += 1
-        self._poll_values.clear()
-        self._terminal_returncode = -15
-
-    def kill(self) -> None:
-        self.kill_calls += 1
-        self._poll_values.clear()
-        self._terminal_returncode = -9
-
-
 def test_main_without_command_prints_help(capsys) -> None:
     result = unified_cli.main([])
 

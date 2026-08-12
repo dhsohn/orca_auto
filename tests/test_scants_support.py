@@ -328,26 +328,6 @@ def _write_surface_scan_failure(inp_path: Path, out_path: Path, *, xyz_count: in
     )
 
 
-def _write_actual_surface_out(path: Path, energies: list[float]) -> None:
-    path.write_text(
-        "\n".join(
-            [
-                "**** RELAXED SURFACE SCAN DONE ***",
-                "RELAXED SURFACE SCAN RESULTS",
-                "The Calculated Surface using the 'Actual Energy'",
-                *(
-                    f"   {1.86 + 0.05 * idx:.8f} {energy:.8f}"
-                    for idx, energy in enumerate(energies)
-                ),
-                "The Calculated Surface using the SCF energy",
-                "   1.86000000 -101.00000000",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-
 def _write_refinement_zero_distance_out(inp_path: Path, out_path: Path) -> None:
     """Scan finished (surface bracketed a maximum at point 2), then ORCA's
     TS-guess refinement constructed a zero-distance geometry and aborted."""
