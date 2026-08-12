@@ -45,25 +45,7 @@ def cmd_workflow_scaffold(args: argparse.Namespace) -> int:
     return int(_cmd_workflow_scaffold(args))
 
 
-def _resolved_run_dir_target(args: argparse.Namespace) -> Path:
-    raw_path = normalize_text(getattr(args, "path", None))
-    if not raw_path:
-        raise ValueError("run-dir requires a target directory path")
-
-    try:
-        target = Path(raw_path).expanduser().resolve()
-    except (OSError, RuntimeError) as exc:
-        raise ValueError(f"run-dir target could not be resolved safely: {raw_path}") from exc
-    if not target.exists():
-        raise ValueError(f"run-dir target not found: {target}")
-    if not target.is_dir():
-        raise ValueError(f"run-dir target is not a directory: {target}")
-    return target
-
-
-def _detect_run_dir_app(args: argparse.Namespace, *, target: Path | None = None) -> str:
-    target = target or _resolved_run_dir_target(args)
-
+def _detect_run_dir_app(target: Path) -> str:
     workflow_layout = inspect_workflow_run_dir(target)
     markers = {
         "workflow": (target / "workflow.json").is_file() or workflow_layout.has_manifest,
@@ -191,7 +173,7 @@ def cmd_run_dir(args: Any) -> int:
                 if runs_root:
                     validate_production_run_dir_target(raw_target, runs_root)
                     validate_production_run_dir_target(pinned_target, runs_root)
-                run_dir_app = _detect_run_dir_app(args, target=pinned_target)
+                run_dir_app = _detect_run_dir_app(pinned_target)
                 pinned_stat = pinned_target.stat()
                 publication_contract = _RunDirPublicationContract(
                     pinned_target=pinned_target,

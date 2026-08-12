@@ -108,17 +108,6 @@ def finalize_completed_job(
     worker._release_admission_slot(job.admission_token)
 
 
-def sync_terminal_running_entries(
-    callbacks: XtbQueueRuntimeTerminalCallbacks,
-    worker: Any,
-) -> None:
-    callbacks.queue_lifecycle.sync_terminal_running_entries(
-        callbacks.queue_entries_with_roots(worker.cfg),
-        load_terminal_summary_fn=callbacks.load_terminal_summary_fn,
-        ensure_terminal_queue_status_fn=callbacks.ensure_terminal_queue_status_fn,
-    )
-
-
 def live_worker_pid_slots(
     callbacks: XtbQueueRuntimeTerminalCallbacks,
     worker: Any,
@@ -150,5 +139,4 @@ __all__ = [
     "list_slots_preserving_live_worker_pids",
     "live_worker_pid_slots",
     "load_terminal_summary",
-    "sync_terminal_running_entries",
 ]

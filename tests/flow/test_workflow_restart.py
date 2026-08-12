@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from argparse import Namespace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1480,7 +1479,7 @@ def test_unified_run_dir_detects_existing_workflow_json_without_flow_yaml(tmp_pa
     workspace = tmp_path / "wf_existing"
     _write_workflow(workspace, {"workflow_id": "wf_existing", "status": "failed", "stages": []})
 
-    assert cli_run_dir._detect_run_dir_app(Namespace(path=str(workspace))) == "workflow"
+    assert cli_run_dir._detect_run_dir_app(workspace) == "workflow"
 
 
 def test_restart_applies_electronic_state_change_without_engine_sections(tmp_path: Path) -> None:
