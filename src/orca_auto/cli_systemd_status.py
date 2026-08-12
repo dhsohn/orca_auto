@@ -424,6 +424,41 @@ def _workflow_worker_unit_for_user(target_user: str) -> str:
 _WORKFLOW_RUNNING_STATES = frozenset({"active", "activating", "reloading", "failed"})
 # Stopped, or being stopped by the operator right now: leave it alone.
 _WORKFLOW_STOPPED_STATES = frozenset({"inactive", "deactivating", "unknown", ""})
+_WORKFLOW_STATE_RETURN_CODES = {
+    "active": frozenset({0}),
+    "activating": frozenset({0}),
+    "reloading": frozenset({0}),
+    "failed": frozenset({3}),
+    "inactive": frozenset({3}),
+    "deactivating": frozenset({0, 3}),
+    "unknown": frozenset({3, 4}),
+    "": frozenset({3}),
+}
+
+
+def _query_workflow_worker_state(
+    unit: str,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+) -> str:
+    try:
+        completed = run(
+            ["systemctl", "is-active", unit],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as exc:
+        raise ValueError(f"systemctl failed: {exc}") from exc
+    stdout = normalize_text(completed.stdout)
+    stderr = normalize_text(completed.stderr)
+    state = stdout.splitlines()[0] if stdout else ""
+    expected_returncodes = _WORKFLOW_STATE_RETURN_CODES.get(state)
+    if stderr or expected_returncodes is None or completed.returncode not in expected_returncodes:
+        detail = stderr.splitlines()[0] if stderr else state or f"exit {completed.returncode}"
+        raise ValueError(f"systemctl answered {detail!r} (exit {completed.returncode})")
+    return state
 
 
 def _restartable_worker_units(
@@ -441,7 +476,13 @@ def _restartable_worker_units(
 
     units = [_worker_unit_for_user(target_user)]
     workflow_unit = _workflow_worker_unit_for_user(target_user)
-    state = _query_systemctl("is-active", workflow_unit, run=run)
+    try:
+        state = _query_workflow_worker_state(workflow_unit, run=run)
+    except ValueError as exc:
+        raise ValueError(
+            f"cannot tell whether {workflow_unit} is running; {exc}. "
+            "Restart it yourself, or rerun once systemctl responds."
+        ) from exc
     if state in _WORKFLOW_RUNNING_STATES:
         units.append(workflow_unit)
     elif state not in _WORKFLOW_STOPPED_STATES:

@@ -1329,6 +1329,8 @@ def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
     ) -> subprocess.CompletedProcess[str]:
         del check, stdout, stderr, text
         commands.append(tuple(argv))
+        if argv[1] == "is-active":
+            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout="inactive\n", stderr="")
 
     result = cli_systemd_status.cmd_service_restart(
@@ -1366,6 +1368,8 @@ def test_cmd_service_restart_stops_when_reset_failed_cannot_clear_start_limit() 
     ) -> subprocess.CompletedProcess[str]:
         del check, stdout, stderr, text
         commands.append(tuple(argv))
+        if argv[1] == "is-active":
+            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
         return subprocess.CompletedProcess(argv, 5, stdout="inactive\n", stderr="")
 
     result = cli_systemd_status.cmd_service_restart(
@@ -1471,9 +1475,12 @@ def test_cmd_service_restart_restarts_a_running_workflow_worker() -> None:
 def _service_restart_with_workflow_state(
     workflow_state: str,
     *,
-    workflow_returncode: int = 0,
+    workflow_returncode: int | None = None,
+    workflow_stderr: str = "",
 ) -> tuple[int, list[tuple[str, ...]]]:
     commands: list[tuple[str, ...]] = []
+    if workflow_returncode is None:
+        workflow_returncode = 0 if workflow_state in {"active", "activating", "reloading"} else 3
 
     def _fake_run(
         argv: list[str],
@@ -1490,7 +1497,10 @@ def _service_restart_with_workflow_state(
             return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
         if argv[1] == "is-active":
             return subprocess.CompletedProcess(
-                argv, workflow_returncode, stdout=f"{workflow_state}\n", stderr=""
+                argv,
+                workflow_returncode,
+                stdout=f"{workflow_state}\n" if workflow_state else "",
+                stderr=workflow_stderr,
             )
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
@@ -1522,11 +1532,20 @@ def test_cmd_service_restart_recovers_a_broken_workflow_worker(workflow_state: s
     assert ("systemctl", "restart", "orca_auto-workflow-worker@alice.service") in commands
 
 
-@pytest.mark.parametrize("workflow_state", ["inactive", "deactivating", "unknown"])
-def test_cmd_service_restart_leaves_a_stopped_workflow_worker_alone(workflow_state: str) -> None:
+@pytest.mark.parametrize(
+    ("workflow_state", "workflow_returncode"),
+    [("inactive", 3), ("deactivating", 0), ("unknown", 4), ("", 3)],
+)
+def test_cmd_service_restart_leaves_a_stopped_workflow_worker_alone(
+    workflow_state: str,
+    workflow_returncode: int,
+) -> None:
     """Supervision is opt-in, and a stop in flight is the operator's decision."""
 
-    result, commands = _service_restart_with_workflow_state(workflow_state)
+    result, commands = _service_restart_with_workflow_state(
+        workflow_state,
+        workflow_returncode=workflow_returncode,
+    )
 
     assert result == 0
     assert not any(
@@ -1548,6 +1567,30 @@ def test_cmd_service_restart_stops_when_the_workflow_state_is_unreadable(capsys:
     assert not any(command[1] in {"restart", "reset-failed"} for command in commands), (
         "nothing may be mutated once the workflow worker's state is unknown"
     )
+    assert "cannot tell whether" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("workflow_returncode", "workflow_state", "workflow_stderr"),
+    [
+        (4, "", ""),
+        (1, "active", "Failed to connect to bus: No such file or directory"),
+    ],
+)
+def test_cmd_service_restart_fails_closed_for_inconsistent_workflow_query(
+    capsys: Any,
+    workflow_returncode: int,
+    workflow_state: str,
+    workflow_stderr: str,
+) -> None:
+    result, commands = _service_restart_with_workflow_state(
+        workflow_state,
+        workflow_returncode=workflow_returncode,
+        workflow_stderr=workflow_stderr,
+    )
+
+    assert result == 1
+    assert not any(command[1] in {"restart", "reset-failed"} for command in commands)
     assert "cannot tell whether" in capsys.readouterr().err
 
 
