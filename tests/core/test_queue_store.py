@@ -294,41 +294,19 @@ def test_enqueue_rejects_noninteger_priority_before_persistence(
     assert not _queue_file(tmp_path).exists()
 
 
-@pytest.mark.parametrize("priority", [False, 1.0, 1.5, "1.5"])
-def test_enqueue_entry_rejects_noninteger_priority_before_persistence(
-    tmp_path: Path,
-    priority: object,
-) -> None:
-    entry = store.QueueEntry(
-        queue_id="q-invalid-priority",
-        app_name="app",
-        task_id="task",
-        task_kind="kind",
-        engine="engine",
-        priority=priority,  # type: ignore[arg-type]
-    )
-
-    with pytest.raises(ValueError, match="priority must be an integer"):
-        store.enqueue_entry(tmp_path, entry)
-
-    assert not _queue_file(tmp_path).exists()
-
-
 @pytest.mark.parametrize("priority", [0, -7])
-def test_enqueue_entry_preserves_zero_and_negative_priority(
+def test_enqueue_preserves_zero_and_negative_priority(
     tmp_path: Path,
     priority: int,
 ) -> None:
-    entry = store.QueueEntry(
-        queue_id=f"q-priority-{priority}",
+    persisted = store.enqueue(
+        tmp_path,
         app_name="app",
         task_id=f"task-{priority}",
         task_kind="kind",
         engine="engine",
         priority=priority,
     )
-
-    persisted = store.enqueue_entry(tmp_path, entry)
 
     assert persisted.priority == priority
     assert store.list_queue(tmp_path)[0].priority == priority
@@ -883,28 +861,15 @@ def test_enqueue_blocks_active_duplicates_and_allows_reenqueue_after_terminal_st
     assert second.queue_id != first.queue_id
 
 
-def test_enqueue_entry_supports_key_duplicate_policy_with_force(
-    monkeypatch: pytest.MonkeyPatch,
+def test_reject_duplicate_entry_key_supports_force_over_terminal_only(
     tmp_path: Path,
 ) -> None:
-    _install_deterministic_helpers(monkeypatch)
     reaction_dir = str(tmp_path / "rxn")
 
     def reaction_key(entry: store.QueueEntry) -> str:
         return str(entry.metadata.get("reaction_dir", ""))
 
-    def reject_duplicate_reaction(
-        entries: Sequence[store.QueueEntry],
-        entry: store.QueueEntry,
-    ) -> None:
-        store.reject_duplicate_entry_key(
-            entries,
-            key=reaction_key(entry),
-            key_fn=reaction_key,
-            force=bool(entry.metadata.get("force", False)),
-        )
-
-    def entry(queue_id: str, status: QueueStatus, *, force: bool = False) -> store.QueueEntry:
+    def entry(queue_id: str, status: QueueStatus) -> store.QueueEntry:
         return store.QueueEntry(
             queue_id=queue_id,
             app_name="app",
@@ -912,34 +877,34 @@ def test_enqueue_entry_supports_key_duplicate_policy_with_force(
             task_kind="kind",
             engine="engine",
             status=status,
-            metadata={"reaction_dir": reaction_dir, "force": force},
+            metadata={"reaction_dir": reaction_dir},
         )
 
-    store.enqueue_entry(
-        tmp_path,
-        entry("q-terminal", QueueStatus.COMPLETED),
-        duplicate_policy=reject_duplicate_reaction,
-    )
+    terminal_only = [entry("q-terminal", QueueStatus.COMPLETED)]
 
     with pytest.raises(store.DuplicateQueueEntryError):
-        store.enqueue_entry(
-            tmp_path,
-            entry("q-unforced", QueueStatus.PENDING),
-            duplicate_policy=reject_duplicate_reaction,
+        store.reject_duplicate_entry_key(
+            terminal_only,
+            key=reaction_dir,
+            key_fn=reaction_key,
+            force=False,
         )
 
-    forced = store.enqueue_entry(
-        tmp_path,
-        entry("q-forced", QueueStatus.PENDING, force=True),
-        duplicate_policy=reject_duplicate_reaction,
+    store.reject_duplicate_entry_key(
+        terminal_only,
+        key=reaction_dir,
+        key_fn=reaction_key,
+        force=True,
     )
-    assert forced.queue_id == "q-forced"
+
+    with_active = [*terminal_only, entry("q-active", QueueStatus.PENDING)]
 
     with pytest.raises(store.DuplicateQueueEntryError):
-        store.enqueue_entry(
-            tmp_path,
-            entry("q-active-forced", QueueStatus.PENDING, force=True),
-            duplicate_policy=reject_duplicate_reaction,
+        store.reject_duplicate_entry_key(
+            with_active,
+            key=reaction_dir,
+            key_fn=reaction_key,
+            force=True,
         )
 
 

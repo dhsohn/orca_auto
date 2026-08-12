@@ -15,7 +15,6 @@ def _callbacks(**overrides: Any) -> queue_runtime_terminal.XtbQueueRuntimeTermin
             finalize_execution_result=lambda *args, **kwargs: ("outcome", args, kwargs),
         ),
         "queue_lifecycle": SimpleNamespace(
-            sync_terminal_running_entries=lambda *args, **kwargs: ("sync", args, kwargs),
             live_worker_pid_slots=lambda *args, **kwargs: ["live-slot"],
         ),
         "worker_execution_outcome_cls": object,

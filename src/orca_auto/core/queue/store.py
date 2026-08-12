@@ -443,43 +443,6 @@ def clear_terminal(
     ).mutate_entries(clear)
 
 
-def enqueue_entry(
-    root: str | Path,
-    entry: QueueEntry,
-    *,
-    duplicate_policy: QueueDuplicatePolicy | None = None,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-) -> QueueEntry:
-    reject_duplicate = duplicate_policy or reject_active_task_duplicate
-    metadata = dict(entry.metadata)
-    if QUEUE_RECORD_SYNC_KEY not in metadata:
-        metadata.update(
-            queue_record_sync_metadata(
-                QUEUE_RECORD_SYNC_COMPLETE,
-                token=entry.queue_id,
-                owner_pid=0,
-            )
-        )
-    normalized_entry = replace(
-        entry,
-        priority=normalize_queue_priority(entry.priority),
-        enqueued_at=entry.enqueued_at or now_utc_iso(),
-        metadata=metadata,
-    )
-
-    def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
-        reject_duplicate(entries, normalized_entry)
-        entries.append(normalized_entry)
-        return normalized_entry, True
-
-    return QueueStore.for_root(
-        root,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-    ).mutate_entries(append)
-
-
 def enqueue(
     root: str | Path,
     *,

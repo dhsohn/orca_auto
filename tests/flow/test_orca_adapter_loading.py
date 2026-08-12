@@ -77,13 +77,6 @@ def test_load_orca_artifact_contract_short_circuits_on_tracked_payload(
             AssertionError("tracked runtime fallback should not run")
         ),
     )
-    monkeypatch.setattr(
-        _orca_local_lookup,
-        "resolve_job_dir_impl",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("job-location fallback should not run")
-        ),
-    )
 
     contract = orca_adapter.load_orca_artifact_contract(
         target="job_payload_1",
@@ -273,13 +266,6 @@ def test_load_orca_artifact_contract_uses_tracked_record_job_dir(
     )
     monkeypatch.setattr(
         _orca_local_lookup,
-        "resolve_job_dir_impl",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("job-dir fallback should not run")
-        ),
-    )
-    monkeypatch.setattr(
-        _orca_local_lookup,
         "find_queue_entry_impl",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("queue fallback should not run")),
     )
@@ -335,13 +321,6 @@ def test_load_orca_artifact_contract_ignores_untracked_root_payload(
     )
 
     _disable_tracking_helpers(monkeypatch)
-    monkeypatch.setattr(
-        _orca_local_lookup,
-        "resolve_job_dir_impl",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("job-dir fallback should not run")
-        ),
-    )
 
     contract = orca_adapter.load_orca_artifact_contract(
         target=str(run_dir),
@@ -439,13 +418,6 @@ def test_load_orca_artifact_contract_propagates_resource_request_and_actual(
         _orca_tracking,
         "tracked_artifact_context_impl",
         lambda **kwargs: (run_dir, tracked_record, {}, {}),
-    )
-    monkeypatch.setattr(
-        _orca_local_lookup,
-        "resolve_job_dir_impl",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("job-dir fallback should not run")
-        ),
     )
 
     contract = orca_adapter.load_orca_artifact_contract(

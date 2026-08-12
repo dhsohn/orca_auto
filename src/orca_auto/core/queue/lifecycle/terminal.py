@@ -43,10 +43,6 @@ def job_queue_root(worker: Any, job: Any) -> Path:
     return Path(getattr(job, "queue_root", worker.allowed_root)).expanduser().resolve()
 
 
-def resolved_job_queue_root(worker: Any, job: Any) -> Path:
-    return job_queue_root(worker, job)
-
-
 def attach_started_process_metadata(
     worker: Any,
     queue_root: Any,
@@ -175,27 +171,6 @@ def mark_terminal_process_queue_entry_with_result(
     )
 
 
-def mark_terminal_process_queue_entry(
-    worker: Any,
-    queue_id: str,
-    job: Any,
-    *,
-    rc: int,
-    hooks: EngineQueueProcessLifecycleHooks,
-    logger: logging.Logger = LOGGER,
-) -> bool:
-    """Mark a process queue entry terminal, preserving the historical bool API."""
-
-    return mark_terminal_process_queue_entry_with_result(
-        worker,
-        queue_id,
-        job,
-        rc=rc,
-        hooks=hooks,
-        logger=logger,
-    ).marked
-
-
 def run_terminal_process_side_effects(
     worker: Any,
     queue_id: str,
@@ -267,13 +242,13 @@ def finalize_process_finished_job(
     rc: int,
     hooks: EngineQueueProcessLifecycleHooks,
 ) -> None:
-    marked_terminal = mark_terminal_process_queue_entry(
+    marked_terminal = mark_terminal_process_queue_entry_with_result(
         worker,
         queue_id,
         job,
         rc=rc,
         hooks=hooks,
-    )
+    ).marked
     try:
         if marked_terminal:
             record_terminal_process_side_effects(worker, queue_id, job, rc=rc, hooks=hooks)
@@ -302,10 +277,8 @@ __all__ = [
     "entry_status_is_running",
     "finalize_process_finished_job",
     "job_queue_root",
-    "mark_terminal_process_queue_entry",
     "mark_terminal_process_queue_entry_with_result",
     "record_terminal_process_side_effects",
-    "resolved_job_queue_root",
     "run_terminal_process_side_effects",
     "sync_terminal_running_entries",
 ]

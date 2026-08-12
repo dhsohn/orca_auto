@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.engines import entry_matches_engine_identity
-from orca_auto.core.indexing import JobLocationIndexError, JobLocationRecord, resolve_job_location
 from orca_auto.core.queue.metadata import (
     mapping_metadata as queue_entry_metadata_impl,
 )
@@ -28,46 +27,6 @@ def load_json_dict_impl(path: Path) -> JsonPayload:
 
 def load_json_list_impl(path: Path) -> JsonPayloadList:
     return load_json_mapping_list_file(path)
-
-
-def _record_candidate_dirs(record: JobLocationRecord) -> list[Path]:
-    rows: list[Path] = []
-    for value in (record.latest_known_path, record.original_run_dir):
-        raw = normalize_text(value)
-        if not raw:
-            continue
-        try:
-            rows.append(Path(raw).expanduser().resolve())
-        except OSError:
-            continue
-    return rows
-
-
-def _resolve_record_for_target(index_root: Path | None, target: str) -> JobLocationRecord | None:
-    if index_root is None:
-        return None
-    try:
-        return resolve_job_location(index_root, target)
-    except (JobLocationIndexError, OSError, ValueError):
-        return None
-
-
-def resolve_job_dir_impl(
-    index_root: Path | None, target: str
-) -> tuple[Path | None, JobLocationRecord | None]:
-    candidates: list[Path] = []
-    record = _resolve_record_for_target(index_root, target)
-    if record is not None:
-        candidates.extend(_record_candidate_dirs(record))
-
-    direct_target = direct_dir_target_impl(target)
-    if direct_target is not None:
-        candidates.append(direct_target)
-
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_dir():
-            return candidate, record
-    return direct_target, record
 
 
 def _queue_entry_matches(
@@ -137,5 +96,4 @@ __all__ = [
     "load_json_list_impl",
     "queue_entry_metadata_impl",
     "queue_entry_metadata_value_impl",
-    "resolve_job_dir_impl",
 ]

@@ -28,11 +28,7 @@ from .admission import (
     reserve_engine_admission_slot,
     start_engine_child_process,
 )
-from .runtime_hooks import (
-    attach_started_child_process,
-    build_child_worker_hooks,
-    shutdown_child_job,
-)
+from .runtime_hooks import build_child_worker_hooks
 
 
 @dataclass(frozen=True)
@@ -131,48 +127,6 @@ class EngineQueueRuntime:
             cfg,
             engine=engine,
             reserve_slot_fn=reserve_slot_fn,
-        )
-
-    def attach_started_child_process(
-        self,
-        *,
-        engine: str,
-        worker: Any,
-        queue_root: Path,
-        entry: Any,
-        process: Any,
-        admission_token: str,
-        activate_reserved_slot_fn: Callable[..., Any],
-        terminate_process_fn: Callable[[Any], Any],
-        mark_failed_fn: Callable[..., Any],
-    ) -> bool:
-        return attach_started_child_process(
-            engine=engine,
-            worker=worker,
-            queue_root=queue_root,
-            entry=entry,
-            process=process,
-            admission_token=admission_token,
-            activate_reserved_slot_fn=activate_reserved_slot_fn,
-            terminate_process_fn=terminate_process_fn,
-            mark_failed_fn=mark_failed_fn,
-        )
-
-    def shutdown_child_job(
-        self,
-        worker: Any,
-        job: Any,
-        *,
-        finalize_child_exit_fn: Callable[..., Any],
-        grace_seconds: float,
-        sleep_fn: Callable[[float], None],
-    ) -> None:
-        shutdown_child_job(
-            worker,
-            job,
-            finalize_child_exit_fn=finalize_child_exit_fn,
-            grace_seconds=grace_seconds,
-            sleep_fn=sleep_fn,
         )
 
     def child_worker_hooks(

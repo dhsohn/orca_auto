@@ -1534,7 +1534,7 @@ def test_terminal_mark_result_preserves_premark_generation_context(
     ]
 
 
-def test_terminal_mark_result_preserves_skipped_entry_identity_and_bool_api(
+def test_terminal_mark_result_preserves_skipped_entry_identity(
     tmp_path: Path,
 ) -> None:
     queue_root = tmp_path / "queue"
@@ -1563,16 +1563,6 @@ def test_terminal_mark_result_preserves_skipped_entry_identity_and_bool_api(
     assert result.expected_job_id == "task-current"
     assert result.current_entry is current
     assert result.queue_root == queue_root.resolve()
-    assert (
-        lifecycle_helpers.mark_terminal_process_queue_entry(
-            worker,
-            "q-1",
-            job,
-            rc=0,
-            hooks=hooks,
-        )
-        is False
-    )
 
 
 def test_terminal_mark_result_reports_failed_queue_mutation(tmp_path: Path) -> None:
