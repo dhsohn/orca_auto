@@ -418,7 +418,7 @@ def test_cancel_materialized_workflow_recovers_journal_after_directory_fsync_fai
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from orca_auto.flow.workflow import journal as workflow_journal
+    from orca_auto.flow.registry import journal as workflow_journal
 
     payload: dict[str, Any] = {
         "workflow_id": "wf_cancel_directory_fsync_retry",

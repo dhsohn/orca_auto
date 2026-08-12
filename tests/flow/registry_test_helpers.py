@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
-from orca_auto.flow import worker_state_store
+from orca_auto.flow.registry import journal as workflow_journal
 from orca_auto.flow.registry import store as registry_store
-from orca_auto.flow.workflow import journal as workflow_journal
+from orca_auto.flow.registry import worker_state_store
 
 
 @contextmanager
