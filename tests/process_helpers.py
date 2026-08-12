@@ -46,25 +46,6 @@ class FakeManagedProcess:
         return int(effect)
 
 
-@dataclass
-class SignalRegistry:
-    default_handler: Any = signal.SIG_DFL
-    handlers: dict[int, Any] = field(default_factory=dict)
-
-    def signal(self, sig: int, handler: Any) -> Any:
-        previous = self.getsignal(sig)
-        self.handlers[sig] = handler
-        return previous
-
-    def getsignal(self, sig: int) -> Any:
-        return self.handlers.get(sig, self.default_handler)
-
-    def fire(self, sig: int, frame: object | None = None) -> None:
-        handler = self.getsignal(sig)
-        if callable(handler):
-            handler(sig, frame)
-
-
 def missing_process_group(*_args: Any, **_kwargs: Any) -> None:
     raise ProcessLookupError("missing process group")
 

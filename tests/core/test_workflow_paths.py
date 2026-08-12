@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from orca_auto.core.paths.workflow import (
+    WORKFLOW_FILE_NAME,
+    WORKFLOW_SCAFFOLD_MANIFEST_NAME,
     workflow_root_for_workspace,
     workflow_stage_dirnames_for_engine,
     workflow_workspace_internal_engine_paths_from_path,
@@ -122,3 +124,45 @@ def test_scaffold_nested_and_root_direct_workspaces_are_valid_run_dir_targets(
     ]
     validate_production_run_dir_target(nested, workflow_root)
     validate_production_run_dir_target(root_direct, workflow_root)
+
+
+def _workflow_paths(root: Path, target: Path):
+    return workflow_workspace_internal_engine_paths_from_path(
+        target,
+        workflow_root=root,
+        engine="orca",
+    )
+
+
+def test_generation_shape_alone_does_not_grant_workflow_paths(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    job = root / "plain_orca_job"
+    generation = job / "20260717-120000-aabbccdd"
+    stage = generation / "03_orca"
+    stage.mkdir(parents=True)
+
+    assert _workflow_paths(root, stage) is None
+
+
+def test_scaffold_parent_grants_workflow_paths(tmp_path: Path) -> None:
+    root = tmp_path / "runs"
+    scaffold = root / "reaction_scaffold"
+    generation = scaffold / "20260717-120000-aabbccdd"
+    stage = generation / "03_orca"
+    stage.mkdir(parents=True)
+    (scaffold / WORKFLOW_SCAFFOLD_MANIFEST_NAME).write_text("template: x\n", encoding="utf-8")
+
+    assert _workflow_paths(root, stage) is not None
+
+
+def test_committed_manifest_grants_workflow_paths_without_scaffold(tmp_path: Path) -> None:
+    # The scaffold's mutable flow.yaml was removed after submission; the
+    # committed workspace manifest still authorizes the workspace.
+    root = tmp_path / "runs"
+    scaffold = root / "reaction_scaffold"
+    generation = scaffold / "20260717-120000-aabbccdd"
+    stage = generation / "03_orca"
+    stage.mkdir(parents=True)
+    (generation / WORKFLOW_FILE_NAME).write_text("{}", encoding="utf-8")
+
+    assert _workflow_paths(root, stage) is not None

@@ -70,27 +70,6 @@ class _PublishedSuccessRunner:
         )
 
 
-class _RetryThenSuccessRunner:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def run(self, inp_path: Path):
-        self.calls += 1
-        inp_path.with_suffix(".xyz").write_text(
-            "2\nretry geometry\nH 0 0 0\nH 0 0 0.75\n",
-            encoding="utf-8",
-        )
-        out_path = inp_path.with_suffix(".out")
-        if self.calls == 1:
-            out_path.write_text("SCF NOT CONVERGED AFTER 300 CYCLES\n", encoding="utf-8")
-            return SimpleNamespace(out_path=str(out_path), return_code=1)
-        out_path.write_text(
-            "****ORCA TERMINATED NORMALLY****\nTOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds 0 msec\n",
-            encoding="utf-8",
-        )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
-
-
 class _AlwaysScfFailRunner:
     def __init__(self) -> None:
         self.seen: list[Path] = []
@@ -129,44 +108,6 @@ class _OptTsRetryThenSuccessRunner:
         )
         out_path = inp_path.with_suffix(".out")
         if len(self.seen) == 1:
-            out_path.write_text(
-                "\n".join(
-                    [
-                        "VIBRATIONAL FREQUENCIES",
-                        "  1    120.00 cm**-1",
-                        "  2    240.00 cm**-1",
-                        "****ORCA TERMINATED NORMALLY****",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        out_path.write_text(
-            "\n".join(
-                [
-                    "VIBRATIONAL FREQUENCIES",
-                    "  1   -150.00 cm**-1",
-                    "  2    120.00 cm**-1",
-                    "****ORCA TERMINATED NORMALLY****",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
-
-
-class _OptTsRetryTwiceThenSuccessRunner:
-    def __init__(self) -> None:
-        self.seen: list[Path] = []
-
-    def run(self, inp_path: Path):
-        self.seen.append(inp_path)
-        inp_path.with_suffix(".xyz").write_text(
-            "2\nTS retry geometry\nH 0 0 0\nH 0 0 0.75\n",
-            encoding="utf-8",
-        )
-        out_path = inp_path.with_suffix(".out")
-        if len(self.seen) <= 2:
             out_path.write_text(
                 "\n".join(
                     [
