@@ -1,6 +1,8 @@
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -75,6 +77,58 @@ class TestRunInpSubmit(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         mock_submit_to_queue.assert_called_once()
+
+    @patch("orca_auto.orca.commands.run_inp.submission.queue_adapter.queue_entry_force")
+    @patch("orca_auto.orca.commands.run_inp.submission.queue_adapter.queue_entry_priority")
+    @patch("orca_auto.orca.commands.run_inp.submission.queue_adapter.queue_entry_task_id")
+    @patch("orca_auto.orca.commands.run_inp.submission.queue_adapter.queue_entry_id")
+    @patch("orca_auto.orca.commands.run_inp.submission.submit_reaction_dir_to_queue")
+    def test_json_submission_emits_one_parseable_document(
+        self,
+        mock_submit_to_queue: MagicMock,
+        mock_entry_id: MagicMock,
+        mock_task_id: MagicMock,
+        mock_priority: MagicMock,
+        mock_force: MagicMock,
+    ) -> None:
+        reaction_dir = Path("/tmp/orca-json-job")
+        mock_entry_id.return_value = "q-json"
+        mock_task_id.return_value = "orca-json"
+        mock_priority.return_value = 7
+        mock_force.return_value = False
+        mock_submit_to_queue.return_value = SimpleNamespace(
+            status="submitted",
+            reason="",
+            stderr="",
+            context=SimpleNamespace(reaction_dir=reaction_dir),
+            queued_result=SimpleNamespace(
+                entry=object(),
+                worker_info=SimpleNamespace(
+                    status="inactive",
+                    pid=None,
+                    log_file="/tmp/q-json.log",
+                    detail=None,
+                ),
+            ),
+        )
+        output = io.StringIO()
+
+        with redirect_stdout(output):
+            rc = cmd_run_inp(SimpleNamespace(config="/tmp/orca.yaml", priority=7, json=True))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {
+                "status": "queued",
+                "job_dir": str(reaction_dir),
+                "queue_id": "q-json",
+                "job_id": "orca-json",
+                "priority": 7,
+                "worker": "inactive",
+                "worker_log": "/tmp/q-json.log",
+            },
+        )
 
     @patch("orca_auto.orca.submission.load_config")
     @patch("orca_auto.orca.submission.create_queued_submission")

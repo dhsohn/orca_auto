@@ -137,6 +137,28 @@ def _cancelled_queue_status(entry: Any) -> str:
     return status
 
 
+def _cancelled_same_generation_queue_entry(
+    queue_root: Any,
+    queued: Any,
+    *,
+    engine_id: str,
+) -> Any | None:
+    recovered = [
+        current
+        for current in list_queue(queue_root)
+        if normalize_text(getattr(current, "queue_id", ""))
+        == normalize_text(getattr(queued, "queue_id", ""))
+        and entry_matches_engine_identity(current, engine_id)
+        and queue_entries_same_generation(current, queued)
+    ]
+    if len(recovered) != 1 or _cancelled_queue_status(recovered[0]) not in {
+        "cancelled",
+        "cancel_requested",
+    }:
+        return None
+    return recovered[0]
+
+
 def cancel_standalone_queue_engine_activity(
     entry: EngineCatalogEntry,
     record: ActivityRecord,
@@ -190,23 +212,22 @@ def cancel_standalone_queue_engine_activity(
         )
     except Exception as cancel_exc:
         try:
-            recovered = [
-                current
-                for current in list_queue(queue_root)
-                if normalize_text(getattr(current, "queue_id", ""))
-                == normalize_text(getattr(queued, "queue_id", ""))
-                and entry_matches_engine_identity(current, entry.engine_id)
-                and queue_entries_same_generation(current, queued)
-            ]
+            updated = _cancelled_same_generation_queue_entry(
+                queue_root,
+                queued,
+                engine_id=entry.engine_id,
+            )
         except Exception as reload_exc:
             raise cancel_exc from reload_exc
-        if len(recovered) != 1 or _cancelled_queue_status(recovered[0]) not in {
-            "cancelled",
-            "cancel_requested",
-        }:
+        if updated is None:
             raise
-        updated = recovered[0]
 
+    if updated is None:
+        updated = _cancelled_same_generation_queue_entry(
+            queue_root,
+            queued,
+            engine_id=entry.engine_id,
+        )
     if updated is None:
         return {
             "status": "failed",

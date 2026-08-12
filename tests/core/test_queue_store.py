@@ -84,6 +84,9 @@ def test_queue_generation_token_tracks_only_immutable_identity() -> None:
             **entry.metadata,
             "execution_dir": "/runs/water-md/20260419-000000-a1b2c3d4",
             "attempt": 1,
+            "run_id": "run_20260419_runtime",
+            "orca_terminal_replay": None,
+            "orca_terminal_replay_fence_only": True,
         },
     )
     terminal = replace(

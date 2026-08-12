@@ -43,6 +43,8 @@ class RunFinalResult(TypedDict, total=False):
 
 class RunState(TypedDict, total=False):
     job_id: str
+    queue_id: str
+    queue_generation: str
     run_id: str
     reaction_dir: str
     selected_inp: str

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from orca_auto.core.engine_scratch import scratch_provenance_from_exception
+from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import worker_execution as worker_job
 from orca_auto.orca.execution_binding import (
@@ -189,6 +190,8 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
         "reservation_token": "slot-1",
         "admission_app_name": "orca_auto_orca",
         "admission_task_id": "task-1",
+        "queue_id": entry.queue_id,
+        "queue_generation": queue_entry_generation_token(entry),
         "selected_inp": entry.metadata["selected_inp"],
     }
     state = new_state(reaction_dir, Path(entry.metadata["selected_inp"]), max_retries=0)
@@ -312,6 +315,8 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
         "reservation_token": "slot-1",
         "admission_app_name": "orca_auto_orca",
         "admission_task_id": "task-1",
+        "queue_id": entry.queue_id,
+        "queue_generation": queue_entry_generation_token(entry),
         "selected_inp": entry.metadata["selected_inp"],
     }
 

@@ -12,6 +12,10 @@ import pytest
 from orca_auto.cli import main as cli_main
 from orca_auto.core.admission import list_slots
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, SI_BLOCK_MD_FILE
+from orca_auto.core.queue.generation import (
+    immutable_generation_metadata,
+    queue_entry_generation_token,
+)
 from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
@@ -199,6 +203,17 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert state["final_result"]["status"] == "completed"
     generation_state = load_state(generation_dir)
     assert generation_state == state
+    raw_root_state = json.loads((reaction_dir / "job_state.json").read_text(encoding="utf-8"))
+    raw_generation_state = json.loads(
+        (generation_dir / "job_state.json").read_text(encoding="utf-8")
+    )
+    expected_generation = queue_entry_generation_token(completed)
+    assert immutable_generation_metadata(completed.metadata) == immutable_generation_metadata(
+        queued.metadata
+    )
+    for raw_state in (raw_root_state, raw_generation_state):
+        assert raw_state["job"]["queue_id"] == completed.queue_id
+        assert raw_state["job"]["generation"] == expected_generation
 
     report = load_report_json(generation_dir)
     assert report is not None

@@ -44,6 +44,7 @@ class WorkflowClock:
 
 @dataclass(frozen=True)
 class WorkflowEvents:
+    append_workflow_journal_event: AnyCallable
     notify_phase_summary: AnyCallable
 
 
@@ -90,6 +91,7 @@ def default_orchestration_services() -> OrchestrationServices:
     from orca_auto.flow.submitters.orca import submit_reaction_dir
     from orca_auto.flow.submitters.xtb import cancel_target as xtb_cancel_target
     from orca_auto.flow.submitters.xtb import submit_job_dir as submit_xtb_job_dir
+    from orca_auto.flow.workflow.journal import append_workflow_journal_event
     from orca_auto.flow.workflow.notifications import maybe_notify_workflow_phase_summary
     from orca_auto.flow.xyz_utils import choose_orca_geometry_frame
 
@@ -120,7 +122,10 @@ def default_orchestration_services() -> OrchestrationServices:
             xtb_cancel_target=xtb_cancel_target,
         ),
         clock=WorkflowClock(now_utc_iso=now_utc_iso),
-        events=WorkflowEvents(notify_phase_summary=maybe_notify_workflow_phase_summary),
+        events=WorkflowEvents(
+            append_workflow_journal_event=append_workflow_journal_event,
+            notify_phase_summary=maybe_notify_workflow_phase_summary,
+        ),
     )
 
 

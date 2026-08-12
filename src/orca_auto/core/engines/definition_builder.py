@@ -41,6 +41,10 @@ def _lazy_callable(module_name: str, function_name: str) -> Callable[..., Any]:
     return call
 
 
+def build_lazy_engine_callback(module_name: str, function_name: str) -> Callable[..., Any]:
+    return _lazy_callable(module_name, function_name)
+
+
 def build_lazy_worker_child_runner(
     module_name: str,
     function_name: str,
@@ -183,6 +187,7 @@ def build_queue_engine_definition(
 
 __all__ = [
     "build_engine_runtime_roots",
+    "build_lazy_engine_callback",
     "build_lazy_queue_worker_runner",
     "build_lazy_worker_child_runner",
     "build_queue_engine_definition",

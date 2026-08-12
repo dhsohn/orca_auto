@@ -4,6 +4,8 @@ import logging
 import os
 import sys
 from contextlib import contextmanager
+from dataclasses import replace
+from functools import partial
 from multiprocessing import get_context
 from pathlib import Path
 from threading import Event, Thread
@@ -38,8 +40,13 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     discard_snapshot_intent,
     transition_snapshot_intent,
 )
+from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.publication import queue_record_sync_metadata
 from orca_auto.flow import engine_runtime
+from orca_auto.flow.engines.crest import job_inputs as crest_job_inputs
+from orca_auto.flow.engines.crest import state as crest_state
+from orca_auto.flow.engines.xtb import job_inputs as xtb_job_inputs
+from orca_auto.flow.engines.xtb import state as xtb_state
 from orca_auto.flow.submitters import (
     crest as crest_submitter,
 )
@@ -1842,6 +1849,7 @@ def test_cancel_target_uses_structured_queue_update(
     assert (request_root, requested_queue_id) == (queue_root, queue_id)
     assert request_kwargs["expected_entry"] is original_entry
     assert callable(request_kwargs["accept_entry_fn"])
+    assert callable(request_kwargs["before_pending_cancel_fn"])
     assert result["status"] == expected_status
     assert result["returncode"] == 0
     assert result["command_argv"] == [
@@ -1854,6 +1862,182 @@ def test_cancel_target_uses_structured_queue_update(
     assert result["parsed_stdout"]["status"] == expected_status
     assert result["queue_id"] == queue_id
     assert result["job_id"] == job_id
+
+
+@pytest.mark.parametrize(
+    ("module", "engine"),
+    [(crest_submitter, "crest"), (xtb_submitter, "xtb")],
+)
+def test_pending_cancel_publishes_generation_bound_terminal_state(
+    tmp_path: Path,
+    module: Any,
+    engine: str,
+) -> None:
+    runs_root = tmp_path / "runs"
+    job_dir = runs_root / f"{engine}-job"
+    job_dir.mkdir(parents=True)
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\nH\nH 0 0 0\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+
+    identity_metadata: dict[str, Any]
+    if engine == "crest":
+        identity_metadata = {"mode": "nci", "molecule_key": "mol-1"}
+        queued_state = crest_job_inputs.queued_state_payload(
+            job_id="crest-pending-cancel",
+            job_dir=job_dir,
+            selected_xyz=selected_xyz,
+            mode="nci",
+            molecule_key="mol-1",
+        )
+        write_state = crest_state.write_state
+        load_state = crest_state.load_state
+    else:
+        identity_metadata = {
+            "job_type": "opt",
+            "reaction_key": "rxn-1",
+            "input_summary": {"input_xyz": str(selected_xyz)},
+        }
+        queued_state = xtb_job_inputs.queued_state_payload(
+            job_id="xtb-pending-cancel",
+            job_dir=job_dir,
+            selected_input_xyz=selected_xyz,
+            job_type="opt",
+            reaction_key="rxn-1",
+            input_summary=identity_metadata["input_summary"],
+        )
+        write_state = xtb_state.write_state
+        load_state = xtb_state.load_state
+    queue_root = runs_root / "queue"
+    entry = enqueue(
+        queue_root,
+        app_name=f"orca_auto_{engine}",
+        task_id=f"{engine}-pending-cancel",
+        task_kind=f"{engine}_test",
+        engine=engine,
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            **identity_metadata,
+        },
+    )
+    queued_state["job"].update(
+        {
+            "queue_id": entry.queue_id,
+            "app_name": entry.app_name,
+            "task_id": entry.task_id,
+            "generation": queue_entry_generation_token(entry),
+        }
+    )
+    write_state(job_dir, queued_state)
+
+    cancelled = request_cancel(
+        queue_root,
+        entry.queue_id,
+        expected_entry=entry,
+        before_pending_cancel_fn=partial(
+            module._before_pending_cancel,
+            config_path=str(config_path),
+        ),
+    )
+
+    assert cancelled is not None
+    assert cancelled.status == QueueStatus.CANCELLED
+    terminal = load_state(job_dir)
+    assert terminal is not None
+    assert terminal["status"]["state"] == "cancelled"
+    assert terminal["status"]["reason"] == "cancel_requested"
+    assert terminal["status"]["exit_code"] == 1
+    assert terminal["job"]["id"] == entry.task_id
+    assert terminal["job"]["queue_id"] == entry.queue_id
+    assert terminal["job"]["generation"] == queue_entry_generation_token(entry)
+
+
+@pytest.mark.parametrize(
+    ("module", "engine"),
+    [(crest_submitter, "crest"), (xtb_submitter, "xtb")],
+)
+def test_pending_cancel_rejects_foreign_generation_artifact(
+    tmp_path: Path,
+    module: Any,
+    engine: str,
+) -> None:
+    runs_root = tmp_path / "runs"
+    job_dir = runs_root / f"{engine}-job"
+    job_dir.mkdir(parents=True)
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\nH\nH 0 0 0\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+
+    identity_metadata: dict[str, Any]
+    if engine == "crest":
+        identity_metadata = {"mode": "nci", "molecule_key": "mol-1"}
+        queued_state = crest_job_inputs.queued_state_payload(
+            job_id="crest-pending-cancel",
+            job_dir=job_dir,
+            selected_xyz=selected_xyz,
+            mode="nci",
+            molecule_key="mol-1",
+        )
+        write_state = crest_state.write_state
+    else:
+        identity_metadata = {
+            "job_type": "opt",
+            "reaction_key": "rxn-1",
+            "input_summary": {"input_xyz": str(selected_xyz)},
+        }
+        queued_state = xtb_job_inputs.queued_state_payload(
+            job_id="xtb-pending-cancel",
+            job_dir=job_dir,
+            selected_input_xyz=selected_xyz,
+            job_type="opt",
+            reaction_key="rxn-1",
+            input_summary=identity_metadata["input_summary"],
+        )
+        write_state = xtb_state.write_state
+
+    queue_root = runs_root / "queue"
+    entry = enqueue(
+        queue_root,
+        app_name=f"orca_auto_{engine}",
+        task_id=f"{engine}-pending-cancel",
+        task_kind=f"{engine}_test",
+        engine=engine,
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            **identity_metadata,
+        },
+    )
+    queued_state["job"].update(
+        {
+            "queue_id": entry.queue_id,
+            "app_name": entry.app_name,
+            "task_id": entry.task_id,
+            "generation": "foreign-generation-token",
+        }
+    )
+    write_state(job_dir, queued_state)
+    state_path = job_dir / "job_state.json"
+    original_state = state_path.read_bytes()
+
+    with pytest.raises(ValueError, match="exact queue generation"):
+        request_cancel(
+            queue_root,
+            entry.queue_id,
+            expected_entry=entry,
+            before_pending_cancel_fn=partial(
+                module._before_pending_cancel,
+                config_path=str(config_path),
+            ),
+        )
+
+    assert state_path.read_bytes() == original_state
+    [persisted] = list_queue(queue_root)
+    assert persisted.status == QueueStatus.PENDING
+    assert not persisted.cancel_requested
 
 
 @pytest.mark.parametrize("module", [xtb_submitter, crest_submitter])
@@ -1887,6 +2071,104 @@ def test_cancel_target_reports_structured_error(
     assert result["stderr"] == "RuntimeError: cancel failed\n"
 
 
+@pytest.mark.parametrize("module", [xtb_submitter, crest_submitter])
+def test_internal_cancel_adopts_same_generation_cancelled_terminal_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    module: Any,
+) -> None:
+    queue_root = tmp_path / "queue"
+    entry = enqueue(
+        queue_root,
+        app_name=f"orca_auto_{'xtb' if module is xtb_submitter else 'crest'}",
+        task_id="cancel-terminal-replay",
+        task_kind="test",
+        engine="xtb" if module is xtb_submitter else "crest",
+        metadata={"job_dir": str(tmp_path / "job")},
+    )
+    monkeypatch.setattr(module, "load_queue_config", lambda _path: object())
+    monkeypatch.setattr(
+        module,
+        "queue_entries_with_roots",
+        lambda _cfg: [(queue_root, current) for current in list_queue(queue_root)],
+    )
+
+    def concurrently_cancel_then_report_no_transition(
+        root: Path,
+        queue_id: str,
+        **_kwargs: Any,
+    ) -> None:
+        cancelled = mark_cancelled(root, queue_id, expected_entry=entry)
+        assert cancelled is not None
+        return None
+
+    monkeypatch.setattr(module, "request_cancel", concurrently_cancel_then_report_no_transition)
+    monkeypatch.setattr(
+        module,
+        "_before_pending_cancel",
+        lambda _entry, *, config_path: None,
+    )
+
+    result = module.cancel_target(
+        target=entry.queue_id,
+        config_path="/tmp/engine.yaml",
+    )
+
+    assert result["status"] == "cancelled"
+    assert result["returncode"] == 0
+    assert result["queue_id"] == entry.queue_id
+    [cancelled] = list_queue(queue_root)
+    assert cancelled.status == QueueStatus.CANCELLED
+
+
+@pytest.mark.parametrize("module", [xtb_submitter, crest_submitter])
+def test_internal_cancel_rejects_cancelled_successor_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    module: Any,
+) -> None:
+    queue_root = tmp_path / "queue"
+    entry = enqueue(
+        queue_root,
+        app_name=f"orca_auto_{'xtb' if module is xtb_submitter else 'crest'}",
+        task_id="cancel-successor",
+        task_kind="test",
+        engine="xtb" if module is xtb_submitter else "crest",
+        metadata={"job_dir": str(tmp_path / "job")},
+    )
+    first_listing = True
+
+    def list_original_then_successor(_cfg: Any) -> list[tuple[Path, QueueEntry]]:
+        nonlocal first_listing
+        if first_listing:
+            first_listing = False
+            return [(queue_root, entry)]
+        return [
+            (
+                queue_root,
+                replace(entry, status=QueueStatus.CANCELLED, task_id="successor-task"),
+            )
+        ]
+
+    monkeypatch.setattr(module, "load_queue_config", lambda _path: object())
+    monkeypatch.setattr(module, "queue_entries_with_roots", list_original_then_successor)
+    monkeypatch.setattr(module, "request_cancel", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_before_pending_cancel",
+        lambda _entry, *, config_path: None,
+    )
+
+    result = module.cancel_target(
+        target=entry.queue_id,
+        config_path="/tmp/engine.yaml",
+    )
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "cancel_command_failed"
+    assert result["stderr"] == f"queue target already terminal: {entry.queue_id}\n"
+
+
 def test_internal_cancel_recovers_durable_post_commit_error(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1915,6 +2197,11 @@ def test_internal_cancel_recovers_durable_post_commit_error(
         raise OSError("cancel durability barrier failed")
 
     monkeypatch.setattr(xtb_submitter, "request_cancel", persist_then_raise)
+    monkeypatch.setattr(
+        xtb_submitter,
+        "_before_pending_cancel",
+        lambda _entry, *, config_path: None,
+    )
 
     result = xtb_submitter.cancel_target(
         target=entry.queue_id,

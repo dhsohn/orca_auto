@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 from orca_auto.core.queue.store import queue_entries_same_generation
@@ -117,11 +118,15 @@ def _cancel_updated_entry(
     match: _InternalEngineCancelMatch,
     *,
     request_cancel_fn: Callable[..., Any | None],
+    before_pending_cancel_fn: Callable[[Any], Any] | None = None,
 ) -> Any | None:
+    cancel_kwargs: dict[str, Any] = {"expected_entry": match.entry}
+    if before_pending_cancel_fn is not None:
+        cancel_kwargs["before_pending_cancel_fn"] = before_pending_cancel_fn
     return request_cancel_fn(
         match.queue_root,
         match.entry.queue_id,
-        expected_entry=match.entry,
+        **cancel_kwargs,
     )
 
 
@@ -164,6 +169,7 @@ def cancel_internal_engine_target(
     queue_entries_with_roots_fn: Callable[[Any], list[tuple[Any, Any]]],
     request_cancel_fn: Callable[..., Any | None],
     display_status_fn: Callable[[Any], str],
+    before_pending_cancel_fn: Callable[[Any], Any] | None = None,
     api_name: str,
     target: str,
     config_path: str,
@@ -193,7 +199,11 @@ def cancel_internal_engine_target(
             )
 
         try:
-            updated = _cancel_updated_entry(match, request_cancel_fn=request_cancel_fn)
+            updated = _cancel_updated_entry(
+                match,
+                request_cancel_fn=request_cancel_fn,
+                before_pending_cancel_fn=before_pending_cancel_fn,
+            )
         except Exception as cancel_exc:
             try:
                 updated = _recover_cancel_after_error(
@@ -205,6 +215,17 @@ def cancel_internal_engine_target(
                 raise cancel_exc from reload_exc
             if updated is None:
                 raise
+        if updated is None:
+            recovered = _recover_cancel_after_error(
+                cfg,
+                match,
+                queue_entries_with_roots_fn=queue_entries_with_roots_fn,
+            )
+            if (
+                recovered is not None
+                and _queue_entry_status_text(recovered).lower() == STATUS_CANCELLED
+            ):
+                updated = recovered
         if updated is None:
             return _cancel_failure_payload(
                 command_trace=request.command_trace,
@@ -232,11 +253,17 @@ def cancel_engine_target(
     target: str,
     config_path: str,
 ) -> dict[str, Any]:
+    before_pending_cancel_fn = (
+        partial(deps.before_pending_cancel_fn, config_path=config_path)
+        if deps.before_pending_cancel_fn is not None
+        else None
+    )
     return cancel_internal_engine_target(
         load_config_fn=deps.load_queue_config_fn,
         queue_entries_with_roots_fn=deps.queue_entries_with_roots_fn,
         request_cancel_fn=deps.request_cancel_fn,
         display_status_fn=deps.display_status_fn,
+        before_pending_cancel_fn=before_pending_cancel_fn,
         api_name=spec.cancel_api_name,
         config_path=config_path,
         target=target,

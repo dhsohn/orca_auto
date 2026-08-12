@@ -36,6 +36,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_TOKEN_KEY,
     transition_snapshot_intent,
 )
+from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.lifecycle import entry_status_is_running
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
@@ -60,6 +61,7 @@ from .queue.adapter import (
     list_queue,
     queue_entry_app_name,
     queue_entry_force,
+    queue_entry_id,
     queue_entry_reaction_dir,
     queue_entry_task_id,
     requeue_running_entry,
@@ -350,6 +352,8 @@ def _run_orca_job_for_entry(
             admission_app_name=context.admission_app_name,
             admission_task_id=context.admission_task_id,
             execution_provenance=execution_provenance,
+            queue_id=queue_entry_id(context.entry),
+            queue_generation=queue_entry_generation_token(context.entry),
             runner_cls=ShutdownAwareOrcaRunner,
         )
     except WorkerShutdownInterrupt as exc:
@@ -648,6 +652,8 @@ def execute_run_job(
     admission_app_name: str | None = None,
     admission_task_id: str | None = None,
     execution_provenance: dict[str, Any] | None = None,
+    queue_id: str | None = None,
+    queue_generation: str | None = None,
     runner_cls: type[OrcaRunner] = OrcaRunner,
 ) -> int:
     return execute_orca_run(
@@ -664,6 +670,8 @@ def execute_run_job(
         admission_app_name=_canonical_admission_app_name(admission_app_name),
         admission_task_id=admission_task_id,
         execution_provenance=execution_provenance,
+        queue_id=queue_id,
+        queue_generation=queue_generation,
     )
 
 

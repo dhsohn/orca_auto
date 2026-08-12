@@ -343,6 +343,8 @@ def existing_completed_exit(
     max_retries: int,
     admission_task_id: str | None,
     execution_provenance: Mapping[str, Any] | None = None,
+    queue_id: str | None = None,
+    queue_generation: str | None = None,
 ) -> int | None:
     del admission_root, reservation_token
     done = existing_completed_out(selected_inp)
@@ -366,6 +368,14 @@ def existing_completed_exit(
         # first so the terminal replay can bind the resulting artifacts to
         # this queue generation.
         state["job_id"] = task_id
+        state_changed = True
+    resolved_queue_id = str(queue_id or "").strip()
+    if resolved_queue_id and state.get("queue_id") != resolved_queue_id:
+        state["queue_id"] = resolved_queue_id
+        state_changed = True
+    resolved_queue_generation = str(queue_generation or "").strip()
+    if resolved_queue_generation and state.get("queue_generation") != resolved_queue_generation:
+        state["queue_generation"] = resolved_queue_generation
         state_changed = True
     if state_changed:
         save_state(reaction_dir, state)
@@ -400,6 +410,8 @@ def execute_locked_run(
             admission_task_id=context.admission_task_id,
         ):
             context_provenance = getattr(context, "execution_provenance", None)
+            context_queue_id = str(getattr(context, "queue_id", "") or "").strip()
+            context_queue_generation = str(getattr(context, "queue_generation", "") or "").strip()
             if not getattr(args, "force", False):
                 existing_kwargs: dict[str, Any] = {
                     "reaction_dir": context.reaction_dir,
@@ -411,6 +423,10 @@ def execute_locked_run(
                 }
                 if context_provenance:
                     existing_kwargs["execution_provenance"] = context_provenance
+                if context_queue_id:
+                    existing_kwargs["queue_id"] = context_queue_id
+                if context_queue_generation:
+                    existing_kwargs["queue_generation"] = context_queue_generation
                 existing_exit = existing_completed_exit(
                     **existing_kwargs,
                 )
@@ -429,6 +445,15 @@ def execute_locked_run(
                 state_changed = True
             if context.admission_task_id and state.get("job_id") != context.admission_task_id:
                 state["job_id"] = context.admission_task_id
+                state_changed = True
+            if context_queue_id and state.get("queue_id") != context_queue_id:
+                state["queue_id"] = context_queue_id
+                state_changed = True
+            if (
+                context_queue_generation
+                and state.get("queue_generation") != context_queue_generation
+            ):
+                state["queue_generation"] = context_queue_generation
                 state_changed = True
             if state_changed:
                 save_state(context.reaction_dir, state)
@@ -456,6 +481,8 @@ def execute_orca_run(
     admission_app_name: str | None = None,
     admission_task_id: str | None = None,
     execution_provenance: Mapping[str, Any] | None = None,
+    queue_id: str | None = None,
+    queue_generation: str | None = None,
     logger: logging.Logger | None = None,
 ) -> int:
     logger = logger or logging.getLogger(__name__)
@@ -468,6 +495,8 @@ def execute_orca_run(
         admission_app_name=admission_app_name,
         admission_task_id=admission_task_id,
         execution_provenance=execution_provenance,
+        queue_id=queue_id,
+        queue_generation=queue_generation,
         load_config_fn=load_config,
         select_latest_inp_fn=select_latest_inp,
         logger=logger,

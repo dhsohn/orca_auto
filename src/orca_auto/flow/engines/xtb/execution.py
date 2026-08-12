@@ -53,7 +53,9 @@ from orca_auto.flow.engines.xtb.runner import (
 )
 from orca_auto.flow.engines.xtb.state import (
     is_recovery_pending,
+    load_state,
     mark_recovery_pending,
+    state_matches_job,
 )
 from orca_auto.flow.engines.xtb.worker_context import (
     WorkerExecutionHooks,
@@ -91,6 +93,9 @@ from orca_auto.flow.engines.xtb.worker_terminal import (
 )
 from orca_auto.flow.engines.xtb.worker_terminal import (
     finalize_execution_result as _finalize_execution_result,
+)
+from orca_auto.flow.engines.xtb.worker_terminal import (
+    write_execution_artifacts as _write_execution_artifacts,
 )
 from orca_auto.flow.engines.xtb.worker_terminal import (
     write_running_state as _write_running_state,
@@ -307,6 +312,55 @@ def build_worker_execution_dependencies(
 
 def default_worker_execution_dependencies() -> WorkerExecutionDependencies:
     return build_worker_execution_dependencies()
+
+
+def publish_pending_cancel(entry: Any, *, config_path: str) -> None:
+    cfg = load_config(config_path)
+    dependencies = default_worker_execution_dependencies()
+    context = _build_worker_execution_context(
+        cfg,
+        entry,
+        context_deps=dependencies.context,
+        verify_execution_snapshot=False,
+    )
+    result = _cancelled_before_start_result(context, dependencies=dependencies)
+    pending_state = _engine_execution.require_pending_cancel_state_for_entry(
+        load_state(context.job_dir),
+        entry=entry,
+        engine="xtb",
+        job_dir=context.job_dir,
+    )
+    if not state_matches_job(
+        pending_state,
+        selected_input_xyz=context.selected_xyz,
+        job_type=context.job_type,
+        reaction_key=context.reaction_key,
+    ):
+        raise ValueError("Pending cancellation state does not match the queued xTB job")
+    pending_status = pending_state.get("status")
+    already_cancelled = (
+        str(pending_status.get("state") or "").strip().lower() == "cancelled"
+        if isinstance(pending_status, dict)
+        else False
+    )
+    if not already_cancelled:
+        _write_execution_artifacts(
+            entry,
+            result,
+            previous_state=pending_state,
+            resumed=False,
+        )
+    upsert_job_record(
+        cfg,
+        job_id=entry.task_id,
+        status=result.status,
+        job_dir=context.job_dir,
+        job_type=context.job_type,
+        selected_input_xyz=str(context.selected_xyz),
+        reaction_key=context.reaction_key,
+        resource_request=result.resource_request,
+        resource_actual=result.resource_actual,
+    )
 
 
 def _build_execution_context(

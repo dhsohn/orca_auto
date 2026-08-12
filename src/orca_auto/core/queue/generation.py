@@ -69,7 +69,10 @@ _MUTABLE_LIFECYCLE_METADATA_KEYS = {
     "attempt",
     "candidate_count",
     "execution_dir",
+    "orca_terminal_replay",
+    "orca_terminal_replay_fence_only",
     "retained_conformer_count",
+    "run_id",
     "terminal_artifacts",
     "terminal_repair_blocked_reason",
 }

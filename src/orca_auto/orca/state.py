@@ -227,6 +227,8 @@ def _state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
     engine_payload = _dict(payload.get("engine_payload"))
     state: RunState = {
         "job_id": _text(job.get("id")),
+        "queue_id": _text(job.get("queue_id")),
+        "queue_generation": _text(job.get("generation")),
         "run_id": _text(engine_payload.get("run_id")),
         "reaction_dir": _text(job.get("dir")),
         "selected_inp": _text(input_payload.get("primary_path")),
@@ -556,10 +558,11 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
         engine="orca",
         job=EngineArtifactJob(
             id=job_id,
-            queue_id="",
+            queue_id=_text(state.get("queue_id")),
             dir=_text(state.get("reaction_dir")) or str(reaction_dir.resolve()),
             app_name="orca_auto_orca",
             task_id=job_id,
+            generation=_text(state.get("queue_generation")),
         ),
         status=EngineArtifactStatus(
             state=status,

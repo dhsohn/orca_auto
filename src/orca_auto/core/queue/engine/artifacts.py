@@ -141,6 +141,43 @@ def exact_artifact_envelope_for_entry(
     return dict(payload)
 
 
+def require_pending_cancel_state_for_entry(
+    payload: Mapping[str, Any] | None,
+    *,
+    entry: QueueEntry,
+    engine: str,
+    job_dir: Path,
+) -> dict[str, Any]:
+    """Require queued or idempotently-cancelled state for this exact generation."""
+
+    if payload is None:
+        raise ValueError("Pending cancellation requires state for the exact queue generation")
+    exact_state = exact_artifact_envelope_for_entry(
+        payload,
+        entry=entry,
+        engine=engine,
+        job_dir=job_dir,
+        require_job_dir=True,
+        require_generation=True,
+    )
+    if not exact_state:
+        raise ValueError("Pending cancellation requires state for the exact queue generation")
+    status = exact_state.get("status")
+    state = str(status.get("state") or "").strip().lower() if isinstance(status, Mapping) else ""
+    if state == "queued":
+        return exact_state
+    if state == "cancelled" and terminal_state_is_consistent(
+        state=exact_state,
+        entry=entry,
+        engine=engine,
+        job_dir=job_dir,
+        expected_status="cancelled",
+        expected_reason="cancel_requested",
+    ):
+        return exact_state
+    raise ValueError("Pending cancellation requires queued state or an exact cancelled replay")
+
+
 def canonical_terminal_state_payload(
     payload: Mapping[str, Any],
     *,
@@ -623,6 +660,7 @@ __all__ = [
     "default_engine_resource_caps",
     "default_entry_resource_request",
     "is_resumed_state",
+    "require_pending_cancel_state_for_entry",
     "terminal_state_is_consistent",
     "write_running_engine_state_artifact",
     "write_running_state_artifact",

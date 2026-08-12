@@ -103,6 +103,7 @@ def open_confined_log(
     *,
     label: str,
     append: bool = False,
+    readable: bool = False,
 ) -> TextIO:
     resolved_cwd = cwd.expanduser().resolve()
     parent = log_path.parent
@@ -113,7 +114,7 @@ def open_confined_log(
     directory_flags |= os.O_NOFOLLOW
     directory_fd = os.open(parent, directory_flags)
     try:
-        file_flags = os.O_WRONLY | os.O_CREAT
+        file_flags = (os.O_RDWR if readable else os.O_WRONLY) | os.O_CREAT
         if append:
             file_flags |= os.O_APPEND
         file_flags |= os.O_NONBLOCK
@@ -128,7 +129,7 @@ def open_confined_log(
     if not append:
         os.ftruncate(descriptor, 0)
         os.lseek(descriptor, 0, os.SEEK_SET)
-    return os.fdopen(descriptor, "w", encoding="utf-8")
+    return os.fdopen(descriptor, "r+" if readable else "w", encoding="utf-8")
 
 
 def read_confined_text(
