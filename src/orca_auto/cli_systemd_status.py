@@ -18,7 +18,13 @@ from orca_auto._version import installed_version_drift
 from orca_auto.cli_errors import emit_error
 from orca_auto.cli_systemd_apply import _run_command
 from orca_auto.core.utils.coercion import normalize_text
-from orca_auto.systemd_plan import _is_root
+from orca_auto.systemd_plan import (
+    _engine_workers_unit_for_user,
+    _is_root,
+    _runtime_unit_for_user,
+    _worker_unit_for_user,
+    _workflow_worker_unit_for_user,
+)
 
 SERVICE_UNIT_ORDER = (
     ("runtime", "orca_auto-runtime@{user}.target"),
@@ -399,22 +405,6 @@ def _systemctl_available(*, which: Callable[[str], str | None] = shutil.which) -
 
 def _sudo_available(*, which: Callable[[str], str | None] = shutil.which) -> bool:
     return which("sudo") is not None
-
-
-def _runtime_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-runtime@{target_user}.target"
-
-
-def _engine_workers_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-engine-workers@{target_user}.target"
-
-
-def _worker_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-queue-worker@{target_user}.service"
-
-
-def _workflow_worker_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-workflow-worker@{target_user}.service"
 
 
 # A unit reaches any of these only because someone started it, so restarting it

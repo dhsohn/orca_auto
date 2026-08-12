@@ -23,7 +23,6 @@ from ..processes import (
 )
 from .loop import QueueWorkerLoop
 from .models import BackgroundRunningJob
-from .signals import install_shutdown_signal_handlers as _install_shutdown_signal_handlers
 
 logger = logging.getLogger(__name__)
 _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
@@ -463,15 +462,10 @@ class HookedPidFileChildProcessQueueWorker(PidFileChildProcessQueueWorker):
         self.hooks.reconcile_worker_state(self)
 
 
-def install_shutdown_signal_handlers(request_shutdown: Callable[[], None]) -> None:
-    _install_shutdown_signal_handlers(request_shutdown)
-
-
 __all__ = [
     "ChildProcessQueueWorker",
     "HookedPidFileChildProcessQueueWorker",
     "PidFileChildProcessQueueWorker",
     "PidFileChildProcessQueueWorkerHooks",
     "QueueWorkerPidFileMixin",
-    "install_shutdown_signal_handlers",
 ]

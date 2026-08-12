@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.persistence import atomic_write_text, now_utc_iso
@@ -36,14 +36,6 @@ class ProcessGroupTerminationDeps:
     group_poll_interval_seconds: float = 0.1
     sigterm: int = signal.SIGTERM
     sigkill: int = signal.SIGKILL
-    logger: logging.Logger = LOGGER
-
-
-@dataclass(frozen=True)
-class ShutdownSignalDeps:
-    signal_fn: Callable[[int, Callable[[int, object], None]], Any] = signal.signal
-    sigterm: int = signal.SIGTERM
-    sigint: int = signal.SIGINT
     logger: logging.Logger = LOGGER
 
 
@@ -271,23 +263,17 @@ def terminate_process_group(
     return terminated
 
 
-def install_shutdown_signal_handlers(
-    request_shutdown: Callable[[], None],
-    *,
-    deps: ShutdownSignalDeps | None = None,
-) -> None:
-    active_deps = deps or ShutdownSignalDeps()
-
+def install_shutdown_signal_handlers(request_shutdown: Callable[[], None]) -> None:
     def _handle_signal(_signum: int, _frame: object) -> None:
         request_shutdown()
 
+    # signal.signal is looked up at call time so tests can patch the signal
+    # module after import and still suppress real handler installation.
     try:
-        active_deps.signal_fn(active_deps.sigterm, _handle_signal)
-        active_deps.signal_fn(active_deps.sigint, _handle_signal)
+        signal.signal(signal.SIGTERM, _handle_signal)
+        signal.signal(signal.SIGINT, _handle_signal)
     except ValueError:
-        active_deps.logger.debug(
-            "shutdown signal handlers can only be installed from the main thread"
-        )
+        LOGGER.debug("shutdown signal handlers can only be installed from the main thread")
 
 
 def pid_is_alive(pid: int) -> bool:
@@ -348,7 +334,6 @@ def read_live_pid_file(pid_path: Path) -> int | None:
 __all__ = [
     "ManagedProcess",
     "ProcessGroupTerminationDeps",
-    "ShutdownSignalDeps",
     "current_worker_pid_payload",
     "install_shutdown_signal_handlers",
     "managed_process_group_has_exited",
