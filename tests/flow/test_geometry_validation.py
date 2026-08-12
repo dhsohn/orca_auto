@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.flow.contracts.xtb import XtbArtifactContract, XtbCandidateArtifact
+from orca_auto.flow.contracts.xtb import (
+    XtbArtifactContract,
+    XtbCandidateArtifact,
+    geometry_validation_passed,
+)
 from orca_auto.flow.engines.xtb.runner_artifacts import _ts_guess_validation_fields
 from orca_auto.flow.geometry_validation import (
     GeometryValidationError,
@@ -311,3 +315,38 @@ def test_xtb_handoff_status_keeps_valid_lower_ranked_guess(tmp_path: Path) -> No
     status = xtb_handoff_status_impl(contract)
     assert status["status"] == "ready"
     assert status["artifact_path"] == str(runner_up_path)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "passed"),
+    [
+        ({"geometry_valid": True, "geometry_validation": {"valid": True, "reasons": []}}, True),
+        ({}, False),
+        ({"geometry_valid": True}, False),
+        ({"geometry_valid": True, "geometry_validation": {"valid": True}}, False),
+        ({"geometry_valid": False, "geometry_validation": {"valid": True, "reasons": []}}, False),
+        ({"geometry_valid": True, "geometry_validation": {"valid": False, "reasons": []}}, False),
+        (
+            {"geometry_valid": True, "geometry_validation": {"valid": True, "reasons": ["rmsd"]}},
+            False,
+        ),
+        (
+            {
+                "geometry_valid": True,
+                "geometry_validation": {"valid": True, "reasons": [], "error": "probe failed"},
+            },
+            False,
+        ),
+        ({"geometry_valid": 1, "geometry_validation": {"valid": True, "reasons": []}}, False),
+    ],
+)
+def test_geometry_validation_passed_requires_every_clause(
+    metadata: dict[str, object],
+    passed: bool,
+) -> None:
+    """The handoff gate accepts only an explicit, self-consistent verdict.
+
+    One shared predicate backs both the accepting rule and the refusal-reason
+    reporter; each clause here is load-bearing for the fail-closed direction.
+    """
+    assert geometry_validation_passed(metadata) is passed
