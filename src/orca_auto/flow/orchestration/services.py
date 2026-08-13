@@ -46,6 +46,7 @@ class WorkflowClock:
 class WorkflowEvents:
     append_workflow_journal_event: AnyCallable
     notify_phase_summary: AnyCallable
+    require_workflow_journal_capacity: AnyCallable
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,7 @@ def default_orchestration_services() -> OrchestrationServices:
     from orca_auto.flow.engine_runtime import engine_runtime_paths
     from orca_auto.flow.registry import (
         append_workflow_journal_event,
+        require_workflow_journal_capacity,
         sync_workflow_registry,
     )
     from orca_auto.flow.state import (
@@ -127,6 +129,7 @@ def default_orchestration_services() -> OrchestrationServices:
         events=WorkflowEvents(
             append_workflow_journal_event=append_workflow_journal_event,
             notify_phase_summary=maybe_notify_workflow_phase_summary,
+            require_workflow_journal_capacity=require_workflow_journal_capacity,
         ),
     )
 

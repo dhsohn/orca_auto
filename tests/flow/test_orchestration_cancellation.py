@@ -110,6 +110,63 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
     assert payload["stages"][4]["task"]["cancel_result"]["status"] == "cancelled"
 
 
+def test_cancel_refuses_before_any_mutation_when_journal_is_over_limit(
+    tmp_path: Path,
+) -> None:
+    journal_path = tmp_path / registry.WORKFLOW_JOURNAL_FILE_NAME
+    journal_path.write_bytes(b"x" * (registry.journal.CALLER_EVENT_LOOKUP_MAX_BYTES + 1))
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_cancel_journal",
+        "status": "running",
+        "stages": [
+            {
+                "stage_id": "stage_crest_remote",
+                "status": "submitted",
+                "metadata": {"queue_id": "q_crest"},
+                "task": {"engine": "crest", "status": "submitted"},
+            }
+        ],
+    }
+    payload_writes: list[Any] = []
+    stage_cancels: list[Any] = []
+
+    def _record_crest_cancel(**kwargs: Any) -> dict[str, Any]:
+        stage_cancels.append(kwargs)
+        return {"status": "cancelled", "queue_id": kwargs["target"]}
+
+    deps = orchestration_services(
+        overrides={
+            "resolve_workflow_workspace": lambda target, workflow_root: (
+                tmp_path / "wf_cancel_journal"
+            ),
+            "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
+            "load_workflow_payload": lambda workspace_dir: payload,
+            "crest_cancel_target": _record_crest_cancel,
+            "write_workflow_payload": lambda workspace_dir, current_payload: payload_writes.append(
+                current_payload
+            ),
+            "sync_workflow_registry": lambda workflow_root, workspace_dir, current_payload: None,
+        }
+    )
+
+    with pytest.raises(ValueError, match="exceeds its read limit"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_cancel_journal",
+            workflow_root=tmp_path,
+            crest_config="/tmp/crest.yaml",
+            services=deps,
+        )
+
+    # The refusal must land before any stage cancel or durable write: an
+    # oversized journal previously surfaced only after the cancelled status
+    # was already persisted, so the command reported failure for a cancel
+    # that had taken effect.
+    assert stage_cancels == []
+    assert payload_writes == []
+    assert payload["status"] == "running"
+    assert "cancellation_status_transitions" not in payload.get("metadata", {})
+
+
 def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_pending(
     tmp_path: Path,
 ) -> None:

@@ -40,6 +40,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `workflow cancel` on a root whose `workflow_registry.journal.jsonl` exceeds
+  the 8 MiB caller-event read limit now refuses up front, before any stage
+  cancel or durable write, with a message naming the journal and the
+  remediation. The oversized journal previously surfaced only after the
+  cancelled status was already persisted, so the command reported failure
+  for a cancel that had taken effect and every later cancel in that root
+  failed the same way.
 - The workflow candidate ranking no longer includes interaction-energy
   fan-out single points. Fragment and complex SP stages (metadata role
   `interaction_*`) carry a different stoichiometry or level of theory, so

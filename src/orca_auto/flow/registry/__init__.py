@@ -4,6 +4,7 @@ from .journal import (
     WORKFLOW_JOURNAL_FILE_NAME,
     append_workflow_journal_event,
     list_workflow_journal,
+    require_workflow_journal_capacity,
     workflow_journal_path,
 )
 from .store import (
@@ -42,6 +43,7 @@ __all__ = [
     "list_workflow_registry",
     "load_workflow_worker_state",
     "reindex_workflow_registry",
+    "require_workflow_journal_capacity",
     "resolve_workflow_registry_record",
     "sync_workflow_registry",
     "upsert_workflow_registry_record",
