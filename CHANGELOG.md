@@ -17,7 +17,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   cross-level complex energy set the ΔE baseline in `workflow_report.html`,
   the Best-energy card, and the terminal workflow `machine.json`
   `results.orca_results`. The stages remain in the stage chain, in workflow
-  lineage, and in the SI ΔE_int table. Already-published terminal
+  lineage, and in the SI ΔE_int table; like `relaxed_scan` stages, their job
+  reports are no longer linked from the candidate table, and the ORCA jobs
+  metric card now counts candidates only. Already-published terminal
   observations are immutable and unaffected.
 
 ## [2.0.0] - 2026-08-10
