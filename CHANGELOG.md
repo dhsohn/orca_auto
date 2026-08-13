@@ -8,6 +8,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Removed
+
+- The `xtb.ts_guess_validation.enabled` manifest key. After the validated
+  geometry handoff landed, `true` matched the default and `false` made every
+  reaction workflow refuse the ORCA handoff with a misleading
+  `xtb_ts_guess_geometry_unvalidated` reason, so the knob had no supported
+  use. Geometry validation always runs; the threshold keys `bond_scale`,
+  `max_spurious_bond_changes`, and `reacting_bond_stretch_scale` remain
+  tunable. A direct xTB job submission carrying `enabled` is rejected at
+  admission as an unknown field; a workflow manifest carrying it is rejected
+  when its first xTB stage is submitted, the same deferred point where any
+  unknown key in this block has always surfaced. A stale `enabled` value
+  inside an already-submitted per-job manifest is ignored by the runner on
+  restart.
+
 ### Fixed
 
 - The workflow candidate ranking no longer includes interaction-energy

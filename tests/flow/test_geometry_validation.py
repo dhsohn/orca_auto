@@ -11,6 +11,7 @@ from orca_auto.flow.contracts.xtb import (
     geometry_validation_passed,
 )
 from orca_auto.flow.engines.xtb.runner_artifacts import _ts_guess_validation_fields
+from orca_auto.flow.engines.xtb.submission import _canonical_ts_validation_options
 from orca_auto.flow.geometry_validation import (
     GeometryValidationError,
     validate_ts_guess_geometry,
@@ -159,13 +160,13 @@ def test_ts_guess_validation_fields_annotations(tmp_path: Path) -> None:
     assert fields["geometry_valid"] is True
     assert fields["geometry_validation"]["valid"] is True
 
-    # disabled via manifest
-    assert (
-        _ts_guess_validation_fields(
-            str(ts), input_summary, {"ts_guess_validation": {"enabled": False}}
-        )
-        is None
+    # A stale `enabled` key stored by a pre-removal manifest is ignored:
+    # validation always runs.
+    stale = _ts_guess_validation_fields(
+        str(ts), input_summary, {"ts_guess_validation": {"enabled": False}}
     )
+    assert stale is not None
+    assert stale["geometry_valid"] is True
     # endpoints unknown
     assert _ts_guess_validation_fields(str(ts), {}, {}) is None
 
@@ -181,6 +182,12 @@ def test_ts_guess_validation_fields_annotations(tmp_path: Path) -> None:
     assert fields is not None
     assert fields["geometry_valid"] is False
     assert "error" in fields["geometry_validation"]
+
+
+def test_ts_guess_validation_schema_rejects_removed_enabled_knob() -> None:
+    manifest = {"ts_guess_validation": {"enabled": False}}
+    with pytest.raises(ValueError, match="Unknown xTB ts_guess_validation fields"):
+        _canonical_ts_validation_options(manifest)
 
 
 def test_ts_guess_validation_rejects_multiframe_geometry(tmp_path: Path) -> None:
