@@ -296,6 +296,12 @@ def cancel_materialized_workflow(
         )
         with lock_context:
             payload = resolved.persistence.load_workflow_payload(workspace_dir)
+            # The caller-owned journal append below must read the whole journal
+            # to dedupe its stable event id, and that read refuses oversized
+            # files. Check capacity before cancelling stages or writing any
+            # durable state, so an oversized journal refuses the cancel while
+            # nothing has changed yet.
+            resolved.events.require_workflow_journal_capacity(workflow_root_path)
             previous_status = str(payload.get("status") or "").strip().lower()
             identity_error = ""
             try:

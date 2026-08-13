@@ -39,6 +39,32 @@ def workflow_journal_path(workflow_root: str | Path) -> Path:
     return root / WORKFLOW_JOURNAL_FILE_NAME
 
 
+def require_workflow_journal_capacity(workflow_root: str | Path) -> None:
+    """Fail closed before durable writes when the journal is over its read limit.
+
+    A caller-owned append must read the whole journal to dedupe its stable
+    event id, and that read refuses files larger than
+    ``CALLER_EVENT_LOOKUP_MAX_BYTES``. A caller that persists durable state
+    before appending checks capacity first, so an oversized journal refuses
+    the whole operation while nothing has changed yet.
+    """
+    path = workflow_journal_path(workflow_root)
+    if path.is_symlink():
+        # The append path opens the journal O_NOFOLLOW and would fail after
+        # durable writes; refuse the same corruption up front.
+        raise ValueError(f"workflow journal must not be a symlink: {path}")
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return
+    if size > CALLER_EVENT_LOOKUP_MAX_BYTES:
+        raise ValueError(
+            f"workflow journal exceeds its read limit "
+            f"({size} > {CALLER_EVENT_LOOKUP_MAX_BYTES} bytes): {path}; "
+            "archive or trim the journal, then retry"
+        )
+
+
 def _maybe_notify_journal_event(event: dict[str, Any], workflow_root: str | Path) -> None:
     event_type = _normalize_text(event.get("event_type"))
     if not _notifications.journal_notification_enabled(event_type):
@@ -241,5 +267,6 @@ __all__ = [
     "WORKFLOW_JOURNAL_FILE_NAME",
     "append_workflow_journal_event",
     "list_workflow_journal",
+    "require_workflow_journal_capacity",
     "workflow_journal_path",
 ]
