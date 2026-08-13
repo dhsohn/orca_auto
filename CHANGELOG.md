@@ -8,6 +8,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The reaction xTB→ORCA handoff now requires an explicit successful geometry
+  validation verdict on the TS guess: a candidate without one refuses the
+  handoff with the new reason `xtb_ts_guess_geometry_unvalidated`, while an
+  explicitly failed validation keeps refusing with
+  `xtb_ts_guess_geometry_invalid`.
+- Queue and workflow activity timestamps parse through the shared strict ISO
+  parser; a non-string value is treated as absent instead of being coerced to
+  text first. No JSON-loaded state can carry such a value today.
+- Removed dead internal surfaces and collapsed pass-through wiring across
+  queue rendering, transition events, flow imports, ISO parsing, xTB ranking
+  re-exports, systemd unit names, and the admission-store test double; queue
+  text output and workflow journal event order were verified unchanged.
+
 ### Removed
 
 - The `xtb.ts_guess_validation.enabled` manifest key. After the validated
@@ -36,11 +51,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   reports are no longer linked from the candidate table, and the ORCA jobs
   metric card now counts candidates only. Already-published terminal
   observations are immutable and unaffected.
-
-## [2.0.0] - 2026-08-10
-
-### Fixed
-
+- A workflow observation's `lineage.upstream` now records every ORCA
+  `machine.json` the workflow actually consumed, including stages that publish
+  no HTML report and prerequisite `relaxed_scan` stages; the co-located HTML
+  report is no longer treated as lineage authority.
+- Terminal `machine.json` probing fails closed before the linked artifact
+  writers: an existing observation that is a symlink, hard link, or unreadable
+  now aborts report finalization before the HTML and SI writers run, so a
+  no-HTML retry can no longer delete a published `job_report.html` before the
+  terminal write refuses.
 - `service restart` now restarts the worker services themselves after the boot
   target. Restarting the target left both workers' start timestamps untouched
   on the deploy host, so a worker kept serving pre-deploy code while the
@@ -62,6 +81,22 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   those a success — `reset-failed` exits 0 on a unit it reports as not
   loaded — so the restart silently skipped the real workers. Template units
   cannot catch this either: they load for any instance name.
+- Pending xTB/CREST workflow-child cancellation now publishes same-generation
+  terminal state before the queue row becomes terminal. Workflow cancellation
+  persists one stable journal transition before best-effort notification and
+  recovers interrupted payload/registry or uncertain journal writes without
+  adopting a successor generation; replay of an existing event does not resend
+  the notification. Standalone engine cancellation also adopts a concurrent
+  same-generation `cancelled` row while rejecting a successor generation.
+- Standalone `run-dir --json` now writes exactly one JSON document to stdout,
+  using the same submission result as the human renderer instead of printing
+  `key: value` lines.
+- Queued standalone ORCA root and generation `job_state.json` now preserve the
+  queue id and immutable generation identity from the claimed row. Direct
+  unqueued runs keep those fields empty, and mutable run/replay metadata no
+  longer changes the generation token.
+
+## [2.0.0] - 2026-08-10
 
 ### Changed
 
@@ -129,21 +164,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `flow.yaml` said such a limit existed.
 
 ### Fixed
-
-- Pending xTB/CREST workflow-child cancellation now publishes same-generation
-  terminal state before the queue row becomes terminal. Workflow cancellation
-  persists one stable journal transition before best-effort notification and
-  recovers interrupted payload/registry or uncertain journal writes without
-  adopting a successor generation; replay of an existing event does not resend
-  the notification. Standalone engine cancellation also adopts a concurrent
-  same-generation `cancelled` row while rejecting a successor generation.
-- Standalone `run-dir --json` now writes exactly one JSON document to stdout,
-  using the same submission result as the human renderer instead of printing
-  `key: value` lines.
-- Queued standalone ORCA root and generation `job_state.json` now preserve the
-  queue id and immutable generation identity from the claimed row. Direct
-  unqueued runs keep those fields empty, and mutable run/replay metadata no
-  longer changes the generation token.
 
 - Submitting to a queue whose worker is already running no longer logs a
   warning with a full traceback when the worker retires the snapshot intent
