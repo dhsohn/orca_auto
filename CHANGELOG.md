@@ -44,6 +44,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- A terminal workflow observation published while SI regeneration is blocked
+  now carries the delivery code `orca_auto/si_publication_blocked` whenever a
+  last known-good `workflow_si.md` is pinned: consumers can see the pinned SI
+  may predate the final payload instead of reading an unqualified
+  `delivery: complete`. A blocked workflow that never published an SI keeps
+  reporting `incomplete` with `required_artifact_unavailable`.
 - The per-job SI block and HTML report never take numbers from a wrong
   attempt: a recorded final `last_out_path` that is absent on disk now reads
   as no output instead of silently substituting an earlier attempt's file.

@@ -389,7 +389,12 @@ workflow observation은 workflow가 직접 소비한 검증된 모든 ORCA `mach
 `interaction_*`)도 포함합니다. 같은 위치의 선택적 HTML report는 lineage의
 권위 자료가 아닙니다. symlink, workspace 외부 또는 그 밖의 검증되지 않은 machine
 observation은 제외합니다. 이미 발행된 terminal workflow observation은 다시 쓰거나
-소급 보충하지 않으며, 이 규칙은 이후 발행분부터 적용합니다.
+소급 보충하지 않으며, 이 규칙은 이후 발행분부터 적용합니다. terminal 발행 시점에
+SI 재생성이 blocked이고 마지막 known-good `workflow_si.md`가 존재하면 그 파일을
+그대로 pin하되 delivery code `orca_auto/si_publication_blocked`를 실어, pin된 SI가
+최종 payload보다 오래됐을 수 있음을 알립니다. known-good이 한 번도 발행되지 않았다면
+평소대로 delivery는 `incomplete`와 `orca_auto/required_artifact_unavailable`로
+보고합니다.
 
 `engine_payload.final_result`가 있을 때 포함하는 필드:
 

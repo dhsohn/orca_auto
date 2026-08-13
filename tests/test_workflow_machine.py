@@ -182,3 +182,35 @@ def test_workflow_with_orca_stage_blocks_when_required_si_is_missing(tmp_path: P
     assert observation["handoff"]["status"] == "blocked"
     assert observation["delivery"]["status"] == "incomplete"
     assert observation["artifacts"]["supporting-information"]["status"] == "missing"
+
+
+def test_blocked_si_publication_signals_a_delivery_code(tmp_path: Path) -> None:
+    # A blocked SI publication keeps pinning the last known-good
+    # workflow_si.md, but the observation must say the pinned file may
+    # predate the final payload.
+    (tmp_path / "workflow_report.html").write_text("<html>done</html>\n", encoding="utf-8")
+    (tmp_path / "workflow_si.md").write_text("# Supporting information\n", encoding="utf-8")
+    payload = _payload(
+        tmp_path,
+        stages=[
+            {
+                "stage_id": "orca-01",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {"engine": "orca", "status": "completed"},
+            }
+        ],
+    )
+    metadata = payload["metadata"]
+    assert isinstance(metadata, dict)
+    metadata["si_publish_blocked"] = True
+    metadata["si_publish_error"] = "SI publication attempt budget exhausted"
+
+    path = write_workflow_machine_observation(tmp_path, payload)
+
+    assert path == tmp_path / "machine.json"
+    _validate_common_machine(path)
+    observation = json.loads(path.read_text(encoding="utf-8"))
+    assert observation["delivery"]["status"] == "complete"
+    assert observation["delivery"]["codes"] == ["orca_auto/si_publication_blocked"]
+    assert observation["handoff"]["status"] == "ready"

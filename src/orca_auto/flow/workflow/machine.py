@@ -160,6 +160,17 @@ def build_workflow_machine_observation(
     )
     delivery_status = "complete" if complete else "incomplete"
     delivery_codes = [] if complete else ["orca_auto/required_artifact_unavailable"]
+    si_receipt = artifacts.get("supporting-information")
+    if (
+        bool(metadata.get("si_publish_blocked"))
+        and isinstance(si_receipt, Mapping)
+        and si_receipt.get("status") == "available"
+    ):
+        # SI regeneration is blocked, so the pinned workflow_si.md is the last
+        # known-good file from an earlier advance and may predate the final
+        # payload. Publication proceeds, but consumers get the signal. A
+        # missing SI already reports required_artifact_unavailable instead.
+        delivery_codes.append("orca_auto/si_publication_blocked")
     if outcome == "succeeded" and complete:
         handoff_status = "ready"
         handoff_codes: list[str] = []
