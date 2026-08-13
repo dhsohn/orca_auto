@@ -504,8 +504,9 @@ ORCA analyzer 상태:
 잘못된 boolean, 정수가 아닌 integer 필드, 문자열이 아닌 route, 여러 줄/제어문자/비인쇄
 문자가 포함된 route 또는 label은 거부합니다. 워크플로우 admission은 manifest 형태, 엔진
 입력 파일 경로, `endpoint_pairing`, `rmsd_dedup`, `interaction_energy`를 거부하고, 엔진 작업
-mapping 자체의 필드 스키마는 해당 엔진 작업을 제출할 때 검사합니다 — 그래서 알 수 없는
+mapping 자체의 키·타입 스키마는 해당 엔진 작업을 제출할 때 검사합니다 — 그래서 알 수 없는
 `xtb.ts_guess_validation` 키는 워크플로우 admission이 아니라 첫 xTB 스테이지에서 드러납니다.
+아래의 엔진 `charge`/`uhf` 충돌 규칙은 그보다 이른 워크플로우 생성 시점에 검사합니다.
 fragment label은 최대 80자입니다.
 활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
 정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는
