@@ -420,7 +420,12 @@ workflow consumed directly in `lineage.upstream`, including prerequisite
 table. The optional co-located HTML report is not lineage authority. Symlinked,
 external, or otherwise unverified machine observations are omitted. Already
 published terminal workflow observations are not rewritten or backfilled; this
-applies to future publications.
+applies to future publications. When SI regeneration is blocked at terminal
+publication and a last known-good `workflow_si.md` exists, it stays pinned and
+the observation carries the delivery code `orca_auto/si_publication_blocked`,
+meaning the pinned SI may predate the final payload; when none was ever
+published, delivery reports `incomplete` with
+`orca_auto/required_artifact_unavailable` as usual.
 
 `engine_payload.final_result`, when present, contains:
 
