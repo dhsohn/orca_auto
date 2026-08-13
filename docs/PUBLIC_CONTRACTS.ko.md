@@ -385,7 +385,8 @@ state는 대체 공개 기계 계약이 아닙니다.
 
 workflow observation은 workflow가 직접 소비한 검증된 모든 ORCA `machine.json`을
 `lineage.upstream`에 기록합니다. 순위 ORCA 결과 표에서 의도적으로 제외되는 선행
-`relaxed_scan` stage도 포함합니다. 같은 위치의 선택적 HTML report는 lineage의
+`relaxed_scan` stage와 interaction-energy fan-out stage(metadata role
+`interaction_*`)도 포함합니다. 같은 위치의 선택적 HTML report는 lineage의
 권위 자료가 아닙니다. symlink, workspace 외부 또는 그 밖의 검증되지 않은 machine
 observation은 제외합니다. 이미 발행된 terminal workflow observation은 다시 쓰거나
 소급 보충하지 않으며, 이 규칙은 이후 발행분부터 적용합니다.

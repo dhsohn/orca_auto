@@ -154,6 +154,20 @@ def _task_kind(stage: Mapping[str, Any]) -> str:
     return _text(task.get("task_kind"))
 
 
+_INTERACTION_ROLE_PREFIX = "interaction_"
+
+
+def _interaction_role_stage(stage: Mapping[str, Any]) -> bool:
+    """True for interaction-energy fan-out stages (``role: interaction_*``).
+
+    Fragment and complex single points carry a different stoichiometry or
+    level of theory than the conformer/TS candidates, so they are ΔE_int
+    inputs only and must never rank in the candidate table or set its ΔE
+    baseline.
+    """
+    return _text(_stage_metadata(stage).get("role")).startswith(_INTERACTION_ROLE_PREFIX)
+
+
 def _stage_artifacts(stage: Mapping[str, Any], kind: str) -> list[dict[str, Any]]:
     artifacts = stage.get("output_artifacts")
     if not isinstance(artifacts, list):
@@ -819,8 +833,10 @@ def collect_workflow_report_data(
                 consumed_orca_machine_paths.append(result.machine_path)
             # A relaxed scan is a prerequisite, not a TS candidate: keep it in
             # the stage chain but out of the ranked candidate table so its
-            # non-stationary energy never sets the ΔE baseline.
-            if _task_kind(stage) != "relaxed_scan":
+            # non-stationary energy never sets the ΔE baseline. Interaction
+            # fan-out stages stay out for the same reason — their energies
+            # belong to the ΔE_int table, not the candidate ranking.
+            if _task_kind(stage) != "relaxed_scan" and not _interaction_role_stage(stage):
                 orca_results.append(result)
             detail_parts = [part for part in (result.label, result.reason) if part]
             detail = " · ".join(detail_parts)
