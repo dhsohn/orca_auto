@@ -25,6 +25,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- The unused `manifest_scalar_text` helper and the lenient `as_bool`/`as_float`
+  config coercers. None had a production consumer; they were kept alive only by
+  re-exports and their own tests, and `manifest_scalar_text` silently treated
+  an explicit `false` as unset.
 - The `xtb.ts_guess_validation.enabled` manifest key. After the validated
   geometry handoff landed, `true` matched the default and `false` made every
   reaction workflow refuse the ORCA handoff with a misleading
@@ -40,6 +44,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- A corrupt `.engrad` spelling `nan` or `inf` now reads as unavailable instead
+  of rendering NaN in `workflow_report.html` and crashing the terminal
+  machine-observation writer on every later advance of that workspace.
+- The worker-child `--admission-token` flag defaults to an empty string, so a
+  token-less diagnostic invocation runs unmanaged as the signatures advertise
+  instead of silently exiting with the literal token `"None"`. The supervised
+  systemd path always passes a real token and is unaffected.
+- A configured messenger config path that does not exist now logs a warning
+  before notifications are disabled, matching the existing parse-failure
+  warning.
+- `scratch_provenance.omitted_transient_bytes` counts only regular-file bytes;
+  an omitted scratch directory no longer contributes its dirent size.
 - `workflow cancel` on a root whose `workflow_registry.journal.jsonl` exceeds
   the 8 MiB caller-event read limit now refuses up front, before any stage
   cancel or durable write, with a message naming the journal and the

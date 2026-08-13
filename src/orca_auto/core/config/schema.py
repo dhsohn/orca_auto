@@ -6,11 +6,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
-from orca_auto.core.utils.coercion import normalize_bool, normalize_text, safe_float, safe_int
+from orca_auto.core.utils.coercion import normalize_text, safe_float, safe_int
 
 _RuntimeAdmissionConfigT = TypeVar("_RuntimeAdmissionConfigT", bound="RuntimeAdmissionMixin")
-_CONFIG_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
-_CONFIG_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 SUPPORTED_MESSENGER_PROVIDERS = frozenset({"discord"})
 MIN_MESSENGER_TIMEOUT_SECONDS = 0.1
 MAX_MESSENGER_TIMEOUT_SECONDS = 120.0
@@ -32,20 +30,6 @@ def as_nonempty_str(value: Any, default: str = "") -> str:
 
 def as_int(value: Any, default: int) -> int:
     return safe_int(value, default=default)
-
-
-def as_bool(value: Any, default: bool = False) -> bool:
-    return normalize_bool(
-        value,
-        default=default,
-        true_values=_CONFIG_TRUE_VALUES,
-        false_values=_CONFIG_FALSE_VALUES,
-    )
-
-
-def as_float(value: Any, default: float) -> float:
-    parsed = safe_float(value, default=default)
-    return default if parsed is None else parsed
 
 
 def _bounded_delivery_float(

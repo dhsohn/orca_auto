@@ -8,8 +8,6 @@ from orca_auto.core.config.schema import (
     CommonRuntimeConfig,
     DiscordConfig,
     RetryRuntimeConfig,
-    as_bool,
-    as_float,
     as_int,
     as_nonempty_str,
     as_str,
@@ -147,39 +145,6 @@ def test_as_int_returns_config_default_for_invalid_values(
     expected: int,
 ) -> None:
     assert as_int(value, default) == expected
-
-
-@pytest.mark.parametrize(
-    ("value", "default", "expected"),
-    [
-        (None, True, True),
-        (" yes ", False, True),
-        ("OFF", True, False),
-        ("maybe", True, True),
-    ],
-)
-def test_as_bool_uses_config_boolean_vocabulary(
-    value: object,
-    default: bool,
-    expected: bool,
-) -> None:
-    assert as_bool(value, default) is expected
-
-
-@pytest.mark.parametrize(
-    ("value", "default", "expected"),
-    [
-        ("1.25", 2.0, 1.25),
-        ("bad", 2.0, 2.0),
-        (None, 2.0, 2.0),
-    ],
-)
-def test_as_float_returns_config_default_for_invalid_values(
-    value: object,
-    default: float,
-    expected: float,
-) -> None:
-    assert as_float(value, default) == expected
 
 
 @pytest.mark.parametrize(

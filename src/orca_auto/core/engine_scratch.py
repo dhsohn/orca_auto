@@ -1338,7 +1338,10 @@ def _publish_workspace(
             )
             if publish_name is not None and not publish_name(source_name):
                 omitted.append(source_name)
-                omitted_bytes += int(source_info.st_size)
+                # Only regular-file content counts; a directory's st_size is
+                # its dirent size, not an omitted volume.
+                if stat.S_ISREG(source_info.st_mode):
+                    omitted_bytes += int(source_info.st_size)
                 continue
             if not stat.S_ISREG(source_info.st_mode):
                 raise EngineScratchError(

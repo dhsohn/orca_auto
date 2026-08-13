@@ -242,9 +242,12 @@ def latest_engrad_energy(directory: Path) -> float | None:
             if not marker_seen or not stripped or stripped.startswith("#"):
                 continue
             try:
-                return float(stripped)
+                parsed = float(stripped)
             except ValueError:
                 break
+            # A corrupt .engrad can spell nan/inf; a non-finite energy must
+            # not reach the report or the machine observation.
+            return parsed if math.isfinite(parsed) else None
     return None
 
 

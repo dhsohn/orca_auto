@@ -9,6 +9,7 @@ import pytest
 from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.core.engine_scratch import (
     EngineScratchError,
+    EngineScratchPolicy,
     EngineScratchWorkspace,
     is_transient_scratch_file,
 )
@@ -38,6 +39,38 @@ def _durable_input(tmp_path: Path) -> Path:
 
 def _scratch_attempts(root: Path) -> list[Path]:
     return [path for path in root.iterdir() if path.name.startswith("attempt-")]
+
+
+def test_publish_name_omitted_directory_contributes_no_dirent_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Engine allowlist policies (CREST/xTB publish_name) can omit whole scratch
+    # directories; only regular-file bytes may count toward the omitted volume.
+    shm = tmp_path / "shm"
+    shm.mkdir()
+    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: 2**63)
+    policy = EngineScratchPolicy(
+        root=shm / "engine",
+        min_free_bytes=1,
+        max_task_memory_bytes=1,
+        publish_name={"sp.out"}.__contains__,
+    )
+    selected = _durable_input(tmp_path)
+
+    workspace = EngineScratchWorkspace.create(policy, selected)
+    (workspace.path / "sp.out").write_text("done\n", encoding="utf-8")
+    (workspace.path / "work.bin").write_bytes(b"x" * 1024)
+    work_dir = workspace.path / "workdir"
+    work_dir.mkdir()
+    (work_dir / "inner.bin").write_bytes(b"z" * 512)
+
+    publication = workspace.publish()
+
+    assert {path.name for path in publication.paths} == {"sp.out"}
+    assert set(publication.omitted_transient_files) == {"work.bin", "workdir"}
+    assert publication.omitted_transient_bytes == 1024
 
 
 def test_scratch_publishes_surviving_results_once_and_omits_tmp(

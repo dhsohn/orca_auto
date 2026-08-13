@@ -84,24 +84,6 @@ def test_as_int_returns_default_for_invalid_values(
     assert config_mod.as_int(value, default) == expected
 
 
-@pytest.mark.parametrize(
-    ("value", "default", "expected"),
-    [
-        (None, True, True),
-        (True, False, True),
-        (" yes ", False, True),
-        ("OFF", True, False),
-        ("maybe", True, True),
-    ],
-)
-def test_as_bool_normalizes_truthy_and_falsy_strings(
-    value: object,
-    default: bool,
-    expected: bool,
-) -> None:
-    assert config_mod.as_bool(value, default) is expected
-
-
 def _write_fake_executable(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n", encoding="utf-8")

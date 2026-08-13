@@ -31,6 +31,10 @@ def _load_messenger_config(config_path: str | Path | None) -> MessengerConfig:
     except OSError:
         return MessengerConfig()
     if not path.exists():
+        _LOGGER.warning(
+            "messenger config file not found; notifications disabled: %s",
+            path,
+        )
         return MessengerConfig()
     try:
         _, raw = load_yaml_mapping(path)
