@@ -162,7 +162,6 @@ def _canonical_ts_validation_options(manifest: dict[str, Any]) -> None:
     if not isinstance(raw, dict):
         raise ValueError("xTB ts_guess_validation must be a mapping")
     unknown = set(raw) - {
-        "enabled",
         "bond_scale",
         "max_spurious_bond_changes",
         "reacting_bond_stretch_scale",
@@ -170,11 +169,6 @@ def _canonical_ts_validation_options(manifest: dict[str, Any]) -> None:
     if unknown:
         raise ValueError(f"Unknown xTB ts_guess_validation fields: {sorted(unknown)}")
     canonical: dict[str, Any] = {}
-    if "enabled" in raw:
-        value = raw.get("enabled")
-        if not isinstance(value, bool):
-            raise ValueError("xTB ts_guess_validation.enabled must be boolean")
-        canonical["enabled"] = value
     for key in ("bond_scale", "reacting_bond_stretch_scale"):
         if key not in raw:
             continue

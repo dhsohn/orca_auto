@@ -229,8 +229,6 @@ def _ts_guess_validation_fields(
         }
     options_raw = manifest.get("ts_guess_validation")
     options = options_raw if isinstance(options_raw, dict) else {}
-    if options.get("enabled") is False:
-        return None
     try:
         bond_scale = _positive_finite_float(
             options.get("bond_scale", DEFAULT_BOND_SCALE),
