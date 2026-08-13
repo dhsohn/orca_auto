@@ -644,12 +644,16 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
             os.close(parent_fd)
 
 
-def _final_single_point_energy_from_output(output_root: Path, candidate: Path) -> float | None:
+def _final_single_point_energy_from_output(
+    output_root: Path, candidate: Path
+) -> tuple[bool, float | None]:
+    """Return ``(final_line_annotated, energy)`` for one bounded output tail."""
     tail_snapshot = _read_pinned_orca_output_tail(output_root, candidate)
     if tail_snapshot is None:
-        return None
+        return False, None
     tail, read_offset = tail_snapshot
 
+    annotated = False
     energy_text: bytes | None = None
     for match in FINAL_SINGLE_POINT_ENERGY_BYTES_RE.finditer(tail):
         # A bounded tail can start in the middle of a line.  Do not treat that
@@ -661,16 +665,18 @@ def _final_single_point_energy_from_output(output_root: Path, candidate: Path) -
             # converged!)"): an unconverged value must not feed the ΔE table,
             # and any earlier clean line belongs to a different geometry —
             # forget it rather than falling back to it.
+            annotated = True
             energy_text = None
             continue
+        annotated = False
         energy_text = match.group(1)
     if energy_text is None:
-        return None
+        return annotated, None
     try:
         energy = final_single_point_energy_value(energy_text)
     except ValueError:
-        return None
-    return energy if math.isfinite(energy) else None
+        return False, None
+    return False, energy if math.isfinite(energy) else None
 
 
 def _orca_report_output_energy(
@@ -678,10 +684,19 @@ def _orca_report_output_energy(
     report_payload: Mapping[str, Any],
 ) -> float | None:
     """Final bounded ORCA output energy when a stage did not retain an ``.engrad``."""
+    _annotated, energy = _orca_report_output_energy_state(output_dir, report_payload)
+    return energy
+
+
+def _orca_report_output_energy_state(
+    output_dir: Path,
+    report_payload: Mapping[str, Any],
+) -> tuple[bool, float | None]:
+    """Return ``(final_line_annotated, energy)`` for the stage's output chain."""
     try:
         output_root = output_dir.resolve(strict=True)
     except OSError:
-        return None
+        return False, None
 
     engine_payload = _mapping(report_payload.get("engine_payload"))
     final_result = _mapping(engine_payload.get("final_result"))
@@ -700,10 +715,14 @@ def _orca_report_output_energy(
         if candidate_key in seen:
             continue
         seen.add(candidate_key)
-        energy = _final_single_point_energy_from_output(output_root, Path(raw_path))
+        annotated, energy = _final_single_point_energy_from_output(output_root, Path(raw_path))
+        if annotated:
+            # The newest readable output in the chain is tainted by an
+            # unconverged SCF; older attempts must not stand in for it.
+            return True, None
         if energy is not None:
-            return energy
-    return None
+            return False, energy
+    return False, None
 
 
 def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaStageResult:
@@ -738,9 +757,18 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
         # Both energy sources must therefore be confined to the generation
         # whose report provenance and workflow-stage identity were verified.
         generation_dir = report_json_path.parent
-        energy = latest_engrad_energy(generation_dir)
-        if energy is None:
-            energy = _orca_report_output_energy(generation_dir, report_payload)
+        annotated_final, output_energy = _orca_report_output_energy_state(
+            generation_dir, report_payload
+        )
+        if annotated_final:
+            # A retained .engrad carries the same unconverged SCF's value and
+            # cannot be cross-checked on its own — the annotation exists only
+            # in the .out. Publish no energy for this stage.
+            energy = None
+        else:
+            energy = latest_engrad_energy(generation_dir)
+            if energy is None:
+                energy = output_energy
 
     report_href: str | None = None
     if report_json_path is not None:
