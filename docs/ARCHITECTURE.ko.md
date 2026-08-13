@@ -386,18 +386,16 @@ YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 
 
 ### Supporting Information 소유권
 
-`flow/workflow/si/`는 외부의 단일 `orca_auto.flow.workflow.si` API를 유지하면서 조립형
-SI 파이프라인을 책임별로 분리합니다. `evidence.py`가 내구성 워크플로우·스테이지 근거를
-읽고, `collection.py`가 이를 `science.py`의 선택·RMSD·interaction-energy·population
-규칙과 조합하며, `rendering.py`는 파일을 쓰지 않고 Markdown text만 생성합니다.
+`flow/workflow/si/`는 3개 모듈의 평면 package입니다. `collection.py`가 내구성
+워크플로우·스테이지 근거를 읽어 선택·RMSD·interaction-energy·population 규칙을
+조합하고, `rendering.py`는 파일을 쓰지 않고 Markdown text만 생성하며,
 `publication.py`는 유일한 workflow SI writer로 원자 교체와 stale 파일 정리를
-소유합니다. advance 루프가 writer 호출 전
-publication을 checkpoint하고 게시 중단 뒤의 내구성 재시도를 소유합니다. 별도의
-수치·artifact 원본을 만들지 않으므로
-`workflow_si.md` 계약은 그대로 유지됩니다.
-import-linter는 publication → collection → rendering → science → evidence → models의 안쪽
-방향을 허용하고(중간 layer 생략 가능) 역방향 import를 거부합니다. package `__init__`은
-외부로 향하는 단일 API facade로 유지됩니다.
+소유합니다. advance 루프가 writer 호출 전 publication을 checkpoint하고 게시 중단
+뒤의 내구성 재시도를 소유합니다. 별도의 수치·artifact 원본을 만들지 않으므로
+`workflow_si.md` 계약은 그대로 유지됩니다. package `__init__`은 아무것도 export하지
+않는 비-facade이고, 이 package를 다루는 import-linter 계약은 없습니다 — collection·
+rendering이 publication을 import하지 않는 방향성은 리뷰어가 지키는 관례입니다
+(`docs/DEVELOPMENT.md` 참조).
 
 ### advance 루프
 

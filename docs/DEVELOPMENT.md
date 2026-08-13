@@ -146,8 +146,9 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
   readers out of the codebase
 - Keep `orca_auto.orca.commands` as an adapter layer. Domain execution,
   submission, worker-child, and queue modules must not import it.
-- Keep SI evidence/science/rendering free of publication imports. This direction
-  is enforced in `pyproject.toml`; do not bypass it with a forwarding module.
+- Keep SI collection/rendering free of publication imports. No import-linter
+  contract enforces this (see the Workflow SI note above); it is a
+  reviewer-enforced convention — do not bypass it with a forwarding module.
 
 ## Engine Workers
 
