@@ -411,19 +411,18 @@ local work at 10,000 atoms and xTB/ORCA Hessian-producing work at 1,000.
 
 ### Supporting Information ownership
 
-`flow/workflow/si/` preserves one outward `orca_auto.flow.workflow.si` API while
-separating the assembled SI pipeline by responsibility. `evidence.py` reads durable
-workflow/stage evidence, `collection.py` composes it with the selection, RMSD,
-interaction-energy, and population rules in `science.py`, and `rendering.py` produces
-Markdown text without writing files. `publication.py` is the only workflow SI
-writer and owns atomic replacement and stale-file cleanup.
+`flow/workflow/si/` is a flat package of three modules. `collection.py` reads
+durable workflow/stage evidence and composes the selection, RMSD,
+interaction-energy, and population rules; `rendering.py` produces Markdown text
+without writing files; `publication.py` is the only workflow SI writer and owns
+atomic replacement and stale-file cleanup.
 The advance loop checkpoints publication before
 calling the writer and owns durable retry after an interrupted publication.
 The modules do not introduce a second numerical or artifact source of
-truth; `workflow_si.md` retains its
-existing contract. Import-linter permits the inward order publication → collection →
-rendering → science → evidence → models (layers may be skipped) and rejects reverse
-imports. The package `__init__` remains the single outward API facade.
+truth; `workflow_si.md` retains its existing contract. The package `__init__`
+exports nothing and is not a facade, and no import-linter contract covers the
+package — keeping collection and rendering free of publication imports is a
+reviewer-enforced convention (see `docs/DEVELOPMENT.md`).
 
 ### The advance loop
 

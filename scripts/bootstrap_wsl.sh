@@ -67,7 +67,7 @@ CONFIG="$ROOT/config/orca_auto.yaml"
 if [[ ! -f "$CONFIG" ]]; then
   cp "$ROOT/config/orca_auto.yaml.example" "$CONFIG"
   echo "[bootstrap] Created config/orca_auto.yaml from example template."
-  echo "[bootstrap] Edit config/orca_auto.yaml and replace /path/to/... placeholders before first run."
+  echo "[bootstrap] Edit config/orca_auto.yaml and replace the /home/user/... example paths before first run."
 fi
 chmod 600 "$CONFIG"
 echo "[bootstrap] Secured config/orca_auto.yaml permissions to 600."
