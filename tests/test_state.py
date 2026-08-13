@@ -523,6 +523,69 @@ class TestState(unittest.TestCase):
                     f"re-entry modified published artifact {name}",
                 )
 
+    def test_write_report_files_rejects_unsafe_machine_links_before_artifact_writers(self) -> None:
+        for link_kind, target_exists in (
+            ("live-symlink", True),
+            ("dangling-symlink", False),
+            ("hardlink", True),
+        ):
+            with self.subTest(link_kind=link_kind), tempfile.TemporaryDirectory() as td:
+                reaction = Path(td)
+                generation, provenance = _bind_generation(
+                    reaction,
+                    token=f"unsafe-machine-link-token-{link_kind}",
+                )
+                state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+                state["status"] = "completed"
+                state["execution_provenance"] = provenance
+
+                foreign_machine = reaction / "foreign-machine.json"
+                if target_exists:
+                    foreign_machine.write_text("{}", encoding="utf-8")
+                machine_path = state_module.report_json_path(generation)
+                if link_kind == "hardlink":
+                    os.link(foreign_machine, machine_path)
+                else:
+                    machine_path.symlink_to(foreign_machine)
+                html_path = generation / "job_report.html"
+                si_path = generation / "si_block.md"
+                html_bytes = b"published html\n"
+                si_bytes = b"published si\n"
+                html_path.write_bytes(html_bytes)
+                si_path.write_bytes(si_bytes)
+
+                with (
+                    patch.object(
+                        state_module,
+                        "write_job_html_report",
+                        side_effect=AssertionError("HTML writer must not run"),
+                    ) as html_writer,
+                    patch.object(
+                        state_module,
+                        "write_si_block",
+                        side_effect=AssertionError("SI writer must not run"),
+                    ) as si_writer,
+                    self.assertRaisesRegex(
+                        RuntimeError,
+                        "existing machine observation is invalid",
+                    ),
+                ):
+                    write_report_files(reaction, state)
+
+                html_writer.assert_not_called()
+                si_writer.assert_not_called()
+                self.assertEqual(html_path.read_bytes(), html_bytes)
+                self.assertEqual(si_path.read_bytes(), si_bytes)
+                if link_kind == "hardlink":
+                    self.assertFalse(machine_path.is_symlink())
+                    self.assertEqual(machine_path.stat().st_nlink, 2)
+                else:
+                    self.assertTrue(machine_path.is_symlink())
+                    self.assertEqual(os.readlink(machine_path), str(foreign_machine))
+                self.assertEqual(foreign_machine.exists(), target_exists)
+                if target_exists:
+                    self.assertEqual(foreign_machine.read_bytes(), b"{}")
+
     def test_terminal_machine_observation_is_immutable(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)

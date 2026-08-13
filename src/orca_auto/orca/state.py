@@ -732,6 +732,38 @@ def _machine_observation(
     }
 
 
+def _published_terminal_observation(
+    generation_dir: Path,
+) -> tuple[str, dict[str, Any]] | None:
+    """Existing finished observation text and lifecycle, if one is published.
+
+    A missing or nonterminal observation returns ``None``. Any existing path
+    that cannot be read as bounded UTF-8 JSON fails closed before artifact
+    writers can change files pinned by a terminal observation.
+    """
+    path = report_json_path(generation_dir)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RuntimeError(f"existing machine observation is invalid: {path}") from exc
+    try:
+        existing_text = read_confined_text(
+            generation_dir,
+            path,
+            label="ORCA generation machine observation",
+            max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+        )
+        existing = json.loads(existing_text)
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError) as exc:
+        raise RuntimeError(f"existing machine observation is invalid: {path}") from exc
+    lifecycle = _dict(existing.get("lifecycle")) if isinstance(existing, dict) else {}
+    if lifecycle.get("phase") != "finished":
+        return None
+    return existing_text, lifecycle
+
+
 def write_report_json(
     reaction_dir: Path,
     report_payload: dict[str, Any],
@@ -771,22 +803,12 @@ def write_report_json(
     )
     path = report_json_path(generation_target[0])
     observation_bytes = machine_json_bytes(observation)
-    if path.exists() or path.is_symlink():
-        try:
-            existing_text = read_confined_text(
-                generation_target[0],
-                path,
-                label="ORCA generation machine observation",
-                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
-            )
-            existing = json.loads(existing_text)
-        except (OSError, RuntimeError, TypeError, UnicodeError, ValueError) as exc:
-            raise RuntimeError(f"existing machine observation is invalid: {path}") from exc
-        existing_lifecycle = _dict(existing.get("lifecycle")) if isinstance(existing, dict) else {}
-        if existing_lifecycle.get("phase") == "finished":
-            if existing_text.encode("utf-8") == observation_bytes:
-                return path
-            raise RuntimeError(f"terminal machine observation is immutable: {path}")
+    existing_terminal = _published_terminal_observation(generation_target[0])
+    if existing_terminal is not None:
+        existing_text, _ = existing_terminal
+        if existing_text.encode("utf-8") == observation_bytes:
+            return path
+        raise RuntimeError(f"terminal machine observation is immutable: {path}")
     _write_generation_bytes(generation_target, path, observation_bytes)
     return path
 
@@ -799,22 +821,11 @@ def _existing_terminal_report_paths(
     ``None`` means no terminal observation is published yet and reports may be
     written. An unreadable or corrupt existing observation fails closed.
     """
+    published_terminal = _published_terminal_observation(generation_dir)
+    if published_terminal is None:
+        return None
+    _, lifecycle = published_terminal
     path = report_json_path(generation_dir)
-    if path.is_symlink() or not path.exists():
-        return None
-    try:
-        existing_text = read_confined_text(
-            generation_dir,
-            path,
-            label="ORCA generation machine observation",
-            max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
-        )
-        existing = json.loads(existing_text)
-    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError) as exc:
-        raise RuntimeError(f"existing machine observation is invalid: {path}") from exc
-    lifecycle = _dict(existing.get("lifecycle")) if isinstance(existing, dict) else {}
-    if lifecycle.get("phase") != "finished":
-        return None
     reports = {"report_json": str(path)}
     html_path = generation_dir / RUN_REPORT_HTML_FILE
     if html_path.is_file():
