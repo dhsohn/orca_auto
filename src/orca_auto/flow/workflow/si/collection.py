@@ -47,6 +47,7 @@ from ...manifest import (
 )
 from ..report import (
     _crest_stage_detail,
+    _interaction_role_stage,
     _resolve_orca_stage_report,
     _stage_dicts,
     _stage_metadata,
@@ -431,9 +432,6 @@ _POP_NO_GIBBS_NOTE = (
     "thermochemistry temperatures)"
 )
 
-# Metadata role prefix carried by the interaction-energy single-point stages the
-# orchestration fans out (``interaction_complex_sp`` and ``interaction_fragment``).
-_INTERACTION_ROLE_PREFIX = "interaction_"
 _INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
 _ROLE_INTERACTION_COMPLEX = "interaction_complex_sp"
 _ROLE_INTERACTION_FRAGMENT = "interaction_fragment"
@@ -1112,7 +1110,7 @@ def collect_workflow_si_data(
             continue
         if stage_kind != "orca_stage":
             continue
-        if _text(_stage_metadata(stage).get("role")).startswith(_INTERACTION_ROLE_PREFIX):
+        if _interaction_role_stage(stage):
             interaction_raw_stages.append(stage)
             continue
 

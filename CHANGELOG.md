@@ -6,6 +6,20 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [Unreleased]
+
+### Fixed
+
+- The workflow candidate ranking no longer includes interaction-energy
+  fan-out single points. Fragment and complex SP stages (metadata role
+  `interaction_*`) carry a different stoichiometry or level of theory, so
+  ranking them listed fragment species as conformer candidates and let a
+  cross-level complex energy set the ΔE baseline in `workflow_report.html`,
+  the Best-energy card, and the terminal workflow `machine.json`
+  `results.orca_results`. The stages remain in the stage chain, in workflow
+  lineage, and in the SI ΔE_int table. Already-published terminal
+  observations are immutable and unaffected.
+
 ## [2.0.0] - 2026-08-10
 
 ### Fixed

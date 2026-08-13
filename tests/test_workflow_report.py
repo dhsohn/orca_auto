@@ -299,6 +299,67 @@ def test_relaxed_scan_without_html_is_preserved_in_workflow_lineage(
     assert not (generation / "job_report.html").exists()
 
 
+def test_interaction_fanout_stages_stay_out_of_candidate_ranking(tmp_path: Path) -> None:
+    conf_dir = _orca_stage_dir(tmp_path, "orca_conf", energy=-100.001, reason="normal_termination")
+    complex_dir = _orca_stage_dir(
+        tmp_path, "orca_int_complex", energy=-200.004, reason="normal_termination"
+    )
+    fragment_dir = _orca_stage_dir(
+        tmp_path, "orca_int_frag", energy=-50.002, reason="normal_termination"
+    )
+    complex_stage = _orca_stage(
+        "orca_int_complex", complex_dir, status="completed", label="complex_sp"
+    )
+    complex_stage["metadata"]["role"] = "interaction_complex_sp"
+    fragment_stage = _orca_stage(
+        "orca_int_frag", fragment_dir, status="completed", label="fragment_a"
+    )
+    fragment_stage["metadata"]["role"] = "interaction_fragment"
+    payload = _payload(
+        tmp_path,
+        [
+            _orca_stage("orca_conf", conf_dir, status="completed", label="conf_01"),
+            complex_stage,
+            fragment_stage,
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    # Interaction fan-out single points stay in the stage chain and in
+    # lineage, but their different-species/-level energies must neither rank
+    # as candidates nor set the ΔE baseline.
+    assert [row.stage_id for row in data.stage_rows] == [
+        "orca_conf",
+        "orca_int_complex",
+        "orca_int_frag",
+    ]
+    assert [entry.label for entry in data.orca_results] == ["conf_01"]
+    assert data.orca_results[0].energy == pytest.approx(-100.001)
+    assert data.orca_results[0].rel_kcal == pytest.approx(0.0)
+    assert set(data.consumed_orca_machine_paths) == {
+        conf_dir / RUN_REPORT_JSON_FILE,
+        complex_dir / RUN_REPORT_JSON_FILE,
+        fragment_dir / RUN_REPORT_JSON_FILE,
+    }
+    assert write_workflow_html_report(tmp_path, payload) == tmp_path / "workflow_report.html"
+    (tmp_path / WORKFLOW_SI_MD_FILE).write_text("# Supporting information\n", encoding="utf-8")
+
+    workflow_machine = write_workflow_machine_observation(tmp_path, payload)
+
+    assert workflow_machine == tmp_path / RUN_REPORT_JSON_FILE
+    assert workflow_machine is not None
+    _validate_common_machine(workflow_machine)
+    observation = json.loads(workflow_machine.read_text(encoding="utf-8"))
+    machine_results = observation["payload"]["data"]["results"]["orca_results"]
+    assert [row["label"] for row in machine_results] == ["conf_01"]
+    assert {row["operation_id"] for row in observation["lineage"]["upstream"]} == {
+        "orca_conf",
+        "orca_int_complex",
+        "orca_int_frag",
+    }
+
+
 def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: Path) -> None:
     job_dir = tmp_path / "orca_from_output"
     job_dir.mkdir()
