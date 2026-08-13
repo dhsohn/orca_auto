@@ -177,6 +177,14 @@ def test_count_xyz_frames_and_engrad_energy(tmp_path: Path) -> None:
     assert latest_engrad_energy(tmp_path) == pytest.approx(-100.123456789012)
 
 
+def test_engrad_energy_rejects_non_finite_values(tmp_path: Path) -> None:
+    # A corrupt .engrad spelling nan would render as NaN in the report and
+    # then crash the machine-observation writer (allow_nan=False) on every
+    # advance; a non-finite energy must read as unavailable instead.
+    (tmp_path / "opt.engrad").write_text(_ENGRAD_TEMPLATE.format(energy="nan"), encoding="utf-8")
+    assert latest_engrad_energy(tmp_path) is None
+
+
 @pytest.mark.parametrize("link_kind", ("symlink", "hardlink"))
 def test_engrad_energy_rejects_linked_generation_file(
     tmp_path: Path,

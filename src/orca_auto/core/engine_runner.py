@@ -383,21 +383,6 @@ def manifest_int(
     raise ValueError(f"Manifest field {key!r} must be an integer-compatible value.")
 
 
-def manifest_scalar_text(manifest: dict[str, Any], key: str) -> str | None:
-    value = manifest.get(key)
-    if value is None:
-        return None
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    if isinstance(value, bool):
-        return "true" if value else None
-    if isinstance(value, (int, float)):
-        return str(value)
-    text = str(value).strip()
-    return text or None
-
-
 def validated_solvent_option(manifest: dict[str, Any]) -> tuple[str, str] | None:
     """Validate the solvent_model/solvent pair; return it, or None when unset."""
 
@@ -428,7 +413,6 @@ __all__ = [
     "bool_flag",
     "executable_identity",
     "manifest_int",
-    "manifest_scalar_text",
     "resolve_configured_executable",
     "resource_actual_dict",
     "validate_executable_file",

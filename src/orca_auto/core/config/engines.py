@@ -25,12 +25,6 @@ from .schema import (
     MessengerConfig,
 )
 from .schema import (
-    as_bool as as_bool,
-)
-from .schema import (
-    as_float as as_float,
-)
-from .schema import (
     as_int as as_int,
 )
 from .schema import (

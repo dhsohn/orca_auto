@@ -680,7 +680,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", required=True)
     parser.add_argument("--queue-root", required=True)
     parser.add_argument("--queue-id", required=True)
-    parser.add_argument("--admission-token", default=None)
+    parser.add_argument("--admission-token", default="")
     return parser
 
 

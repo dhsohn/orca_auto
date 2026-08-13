@@ -9,7 +9,6 @@ import yaml
 from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.config.engines import (
     CONFIG_ENV_VAR,
-    as_bool,
     as_int,
     as_str,
 )
@@ -100,27 +99,6 @@ def test_load_config_reports_missing_file_invalid_payload_and_requires_workflow_
     missing_workflow_root_path.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match=r"Config is missing runs_root"):
         load_config(str(missing_workflow_root_path))
-
-
-@pytest.mark.parametrize(
-    ("value", "default", "expected"),
-    [
-        (None, False, False),
-        (None, True, True),
-        (True, False, True),
-        (False, True, False),
-        ("YES", False, True),
-        ("off", True, False),
-        ("maybe", True, True),
-        ("maybe", False, False),
-    ],
-)
-def test_helper_normalizers_cover_boolean_and_default_branches(
-    value: object,
-    default: bool,
-    expected: bool,
-) -> None:
-    assert as_bool(value, default) == expected
 
 
 def test_helper_normalizers_cover_string_and_int_defaults() -> None:
