@@ -13,7 +13,8 @@ documented surfaces change shape.
 
 **Manifests**: `xtb.ts_guess_validation` no longer accepts `enabled`. Drop the
 key before submitting — a workflow carrying it is rejected when its first xTB
-stage is submitted, which is where any bad `xtb` mapping has always surfaced.
+stage is submitted, which is where the `xtb` mapping's own field schema has
+always been checked.
 
 **Reaction workflows**: the xTB→ORCA handoff now requires an explicit
 successful geometry verdict and refuses with the new reason
@@ -27,8 +28,9 @@ block is worse than none — while interaction-energy fan-out stages stop
 feeding the ranked table and `results.orca_results`. `lineage.upstream` gains
 the stages that publish no HTML, and a terminal observation published while SI
 regeneration is blocked now carries the delivery code
-`orca_auto/si_publication_blocked` on an otherwise complete delivery, so a
-consumer that treats any code as failure needs updating. Already published
+`orca_auto/si_publication_blocked` beside the pinned SI — normally on a
+delivery that is otherwise complete, so a consumer that treats any code as
+failure needs updating. Already published
 terminal observations are immutable and unchanged; every difference applies to
 future publications.
 
@@ -40,7 +42,8 @@ commands now address the units of the account behind `sudo` rather than root.
 
 One more operational note: an oversized or symlinked
 `workflow_registry.journal.jsonl` refuses `queue cancel` for that workflow up
-front, with a message naming the file and the remediation.
+front, with a message naming the file — and, for the size limit, the
+remediation.
 
 ### Changed
 
@@ -119,7 +122,7 @@ front, with a message naming the file and the remediation.
 - `queue cancel` on a workflow whose `workflow_registry.journal.jsonl` exceeds
   the 8 MiB caller-event read limit, or is a symlink, now refuses up front,
   before any stage cancel or durable write, with a message naming the journal
-  and the remediation. The oversized journal previously surfaced only after the
+  and — for the size limit — the remediation. The oversized journal previously surfaced only after the
   cancelled status was already persisted, so the command reported failure
   for a cancel that had taken effect and every later cancel in that root
   failed the same way.

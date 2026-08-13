@@ -502,9 +502,11 @@ ORCA analyzer 상태:
 `crest`와 `xtb` 엔진 작업 mapping, `xtb.ts_guess_validation`, `rmsd_dedup`,
 `interaction_energy` 블록은 strict schema를 사용합니다. 알 수 없는 키,
 잘못된 boolean, 정수가 아닌 integer 필드, 문자열이 아닌 route, 여러 줄/제어문자/비인쇄
-문자가 포함된 route 또는 label은 거부합니다. 엔진 작업 mapping은 해당 엔진 작업을 제출할 때
-검사하므로, 잘못된 `xtb` mapping을 담은 워크플로우 manifest는 워크플로우 admission이 아니라
-첫 xTB 스테이지 제출 시점에 거부됩니다. fragment label은 최대 80자입니다.
+문자가 포함된 route 또는 label은 거부합니다. 워크플로우 admission은 manifest 형태, 엔진
+입력 파일 경로, `endpoint_pairing`, `rmsd_dedup`, `interaction_energy`를 거부하고, 엔진 작업
+mapping 자체의 필드 스키마는 해당 엔진 작업을 제출할 때 검사합니다 — 그래서 알 수 없는
+`xtb.ts_guess_validation` 키는 워크플로우 admission이 아니라 첫 xTB 스테이지에서 드러납니다.
+fragment label은 최대 80자입니다.
 활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
 정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는
 모든 입력 원자를 gap 없이 정적으로 완전 분할해야 합니다.

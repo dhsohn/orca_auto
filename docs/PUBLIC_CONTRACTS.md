@@ -539,10 +539,12 @@ per selection call.
 The `crest` and `xtb` engine-job mappings, `xtb.ts_guess_validation`,
 `rmsd_dedup`, and `interaction_energy` use strict schemas: unknown
 keys, malformed booleans, non-integral integer fields, non-string routes, and
-multiline/control/non-printable route or label text are rejected. An engine-job
-mapping is checked when that engine job is submitted, so a workflow manifest
-carrying a bad `xtb` mapping is rejected when its first xTB stage is submitted
-rather than at workflow admission.
+multiline/control/non-printable route or label text are rejected. Workflow
+admission rejects manifest shape, engine input-file paths, `endpoint_pairing`,
+`rmsd_dedup`, and `interaction_energy`; an engine-job mapping's own field
+schema is checked when that engine job is submitted, so an unknown
+`xtb.ts_guess_validation` key surfaces at the first xTB stage rather than at
+workflow admission.
 Fragment labels are at most 80 characters. An enabled interaction-energy block
 requires 2–8 fragments; each multiplicity is an integer in `[1, 100]`, and
 `sp_route_line` must describe a pure single-point calculation. Fragment indices
