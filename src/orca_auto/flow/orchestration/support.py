@@ -7,6 +7,7 @@ from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts import XtbDownstreamPolicy
 from orca_auto.flow.contracts.workflow import workflow_stage_metadata
+from orca_auto.flow.contracts.xtb import geometry_validation_passed
 from orca_auto.flow.orchestration.services import (
     OrchestrationServices,
     resolve_orchestration_services,
@@ -138,14 +139,7 @@ def reaction_ts_guess_error_impl(
                 f"the reactant/product endpoints{detail_text}; refusing ORCA handoff."
             ),
         }
-    validation = candidate.metadata.get("geometry_validation")
-    if not (
-        candidate.metadata.get("geometry_valid") is True
-        and isinstance(validation, dict)
-        and validation.get("valid") is True
-        and "error" not in validation
-        and validation.get("reasons") == []
-    ):
+    if not geometry_validation_passed(candidate.metadata):
         return {
             "reason": "xtb_ts_guess_geometry_unvalidated",
             "message": (
