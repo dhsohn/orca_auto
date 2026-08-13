@@ -183,8 +183,14 @@ def _populate_energy(result: OrcaResult, text: str) -> None:
     energy_matches = list(FINAL_SINGLE_POINT_ENERGY_RE.finditer(text))
     if not energy_matches:
         return
+    last_match = energy_matches[-1]
+    if last_match.group(2) is not None:
+        # The final energy line carries an annotation such as
+        # "(SCF not fully converged!)": an unconverged value must not be
+        # published, and any earlier line belongs to a different geometry.
+        return
     try:
-        energy = final_single_point_energy_value(energy_matches[-1].group(1))
+        energy = final_single_point_energy_value(last_match.group(1))
     except ValueError:
         return
     result.energy_hartree = energy

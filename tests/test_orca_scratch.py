@@ -73,6 +73,29 @@ def test_publish_name_omitted_directory_contributes_no_dirent_bytes(
     assert publication.omitted_transient_bytes == 1024
 
 
+def test_scratch_create_sweeps_interrupted_cleanup_tombstones(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    selected = _durable_input(tmp_path)
+    policy.root.mkdir(parents=True)
+    policy.root.chmod(0o700)
+    tombstone = policy.root / (".orca_auto_cleanup." + "a" * 32)
+    tombstone.mkdir()
+    (tombstone / "leftover.bin").write_bytes(b"x" * 4096)
+
+    # A tombstone is an interrupted cleanup's rename-for-deletion; the next
+    # scratch run completes the removal instead of silently pinning tmpfs RAM.
+    workspace = EngineScratchWorkspace.create(policy, selected)
+    (workspace.path / "sp.out").write_text("done\n", encoding="utf-8")
+    publication = workspace.publish()
+    workspace.cleanup()
+
+    assert not tombstone.exists()
+    assert {path.name for path in publication.paths} == {"sp.out"}
+
+
 def test_scratch_publishes_surviving_results_once_and_omits_tmp(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
