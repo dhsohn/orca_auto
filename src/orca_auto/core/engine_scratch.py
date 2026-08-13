@@ -37,6 +37,7 @@ _PUBLICATION_META_TEMP_PREFIX = ".orca_auto_publish_meta."
 _STAGING_TEMP_PREFIX = ".orca_auto_stage."
 _PUBLICATION_TEMP_NAME_RE = re.compile(r"^\.orca_auto_publish\.[0-9a-f]{32}\.tmp$")
 _PUBLICATION_BACKUP_NAME_RE = re.compile(r"^\.orca_auto_backup\.[0-9a-f]{32}$")
+_CLEANUP_TOMBSTONE_NAME_RE = re.compile(r"^\.orca_auto_cleanup\.[0-9a-f]{32}$")
 _TRANSIENT_FILE_RE = re.compile(r"(?:^|\.)tmp(?:\.|$)", re.IGNORECASE)
 _SCRATCH_CONTROL_FILE_NAMES = frozenset(
     {
@@ -677,6 +678,18 @@ def _manifest_owner_is_live(payload: dict[str, Any]) -> bool:
 
 def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
     for name in os.listdir(root_fd):
+        if _CLEANUP_TOMBSTONE_NAME_RE.fullmatch(name):
+            # A tombstone is a workspace renamed for deletion whose rmtree was
+            # interrupted. Completing the removal is the recorded intent;
+            # leaving it would pin tmpfs RAM invisibly. The caller holds the
+            # scratch-root lock, so no live cleanup can be mid-removal here.
+            info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            if not stat.S_ISDIR(info.st_mode):
+                raise EngineScratchError(
+                    f"engine scratch root contains an unsafe entry: {root / name}"
+                )
+            shutil.rmtree(name, dir_fd=root_fd)
+            continue
         if not name.startswith(SCRATCH_WORKSPACE_PREFIX):
             continue
         candidate = root / name

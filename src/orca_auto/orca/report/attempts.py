@@ -87,12 +87,19 @@ def attempt_report_rows(
 
 
 def final_out_path(state: Mapping[str, Any]) -> Path | None:
-    """Last existing output file of the run, preferring the final result."""
+    """Output file of the run's recorded final result.
+
+    A recorded final ``last_out_path`` is authoritative: when it is absent on
+    disk the run has no trustworthy output, and an earlier attempt's numbers
+    must never stand in for it. The attempt scan remains only for records
+    that never captured a final result path.
+    """
     final_result = state.get("final_result")
     if isinstance(final_result, Mapping):
         last_out = str(final_result.get("last_out_path") or "").strip()
-        if last_out and Path(last_out).exists():
-            return Path(last_out)
+        if last_out:
+            path = Path(last_out)
+            return path if path.exists() else None
     attempts = state.get("attempts")
     attempts = attempts if isinstance(attempts, list) else []
     for attempt in reversed(attempts):

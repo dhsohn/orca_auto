@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from orca_auto.orca.report.attempts import final_out_path
 from orca_auto.orca.report.si import (
     SiBlockError,
     collect_si_block,
@@ -111,6 +112,26 @@ _SCAN_INP = (
     "* xyz 0 1\nC 0 0 0\n*\n"
 )
 _IRC_INP = "! B3LYP def2-SVP IRC\n* xyz 0 1\nC 0 0 0\n*\n"
+
+
+def test_final_out_path_never_substitutes_an_earlier_attempt(tmp_path: Path) -> None:
+    earlier = tmp_path / "attempt_1.out"
+    earlier.write_text("earlier attempt\n", encoding="utf-8")
+    missing_final = tmp_path / "attempt_2.out"
+
+    # A recorded final output that is absent on disk must read as no output,
+    # never as the previous attempt's file.
+    assert (
+        final_out_path(
+            {
+                "final_result": {"last_out_path": str(missing_final)},
+                "attempts": [{"index": 1, "out_path": str(earlier)}],
+            }
+        )
+        is None
+    )
+    # Records that never captured a final result path keep the attempt scan.
+    assert final_out_path({"attempts": [{"index": 1, "out_path": str(earlier)}]}) == earlier
 
 
 def test_ts_block_renders_thermochemistry_mode_and_coordinates(tmp_path: Path) -> None:

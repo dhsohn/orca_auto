@@ -44,6 +44,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The per-job SI block and HTML report never take numbers from a wrong
+  attempt: a recorded final `last_out_path` that is absent on disk now reads
+  as no output instead of silently substituting an earlier attempt's file.
+  Records that never captured a final result path keep the attempt scan.
+- A final energy line annotated `(SCF not fully converged!)` no longer
+  populates the published energies. The workflow fallback path already
+  refused annotated values; the per-job parser now agrees, so `si_block.md`
+  and `job_report.html` cannot print an unconverged E(el).
+- An interrupted scratch cleanup no longer pins tmpfs RAM invisibly: the next
+  scratch run completes the removal of `.orca_auto_cleanup.*` tombstones
+  under the scratch-root lock.
 - A corrupt `.engrad` spelling `nan` or `inf` now reads as unavailable instead
   of rendering NaN in `workflow_report.html` and crashing the terminal
   machine-observation writer on every later advance of that workspace.

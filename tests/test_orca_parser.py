@@ -9,6 +9,31 @@ import pytest
 from orca_auto.orca.parser import parse_opt_progress, parse_orca_output
 
 
+def test_annotated_final_energy_is_not_published(tmp_path: Path) -> None:
+    # A near-converged SCF prints "(SCF not fully converged!)" on the final
+    # energy line. That value must not populate the published energies, and an
+    # earlier clean line belongs to a different geometry, so no energy at all
+    # may be reported.
+    out_file = tmp_path / "annotated.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "! B3LYP def2-SVP Opt",
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                "FINAL SINGLE POINT ENERGY      -100.123456789012 (SCF not fully converged!)",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.energy_hartree is None
+    assert result.energy_ev is None
+    assert result.energy_kcalmol is None
+
+
 def test_error_termination_is_classified_as_failed(tmp_path: Path) -> None:
     out_file = tmp_path / "error_case.out"
     out_file.write_text(
