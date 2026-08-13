@@ -21,6 +21,13 @@ def test_annotated_final_energy_is_not_published(tmp_path: Path) -> None:
                 "! B3LYP def2-SVP Opt",
                 "FINAL SINGLE POINT ENERGY      -100.200000000000",
                 "FINAL SINGLE POINT ENERGY      -100.123456789012 (SCF not fully converged!)",
+                "--------------------------",
+                "THERMOCHEMISTRY AT 298.15K",
+                "--------------------------",
+                "Zero point energy                ...      0.08843782 Eh",
+                "Total enthalpy                   ...   -100.00000000 Eh",
+                "Final Gibbs free energy          ...   -100.05000000 Eh",
+                "G-E(el)                          ...      0.07345679 Eh",
                 "****ORCA TERMINATED NORMALLY****",
             ]
         ),
@@ -32,6 +39,13 @@ def test_annotated_final_energy_is_not_published(tmp_path: Path) -> None:
     assert result.energy_hartree is None
     assert result.energy_ev is None
     assert result.energy_kcalmol is None
+    # Thermochemistry derives from the same unconverged SCF: none of it may
+    # be published either.
+    assert result.enthalpy is None
+    assert result.gibbs_energy is None
+    assert result.zpe_correction is None
+    assert result.gibbs_correction is None
+    assert result.thermo_temperature_k is None
 
 
 def test_error_termination_is_classified_as_failed(tmp_path: Path) -> None:

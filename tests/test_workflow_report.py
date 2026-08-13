@@ -419,6 +419,119 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
     assert data.orca_results[0].rel_kcal == pytest.approx(0.0)
 
 
+def test_collect_refuses_annotated_final_output_energy(tmp_path: Path) -> None:
+    # When the last final-energy line is annotated ("(SCF not fully
+    # converged!)"), the fallback must publish no energy at all — an earlier
+    # clean line belongs to a different geometry and must not set the ΔE
+    # baseline.
+    job_dir = tmp_path / "orca_annotated_output"
+    job_dir.mkdir()
+    stage_dir, provenance = _orca_generation(job_dir)
+    out_path = stage_dir / "opt.out"
+    out_path.write_text(
+        "\n".join(
+            [
+                "|  1> ! r2scan-3c Opt TightSCF",
+                "FINAL SINGLE POINT ENERGY -1.000000000000",
+                "FINAL SINGLE POINT ENERGY -1.100000000000 (SCF not fully converged!)",
+                "****ORCA TERMINATED NORMALLY****",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    report = {
+        "schema_version": 1,
+        "engine": "orca",
+        "job": {"id": "orca_conformer_01"},
+        "status": {"state": "completed", "reason": "normal_termination"},
+        "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
+        "execution_provenance": provenance,
+        "engine_payload": {
+            "attempts": [
+                {
+                    "index": 1,
+                    "out_path": str(out_path),
+                    "markers": {"imaginary_frequency_count": 0},
+                }
+            ],
+            "final_result": {
+                "reason": "normal_termination",
+                "last_out_path": str(out_path),
+            },
+        },
+    }
+    _publish_orca_machine(stage_dir, report)
+    (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
+    payload = _payload(
+        tmp_path,
+        [_orca_stage("orca_conformer_01", stage_dir, status="completed", label="conf_01")],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.orca_results[0].energy is None
+    assert data.orca_results[0].rel_kcal is None
+
+
+def test_collect_refuses_engrad_energy_when_final_output_is_annotated(tmp_path: Path) -> None:
+    # The .engrad is the primary energy channel, but it carries the same
+    # unconverged SCF's value and cannot be cross-checked on its own — the
+    # annotation exists only in the .out. A stage whose final output line is
+    # annotated publishes no energy even when its .engrad is retained.
+    job_dir = tmp_path / "orca_annotated_engrad"
+    job_dir.mkdir()
+    stage_dir, provenance = _orca_generation(job_dir)
+    (stage_dir / "opt.engrad").write_text(
+        _ENGRAD_TEMPLATE.format(energy="-1.050000000000"), encoding="utf-8"
+    )
+    out_path = stage_dir / "opt.out"
+    out_path.write_text(
+        "\n".join(
+            [
+                "|  1> ! r2scan-3c Opt TightSCF",
+                "FINAL SINGLE POINT ENERGY -1.000000000000",
+                "FINAL SINGLE POINT ENERGY -1.100000000000 (SCF not fully converged!)",
+                "****ORCA TERMINATED NORMALLY****",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    report = {
+        "schema_version": 1,
+        "engine": "orca",
+        "job": {"id": "orca_conformer_01"},
+        "status": {"state": "completed", "reason": "normal_termination"},
+        "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
+        "execution_provenance": provenance,
+        "engine_payload": {
+            "attempts": [
+                {
+                    "index": 1,
+                    "out_path": str(out_path),
+                    "markers": {"imaginary_frequency_count": 0},
+                }
+            ],
+            "final_result": {
+                "reason": "normal_termination",
+                "last_out_path": str(out_path),
+            },
+        },
+    }
+    _publish_orca_machine(stage_dir, report)
+    (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
+    payload = _payload(
+        tmp_path,
+        [_orca_stage("orca_conformer_01", stage_dir, status="completed", label="conf_01")],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.orca_results[0].energy is None
+    assert data.orca_results[0].rel_kcal is None
+
+
 def test_collect_ignores_unbound_root_engrad_for_verified_orca_generation(
     tmp_path: Path,
 ) -> None:
