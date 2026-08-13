@@ -49,9 +49,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   as no output instead of silently substituting an earlier attempt's file.
   Records that never captured a final result path keep the attempt scan.
 - A final energy line annotated `(SCF not fully converged!)` no longer
-  populates the published energies. The workflow fallback path already
-  refused annotated values; the per-job parser now agrees, so `si_block.md`
-  and `job_report.html` cannot print an unconverged E(el).
+  populates the published per-job energies: `si_block.md` refuses the whole
+  block and `job_report.html` cannot print an unconverged E(el).
+  Thermochemistry lines parsed from the same output still render in the HTML
+  report, and the workflow ΔE fallback still skips to the last clean line —
+  aligning both with the refuse rule is a recorded follow-up.
 - An interrupted scratch cleanup no longer pins tmpfs RAM invisibly: the next
   scratch run completes the removal of `.orca_auto_cleanup.*` tombstones
   under the scratch-root lock.
