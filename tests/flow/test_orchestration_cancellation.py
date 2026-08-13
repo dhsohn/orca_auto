@@ -166,6 +166,22 @@ def test_cancel_refuses_before_any_mutation_when_journal_is_over_limit(
     assert payload["status"] == "running"
     assert "cancellation_status_transitions" not in payload.get("metadata", {})
 
+    # A symlinked journal would only fail inside the O_NOFOLLOW append after
+    # the durable writes; the guard refuses it up front the same way.
+    journal_path.unlink()
+    real_journal = tmp_path / "elsewhere.jsonl"
+    real_journal.write_bytes(b"")
+    journal_path.symlink_to(real_journal)
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_cancel_journal",
+            workflow_root=tmp_path,
+            crest_config="/tmp/crest.yaml",
+            services=deps,
+        )
+    assert stage_cancels == []
+    assert payload_writes == []
+
 
 def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_pending(
     tmp_path: Path,

@@ -49,6 +49,10 @@ def require_workflow_journal_capacity(workflow_root: str | Path) -> None:
     the whole operation while nothing has changed yet.
     """
     path = workflow_journal_path(workflow_root)
+    if path.is_symlink():
+        # The append path opens the journal O_NOFOLLOW and would fail after
+        # durable writes; refuse the same corruption up front.
+        raise ValueError(f"workflow journal must not be a symlink: {path}")
     try:
         size = path.stat().st_size
     except FileNotFoundError:
@@ -263,5 +267,6 @@ __all__ = [
     "WORKFLOW_JOURNAL_FILE_NAME",
     "append_workflow_journal_event",
     "list_workflow_journal",
+    "require_workflow_journal_capacity",
     "workflow_journal_path",
 ]
