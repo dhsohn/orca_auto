@@ -293,7 +293,9 @@ diagnostic도 이 파일을 읽지 않습니다. report-only 작업은 지원하
 - 적용 가능한 리포트 렌더러가 있을 때 `<generation>/job_report.html`
 - 정류점으로 끝나는 완료 작업에는 `<generation>/si_block.md` (route, 에너지,
   열화학, Nimag, 좌표를 담은 복사-붙여넣기용 Supporting Information 블록),
-  IRC route에는 좌표 없는 요약 전용 validation 블록
+  IRC route에는 좌표 없는 요약 전용 validation 블록. 출력에서 신뢰할 수 있는
+  최종 에너지나 기하를 얻지 못하면 — 최종 에너지 라인이 수렴 미완으로 주석된
+  경우를 포함해 — 블록을 발행하지 않습니다(부분 SI 블록은 없느니만 못합니다)
 
 실행 중에는 루트에 live `job_state.json`이 함께 존재합니다(terminal 정리 시
 제거). 리포트는 검증된 실행 generation에만 발행합니다. generation을 검증할 수
@@ -500,7 +502,12 @@ ORCA analyzer 상태:
 `crest`와 `xtb` 엔진 작업 mapping, `xtb.ts_guess_validation`, `rmsd_dedup`,
 `interaction_energy` 블록은 strict schema를 사용합니다. 알 수 없는 키,
 잘못된 boolean, 정수가 아닌 integer 필드, 문자열이 아닌 route, 여러 줄/제어문자/비인쇄
-문자가 포함된 route 또는 label은 admission에서 거부합니다. fragment label은 최대 80자입니다.
+문자가 포함된 route 또는 label은 거부합니다. 워크플로우 admission은 manifest 형태, 엔진
+입력 파일 경로, `endpoint_pairing`, `rmsd_dedup`, `interaction_energy`를 거부하고, 엔진 작업
+mapping 자체의 키·타입 스키마는 해당 엔진 작업을 제출할 때 검사합니다 — 그래서 알 수 없는
+`xtb.ts_guess_validation` 키는 워크플로우 admission이 아니라 첫 xTB 스테이지에서 드러납니다.
+아래의 엔진 `charge`/`uhf` 충돌 규칙은 그보다 이른 워크플로우 생성 시점에 검사합니다.
+fragment label은 최대 80자입니다.
 활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
 정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는
 모든 입력 원자를 gap 없이 정적으로 완전 분할해야 합니다.
@@ -647,7 +654,8 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
 
 공개 리포트 또는 triage에서 현재 쓰이는 워크플로우 reason 문자열 예시는
 `scan_profile_no_barrier`, `ts_candidates_exhausted`,
-`reaction_ts_search_xtb_phase_failed`, `conformers_failed`, `xtb_ts_guess_missing`입니다.
+`reaction_ts_search_xtb_phase_failed`, `conformers_failed`, `xtb_ts_guess_missing`,
+`xtb_ts_guess_geometry_invalid`, `xtb_ts_guess_geometry_unvalidated`입니다.
 
 실행 전에 거부된 스테이지는 스테이지 메타데이터에 `reason`(제출기가 제시한
 사유, 없으면 `queue_submission_failed`)을 기록하고, 제출기가 stderr 또는

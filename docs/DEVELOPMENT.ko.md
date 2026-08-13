@@ -144,8 +144,9 @@ bash scripts/clean_artifacts.sh
 - 최상위 별칭 패키지, 콘솔 스크립트 별칭, 대체 런타임 리더는 코드베이스에서 배제하세요.
 - `orca_auto.orca.commands`는 adapter 계층으로 유지하세요. 도메인 실행·제출·worker-child·
   queue 모듈은 이 패키지를 임포트하면 안 됩니다.
-- SI evidence/science/rendering은 publication을 import하지 않게 유지하세요. 이 방향은
-  `pyproject.toml`이 강제하므로 전달용 module로 우회하지 마세요.
+- SI collection/rendering은 publication을 import하지 않게 유지하세요. 이를 강제하는
+  import-linter 계약은 없으며(위 workflow SI 절 참조) 리뷰어가 지키는 관례이니,
+  전달용 module로 우회하지 마세요.
 
 ## 엔진 워커
 

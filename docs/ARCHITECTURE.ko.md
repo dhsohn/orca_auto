@@ -347,7 +347,8 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   요약이 들어갑니다. 정류점으로 끝나는 완료 작업은
   `si_block.md`(`report/si.py`)도 생성합니다 — 에너지, 열화학, Nimag, 좌표를
   담은 복사-붙여넣기용 Supporting Information 블록입니다. IRC route는 좌표
-  없는 요약 전용 validation 블록을 생성합니다.
+  없는 요약 전용 validation 블록을 생성합니다. 출력에서 신뢰할 수 있는 최종
+  에너지나 기하를 얻지 못하면 writer가 블록 생성을 거부합니다.
 - **인덱스:** `job_locations/`와 `core/indexing`이 탐색용 JSONL 작업 위치
   인덱스를 유지합니다.
 

@@ -6,7 +6,44 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
-## [Unreleased]
+## [3.0.0] - 2026-08-13
+
+This release refuses to publish numbers it cannot vouch for, so four
+documented surfaces change shape.
+
+**Manifests**: `xtb.ts_guess_validation` no longer accepts `enabled`. Drop the
+key before submitting — a workflow carrying it is rejected when its first xTB
+stage is submitted, which is where the `xtb` mapping's own field schema has
+always been checked.
+
+**Reaction workflows**: the xTB→ORCA handoff now requires an explicit
+successful geometry verdict and refuses with the new reason
+`xtb_ts_guess_geometry_unvalidated` when none exists.
+
+**Published reports and `machine.json`**: a stage energy, its thermochemistry,
+or a whole ranked row can now be absent where a value used to appear. An
+output whose final energy line is annotated as not fully converged publishes
+no energy or thermochemistry — and no `si_block.md` at all, since a partial SI
+block is worse than none — while interaction-energy fan-out stages stop
+feeding the ranked table and `results.orca_results`. `lineage.upstream` gains
+the stages that publish no HTML, and a terminal observation published while SI
+regeneration is blocked now carries the delivery code
+`orca_auto/si_publication_blocked` beside the pinned SI — normally on a
+delivery that is otherwise complete, so a consumer that treats any code as
+failure needs updating. Already published
+terminal observations are immutable and unchanged; every difference applies to
+future publications.
+
+**Systemd**: `service restart` now restarts the worker services themselves, so
+it ends in-flight ORCA work — run it in an idle window. A worker whose restart
+fails is left stopped instead of running stale code, an unreadable
+workflow-worker state changes nothing and exits non-zero, and both service
+commands now address the units of the account behind `sudo` rather than root.
+
+One more operational note: an oversized or symlinked
+`workflow_registry.journal.jsonl` refuses `queue cancel` for that workflow up
+front, with a message naming the file — and, for the size limit, the
+remediation.
 
 ### Changed
 
@@ -18,6 +55,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - Queue and workflow activity timestamps parse through the shared strict ISO
   parser; a non-string value is treated as absent instead of being coerced to
   text first. No JSON-loaded state can carry such a value today.
+- `AGENTS.md` documents the repository validation entrypoint and the states
+  `make check` cannot certify: deployment, live-runtime safety, and
+  real-engine acceptance.
 - Removed dead internal surfaces and collapsed pass-through wiring across
   queue rendering, transition events, flow imports, ISO parsing, xTB ranking
   re-exports, systemd unit names, and the admission-store test double; queue
@@ -69,19 +109,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - A corrupt `.engrad` spelling `nan` or `inf` now reads as unavailable instead
   of rendering NaN in `workflow_report.html` and crashing the terminal
   machine-observation writer on every later advance of that workspace.
-- The worker-child `--admission-token` flag defaults to an empty string, so a
-  token-less diagnostic invocation runs unmanaged as the signatures advertise
-  instead of silently exiting with the literal token `"None"`. The supervised
-  systemd path always passes a real token and is unaffected.
+- The `--admission-token` flag on all four worker-child entrypoints defaults
+  to an empty string, so a token-less diagnostic invocation runs unmanaged as
+  the signatures advertise instead of silently exiting with the literal token
+  `"None"`. The supervised systemd path always passes a real token and is
+  unaffected.
 - A configured messenger config path that does not exist now logs a warning
   before notifications are disabled, matching the existing parse-failure
   warning.
 - `scratch_provenance.omitted_transient_bytes` counts only regular-file bytes;
   an omitted scratch directory no longer contributes its dirent size.
-- `workflow cancel` on a root whose `workflow_registry.journal.jsonl` exceeds
-  the 8 MiB caller-event read limit now refuses up front, before any stage
-  cancel or durable write, with a message naming the journal and the
-  remediation. The oversized journal previously surfaced only after the
+- `queue cancel` on a workflow whose `workflow_registry.journal.jsonl` exceeds
+  the 8 MiB caller-event read limit, or is a symlink, now refuses up front,
+  before any stage cancel or durable write, with a message naming the journal
+  and — for the size limit — the remediation. The oversized journal previously surfaced only after the
   cancelled status was already persisted, so the command reported failure
   for a cancel that had taken effect and every later cancel in that root
   failed the same way.

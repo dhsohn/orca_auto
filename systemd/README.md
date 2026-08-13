@@ -108,8 +108,11 @@ Worker safety policy:
   independently of the short queue poll;
 - the queue-worker and workflow-worker units use `Restart=on-failure`; both wait
   30 seconds and permit at most three unit starts in five minutes;
-- `orca_auto service restart` clears the bounded failure state before an
-  operator-requested restart.
+- `orca_auto service restart` clears the bounded failure state and then
+  restarts the worker services themselves, so it ends in-flight ORCA work:
+  run it in an idle window. A worker whose restart fails is left stopped
+  rather than running stale code, and an unreadable workflow-worker state
+  changes nothing and exits non-zero.
 
 Install the default ORCA engine worker:
 

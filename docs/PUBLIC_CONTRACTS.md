@@ -314,7 +314,10 @@ visible execution generation per submission. The generation contains:
 - `<generation>/si_block.md` for completed jobs ending on a stationary point
   (a copy-paste Supporting Information block: route, energies,
   thermochemistry, Nimag, coordinates) or for IRC routes (summary-only
-  validation block, no coordinates)
+  validation block, no coordinates). The block is withheld when the output
+  yields no trustworthy final energy or geometry — including a final energy
+  line annotated as not fully converged — because a partial SI block is worse
+  than none
 
 During a run the root additionally carries the live `job_state.json` (removed
 by terminal cleanup once the run is cleared). Reports are published only into
@@ -536,7 +539,13 @@ per selection call.
 The `crest` and `xtb` engine-job mappings, `xtb.ts_guess_validation`,
 `rmsd_dedup`, and `interaction_energy` use strict schemas: unknown
 keys, malformed booleans, non-integral integer fields, non-string routes, and
-multiline/control/non-printable route or label text are rejected at admission.
+multiline/control/non-printable route or label text are rejected. Workflow
+admission rejects manifest shape, engine input-file paths, `endpoint_pairing`,
+`rmsd_dedup`, and `interaction_energy`; an engine-job mapping's own key and
+type schema is checked when that engine job is submitted, so an unknown
+`xtb.ts_guess_validation` key surfaces at the first xTB stage rather than at
+workflow admission. The engine `charge`/`uhf` conflict rule below is checked
+earlier, when the workflow is created.
 Fragment labels are at most 80 characters. An enabled interaction-energy block
 requires 2–8 fragments; each multiplicity is an integer in `[1, 100]`, and
 `sp_route_line` must describe a pure single-point calculation. Fragment indices
@@ -713,8 +722,9 @@ Workflow and stage statuses use the shared status vocabulary where applicable:
 
 Workflow-specific reason strings currently used in public reports or triage
 include `scan_profile_no_barrier`, `ts_candidates_exhausted`,
-`reaction_ts_search_xtb_phase_failed`, `conformers_failed`, and
-`xtb_ts_guess_missing`.
+`reaction_ts_search_xtb_phase_failed`, `conformers_failed`,
+`xtb_ts_guess_missing`, `xtb_ts_guess_geometry_invalid`, and
+`xtb_ts_guess_geometry_unvalidated`.
 
 A stage rejected before execution records `reason` (the submitter's reason, or
 `queue_submission_failed` when it gives none) and, when the submitter wrote

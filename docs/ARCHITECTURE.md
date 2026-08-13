@@ -372,7 +372,8 @@ logic. Notable pieces:
   vibrational summary. Completed jobs ending on a stationary point also get
   `si_block.md` (`report/si.py`), a copy-paste Supporting Information block
   with energies, thermochemistry, Nimag, and coordinates; IRC routes get a
-  summary-only validation block without coordinates.
+  summary-only validation block without coordinates. The writer refuses the
+  block when the output yields no trustworthy final energy or geometry.
 - **Index:** `job_locations/` and `core/indexing` maintain a JSONL
   job-location index for discovery.
 
