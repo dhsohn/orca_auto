@@ -107,8 +107,10 @@ xTB/CREST 엔진 워커로 확장됩니다. 이 unit은 설치되지만 기본 r
 - 엔진 워커의 유휴 전체 상태 조정은 짧은 큐 poll과 별개로 1분에 최대 한 번 실행합니다.
 - queue-worker와 workflow-worker unit은 `Restart=on-failure`를 사용하며, 두 unit
   모두 30초 간격으로 재시작하고 5분 동안 unit 시작을 최대 세 번만 허용합니다.
-- `orca_auto service restart`는 운영자가 요청한 재시작 전에 제한된 실패 상태를
-  초기화합니다.
+- `orca_auto service restart`는 제한된 실패 상태를 초기화한 뒤 worker service
+  자체를 재시작하므로 진행 중인 ORCA 작업을 중단시킵니다 — 유휴 창에서 실행하세요.
+  재시작에 실패한 worker는 낡은 코드로 계속 도는 대신 정지 상태로 남고, workflow
+  worker 상태를 읽을 수 없으면 아무것도 바꾸지 않고 non-zero로 종료합니다.
 
 기본 ORCA 엔진 워커 설치:
 

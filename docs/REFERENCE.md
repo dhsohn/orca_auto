@@ -698,7 +698,9 @@ that run's state and reports:
   with the route line and ORCA version, E(el)/ZPE/H/G and the G−E(el)
   correction, Nimag with an imaginary-mode summary, the final coordinates, and
   `⚠` lint lines for reviewer-visible problems; for IRC routes, a
-  summary-only validation block without coordinates
+  summary-only validation block without coordinates. No block is written when
+  the output yields no trustworthy final energy or geometry, which includes a
+  final energy line annotated as not fully converged
 
 Each submission places its bound inputs and raw outputs in one visible direct
 child, for example:

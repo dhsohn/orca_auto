@@ -658,7 +658,9 @@ visible 실행 generation이 남습니다. 각 generation이 그 실행의 상�
   제외)은 route line과 ORCA 버전, E(el)/ZPE/H/G와 G−E(el) 보정, Nimag와
   허수 모드 요약, 최종 좌표, 그리고 리뷰어가 잡을 문제를 표시하는 `⚠` lint
   라인을 담은 복사-붙여넣기용 Supporting Information 블록을 생성합니다. IRC
-  route는 좌표 없는 요약 전용 validation 블록을 생성합니다.
+  route는 좌표 없는 요약 전용 validation 블록을 생성합니다. 출력에서 신뢰할 수
+  있는 최종 에너지나 기하를 얻지 못하면 — 최종 에너지 라인이 수렴 미완으로
+  주석된 경우를 포함해 — 블록을 쓰지 않습니다.
 
 각 제출의 바인딩 입력과 raw 출력은 눈에 보이는 직접 하위 디렉터리 하나에 배치됩니다.
 예:
