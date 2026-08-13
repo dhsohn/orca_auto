@@ -48,12 +48,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   attempt: a recorded final `last_out_path` that is absent on disk now reads
   as no output instead of silently substituting an earlier attempt's file.
   Records that never captured a final result path keep the attempt scan.
-- A final energy line annotated `(SCF not fully converged!)` no longer
-  populates the published per-job energies: `si_block.md` refuses the whole
-  block and `job_report.html` cannot print an unconverged E(el).
-  Thermochemistry lines parsed from the same output still render in the HTML
-  report, and the workflow ΔE fallback still skips to the last clean line —
-  aligning both with the refuse rule is a recorded follow-up.
+- A final energy line annotated `(SCF not fully converged!)` publishes
+  nothing derived from that SCF: `si_block.md` refuses the whole block,
+  `job_report.html` prints neither an unconverged E(el) nor thermochemistry
+  parsed from the same output, and the workflow ΔE fallback reports no
+  energy instead of skipping to an earlier clean line that belongs to a
+  different geometry.
 - An interrupted scratch cleanup no longer pins tmpfs RAM invisibly: the next
   scratch run completes the removal of `.orca_auto_cleanup.*` tombstones
   under the scratch-root lock.

@@ -657,8 +657,11 @@ def _final_single_point_energy_from_output(output_root: Path, candidate: Path) -
         if read_offset and match.start() == 0:
             continue
         if match.group(2) is not None:
-            # Annotated values ("(SCF not fully converged!)") never feed the
-            # report's fallback energy, matching this site's prior pattern.
+            # The final energy line is annotated ("(SCF not fully
+            # converged!)"): an unconverged value must not feed the ΔE table,
+            # and any earlier clean line belongs to a different geometry —
+            # forget it rather than falling back to it.
+            energy_text = None
             continue
         energy_text = match.group(1)
     if energy_text is None:

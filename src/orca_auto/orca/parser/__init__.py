@@ -179,15 +179,24 @@ def _populate_coordinates(result: OrcaResult, text: str) -> None:
     result.formula = _build_formula(result.elements)
 
 
+def _final_energy_line_annotated(text: str) -> bool:
+    """True when the last final-energy line carries an annotation.
+
+    A trailing annotation such as "(SCF not fully converged!)" taints the
+    final geometry's SCF: neither the energy nor thermochemistry derived from
+    it may be published, and any earlier clean line belongs to a different
+    geometry.
+    """
+    energy_matches = list(FINAL_SINGLE_POINT_ENERGY_RE.finditer(text))
+    return bool(energy_matches) and energy_matches[-1].group(2) is not None
+
+
 def _populate_energy(result: OrcaResult, text: str) -> None:
     energy_matches = list(FINAL_SINGLE_POINT_ENERGY_RE.finditer(text))
     if not energy_matches:
         return
     last_match = energy_matches[-1]
     if last_match.group(2) is not None:
-        # The final energy line carries an annotation such as
-        # "(SCF not fully converged!)": an unconverged value must not be
-        # published, and any earlier line belongs to a different geometry.
         return
     try:
         energy = final_single_point_energy_value(last_match.group(1))
@@ -212,6 +221,10 @@ def _populate_frequencies(result: OrcaResult, text: str) -> None:
 
 
 def _populate_thermodynamics(result: OrcaResult, text: str) -> None:
+    if _final_energy_line_annotated(text):
+        # Thermochemistry printed after an unconverged final SCF derives from
+        # the same tainted energy; publish none of it.
+        return
     enthalpy_match = _ENTHALPY_RE.search(text)
     if enthalpy_match:
         result.enthalpy = float(enthalpy_match.group(1))
