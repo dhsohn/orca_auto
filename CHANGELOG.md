@@ -6,6 +6,22 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [Unreleased]
+
+### Fixed
+
+- The workflow report's annotated-energy refusal now locates the true final
+  `FINAL SINGLE POINT ENERGY` line by scanning backwards from EOF instead of
+  reading one 256 KiB tail, which a Freq block's normal-modes printout
+  routinely pushed that line beyond. An output whose final energy line is
+  annotated as not fully converged therefore refuses its retained `.engrad`
+  energy in `workflow_report.html`, the Best-energy card, and terminal
+  `machine.json` `results.orca_results` regardless of output size —
+  previously such a stage published the unconverged value while its
+  `si_block.md` refused the same output. A clean final line beyond the old
+  tail now also publishes its energy for stages without an `.engrad`, where
+  the value was silently absent.
+
 ## [3.0.0] - 2026-08-13
 
 This release refuses to publish numbers it cannot vouch for, so four
