@@ -10,6 +10,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `workflow cancel` and `workflow restart` now refuse a hardlinked or
+  non-regular `workflow_registry.journal.jsonl` before any durable write, the
+  same way an oversized or symlinked journal is refused. Restart previously
+  had no journal guard at all: its append runs after the mutation is
+  committed, so a corrupt journal made the command report failure for a
+  restart that had taken effect and poisoned the retry into the
+  no-restartable-stages refusal.
 - The workflow report's annotated-energy refusal now locates the true final
   `FINAL SINGLE POINT ENERGY` line by scanning backwards from EOF instead of
   reading one 256 KiB tail, which a Freq block's normal-modes printout

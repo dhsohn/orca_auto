@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,30 @@ def workflow_journal_path(workflow_root: str | Path) -> Path:
     return root / WORKFLOW_JOURNAL_FILE_NAME
 
 
+def require_workflow_journal_integrity(workflow_root: str | Path) -> os.stat_result | None:
+    """Fail closed before durable writes when the journal cannot be appended.
+
+    The append path opens the journal ``O_NOFOLLOW`` and requires a
+    single-link regular file, so a symlinked, hardlinked or non-regular
+    journal would make it raise only after a caller's durable writes. A
+    caller that persists state before appending refuses the same corruption
+    up front, while nothing has changed yet.
+
+    Returns the journal's stat result, or ``None`` when no journal exists
+    yet (the append creates it).
+    """
+    path = workflow_journal_path(workflow_root)
+    if path.is_symlink():
+        raise ValueError(f"workflow journal must not be a symlink: {path}")
+    try:
+        details = path.stat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+        raise ValueError(f"workflow journal must be a single-link regular file: {path}")
+    return details
+
+
 def require_workflow_journal_capacity(workflow_root: str | Path) -> None:
     """Fail closed before durable writes when the journal is over its read limit.
 
@@ -46,21 +71,17 @@ def require_workflow_journal_capacity(workflow_root: str | Path) -> None:
     event id, and that read refuses files larger than
     ``CALLER_EVENT_LOOKUP_MAX_BYTES``. A caller that persists durable state
     before appending checks capacity first, so an oversized journal refuses
-    the whole operation while nothing has changed yet.
+    the whole operation while nothing has changed yet. The integrity
+    conditions the append itself enforces are checked the same way.
     """
-    path = workflow_journal_path(workflow_root)
-    if path.is_symlink():
-        # The append path opens the journal O_NOFOLLOW and would fail after
-        # durable writes; refuse the same corruption up front.
-        raise ValueError(f"workflow journal must not be a symlink: {path}")
-    try:
-        size = path.stat().st_size
-    except FileNotFoundError:
+    details = require_workflow_journal_integrity(workflow_root)
+    if details is None:
         return
-    if size > CALLER_EVENT_LOOKUP_MAX_BYTES:
+    if details.st_size > CALLER_EVENT_LOOKUP_MAX_BYTES:
+        path = workflow_journal_path(workflow_root)
         raise ValueError(
             f"workflow journal exceeds its read limit "
-            f"({size} > {CALLER_EVENT_LOOKUP_MAX_BYTES} bytes): {path}; "
+            f"({details.st_size} > {CALLER_EVENT_LOOKUP_MAX_BYTES} bytes): {path}; "
             "archive or trim the journal, then retry"
         )
 
@@ -268,5 +289,6 @@ __all__ = [
     "append_workflow_journal_event",
     "list_workflow_journal",
     "require_workflow_journal_capacity",
+    "require_workflow_journal_integrity",
     "workflow_journal_path",
 ]

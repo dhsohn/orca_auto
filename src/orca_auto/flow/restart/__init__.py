@@ -5,7 +5,7 @@ from typing import Any
 
 from orca_auto.core.utils import now_utc_iso
 
-from ..registry import append_workflow_journal_event
+from ..registry import append_workflow_journal_event, require_workflow_journal_integrity
 from ..state import acquire_workflow_lock, load_workflow_payload
 from .mutation import (
     RestartDirectoryTransaction,
@@ -30,6 +30,11 @@ def restart_failed_workflow(
 
     try:
         with acquire_workflow_lock(workspace):
+            # The restart journal append runs only after the mutation is
+            # durably committed, so a journal the append would refuse must
+            # refuse the whole restart while nothing has changed yet — the
+            # same up-front honesty cancel applies before its mutations.
+            require_workflow_journal_integrity(root)
             payload = load_workflow_payload(workspace)
             directory_transaction.capture_original_payload(payload)
             previous_status, workflow_id = _validate_restart_request(

@@ -128,6 +128,44 @@ def test_restart_manifest_accepts_zero_xtb_handoff_retries(tmp_path: Path) -> No
     assert stage["metadata"]["max_handoff_retries"] == 0
 
 
+def test_restart_refuses_corrupt_journal_before_any_mutation(tmp_path: Path) -> None:
+    # The restart journal append runs only after the mutation is durably
+    # committed, so a journal the append would refuse previously made restart
+    # report failure for a restart that had taken effect — and the retry then
+    # failed with "no failed or cancelled stages to restart".
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_journal_guard"
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_journal_guard",
+            "template_name": "reaction_ts_search",
+            "status": "failed",
+            "requested_at": "2026-04-27T00:00:00+00:00",
+            "stages": [_failed_orca_restart_stage("orca_failed", reaction_dir)],
+            "metadata": {"workflow_error": {"status": "failed", "reason": "boom"}},
+        },
+    )
+    original = (workspace / "workflow.json").read_text(encoding="utf-8")
+    journal_path = root / "workflow_registry.journal.jsonl"
+    real_journal = tmp_path / "elsewhere.jsonl"
+    real_journal.write_bytes(b"")
+    journal_path.symlink_to(real_journal)
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    # Nothing changed: the durable payload is untouched, so the retry is not
+    # poisoned into the no-restartable-stages refusal.
+    assert (workspace / "workflow.json").read_text(encoding="utf-8") == original
+
+    journal_path.unlink()
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+    assert result["status"] == "restarted"
+
+
 def test_restart_failed_workflow_resets_failed_and_cancelled_stages(tmp_path: Path) -> None:
     root = tmp_path / "workflow_runs"
     workspace = root / "wf_failed"
