@@ -1,7 +1,9 @@
 .PHONY: check test clean structural-tests
 
-check test:
+check:
 	bash scripts/check.sh
+
+test: check
 
 clean:
 	bash scripts/clean_artifacts.sh
