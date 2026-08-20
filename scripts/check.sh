@@ -34,13 +34,14 @@ raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
 PY
 }
 
-PYTHON="$(find_python)" || {
-  echo "[check] ERROR: Python 3.11 or newer is required." >&2
-  echo "[check] Set PYTHON_BIN=/path/to/python3.11 and rerun." >&2
-  exit 1
-}
-
+# A usable venv needs no bootstrap interpreter, so the gate completes on a
+# minimal PATH; find_python runs only when the venv must be (re)created.
 if ! venv_is_usable; then
+  PYTHON="$(find_python)" || {
+    echo "[check] ERROR: Python 3.11 or newer is required." >&2
+    echo "[check] Set PYTHON_BIN=/path/to/python3.11 and rerun." >&2
+    exit 1
+  }
   if [[ -e "$VENV_DIR" || -L "$VENV_DIR" ]]; then
     echo "[check] Recreating unusable virtual environment: $VENV_DIR"
     rm -rf "$VENV_DIR"

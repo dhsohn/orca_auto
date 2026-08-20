@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import re
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -50,7 +51,14 @@ logger = logging.getLogger(__name__)
 
 _ENGRAD_ENERGY_MARKER = "current total energy"
 _MAX_ENGRAD_ENERGY_FILE_BYTES = 8 * 1024 * 1024
-_MAX_ORCA_ENERGY_SCAN_BYTES = 256 * 1024
+_ORCA_ENERGY_SCAN_WINDOW_BYTES = 256 * 1024
+# Consecutive scan windows overlap by this much so a line cut at a window's
+# start is seen whole by the next window; it must exceed the longest possible
+# final-energy line (marker + value + annotation, well under 200 bytes).
+_ORCA_ENERGY_SCAN_OVERLAP_BYTES = 4 * 1024
+# A window strictly larger than the overlap is what makes each backward step
+# progress; equality would rescan the same window forever.
+assert _ORCA_ENERGY_SCAN_WINDOW_BYTES > _ORCA_ENERGY_SCAN_OVERLAP_BYTES
 _MAX_ORCA_ENERGY_CANDIDATES = 8
 _ORCA_ENERGY_READ_CHUNK_BYTES = 64 * 1024
 _FAILED_STAGE_STATUSES = frozenset({"failed", "cancel_failed", "submission_failed"})
@@ -568,8 +576,39 @@ def _stage_diagnostic(
     return reason, explanation, details_href
 
 
-def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[bytes, int] | None:
-    """Read at most the bounded tail of one confined, stable regular output."""
+def _pread_exact(descriptor: int, offset: int, size: int) -> bytes | None:
+    """Read exactly ``size`` bytes at ``offset``, or None on a short read."""
+    buffer = bytearray()
+    while len(buffer) < size:
+        chunk = os.pread(
+            descriptor,
+            min(_ORCA_ENERGY_READ_CHUNK_BYTES, size - len(buffer)),
+            offset + len(buffer),
+        )
+        if not chunk:
+            break
+        buffer.extend(chunk)
+    if len(buffer) != size:
+        return None
+    return bytes(buffer)
+
+
+def _last_final_energy_line_from_output(
+    output_root: Path, candidate: Path
+) -> tuple[bool, bytes | None] | None:
+    """Locate the file-final energy line of one confined, stable output.
+
+    Scans fixed-size windows backwards from EOF until the newest complete
+    ``FINAL SINGLE POINT ENERGY`` line is found, so the read cost is bounded
+    by that line's distance from EOF rather than by a fixed tail; only an
+    output that prints no final-energy line at all is read in full. Freq
+    blocks routinely push that line several hundred KiB before EOF, which a
+    single bounded tail cannot see past.
+
+    Returns ``None`` when the output cannot be read safely, and
+    ``(annotated, energy_text)`` otherwise; ``energy_text`` is ``None`` when
+    no final-energy line exists or the last one is annotated.
+    """
     parent_fd = -1
     output_fd = -1
     try:
@@ -611,30 +650,36 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
         ):
             return None
 
-        read_size = min(opened.st_size, _MAX_ORCA_ENERGY_SCAN_BYTES)
-        read_offset = opened.st_size - read_size
-        tail = bytearray()
-        while len(tail) < read_size:
-            chunk = os.pread(
-                output_fd,
-                min(_ORCA_ENERGY_READ_CHUNK_BYTES, read_size - len(tail)),
-                read_offset + len(tail),
-            )
-            if not chunk:
+        found: re.Match[bytes] | None = None
+        window_end = opened.st_size
+        while True:
+            window_start = max(0, window_end - _ORCA_ENERGY_SCAN_WINDOW_BYTES)
+            window = _pread_exact(output_fd, window_start, window_end - window_start)
+            if window is None:
+                return None
+            for match in FINAL_SINGLE_POINT_ENERGY_BYTES_RE.finditer(window):
+                # A window can start in the middle of a line. Do not treat that
+                # truncated first line as a complete ORCA marker; the next
+                # window's overlap re-reads it with its true line start.
+                if window_start and match.start() == 0:
+                    continue
+                found = match
+            if found is not None or window_start == 0:
                 break
-            tail.extend(chunk)
+            window_end = window_start + _ORCA_ENERGY_SCAN_OVERLAP_BYTES
 
         after = os.fstat(output_fd)
-        # A file that grew under the read must be rejected, not parsed. The
-        # energy marker's `$` also matches at the end of the tail buffer, so a
+        # A file that changed under the scan must be rejected, not parsed. The
+        # energy marker's `$` also matches at the end of a window buffer, so a
         # half-written number would parse as a complete value and be displayed
         # as a wrong energy in the delta-E table.
-        if len(tail) != read_size or (opened.st_size, opened.st_mtime_ns) != (
-            after.st_size,
-            after.st_mtime_ns,
-        ):
+        if (opened.st_size, opened.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
             return None
-        return bytes(tail), read_offset
+        if found is None:
+            return False, None
+        if found.group(2) is not None:
+            return True, None
+        return False, found.group(1)
     except (OSError, ValueError):
         return None
     finally:
@@ -647,31 +692,19 @@ def _read_pinned_orca_output_tail(output_root: Path, candidate: Path) -> tuple[b
 def _final_single_point_energy_from_output(
     output_root: Path, candidate: Path
 ) -> tuple[bool, float | None]:
-    """Return ``(final_line_annotated, energy)`` for one bounded output tail."""
-    tail_snapshot = _read_pinned_orca_output_tail(output_root, candidate)
-    if tail_snapshot is None:
+    """Return ``(final_line_annotated, energy)`` for one confined output."""
+    scan = _last_final_energy_line_from_output(output_root, candidate)
+    if scan is None:
         return False, None
-    tail, read_offset = tail_snapshot
-
-    annotated = False
-    energy_text: bytes | None = None
-    for match in FINAL_SINGLE_POINT_ENERGY_BYTES_RE.finditer(tail):
-        # A bounded tail can start in the middle of a line.  Do not treat that
-        # truncated first line as a complete ORCA marker.
-        if read_offset and match.start() == 0:
-            continue
-        if match.group(2) is not None:
-            # The final energy line is annotated ("(SCF not fully
-            # converged!)"): an unconverged value must not feed the ΔE table,
-            # and any earlier clean line belongs to a different geometry —
-            # forget it rather than falling back to it.
-            annotated = True
-            energy_text = None
-            continue
-        annotated = False
-        energy_text = match.group(1)
+    annotated, energy_text = scan
+    if annotated:
+        # The final energy line is annotated ("(SCF not fully converged!)"):
+        # an unconverged value must not feed the ΔE table, and any earlier
+        # clean line belongs to a different geometry — forget it rather than
+        # falling back to it.
+        return True, None
     if energy_text is None:
-        return annotated, None
+        return False, None
     try:
         energy = final_single_point_energy_value(energy_text)
     except ValueError:

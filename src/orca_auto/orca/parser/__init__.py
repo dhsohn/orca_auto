@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 from dataclasses import dataclass, field
 
 from ..orca_chemistry import build_formula as _build_formula
@@ -144,12 +145,14 @@ def parse_orca_output(file_path: str) -> OrcaResult:
     result.mtime = os.path.getmtime(file_path)
     result.file_hash = _compute_file_hash(file_path)
 
+    final_energy = _last_final_energy_match(text)
+
     _populate_input_metadata(result, text)
     _populate_coordinates(result, text)
-    _populate_energy(result, text)
+    _populate_energy(result, final_energy)
     _populate_convergence(result, text)
     _populate_frequencies(result, text)
-    _populate_thermodynamics(result, text)
+    _populate_thermodynamics(result, text, final_energy)
     result.wall_time_seconds = _parse_wall_time(text)
     result.status = _parse_status(text, result)
 
@@ -179,7 +182,15 @@ def _populate_coordinates(result: OrcaResult, text: str) -> None:
     result.formula = _build_formula(result.elements)
 
 
-def _final_energy_line_annotated(text: str) -> bool:
+def _last_final_energy_match(text: str) -> re.Match[str] | None:
+    """Return the last final-energy line's match, or None when none is printed."""
+    last_match: re.Match[str] | None = None
+    for match in FINAL_SINGLE_POINT_ENERGY_RE.finditer(text):
+        last_match = match
+    return last_match
+
+
+def _final_energy_line_annotated(final_energy: re.Match[str] | None) -> bool:
     """True when the last final-energy line carries an annotation.
 
     A trailing annotation such as "(SCF not fully converged!)" taints the
@@ -187,19 +198,14 @@ def _final_energy_line_annotated(text: str) -> bool:
     it may be published, and any earlier clean line belongs to a different
     geometry.
     """
-    energy_matches = list(FINAL_SINGLE_POINT_ENERGY_RE.finditer(text))
-    return bool(energy_matches) and energy_matches[-1].group(2) is not None
+    return final_energy is not None and final_energy.group(2) is not None
 
 
-def _populate_energy(result: OrcaResult, text: str) -> None:
-    energy_matches = list(FINAL_SINGLE_POINT_ENERGY_RE.finditer(text))
-    if not energy_matches:
-        return
-    last_match = energy_matches[-1]
-    if last_match.group(2) is not None:
+def _populate_energy(result: OrcaResult, final_energy: re.Match[str] | None) -> None:
+    if final_energy is None or _final_energy_line_annotated(final_energy):
         return
     try:
-        energy = final_single_point_energy_value(last_match.group(1))
+        energy = final_single_point_energy_value(final_energy.group(1))
     except ValueError:
         return
     result.energy_hartree = energy
@@ -220,8 +226,10 @@ def _populate_frequencies(result: OrcaResult, text: str) -> None:
     result.lowest_freq_cm1 = lowest
 
 
-def _populate_thermodynamics(result: OrcaResult, text: str) -> None:
-    if _final_energy_line_annotated(text):
+def _populate_thermodynamics(
+    result: OrcaResult, text: str, final_energy: re.Match[str] | None
+) -> None:
+    if _final_energy_line_annotated(final_energy):
         # Thermochemistry printed after an unconverged final SCF derives from
         # the same tainted energy; publish none of it.
         return
