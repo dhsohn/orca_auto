@@ -931,6 +931,35 @@ def test_orca_output_energy_sees_annotated_line_cut_at_window_start(tmp_path: Pa
     assert energy is None
 
 
+def test_orca_output_energy_skips_false_match_at_mid_line_window_start(tmp_path: Path) -> None:
+    # A window can begin mid-line. When the cut lands right before an
+    # energy-line echo embedded in a longer line, the buffer-position-0
+    # match is a complete-looking impostor the full file never matches;
+    # the skip rule must reject it so the true line's value publishes.
+    stage_dir = tmp_path / "orca_mid_line_cut"
+    stage_dir.mkdir()
+    out_path = stage_dir / "opt.out"
+    real_line = b"FINAL SINGLE POINT ENERGY -1.100000000000\n"
+    echo_head = b"| 27> "
+    fake_tail = b"FINAL SINGLE POINT ENERGY -9.900000000000\n"
+    out_path.write_bytes(
+        real_line
+        + echo_head
+        + fake_tail
+        + b"x" * (workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES - len(fake_tail))
+    )
+    assert out_path.stat().st_size - workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES == len(
+        real_line
+    ) + len(echo_head)
+
+    annotated_state, energy = workflow_report._orca_report_output_energy_state(
+        stage_dir, _orca_output_report(out_path)
+    )
+
+    assert annotated_state is False
+    assert energy == pytest.approx(-1.1)
+
+
 def test_orca_output_energy_rejects_file_changed_during_tail_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

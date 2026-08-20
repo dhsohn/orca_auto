@@ -56,6 +56,9 @@ _ORCA_ENERGY_SCAN_WINDOW_BYTES = 256 * 1024
 # start is seen whole by the next window; it must exceed the longest possible
 # final-energy line (marker + value + annotation, well under 200 bytes).
 _ORCA_ENERGY_SCAN_OVERLAP_BYTES = 4 * 1024
+# A window strictly larger than the overlap is what makes each backward step
+# progress; equality would rescan the same window forever.
+assert _ORCA_ENERGY_SCAN_WINDOW_BYTES > _ORCA_ENERGY_SCAN_OVERLAP_BYTES
 _MAX_ORCA_ENERGY_CANDIDATES = 8
 _ORCA_ENERGY_READ_CHUNK_BYTES = 64 * 1024
 _FAILED_STAGE_STATUSES = frozenset({"failed", "cancel_failed", "submission_failed"})
