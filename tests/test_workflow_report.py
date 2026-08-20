@@ -960,6 +960,88 @@ def test_orca_output_energy_skips_false_match_at_mid_line_window_start(tmp_path:
     assert energy == pytest.approx(-1.1)
 
 
+@pytest.mark.parametrize("final_state", ("missing", "no_energy_line"))
+def test_orca_output_energy_refuses_earlier_attempt_for_recorded_final(
+    tmp_path: Path, final_state: str
+) -> None:
+    # A recorded final output is authoritative. The verified report
+    # resolution already rejects a report whose bound final output is
+    # missing, so this chain sees that shape only in the window between
+    # verification and the scan — and an earlier attempt's clean value must
+    # not stand in for the final geometry there, nor when the final is
+    # readable but prints no final energy line.
+    stage_dir = tmp_path / "orca_final_authority"
+    stage_dir.mkdir()
+    attempt_out = stage_dir / "attempt1.out"
+    attempt_out.write_text("FINAL SINGLE POINT ENERGY -1.000000000000\n", encoding="utf-8")
+    final_out = stage_dir / "final.out"
+    if final_state == "no_energy_line":
+        final_out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+    payload = {
+        "engine_payload": {
+            "attempts": [{"index": 1, "out_path": str(attempt_out)}],
+            "final_result": {
+                "reason": "normal_termination",
+                "last_out_path": str(final_out),
+            },
+        }
+    }
+
+    annotated_state, energy = workflow_report._orca_report_output_energy_state(stage_dir, payload)
+
+    assert annotated_state is False
+    assert energy is None
+
+
+def test_orca_output_energy_keeps_attempt_annotation_evidence_for_recorded_final(
+    tmp_path: Path,
+) -> None:
+    # The conservative edge stays: with the recorded final unreadable, an
+    # annotated earlier attempt still taints the chain, so the retained
+    # engrad is refused rather than published unverifiable.
+    stage_dir = tmp_path / "orca_final_authority_annotated"
+    stage_dir.mkdir()
+    attempt_out = stage_dir / "attempt1.out"
+    attempt_out.write_text(
+        "FINAL SINGLE POINT ENERGY -1.000000000000 (SCF not fully converged!)\n",
+        encoding="utf-8",
+    )
+    payload = {
+        "engine_payload": {
+            "attempts": [{"index": 1, "out_path": str(attempt_out)}],
+            "final_result": {
+                "reason": "normal_termination",
+                "last_out_path": str(stage_dir / "vanished.out"),
+            },
+        }
+    }
+
+    annotated_state, energy = workflow_report._orca_report_output_energy_state(stage_dir, payload)
+
+    assert annotated_state is True
+    assert energy is None
+
+
+def test_orca_output_energy_scans_attempts_when_no_final_was_recorded(tmp_path: Path) -> None:
+    # Records that never captured a final output path keep the attempt scan,
+    # exactly like the per-job rule.
+    stage_dir = tmp_path / "orca_never_recorded"
+    stage_dir.mkdir()
+    attempt_out = stage_dir / "attempt1.out"
+    attempt_out.write_text("FINAL SINGLE POINT ENERGY -1.000000000000\n", encoding="utf-8")
+    payload = {
+        "engine_payload": {
+            "attempts": [{"index": 1, "out_path": str(attempt_out)}],
+            "final_result": {"reason": "normal_termination"},
+        }
+    }
+
+    annotated_state, energy = workflow_report._orca_report_output_energy_state(stage_dir, payload)
+
+    assert annotated_state is False
+    assert energy == pytest.approx(-1.0)
+
+
 def test_orca_output_energy_rejects_file_changed_during_tail_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

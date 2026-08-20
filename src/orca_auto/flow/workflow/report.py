@@ -733,7 +733,8 @@ def _orca_report_output_energy_state(
 
     engine_payload = _mapping(report_payload.get("engine_payload"))
     final_result = _mapping(engine_payload.get("final_result"))
-    candidates = [_text(final_result.get("last_out_path"))]
+    final_out_path = _text(final_result.get("last_out_path"))
+    candidates = [final_out_path]
     attempts = engine_payload.get("attempts")
     if isinstance(attempts, list):
         for attempt in reversed(attempts[-(_MAX_ORCA_ENERGY_CANDIDATES - 1) :]):
@@ -741,7 +742,7 @@ def _orca_report_output_energy_state(
                 candidates.append(_text(attempt.get("out_path")))
 
     seen: set[str] = set()
-    for raw_path in candidates:
+    for position, raw_path in enumerate(candidates):
         if not raw_path:
             continue
         candidate_key = os.path.abspath(raw_path)
@@ -754,6 +755,14 @@ def _orca_report_output_energy_state(
             # unconverged SCF; older attempts must not stand in for it.
             return True, None
         if energy is not None:
+            if final_out_path and position > 0:
+                # A recorded final output is authoritative: when it is
+                # missing, unreadable, or prints no final energy line, an
+                # earlier attempt's clean value belongs to a different
+                # geometry and must not stand in for it. Older attempts stay
+                # consulted above as annotation evidence only — mirrors the
+                # per-job final_out_path rule.
+                return False, None
             return False, energy
     return False, None
 
