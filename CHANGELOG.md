@@ -13,12 +13,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - The workflow energy chain treats a recorded final output as authoritative,
   matching the per-job rule: an earlier attempt's clean value no longer
   stands in for the final geometry when the recorded final is unreadable or
-  prints no final energy line. The verified report resolution already
-  rejects a report whose bound final output is missing from disk, so this
-  closes the residual window between that verification and the energy scan.
-  Earlier attempts stay consulted as annotation evidence only, so an
-  annotated earlier attempt still refuses the retained `.engrad`, and
-  records that never captured a final output path keep the attempt scan.
+  prints no final energy line. For observations that recorded the final
+  output as available, the verified resolution already rejects the report
+  once that file is missing from disk; this closes the remaining shapes —
+  the window between that verification and the energy scan, a readable
+  final with no energy line, and a receipt that never recorded the final as
+  available. Earlier attempts stay consulted as annotation evidence, read
+  newest-first up to the nearest readable value, so an annotated
+  newest-readable attempt still refuses the retained `.engrad`; records
+  that never captured a final output path keep the attempt scan.
 - `workflow cancel` now refuses a hardlinked or non-regular
   `workflow_registry.journal.jsonl` before any durable write, alongside its
   existing oversized and symlink refusals, and `workflow restart` gains the
