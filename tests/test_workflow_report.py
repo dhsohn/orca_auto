@@ -432,8 +432,8 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
 
 def test_collect_refuses_annotated_final_output_energy(tmp_path: Path) -> None:
     # When the last final-energy line is annotated ("(SCF not fully
-    # converged!)"), the fallback must publish no energy at all - an earlier
-    # clean line belongs to a different geometry and must not set the dE
+    # converged!)"), the fallback must publish no energy at all — an earlier
+    # clean line belongs to a different geometry and must not set the ΔE
     # baseline.
     payload = _energy_chain_payload(
         tmp_path,
@@ -452,7 +452,7 @@ def test_collect_refuses_annotated_final_output_energy(tmp_path: Path) -> None:
 
 def test_collect_refuses_engrad_energy_when_final_output_is_annotated(tmp_path: Path) -> None:
     # The .engrad is the primary energy channel, but it carries the same
-    # unconverged SCF value and cannot be cross-checked on its own - the
+    # unconverged SCF value and cannot be cross-checked on its own — the
     # annotation exists only in the .out. A stage whose final output line is
     # annotated publishes no energy even when its .engrad is retained.
     payload = _energy_chain_payload(
