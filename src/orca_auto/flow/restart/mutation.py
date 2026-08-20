@@ -13,6 +13,7 @@ from orca_auto.core.paths.workflow import (
 from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
+from ..contracts.workflow import is_interaction_role
 from ..registry import sync_workflow_registry
 from ..state import load_workflow_payload, workflow_summary, write_workflow_payload
 from ..workflow.status import WORKFLOW_FAILED_STATUSES
@@ -26,7 +27,6 @@ from .stage_ops import (
 )
 
 _RESTARTABLE_WORKFLOW_STATUSES = frozenset({*WORKFLOW_FAILED_STATUSES, STATUS_CANCELLED})
-_INTERACTION_ROLE_PREFIX = "interaction_"
 
 
 @dataclass
@@ -139,11 +139,13 @@ def _reset_restartable_stages(
     restarted_stages: list[dict[str, str]] = []
     has_interaction_stages = any(
         isinstance(raw_stage, dict)
-        and _normalize_text(
-            raw_stage.get("metadata", {}).get("role")
-            if isinstance(raw_stage.get("metadata"), dict)
-            else ""
-        ).startswith(_INTERACTION_ROLE_PREFIX)
+        and is_interaction_role(
+            _normalize_text(
+                raw_stage.get("metadata", {}).get("role")
+                if isinstance(raw_stage.get("metadata"), dict)
+                else ""
+            )
+        )
         for raw_stage in payload.get("stages", [])
     )
     if has_interaction_stages and not flow_settings.get("interaction_energy_disabled"):
@@ -153,9 +155,9 @@ def _reset_restartable_stages(
                 continue
             metadata = raw_stage.get("metadata")
             role = _normalize_text(metadata.get("role")) if isinstance(metadata, dict) else ""
-            if _normalize_text(raw_stage.get("stage_kind")) == "orca_stage" and not role.startswith(
-                _INTERACTION_ROLE_PREFIX
-            ):
+            if _normalize_text(
+                raw_stage.get("stage_kind")
+            ) == "orca_stage" and not is_interaction_role(role):
                 reopening_primary_orca.append(_normalize_text(raw_stage.get("stage_id")))
         if reopening_primary_orca:
             raise ValueError(
@@ -171,7 +173,7 @@ def _reset_restartable_stages(
                 continue
             metadata = raw_stage.get("metadata")
             role = _normalize_text(metadata.get("role")) if isinstance(metadata, dict) else ""
-            if not role.startswith(_INTERACTION_ROLE_PREFIX):
+            if not is_interaction_role(role):
                 retained.append(raw_stage)
                 continue
             task = raw_stage.get("task")

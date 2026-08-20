@@ -33,6 +33,7 @@ from orca_auto.core.queue.generation import (
     visible_generation_children,
 )
 from orca_auto.core.utils.persistence import atomic_write_text
+from orca_auto.flow.contracts.workflow import is_interaction_role
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.parser.patterns import (
     FINAL_SINGLE_POINT_ENERGY_BYTES_RE,
@@ -162,9 +163,6 @@ def _task_kind(stage: Mapping[str, Any]) -> str:
     return _text(task.get("task_kind"))
 
 
-_INTERACTION_ROLE_PREFIX = "interaction_"
-
-
 def _interaction_role_stage(stage: Mapping[str, Any]) -> bool:
     """True for interaction-energy fan-out stages (``role: interaction_*``).
 
@@ -173,7 +171,7 @@ def _interaction_role_stage(stage: Mapping[str, Any]) -> bool:
     inputs only and must never rank in the candidate table or set its ΔE
     baseline.
     """
-    return _text(_stage_metadata(stage).get("role")).startswith(_INTERACTION_ROLE_PREFIX)
+    return is_interaction_role(_text(_stage_metadata(stage).get("role")))
 
 
 def _stage_artifacts(stage: Mapping[str, Any], kind: str) -> list[dict[str, Any]]:
@@ -710,15 +708,6 @@ def _final_single_point_energy_from_output(
     except ValueError:
         return False, None
     return False, energy if math.isfinite(energy) else None
-
-
-def _orca_report_output_energy(
-    output_dir: Path,
-    report_payload: Mapping[str, Any],
-) -> float | None:
-    """Final bounded ORCA output energy when a stage did not retain an ``.engrad``."""
-    _annotated, energy = _orca_report_output_energy_state(output_dir, report_payload)
-    return energy
 
 
 def _orca_report_output_energy_state(

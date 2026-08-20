@@ -264,7 +264,26 @@ class WorkflowPlan:
         }
 
 
+# Interaction-energy fan-out stages carry ``role`` metadata in the
+# ``interaction_*`` namespace so ranking quarantine, SI routing, restart
+# guards, and fan-out idempotency all recognize them by one rule. They are
+# lineage-only ΔE_int inputs, never candidates.
+INTERACTION_ROLE_PREFIX = "interaction_"
+INTERACTION_COMPLEX_SP_ROLE = "interaction_complex_sp"
+INTERACTION_FRAGMENT_ROLE = "interaction_fragment"
+INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
+
+
+def is_interaction_role(role: str) -> bool:
+    """True for any role in the ``interaction_*`` namespace."""
+    return role.startswith(INTERACTION_ROLE_PREFIX)
+
+
 __all__ = [
+    "INTERACTION_COMPLEX_SP_ROLE",
+    "INTERACTION_CONFIG_FINGERPRINT_KEY",
+    "INTERACTION_FRAGMENT_ROLE",
+    "INTERACTION_ROLE_PREFIX",
     "WorkflowArtifactRef",
     "WorkflowArtifactRefPayload",
     "WorkflowPlan",
@@ -277,5 +296,6 @@ __all__ = [
     "WorkflowTemplateRequest",
     "WorkflowTemplateRequestPayload",
     "coerce_workflow_plan_payload",
+    "is_interaction_role",
     "workflow_request_parameters",
 ]

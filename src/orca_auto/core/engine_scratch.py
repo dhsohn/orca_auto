@@ -37,7 +37,8 @@ _PUBLICATION_META_TEMP_PREFIX = ".orca_auto_publish_meta."
 _STAGING_TEMP_PREFIX = ".orca_auto_stage."
 _PUBLICATION_TEMP_NAME_RE = re.compile(r"^\.orca_auto_publish\.[0-9a-f]{32}\.tmp$")
 _PUBLICATION_BACKUP_NAME_RE = re.compile(r"^\.orca_auto_backup\.[0-9a-f]{32}$")
-_CLEANUP_TOMBSTONE_NAME_RE = re.compile(r"^\.orca_auto_cleanup\.[0-9a-f]{32}$")
+_CLEANUP_TOMBSTONE_PREFIX = ".orca_auto_cleanup."
+_CLEANUP_TOMBSTONE_NAME_RE = re.compile(rf"^{re.escape(_CLEANUP_TOMBSTONE_PREFIX)}[0-9a-f]{{32}}$")
 _TRANSIENT_FILE_RE = re.compile(r"(?:^|\.)tmp(?:\.|$)", re.IGNORECASE)
 _SCRATCH_CONTROL_FILE_NAMES = frozenset(
     {
@@ -1480,7 +1481,7 @@ def _remove_owned_workspace_at(
     workspace_name: str,
     workspace_identity: tuple[int, int],
 ) -> None:
-    tombstone_name = f".orca_auto_cleanup.{secrets.token_hex(16)}"
+    tombstone_name = f"{_CLEANUP_TOMBSTONE_PREFIX}{secrets.token_hex(16)}"
     before = os.stat(workspace_name, dir_fd=root_fd, follow_symlinks=False)
     if not stat.S_ISDIR(before.st_mode) or _identity(before) != workspace_identity:
         raise EngineScratchError("engine scratch workspace identity changed before cleanup")

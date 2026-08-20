@@ -12,7 +12,12 @@ from typing import Any
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.engine_runner import executable_identity, verify_confined_output_identity
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
-from orca_auto.flow.contracts.workflow import workflow_request_parameters
+from orca_auto.flow.contracts.workflow import (
+    INTERACTION_COMPLEX_SP_ROLE,
+    INTERACTION_CONFIG_FINGERPRINT_KEY,
+    INTERACTION_FRAGMENT_ROLE,
+    workflow_request_parameters,
+)
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.interaction_energy import (
     InteractionEnergyResult,
@@ -432,10 +437,6 @@ _POP_NO_GIBBS_NOTE = (
     "thermochemistry temperatures)"
 )
 
-_INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
-_ROLE_INTERACTION_COMPLEX = "interaction_complex_sp"
-_ROLE_INTERACTION_FRAGMENT = "interaction_fragment"
-
 
 def _pair_single_points(
     stationary: list[WorkflowSiEntry],
@@ -627,16 +628,16 @@ def _interaction_energy_results(
         complex_candidates = [
             stage
             for stage in parent_stages
-            if _text(_stage_metadata(stage).get("role")) == _ROLE_INTERACTION_COMPLEX
+            if _text(_stage_metadata(stage).get("role")) == INTERACTION_COMPLEX_SP_ROLE
         ]
         fragment_candidates: dict[int, list[Mapping[str, Any]]] = {}
         for stage in parent_stages:
             meta = _stage_metadata(stage)
             role = _text(meta.get("role"))
-            if role == _ROLE_INTERACTION_FRAGMENT:
+            if role == INTERACTION_FRAGMENT_ROLE:
                 index = _meta_int(meta.get("fragment_index"), -1)
                 fragment_candidates.setdefault(index, []).append(stage)
-            elif role != _ROLE_INTERACTION_COMPLEX:
+            elif role != INTERACTION_COMPLEX_SP_ROLE:
                 blockers.append(f"unexpected interaction stage role {role or 'missing'}")
 
         if len(complex_candidates) != 1:
@@ -667,7 +668,7 @@ def _interaction_energy_results(
             complex_stage = complex_candidates[0]
             complex_sp_stage_id = _text(complex_stage.get("stage_id"))
             meta = _stage_metadata(complex_stage)
-            if _text(meta.get(_INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
+            if _text(meta.get(INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
                 blockers.append("complex stage belongs to another interaction config generation")
             complex_block, reason = _completed_interaction_block(complex_stage)
             if complex_block is None:
@@ -705,7 +706,7 @@ def _interaction_energy_results(
                 stage = candidates[0]
                 stage_id = _text(stage.get("stage_id"))
                 meta = _stage_metadata(stage)
-                if _text(meta.get(_INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
+                if _text(meta.get(INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
                     blockers.append(f"fragment {index} belongs to another config generation")
                 if tuple(meta.get("fragment_atom_indices", ())) != expected_indices:
                     blockers.append(

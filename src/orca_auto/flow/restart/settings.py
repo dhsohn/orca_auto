@@ -10,6 +10,12 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
+from orca_auto.flow.contracts.workflow import (
+    INTERACTION_COMPLEX_SP_ROLE,
+    INTERACTION_CONFIG_FINGERPRINT_KEY,
+    INTERACTION_FRAGMENT_ROLE,
+    is_interaction_role,
+)
 from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
 from orca_auto.flow.orchestration.workflow_builders import (
@@ -60,11 +66,6 @@ from .stage_ops import (
     _task_metadata,
     _task_payload,
 )
-
-_INTERACTION_ROLE_PREFIX = "interaction_"
-_INTERACTION_COMPLEX_ROLE = "interaction_complex_sp"
-_INTERACTION_FRAGMENT_ROLE = "interaction_fragment"
-_INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
 
 
 def _strict_optional_int(
@@ -468,10 +469,10 @@ def _flow_restart_settings_from_manifest(
                 continue
             metadata = _stage_metadata(raw_stage)
             role = _normalize_text(metadata.get("role"))
-            if not role.startswith(_INTERACTION_ROLE_PREFIX):
+            if not is_interaction_role(role):
                 continue
             if (
-                _normalize_text(metadata.get(_INTERACTION_CONFIG_FINGERPRINT_KEY))
+                _normalize_text(metadata.get(INTERACTION_CONFIG_FINGERPRINT_KEY))
                 != interaction_fingerprint
             ):
                 raise ValueError(
@@ -563,14 +564,14 @@ def _apply_flow_restart_settings(
     stage_metadata = _stage_metadata(stage)
     interaction_role = _normalize_text(stage_metadata.get("role"))
 
-    if engine == "orca" and interaction_role.startswith(_INTERACTION_ROLE_PREFIX):
+    if engine == "orca" and is_interaction_role(interaction_role):
         interaction_cfg = settings.get("interaction_energy")
         if not isinstance(interaction_cfg, dict):
             raise ValueError("disabled interaction-energy stages must be retired before restart")
         expected_fingerprint = _normalize_text(settings.get("interaction_energy_fingerprint"))
         if (
             not expected_fingerprint
-            or _normalize_text(stage_metadata.get(_INTERACTION_CONFIG_FINGERPRINT_KEY))
+            or _normalize_text(stage_metadata.get(INTERACTION_CONFIG_FINGERPRINT_KEY))
             != expected_fingerprint
         ):
             raise ValueError(
@@ -594,7 +595,7 @@ def _apply_flow_restart_settings(
 
         charge = int(settings.get("charge", 0))
         multiplicity = int(settings.get("multiplicity", 1))
-        if interaction_role == _INTERACTION_FRAGMENT_ROLE:
+        if interaction_role == INTERACTION_FRAGMENT_ROLE:
             fragment_index = stage_metadata.get("fragment_index")
             fragments = interaction_cfg.get("fragments")
             if (
@@ -617,7 +618,7 @@ def _apply_flow_restart_settings(
                     "fragment_atom_indices": list(fragment["atom_indices"]),
                 }
             )
-        elif interaction_role != _INTERACTION_COMPLEX_ROLE:
+        elif interaction_role != INTERACTION_COMPLEX_SP_ROLE:
             raise ValueError(f"unknown interaction-energy stage role: {interaction_role}")
 
         interaction_settings = dict(settings)

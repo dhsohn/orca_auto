@@ -368,23 +368,23 @@ def test_interaction_fanout_stages_stay_out_of_candidate_ranking(tmp_path: Path)
     }
 
 
-def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: Path) -> None:
-    job_dir = tmp_path / "orca_from_output"
+def _energy_chain_payload(
+    tmp_path: Path,
+    name: str,
+    out_text: str,
+    *,
+    engrad_energy: str | None = None,
+) -> dict[str, Any]:
+    """One completed ORCA stage whose energy comes from the .out/.engrad chain."""
+    job_dir = tmp_path / name
     job_dir.mkdir()
     stage_dir, provenance = _orca_generation(job_dir)
+    if engrad_energy is not None:
+        (stage_dir / "opt.engrad").write_text(
+            _ENGRAD_TEMPLATE.format(energy=engrad_energy), encoding="utf-8"
+        )
     out_path = stage_dir / "opt.out"
-    out_path.write_text(
-        "\n".join(
-            [
-                "|  1> ! r2scan-3c Opt TightSCF",
-                "FINAL SINGLE POINT ENERGY -1.000000000000",
-                "FINAL SINGLE POINT ENERGY -1.100000000000",
-                "****ORCA TERMINATED NORMALLY****",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    out_path.write_text(out_text, encoding="utf-8")
     report = {
         "schema_version": 1,
         "engine": "orca",
@@ -408,9 +408,20 @@ def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: P
     }
     _publish_orca_machine(stage_dir, report)
     (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
-    payload = _payload(
+    return _payload(
         tmp_path,
         [_orca_stage("orca_conformer_01", stage_dir, status="completed", label="conf_01")],
+    )
+
+
+def test_collect_uses_final_orca_output_energy_when_engrad_is_absent(tmp_path: Path) -> None:
+    payload = _energy_chain_payload(
+        tmp_path,
+        "orca_from_output",
+        "|  1> ! r2scan-3c Opt TightSCF\n"
+        "FINAL SINGLE POINT ENERGY -1.000000000000\n"
+        "FINAL SINGLE POINT ENERGY -1.100000000000\n"
+        "****ORCA TERMINATED NORMALLY****\n",
     )
 
     data = collect_workflow_report_data(tmp_path, payload)
@@ -424,48 +435,13 @@ def test_collect_refuses_annotated_final_output_energy(tmp_path: Path) -> None:
     # converged!)"), the fallback must publish no energy at all — an earlier
     # clean line belongs to a different geometry and must not set the ΔE
     # baseline.
-    job_dir = tmp_path / "orca_annotated_output"
-    job_dir.mkdir()
-    stage_dir, provenance = _orca_generation(job_dir)
-    out_path = stage_dir / "opt.out"
-    out_path.write_text(
-        "\n".join(
-            [
-                "|  1> ! r2scan-3c Opt TightSCF",
-                "FINAL SINGLE POINT ENERGY -1.000000000000",
-                "FINAL SINGLE POINT ENERGY -1.100000000000 (SCF not fully converged!)",
-                "****ORCA TERMINATED NORMALLY****",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    report = {
-        "schema_version": 1,
-        "engine": "orca",
-        "job": {"id": "orca_conformer_01"},
-        "status": {"state": "completed", "reason": "normal_termination"},
-        "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
-        "execution_provenance": provenance,
-        "engine_payload": {
-            "attempts": [
-                {
-                    "index": 1,
-                    "out_path": str(out_path),
-                    "markers": {"imaginary_frequency_count": 0},
-                }
-            ],
-            "final_result": {
-                "reason": "normal_termination",
-                "last_out_path": str(out_path),
-            },
-        },
-    }
-    _publish_orca_machine(stage_dir, report)
-    (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
-    payload = _payload(
+    payload = _energy_chain_payload(
         tmp_path,
-        [_orca_stage("orca_conformer_01", stage_dir, status="completed", label="conf_01")],
+        "orca_annotated_output",
+        "|  1> ! r2scan-3c Opt TightSCF\n"
+        "FINAL SINGLE POINT ENERGY -1.000000000000\n"
+        "FINAL SINGLE POINT ENERGY -1.100000000000 (SCF not fully converged!)\n"
+        "****ORCA TERMINATED NORMALLY****\n",
     )
 
     data = collect_workflow_report_data(tmp_path, payload)
@@ -476,54 +452,17 @@ def test_collect_refuses_annotated_final_output_energy(tmp_path: Path) -> None:
 
 def test_collect_refuses_engrad_energy_when_final_output_is_annotated(tmp_path: Path) -> None:
     # The .engrad is the primary energy channel, but it carries the same
-    # unconverged SCF's value and cannot be cross-checked on its own — the
+    # unconverged SCF value and cannot be cross-checked on its own — the
     # annotation exists only in the .out. A stage whose final output line is
     # annotated publishes no energy even when its .engrad is retained.
-    job_dir = tmp_path / "orca_annotated_engrad"
-    job_dir.mkdir()
-    stage_dir, provenance = _orca_generation(job_dir)
-    (stage_dir / "opt.engrad").write_text(
-        _ENGRAD_TEMPLATE.format(energy="-1.050000000000"), encoding="utf-8"
-    )
-    out_path = stage_dir / "opt.out"
-    out_path.write_text(
-        "\n".join(
-            [
-                "|  1> ! r2scan-3c Opt TightSCF",
-                "FINAL SINGLE POINT ENERGY -1.000000000000",
-                "FINAL SINGLE POINT ENERGY -1.100000000000 (SCF not fully converged!)",
-                "****ORCA TERMINATED NORMALLY****",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    report = {
-        "schema_version": 1,
-        "engine": "orca",
-        "job": {"id": "orca_conformer_01"},
-        "status": {"state": "completed", "reason": "normal_termination"},
-        "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
-        "execution_provenance": provenance,
-        "engine_payload": {
-            "attempts": [
-                {
-                    "index": 1,
-                    "out_path": str(out_path),
-                    "markers": {"imaginary_frequency_count": 0},
-                }
-            ],
-            "final_result": {
-                "reason": "normal_termination",
-                "last_out_path": str(out_path),
-            },
-        },
-    }
-    _publish_orca_machine(stage_dir, report)
-    (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
-    payload = _payload(
+    payload = _energy_chain_payload(
         tmp_path,
-        [_orca_stage("orca_conformer_01", stage_dir, status="completed", label="conf_01")],
+        "orca_annotated_engrad",
+        "|  1> ! r2scan-3c Opt TightSCF\n"
+        "FINAL SINGLE POINT ENERGY -1.000000000000\n"
+        "FINAL SINGLE POINT ENERGY -1.100000000000 (SCF not fully converged!)\n"
+        "****ORCA TERMINATED NORMALLY****\n",
+        engrad_energy="-1.050000000000",
     )
 
     data = collect_workflow_report_data(tmp_path, payload)
@@ -538,47 +477,15 @@ def test_collect_refuses_engrad_energy_when_annotation_is_beyond_scan_window(
     # Freq-bearing outputs routinely print hundreds of KiB of modes after the
     # last final-energy line. The annotation must still refuse the retained
     # .engrad when that line lies beyond the first backward scan window.
-    job_dir = tmp_path / "orca_annotated_beyond_window"
-    job_dir.mkdir()
-    stage_dir, provenance = _orca_generation(job_dir)
-    (stage_dir / "opt.engrad").write_text(
-        _ENGRAD_TEMPLATE.format(energy="-1.050000000000"), encoding="utf-8"
-    )
-    out_path = stage_dir / "opt.out"
-    out_path.write_text(
+    payload = _energy_chain_payload(
+        tmp_path,
+        "orca_annotated_beyond_window",
         "|  1> ! r2scan-3c Opt Freq TightSCF\n"
         "FINAL SINGLE POINT ENERGY -1.000000000000\n"
         "FINAL SINGLE POINT ENERGY -1.100000000000 (SCF not fully converged!)\n"
         + "x" * (workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES + 4096)
         + "\n****ORCA TERMINATED NORMALLY****\n",
-        encoding="utf-8",
-    )
-    report = {
-        "schema_version": 1,
-        "engine": "orca",
-        "job": {"id": "orca_conformer_01"},
-        "status": {"state": "completed", "reason": "normal_termination"},
-        "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
-        "execution_provenance": provenance,
-        "engine_payload": {
-            "attempts": [
-                {
-                    "index": 1,
-                    "out_path": str(out_path),
-                    "markers": {"imaginary_frequency_count": 0},
-                }
-            ],
-            "final_result": {
-                "reason": "normal_termination",
-                "last_out_path": str(out_path),
-            },
-        },
-    }
-    _publish_orca_machine(stage_dir, report)
-    (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
-    payload = _payload(
-        tmp_path,
-        [_orca_stage("orca_conformer_01", stage_dir, status="completed", label="conf_01")],
+        engrad_energy="-1.050000000000",
     )
 
     data = collect_workflow_report_data(tmp_path, payload)
@@ -590,44 +497,14 @@ def test_collect_refuses_engrad_energy_when_annotation_is_beyond_scan_window(
 def test_collect_finds_clean_output_energy_beyond_scan_window(tmp_path: Path) -> None:
     # A clean final-energy line beyond the first window must still publish:
     # the backward scan may not trade the blind spot for over-refusal.
-    job_dir = tmp_path / "orca_clean_beyond_window"
-    job_dir.mkdir()
-    stage_dir, provenance = _orca_generation(job_dir)
-    out_path = stage_dir / "opt.out"
-    out_path.write_text(
+    payload = _energy_chain_payload(
+        tmp_path,
+        "orca_clean_beyond_window",
         "|  1> ! r2scan-3c Opt Freq TightSCF\n"
         "FINAL SINGLE POINT ENERGY -1.000000000000\n"
         "FINAL SINGLE POINT ENERGY -1.100000000000\n"
         + "x" * (workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES + 4096)
         + "\n****ORCA TERMINATED NORMALLY****\n",
-        encoding="utf-8",
-    )
-    report = {
-        "schema_version": 1,
-        "engine": "orca",
-        "job": {"id": "orca_conformer_01"},
-        "status": {"state": "completed", "reason": "normal_termination"},
-        "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
-        "execution_provenance": provenance,
-        "engine_payload": {
-            "attempts": [
-                {
-                    "index": 1,
-                    "out_path": str(out_path),
-                    "markers": {"imaginary_frequency_count": 0},
-                }
-            ],
-            "final_result": {
-                "reason": "normal_termination",
-                "last_out_path": str(out_path),
-            },
-        },
-    }
-    _publish_orca_machine(stage_dir, report)
-    (stage_dir / "job_report.html").write_text("<html></html>", encoding="utf-8")
-    payload = _payload(
-        tmp_path,
-        [_orca_stage("orca_conformer_01", stage_dir, status="completed", label="conf_01")],
     )
 
     data = collect_workflow_report_data(tmp_path, payload)
@@ -900,7 +777,9 @@ def test_orca_output_energy_reads_only_bounded_tail(
 
     monkeypatch.setattr(workflow_report.os, "pread", tracked_pread)
 
-    energy = workflow_report._orca_report_output_energy(stage_dir, _orca_output_report(out_path))
+    _annotated, energy = workflow_report._orca_report_output_energy_state(
+        stage_dir, _orca_output_report(out_path)
+    )
 
     assert out_path.stat().st_size > workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES
     assert bytes_requested == workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES
@@ -1066,9 +945,9 @@ def test_orca_output_energy_rejects_file_changed_during_tail_read(
 
     monkeypatch.setattr(workflow_report.os, "pread", mutating_pread)
 
-    assert (
-        workflow_report._orca_report_output_energy(stage_dir, _orca_output_report(out_path)) is None
-    )
+    assert workflow_report._orca_report_output_energy_state(
+        stage_dir, _orca_output_report(out_path)
+    ) == (False, None)
 
 
 def test_orca_output_energy_rejects_nonregular_multilink_or_unconfined_paths(
@@ -1094,10 +973,9 @@ def test_orca_output_energy_rejects_nonregular_multilink_or_unconfined_paths(
     )
 
     for candidate in (symlink, hardlink, fifo, outside):
-        assert (
-            workflow_report._orca_report_output_energy(stage_dir, _orca_output_report(candidate))
-            is None
-        )
+        assert workflow_report._orca_report_output_energy_state(
+            stage_dir, _orca_output_report(candidate)
+        ) == (False, None)
 
 
 def test_write_workflow_html_report_renders_sections(tmp_path: Path) -> None:
