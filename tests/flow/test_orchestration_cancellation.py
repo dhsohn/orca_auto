@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -173,6 +174,35 @@ def test_cancel_refuses_before_any_mutation_when_journal_is_over_limit(
     real_journal.write_bytes(b"")
     journal_path.symlink_to(real_journal)
     with pytest.raises(ValueError, match="must not be a symlink"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_cancel_journal",
+            workflow_root=tmp_path,
+            crest_config="/tmp/crest.yaml",
+            services=deps,
+        )
+    assert stage_cancels == []
+    assert payload_writes == []
+
+    # The append also refuses a hardlinked or non-regular journal, and only
+    # after the durable writes; the guard mirrors both conditions up front.
+    journal_path.unlink()
+    journal_path.write_bytes(b"")
+    hardlink_path = tmp_path / "journal_backup.jsonl"
+    os.link(journal_path, hardlink_path)
+    with pytest.raises(ValueError, match="single-link regular file"):
+        orchestration.cancel_materialized_workflow(
+            target="wf_cancel_journal",
+            workflow_root=tmp_path,
+            crest_config="/tmp/crest.yaml",
+            services=deps,
+        )
+    assert stage_cancels == []
+    assert payload_writes == []
+
+    hardlink_path.unlink()
+    journal_path.unlink()
+    os.mkfifo(journal_path)
+    with pytest.raises(ValueError, match="single-link regular file"):
         orchestration.cancel_materialized_workflow(
             target="wf_cancel_journal",
             workflow_root=tmp_path,
