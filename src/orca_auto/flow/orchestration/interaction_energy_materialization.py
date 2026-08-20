@@ -44,7 +44,13 @@ from orca_auto.flow.conformer_selection import (
     unique_single_point_matches,
 )
 from orca_auto.flow.contracts import WorkflowStageInput
-from orca_auto.flow.contracts.workflow import workflow_request_parameters
+from orca_auto.flow.contracts.workflow import (
+    INTERACTION_COMPLEX_SP_ROLE,
+    INTERACTION_CONFIG_FINGERPRINT_KEY,
+    INTERACTION_FRAGMENT_ROLE,
+    is_interaction_role,
+    workflow_request_parameters,
+)
 from orca_auto.flow.manifest import (
     DEFAULT_INTERACTION_SP_ROUTE_LINE,
     INTERACTION_ENERGY_MAX_FRAGMENTS_CAP,
@@ -65,11 +71,7 @@ from orca_auto.orca.state import load_state
 
 logger = logging.getLogger(__name__)
 
-_INTERACTION_ROLE_PREFIX = "interaction_"
-_ROLE_COMPLEX = "interaction_complex_sp"
-_ROLE_FRAGMENT = "interaction_fragment"
 _INTERACTION_SOURCE_DIRNAME = "_interaction_sources"
-_INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
 
 
 def _text(value: Any) -> str:
@@ -230,7 +232,7 @@ def _existing_interaction_keys(stages: list[dict[str, Any]]) -> set[tuple[str, s
     keys: set[tuple[str, str, int]] = set()
     for stage in stages:
         role = _stage_role(stage)
-        if not role.startswith(_INTERACTION_ROLE_PREFIX):
+        if not is_interaction_role(role):
             continue
         meta = _stage_metadata(stage)
         parent = _text(meta.get("parent_stage_id"))
@@ -397,11 +399,7 @@ def append_interaction_energy_stages_impl(
 
     stages = _stage_dicts(payload)
     orca_stages = [stage for stage in stages if _text(stage.get("stage_kind")) == "orca_stage"]
-    complex_stages = [
-        stage
-        for stage in orca_stages
-        if not _stage_role(stage).startswith(_INTERACTION_ROLE_PREFIX)
-    ]
+    complex_stages = [stage for stage in orca_stages if not is_interaction_role(_stage_role(stage))]
     if not complex_stages:
         return False
     # Fire only once the primary ORCA set is terminal. Partial-success conformer
@@ -452,10 +450,10 @@ def append_interaction_energy_stages_impl(
     max_memory_gb = safe_int(cfg.get("max_memory_gb", params.get("max_memory_gb", 32)), default=32)
 
     existing_interaction = [
-        stage for stage in orca_stages if _stage_role(stage).startswith(_INTERACTION_ROLE_PREFIX)
+        stage for stage in orca_stages if is_interaction_role(_stage_role(stage))
     ]
     if any(
-        _text(_stage_metadata(stage).get(_INTERACTION_CONFIG_FINGERPRINT_KEY)) != config_fingerprint
+        _text(_stage_metadata(stage).get(INTERACTION_CONFIG_FINGERPRINT_KEY)) != config_fingerprint
         for stage in existing_interaction
     ):
         logger.warning(
@@ -487,7 +485,7 @@ def append_interaction_energy_stages_impl(
             continue
         safe_parent = safe_name(stage_id, fallback="complex")
 
-        if (_ROLE_COMPLEX, stage_id, -1) not in existing:
+        if (INTERACTION_COMPLEX_SP_ROLE, stage_id, -1) not in existing:
             complex_xyz = source_root / f"{safe_parent}_complex.xyz"
             write_fragment_xyz(
                 coordinates=coordinates,
@@ -509,15 +507,15 @@ def append_interaction_energy_stages_impl(
                 max_cores=max_cores,
                 max_memory_gb=max_memory_gb,
                 metadata={
-                    "role": _ROLE_COMPLEX,
+                    "role": INTERACTION_COMPLEX_SP_ROLE,
                     "parent_stage_id": stage_id,
-                    _INTERACTION_CONFIG_FINGERPRINT_KEY: config_fingerprint,
+                    INTERACTION_CONFIG_FINGERPRINT_KEY: config_fingerprint,
                 },
             )
             created += 1
 
         for index, fragment in enumerate(fragments):
-            if (_ROLE_FRAGMENT, stage_id, index) in existing:
+            if (INTERACTION_FRAGMENT_ROLE, stage_id, index) in existing:
                 continue
             atom_indices = [int(value) for value in fragment.get("atom_indices", [])]
             label = _text(fragment.get("label")) or f"fragment_{index + 1}"
@@ -544,14 +542,14 @@ def append_interaction_energy_stages_impl(
                 max_cores=max_cores,
                 max_memory_gb=max_memory_gb,
                 metadata={
-                    "role": _ROLE_FRAGMENT,
+                    "role": INTERACTION_FRAGMENT_ROLE,
                     "parent_stage_id": stage_id,
                     "fragment_index": index,
                     "fragment_label": label,
                     "fragment_charge": fragment_charge,
                     "fragment_multiplicity": fragment_multiplicity,
                     "fragment_atom_indices": list(atom_indices),
-                    _INTERACTION_CONFIG_FINGERPRINT_KEY: config_fingerprint,
+                    INTERACTION_CONFIG_FINGERPRINT_KEY: config_fingerprint,
                 },
             )
             created += 1
