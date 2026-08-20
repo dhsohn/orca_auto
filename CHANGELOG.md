@@ -6,7 +6,7 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
-## [Unreleased]
+## [3.0.1] - 2026-08-20
 
 ### Fixed
 
@@ -22,15 +22,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   newest-first up to the nearest readable value, so an annotated
   newest-readable attempt still refuses the retained `.engrad`; records
   that never captured a final output path keep the attempt scan.
-- `workflow cancel` now refuses a hardlinked or non-regular
+- `queue cancel` on a workflow now refuses a hardlinked or non-regular
   `workflow_registry.journal.jsonl` before any durable write, alongside its
-  existing oversized and symlink refusals, and `workflow restart` gains the
-  same up-front symlink and single-link-regular refusal (restart's append
-  never reads the journal back, so size is not checked there). Restart
-  previously had no journal guard at all: its append runs after the mutation
-  is committed, so a corrupt journal made the command report failure for a
-  restart that had taken effect and poisoned the retry into the
-  no-restartable-stages refusal.
+  existing oversized and symlink refusals, and the workflow restart path
+  (`run-dir` on an existing workspace) gains the same up-front symlink and
+  single-link-regular refusal (the restart append never reads the journal
+  back, so size is not checked there). Restart previously had no journal
+  guard at all: its append runs after the mutation is committed, so a
+  corrupt journal made the command report failure for a restart that had
+  taken effect and poisoned the retry into the no-restartable-stages
+  refusal.
 - The workflow report's annotated-energy refusal now locates the true final
   `FINAL SINGLE POINT ENERGY` line by scanning backwards from EOF instead of
   reading one 256 KiB tail, which a Freq block's normal-modes printout
