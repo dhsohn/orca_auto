@@ -31,9 +31,12 @@ def restart_failed_workflow(
     try:
         with acquire_workflow_lock(workspace):
             # The restart journal append runs only after the mutation is
-            # durably committed, so a journal the append would refuse must
-            # refuse the whole restart while nothing has changed yet — the
-            # same up-front honesty cancel applies before its mutations.
+            # durably committed, so a journal failing the append's integrity
+            # conditions (symlink, single-link regular file) must refuse the
+            # whole restart while nothing has changed yet — the same up-front
+            # honesty cancel applies before its mutations. Size is not
+            # checked: this append passes no event_id, so it never reads the
+            # journal back.
             require_workflow_journal_integrity(root)
             payload = load_workflow_payload(workspace)
             directory_transaction.capture_original_payload(payload)
