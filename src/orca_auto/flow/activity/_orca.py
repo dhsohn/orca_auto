@@ -99,8 +99,7 @@ def queue_record(
     *,
     allowed_root: Path,
 ) -> ActivityRecord:
-    entry_metadata_loader = getattr(queue_adapter, "queue_entry_metadata", None)
-    entry_metadata = dict(entry_metadata_loader(entry)) if callable(entry_metadata_loader) else {}
+    entry_metadata = queue_adapter.queue_entry_metadata(entry)
     queue_id = normalize_text(queue_adapter.queue_entry_id(entry))
     task_id = normalize_text(queue_adapter.queue_entry_task_id(entry))
     run_id = normalize_text(queue_adapter.queue_entry_run_id(entry))
@@ -273,9 +272,7 @@ def orca_records(
 
     runtime_paths = engine_runtime_paths(config_path, engine="orca")
     allowed_root = runtime_paths["allowed_root"]
-    reconcile = getattr(queue_adapter, "reconcile_orphaned_running_entries", None)
-    if callable(reconcile):
-        reconcile(allowed_root)
+    queue_adapter.reconcile_orphaned_running_entries(allowed_root)
 
     queue_entries = [
         entry

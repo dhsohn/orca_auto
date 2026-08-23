@@ -9,15 +9,12 @@ from unittest.mock import patch
 
 from orca_auto.orca import run_snapshot
 from orca_auto.orca.run_snapshot import (
-    RunSnapshot,
     _compute_elapsed,
     _find_latest_out_in_dir,
     _latest_out_path,
     collect_run_snapshots,
     elapsed_text,
     parse_iso_utc,
-    sort_snapshots_by_completed,
-    sort_snapshots_by_started,
 )
 from orca_auto.orca.state import save_state, state_path
 
@@ -29,32 +26,6 @@ class _FrozenDateTime(datetime):
         if tz is None:
             return current
         return current.astimezone(tz)
-
-
-def _snapshot(
-    reaction_dir: Path,
-    *,
-    name: str,
-    started_at: str,
-    updated_at: str = "",
-    completed_at: str = "",
-) -> RunSnapshot:
-    return RunSnapshot(
-        key=f"key-{name}",
-        name=name,
-        reaction_dir=reaction_dir,
-        run_id=f"run-{name}",
-        status="running",
-        started_at=started_at,
-        updated_at=updated_at,
-        completed_at=completed_at,
-        selected_inp_name="calc.inp",
-        attempts=1,
-        latest_out_path=None,
-        final_reason="",
-        elapsed=0.0,
-        elapsed_text="0s",
-    )
 
 
 def test_find_latest_out_in_dir_handles_non_dir_stat_errors_and_latest_selection(
@@ -479,49 +450,3 @@ def test_collect_run_snapshots_includes_untracked_state_when_index_is_incomplete
         "project/rxn_tracked",
         "untracked/rxn_untracked",
     }
-
-
-def test_sort_snapshots_by_started_handles_invalid_timestamps(tmp_path: Path) -> None:
-    reaction_dir = tmp_path / "rxn"
-    ordered = sort_snapshots_by_started(
-        [
-            _snapshot(reaction_dir, name="invalid", started_at="not-a-time"),
-            _snapshot(reaction_dir, name="later", started_at="2026-01-10T12:00:00Z"),
-            _snapshot(reaction_dir, name="earlier", started_at="2026-01-10T11:00:00+00:00"),
-        ]
-    )
-
-    assert [snapshot.name for snapshot in ordered] == ["earlier", "later", "invalid"]
-
-
-def test_sort_snapshots_by_completed_uses_updated_at_fallback_and_invalid_last(
-    tmp_path: Path,
-) -> None:
-    reaction_dir = tmp_path / "rxn"
-    ordered = sort_snapshots_by_completed(
-        [
-            _snapshot(
-                reaction_dir,
-                name="fallback",
-                started_at="2026-01-10T09:00:00+00:00",
-                updated_at="2026-01-10T12:30:00+00:00",
-                completed_at="bad",
-            ),
-            _snapshot(
-                reaction_dir,
-                name="completed",
-                started_at="2026-01-10T09:30:00+00:00",
-                updated_at="2026-01-10T12:00:00+00:00",
-                completed_at="2026-01-10T12:00:00+00:00",
-            ),
-            _snapshot(
-                reaction_dir,
-                name="invalid",
-                started_at="2026-01-10T08:00:00+00:00",
-                updated_at="also-bad",
-                completed_at="",
-            ),
-        ]
-    )
-
-    assert [snapshot.name for snapshot in ordered] == ["fallback", "completed", "invalid"]

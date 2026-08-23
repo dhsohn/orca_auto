@@ -140,12 +140,6 @@ class WorkflowSiData:
     def has_orca_stages(self) -> bool:
         return bool(self.entries or self.extra_blocks or self.excluded or self.interaction_energies)
 
-    def rmsd_group_for(self, stage_id: str) -> tuple[int, RmsdGroup] | None:
-        for index, group in enumerate(self.rmsd_groups, start=1):
-            if stage_id in group.member_stage_ids:
-                return index, group
-        return None
-
 
 # ---------------------------------------------------------------------------
 # Durable workflow-stage evidence readers

@@ -6,10 +6,10 @@ import math
 
 import pytest
 
+from orca_auto.orca.report import rmsd as rmsd_module
 from orca_auto.orca.report.rmsd import (
     RmsdCandidate,
     group_by_rmsd,
-    heavy_atom_rmsd,
 )
 
 AtomRow = tuple[str, float, float, float]
@@ -34,32 +34,47 @@ _CHIRAL: list[AtomRow] = [
 _COMPARISON_KEY = ("same-state-and-level",)
 
 
+def _aligned_metrics(
+    a: list[AtomRow],
+    b: list[AtomRow],
+    *,
+    heavy_atoms_only: bool = False,
+) -> tuple[float, float, bool] | None:
+    return rmsd_module._aligned_metrics(a, b, heavy_atoms_only=heavy_atoms_only)
+
+
 def test_identical_geometry_has_zero_rmsd() -> None:
-    assert heavy_atom_rmsd(_CHIRAL, _CHIRAL) == 0.0
+    assert _aligned_metrics(_CHIRAL, _CHIRAL) == (0.0, 0.0, False)
 
 
 def test_rigid_rotation_and_translation_is_zero_rmsd() -> None:
     moved = _translate(_rotate_z(_CHIRAL, 73.0), 5.0, -3.0, 2.0)
-    rmsd = heavy_atom_rmsd(_CHIRAL, moved)
-    assert rmsd is not None
+    metrics = _aligned_metrics(_CHIRAL, moved)
+    assert metrics is not None
+    rmsd, maximum_displacement, orientation_reversing = metrics
     assert rmsd < 1e-6
+    assert maximum_displacement < 1e-6
+    assert orientation_reversing is False
 
 
 def test_mirror_image_is_not_merged_by_proper_rotation() -> None:
     # Reflection through the yz-plane produces the enantiomer; a proper-rotation
     # alignment cannot superpose it, so the RMSD stays clearly non-zero.
     mirror = [(el, -x, y, z) for el, x, y, z in _CHIRAL]
-    rmsd = heavy_atom_rmsd(_CHIRAL, mirror)
-    assert rmsd is not None
+    metrics = _aligned_metrics(_CHIRAL, mirror)
+    assert metrics is not None
+    rmsd, maximum_displacement, orientation_reversing = metrics
     assert rmsd > 0.1
+    assert maximum_displacement > 0.1
+    assert orientation_reversing is True
 
 
 def test_hydrogen_positions_are_ignored_when_heavy_only() -> None:
     base: list[AtomRow] = [("C", 0.0, 0.0, 0.0), ("O", 1.4, 0.0, 0.0), ("H", 2.0, 0.6, 0.0)]
     moved_h: list[AtomRow] = [("C", 0.0, 0.0, 0.0), ("O", 1.4, 0.0, 0.0), ("H", 2.0, -0.6, 0.3)]
-    assert heavy_atom_rmsd(base, moved_h, heavy_atoms_only=True) == 0.0
-    with_h = heavy_atom_rmsd(base, moved_h, heavy_atoms_only=False)
-    assert with_h is not None and with_h > 0.0
+    assert _aligned_metrics(base, moved_h, heavy_atoms_only=True) == (0.0, 0.0, False)
+    with_h = _aligned_metrics(base, moved_h, heavy_atoms_only=False)
+    assert with_h is not None and with_h[0] > 0.0
 
 
 def test_different_elements_do_not_compare() -> None:
@@ -69,12 +84,12 @@ def test_different_elements_do_not_compare() -> None:
         ("Cl", 0.0, 1.2, 0.0),
         ("N", 0.0, 0.0, 1.3),
     ]
-    assert heavy_atom_rmsd(_CHIRAL, other) is None
+    assert _aligned_metrics(_CHIRAL, other) is None
 
 
 def test_different_atom_counts_do_not_compare() -> None:
     shorter: list[AtomRow] = [("C", 0.0, 0.0, 0.0), ("F", 1.1, 0.0, 0.0)]
-    assert heavy_atom_rmsd(_CHIRAL, shorter) is None
+    assert _aligned_metrics(_CHIRAL, shorter) is None
 
 
 def test_non_finite_coordinates_fail_closed_and_never_merge() -> None:
@@ -85,7 +100,7 @@ def test_non_finite_coordinates_fail_closed_and_never_merge() -> None:
         ("Br", 0.0, 0.0, 1.3),
     ]
     # A non-finite geometry cannot be compared: return None (never a spurious 0.0).
-    assert heavy_atom_rmsd(_CHIRAL, corrupt) is None
+    assert _aligned_metrics(_CHIRAL, corrupt) is None
     grouping = group_by_rmsd(
         [
             RmsdCandidate("good", tuple(_CHIRAL), -100.0, _COMPARISON_KEY),
@@ -123,9 +138,9 @@ def test_all_atom_default_keeps_hydrogen_defined_mirror_minima_distinct() -> Non
         ("O", 0.0, 1.0, 0.0),
         ("H", 0.0, 0.0, -1.0),
     ]
-    assert heavy_atom_rmsd(left, right, heavy_atoms_only=True) == 0.0
-    all_atom = heavy_atom_rmsd(left, right)
-    assert all_atom is not None and all_atom > 0.25
+    assert _aligned_metrics(left, right, heavy_atoms_only=True) == (0.0, 0.0, False)
+    all_atom = _aligned_metrics(left, right)
+    assert all_atom is not None and all_atom[0] > 0.25 and all_atom[2] is True
     grouping = group_by_rmsd(
         [
             RmsdCandidate("left", tuple(left), -10.0, _COMPARISON_KEY),
@@ -152,7 +167,7 @@ def test_group_by_rmsd_merges_duplicates_keeping_lowest_energy() -> None:
     group = grouping.groups[0]
     assert group.representative_stage_id == "low"  # lower energy wins
     assert group.degeneracy == 2
-    assert group.merged_stage_ids == ("high",)
+    assert group.member_stage_ids == ("high", "low")
 
 
 def test_energy_window_keeps_distant_in_energy_structures_distinct() -> None:
@@ -168,10 +183,12 @@ def test_energy_window_keeps_distant_in_energy_structures_distinct() -> None:
         energy_window_kcal=0.5,
     )
     # a and b merge (same energy, ~0 RMSD); c stays distinct on the energy window.
-    reps = grouping.representative_ids
-    assert "c" in reps
-    group_ab = grouping.group_for("a")
-    assert group_ab is not None and group_ab.degeneracy == 2 and "b" in group_ab.member_stage_ids
+    assert [
+        (group.representative_stage_id, group.member_stage_ids) for group in grouping.groups
+    ] == [
+        ("a", ("a", "b")),
+        ("c", ("c",)),
+    ]
 
 
 def test_candidate_without_energy_is_never_merged() -> None:
@@ -222,8 +239,11 @@ def test_local_motion_is_not_hidden_by_large_molecule_rmsd_dilution() -> None:
     ]
     left = [*scaffold, ("H", 0.25, 0.25, 0.0)]
     right = [*scaffold, ("H", 0.25, 0.25, 2.0)]
-    rmsd = heavy_atom_rmsd(left, right)
-    assert rmsd is not None and rmsd < 0.25
+    metrics = _aligned_metrics(left, right)
+    assert metrics is not None
+    rmsd, maximum_displacement, _orientation_reversing = metrics
+    assert rmsd < 0.25
+    assert maximum_displacement > 0.25
     grouping = group_by_rmsd(
         [
             RmsdCandidate("left", tuple(left), -100.0, _COMPARISON_KEY),
@@ -279,9 +299,9 @@ def test_non_finite_candidate_cannot_disrupt_lowest_finite_representative() -> N
         rmsd_threshold_angstrom=0.25,
         energy_window_kcal=1000.0,
     )
-    finite_group = grouping.group_for("finite_low")
-    nonfinite_group = grouping.group_for("nonfinite")
-    assert finite_group is not None
-    assert finite_group.representative_stage_id == "finite_low"
-    assert finite_group.member_stage_ids == ("finite_high", "finite_low")
-    assert nonfinite_group is not None and nonfinite_group.degeneracy == 1
+    assert [
+        (group.representative_stage_id, group.member_stage_ids) for group in grouping.groups
+    ] == [
+        ("finite_low", ("finite_high", "finite_low")),
+        ("nonfinite", ("nonfinite",)),
+    ]

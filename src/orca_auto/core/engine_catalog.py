@@ -123,10 +123,6 @@ def get_engine_catalog_entry(engine: object) -> EngineCatalogEntry:
     raise ValueError(f"unsupported engine: {engine_id or '<blank>'} (supported: {supported})")
 
 
-def find_engine_catalog_entry_by_app_id(app_id: object) -> EngineCatalogEntry | None:
-    return _ENGINE_BY_APP_ID.get(str(app_id or "").strip())
-
-
 def find_engine_catalog_entry_by_source_id(source_id: object) -> EngineCatalogEntry | None:
     return _ENGINE_BY_SOURCE_ID.get(str(source_id or "").strip())
 
@@ -153,7 +149,6 @@ __all__ = [
     "activity_engine_entries",
     "engine_catalog",
     "find_engine_catalog_entry",
-    "find_engine_catalog_entry_by_app_id",
     "find_engine_catalog_entry_by_source_id",
     "get_engine_catalog_entry",
     "known_engine_ids",

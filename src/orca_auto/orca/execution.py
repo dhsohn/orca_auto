@@ -304,17 +304,18 @@ def run_with_state(
         )
     if admission_root is not None and reservation_token:
         set_registrar = getattr(runner, "set_running_job_registrar", None)
-        if callable(set_registrar):
-            set_registrar(
-                build_slot_engine_process_registrar(
-                    admission_root,
-                    reservation_token,
-                ),
-                prepare=build_slot_engine_process_preparer(
-                    admission_root,
-                    reservation_token,
-                ),
-            )
+        if not callable(set_registrar):
+            raise TypeError("Admitted ORCA runner does not support engine-process registration")
+        set_registrar(
+            build_slot_engine_process_registrar(
+                admission_root,
+                reservation_token,
+            ),
+            prepare=build_slot_engine_process_preparer(
+                admission_root,
+                reservation_token,
+            ),
+        )
     # Carry the per-task memory budget into the run so retry rewrites can cap
     # escalated %maxcore (see inp_rewriter.rewrite_for_retry).
     state["max_memory_gb_per_task"] = int(cfg.resources.max_memory_gb_per_task)

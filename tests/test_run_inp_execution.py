@@ -31,6 +31,45 @@ def _write_running_state(reaction_dir: Path) -> None:
     )
 
 
+def test_run_with_state_rejects_admitted_runner_without_process_registrar(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    class RunnerWithoutRegistrar:
+        def __init__(self, _orca_executable: str) -> None:
+            pass
+
+    monkeypatch.setattr(
+        run_inp_execution,
+        "notification_callbacks",
+        lambda _cfg: (None, None, None),
+    )
+    monkeypatch.setattr(run_inp_execution, "run_attempts", lambda *_args, **_kwargs: 0)
+    cfg = SimpleNamespace(
+        paths=SimpleNamespace(orca_executable="/bin/true"),
+        scratch=SimpleNamespace(enabled=False),
+        resources=SimpleNamespace(max_memory_gb_per_task=1),
+    )
+
+    with pytest.raises(
+        TypeError,
+        match="Admitted ORCA runner does not support engine-process registration",
+    ):
+        run_inp_execution.run_with_state(
+            cfg=cfg,
+            reaction_dir=tmp_path / "rxn",
+            selected_inp=tmp_path / "rxn.inp",
+            runner_cls=RunnerWithoutRegistrar,
+            max_retries=0,
+            resumed=False,
+            state={},
+            admission_root=tmp_path / "admission",
+            reservation_token="slot-1",
+        )
+
+
 def test_recover_crashed_state_transitions_running_state_to_failed(
     tmp_path: Path,
 ) -> None:

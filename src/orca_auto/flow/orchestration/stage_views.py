@@ -50,17 +50,11 @@ class WorkflowTaskView(
     def enqueue_payload(self) -> dict[str, Any]:
         return _mapping_field(self.raw, "enqueue_payload")
 
-    def existing_enqueue_payload(self) -> dict[str, Any] | None:
-        return self.existing_mapping("enqueue_payload")
-
     def existing_payload(self) -> dict[str, Any] | None:
         return self.existing_mapping("payload")
 
     def submission_result(self) -> dict[str, Any]:
         return _mapping_field(self.raw, "submission_result")
-
-    def existing_submission_result(self) -> dict[str, Any] | None:
-        return self.existing_mapping("submission_result")
 
     def resource_request(self) -> dict[str, Any]:
         return _mapping_field(self.raw, "resource_request")
@@ -79,10 +73,6 @@ class WorkflowTaskView(
 
     def status_with(self, normalize_text: Callable[[Any], str]) -> str:
         return self.text_field("status", normalize_text).lower()
-
-    def has_submitted_result(self) -> bool:
-        submission = self.existing_submission_result()
-        return submission is not None and submission.get("status") == "submitted"
 
     def set_status(self, status: str) -> None:
         self.raw["status"] = status

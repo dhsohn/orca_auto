@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
@@ -45,10 +44,6 @@ class RunSnapshot:
     state_file_identity: StateFileIdentity | None = None
     state_run_identity: str = ""
     state_generation_identity: str = ""
-
-
-def status_icon(status: str) -> str:
-    return activity_status_icon(status)
 
 
 def parse_iso_utc(value: Any) -> datetime | None:
@@ -423,21 +418,3 @@ def collect_run_snapshots(allowed_root: Path) -> list[RunSnapshot]:
 
     snapshots.sort(key=lambda snapshot: snapshot.started_at, reverse=True)
     return snapshots
-
-
-def sort_snapshots_by_started(snapshots: Iterable[RunSnapshot]) -> list[RunSnapshot]:
-    def _key(snapshot: RunSnapshot) -> tuple[int, datetime]:
-        parsed = parse_iso_utc(snapshot.started_at)
-        if parsed is None:
-            return (1, datetime.min.replace(tzinfo=UTC))
-        return (0, parsed)
-
-    return sorted(snapshots, key=_key)
-
-
-def sort_snapshots_by_completed(snapshots: Iterable[RunSnapshot]) -> list[RunSnapshot]:
-    def _key(snapshot: RunSnapshot) -> datetime:
-        parsed = parse_iso_utc(snapshot.completed_at) or parse_iso_utc(snapshot.updated_at)
-        return parsed or datetime.min.replace(tzinfo=UTC)
-
-    return sorted(snapshots, key=_key, reverse=True)

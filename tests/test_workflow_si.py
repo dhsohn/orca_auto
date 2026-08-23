@@ -2017,11 +2017,11 @@ def test_rmsd_dedup_collapses_degenerate_minima(tmp_path: Path) -> None:
     # Both are identical NO geometries within 1 kcal/mol → one representative kept.
     assert [entry.block.name for entry in data.entries] == ["keep"]
     assert data.rmsd_dedup_enabled
-    lookup = data.rmsd_group_for(data.entries[0].stage_id)
-    assert lookup is not None
-    _index, group = lookup
+    assert len(data.rmsd_groups) == 1
+    group = data.rmsd_groups[0]
+    assert group.representative_stage_id == data.entries[0].stage_id
     assert group.degeneracy == 2
-    assert list(group.merged_stage_ids) == ["orca_conf_drop"]
+    assert group.member_stage_ids == ("orca_conf_drop", "orca_conf_keep")
     assert "RMSD representatives" in render_workflow_si_md(data)
 
 
@@ -2153,10 +2153,10 @@ def test_single_minimum_rmsd_metadata_reports_singleton_group(tmp_path: Path) ->
             rmsd_dedup={"enabled": True},
         )
     )
-    lookup = data.rmsd_group_for(data.entries[0].stage_id)
-    assert lookup is not None
-    index, group = lookup
-    assert index == 1
+    assert len(data.rmsd_groups) == 1
+    group = data.rmsd_groups[0]
+    assert group.representative_stage_id == data.entries[0].stage_id
+    assert group.member_stage_ids == (data.entries[0].stage_id,)
     assert group.degeneracy == 1
 
 

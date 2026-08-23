@@ -79,8 +79,8 @@ def test_task_view_existing_mapping_reads_do_not_coerce_bad_payloads() -> None:
     }
     view = WorkflowTaskView(task)
 
-    assert view.existing_enqueue_payload() is None
-    assert view.has_submitted_result() is True
+    assert view.existing_mapping("enqueue_payload") is None
+    assert view.existing_mapping("submission_result") == {"status": "submitted"}
     assert task["enqueue_payload"] == "bad"
 
 

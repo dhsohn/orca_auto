@@ -564,7 +564,6 @@ class TestOrcaRunnerShutdownSignalGuard(OrcaRunnerTestCase):
                 guard._handle_signal(signal.SIGTERM, None)
                 guard._handle_signal(signal.SIGINT, None)
                 protected_work_completed.append(True)
-                self.assertTrue(guard.signalled)
                 self.assertEqual(guard.received_signal, signal.SIGTERM)
 
         self.assertEqual(protected_work_completed, [True])

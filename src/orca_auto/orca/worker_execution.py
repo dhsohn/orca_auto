@@ -334,12 +334,11 @@ def _run_orca_job_for_entry(
     bound_cfg = copy.copy(cfg)
     bound_cfg.runtime = copy.copy(cfg.runtime)
     bound_cfg.runtime.default_max_retries = context.max_retries
-    if hasattr(cfg, "resources"):
-        bound_cfg.resources = replace(
-            cfg.resources,
-            max_cores_per_task=context.resource_request["max_cores"],
-            max_memory_gb_per_task=context.resource_request["max_memory_gb"],
-        )
+    bound_cfg.resources = replace(
+        cfg.resources,
+        max_cores_per_task=context.resource_request["max_cores"],
+        max_memory_gb_per_task=context.resource_request["max_memory_gb"],
+    )
 
     try:
         return execute_run_job(
