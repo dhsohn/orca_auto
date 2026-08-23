@@ -155,7 +155,7 @@ def _manifest(workflow_type: str, crest_mode: str) -> str:
                 "# Merging needs convergence, no known imaginary mode, exact provenance,",
                 "# low proper RMSD/max displacement, and a small energy gap. Detected global",
                 "# reflections stay distinct, but this is still a heuristic: inspect",
-                "# merged_stage_ids before treating grouped minima as chemically identical.",
+                "# merged groups before treating them as chemically identical.",
                 "# rmsd_dedup:",
                 "#   enabled: true",
                 "#   rmsd_threshold_angstrom: 0.25",

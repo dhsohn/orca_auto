@@ -1465,7 +1465,7 @@ def _remove_owned_workspace(
     workspace_name: str,
     workspace_identity: tuple[int, int],
 ) -> None:
-    root_fd, observed_root_identity = _open_pinned_directory(
+    root_fd, _observed_root_identity = _open_pinned_directory(
         root,
         label="engine scratch root",
         expected_identity=root_identity,

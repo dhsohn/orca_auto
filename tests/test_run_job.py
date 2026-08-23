@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from orca_auto.core.config import CommonResourceConfig
 from orca_auto.core.engine_scratch import scratch_provenance_from_exception
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -139,7 +140,8 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
             max_concurrent=1,
             resolved_admission_root=str(tmp_path / "admission"),
             resolved_admission_limit=1,
-        )
+        ),
+        resources=CommonResourceConfig(),
     )
     entry = QueueEntry(
         queue_id="queue-1",
@@ -178,6 +180,8 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     execution_provenance = calls["kwargs"].pop("execution_provenance")
     assert issubclass(runner_cls, OrcaRunner)
     assert bound_cfg.runtime.default_max_retries == 0
+    assert bound_cfg.resources.max_cores_per_task == 1
+    assert bound_cfg.resources.max_memory_gb_per_task == 1
     runner = runner_cls("/changed/orca")
     assert runner.orca_executable == str((tmp_path / "fake-orca").resolve())
     assert (
@@ -272,7 +276,10 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
 ) -> None:
     queue_root = tmp_path / "queue"
     reaction_dir = queue_root / "rxn"
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(queue_root)))
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(allowed_root=str(queue_root)),
+        resources=CommonResourceConfig(),
+    )
     entry = QueueEntry(
         queue_id="queue-1",
         app_name="orca_auto_orca",
@@ -309,6 +316,8 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
     execution_provenance = calls["kwargs"].pop("execution_provenance")
     assert issubclass(runner_cls, OrcaRunner)
     assert bound_cfg.runtime.default_max_retries == 0
+    assert bound_cfg.resources.max_cores_per_task == 1
+    assert bound_cfg.resources.max_memory_gb_per_task == 1
     assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
     assert calls["kwargs"] == {
         "force": True,
@@ -346,7 +355,8 @@ def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
             max_concurrent=1,
             resolved_admission_root=str(admission_root),
             resolved_admission_limit=1,
-        )
+        ),
+        resources=CommonResourceConfig(),
     )
     calls: dict[str, Any] = {}
 
@@ -402,7 +412,8 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
             max_concurrent=1,
             resolved_admission_root=str(admission_root),
             resolved_admission_limit=1,
-        )
+        ),
+        resources=CommonResourceConfig(),
     )
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)

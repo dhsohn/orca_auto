@@ -292,43 +292,6 @@ class OrcaStageBuildContext:
         )
 
 
-def materialize_orca_stage(
-    *,
-    workspace_dir: Path,
-    stage_root_name: str,
-    stage_key: str,
-    source_artifact_path: str,
-    candidate_kind: str,
-    route_line: str,
-    charge: int,
-    multiplicity: int,
-    max_cores: int,
-    max_memory_gb: int,
-    xyz_filename: str = "input.xyz",
-    inp_filename: str = "input.inp",
-    source_frame_index: int = 0,
-    extra_source_payload: dict[str, Any] | None = None,
-) -> OrcaStageMaterialization:
-    return materialize_orca_stage_from_request(
-        OrcaStageMaterializationRequest(
-            workspace_dir=workspace_dir,
-            stage_root_name=stage_root_name,
-            stage_key=stage_key,
-            source_artifact_path=source_artifact_path,
-            candidate_kind=candidate_kind,
-            route_line=route_line,
-            charge=charge,
-            multiplicity=multiplicity,
-            max_cores=max_cores,
-            max_memory_gb=max_memory_gb,
-            xyz_filename=xyz_filename,
-            inp_filename=inp_filename,
-            source_frame_index=source_frame_index,
-            extra_source_payload=extra_source_payload,
-        )
-    )
-
-
 def _candidate_source_frame_index(candidate: WorkflowStageInput) -> int:
     metadata = candidate.metadata if isinstance(candidate.metadata, dict) else {}
     return max(0, safe_int(metadata.get("source_frame_index", 0), default=0))
@@ -613,7 +576,6 @@ __all__ = [
     "build_materialized_orca_stage_from_context",
     "build_orca_enqueue_payload",
     "ensure_route_line",
-    "materialize_orca_stage",
     "materialize_orca_stage_from_request",
     "normalize_text",
     "OrcaStageBuildContext",

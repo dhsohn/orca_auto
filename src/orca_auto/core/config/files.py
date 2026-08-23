@@ -238,20 +238,6 @@ def load_yaml_mapping(
     return path, parsed
 
 
-def load_required_yaml_mapping(
-    config_path: str | Path,
-    *,
-    missing_error: Callable[[Path], Exception] | None = None,
-    invalid_message: str = "YAML top-level is not a mapping: {path}",
-) -> tuple[Path, dict[str, Any]]:
-    path = Path(config_path).expanduser().resolve()
-    if not path.exists():
-        if missing_error is not None:
-            raise missing_error(path)
-        raise FileNotFoundError(path)
-    return load_yaml_mapping(path, invalid_message=invalid_message)
-
-
 def mapping_section(raw: dict[str, Any] | None, key: str) -> dict[str, Any]:
     section = raw.get(key) if isinstance(raw, dict) else None
     return section if isinstance(section, dict) else {}

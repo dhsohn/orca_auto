@@ -19,27 +19,19 @@ def test_normalize_bool_and_safe_int_cover_string_and_default_paths() -> None:
     assert safe_int(None, default=9) == 9
 
 
-def test_load_json_dict_and_list_handle_missing_invalid_and_type_filtered_payloads(
+def test_load_json_list_handles_missing_invalid_and_type_filtered_payloads(
     tmp_path: Path,
 ) -> None:
     missing = tmp_path / "missing.json"
-    assert _orca_local_lookup.load_json_dict_impl(missing) == {}
     assert _orca_local_lookup.load_json_list_impl(missing) == []
 
     invalid = tmp_path / "invalid.json"
     invalid.write_text("{not-json", encoding="utf-8")
-    assert _orca_local_lookup.load_json_dict_impl(invalid) == {}
     assert _orca_local_lookup.load_json_list_impl(invalid) == []
 
     wrong_type = tmp_path / "wrong-type.json"
     wrong_type.write_text(json.dumps(["x", {"ok": True}]), encoding="utf-8")
-    assert _orca_local_lookup.load_json_dict_impl(wrong_type) == {}
     assert _orca_local_lookup.load_json_list_impl(wrong_type) == [{"ok": True}]
-
-    dict_payload = tmp_path / "dict.json"
-    dict_payload.write_text(json.dumps({"status": "ok"}), encoding="utf-8")
-    assert _orca_local_lookup.load_json_dict_impl(dict_payload) == {"status": "ok"}
-    assert _orca_local_lookup.load_json_list_impl(dict_payload) == []
 
 
 def test_resolve_candidate_path_and_direct_dir_target_cover_existing_and_oserror_paths(

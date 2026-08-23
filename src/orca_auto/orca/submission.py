@@ -25,7 +25,7 @@ from orca_auto.core.queue.enqueue_publication import (
 )
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import QueueAfterCommitError
-from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.persistence import timestamped_token
 
 from .config import load_config
@@ -105,20 +105,7 @@ class _QueuedRecordPartiallyPublished(RuntimeError):
 
 
 def active_queue_entry(allowed_root: Path, reaction_dir: Path) -> QueueEntry | None:
-    helper = getattr(queue_adapter, "get_active_entry_for_reaction_dir", None)
-    if callable(helper):
-        return helper(allowed_root, str(reaction_dir))
-
-    resolved = str(reaction_dir.expanduser().resolve())
-    for entry in queue_adapter.list_queue(allowed_root):
-        if queue_adapter.queue_entry_reaction_dir(entry) != resolved:
-            continue
-        if queue_adapter.queue_entry_status(entry) in {
-            QueueStatus.PENDING.value,
-            QueueStatus.RUNNING.value,
-        }:
-            return entry
-    return None
+    return queue_adapter.get_active_entry_for_reaction_dir(allowed_root, str(reaction_dir))
 
 
 def find_submission_conflict(
@@ -143,12 +130,7 @@ def worker_status_for_submission(allowed_root: Path) -> WorkerStatusInfo:
 
 
 def queue_entry_worker_log(entry: Any) -> Any | None:
-    metadata_fn = getattr(queue_adapter, "queue_entry_metadata", None)
-    if not callable(metadata_fn):
-        return None
-    metadata = metadata_fn(entry)
-    if not isinstance(metadata, dict):
-        return None
+    metadata = queue_adapter.queue_entry_metadata(entry)
     worker_log = metadata.get("worker_log")
     if isinstance(worker_log, (str, Path)):
         return worker_log

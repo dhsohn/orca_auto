@@ -11,7 +11,7 @@ from orca_auto.core.queue.metadata import (
     mapping_metadata_value as queue_entry_metadata_value_impl,
 )
 from orca_auto.core.utils.coercion import normalize_text
-from orca_auto.core.utils.persistence import load_json_mapping_file, load_json_mapping_list_file
+from orca_auto.core.utils.persistence import load_json_mapping_list_file
 
 from ._orca_path_helpers import resolve_candidate_path_impl
 
@@ -19,10 +19,6 @@ QUEUE_FILE_NAME = "queue.json"
 
 JsonPayload = dict[str, Any]
 JsonPayloadList = list[JsonPayload]
-
-
-def load_json_dict_impl(path: Path) -> JsonPayload:
-    return load_json_mapping_file(path) or {}
 
 
 def load_json_list_impl(path: Path) -> JsonPayloadList:
@@ -81,7 +77,6 @@ def find_queue_entry_impl(
 
 __all__ = [
     "find_queue_entry_impl",
-    "load_json_dict_impl",
     "load_json_list_impl",
     "queue_entry_metadata_impl",
     "queue_entry_metadata_value_impl",

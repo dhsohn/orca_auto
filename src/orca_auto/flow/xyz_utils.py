@@ -50,10 +50,6 @@ class XYZParseResult:
     frames: tuple[XYZFrame, ...] = ()
     error_reason: str = ""
 
-    @property
-    def ok(self) -> bool:
-        return bool(self.frames) and not self.error_reason
-
 
 @dataclass(frozen=True)
 class _XYZFrameParseStep:

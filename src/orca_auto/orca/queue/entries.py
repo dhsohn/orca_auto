@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from orca_auto.core.queue import store as _core_queue
-from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import normalize_bool as _shared_normalize_bool
 from orca_auto.core.utils import normalize_text as _shared_normalize_text
@@ -47,10 +46,6 @@ def normalize_bool(value: object) -> bool:
     if not isinstance(value, (bool, str)) and value is not None:
         return bool(value)
     return _shared_normalize_bool(value)
-
-
-def normalize_priority(value: object, *, default: int = 10) -> int:
-    return normalize_queue_priority(value, default=default)
 
 
 def normalize_optional_text(value: object | None) -> str | None:

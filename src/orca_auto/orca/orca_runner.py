@@ -117,10 +117,6 @@ class ShutdownSignalGuard:
             self.received_signal = signum
 
     @property
-    def signalled(self) -> bool:
-        return self.received_signal is not None
-
-    @property
     def installed(self) -> bool:
         return len(self._installed_signals) == len(self._MANAGED_SIGNALS)
 

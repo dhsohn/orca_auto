@@ -73,7 +73,6 @@ def test_load_xyz_frames_rejects_nonfinite_coordinates(tmp_path: Path, coordinat
 
     result = xyz_utils.parse_xyz_file(xyz_path)
 
-    assert result.ok is False
     assert result.error_reason == "invalid_atom_line"
     assert xyz_utils.load_xyz_frames(xyz_path) == ()
 

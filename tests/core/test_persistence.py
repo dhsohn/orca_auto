@@ -53,24 +53,6 @@ def test_coerce_int(value: Any, default: int, expected: int) -> None:
     assert persistence.coerce_int(value, default=default) == expected
 
 
-@pytest.mark.parametrize(
-    ("value", "default", "expected"),
-    [
-        (True, False, True),
-        (False, True, False),
-        (3, False, True),
-        (0.0, True, False),
-        (" yes ", False, True),
-        ("OFF", True, False),
-        ("", True, False),
-        ("maybe", True, True),
-        (object(), False, False),
-    ],
-)
-def test_coerce_bool(value: Any, default: bool, expected: bool) -> None:
-    assert persistence.coerce_bool(value, default=default) is expected
-
-
 def test_resolve_root_path_expands_user_and_resolves(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

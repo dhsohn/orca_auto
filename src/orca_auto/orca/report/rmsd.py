@@ -233,23 +233,6 @@ def _aligned_metrics(
     )
 
 
-def heavy_atom_rmsd(
-    a: Sequence[AtomRow],
-    b: Sequence[AtomRow],
-    *,
-    heavy_atoms_only: bool = False,
-) -> float | None:
-    """Minimal proper-rotation RMSD between two geometries, or ``None``.
-
-    Returns ``None`` (never a large number) when the two structures cannot be
-    compared atom-for-atom by index: different selected-atom counts or a
-    different element sequence. That fail-closed contract keeps constitutionally
-    different candidates — and reordered atom lists — from ever being merged.
-    """
-    metrics = _aligned_metrics(a, b, heavy_atoms_only=heavy_atoms_only)
-    return metrics[0] if metrics is not None else None
-
-
 @dataclass(frozen=True)
 class RmsdCandidate:
     """One optimized minimum considered for RMSD de-duplication."""
@@ -271,23 +254,12 @@ class RmsdGroup:
     def degeneracy(self) -> int:
         return len(self.member_stage_ids)
 
-    @property
-    def merged_stage_ids(self) -> tuple[str, ...]:
-        """Non-representative members, deterministically ordered."""
-        return tuple(sid for sid in self.member_stage_ids if sid != self.representative_stage_id)
-
 
 @dataclass(frozen=True)
 class RmsdGrouping:
     """The full partition of candidates into RMSD groups (one per representative)."""
 
     groups: tuple[RmsdGroup, ...] = ()
-
-    def group_for(self, stage_id: str) -> RmsdGroup | None:
-        for group in self.groups:
-            if stage_id in group.member_stage_ids:
-                return group
-        return None
 
     @property
     def representative_ids(self) -> frozenset[str]:
@@ -390,6 +362,5 @@ __all__ = [
     "RmsdGroup",
     "RmsdGrouping",
     "group_by_rmsd",
-    "heavy_atom_rmsd",
     "rmsd_comparison_key",
 ]
