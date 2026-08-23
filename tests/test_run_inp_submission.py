@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import threading
 from dataclasses import replace
+from http.client import IncompleteRead
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
 import orca_auto.orca.submission as submission_mod
 from orca_auto.core.commands.run_dir import use_run_dir_publication_guard
+from orca_auto.core.config import DiscordConfig, MessengerConfig
+from orca_auto.core.messaging import discord_bot as discord_bot_mod
 from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.generation import is_visible_generation_name
@@ -25,6 +28,7 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import submission as run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
+from orca_auto.orca.notifications import notify_queue_enqueued_event
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import publication_repair
 
@@ -139,6 +143,73 @@ def test_submission_normalizes_resources_only_in_private_snapshot(
         "max_cores": 2,
         "max_memory_gb": 4,
     }
+
+
+def test_notification_delivery_failure_does_not_park_queue_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    cfg = run_inp.load_config("")
+    cfg.messenger = MessengerConfig(
+        discord=DiscordConfig(bot_token="synthetic-token", default_channel_id="123")
+    )
+    monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", lambda *_args, **_kwargs: False)
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "submitted"
+    assert result.queued_result is not None
+    assert "queued notification delivery failed" in result.queued_result.worker_info.detail
+    [entry] = queue_adapter.list_queue(tmp_path)
+    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    assert queue_entry_is_claimable(entry)
+
+
+def test_truncated_discord_response_does_not_park_queue_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    cfg = run_inp.load_config("")
+    cfg.messenger = MessengerConfig(
+        discord=DiscordConfig(
+            bot_token="synthetic-token",
+            default_channel_id="123",
+            max_attempts=1,
+        )
+    )
+
+    class _TruncatedResponse:
+        status = 200
+
+        def getcode(self) -> int:
+            return self.status
+
+        def read(self) -> bytes:
+            raise IncompleteRead(b'{"id":')
+
+        def __enter__(self) -> _TruncatedResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> Literal[False]:
+            return False
+
+    monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", notify_queue_enqueued_event)
+    monkeypatch.setattr(
+        discord_bot_mod,
+        "urlopen",
+        lambda *_args, **_kwargs: _TruncatedResponse(),
+    )
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "submitted"
+    assert result.queued_result is not None
+    assert "queued notification delivery failed" in result.queued_result.worker_info.detail
+    [entry] = queue_adapter.list_queue(tmp_path)
+    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+    assert queue_entry_is_claimable(entry)
 
 
 def test_submission_rejects_distinct_sources_with_same_basename_before_enqueue(

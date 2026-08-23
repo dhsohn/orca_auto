@@ -191,6 +191,8 @@ def _slot_from_reservation_request(
     *,
     token: str,
 ) -> AdmissionSlot:
+    if type(request.engine_launch_gated) is not bool:
+        raise ValueError("Admission engine launch-gated flag must be a boolean")
     resolved_owner_pid = request.owner_pid if request.owner_pid is not None else os.getpid()
     if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
         raise ValueError("Admission slot owner PID must be a positive integer")
@@ -213,6 +215,7 @@ def _slot_from_reservation_request(
         work_dir=_normalize_work_dir(request.work_dir),
         queue_id=request.queue_id.strip(),
         engine_process_state=engine_process_state,
+        engine_launch_gated=request.engine_launch_gated,
     )
 
 
@@ -448,6 +451,7 @@ def reserve_slot(
     queue_id: str = "",
     owner_pid: int | None = None,
     engine_process_state: str = "idle",
+    engine_launch_gated: bool = False,
 ) -> str | None:
     return reserve_slot_from_request(
         root,
@@ -462,6 +466,7 @@ def reserve_slot(
             queue_id=queue_id,
             owner_pid=owner_pid,
             engine_process_state=engine_process_state,
+            engine_launch_gated=engine_launch_gated,
         ),
     )
 
@@ -690,9 +695,16 @@ def complete_slot_engine_process(
     expected_owner_pid: int | _ExpectationUnset = _EXPECTATION_UNSET,
     expected_owner_process_start_ticks: int | None | _ExpectationUnset = _EXPECTATION_UNSET,
     expected_owner_boot_id: str | None | _ExpectationUnset = _EXPECTATION_UNSET,
+    expected_engine_launch_gated: bool | _ExpectationUnset = _EXPECTATION_UNSET,
     require_pending_without_engine_identity: bool = False,
 ) -> AdmissionSlot | None:
     """Mark a normally completed child with no engine launch in flight."""
+
+    if (
+        expected_engine_launch_gated is not _EXPECTATION_UNSET
+        and type(expected_engine_launch_gated) is not bool
+    ):
+        raise ValueError("Expected engine launch-gated flag must be a boolean")
 
     has_expectations = (
         any(
@@ -701,6 +713,7 @@ def complete_slot_engine_process(
                 expected_owner_pid,
                 expected_owner_process_start_ticks,
                 expected_owner_boot_id,
+                expected_engine_launch_gated,
             )
         )
         or require_pending_without_engine_identity
@@ -727,6 +740,11 @@ def complete_slot_engine_process(
             if (
                 expected_owner_boot_id is not _EXPECTATION_UNSET
                 and slot.owner_boot_id != expected_owner_boot_id
+            ):
+                return None, False
+            if (
+                expected_engine_launch_gated is not _EXPECTATION_UNSET
+                and slot.engine_launch_gated != expected_engine_launch_gated
             ):
                 return None, False
             if require_pending_without_engine_identity and any(

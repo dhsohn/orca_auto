@@ -9,6 +9,7 @@ production never reached. The live path recorder now carries the behavior.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from orca_auto.flow.orchestration.stage_runtime.shared import _apply_submission_result
@@ -128,7 +129,9 @@ def test_deferred_submission_leaves_failure_metadata_untouched() -> None:
     assert stage_metadata["submission_error_detail"] == "old failure detail"
 
 
-def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass() -> None:
+def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass(
+    tmp_path: Path,
+) -> None:
     """Integration regression: the same sync tick must not clobber the reason.
 
     For an ORCA stage the contract loader never raises — a stage whose
@@ -142,6 +145,13 @@ def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass() -> None
     from orca_auto.flow.orchestration.stage_runtime.orca import sync_orca_stage_impl
     from tests.flow.orchestration_services import orchestration_services
 
+    reaction_dir = tmp_path / "rxn_rejected"
+    reaction_dir.mkdir()
+    selected_inp = reaction_dir / "ts_guess.inp"
+    selected_inp.write_text(
+        "! HF Opt\n* xyz 0 1\nH 0 0 0\n*\n",
+        encoding="utf-8",
+    )
     stage: dict[str, Any] = {
         "stage_id": "orca_optts_freq_01",
         "stage_kind": "orca_stage",
@@ -149,10 +159,17 @@ def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass() -> None
         "metadata": {},
         "task": {
             "engine": "orca",
-            "task_kind": "geometry_opt",
+            "task_kind": "opt",
             "status": "planned",
-            "payload": {"reaction_dir": "/tmp/rxn_rejected", "selected_inp": ""},
-            "enqueue_payload": {"reaction_dir": "/tmp/rxn_rejected", "priority": 10},
+            "payload": {
+                "reaction_dir": str(reaction_dir),
+                "selected_inp": str(selected_inp),
+            },
+            "enqueue_payload": {
+                "reaction_dir": str(reaction_dir),
+                "selected_inp": str(selected_inp),
+                "priority": 10,
+            },
         },
     }
     rejection = {
@@ -171,7 +188,7 @@ def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass() -> None
         status="unknown",
         reason="",
         state_status="",
-        reaction_dir="/tmp/rxn_rejected",
+        reaction_dir=str(reaction_dir),
         latest_known_path="",
         optimized_xyz_path="",
         queue_id="",

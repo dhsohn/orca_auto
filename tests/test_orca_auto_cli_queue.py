@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 
 from orca_auto import activity_labels, cli_common, cli_style, terminal_table
 from orca_auto import cli_queue as unified_cli
+from orca_auto.core.queue import QueueStoreCorruptError
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -1012,6 +1016,88 @@ def test_cmd_queue_list_clear_rejects_filters(
     )
 
 
+@pytest.mark.parametrize(
+    ("action", "failure"),
+    [
+        (None, FileNotFoundError("configured file is missing")),
+        (None, yaml.YAMLError("configuration YAML is invalid")),
+        ("clear", QueueStoreCorruptError("queue store is invalid")),
+    ],
+)
+def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    action: str | None,
+    failure: Exception,
+) -> None:
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities" if action is None else "clear_activities",
+        lambda **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=action,
+            workflow_root=None,
+            orca_auto_config="/tmp/missing-or-corrupt.yaml",
+            limit=0,
+            refresh=False,
+            engine=None,
+            status=None,
+            kind=None,
+            json=True,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err.startswith("error: ")
+    assert "hint: Check the config path" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_cmd_queue_list_treats_closed_output_pipe_separately_from_state_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **_kwargs: {"activities": [], "sources": {}},
+    )
+    monkeypatch.setattr(
+        unified_cli,
+        "count_global_active_simulations",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        unified_cli,
+        "_print_queue_list_text",
+        lambda **_kwargs: (_ for _ in ()).throw(BrokenPipeError("downstream closed")),
+    )
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=None,
+            workflow_root=None,
+            orca_auto_config=None,
+            limit=0,
+            refresh=False,
+            engine=None,
+            status=None,
+            kind=None,
+            json=False,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.out == ""
+    assert captured.err == ""
+
+
 def test_cmd_queue_cancel_reports_lookup_error(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1033,8 +1119,87 @@ def test_cmd_queue_cancel_reports_lookup_error(
     assert result == 1
     assert capsys.readouterr().err == (
         "error: Activity target not found: missing\n"
-        "hint: Run `orca_auto queue list` to see valid targets.\n"
+        "hint: Check the configured runtime state, then run `orca_auto queue list` "
+        "to see valid targets.\n"
     )
+
+
+def test_cmd_queue_cancel_treats_closed_pipe_as_success_after_durable_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cancel_calls: list[dict[str, Any]] = []
+
+    def fake_cancel_activity(**kwargs: Any) -> dict[str, str]:
+        cancel_calls.append(kwargs)
+        return {"activity_id": "job-1"}
+
+    monkeypatch.setattr(unified_cli, "cancel_activity", fake_cancel_activity)
+    monkeypatch.setattr(
+        unified_cli,
+        "_emit_queue_cancel",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(BrokenPipeError("downstream closed")),
+    )
+
+    result = unified_cli.cmd_queue_cancel(
+        SimpleNamespace(
+            target="job-1",
+            workflow_root=None,
+            orca_auto_config=None,
+            json=True,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert len(cancel_calls) == 1
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_cli_main_silences_closed_pipe_before_interpreter_shutdown() -> None:
+    script = """
+from types import SimpleNamespace
+
+from orca_auto import cli
+
+
+class FakeParser:
+    def parse_args(self, _argv):
+        return SimpleNamespace(no_color=False, func=emit)
+
+    def print_help(self):
+        raise AssertionError("unexpected help")
+
+
+def emit(_args):
+    try:
+        for _ in range(4096):
+            print("x" * 4096)
+    except BrokenPipeError:
+        return 0
+    return 0
+
+
+cli.build_parser = FakeParser
+raise SystemExit(cli.main([]))
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    assert process.stderr is not None
+    assert process.stdout.readline().startswith("x")
+    process.stdout.close()
+    stderr = process.stderr.read()
+    return_code = process.wait(timeout=10)
+
+    assert return_code == 0
+    assert stderr == ""
 
 
 def test_cmd_queue_cancel_reports_timeout_error(
@@ -1060,8 +1225,45 @@ def test_cmd_queue_cancel_reports_timeout_error(
     assert result == 1
     assert capsys.readouterr().err == (
         "error: Workflow is busy and could not be locked for cancellation within 5s: /tmp/wf_busy\n"
-        "hint: Run `orca_auto queue list` to see valid targets.\n"
+        "hint: Check the configured runtime state, then run `orca_auto queue list` "
+        "to see valid targets.\n"
     )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        FileNotFoundError("configured file is missing"),
+        yaml.YAMLError("configuration YAML is invalid"),
+        QueueStoreCorruptError("queue store is invalid"),
+    ],
+)
+def test_cmd_queue_cancel_reports_expected_state_errors_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: Exception,
+) -> None:
+    monkeypatch.setattr(
+        unified_cli,
+        "cancel_activity",
+        lambda **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    result = unified_cli.cmd_queue_cancel(
+        SimpleNamespace(
+            target="anything",
+            workflow_root="/tmp/workflows",
+            orca_auto_config="/tmp/missing-or-corrupt.yaml",
+            json=True,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err.startswith("error: ")
+    assert "hint: Check the configured runtime state" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_cmd_queue_cancel_json_output(

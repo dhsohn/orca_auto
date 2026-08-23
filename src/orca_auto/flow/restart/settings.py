@@ -10,11 +10,13 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
+from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_route
+from orca_auto.flow.conformer_selection import orca_science_route_identity
 from orca_auto.flow.contracts.workflow import (
     INTERACTION_COMPLEX_SP_ROLE,
     INTERACTION_CONFIG_FINGERPRINT_KEY,
     INTERACTION_FRAGMENT_ROLE,
-    is_interaction_role,
+    is_valid_interaction_stage_contract,
 )
 from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
@@ -218,6 +220,17 @@ def _request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
+def _existing_request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    request = metadata.get("request")
+    if not isinstance(request, dict):
+        return {}
+    params = request.get("parameters")
+    return params if isinstance(params, dict) else {}
+
+
 def _apply_restart_request_basics(
     params: dict[str, Any],
     *,
@@ -283,12 +296,18 @@ def _manifest_electronic_state(manifest: dict[str, Any]) -> tuple[int | None, in
     return charge, multiplicity
 
 
-def _apply_orca_request_parameters(params: dict[str, Any], manifest: dict[str, Any]) -> None:
-    orca_manifest = _manifest_mapping(manifest.get("orca"))
-    route_line = _normalize_text(manifest.get("orca_route_line") or orca_manifest.get("route_line"))
+def _apply_orca_request_parameters(
+    params: dict[str, Any],
+    *,
+    route_line: str,
+    optts_route_line: str,
+    charge: int | None,
+    multiplicity: int | None,
+) -> None:
     if route_line:
         params["orca_route_line"] = route_line
-    charge, multiplicity = _manifest_electronic_state(manifest)
+    if optts_route_line:
+        params["orca_optts_route_line"] = optts_route_line
     if charge is not None:
         params["charge"] = charge
     if multiplicity is not None:
@@ -297,7 +316,162 @@ def _apply_orca_request_parameters(params: dict[str, Any], manifest: dict[str, A
 
 def _manifest_orca_route_line(manifest: dict[str, Any]) -> str:
     orca_manifest = _manifest_mapping(manifest.get("orca"))
-    return _normalize_text(manifest.get("orca_route_line") or orca_manifest.get("route_line"))
+    candidates = (
+        ("orca_route_line" in manifest, manifest.get("orca_route_line"), "orca_route_line"),
+        ("route_line" in orca_manifest, orca_manifest.get("route_line"), "orca.route_line"),
+    )
+    for present, value, label in candidates:
+        if not present:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be a string. got={value!r}")
+        if value.strip():
+            return value.strip()
+    return ""
+
+
+def _manifest_orca_optts_route_line(manifest: dict[str, Any]) -> str:
+    if "orca_optts_route_line" not in manifest:
+        return ""
+    value = manifest.get("orca_optts_route_line")
+    if not isinstance(value, str):
+        raise ValueError(f"orca_optts_route_line must be a string. got={value!r}")
+    return value.strip()
+
+
+def _validate_manifest_orca_routes(
+    template_name: str,
+    manifest: dict[str, Any],
+) -> tuple[str, str]:
+    route_line = _manifest_orca_route_line(manifest)
+    task_kind = {
+        "reaction_ts_search": "optts_freq",
+        "conformer_screening": "opt",
+        "scan_ts_search": "relaxed_scan",
+    }.get(template_name, "")
+    if route_line and task_kind:
+        route_line = validate_workflow_orca_route(task_kind=task_kind, route_line=route_line)
+    optts_route_line = ""
+    if template_name == "scan_ts_search":
+        optts_route_line = _manifest_orca_optts_route_line(manifest)
+        if optts_route_line:
+            optts_route_line = validate_workflow_orca_route(
+                task_kind="optts_freq",
+                route_line=optts_route_line,
+            )
+    return route_line, optts_route_line
+
+
+def _durable_interaction_config_fingerprint(payload: dict[str, Any]) -> str:
+    params = _request_parameters(payload)
+    try:
+        interaction_cfg = _normalize_interaction_energy_block(params.get("interaction_energy"))
+        if interaction_cfg is None:
+            return ""
+        rmsd_cfg = _normalize_rmsd_dedup_block(params.get("rmsd_dedup"))
+        charge = strict_int(params.get("charge", 0), field="charge")
+        multiplicity = strict_int(
+            params.get("multiplicity", 1),
+            field="multiplicity",
+            minimum=1,
+        )
+    except ValueError:
+        return ""
+    return _interaction_energy_config_fingerprint(
+        interaction_cfg,
+        complex_charge=charge,
+        complex_multiplicity=multiplicity,
+        rmsd_dedup=rmsd_cfg,
+    )
+
+
+def _completed_primary_orca_stage_ids(
+    payload: dict[str, Any],
+    *,
+    expected_interaction_fingerprint: str,
+) -> list[str]:
+    completed: list[str] = []
+    stages = [stage for stage in payload.get("stages", []) if isinstance(stage, dict)]
+    for raw_stage in stages:
+        if not isinstance(raw_stage, dict):
+            continue
+        if is_valid_interaction_stage_contract(
+            raw_stage,
+            stages,
+            expected_config_fingerprint=expected_interaction_fingerprint,
+        ):
+            continue
+        task = raw_stage.get("task")
+        task = task if isinstance(task, dict) else {}
+        if not (
+            _normalize_text(raw_stage.get("stage_kind")).lower() == "orca_stage"
+            or _normalize_text(task.get("engine")).lower() == "orca"
+        ):
+            continue
+        if "completed" not in {
+            _normalize_text(raw_stage.get("status")).lower(),
+            _normalize_text(task.get("status")).lower(),
+        }:
+            continue
+        completed.append(_normalize_text(raw_stage.get("stage_id")) or "<unknown>")
+    return completed
+
+
+def _changed_completed_orca_science_fields(
+    payload: dict[str, Any],
+    *,
+    template_name: str,
+    route_line: str,
+    optts_route_line: str,
+    manifest_charge: int | None,
+    manifest_multiplicity: int | None,
+) -> list[str]:
+    params = _existing_request_parameters(payload)
+    changed: list[str] = []
+    route_updates = [("orca_route_line", route_line)]
+    if template_name == "scan_ts_search":
+        route_updates.append(("orca_optts_route_line", optts_route_line))
+    for key, updated in route_updates:
+        if not updated:
+            continue
+        current = params.get(key)
+        if not isinstance(current, str) or not current.strip():
+            changed.append(key)
+            continue
+        task_kind = (
+            "optts_freq"
+            if key == "orca_optts_route_line" or template_name == "reaction_ts_search"
+            else "opt"
+            if template_name == "conformer_screening"
+            else "relaxed_scan"
+        )
+        try:
+            current = validate_workflow_orca_route(task_kind=task_kind, route_line=current)
+        except ValueError:
+            changed.append(key)
+            continue
+        if orca_science_route_identity(current.splitlines()) != orca_science_route_identity(
+            updated.splitlines()
+        ):
+            changed.append(key)
+    for numeric_key, numeric_updated, minimum in (
+        ("charge", manifest_charge, None),
+        ("multiplicity", manifest_multiplicity, 1),
+    ):
+        if numeric_updated is None:
+            continue
+        try:
+            current_value = strict_int(
+                params.get(numeric_key),
+                field=numeric_key,
+                minimum=minimum,
+            )
+        except ValueError:
+            changed.append(numeric_key)
+            continue
+        if current_value != numeric_updated:
+            changed.append(numeric_key)
+    return changed
 
 
 def _update_request_parameters(
@@ -313,6 +487,10 @@ def _update_request_parameters(
     xtb_present: bool,
     xtb_overrides: dict[str, Any],
     endpoint_pairing: dict[str, Any],
+    route_line: str,
+    optts_route_line: str,
+    manifest_charge: int | None,
+    manifest_multiplicity: int | None,
 ) -> None:
     params = _request_parameters(payload)
 
@@ -331,7 +509,13 @@ def _update_request_parameters(
         xtb_overrides=xtb_overrides,
         endpoint_pairing=endpoint_pairing,
     )
-    _apply_orca_request_parameters(params, manifest)
+    _apply_orca_request_parameters(
+        params,
+        route_line=route_line,
+        optts_route_line=optts_route_line,
+        charge=manifest_charge,
+        multiplicity=manifest_multiplicity,
+    )
     if "boltzmann_temperature_k" in manifest:
         temperature = _optional_positive_float(manifest, "boltzmann_temperature_k")
         if temperature is None:
@@ -372,7 +556,12 @@ def _update_request_parameters(
 def _flow_restart_settings(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     manifest = _load_flow_manifest(workspace)
     if not manifest:
-        return {"applied": False}
+        return {
+            "applied": False,
+            "persisted_interaction_energy_fingerprint": (
+                _durable_interaction_config_fingerprint(payload)
+            ),
+        }
     return _flow_restart_settings_from_manifest(workspace, payload, manifest)
 
 
@@ -382,6 +571,31 @@ def _flow_restart_settings_from_manifest(
     manifest: dict[str, Any],
 ) -> dict[str, Any]:
     template_name = _workflow_template_name(payload, manifest)
+    route_line, manifest_optts_route_line = _validate_manifest_orca_routes(
+        template_name,
+        manifest,
+    )
+    manifest_charge, manifest_multiplicity = _manifest_electronic_state(manifest)
+    persisted_interaction_fingerprint = _durable_interaction_config_fingerprint(payload)
+    completed_primary_orca = _completed_primary_orca_stage_ids(
+        payload,
+        expected_interaction_fingerprint=persisted_interaction_fingerprint,
+    )
+    changed_science = _changed_completed_orca_science_fields(
+        payload,
+        template_name=template_name,
+        route_line=route_line,
+        optts_route_line=manifest_optts_route_line,
+        manifest_charge=manifest_charge,
+        manifest_multiplicity=manifest_multiplicity,
+    )
+    if completed_primary_orca and changed_science:
+        raise ValueError(
+            "workflow ORCA scientific settings cannot change while completed primary "
+            "ORCA stages retain prior results; start a new workflow or restore the "
+            f"original settings. fields={changed_science!r}, "
+            f"completed_stages={completed_primary_orca!r}"
+        )
     crest_present, crest_manifest = _resolve_engine_manifest(workspace, manifest, "crest")
     xtb_present, xtb_manifest = _resolve_engine_manifest(workspace, manifest, "xtb")
     endpoint_pairing = _resolve_endpoint_pairing_manifest(manifest, xtb_manifest)
@@ -406,6 +620,10 @@ def _flow_restart_settings_from_manifest(
         xtb_present=xtb_present,
         xtb_overrides=xtb_manifest,
         endpoint_pairing=endpoint_pairing,
+        route_line=route_line,
+        optts_route_line=manifest_optts_route_line,
+        manifest_charge=manifest_charge,
+        manifest_multiplicity=manifest_multiplicity,
     )
     # The request parameters now hold the effective charge/multiplicity
     # (manifest-updated or pre-existing). The stage overrides written back by
@@ -421,7 +639,6 @@ def _flow_restart_settings_from_manifest(
     # back to the manifest values directly too, so an older workflow.json whose
     # params never carried an electronic state still restarts on the right one.
     params = _request_parameters(payload)
-    manifest_charge, manifest_multiplicity = _manifest_electronic_state(manifest)
     charge = params.get("charge", manifest_charge if manifest_charge is not None else 0)
     multiplicity = params.get(
         "multiplicity", manifest_multiplicity if manifest_multiplicity is not None else 1
@@ -464,22 +681,32 @@ def _flow_restart_settings_from_manifest(
         else ""
     )
     if interaction_cfg is not None:
-        for raw_stage in payload.get("stages", []):
-            if not isinstance(raw_stage, dict):
-                continue
-            metadata = _stage_metadata(raw_stage)
-            role = _normalize_text(metadata.get("role"))
-            if not is_interaction_role(role):
-                continue
-            if (
-                _normalize_text(metadata.get(INTERACTION_CONFIG_FINGERPRINT_KEY))
-                != interaction_fingerprint
+        workflow_stages = [
+            raw_stage for raw_stage in payload.get("stages", []) if isinstance(raw_stage, dict)
+        ]
+        for raw_stage in workflow_stages:
+            if not is_valid_interaction_stage_contract(
+                raw_stage,
+                workflow_stages,
+                expected_config_fingerprint=persisted_interaction_fingerprint,
             ):
+                continue
+            if persisted_interaction_fingerprint != interaction_fingerprint:
                 raise ValueError(
                     "interaction_energy scientific settings cannot change after its stages "
                     "were materialized; disable the feature or start a new workflow"
                 )
-    route_line = _manifest_orca_route_line(manifest)
+    if template_name == "reaction_ts_search":
+        optts_route_line = route_line or _normalize_text(params.get("orca_route_line"))
+        optts_route_line_present = bool(route_line)
+    elif template_name == "scan_ts_search":
+        optts_route_line = manifest_optts_route_line or _normalize_text(
+            params.get("orca_optts_route_line")
+        )
+        optts_route_line_present = bool(manifest_optts_route_line)
+    else:
+        optts_route_line = ""
+        optts_route_line_present = False
     return {
         "applied": True,
         "resources": resources,
@@ -496,6 +723,7 @@ def _flow_restart_settings_from_manifest(
         "multiplicity": multiplicity,
         "interaction_energy": interaction_cfg,
         "interaction_energy_fingerprint": interaction_fingerprint,
+        "persisted_interaction_energy_fingerprint": persisted_interaction_fingerprint,
         "interaction_energy_disabled": (
             "interaction_energy" in manifest and interaction_cfg is None
         ),
@@ -503,7 +731,10 @@ def _flow_restart_settings_from_manifest(
         "orca_multiplicity": manifest_multiplicity,
         "orca_route_line_present": bool(route_line),
         "orca_route_line": route_line or _normalize_text(params.get("orca_route_line")),
+        "orca_optts_route_line_present": optts_route_line_present,
+        "orca_optts_route_line": optts_route_line,
         "orca_input_updates": bool(route_line)
+        or bool(manifest_optts_route_line)
         or bool(manifest_charge is not None or manifest_multiplicity is not None)
         or bool(resources),
         "crest_present": crest_present,
@@ -553,6 +784,7 @@ def _apply_flow_restart_settings(
     settings: dict[str, Any],
     *,
     restart_allowed_root: Path,
+    workflow_stages: list[dict[str, Any]],
     created_restart_dirs: list[Path] | None = None,
 ) -> None:
     if not settings.get("applied"):
@@ -564,7 +796,14 @@ def _apply_flow_restart_settings(
     stage_metadata = _stage_metadata(stage)
     interaction_role = _normalize_text(stage_metadata.get("role"))
 
-    if engine == "orca" and is_interaction_role(interaction_role):
+    expected_interaction_fingerprint = _normalize_text(
+        settings.get("interaction_energy_fingerprint")
+    )
+    if engine == "orca" and is_valid_interaction_stage_contract(
+        stage,
+        workflow_stages,
+        expected_config_fingerprint=expected_interaction_fingerprint,
+    ):
         interaction_cfg = settings.get("interaction_energy")
         if not isinstance(interaction_cfg, dict):
             raise ValueError("disabled interaction-energy stages must be retired before restart")
@@ -683,6 +922,25 @@ def _apply_flow_restart_settings(
             {key: int(resources[key]) for key in ("max_cores", "max_memory_gb") if key in resources}
         )
         orca_settings = dict(settings)
+        route_setting = (
+            "orca_optts_route_line" if task_view.kind() == "optts_freq" else "orca_route_line"
+        )
+        route_line_present = bool(settings.get(f"{route_setting}_present"))
+        route_line = _normalize_text(settings.get(route_setting))
+        if route_line_present:
+            validate_workflow_orca_route(
+                task_kind=task_view.kind(),
+                route_line=route_line,
+            )
+        orca_settings.update(
+            {
+                "orca_route_line_present": route_line_present,
+                "orca_route_line": route_line,
+                "orca_input_updates": route_line_present
+                or bool(settings.get("electronic_state_present"))
+                or bool(resources),
+            }
+        )
         if resources:
             orca_settings["resources"] = dict(task_view.resource_request())
         rematerialize_orca_restart_input(

@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -7,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_input_bytes
 from orca_auto.orca.commands.run_inp import cmd_run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
@@ -47,6 +49,17 @@ def _make_args(root: Path, reaction_dir: Path, **overrides) -> SimpleNamespace:
         "priority": 10,
     }
     defaults.update(overrides)
+    workflow_task_kind = defaults.get("workflow_task_kind")
+    if isinstance(workflow_task_kind, str) and "bound_selected_validator" not in defaults:
+
+        def validate_bound_selected(bound_inp: Path, payload: bytes) -> None:
+            validate_workflow_orca_input_bytes(
+                task_kind=workflow_task_kind,
+                inp_path=bound_inp,
+                input_bytes=payload,
+            )
+
+        defaults["bound_selected_validator"] = validate_bound_selected
     return SimpleNamespace(**defaults)
 
 
@@ -271,6 +284,220 @@ class TestRunInpSubmit(unittest.TestCase):
             self.assertEqual(result.worker_info.log_file, metadata["worker_log"])
             mock_read_worker_pid.assert_called_once()
             mock_notify_queue.assert_called_once()
+
+    @patch("orca_auto.orca.submission.load_config")
+    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
+    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
+    def test_workflow_submission_binds_valid_rewritten_snapshot_bytes(
+        self,
+        _mock_read_worker_pid: MagicMock,
+        _mock_notify_queue: MagicMock,
+        mock_load_config: MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mock_load_config.return_value = _make_cfg(tmp)
+            reaction_dir = root / "rxn"
+            _write_inp(
+                reaction_dir,
+                content="! OptTS NumFreq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+            )
+            durable_inp = (reaction_dir / "rxn.inp").resolve()
+
+            submission = submit_reaction_dir_to_queue(
+                _make_args(
+                    root,
+                    reaction_dir,
+                    expected_selected_inp=str(durable_inp),
+                    workflow_task_kind="optts_freq",
+                )
+            )
+
+            self.assertEqual(submission.status, "submitted")
+            [entry] = list_queue(root)
+            snapshot_inp = Path(queue_entry_metadata(entry)["selected_inp"])
+            snapshot_text = snapshot_inp.read_text(encoding="utf-8")
+            self.assertIn("OptTS NumFreq", snapshot_text)
+            self.assertIn("%pal", snapshot_text)
+
+    @patch("orca_auto.orca.submission.load_config")
+    def test_workflow_submission_requires_upper_layer_bound_payload_validator(
+        self,
+        mock_load_config: MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mock_load_config.return_value = _make_cfg(tmp)
+            reaction_dir = root / "rxn"
+            _write_inp(
+                reaction_dir,
+                content="! OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+            )
+            durable_inp = (reaction_dir / "rxn.inp").resolve()
+
+            submission = submit_reaction_dir_to_queue(
+                _make_args(
+                    root,
+                    reaction_dir,
+                    expected_selected_inp=str(durable_inp),
+                    workflow_task_kind="optts_freq",
+                    bound_selected_validator=None,
+                )
+            )
+
+            self.assertEqual(submission.status, "failed")
+            self.assertEqual(submission.reason, "invalid_submission_input")
+            self.assertIn("upper-layer bound-payload validator", submission.stderr)
+            self.assertEqual(list_queue(root), [])
+
+    @patch("orca_auto.orca.submission.load_config")
+    def test_workflow_submission_rejects_newer_input_than_durable_selection(
+        self,
+        mock_load_config: MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mock_load_config.return_value = _make_cfg(tmp)
+            reaction_dir = root / "rxn"
+            _write_inp(
+                reaction_dir,
+                content="! OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+            )
+            durable_inp = (reaction_dir / "rxn.inp").resolve()
+            newer_inp = reaction_dir / "newer.inp"
+            newer_inp.write_text(
+                "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                encoding="utf-8",
+            )
+            durable_stat = durable_inp.stat()
+            newer_stat = newer_inp.stat()
+            os.utime(
+                newer_inp,
+                ns=(newer_stat.st_atime_ns, durable_stat.st_mtime_ns + 1_000_000),
+            )
+
+            submission = submit_reaction_dir_to_queue(
+                _make_args(
+                    root,
+                    reaction_dir,
+                    expected_selected_inp=str(durable_inp),
+                    workflow_task_kind="optts_freq",
+                )
+            )
+
+            self.assertEqual(submission.status, "failed")
+            self.assertEqual(submission.reason, "invalid_submission_input")
+            self.assertIn("durable selected input", submission.stderr)
+            self.assertEqual(list_queue(root), [])
+
+    @patch("orca_auto.orca.submission.load_config")
+    def test_workflow_submission_validates_snapshot_bound_bytes_after_source_replacement(
+        self,
+        mock_load_config: MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mock_load_config.return_value = _make_cfg(tmp)
+            reaction_dir = root / "rxn"
+            _write_inp(
+                reaction_dir,
+                content="! OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+            )
+            durable_inp = (reaction_dir / "rxn.inp").resolve()
+
+            def replace_after_selection(_allowed_root: Path, _reaction_dir: Path) -> None:
+                durable_inp.write_text(
+                    "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                    encoding="utf-8",
+                )
+                return None
+
+            with patch(
+                "orca_auto.orca.submission.find_submission_conflict",
+                side_effect=replace_after_selection,
+            ):
+                submission = submit_reaction_dir_to_queue(
+                    _make_args(
+                        root,
+                        reaction_dir,
+                        expected_selected_inp=str(durable_inp),
+                        workflow_task_kind="optts_freq",
+                    )
+                )
+
+            self.assertEqual(submission.status, "failed")
+            self.assertEqual(submission.reason, "invalid_submission_input")
+            self.assertIn("route-role mismatch", submission.stderr)
+            self.assertEqual(list_queue(root), [])
+            self.assertFalse((reaction_dir / ".orca_auto_orca_executions").exists())
+
+    @patch("orca_auto.orca.submission.load_config")
+    def test_workflow_sp_snapshot_callback_rejects_replaced_optimization_input(
+        self,
+        mock_load_config: MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mock_load_config.return_value = _make_cfg(tmp)
+            reaction_dir = root / "rxn"
+            _write_inp(
+                reaction_dir,
+                content="! HF TightSCF\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+            )
+            durable_inp = (reaction_dir / "rxn.inp").resolve()
+
+            def replace_after_selection(_allowed_root: Path, _reaction_dir: Path) -> None:
+                durable_inp.write_text(
+                    "! HF Opt TightSCF\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                    encoding="utf-8",
+                )
+                return None
+
+            with patch(
+                "orca_auto.orca.submission.find_submission_conflict",
+                side_effect=replace_after_selection,
+            ):
+                submission = submit_reaction_dir_to_queue(
+                    _make_args(
+                        root,
+                        reaction_dir,
+                        expected_selected_inp=str(durable_inp),
+                        workflow_task_kind="sp",
+                    )
+                )
+
+            self.assertEqual(submission.status, "failed")
+            self.assertEqual(submission.reason, "invalid_submission_input")
+            self.assertIn("single-point", submission.stderr)
+            self.assertEqual(list_queue(root), [])
+            self.assertFalse((reaction_dir / ".orca_auto_orca_executions").exists())
+
+    @patch("orca_auto.orca.submission.load_config")
+    def test_workflow_snapshot_callback_rejects_unknown_task_kind(
+        self,
+        mock_load_config: MagicMock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mock_load_config.return_value = _make_cfg(tmp)
+            reaction_dir = root / "rxn"
+            _write_inp(reaction_dir)
+            durable_inp = (reaction_dir / "rxn.inp").resolve()
+
+            submission = submit_reaction_dir_to_queue(
+                _make_args(
+                    root,
+                    reaction_dir,
+                    expected_selected_inp=str(durable_inp),
+                    workflow_task_kind="geometry_opt",
+                )
+            )
+
+            self.assertEqual(submission.status, "failed")
+            self.assertEqual(submission.reason, "invalid_submission_input")
+            self.assertIn("unsupported workflow ORCA task_kind", submission.stderr)
+            self.assertEqual(list_queue(root), [])
+            self.assertFalse((reaction_dir / ".orca_auto_orca_executions").exists())
 
     @patch("orca_auto.orca.submission.load_config")
     @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)

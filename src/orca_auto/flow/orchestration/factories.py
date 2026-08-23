@@ -7,6 +7,7 @@ from typing import Any, cast
 
 from orca_auto.core.queue.generation import new_visible_generation_name
 from orca_auto.core.utils import now_utc_iso
+from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_route
 from orca_auto.flow.endpoint_pairing import (
     EndpointPairingPolicy,
     validate_endpoint_pairing_atom_budget,
@@ -41,6 +42,7 @@ from orca_auto.orca.report.interaction_energy import (
     validate_fragment_electronic_states,
     validate_fragment_partition,
 )
+from orca_auto.orca.scants import validate_scan_coordinate
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,10 @@ def _normalized_reaction_ts_request(
             len(deps.load_xyz_atom_sequence_fn(request.reactant_xyz)),
             len(deps.load_xyz_atom_sequence_fn(request.product_xyz)),
         )
+    orca_route_line = validate_workflow_orca_route(
+        task_kind="optts_freq",
+        route_line=request.orca_route_line,
+    )
     return replace(
         request,
         crest_mode=normalized_crest_mode,
@@ -136,6 +142,7 @@ def _normalized_reaction_ts_request(
             request.max_orca_stages,
             field_name="max_orca_stages",
         ),
+        orca_route_line=orca_route_line,
         multiplicity=_positive_int_field(request.multiplicity, field_name="multiplicity"),
     )
 
@@ -172,6 +179,10 @@ def _normalized_conformer_screening_request(
         )
         if state_reason:
             raise ValueError(f"interaction_energy fragment state is impossible: {state_reason}")
+    orca_route_line = validate_workflow_orca_route(
+        task_kind="opt",
+        route_line=request.orca_route_line,
+    )
     return replace(
         request,
         crest_mode=normalized_crest_mode,
@@ -185,6 +196,7 @@ def _normalized_conformer_screening_request(
             request.max_orca_stages,
             field_name="max_orca_stages",
         ),
+        orca_route_line=orca_route_line,
         multiplicity=multiplicity,
         boltzmann_temperature_k=optional_positive_float(
             {"boltzmann_temperature_k": request.boltzmann_temperature_k},
@@ -228,12 +240,11 @@ def _normalized_scan_ts_request(
     *,
     deps: WorkflowFactoryDeps,
 ) -> ScanTsSearchWorkflowRequest:
-    scan_coordinate = deps.normalize_text(request.scan_coordinate)
-    if "=" not in scan_coordinate or "," not in scan_coordinate:
-        raise ValueError(
-            "scan_ts_search requires scan_coordinate like 'B 20 61 = 1.80, 5.00, 32'. "
-            f"got={request.scan_coordinate!r}"
-        )
+    atom_count = len(deps.load_xyz_atom_sequence_fn(request.input_xyz))
+    scan_coordinate = validate_scan_coordinate(
+        request.scan_coordinate,
+        atom_count=atom_count,
+    )
     threshold = _positive_float_field(
         request.barrier_threshold_kcal,
         field_name="barrier_threshold_kcal",
@@ -242,6 +253,14 @@ def _normalized_scan_ts_request(
         request.max_scan_extensions,
         field="max_scan_extensions",
         minimum=0,
+    )
+    orca_route_line = validate_workflow_orca_route(
+        task_kind="relaxed_scan",
+        route_line=request.orca_route_line,
+    )
+    orca_optts_route_line = validate_workflow_orca_route(
+        task_kind="optts_freq",
+        route_line=request.orca_optts_route_line,
     )
     return replace(
         request,
@@ -258,6 +277,8 @@ def _normalized_scan_ts_request(
             request.max_orca_stages,
             field_name="max_orca_stages",
         ),
+        orca_route_line=orca_route_line,
+        orca_optts_route_line=orca_optts_route_line,
         multiplicity=_positive_int_field(request.multiplicity, field_name="multiplicity"),
     )
 

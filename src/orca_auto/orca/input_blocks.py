@@ -143,7 +143,7 @@ def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> Non
     """Reject duplicate resource/checkpoint directives with unclear ORCA precedence."""
 
     maxcore_count = 0
-    moinp_count = 0
+    moinp_count = len(orca_moinp_references(lines))
     pal_block_count = 0
     pal_nprocs_count = 0
     pal_route_count = 0
@@ -152,9 +152,6 @@ def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> Non
         active_directive = active_orca_directive_text(line)
         if MAXCORE_DIRECTIVE_RE.match(active_directive):
             maxcore_count += 1
-        if MOINP_RE.match(active_directive):
-            moinp_count += 1
-
         block_match = BLOCK_START_RE.match(active_directive)
         if block_match is not None:
             in_pal_block = block_match.group(1).lower() == "pal"
@@ -552,6 +549,20 @@ def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:
     matches = [
         idx for idx, line in enumerate(lines) if MOINP_RE.match(active_orca_directive_text(line))
     ]
+    semantic_references = orca_moinp_references(lines)
+    noncanonical_references = [
+        reference for reference in semantic_references if reference.line_index not in matches
+    ]
+    if noncanonical_references:
+        if len(semantic_references) != 1:
+            raise ValueError("ORCA input has duplicate semantic MOInp declarations")
+        reference = noncanonical_references[0]
+        current = lines[reference.line_index]
+        updated = current[: reference.start] + ref + current[reference.end :]
+        if updated == current:
+            return False
+        lines[reference.line_index] = updated
+        return True
     if matches:
         first = matches[0]
         changed = lines[first] != new_line or len(matches) > 1
@@ -696,6 +707,125 @@ class OrcaFileReference:
     kind: str  # "geometry" | "neb_geometry" | "auxiliary"
 
 
+def _percent_directive_header(tokens: list[OrcaLineToken]) -> tuple[str, int] | None:
+    if not tokens or tokens[0].quoted:
+        return None
+    if tokens[0].value.startswith("%") and tokens[0].value != "%":
+        return tokens[0].value[1:].lower(), 1
+    if len(tokens) >= 2 and tokens[0].value == "%" and not tokens[1].quoted:
+        return tokens[1].value.lower(), 2
+    return None
+
+
+def _scf_body_token_rows(lines: list[str]) -> list[tuple[int, list[OrcaLineToken]]]:
+    """Return active ``%scf`` body tokens, stopping each block at ``end``."""
+
+    rows: list[tuple[int, list[OrcaLineToken]]] = []
+    in_scf_block = False
+    for line_index, line in enumerate(lines):
+        tokens = orca_line_tokens(line)
+        if not tokens:
+            continue
+        header = _percent_directive_header(tokens)
+        if header is not None:
+            block_name, body_start = header
+            in_scf_block = block_name == "scf"
+            if not in_scf_block:
+                continue
+        elif in_scf_block:
+            body_start = 0
+        else:
+            continue
+
+        end_index = next(
+            (
+                index
+                for index in range(body_start, len(tokens))
+                if not tokens[index].quoted and tokens[index].value.lower() == "end"
+            ),
+            len(tokens),
+        )
+        rows.append((line_index, tokens[body_start:end_index]))
+        if end_index < len(tokens):
+            in_scf_block = False
+    return rows
+
+
+def _reference_after_keyword(
+    *,
+    line_index: int,
+    line: str,
+    tokens: list[OrcaLineToken],
+    keyword_index: int,
+) -> OrcaFileReference:
+    value_index = keyword_index + 1
+    if value_index < len(tokens) and tokens[value_index].value == "=":
+        value_index += 1
+    if value_index >= len(tokens):
+        raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
+    value_token = tokens[value_index]
+    value = value_token.value.strip()
+    if not value or (not value_token.quoted and value.lower() == "end"):
+        raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
+    return OrcaFileReference(
+        line_index=line_index,
+        value=value,
+        start=value_token.start,
+        end=value_token.end,
+        kind="auxiliary",
+    )
+
+
+def orca_moinp_references(lines: list[str]) -> list[OrcaFileReference]:
+    """Return every semantic top-level or ``%scf`` ``MOInp`` occurrence."""
+
+    references: list[OrcaFileReference] = []
+    for line_index, line in enumerate(lines):
+        tokens = orca_line_tokens(line)
+        header = _percent_directive_header(tokens)
+        if header is None or header[0] != "moinp":
+            continue
+        references.append(
+            _reference_after_keyword(
+                line_index=line_index,
+                line=line,
+                tokens=tokens,
+                keyword_index=header[1] - 1,
+            )
+        )
+    for line_index, body_tokens in _scf_body_token_rows(lines):
+        for token_index, token in enumerate(body_tokens):
+            if token.quoted or token.value.lower() != "moinp":
+                continue
+            references.append(
+                _reference_after_keyword(
+                    line_index=line_index,
+                    line=lines[line_index],
+                    tokens=body_tokens,
+                    keyword_index=token_index,
+                )
+            )
+    return sorted(references, key=lambda reference: (reference.line_index, reference.start))
+
+
+def orca_input_requests_moread(lines: list[str]) -> bool:
+    """Return whether active route or ``%scf`` semantics request orbital reuse."""
+
+    if orca_moinp_references(lines):
+        return True
+    if any(
+        not token.quoted and token.value.lower() == "moread"
+        for line in lines
+        for token in orca_route_tokens(line)
+    ):
+        return True
+    return any(
+        not token.quoted and token.value.lower() == "moread"
+        for _line_index, tokens in _scf_body_token_rows(lines)
+        for token in tokens
+    )
+
+
 def scan_orca_file_references(
     lines: list[str],
     *,
@@ -716,10 +846,21 @@ def scan_orca_file_references(
     directives, malformed references, and more than
     ``MAX_ORCA_INPUT_REFERENCES`` references.
     """
+    moinp_references = orca_moinp_references(lines)
+    moinp_by_line: dict[int, list[OrcaFileReference]] = {}
+    for reference in moinp_references:
+        moinp_by_line.setdefault(reference.line_index, []).append(reference)
     references: list[OrcaFileReference] = []
     in_neb_block = False
     for line_index, line in enumerate(lines):
         tokens = orca_line_tokens(line)
+        semantic_moinp_value_indices = {
+            token_index
+            for token_index, token in enumerate(tokens)
+            for reference in moinp_by_line.get(line_index, [])
+            if (token.start, token.end) == (reference.start, reference.end)
+        }
+        references.extend(moinp_by_line.get(line_index, []))
         neb_keyword_indices, in_neb_block = neb_file_reference_context(
             tokens,
             in_neb_block=in_neb_block,
@@ -728,6 +869,7 @@ def scan_orca_file_references(
         if "gcp(file)" in compact_active:
             raise ValueError("Unsupported ORCA auxiliary or external program directive: GCP(FILE)")
         reference_value_indices: set[int] = set()
+        reference_value_indices.update(semantic_moinp_value_indices)
         if len(tokens) >= 5 and tokens[0].value == "*" and tokens[1].value.lower() == "xyzfile":
             value_token = tokens[4]
             # Always mark the filename so the second pass never misreads it as
@@ -813,6 +955,8 @@ def scan_orca_file_references(
             value_index = token_index + 1
             if value_index < len(tokens) and tokens[value_index].value == "=":
                 value_index += 1
+            if value_index in semantic_moinp_value_indices:
+                continue
             if value_index >= len(tokens):
                 raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
             value_token = tokens[value_index]

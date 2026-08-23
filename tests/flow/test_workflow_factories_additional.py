@@ -6,6 +6,12 @@ from typing import Any
 import pytest
 
 from orca_auto.flow import orchestration
+from orca_auto.flow._orca_stage_materialization import (
+    build_materialized_orca_stage,
+    validate_workflow_orca_route,
+)
+from orca_auto.flow.contracts import WorkflowStageInput
+from orca_auto.flow.orchestration import template_builders
 from orca_auto.flow.orchestration.builders import new_crest_stage_impl
 
 
@@ -109,6 +115,311 @@ def test_create_reaction_ts_search_workflow_rejects_invalid_crest_mode(tmp_path:
             product_xyz=str(product_xyz),
             workflow_root=tmp_path,
             crest_mode="weird",
+        )
+
+
+def test_workflow_factories_reject_orca_route_role_mismatches(tmp_path: Path) -> None:
+    reactant_xyz = tmp_path / "route_reactant.xyz"
+    product_xyz = tmp_path / "route_product.xyz"
+    input_xyz = tmp_path / "route_input.xyz"
+    atoms = [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)]
+    _write_xyz(reactant_xyz, atoms)
+    _write_xyz(product_xyz, atoms)
+    _write_xyz(input_xyz, atoms)
+
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        orchestration.create_reaction_ts_search_workflow(
+            reactant_xyz=str(reactant_xyz),
+            product_xyz=str(product_xyz),
+            workflow_root=tmp_path,
+            orca_route_line="! Opt r2scan-3c TightSCF",
+        )
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        orchestration.create_conformer_screening_workflow(
+            input_xyz=str(input_xyz),
+            workflow_root=tmp_path,
+            orca_route_line="! SP r2scan-3c TightSCF",
+        )
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        orchestration.create_scan_ts_search_workflow(
+            input_xyz=str(input_xyz),
+            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
+            workflow_root=tmp_path,
+            orca_route_line="! SP r2scan-3c TightSCF",
+        )
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        orchestration.create_scan_ts_search_workflow(
+            input_xyz=str(input_xyz),
+            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
+            workflow_root=tmp_path,
+            orca_optts_route_line="! Opt r2scan-3c TightSCF",
+        )
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        orchestration.create_reaction_ts_search_workflow(
+            reactant_xyz=str(reactant_xyz),
+            product_xyz=str(product_xyz),
+            workflow_root=tmp_path,
+            orca_route_line="! SP r2scan-3c # OptTS Freq",
+        )
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        orchestration.create_conformer_screening_workflow(
+            input_xyz=str(input_xyz),
+            workflow_root=tmp_path,
+            orca_route_line="! SP r2scan-3c # Opt",
+        )
+
+
+@pytest.mark.parametrize(
+    "route_line",
+    (
+        "! ScanTS Freq r2scan-3c TightSCF",
+        "! NEB-TS Freq r2scan-3c TightSCF",
+        "! OptTS Freq ScanTS r2scan-3c TightSCF",
+    ),
+)
+def test_reaction_factory_requires_exact_optts_freq_route_tokens(
+    tmp_path: Path,
+    route_line: str,
+) -> None:
+    reactant_xyz = tmp_path / "exact_route_reactant.xyz"
+    product_xyz = tmp_path / "exact_route_product.xyz"
+    atoms = [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)]
+    _write_xyz(reactant_xyz, atoms)
+    _write_xyz(product_xyz, atoms)
+    workflow_root = tmp_path / "workflows"
+
+    with pytest.raises(ValueError, match="requires exact OptTS"):
+        orchestration.create_reaction_ts_search_workflow(
+            reactant_xyz=str(reactant_xyz),
+            product_xyz=str(product_xyz),
+            workflow_root=workflow_root,
+            orca_route_line=route_line,
+        )
+
+    assert not workflow_root.exists()
+
+
+@pytest.mark.parametrize("frequency_keyword", ("Freq", "NumFreq", "AnFreq"))
+def test_reaction_factory_accepts_supported_frequency_route_tokens(
+    tmp_path: Path,
+    frequency_keyword: str,
+) -> None:
+    reactant_xyz = tmp_path / f"supported_{frequency_keyword}_reactant.xyz"
+    product_xyz = tmp_path / f"supported_{frequency_keyword}_product.xyz"
+    atoms = [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)]
+    _write_xyz(reactant_xyz, atoms)
+    _write_xyz(product_xyz, atoms)
+
+    payload = orchestration.create_reaction_ts_search_workflow(
+        reactant_xyz=str(reactant_xyz),
+        product_xyz=str(product_xyz),
+        workflow_root=tmp_path / "workflows",
+        workflow_id=f"wf_supported_{frequency_keyword.lower()}",
+        orca_route_line=f"! OptTS {frequency_keyword} r2scan-3c TightSCF",
+    )
+
+    assert payload["workflow_id"] == f"wf_supported_{frequency_keyword.lower()}"
+
+
+@pytest.mark.parametrize(
+    "route_line",
+    (
+        '! "OptTS" Freq r2scan-3c',
+        '! OptTS "Freq" r2scan-3c',
+        '! OptTS "NumFreq" r2scan-3c',
+        '! OptTS "AnFreq" r2scan-3c',
+    ),
+)
+def test_workflow_route_rejects_quoted_program_keywords(route_line: str) -> None:
+    with pytest.raises(ValueError, match="quoted tokens"):
+        validate_workflow_orca_route(task_kind="optts_freq", route_line=route_line)
+
+
+@pytest.mark.parametrize(
+    "route_line",
+    (
+        "!! Opt r2scan-3c",
+        "!%pal Opt r2scan-3c",
+        "! Opt %pal nprocs 8 end",
+        "! Opt * xyz 0 1",
+        "! Opt $new_job",
+    ),
+)
+def test_workflow_route_rejects_marker_prefixed_payload_tokens(route_line: str) -> None:
+    with pytest.raises(ValueError, match="marker-prefixed payload token"):
+        validate_workflow_orca_route(task_kind="opt", route_line=route_line)
+
+
+def test_workflow_route_accepts_compact_leading_bang_keyword() -> None:
+    assert (
+        validate_workflow_orca_route(task_kind="opt", route_line="!B3LYP Opt TightSCF")
+        == "! B3LYP Opt TightSCF"
+    )
+
+
+@pytest.mark.parametrize(
+    ("task_kind", "route_line"),
+    (
+        ("opt", "! HF fake-Opt TightSCF"),
+        ("optts_freq", "! HF OptTS fake-Freq TightSCF"),
+        ("optts_freq", "! HF OptTS Freq(foo) TightSCF"),
+    ),
+)
+def test_workflow_route_requires_full_keyword_tokens(
+    task_kind: str,
+    route_line: str,
+) -> None:
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        validate_workflow_orca_route(task_kind=task_kind, route_line=route_line)
+
+
+@pytest.mark.parametrize(
+    "optimization_keyword",
+    ("Opt", "TightOpt", "COpt", "ZOpt", "VeryTightOpt"),
+)
+def test_workflow_opt_route_accepts_supported_exact_optimization_tokens(
+    optimization_keyword: str,
+) -> None:
+    route_line = f"! HF {optimization_keyword} TightSCF"
+    assert validate_workflow_orca_route(task_kind="opt", route_line=route_line) == route_line
+
+
+def test_workflow_sp_route_does_not_invent_bare_ts_run_type() -> None:
+    route_line = "! HF TS TightSCF"
+    assert validate_workflow_orca_route(task_kind="sp", route_line=route_line) == route_line
+
+
+def test_materialization_rejects_unknown_orca_task_kind_before_workspace_creation(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "unknown_kind_workspace"
+    candidate = WorkflowStageInput(
+        source_job_id="source_unknown",
+        source_job_type="test",
+        reaction_key="unknown",
+        selected_input_xyz=str(tmp_path / "never_read.xyz"),
+        rank=1,
+        kind="unknown",
+        artifact_path=str(tmp_path / "never_read.xyz"),
+        selected=True,
+    )
+
+    with pytest.raises(ValueError, match="unsupported workflow ORCA task_kind"):
+        build_materialized_orca_stage(
+            workflow_id="wf_unknown_kind",
+            template_name="test",
+            stage_id="orca_unknown_kind",
+            stage_key="unknown_kind",
+            stage_root_name="",
+            workspace_dir=workspace,
+            input_artifact_kind="unknown",
+            candidate=candidate,
+            task_kind="geometry_opt",
+            route_line="! HF Opt",
+            charge=0,
+            multiplicity=1,
+            max_cores=1,
+            max_memory_gb=1,
+            priority=10,
+            xyz_filename="unknown.xyz",
+            inp_filename="unknown.inp",
+        )
+
+    assert not workspace.exists()
+
+
+def test_scan_workflow_refuses_materialization_without_a_geom_scan_block(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_xyz = tmp_path / "scan_input.xyz"
+    _write_xyz(
+        input_xyz,
+        [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)],
+    )
+    monkeypatch.setattr(template_builders, "scan_geom_block", lambda _coordinate: "")
+
+    with pytest.raises(ValueError, match="requires a %geom Scan block"):
+        orchestration.create_scan_ts_search_workflow(
+            input_xyz=str(input_xyz),
+            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
+            workflow_root=tmp_path,
+        )
+
+
+def test_route_role_validation_matches_multiline_route_rendering() -> None:
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        validate_workflow_orca_route(
+            task_kind="optts_freq",
+            route_line="SP\nOptTS Freq",
+        )
+
+    assert (
+        validate_workflow_orca_route(
+            task_kind="optts_freq",
+            route_line="! SP\n! OptTS Freq",
+        )
+        == "! SP\n! OptTS Freq"
+    )
+
+
+@pytest.mark.parametrize(
+    "route_line",
+    [
+        "! OptTS Freq r2scan-3c\n%geom\n  MaxIter 999\nend",
+        "! OptTS Freq r2scan-3c\n* xyz 0 1\nH 0 0 0\n*",
+        "! OptTS Freq r2scan-3c\nPAL8",
+    ],
+)
+def test_workflow_route_rejects_active_non_route_lines(route_line: str) -> None:
+    with pytest.raises(ValueError, match="may contain only active '!' route lines"):
+        validate_workflow_orca_route(task_kind="optts_freq", route_line=route_line)
+
+
+def test_scan_factory_renders_the_same_canonical_commented_multiline_route(
+    tmp_path: Path,
+) -> None:
+    input_xyz = tmp_path / "canonical_route.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+    route = "# prefix # ! Opt # hidden # r2scan-3c\n# comment only\n! TightSCF"
+
+    payload = orchestration.create_scan_ts_search_workflow(
+        input_xyz=str(input_xyz),
+        scan_coordinate="B 0 1 = 0.7, 2.0, 8",
+        workflow_root=tmp_path,
+        workflow_id="wf_canonical_route",
+        orca_route_line=route,
+    )
+
+    canonical = "! Opt r2scan-3c\n! TightSCF"
+    parameters = payload["metadata"]["request"]["parameters"]
+    selected_inp = Path(payload["stages"][0]["task"]["payload"]["selected_inp"])
+    assert parameters["orca_route_line"] == canonical
+    assert selected_inp.read_text(encoding="utf-8").splitlines()[:2] == canonical.splitlines()
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("orca_route_line", ["! Opt", "! TightSCF"]),
+        ("orca_optts_route_line", {"route": "! OptTS Freq"}),
+    ],
+)
+def test_scan_factory_rejects_structured_route_fields(
+    tmp_path: Path,
+    field: str,
+    bad_value: object,
+) -> None:
+    input_xyz = tmp_path / f"bad_{field}.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+    route_override: dict[str, Any] = {field: bad_value}
+
+    with pytest.raises(ValueError, match="route_line must be a string"):
+        orchestration.create_scan_ts_search_workflow(
+            input_xyz=str(input_xyz),
+            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
+            workflow_root=tmp_path,
+            **route_override,
         )
 
 
@@ -281,7 +592,7 @@ def test_create_scan_ts_search_workflow_rejects_lossy_scientific_settings(
     with pytest.raises(ValueError, match=message):
         orchestration.create_scan_ts_search_workflow(
             input_xyz=str(input_xyz),
-            scan_coordinate="B 1 2 = 0.7, 2.0, 8",
+            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
             workflow_root=tmp_path,
             **kwargs,
         )
@@ -418,7 +729,7 @@ def test_create_reaction_ts_search_workflow_materializes_two_crest_stages(
         max_xtb_stages=4,
         max_xtb_handoff_retries=3,
         max_orca_stages=2,
-        orca_route_line="! custom ts route",
+        orca_route_line="! custom OptTS Freq route",
     )
 
     workspace_dir = tmp_path / "wf_reaction_extra"
@@ -434,7 +745,7 @@ def test_create_reaction_ts_search_workflow_materializes_two_crest_stages(
     assert request["parameters"]["max_xtb_stages"] == 4
     assert request["parameters"]["max_xtb_handoff_retries"] == 3
     assert request["parameters"]["max_orca_stages"] == 2
-    assert request["parameters"]["orca_route_line"] == "! custom ts route"
+    assert request["parameters"]["orca_route_line"] == "! custom OptTS Freq route"
     assert payload["stages"][0]["task"]["payload"]["job_manifest_overrides"] == {"rthr": 0.3}
     assert payload["stages"][1]["task"]["payload"]["job_manifest_overrides"] == {"rthr": 0.3}
     assert (workspace_dir / "workflow.json").exists()
@@ -476,7 +787,7 @@ def test_single_input_crest_workflow_factories_materialize_expected_stage(
         workflow_root=tmp_path,
         crest_mode=crest_mode,
         max_orca_stages=2,
-        orca_route_line="! custom route",
+        orca_route_line="! custom Opt route",
         charge=1,
         multiplicity=2,
     )
@@ -488,7 +799,7 @@ def test_single_input_crest_workflow_factories_materialize_expected_stage(
     assert payload["template_name"] == template_name
     assert request["template_name"] == template_name
     assert request["parameters"]["max_orca_stages"] == 2
-    assert request["parameters"]["orca_route_line"] == "! custom route"
+    assert request["parameters"]["orca_route_line"] == "! custom Opt route"
     assert request["source_artifacts"][0]["kind"] == artifact_kind
     assert stage["stage_id"] == stage_id
     assert stage["metadata"]["input_role"] == input_role
@@ -521,7 +832,7 @@ def test_create_conformer_screening_nci_workflow_writes_expected_request_shape(
         max_cores=10,
         max_memory_gb=40,
         max_orca_stages=4,
-        orca_route_line="! nci route",
+        orca_route_line="! nci Opt route",
         charge=-1,
         multiplicity=3,
         boltzmann_temperature_k=310.0,
@@ -544,7 +855,7 @@ def test_create_conformer_screening_nci_workflow_writes_expected_request_shape(
         "max_cores": 10,
         "max_memory_gb": 40,
         "max_orca_stages": 4,
-        "orca_route_line": "! nci route",
+        "orca_route_line": "! nci Opt route",
         "charge": -1,
         "multiplicity": 3,
         "boltzmann_temperature_k": 310.0,

@@ -425,11 +425,13 @@ def recover_orphaned_engine_slots(
     for slot in orphaned:
         if slot.engine_process_state == "pending":
             current_boot_id = active_deps.boot_id()
-            if (
+            cross_boot = (
                 slot.owner_boot_id is not None
                 and current_boot_id is not None
                 and slot.owner_boot_id != current_boot_id
-            ):
+            )
+            if cross_boot or slot.engine_launch_gated:
+                recovery_kind = "cross-boot" if cross_boot else "launch-gated"
                 try:
                     completed = complete_slot_engine_process(
                         root,
@@ -437,17 +439,19 @@ def recover_orphaned_engine_slots(
                         expected_owner_pid=slot.owner_pid,
                         expected_owner_process_start_ticks=slot.process_start_ticks,
                         expected_owner_boot_id=slot.owner_boot_id,
+                        expected_engine_launch_gated=slot.engine_launch_gated,
                         require_pending_without_engine_identity=True,
                     )
                 except (OSError, TypeError, ValueError) as exc:
                     errors.append(
-                        f"Cannot clear cross-boot pending engine launch "
+                        f"Cannot clear {recovery_kind} pending engine launch "
                         f"for token={slot.token}: {exc}"
                     )
                 else:
                     if completed is None:
                         errors.append(
-                            f"Cross-boot pending engine record changed while clearing "
+                            f"{recovery_kind.capitalize()} pending engine record "
+                            f"changed while clearing "
                             f"token={slot.token}"
                         )
                     else:

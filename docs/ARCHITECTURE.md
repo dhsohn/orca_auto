@@ -168,7 +168,11 @@ Key properties:
   to those confined flat copies, and writes raw outputs beside them. New ORCA
   generations have no hidden execution parent or nested
   input layer. Workers verify input and executable content identities instead
-  of re-reading mutable source files as the execution contract.
+  of re-reading mutable source files as the execution contract. Recovery stays
+  pinned to the original executable identity, and semantic orbital-input
+  references are snapshot-bound across top-level and `%scf` syntax. A mutable
+  runtime XYZ seed is accepted only when strict finite atom rows preserve the
+  identity-bound atom-label sequence.
 - **If no worker is running, work stays pending** in `queue.json` until a worker
   returns. Closing the submission terminal after `status: queued` is safe.
 
@@ -271,6 +275,12 @@ and all internal workflow stages compete for one shared pool.
   start ticks. `_slot_owner_alive` validates the PID is still the same process,
   so crashed owners' slots are reclaimed by `reconcile_stale_slots` rather than
   leaking capacity.
+- **Pending-launch recovery:** the engine catalog persists whether an engine
+  uses the ORCA launch gate. A dead same-boot owner whose gated slot is still
+  pending and has no engine identity can be cleared with an owner-and-policy
+  compare-and-swap: the gate proves the engine could not have executed.
+  Direct-launch xTB/CREST and legacy records default to non-gated and retain the
+  conservative pending fence because an unrecorded process may exist.
 
 This is why the `active_simulations` line in `queue list` counts only runs that
 currently consume a shared slot.
@@ -328,7 +338,9 @@ logic. Notable pieces:
   A one-byte launch gate starts in the final process group first. The worker
   durably records that PID/PGID in the shared admission slot before releasing
   the gate to `exec` ORCA, so a hard parent failure before registration cannot
-  leave an unowned calculation.
+  leave an unowned calculation. If the parent dies earlier while the durable
+  record is still identity-less `pending`, that same gate evidence lets orphan
+  recovery reclaim the slot without waiting for a reboot.
   A worker/host crash can lose unpublished tmpfs checkpoints; the ordinary
   durable recovery path then resumes from evidence that was already published.
 - **Attempt engine** (`attempt/engine.py`, `attempt/retry.py`,
@@ -358,8 +370,10 @@ logic. Notable pieces:
   **never** auto-changed; the original `.inp` is preserved; retries are written
   as `<name>.retryNN.inp`.
 - **Restart/resume:** for retry/resume it generates a restart input with
-  `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists; resumed
-  inputs are written as `*.resume.inp` so user input is never mutated.
+  `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists. An
+  existing top-level or `%scf` orbital-input declaration is recognized
+  semantically, so recovery never injects a second source. Resumed inputs are
+  written as `*.resume.inp` so user input is never mutated.
 - **State & reports:** `state.py`/`state_machine.py` persist private
   `job_state.json`; completion publishes the common `machine.json` last. Opt,
   OptTS, NEB-TS,
@@ -409,6 +423,22 @@ Manifest admission is bounded before materialization: the shared loader caps a
 job manifest at 1 MiB, 32 YAML aliases, 10,000 parsed/expanded nodes, and 64
 nesting levels, and rejects cyclic/recursive graphs. Central geometry limits cap
 local work at 10,000 atoms and xTB/ORCA Hessian-producing work at 1,000.
+
+Workflow ORCA task roles are revalidated against the materialized input at
+creation, restart, actual pre-submission selection, and completed-result
+acceptance. Relaxed scans additionally bind one closed scan coordinate to the
+selected geometry at each dynamic stage. The submitter binds equal durable path
+copies to its actual selection and validates the final rewritten bytes before
+the execution snapshot writes and identifies those same bytes. Candidate
+relative energies and interaction RMSD representative choices are published
+only when authoritative selected inputs and final outputs prove uniform route,
+non-resource active directives, ordered atom labels, identity-bound
+non-geometry dependency content, electronic state, and ORCA version provenance.
+Geometry coordinates remain candidate-specific and private dependency pathnames
+are canonicalized away. HTML and SI consume that same scientific identity;
+resource controls do not affect it. `flow/orca_stage_evidence.py` is the shared
+authoritative report/state/input/output reader used by report, SI, and
+interaction materialization.
 
 ### Supporting Information ownership
 
@@ -537,7 +567,9 @@ providers.
 
 `DiscordBotChannel` (`discord_bot.py`) renders each `Message` into a Discord embed
 (`render_discord.py`) and delivers it over the bot-authenticated Discord API; its
-shared HTTP retry/backoff helpers live in `discord_http.py`.
+shared HTTP retry/backoff helpers live in `discord_http.py`. All transport and
+response-read failures are normalized at this adapter boundary, so notification
+failure remains advisory to durable publication.
 
 `core/notifications/` holds the engine notification hook layer (`engines.py`).
 Each `EngineDefinition` can register `job_started` /
@@ -590,7 +622,9 @@ under `systemd/`:
 | `orca_auto-runtime@.target`           | Starts the engine workers                        |
 
 `orca_auto systemd install --user <user> --repo <repo>` renders and enables the
-units. On WSL, `systemd` must be enabled in `/etc/wsl.conf`.
+units. Literal percent characters in data paths are escaped, while paths whose
+quotes, backslashes, or dollar signs would alter unit parsing are rejected. On
+WSL, `systemd` must be enabled in `/etc/wsl.conf`.
 
 The default ORCA worker runs under its own service supervisor, so it can fail or
 restart independently of the opt-in workflow supervisor. The opt-in
@@ -602,6 +636,11 @@ startup, but idle full-state reconciliation is limited to once per minute while
 the light queue/status poll remains at its normal interval. The service retries failures
 after 30 seconds and permits at most three unit starts per five-minute window;
 clean supervisor exits are not restarted.
+
+Workers bind their resolved package source into their own process environment
+at startup. Status reads that provenance with PID/start-tick race checks before
+performing a fresh HEAD/reflog and package-tree cleanliness inspection for each
+worker; process cwd is not treated as import-source evidence.
 
 ---
 

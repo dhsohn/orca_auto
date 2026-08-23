@@ -90,6 +90,7 @@ def _read_unit_template(template_root: Path, name: str) -> str:
 
 _SYSTEMD_READ_WRITE_PLACEHOLDER = "# ORCA_AUTO_READ_WRITE_PATHS"
 _TARGET_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]*[$]?$")
+_SYSTEMD_UNSUPPORTED_PATH_CHARACTERS = frozenset({'"', "'", "\\", "$"})
 
 
 def _validate_target_user(target_user: str) -> str:
@@ -109,7 +110,17 @@ def _systemd_path_text(path: Path, *, label: str) -> str:
             f"{label} must not contain whitespace or control characters for "
             f"systemd unit rendering: {text}"
         )
-    return text
+    if any(character in _SYSTEMD_UNSUPPORTED_PATH_CHARACTERS for character in text):
+        raise ValueError(
+            f"{label} must not contain quotes, backslashes, or dollar signs for "
+            f"systemd unit rendering: {text}"
+        )
+    # systemd expands ``%`` specifiers in every setting where these paths are
+    # inserted (WorkingDirectory, Environment, ExecStart, and ReadWritePaths).
+    # Escape only the path value here, before it replaces the template-owned
+    # ``/home/%i/orca_auto`` placeholder, so literal percent signs survive while
+    # the template's account instance specifiers keep their intended meaning.
+    return text.replace("%", "%%")
 
 
 def _append_absolute_path(paths: list[Path], value: Any) -> None:
@@ -138,7 +149,7 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     if not config.exists():
         return ()
     try:
-        config_path, raw = load_shared_config_mapping(config)
+        _, raw = load_shared_config_mapping(config)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return ()
 

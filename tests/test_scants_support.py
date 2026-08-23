@@ -428,12 +428,12 @@ def test_scants_detection_agrees_with_retry_policy_for_block_before_route(
         (
             "bond",
             ["    B 4 20 = 1.86, 3.40, 32"],
-            ["    B 4 20 = 2.05870968, 3.40, 28"],
+            ["    B 4 20 = 2.0587096774193547, 3.40, 28"],
         ),
         (
             "angle",
             ["    A 5 6 7 = 90.00, 120.00, 32"],
-            ["    A 5 6 7 = 93.87096774, 120.00, 28"],
+            ["    A 5 6 7 = 93.87096774193549, 120.00, 28"],
         ),
         (
             "mixed",
@@ -442,8 +442,8 @@ def test_scants_detection_agrees_with_retry_policy_for_block_before_route(
                 "    A 8 9 10 = 120.00, 60.00, 32",
             ],
             [
-                "    B 4 20 = 2.05870968, 3.40, 28",
-                "    A 8 9 10 = 112.25806452, 60.00, 28",
+                "    B 4 20 = 2.0587096774193547, 3.40, 28",
+                "    A 8 9 10 = 112.25806451612902, 60.00, 28",
             ],
         ),
     ],
@@ -475,12 +475,12 @@ def test_relaxed_scan_resume_rewrite_updates_scan_ranges(
         (
             "bond_breaking",
             ["    B 4 20 = 1.86, 3.40, 32"],
-            ["    B 4 20 = 3.44967742, 3.69806452, 6"],
+            ["    B 4 20 = 3.4496774193548383, 3.698064516129032, 6"],
         ),
         (
             "bond_forming",
             ["    B 4 20 = 3.40, 1.86, 32"],
-            ["    B 4 20 = 1.81032258, 1.56193548, 6"],
+            ["    B 4 20 = 1.8103225806451615, 1.5619354838709678, 6"],
         ),
         (
             "mixed",
@@ -489,8 +489,8 @@ def test_relaxed_scan_resume_rewrite_updates_scan_ranges(
                 "    A 8 9 10 = 120.00, 60.00, 32",
             ],
             [
-                "    B 4 20 = 3.44967742, 3.69806452, 6",
-                "    A 8 9 10 = 58.06451613, 48.38709677, 6",
+                "    B 4 20 = 3.4496774193548383, 3.698064516129032, 6",
+                "    A 8 9 10 = 58.064516129032256, 48.38709677419355, 6",
             ],
         ),
     ],
@@ -752,8 +752,8 @@ def test_resumed_scants_without_refining_marker_resumes_scan_range(tmp_path: Pat
     assert "OPTTS" not in resume_text
     assert "B 4 20 = 1.86, 3.40, 32" not in resume_text
     assert "A 5 6 7 = 90.00, 120.00, 32" not in resume_text
-    assert "B 4 20 = 2.05870968, 3.40, 28" in resume_text
-    assert "A 5 6 7 = 93.87096774, 120.00, 28" in resume_text
+    assert "B 4 20 = 2.0587096774193547, 3.40, 28" in resume_text
+    assert "A 5 6 7 = 93.87096774193549, 120.00, 28" in resume_text
     assert "* xyzfile 0 1 tsopt.xyz" in resume_text
     actions = _attempt_actions(saved)
     assert "resume_scants_resume_to_optts" not in actions
@@ -1185,7 +1185,7 @@ def test_scants_continuation_then_surface_maximum_failure_exhausts(
     assert rc == 1
     assert runner.seen == [selected_inp, retry01_inp]
     assert "ScanTS" in retry01_text
-    assert "B 4 20 = 3.44967742, 3.69806452, 6" in retry01_text
+    assert "B 4 20 = 3.4496774193548383, 3.698064516129032, 6" in retry01_text
     assert "* xyzfile 0 1 rxn.032.xyz" in retry01_text
     assert not (tmp_path / "rxn.retry02.inp").exists()
     assert saved.get("status") == "failed"
@@ -1210,7 +1210,7 @@ def test_failed_scants_without_surface_maximum_continues_from_last_numbered_xyz(
     assert runner.seen == [selected_inp, retry_inp]
     assert "ScanTS" in retry_text
     assert "OPTTS" not in retry_text
-    assert "B 4 20 = 3.44967742, 3.69806452, 6" in retry_text
+    assert "B 4 20 = 3.4496774193548383, 3.698064516129032, 6" in retry_text
     assert "B 4 20 = 1.86, 3.40, 32" not in retry_text
     assert "* xyzfile 0 1 rxn.032.xyz" in retry_text
     assert "* xyzfile 0 1 input.xyz" not in retry_text
@@ -1277,7 +1277,7 @@ def test_failed_scants_second_failure_fails_closed_without_generic_hardening(
     assert "TightSCF" not in retry01_text
     assert "SlowConv" not in retry01_text
     assert "%scf" not in retry01_text
-    assert "B 4 20 = 3.44967742, 3.69806452, 6" in retry01_text
+    assert "B 4 20 = 3.4496774193548383, 3.698064516129032, 6" in retry01_text
     assert "* xyzfile 0 1 rxn.032.xyz" in retry01_text
     assert "rxn.retry01.xyz" not in retry01_text
     assert "rxn.retry01.gbw" not in retry01_text

@@ -11,13 +11,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from orca_auto.core.engine_runner import executable_identity
 from orca_auto.flow.conformer_selection import (
     GEOMETRY_TOL_ANGSTROM,
     blocks_match_geometry,
+    bound_orca_selected_input_science_identity,
     coordinates_match,
     eligible_minimum_block,
     has_required_provenance,
     normalized_route_line,
+    orca_science_route_identity,
     rmsd_candidate_for_block,
     rmsd_grouping,
     selected_input_state_matches,
@@ -100,6 +103,100 @@ class TestNormalizedRouteLine:
     def test_empty_and_non_text_values(self) -> None:
         assert normalized_route_line("") == ""
         assert normalized_route_line(None) == ""
+
+
+class TestScienceRouteIdentity:
+    def test_omits_only_unquoted_pal_resource_shorthands(self) -> None:
+        assert orca_science_route_identity(["! HF SP PAL4"]) == (
+            (False, "hf"),
+            (False, "sp"),
+        )
+        assert orca_science_route_identity(['! HF SP "PAL4"']) == (
+            (False, "hf"),
+            (False, "sp"),
+            (True, "PAL4"),
+        )
+
+    def test_xyzfile_requires_unchanged_materialized_dependency(self, tmp_path: Path) -> None:
+        generation = tmp_path / "generation"
+        generation.mkdir()
+        geometry = generation / "geom.xyz"
+        geometry.write_text("1\nbound geometry\nH 0 0 0\n", encoding="utf-8")
+        selected = generation / "job.inp"
+        selected.write_text("! HF SP\n* xyzfile 0 1 geom.xyz\n", encoding="utf-8")
+        materialized = {"dependency_000000": executable_identity(geometry)}
+
+        identity = bound_orca_selected_input_science_identity(
+            generation,
+            selected,
+            bound_selected_identity=executable_identity(selected),
+            materialized_input_identities=materialized,
+        )
+
+        assert identity is not None
+        assert identity.atom_sequence == ("h",)
+        geometry.write_text("1\nmutated geometry\nCl 0 0 0\n", encoding="utf-8")
+        assert (
+            bound_orca_selected_input_science_identity(
+                generation,
+                selected,
+                bound_selected_identity=executable_identity(selected),
+                materialized_input_identities=materialized,
+            )
+            is None
+        )
+
+    def test_auxiliary_dependency_content_is_part_of_identity(self, tmp_path: Path) -> None:
+        identities = []
+        for name, charge_text in (("first", "0.1"), ("second", "9.9")):
+            generation = tmp_path / name
+            generation.mkdir()
+            point_charges = generation / "charges.pc"
+            point_charges.write_text(charge_text, encoding="utf-8")
+            selected = generation / "job.inp"
+            selected.write_text(
+                '! HF SP\n%pointcharges "charges.pc"\n* xyz 0 1\nH 0 0 0\n*\n',
+                encoding="utf-8",
+            )
+            identities.append(
+                bound_orca_selected_input_science_identity(
+                    generation,
+                    selected,
+                    bound_selected_identity=executable_identity(selected),
+                    materialized_input_identities={
+                        "dependency_000000": executable_identity(point_charges)
+                    },
+                )
+            )
+
+        assert identities[0] is not None and identities[1] is not None
+        assert identities[0] != identities[1]
+
+    def test_auxiliary_dependency_path_is_not_part_of_identity(self, tmp_path: Path) -> None:
+        identities = []
+        for name in ("first", "second"):
+            generation = tmp_path / name
+            generation.mkdir()
+            point_charges = generation / f"{name}_charges.pc"
+            point_charges.write_text("0.1", encoding="utf-8")
+            selected = generation / "job.inp"
+            selected.write_text(
+                f'! HF SP\n%pointcharges "{point_charges}"\n* xyz 0 1\nH 0 0 0\n*\n',
+                encoding="utf-8",
+            )
+            identities.append(
+                bound_orca_selected_input_science_identity(
+                    generation,
+                    selected,
+                    bound_selected_identity=executable_identity(selected),
+                    materialized_input_identities={
+                        "dependency_000000": executable_identity(point_charges)
+                    },
+                )
+            )
+
+        assert identities[0] is not None and identities[1] is not None
+        assert identities[0] == identities[1]
 
 
 # ---------------------------------------------------------------------------

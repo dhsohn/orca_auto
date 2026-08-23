@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from orca_auto.core.commands.queue import display_status
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import STATUS_WAITING_FOR_SLOT
 from orca_auto.core.utils import normalize_text as _normalize_text
+from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_input_bytes
 
 from . import internal_engine_models as _engine_models
 
@@ -221,6 +223,8 @@ def _submit_request(
     max_cores: int | None,
     max_memory_gb: int | None,
     force: bool,
+    expected_selected_inp: str | None,
+    workflow_task_kind: str | None,
 ) -> _OrcaDirectSubmitRequest:
     normalized_config = _normalize_text(config_path)
     priority_value = normalize_queue_priority(priority)
@@ -230,6 +234,11 @@ def _submit_request(
         "priority": priority_value,
         "force": force_value,
     }
+    workflow_validator = _workflow_bound_payload_validator(
+        expected_selected_inp=expected_selected_inp,
+        workflow_task_kind=workflow_task_kind,
+    )
+
     return _OrcaDirectSubmitRequest(
         command_argv=_trace_argv(
             api_name=_SUBMIT_API_NAME,
@@ -243,11 +252,38 @@ def _submit_request(
             force=force_value,
             max_cores=max_cores,
             max_memory_gb=max_memory_gb,
+            expected_selected_inp=expected_selected_inp,
+            workflow_task_kind=workflow_task_kind,
+            bound_selected_validator=workflow_validator,
         ),
         reaction_dir=reaction_dir,
         priority=priority_value,
         force=force_value,
     )
+
+
+def _workflow_bound_payload_validator(
+    *,
+    expected_selected_inp: str | None,
+    workflow_task_kind: str | None,
+) -> Callable[[Path, bytes], None] | None:
+    if expected_selected_inp is None and workflow_task_kind is None:
+        return None
+    selected_text = (expected_selected_inp or "").strip()
+    task_kind = (workflow_task_kind or "").strip()
+    if not selected_text or not task_kind:
+        raise ValueError(
+            "Workflow ORCA direct submission requires task kind and selected input together"
+        )
+
+    def validate_bound_payload(bound_inp: Path, payload: bytes) -> None:
+        validate_workflow_orca_input_bytes(
+            task_kind=task_kind,
+            inp_path=bound_inp,
+            input_bytes=payload,
+        )
+
+    return validate_bound_payload
 
 
 def _submit_reaction_dir_to_queue(args: Namespace) -> Any:
@@ -299,6 +335,8 @@ def submit_reaction_dir(
     max_memory_gb: int | None = None,
     force: bool = False,
     repo_root: str | None = None,
+    expected_selected_inp: str | None = None,
+    workflow_task_kind: str | None = None,
 ) -> dict[str, Any]:
     del repo_root
     request = _submit_request(
@@ -308,6 +346,8 @@ def submit_reaction_dir(
         max_cores=max_cores,
         max_memory_gb=max_memory_gb,
         force=force,
+        expected_selected_inp=expected_selected_inp,
+        workflow_task_kind=workflow_task_kind,
     )
     try:
         submission = _submit_reaction_dir_to_queue(request.args)

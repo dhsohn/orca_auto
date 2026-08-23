@@ -39,7 +39,9 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 
 The installer renders the unit files with the repository path, writes them to
 `/etc/systemd/system`, runs `systemctl daemon-reload`, and enables/starts the
-runtime target (or the engine-worker target with `--worker-only`).
+runtime target (or the engine-worker target with `--worker-only`). Literal `%`
+in rendered data paths is escaped; paths containing quotes, backslashes, or
+dollar signs are rejected before any unit is written.
 
 After updating the checkout or editing any unit template in this directory,
 rerun the installer with the same `--user` and `--repo` values. The installed
@@ -113,6 +115,11 @@ Worker safety policy:
   run it in an idle window. A worker whose restart fails is left stopped
   rather than running stale code, and an unreadable workflow-worker state
   changes nothing and exits non-zero.
+- supervised workers record their resolved package import source during the
+  startup exec. `service status` binds that evidence to PID/start ticks and
+  checks a fresh Git HEAD reflog and imported-package cleanliness snapshot per
+  worker; process cwd is not source evidence. Workers from an older release or
+  a package tree with uncommitted source changes report `undetermined`.
 
 Install the default ORCA engine worker:
 

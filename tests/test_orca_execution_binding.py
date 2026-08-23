@@ -826,6 +826,9 @@ def test_orca_execution_snapshot_rejects_multiple_geometry_blocks(tmp_path: Path
         "! PAL4 PAL999",
         "%pal nprocs 4 end\n! PAL999",
         '%moinp "first.gbw"\n# hidden # %moinp "second.gbw"',
+        '%moinp "first.gbw"\n%scf Guess MORead MOInp "second.gbw" end',
+        '%scf MOInp "first.gbw" MOInp "second.gbw" end',
+        '%scf\n  MOInp "first.gbw"\n  moinp = "second.gbw"\nend',
     ],
 )
 def test_orca_execution_snapshot_rejects_ambiguous_duplicate_directives(
@@ -874,6 +877,76 @@ def test_orca_execution_snapshot_binds_spaced_percent_moinp(tmp_path: Path) -> N
     assert snapshot["dependency_paths"] == [str((job_dir / "guess.gbw").resolve())]
     assert '% moinp "guess.gbw"' in Path(snapshot["selected_inp"]).read_text(encoding="utf-8")
     assert Path(snapshot["materialized_inputs"]["dependency_000000"]["path"]).name == ("guess.gbw")
+
+
+@pytest.mark.parametrize(
+    "moread_directive",
+    [
+        "! SP MORead",
+        "! SP\n%scf Guess MORead end",
+        "! SP\n% SCF\n  GUESS   moread\nend",
+    ],
+)
+def test_orca_execution_snapshot_rejects_moread_without_explicit_moinp(
+    tmp_path: Path,
+    moread_directive: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        f"{moread_directive}\n* xyz 0 1\nH 0 0 0\n*\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="MORead requires an explicit MOInp"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            max_retries=0,
+            orca_executable=_write_executable(tmp_path / "orca"),
+        )
+
+    assert not any(
+        child.is_dir() and is_visible_generation_name(child.name) for child in job_dir.iterdir()
+    )
+
+
+@pytest.mark.parametrize(
+    "scf_block",
+    [
+        '%scf Guess MORead MOInp "guess.gbw" end',
+        "% SCF\n  GUESS   moread\n  MOINP = 'guess.gbw'\nEND",
+    ],
+)
+def test_orca_execution_snapshot_binds_scf_block_moinp(
+    tmp_path: Path,
+    scf_block: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "guess.gbw").write_bytes(b"checkpoint")
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        f"! SP\n{scf_block}\n* xyz 0 1\nH 0 0 0\n*\n",
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        max_retries=0,
+        orca_executable=_write_executable(tmp_path / "orca"),
+    )
+
+    assert snapshot["dependency_paths"] == [str((job_dir / "guess.gbw").resolve())]
+    assert Path(snapshot["materialized_inputs"]["dependency_000000"]["path"]).read_bytes() == (
+        b"checkpoint"
+    )
 
 
 def test_orca_execution_snapshot_allows_unquoted_progress_input_filenames(

@@ -217,6 +217,20 @@ class TestInpRewriter(unittest.TestCase):
         self.assertEqual(inline_lines[0], "%pal nprocs 4 end")
         self.assertEqual(read_nprocs(inline_lines), 4)
 
+    def test_set_moinp_updates_existing_scf_declaration_without_duplicate(self) -> None:
+        lines = [
+            "! Opt MORead",
+            '%scf Guess MOInp "old.gbw" end',
+            "* xyz 0 1",
+            "H 0 0 0",
+            "*",
+        ]
+
+        self.assertTrue(set_moinp(lines, Path("new.gbw"), Path.cwd()))
+
+        self.assertIn('MOInp "new.gbw"', lines[1])
+        self.assertFalse(any(line.lower().startswith("%moinp") for line in lines))
+
     def test_resource_readers_use_maximum_and_maxcore_clamp_collapses_duplicates(self) -> None:
         lines = [
             "%maxcore 1000",

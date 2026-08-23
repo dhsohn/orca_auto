@@ -91,6 +91,7 @@ def _reserve_orca_worker_slot(root: str | Path, limit: int, **kwargs: Any) -> st
     slot_kwargs["source"] = catalog_entry.admission_source
     slot_kwargs["app_name"] = catalog_entry.app_id
     slot_kwargs["state"] = "reserved"
+    slot_kwargs["engine_launch_gated"] = catalog_entry.engine_launch_gated
     return reserve_slot(
         Path(root),
         limit,

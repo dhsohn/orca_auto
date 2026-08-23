@@ -21,6 +21,7 @@ def _restart_stage(reaction_dir: Path) -> dict[str, object]:
         "metadata": {"reaction_dir": str(reaction_dir)},
         "task": {
             "engine": "orca",
+            "task_kind": "opt",
             "payload": {
                 "reaction_dir": str(reaction_dir),
                 "selected_inp": str(selected_inp),
@@ -113,7 +114,7 @@ def test_rematerialize_orca_restart_input_copies_safe_relative_auxiliary_file(
     checkpoint.write_bytes(b"checkpoint")
     (original / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        '! OLD MOREAD\n%moinp "checkpoints/seed.gbw"\n* xyzfile 0 1 input.xyz\n',
+        '! OLD Opt MOREAD\n%moinp "checkpoints/seed.gbw"\n* xyzfile 0 1 input.xyz\n',
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -123,7 +124,7 @@ def test_rematerialize_orca_restart_input_copies_safe_relative_auxiliary_file(
         {
             "orca_input_updates": True,
             "orca_route_line_present": True,
-            "orca_route_line": "! NEW MOREAD",
+            "orca_route_line": "! NEW Opt MOREAD",
         },
         allowed_root=tmp_path,
     )
@@ -141,7 +142,7 @@ def test_rematerialize_orca_restart_input_preserves_nested_geometry_path(
     selected_xyz.parent.mkdir(parents=True)
     selected_xyz.write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        "! OLD\n* xyzfile 0 1 coords/selected.xyz\n",
+        "! OLD Opt\n* xyzfile 0 1 coords/selected.xyz\n",
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -173,7 +174,7 @@ def test_rematerialize_orca_restart_input_keeps_distinct_nested_geometry_and_aux
     selected_xyz.write_text("1\ngeometry\nH 0 0 0\n", encoding="utf-8")
     (original / "shared.xyz").write_text("POINT-CHARGE-DATA\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        '! OLD\n%pointcharges "shared.xyz"\n* xyzfile 0 1 coords/shared.xyz\n',
+        '! OLD Opt\n%pointcharges "shared.xyz"\n* xyzfile 0 1 coords/shared.xyz\n',
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -210,7 +211,7 @@ def test_rematerialize_orca_restart_input_preserves_nested_input_relative_auxili
     auxiliary.write_text("POINT-CHARGE-DATA\n", encoding="utf-8")
     selected_inp = nested / "input.inp"
     selected_inp.write_text(
-        '%pointcharges "coords/shared.xyz"\n* xyzfile 0 1 ../coords/shared.xyz\n',
+        '! Opt\n%pointcharges "coords/shared.xyz"\n* xyzfile 0 1 ../coords/shared.xyz\n',
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -249,7 +250,7 @@ def test_rematerialize_orca_restart_input_allows_nested_input_parent_auxiliary(
     nested.mkdir()
     selected_inp = nested / "input.inp"
     selected_inp.write_text(
-        '%moinp "../checkpoints/seed.gbw"\n* xyz 0 1\nH 0 0 0\n*\n',
+        '! Opt\n%moinp "../checkpoints/seed.gbw"\n* xyz 0 1\nH 0 0 0\n*\n',
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -282,7 +283,7 @@ def test_rematerialize_orca_restart_input_allows_same_source_copy_target(
     geometry.parent.mkdir(parents=True)
     geometry.write_text("1\ngeometry\nH 0 0 0\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        '%geom neb_end_xyzfile "coords/shared.xyz" end\n* xyzfile 0 1 coords/shared.xyz\n',
+        '! Opt\n%geom neb_end_xyzfile "coords/shared.xyz" end\n* xyzfile 0 1 coords/shared.xyz\n',
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -315,7 +316,7 @@ def test_rematerialize_orca_restart_input_copies_official_neb_geometry_files(
     guess.parent.mkdir()
     guess.write_text("1\nTS guess\nH 0 0 0\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        '! NEB-TS\n%neb\n  Product "endpoints/product.xyz"\n'
+        '! Opt\n%neb\n  Product "endpoints/product.xyz"\n'
         '  TS = "guesses/guessTS.xyz"\nend\n* xyzfile 0 1 input.xyz\n',
         encoding="utf-8",
     )
@@ -345,7 +346,7 @@ def test_rematerialize_orca_restart_input_rejects_generated_file_collision(
     original = tmp_path / "orca_stage"
     original.mkdir()
     (original / "input.inp").write_text(
-        f'%pointcharges "{reserved_name}"\n* xyz 0 1\nH 0 0 0\n*\n',
+        f'! Opt\n%pointcharges "{reserved_name}"\n* xyz 0 1\nH 0 0 0\n*\n',
         encoding="utf-8",
     )
     if reserved_name != "input.inp":
@@ -376,7 +377,8 @@ def test_rematerialize_orca_restart_input_copies_inline_geom_auxiliary(
     hessian.write_text("HESSIAN-DATA\n", encoding="utf-8")
     (original / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        '%geom InHess Read InHessName "hessian files/seed.hess" end\n* xyzfile 0 1 input.xyz\n',
+        '! Opt\n%geom InHess Read InHessName "hessian files/seed.hess" end\n'
+        "* xyzfile 0 1 input.xyz\n",
         encoding="utf-8",
     )
 
@@ -401,7 +403,7 @@ def test_rematerialize_orca_restart_input_rejects_auxiliary_escape(tmp_path: Pat
     outside.write_bytes(b"checkpoint")
     (original / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        '! OLD MOREAD\n%moinp "../outside.gbw"\n* xyzfile 0 1 input.xyz\n',
+        '! OLD Opt MOREAD\n%moinp "../outside.gbw"\n* xyzfile 0 1 input.xyz\n',
         encoding="utf-8",
     )
 
@@ -411,7 +413,7 @@ def test_rematerialize_orca_restart_input_rejects_auxiliary_escape(tmp_path: Pat
             {
                 "orca_input_updates": True,
                 "orca_route_line_present": True,
-                "orca_route_line": "! NEW MOREAD",
+                "orca_route_line": "! NEW Opt MOREAD",
             },
             allowed_root=tmp_path,
         )
@@ -425,7 +427,7 @@ def test_rematerialize_orca_restart_input_rejects_selected_input_escape(
     original = tmp_path / "orca_stage"
     original.mkdir()
     outside_inp = tmp_path / "outside.inp"
-    outside_inp.write_text("! OLD\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    outside_inp.write_text("! OLD Opt\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
     stage = _restart_stage(original)
     task = stage["task"]
     assert isinstance(task, dict)
@@ -455,7 +457,7 @@ def test_rematerialize_orca_restart_input_rejects_reaction_dir_outside_allowed_r
     outside = tmp_path / "outside_stage"
     outside.mkdir()
     (outside / "input.inp").write_text(
-        "! OLD\n* xyz 0 1\nH 0 0 0\n*\n",
+        "! OLD Opt\n* xyz 0 1\nH 0 0 0\n*\n",
         encoding="utf-8",
     )
     stage = _restart_stage(outside)
@@ -481,7 +483,7 @@ def test_rematerialize_orca_restart_input_rejects_source_metadata_symlink_escape
     original = tmp_path / "orca_stage"
     original.mkdir()
     (original / "input.inp").write_text(
-        "! OLD\n* xyz 0 1\nH 0 0 0\n*\n",
+        "! OLD Opt\n* xyz 0 1\nH 0 0 0\n*\n",
         encoding="utf-8",
     )
     outside_source = tmp_path / "outside_source.json"
@@ -525,14 +527,14 @@ def test_rematerialize_orca_restart_input_replaces_all_simple_input_lines(
         {
             "orca_input_updates": True,
             "orca_route_line_present": True,
-            "orca_route_line": "! PBE0 def2-TZVP",
+            "orca_route_line": "! PBE0 def2-TZVP Opt",
         },
         allowed_root=tmp_path,
     )
 
     restarted_lines = (tmp_path / "orca_stage.restart-001" / "input.inp").read_text().splitlines()
     assert [line for line in restarted_lines if line.strip().startswith("!")] == [
-        "! PBE0 def2-TZVP"
+        "! PBE0 def2-TZVP Opt"
     ]
 
 
@@ -545,7 +547,7 @@ def test_rematerialize_orca_restart_input_updates_inline_pal_and_uses_safe_xyzfi
     inp = original / "input.inp"
     xyz.write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
     inp.write_text(
-        '! OLD\n%pal nprocs 1 end\n%maxcore 1024\n* xyzfile 0 1 "coords with space.xyz"\n',
+        '! OLD Opt\n%pal nprocs 1 end\n%maxcore 1024\n* xyzfile 0 1 "coords with space.xyz"\n',
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -584,7 +586,8 @@ def test_rematerialize_orca_restart_input_rejects_reserved_geometry_collision(
     auxiliary.parent.mkdir()
     auxiliary.write_text("POINT-CHARGE-DATA\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        '%pointcharges ".orca_auto_inputs/geometry.xyz"\n* xyzfile 0 1 "coords with space.xyz"\n',
+        '! Opt\n%pointcharges ".orca_auto_inputs/geometry.xyz"\n'
+        '* xyzfile 0 1 "coords with space.xyz"\n',
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -623,7 +626,7 @@ def test_rematerialize_orca_restart_input_rejects_reserved_geometry_path_tree_co
     auxiliary.parent.mkdir(parents=True, exist_ok=True)
     auxiliary.write_text("POINT-CHARGE-DATA\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        f'%pointcharges "{auxiliary_relative_path.as_posix()}"\n'
+        f'! Opt\n%pointcharges "{auxiliary_relative_path.as_posix()}"\n'
         '* xyzfile 0 1 "coords with space.xyz"\n',
         encoding="utf-8",
     )
@@ -652,7 +655,7 @@ def test_rematerialize_orca_restart_input_parses_commented_xyzfile_fallback(
     geometry = original / "input.xyz"
     geometry.write_text("1\ngeometry\nH 0 0 0\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        "! OLD\n* xyzfile 0 1 input.xyz # reactant geometry\n",
+        "! OLD Opt\n* xyzfile 0 1 input.xyz # reactant geometry\n",
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -708,7 +711,7 @@ def test_rematerialize_orca_restart_input_preserves_inline_geometry(tmp_path: Pa
     original.mkdir()
     inp = original / "input.inp"
     inp.write_text(
-        "! OLD\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+        "! OLD Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
         encoding="utf-8",
     )
     stage = _restart_stage(original)
@@ -736,12 +739,12 @@ def test_pending_generation_contract_keeps_inp_for_repeated_restart(tmp_path: Pa
     original = tmp_path / "orca_stage"
     original.mkdir()
     (original / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
-    (original / "input.inp").write_text("! OLD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
+    (original / "input.inp").write_text("! OLD Opt\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     stage = _restart_stage(original)
     settings = {
         "orca_input_updates": True,
         "orca_route_line_present": True,
-        "orca_route_line": "! NEW",
+        "orca_route_line": "! NEW Opt",
     }
     assert rematerialize_orca_restart_input(stage, settings, allowed_root=tmp_path)
     first = tmp_path / "orca_stage.restart-001"
@@ -812,7 +815,7 @@ def test_rematerialize_orca_restart_input_copies_execution_superset_references(
     (original / "restart.allxyz").write_text("1\nframe\nH 0 0 0\n", encoding="utf-8")
     (original / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
     (original / "input.inp").write_text(
-        "! OLD MOREAD\n"
+        "! OLD Opt MOREAD\n"
         '% moinp "checkpoints/seed.gbw"\n'
         "%neb\n"
         '  restart_allxyzfile "restart.allxyz"\n'
@@ -827,7 +830,7 @@ def test_rematerialize_orca_restart_input_copies_execution_superset_references(
         {
             "orca_input_updates": True,
             "orca_route_line_present": True,
-            "orca_route_line": "! NEW MOREAD",
+            "orca_route_line": "! NEW Opt MOREAD",
         },
         allowed_root=tmp_path,
     )

@@ -12,13 +12,34 @@ source of those rules; neither consumer may reimplement them locally.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
 
+from orca_auto.core.engine_process import read_confined_text, require_confined_regular_file
+from orca_auto.core.engine_runner import executable_identity
+from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS
+from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.utils.coercion import normalize_text
-from orca_auto.orca.input_blocks import file_route_lines, geometry_range
+from orca_auto.orca.input_blocks import (
+    BLOCK_START_RE,
+    GEOM_HEADER_RE,
+    MAXCORE_DIRECTIVE_RE,
+    PAL_ROUTE_TOKEN_RE,
+    OrcaFileReference,
+    active_orca_directive_text,
+    active_orca_line_text,
+    file_route_lines,
+    geometry_range,
+    orca_line_tokens,
+    orca_route_line,
+    orca_route_tokens,
+    scan_orca_file_references,
+)
 from orca_auto.orca.report.rmsd import (
     RmsdCandidate,
     RmsdGrouping,
@@ -39,6 +60,18 @@ GEOMETRY_COMPARISON_EPSILON_ANGSTROM = 1e-12
 _COORDINATE_TOLERANCE = GEOMETRY_TOL_ANGSTROM + GEOMETRY_COMPARISON_EPSILON_ANGSTROM
 
 
+@dataclass(frozen=True)
+class OrcaSelectedInputScienceIdentity:
+    """Science-affecting identity of one bound, generation-local ORCA input."""
+
+    route_tokens: tuple[tuple[bool, str], ...]
+    charge: int
+    multiplicity: int
+    directive_sha256: str
+    atom_sequence: tuple[str, ...]
+    dependency_identities: tuple[tuple[str, str, int], ...]
+
+
 def finite(value: float | None) -> TypeGuard[float]:
     return value is not None and math.isfinite(value)
 
@@ -53,6 +86,302 @@ def normalized_route_line(value: Any) -> str:
     """
     text = normalize_text(value).replace("!", " ")
     return " ".join(text.split()).lower()
+
+
+def orca_science_route_identity(lines: list[str]) -> tuple[tuple[bool, str], ...] | None:
+    """Canonical active route tokens with resource-only ``PAL<n>`` omitted."""
+
+    route_seen = False
+    canonical: list[tuple[bool, str]] = []
+    for line in lines:
+        if orca_route_line(line) is None:
+            continue
+        route_seen = True
+        canonical.extend(
+            (
+                token.quoted,
+                token.value if token.quoted else token.value.casefold(),
+            )
+            for token in orca_route_tokens(line)
+            if token.quoted or PAL_ROUTE_TOKEN_RE.fullmatch(token.value) is None
+        )
+    return tuple(canonical) if route_seen and canonical else None
+
+
+def bound_orca_selected_input_science_identity(
+    generation_dir: Path,
+    selected_path: Path,
+    *,
+    bound_selected_identity: Mapping[str, Any],
+    materialized_input_identities: Mapping[str, Any],
+) -> OrcaSelectedInputScienceIdentity | None:
+    """Read one provenance-bound selected input into a comparison identity.
+
+    Route keywords, charge/multiplicity, active non-resource directives, and
+    ordered atom labels affect cross-stage energy comparability. CPU/memory
+    controls do not. The selected input is confined to the generation and its
+    executable identity is checked both before and after dependent reads.
+    """
+
+    try:
+        resolved_generation = generation_dir.expanduser().resolve(strict=True)
+        raw_selected = selected_path.expanduser()
+        selected = require_confined_regular_file(
+            resolved_generation,
+            raw_selected,
+            label="ORCA selected input science identity",
+        )
+        expected_identity = dict(bound_selected_identity)
+        if (
+            not raw_selected.is_absolute()
+            or raw_selected != selected
+            or selected.parent != resolved_generation
+            or executable_identity(selected) != expected_identity
+        ):
+            return None
+        lines = read_confined_text(
+            resolved_generation,
+            selected,
+            label="ORCA selected input science identity",
+            max_bytes=MAX_INPUT_SNAPSHOT_BYTES,
+        ).splitlines()
+        references = scan_orca_file_references(lines)
+        verified_references = _verified_materialized_references(
+            resolved_generation,
+            selected,
+            references,
+            materialized_input_identities,
+        )
+        if verified_references is None:
+            return None
+        geometries = [
+            match for line in lines if (match := GEOM_HEADER_RE.match(line.strip())) is not None
+        ]
+        geometry = geometry_range(lines)
+        route_tokens = orca_science_route_identity(lines)
+        directive_sha256 = _orca_science_directive_fingerprint(lines, references)
+        atom_sequence = _orca_input_atom_sequence(
+            generation_dir=resolved_generation,
+            lines=lines,
+            verified_references=verified_references,
+        )
+        if (
+            len(geometries) != 1
+            or geometry is None
+            or route_tokens is None
+            or directive_sha256 is None
+            or atom_sequence is None
+            or executable_identity(selected) != expected_identity
+            or any(
+                executable_identity(path) != expected
+                for _reference, path, expected in verified_references
+            )
+        ):
+            return None
+        dependency_identities = tuple(
+            (
+                reference.kind,
+                str(expected.get("sha256") or ""),
+                int(expected.get("size_bytes", -1)),
+            )
+            for reference, _path, expected in verified_references
+            if reference.kind != "geometry"
+        )
+        if any(not sha256 or size_bytes < 0 for _kind, sha256, size_bytes in dependency_identities):
+            return None
+        return OrcaSelectedInputScienceIdentity(
+            route_tokens=route_tokens,
+            charge=geometry[2],
+            multiplicity=geometry[3],
+            directive_sha256=directive_sha256,
+            atom_sequence=atom_sequence,
+            dependency_identities=dependency_identities,
+        )
+    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+        return None
+
+
+def _verified_materialized_references(
+    generation_dir: Path,
+    selected_path: Path,
+    references: list[OrcaFileReference],
+    materialized_input_identities: Mapping[str, Any],
+) -> list[tuple[OrcaFileReference, Path, dict[str, Any]]] | None:
+    """Resolve every semantic file reference to exactly one bound dependency."""
+
+    verified: list[tuple[OrcaFileReference, Path, dict[str, Any]]] = []
+    for reference in references:
+        raw_reference = Path(reference.value).expanduser()
+        if not raw_reference.is_absolute():
+            raw_reference = selected_path.parent / raw_reference
+        try:
+            resolved_reference = require_confined_regular_file(
+                generation_dir,
+                raw_reference,
+                label="ORCA selected input materialized dependency",
+            )
+        except (OSError, RuntimeError, ValueError):
+            return None
+        matches: list[dict[str, Any]] = []
+        for raw_identity in materialized_input_identities.values():
+            if not isinstance(raw_identity, Mapping):
+                continue
+            identity = dict(raw_identity)
+            identity_path = Path(str(identity.get("path") or "")).expanduser()
+            try:
+                resolved_identity_path = require_confined_regular_file(
+                    generation_dir,
+                    identity_path,
+                    label="ORCA materialized dependency identity",
+                )
+            except (OSError, RuntimeError, ValueError):
+                continue
+            if resolved_identity_path == resolved_reference:
+                matches.append(identity)
+        if len(matches) != 1 or executable_identity(resolved_reference) != matches[0]:
+            return None
+        verified.append((reference, resolved_reference, matches[0]))
+    return verified
+
+
+def _orca_science_directive_fingerprint(
+    lines: list[str],
+    references: list[OrcaFileReference],
+) -> str | None:
+    """Digest active non-route science controls, excluding geometry/resources."""
+
+    geometry = geometry_range(lines)
+    if geometry is None:
+        return None
+    geometry_start, geometry_end, _charge, _multiplicity = geometry
+    canonical_lines = list(lines)
+    references_by_line: dict[int, list[OrcaFileReference]] = {}
+    for reference in references:
+        references_by_line.setdefault(reference.line_index, []).append(reference)
+    for line_index, line_references in references_by_line.items():
+        canonical_line = canonical_lines[line_index]
+        for reference in sorted(line_references, key=lambda item: item.start, reverse=True):
+            placeholder = f'"__orca_{reference.kind}_dependency__"'
+            canonical_line = (
+                canonical_line[: reference.start] + placeholder + canonical_line[reference.end :]
+            )
+        canonical_lines[line_index] = canonical_line
+    canonical_tokens: list[tuple[bool, str]] = []
+    in_pal_block = False
+    for index, line in enumerate(canonical_lines):
+        if geometry_start <= index < geometry_end:
+            continue
+        active_directive = active_orca_directive_text(line)
+        active_text = active_orca_line_text(line).strip()
+        if not active_text:
+            continue
+        tokens = orca_line_tokens(active_directive)
+        if in_pal_block:
+            if any(not token.quoted and token.value.casefold() == "end" for token in tokens):
+                in_pal_block = False
+            continue
+        block = BLOCK_START_RE.match(active_directive)
+        if block is not None and block.group(1).casefold() == "pal":
+            if not any(not token.quoted and token.value.casefold() == "end" for token in tokens):
+                in_pal_block = True
+            continue
+        if MAXCORE_DIRECTIVE_RE.match(active_directive) is not None:
+            continue
+        if orca_route_line(line) is not None:
+            continue
+        canonical_tokens.extend(
+            (
+                token.quoted,
+                token.value if token.quoted else token.value.casefold(),
+            )
+            for token in orca_line_tokens(active_text)
+        )
+    if in_pal_block:
+        return None
+    canonical = json.dumps(canonical_tokens, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _orca_input_atom_sequence(
+    *,
+    generation_dir: Path,
+    lines: list[str],
+    verified_references: list[tuple[OrcaFileReference, Path, dict[str, Any]]],
+) -> tuple[str, ...] | None:
+    """Ordered atom labels from the bound inline or confined XYZ geometry."""
+
+    geometry = geometry_range(lines)
+    if geometry is None:
+        return None
+    start, end, _charge, _multiplicity = geometry
+    header = GEOM_HEADER_RE.match(lines[start].strip())
+    if header is None:
+        return None
+    if header.group(1).casefold() == "xyz":
+        if end <= start + 1 or lines[end - 1].strip() != "*":
+            return None
+        return _orca_atom_sequence_from_rows(lines[start + 1 : end - 1], exact_columns=True)
+
+    if len(orca_line_tokens(lines[start])) != 5:
+        return None
+    geometry_references = [
+        (reference, path)
+        for reference, path, _identity in verified_references
+        if reference.kind == "geometry" and reference.line_index == start
+    ]
+    if len(geometry_references) != 1:
+        return None
+    _reference, geometry_path = geometry_references[0]
+    try:
+        xyz_lines = read_confined_text(
+            generation_dir,
+            geometry_path,
+            label="ORCA selected XYZ science identity",
+            max_bytes=MAX_INPUT_SNAPSHOT_BYTES,
+        ).splitlines()
+    except (OSError, RuntimeError, UnicodeError, ValueError):
+        return None
+    cursor = 0
+    while cursor < len(xyz_lines) and not xyz_lines[cursor].strip():
+        cursor += 1
+    if cursor >= len(xyz_lines):
+        return None
+    try:
+        atom_count = int(xyz_lines[cursor].strip())
+    except ValueError:
+        return None
+    if atom_count < 1 or atom_count > MAX_ADMISSION_ATOMS:
+        return None
+    row_start = cursor + 2
+    row_end = row_start + atom_count
+    if row_end > len(xyz_lines) or any(line.strip() for line in xyz_lines[row_end:]):
+        return None
+    return _orca_atom_sequence_from_rows(
+        xyz_lines[row_start:row_end],
+        exact_columns=False,
+    )
+
+
+def _orca_atom_sequence_from_rows(
+    rows: list[str],
+    *,
+    exact_columns: bool,
+) -> tuple[str, ...] | None:
+    if not rows or len(rows) > MAX_ADMISSION_ATOMS:
+        return None
+    labels: list[str] = []
+    for row in rows:
+        tokens = row.split()
+        if len(tokens) != 4 if exact_columns else len(tokens) < 4:
+            return None
+        try:
+            coordinates = tuple(float(value) for value in tokens[1:4])
+        except ValueError:
+            return None
+        if not tokens[0] or not all(math.isfinite(value) for value in coordinates):
+            return None
+        labels.append(tokens[0].casefold())
+    return tuple(labels)
 
 
 def coordinates_match(
@@ -175,9 +504,24 @@ def rmsd_candidate_for_block(
     block: SiBlock,
     *,
     energy_hartree: float | None,
+    selected_input_identity: OrcaSelectedInputScienceIdentity | None = None,
 ) -> RmsdCandidate:
     """One RMSD candidate with the full executed-provenance comparison key."""
     result = block.result
+    comparison_route = result.input_line
+    if selected_input_identity is not None:
+        comparison_route = json.dumps(
+            (
+                selected_input_identity.route_tokens,
+                selected_input_identity.charge,
+                selected_input_identity.multiplicity,
+                selected_input_identity.directive_sha256,
+                selected_input_identity.atom_sequence,
+                selected_input_identity.dependency_identities,
+            ),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     return RmsdCandidate(
         stage_id=stage_id,
         coordinates=tuple(result.coordinates),
@@ -190,7 +534,7 @@ def rmsd_candidate_for_block(
             basis_set=result.basis_set,
             solvation=result.solvation,
             orca_version=result.orca_version,
-            input_line=result.input_line,
+            input_line=comparison_route,
             electronic_state_verified=result.electronic_state_verified,
         ),
     )
@@ -215,12 +559,15 @@ def rmsd_grouping(
 __all__ = [
     "GEOMETRY_COMPARISON_EPSILON_ANGSTROM",
     "GEOMETRY_TOL_ANGSTROM",
+    "OrcaSelectedInputScienceIdentity",
     "blocks_match_geometry",
+    "bound_orca_selected_input_science_identity",
     "coordinates_match",
     "eligible_minimum_block",
     "finite",
     "has_required_provenance",
     "normalized_route_line",
+    "orca_science_route_identity",
     "rmsd_candidate_for_block",
     "rmsd_grouping",
     "selected_input_state_matches",

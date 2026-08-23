@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import io
+import math
 import os
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -38,12 +39,11 @@ from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from .input_blocks import (
     GEOM_HEADER_RE,
-    MOINP_RE,
     OrcaFileReference,
-    active_orca_directive_text,
     ensure_route_keywords,
+    orca_input_requests_moread,
+    orca_moinp_references,
     orca_route_line,
-    orca_route_tokens,
     quote_orca_path,
     scan_orca_file_references,
     set_moinp,
@@ -69,6 +69,8 @@ _GENERATION_RUNTIME_FILE_NAMES = frozenset(
 )
 _XYZ_GEOMETRY_REFERENCE_KINDS = frozenset({"geometry", "neb_geometry"})
 _NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
+_XYZ_ATOM_LABEL_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_:+().{}\[\]-]*\Z")
+_XYZ_COORDINATE_RE = re.compile(r"\A[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?\Z")
 
 
 def _render_bound_reference(reference: OrcaFileReference, relative_path: str) -> str:
@@ -135,6 +137,18 @@ def _validated_xyz_atom_count(path: Path, payload: bytes, *, max_atoms: int) -> 
     return atom_count
 
 
+def _strict_xyz_atom_row(path: Path, line: str) -> str:
+    tokens = line.split()
+    if len(tokens) != 4 or _XYZ_ATOM_LABEL_RE.fullmatch(tokens[0]) is None:
+        raise ValueError(f"ORCA XYZ geometry has an invalid atom row: {path}")
+    if any(_XYZ_COORDINATE_RE.fullmatch(value) is None for value in tokens[1:]):
+        raise ValueError(f"ORCA XYZ geometry has invalid coordinates: {path}")
+    coordinates = tuple(float(value.replace("d", "e").replace("D", "E")) for value in tokens[1:])
+    if not all(math.isfinite(value) for value in coordinates):
+        raise ValueError(f"ORCA XYZ geometry has non-finite coordinates: {path}")
+    return tokens[0].casefold()
+
+
 def _xyz_atom_lines(path: Path, payload: bytes, *, max_atoms: int) -> list[str]:
     atom_count = _validated_xyz_atom_count(path, payload, max_atoms=max_atoms)
     try:
@@ -149,12 +163,33 @@ def _xyz_atom_lines(path: Path, payload: bytes, *, max_atoms: int) -> list[str]:
     atom_lines = lines[atom_start : atom_start + atom_count]
     if header_index < 0 or len(atom_lines) != atom_count:
         raise ValueError(f"ORCA XYZ geometry has fewer atoms than declared: {path}")
-    if any(
-        not line.strip() or line.strip() == "*" or line.lstrip().startswith(("%", "!", "#"))
-        for line in atom_lines
-    ):
-        raise ValueError(f"ORCA XYZ geometry cannot be safely inlined: {path}")
+    for line in atom_lines:
+        _strict_xyz_atom_row(path, line)
+    if any(line.strip() for line in lines[atom_start + atom_count :]):
+        raise ValueError(f"ORCA XYZ geometry has trailing rows after its declared atoms: {path}")
     return atom_lines
+
+
+def _inline_geometry_atom_signature(path: Path, payload: bytes) -> tuple[str, ...]:
+    try:
+        lines = payload.decode("utf-8", errors="strict").splitlines()
+    except UnicodeError as exc:
+        raise ValueError(f"ORCA inline geometry must be UTF-8 text: {path}") from exc
+    for index, line in enumerate(lines):
+        match = GEOM_HEADER_RE.match(line.strip())
+        if match is None:
+            continue
+        if match.group(1).lower() != "xyz":
+            raise ValueError(f"ORCA recovery bound input has no inline geometry: {path}")
+        signature: list[str] = []
+        for atom_line in lines[index + 1 :]:
+            if atom_line.strip() == "*":
+                if not signature:
+                    raise ValueError(f"ORCA recovery bound input has an empty geometry: {path}")
+                return tuple(signature)
+            signature.append(_strict_xyz_atom_row(path, atom_line))
+        break
+    raise ValueError(f"ORCA recovery bound input has no complete inline geometry: {path}")
 
 
 def _reference_source(job_dir: Path, selected_inp: Path, reference: str) -> Path:
@@ -165,6 +200,22 @@ def _reference_source(job_dir: Path, selected_inp: Path, reference: str) -> Path
         candidate,
         label="ORCA referenced input",
     )
+
+
+def _confined_reference_path(job_dir: Path, selected_inp: Path, reference: str) -> Path:
+    """Resolve a reference without requiring its final file to still exist."""
+
+    raw_path = Path(reference).expanduser()
+    candidate = raw_path if raw_path.is_absolute() else selected_inp.parent / raw_path
+    resolved = candidate.resolve(strict=False)
+    if not resolved.is_relative_to(job_dir):
+        raise ValueError(f"ORCA referenced input must stay inside its root: {candidate}")
+    current = candidate
+    while current != job_dir and current != current.parent:
+        if current.is_symlink():
+            raise ValueError(f"ORCA referenced input must not contain symlinks: {current}")
+        current = current.parent
+    return resolved
 
 
 def _execution_directory(job_dir: Path, generation_name: str) -> Path:
@@ -178,13 +229,13 @@ def _execution_directory(job_dir: Path, generation_name: str) -> Path:
     return execution_dir.resolve()
 
 
-def _source_with_budget(
+def _payload_with_budget(
     source: Path,
+    payload: bytes,
     *,
     role: str,
     consumed_bytes: int,
 ) -> tuple[dict[str, Any], bytes, int]:
-    payload = read_stable_regular_file(source, max_bytes=MAX_INPUT_SNAPSHOT_BYTES)
     if consumed_bytes + len(payload) > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
         raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
     descriptor = {
@@ -194,6 +245,21 @@ def _source_with_budget(
         "size_bytes": len(payload),
     }
     return descriptor, payload, consumed_bytes + len(payload)
+
+
+def _source_with_budget(
+    source: Path,
+    *,
+    role: str,
+    consumed_bytes: int,
+) -> tuple[dict[str, Any], bytes, int]:
+    payload = read_stable_regular_file(source, max_bytes=MAX_INPUT_SNAPSHOT_BYTES)
+    return _payload_with_budget(
+        source,
+        payload,
+        role=role,
+        consumed_bytes=consumed_bytes,
+    )
 
 
 def _private_input_path(
@@ -291,7 +357,7 @@ def _rewrite_bound_input(
     replacements: dict[int, list[tuple[int, int, str]]] = {}
     inline_replacements: dict[int, str] = {}
     for reference in references:
-        source = _reference_source(job_dir, selected_inp, reference.value)
+        source = _confined_reference_path(job_dir, selected_inp, reference.value)
         if reference.kind == "geometry" and source in inline_geometry_atoms:
             match = GEOM_HEADER_RE.match(lines[reference.line_index].strip())
             if match is None or match.group(1).lower() != "xyzfile":
@@ -356,6 +422,27 @@ def orca_execution_provenance(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def verify_orca_snapshot_executable(
+    snapshot: Mapping[str, Any],
+    *,
+    expected_executable: str | Path | None = None,
+) -> str:
+    """Verify and return the executable identity pinned by one snapshot."""
+
+    executable_identities = snapshot.get("executable_identities")
+    if not isinstance(executable_identities, Mapping):
+        raise ValueError("Queued ORCA execution snapshot has no executable identities")
+    identity = executable_identities.get("orca")
+    if not isinstance(identity, dict):
+        raise ValueError("Queued ORCA execution snapshot has no ORCA executable identity")
+    if expected_executable is None:
+        return _engine_runner.verify_executable_identity(identity)
+    current = _engine_runner.executable_identity(expected_executable)
+    if current != identity:
+        raise ValueError("ORCA crash recovery executable does not match the submitted identity")
+    return str(current["path"])
+
+
 def _reserve_execution_generation(
     job_dir: Path,
     *,
@@ -410,7 +497,7 @@ def _reserve_execution_generation(
 def _recovery_seed_plan(
     job_dir: Path,
     recovery_from: Mapping[str, Any],
-) -> tuple[Path, str, set[str]]:
+) -> tuple[Path, str, set[str], tuple[str, ...] | None, dict[str, dict[str, Any]]]:
     """Validate a crashed snapshot and plan seeding from its frozen generation."""
 
     seed_dir = orca_execution_snapshot_generation_dir(job_dir, recovery_from)
@@ -432,7 +519,121 @@ def _recovery_seed_plan(
             name = Path(str(identity.get("path") or "")).name
             if name:
                 seed_basenames.add(name)
-    return seed_dir, selected_sha256, seed_basenames
+    seed_atom_signature: tuple[str, ...] | None = None
+    if seed_basenames:
+        _bound_selected, bound_selected_payload = _verified_identity_payload(
+            recovery_from.get("bound_selected_identity"),
+            root=seed_dir,
+            label="recovery bound selected input",
+        )
+        seed_atom_signature = _inline_geometry_atom_signature(
+            _bound_selected,
+            bound_selected_payload,
+        )
+    submitted_identities = _recovery_submitted_dependency_identities(
+        job_dir,
+        recovery_from,
+    )
+    return seed_dir, selected_sha256, seed_basenames, seed_atom_signature, submitted_identities
+
+
+def _validated_submitted_dependency_identity(
+    job_dir: Path,
+    source_text: str,
+    identity: Any,
+) -> dict[str, Any]:
+    try:
+        source = Path(source_text)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError("ORCA recovery dependency identity has an invalid source path") from exc
+    if (
+        not source_text
+        or not source.is_absolute()
+        or source_text != str(source)
+        or ".." in source.parts
+        or "\x00" in source_text
+        or not source.is_relative_to(job_dir)
+    ):
+        raise ValueError("ORCA recovery dependency identity has an invalid source path")
+    if not isinstance(identity, Mapping):
+        raise ValueError(f"ORCA recovery dependency identity is invalid: {source_text}")
+    digest = str(identity.get("sha256") or "").strip().lower()
+    size = identity.get("size_bytes")
+    if (
+        len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or size < 0
+    ):
+        raise ValueError(f"ORCA recovery dependency identity is invalid: {source_text}")
+    return {"sha256": digest, "size_bytes": size}
+
+
+def _recovery_submitted_dependency_identities(
+    job_dir: Path,
+    recovery_from: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    recovery = recovery_from.get("recovery")
+    propagated = (
+        recovery.get("submitted_dependency_identities") if isinstance(recovery, Mapping) else None
+    )
+    if propagated is not None:
+        if not isinstance(propagated, Mapping):
+            raise ValueError("ORCA recovery submitted dependency identities are invalid")
+        return {
+            str(source): _validated_submitted_dependency_identity(
+                job_dir,
+                str(source),
+                identity,
+            )
+            for source, identity in propagated.items()
+        }
+
+    dependency_paths = recovery_from.get("dependency_paths")
+    source_inputs = recovery_from.get("source_inputs")
+    if not isinstance(dependency_paths, list) or not isinstance(source_inputs, Mapping):
+        raise ValueError("ORCA recovery snapshot has invalid dependency identities")
+    submitted: dict[str, dict[str, Any]] = {}
+    for index, raw_source in enumerate(dependency_paths):
+        if not isinstance(raw_source, str):
+            raise ValueError("ORCA recovery snapshot has invalid dependency identities")
+        role = f"dependency_{index:06d}"
+        descriptor = source_inputs.get(role)
+        if (
+            not isinstance(descriptor, Mapping)
+            or str(descriptor.get("role") or "") != role
+            or descriptor.get("source_path") != raw_source
+        ):
+            raise ValueError("ORCA recovery snapshot has invalid dependency identities")
+        submitted[raw_source] = _validated_submitted_dependency_identity(
+            job_dir,
+            raw_source,
+            descriptor,
+        )
+    return submitted
+
+
+def _validated_recovery_source_payload(
+    job_dir: Path,
+    source: Path,
+    submitted_identities: Mapping[str, Mapping[str, Any]],
+) -> bytes:
+    expected = submitted_identities.get(str(source))
+    if expected is None:
+        raise ValueError(
+            "ORCA recovery has no submitted identity for dependency: "
+            f"{source.relative_to(job_dir).as_posix()}"
+        )
+    payload = read_stable_regular_file(source, max_bytes=MAX_INPUT_SNAPSHOT_BYTES)
+    if len(payload) != expected.get("size_bytes") or hashlib.sha256(
+        payload
+    ).hexdigest() != expected.get("sha256"):
+        raise ValueError(
+            "ORCA recovery dependency changed since the crashed submission: "
+            f"{source.relative_to(job_dir).as_posix()}"
+        )
+    return payload
 
 
 def _validated_recovery_seed(
@@ -440,14 +641,14 @@ def _validated_recovery_seed(
     job_dir: Path,
     seed_dir: Path,
     basename: str,
-    pristine_source: Path,
+    expected_atom_signature: tuple[str, ...],
     max_atoms: int,
-) -> Path | None:
-    """Return the frozen runtime geometry to seed from, or None to use the source.
+) -> tuple[Path, bytes] | None:
+    """Return the exact validated runtime seed bytes, or None to use the source.
 
     A crash can leave the runtime geometry absent, empty, or truncated
     mid-write; those fall back to the pristine submission geometry. A seed
-    that parses but changes the submitted atom count is evidence of
+    that parses but changes the submitted atom order or labels is evidence of
     substitution, not of a crash, and fails closed.
     """
 
@@ -466,27 +667,14 @@ def _validated_recovery_seed(
         seed_atoms = _xyz_atom_lines(seed, payload, max_atoms=max_atoms)
     except ValueError:
         return None
-    pristine_payload = read_stable_regular_file(
-        pristine_source,
-        max_bytes=MAX_INPUT_SNAPSHOT_BYTES,
-    )
-    pristine_atoms = _xyz_atom_lines(pristine_source, pristine_payload, max_atoms=max_atoms)
-    if len(seed_atoms) != len(pristine_atoms):
+    seed_atom_signature = tuple(_strict_xyz_atom_row(seed, line) for line in seed_atoms)
+    if seed_atom_signature != expected_atom_signature:
         raise ValueError(
-            f"ORCA recovery seed geometry does not preserve the submitted atom count: {basename}"
+            "ORCA recovery seed geometry does not preserve the submitted atom count, order, "
+            "and labels: "
+            f"{basename}"
         )
-    return seed
-
-
-def _input_requests_moread(lines: list[str]) -> bool:
-    if any(MOINP_RE.match(active_orca_directive_text(line)) for line in lines):
-        return True
-    for line in lines:
-        if orca_route_line(line) is None:
-            continue
-        if any(token.value.upper() == "MOREAD" for token in orca_route_tokens(line)):
-            return True
-    return False
+    return seed, payload
 
 
 def recovery_checkpoint_private_name(source_selected: Path) -> str:
@@ -633,6 +821,7 @@ def build_orca_execution_snapshot(
     snapshot_intent_token: str | None = None,
     normalized_selected_payload: bytes | None = None,
     source_selected_sha256: str | None = None,
+    bound_selected_validator: Callable[[Path, bytes], None] | None = None,
     recovery_from: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one visible, immutable ORCA execution generation.
@@ -665,14 +854,26 @@ def build_orca_execution_snapshot(
     if source_selected.suffix.lower() != ".inp":
         raise ValueError(f"ORCA selected input must be an .inp file: {source_selected}")
 
+    recovery_executable: str | None = None
+    if recovery_from is not None:
+        recovery_executable = verify_orca_snapshot_executable(
+            recovery_from,
+            expected_executable=orca_executable,
+        )
+
     recovery_seed_dir: Path | None = None
     recovery_selected_sha256 = ""
     recovery_seed_basenames: set[str] = set()
+    recovery_seed_atom_signature: tuple[str, ...] | None = None
+    recovery_submitted_dependency_identities: dict[str, dict[str, Any]] = {}
     if recovery_from is not None:
-        recovery_seed_dir, recovery_selected_sha256, recovery_seed_basenames = _recovery_seed_plan(
-            resolved_job_dir,
-            recovery_from,
-        )
+        (
+            recovery_seed_dir,
+            recovery_selected_sha256,
+            recovery_seed_basenames,
+            recovery_seed_atom_signature,
+            recovery_submitted_dependency_identities,
+        ) = _recovery_seed_plan(resolved_job_dir, recovery_from)
     seeded_roles: dict[str, dict[str, Any]] = {}
 
     resolved_queue_root = Path(queue_root or resolved_job_dir).expanduser().resolve()
@@ -714,6 +915,12 @@ def build_orca_execution_snapshot(
         ):
             raise ValueError("ORCA normalized selected input does not match its resource request")
         validate_supported_xyz_geometry_syntax(lines, label="ORCA selected input")
+        moinp_references = orca_moinp_references(lines)
+        if orca_input_requests_moread(lines) and not moinp_references:
+            raise ValueError(
+                "ORCA MORead requires an explicit MOInp file so the checkpoint can be "
+                "bound into the execution snapshot"
+            )
         hessian_requested = _route_requests_hessian(lines)
         same_stem_xyz_is_output = _route_writes_same_stem_xyz(lines)
         effective_retry_count = effective_max_retries(
@@ -734,10 +941,24 @@ def build_orca_execution_snapshot(
         geometry_dependencies: set[Path] = set()
         dependency_reference_kinds: dict[Path, set[str]] = {}
         for reference in references:
-            dependency = _reference_source(
-                resolved_job_dir,
-                source_selected,
-                reference.value,
+            prospective_dependency = _confined_reference_path(
+                resolved_job_dir, source_selected, reference.value
+            )
+            may_use_recovery_geometry_seed = (
+                recovery_seed_dir is not None
+                and same_stem_xyz_is_output
+                and reference.kind == "geometry"
+                and prospective_dependency.name == source_selected.with_suffix(".xyz").name
+                and str(prospective_dependency) in recovery_submitted_dependency_identities
+            )
+            dependency = (
+                prospective_dependency
+                if may_use_recovery_geometry_seed
+                else _reference_source(
+                    resolved_job_dir,
+                    source_selected,
+                    reference.value,
+                )
             )
             if dependency == source_selected:
                 raise ValueError("ORCA selected input must not reference itself as an input file")
@@ -753,9 +974,8 @@ def build_orca_execution_snapshot(
             dependencies,
             job_dir=resolved_job_dir,
         )
-
         recovery_checkpoint_source: Path | None = None
-        if recovery_seed_dir is not None and not _input_requests_moread(lines):
+        if recovery_seed_dir is not None and not orca_input_requests_moread(lines):
             # Count dependencies twice: once for the materialized copies and
             # once more as a conservative bound on inline-geometry expansion
             # of the bound input, so a checkpoint near the aggregate cap is
@@ -763,7 +983,13 @@ def build_orca_execution_snapshot(
             # generation is already materialized.
             estimated_source_bytes = (
                 consumed_bytes
-                + 2 * sum(dependency.stat().st_size for dependency in dependencies)
+                + 2
+                * sum(
+                    int(recovery_submitted_dependency_identities[str(dependency)]["size_bytes"])
+                    if str(dependency) in recovery_submitted_dependency_identities
+                    else dependency.stat().st_size
+                    for dependency in dependencies
+                )
                 + 2 * len(selected_payload)
             )
             recovery_checkpoint_source = _validated_recovery_checkpoint(
@@ -775,7 +1001,7 @@ def build_orca_execution_snapshot(
                 effective_retry_count=effective_retry_count,
             )
 
-        bound_dependencies: list[tuple[Path, Path, bool, str | None]] = []
+        bound_dependencies: list[tuple[Path, Path, bool, str | None, bytes | None]] = []
         for dependency in dependencies:
             inline_same_stem_xyz = (
                 same_stem_xyz_is_output
@@ -791,19 +1017,30 @@ def build_orca_execution_snapshot(
                 inline_same_stem_xyz=inline_same_stem_xyz,
             )
             seed_source: Path | None = None
+            dependency_payload: bytes | None = None
             if (
                 recovery_seed_dir is not None
                 and inline_same_stem_xyz
                 and dependency.name in recovery_seed_basenames
             ):
-                seed_source = _validated_recovery_seed(
+                if recovery_seed_atom_signature is None:
+                    raise ValueError("ORCA recovery mutable geometry has no bound atom signature")
+                validated_seed = _validated_recovery_seed(
                     job_dir=resolved_job_dir,
                     seed_dir=recovery_seed_dir,
                     basename=dependency.name,
-                    pristine_source=dependency,
+                    expected_atom_signature=recovery_seed_atom_signature,
                     max_atoms=(
                         MAX_HESSIAN_ADMISSION_ATOMS if hessian_requested else MAX_ADMISSION_ATOMS
                     ),
+                )
+                if validated_seed is not None:
+                    seed_source, dependency_payload = validated_seed
+            if seed_source is None and recovery_from is not None:
+                dependency_payload = _validated_recovery_source_payload(
+                    resolved_job_dir,
+                    dependency,
+                    recovery_submitted_dependency_identities,
                 )
             bound_dependencies.append(
                 (
@@ -811,6 +1048,7 @@ def build_orca_execution_snapshot(
                     seed_source if seed_source is not None else dependency,
                     inline_same_stem_xyz,
                     None,
+                    dependency_payload,
                 )
             )
         if recovery_checkpoint_source is not None:
@@ -820,6 +1058,7 @@ def build_orca_execution_snapshot(
                     recovery_checkpoint_source,
                     False,
                     recovery_checkpoint_private_name(source_selected),
+                    None,
                 )
             )
         # Roles must follow the canonical order of the *stored* source paths:
@@ -842,13 +1081,22 @@ def build_orca_execution_snapshot(
             effective_source,
             inline_same_stem_xyz,
             private_override,
+            source_payload,
         ) in enumerate(bound_dependencies):
             role = f"dependency_{index:06d}"
-            descriptor, dependency_payload, consumed_bytes = _source_with_budget(
-                effective_source,
-                role=role,
-                consumed_bytes=consumed_bytes,
-            )
+            if source_payload is None:
+                descriptor, dependency_payload, consumed_bytes = _source_with_budget(
+                    effective_source,
+                    role=role,
+                    consumed_bytes=consumed_bytes,
+                )
+            else:
+                descriptor, dependency_payload, consumed_bytes = _payload_with_budget(
+                    effective_source,
+                    source_payload,
+                    role=role,
+                    consumed_bytes=consumed_bytes,
+                )
             source_inputs[role] = descriptor
             if effective_source is not dependency:
                 seeded_roles[role] = {
@@ -923,6 +1171,8 @@ def build_orca_execution_snapshot(
         if consumed_bytes + len(bound_payload) > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
             raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
         bound_selected = execution_dir / source_selected.name
+        if bound_selected_validator is not None:
+            bound_selected_validator(bound_selected, bound_payload)
         _write_private_input(
             execution_dir,
             bound_selected,
@@ -930,7 +1180,21 @@ def build_orca_execution_snapshot(
             label="ORCA bound selected input",
         )
         bound_identity = _file_identity(bound_selected)
-        executable = _engine_runner.executable_identity(orca_executable)
+        executable = _engine_runner.executable_identity(
+            recovery_executable if recovery_executable is not None else orca_executable
+        )
+        if recovery_from is not None:
+            executable_identities = recovery_from.get("executable_identities")
+            previous_executable = (
+                executable_identities.get("orca")
+                if isinstance(executable_identities, Mapping)
+                else None
+            )
+            if executable != previous_executable:
+                raise ValueError(
+                    "ORCA crash recovery executable changed while the replacement snapshot "
+                    "was built"
+                )
         snapshot: dict[str, Any] = {
             "version": ORCA_EXECUTION_SNAPSHOT_VERSION,
             "job_dir_identity": {
@@ -963,6 +1227,7 @@ def build_orca_execution_snapshot(
                 "previous_execution_dir": str(recovery_seed_dir),
                 "seeded_roles": seeded_roles,
                 "checkpoint_role": recovery_checkpoint_role,
+                "submitted_dependency_identities": (recovery_submitted_dependency_identities),
             }
         return snapshot
     except BaseException:
@@ -1029,6 +1294,39 @@ def _verify_identity(identity: Any, *, root: Path, label: str) -> Path:
     if current != dict(identity):
         raise ValueError(f"Queued ORCA {label} snapshot is corrupt")
     return path
+
+
+def _verified_identity_payload(
+    identity: Any,
+    *,
+    root: Path,
+    label: str,
+) -> tuple[Path, bytes]:
+    """Read identity-bound input bytes once and verify those exact bytes."""
+
+    if not isinstance(identity, Mapping):
+        raise ValueError(f"Queued ORCA execution snapshot has no {label} identity")
+    path = require_confined_regular_file(
+        root,
+        Path(str(identity.get("path") or "")).expanduser(),
+        label=f"Queued ORCA {label} snapshot",
+    )
+    payload = read_stable_regular_file(
+        path,
+        # The bound input may be larger than either source file after a
+        # same-stem XYZ dependency is inlined. Construction already caps this
+        # rewritten artifact against the aggregate snapshot budget.
+        max_bytes=MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES,
+        require_single_link=True,
+    )
+    current = {
+        "path": str(path),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "size_bytes": len(payload),
+    }
+    if current != dict(identity):
+        raise ValueError(f"Queued ORCA {label} snapshot is corrupt")
+    return path, payload
 
 
 def _verify_source_descriptor(
@@ -1301,10 +1599,7 @@ def verify_orca_execution_snapshot(
     if snapshot.get("max_retries") != int(expected_max_retries):
         raise ValueError("Queued ORCA retry budget does not match its execution snapshot")
 
-    executable_identities = snapshot.get("executable_identities")
-    if not isinstance(executable_identities, Mapping):
-        raise ValueError("Queued ORCA execution snapshot has no executable identities")
-    executable = _engine_runner.verify_executable_identity(executable_identities.get("orca"))
+    executable = verify_orca_snapshot_executable(snapshot)
     return selected, executable
 
 

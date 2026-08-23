@@ -265,6 +265,71 @@ def test_run_dir_rejects_fractional_electronic_state_at_public_ingress(
         )
 
 
+@pytest.mark.parametrize(
+    "manifest",
+    [
+        {"orca_route_line": ["! Opt", "! TightSCF"]},
+        {"orca": {"route_line": {"method": "r2scan-3c"}}},
+    ],
+)
+def test_run_dir_rejects_structured_orca_route_before_text_normalization(
+    manifest: dict[str, object],
+) -> None:
+    orca_raw = manifest.get("orca")
+    orca_section = dict(orca_raw) if isinstance(orca_raw, dict) else {}
+    sections = run_dir_options.RunDirManifestSections(
+        resources={},
+        crest={},
+        xtb={},
+        endpoint_pairing={},
+        orca=orca_section,
+    )
+
+    with pytest.raises(ValueError, match="route_line must be a string"):
+        run_dir_options._resolve_run_dir_workflow_options(
+            SimpleNamespace(),
+            manifest,
+            sections,
+            default_orca_route_line="! r2scan-3c Opt TightSCF",
+            default_max_orca_stages=20,
+            workflow_root="/tmp/runs",
+            workflow_type="conformer_screening",
+        )
+
+
+@pytest.mark.parametrize("source", ("explicit", "manifest", "section"))
+def test_run_dir_rejects_present_blank_orca_route_instead_of_defaulting(
+    source: str,
+) -> None:
+    args = SimpleNamespace()
+    manifest: dict[str, object] = {}
+    orca_section: dict[str, object] = {}
+    if source == "explicit":
+        args.orca_route_line = "   "
+    elif source == "manifest":
+        manifest["orca_route_line"] = "   "
+    else:
+        orca_section["route_line"] = "   "
+    sections = run_dir_options.RunDirManifestSections(
+        resources={},
+        crest={},
+        xtb={},
+        endpoint_pairing={},
+        orca=orca_section,
+    )
+
+    with pytest.raises(ValueError, match="orca.*route.*must contain an active route"):
+        run_dir_options._resolve_run_dir_workflow_options(
+            args,
+            manifest,
+            sections,
+            default_orca_route_line="! r2scan-3c Opt TightSCF",
+            default_max_orca_stages=20,
+            workflow_root="/tmp/runs",
+            workflow_type="conformer_screening",
+        )
+
+
 def test_run_dir_rejects_interaction_features_on_unsupported_template(tmp_path: Path) -> None:
     workflow_dir = tmp_path / "reaction"
     workflow_dir.mkdir()
@@ -328,6 +393,46 @@ def _run_dir_args(workflow_dir: Path) -> SimpleNamespace:
         multiplicity=None,
         json=False,
     )
+
+
+@pytest.mark.parametrize(
+    "manifest_value",
+    ["null", '"   "'],
+    ids=["null", "blank"],
+)
+def test_cmd_run_dir_rejects_missing_active_orca_optts_route_line(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    manifest_value: str,
+) -> None:
+    workflow_root = tmp_path / "workflow_root"
+    workflow_root.mkdir()
+    workflow_dir = workflow_root / "scan_case"
+    workflow_dir.mkdir()
+    (workflow_dir / "input.xyz").write_text(
+        "2\nscan input\nH 0 0 0\nH 0 0 0.74\n",
+        encoding="utf-8",
+    )
+    (workflow_dir / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: scan_ts_search",
+                "scan_coordinate: 'B 0 1 = 0.7, 2.0, 8'",
+                f"orca_optts_route_line: {manifest_value}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli_common,
+        "_discover_workflow_root",
+        lambda explicit: str(workflow_root.resolve()),
+    )
+
+    assert cli_run_dir.cmd_run_dir(_run_dir_args(workflow_dir)) == 1
+    assert "route_line" in capsys.readouterr().err
 
 
 def test_cmd_run_dir_passes_scaffold_dir_for_generation_workspace(

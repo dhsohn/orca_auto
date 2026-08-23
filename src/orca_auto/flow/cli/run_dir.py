@@ -184,7 +184,10 @@ def _create_scan_ts_run_dir_workflow(
     # The reaction/conformer templates run CREST first; scan_ts_search starts
     # directly with the ORCA relaxed scan, so crest-only kwargs do not apply.
     workflow_kwargs.pop("crest_mode", None)
-    scan_coordinate = normalize_text(config.manifest.get("scan_coordinate"))
+    raw_scan_coordinate = config.manifest.get("scan_coordinate")
+    if "scan_coordinate" in config.manifest and not isinstance(raw_scan_coordinate, str):
+        raise ValueError(f"scan_coordinate must be a string. got={raw_scan_coordinate!r}")
+    scan_coordinate = normalize_text(raw_scan_coordinate)
     if not scan_coordinate:
         raise ValueError(
             "scan_ts_search requires scan_coordinate in flow.yaml, "
@@ -193,6 +196,9 @@ def _create_scan_ts_run_dir_workflow(
     workflow_kwargs["scan_coordinate"] = scan_coordinate
     for key in _SCAN_TS_OPTIONAL_MANIFEST_KEYS:
         value = config.manifest.get(key)
+        if key == "orca_optts_route_line" and key in config.manifest:
+            workflow_kwargs[key] = value
+            continue
         # `is not None` (not truthiness): `max_scan_extensions: 0` is a valid
         # override that disables scan extensions.
         if value is not None and (not isinstance(value, str) or value.strip()):

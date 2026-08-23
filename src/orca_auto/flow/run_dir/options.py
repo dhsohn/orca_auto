@@ -118,6 +118,33 @@ def _resolve_text_option_with_section(
     return default
 
 
+def _resolve_string_option_with_section(
+    explicit: Any,
+    manifest: dict[str, Any],
+    key: str,
+    section: dict[str, Any],
+    section_key: str,
+    default: str,
+) -> str:
+    """Resolve a text option without coercing structured YAML into source text."""
+
+    candidates = (
+        (explicit is not None, explicit, key),
+        (key in manifest, manifest.get(key), key),
+        (section_key in section, section.get(section_key), f"orca.{section_key}"),
+    )
+    for present, value, label in candidates:
+        if not present:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"{label} must be a string. got={value!r}")
+        text = value.strip()
+        if not text:
+            raise ValueError(f"{label} must contain an active route. got={value!r}")
+        return text
+    return default
+
+
 def _int_requirement(minimum: int | None) -> str:
     if minimum is None:
         return "an integer"
@@ -290,7 +317,7 @@ def _resolve_run_dir_orca_options(
             "max_orca_stages",
             defaults.max_orca_stages,
         ),
-        "orca_route_line": _resolve_text_option_with_section(
+        "orca_route_line": _resolve_string_option_with_section(
             getattr(args, "orca_route_line", None),
             manifest,
             "orca_route_line",

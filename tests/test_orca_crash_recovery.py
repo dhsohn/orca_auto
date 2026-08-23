@@ -16,6 +16,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     transition_snapshot_intent,
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.orca import execution_binding as binding_mod
 from orca_auto.orca import worker_execution as worker_job
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
@@ -129,6 +130,171 @@ def test_recovery_build_seeds_frozen_runtime_geometry(tmp_path: Path) -> None:
     assert (old_generation / "h2.xyz").read_text(encoding="utf-8") == _CRASHED_XYZ
 
 
+def test_recovery_rejects_runtime_seed_with_substituted_atom_labels(tmp_path: Path) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    generation = _crash_generation(crashed)
+    (generation / "h2.xyz").write_text(
+        "2\nsubstituted species\nHe 0 0 0\nLi 0 0 0.80\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="does not preserve the submitted atom count, order"):
+        _build(job_dir, selected, executable, recovery_from=crashed)
+
+    assert [
+        child
+        for child in job_dir.iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [generation]
+
+
+@pytest.mark.parametrize(
+    "invalid_seed",
+    [
+        "2\nnon-finite\nH 0 0 0\nH nan 0 0\n",
+        "2\nextra coordinate\nH 0 0 0\nH 0 0 0.80 1.0\n",
+        "2\ntrailing row\nH 0 0 0\nH 0 0 0.80\nHe 0 0 1\n",
+    ],
+)
+def test_recovery_invalid_runtime_seed_falls_back_to_submitted_geometry(
+    tmp_path: Path,
+    invalid_seed: str,
+) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    generation = _crash_generation(crashed)
+    (generation / "h2.xyz").write_text(invalid_seed, encoding="utf-8")
+
+    replacement = _build(job_dir, selected, executable, recovery_from=crashed)
+
+    bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
+    assert "H 0 0 0.74" in bound_text
+    assert "nan" not in bound_text
+    assert "He 0 0 1" not in bound_text
+    _verify(job_dir, replacement)
+
+
+def test_recovery_valid_seed_does_not_use_changed_job_root_geometry(tmp_path: Path) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    _crash_generation(crashed)
+    (job_dir / "h2.xyz").write_text(
+        "2\nedited after submission\nH 0 0 0\nH 0 0 9.99\n",
+        encoding="utf-8",
+    )
+
+    replacement = _build(job_dir, selected, executable, recovery_from=crashed)
+
+    bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
+    assert "H 0 0 0.80" in bound_text
+    assert "9.99" not in bound_text
+    _verify(job_dir, replacement)
+
+
+@pytest.mark.parametrize("remove_mode", ["deleted", "renamed"])
+def test_recovery_valid_seed_does_not_require_current_job_root_geometry(
+    tmp_path: Path,
+    remove_mode: str,
+) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    _crash_generation(crashed)
+    current_geometry = job_dir / "h2.xyz"
+    if remove_mode == "deleted":
+        current_geometry.unlink()
+    else:
+        current_geometry.rename(job_dir / "h2.original.xyz")
+
+    replacement = _build(job_dir, selected, executable, recovery_from=crashed)
+
+    bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
+    assert "H 0 0 0.80" in bound_text
+    assert replacement["recovery"]["seeded_roles"]
+    _verify(job_dir, replacement)
+
+
+def test_recovery_materializes_the_exact_validated_seed_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    generation = _crash_generation(crashed)
+    seed_path = generation / "h2.xyz"
+    real_read = binding_mod.read_stable_regular_file
+    seed_reads = 0
+
+    def substitute_on_second_seed_read(path: str | Path, **kwargs: Any) -> bytes:
+        nonlocal seed_reads
+        if Path(path) == seed_path:
+            seed_reads += 1
+            if seed_reads > 1:
+                return b"1\nsubstituted after validation\nHe 0 0 0\n"
+        return real_read(path, **kwargs)
+
+    monkeypatch.setattr(binding_mod, "read_stable_regular_file", substitute_on_second_seed_read)
+
+    replacement = _build(job_dir, selected, executable, recovery_from=crashed)
+
+    assert seed_reads == 1
+    bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
+    assert "H 0 0 0.80" in bound_text
+    assert "He 0 0 0" not in bound_text
+    _verify(job_dir, replacement)
+
+
+def test_recovery_atom_guard_rejects_bytes_outside_bound_selected_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    generation = _crash_generation(crashed)
+    bound_selected = Path(crashed["bound_selected_identity"]["path"])
+    real_read = binding_mod.read_stable_regular_file
+
+    def substitute_bound_selected(path: str | Path, **kwargs: Any) -> bytes:
+        if Path(path) == bound_selected:
+            return b"! HF STO-3G Opt\n* xyz 0 1\nHe 0 0 0\n*\n"
+        return real_read(path, **kwargs)
+
+    monkeypatch.setattr(binding_mod, "read_stable_regular_file", substitute_bound_selected)
+
+    with pytest.raises(ValueError, match="recovery bound selected input snapshot is corrupt"):
+        _build(job_dir, selected, executable, recovery_from=crashed)
+
+    assert not any(
+        child.is_dir() and child != generation
+        for child in job_dir.iterdir()
+        if is_visible_generation_name(child.name)
+    )
+
+
+def test_recovery_accepts_identity_bound_input_larger_than_one_source_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(binding_mod, "MAX_INPUT_SNAPSHOT_BYTES", 240)
+    monkeypatch.setattr(binding_mod, "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES", 960)
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    selected.write_text(
+        "! HF STO-3G Opt\n#" + "x" * 200 + "\n* xyzfile 0 1 h2.xyz\n",
+        encoding="utf-8",
+    )
+    assert selected.stat().st_size <= binding_mod.MAX_INPUT_SNAPSHOT_BYTES
+
+    crashed = _build(job_dir, selected, executable)
+    bound_selected = Path(crashed["bound_selected_identity"]["path"])
+    assert bound_selected.stat().st_size > binding_mod.MAX_INPUT_SNAPSHOT_BYTES
+    _crash_generation(crashed)
+
+    replacement = _build(job_dir, selected, executable, recovery_from=crashed)
+
+    assert "H 0 0 0.80" in Path(replacement["selected_inp"]).read_text(encoding="utf-8")
+    _verify(job_dir, replacement)
+
+
 def test_recovery_build_falls_back_when_seed_is_truncated(tmp_path: Path) -> None:
     job_dir, selected, executable = _mutable_job(tmp_path)
     crashed = _build(job_dir, selected, executable)
@@ -155,6 +321,38 @@ def test_recovery_build_falls_back_when_seed_is_missing(tmp_path: Path) -> None:
 
     assert replacement["recovery"]["seeded_roles"] == {}
     _verify(job_dir, replacement)
+
+
+def test_recovery_build_rejects_changed_source_when_seed_is_missing(tmp_path: Path) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    generation = Path(crashed["execution_dir"])
+    (generation / "h2.out").write_text("interrupted\n", encoding="utf-8")
+    (generation / "h2.xyz").unlink()
+    (job_dir / "h2.xyz").write_text(
+        "2\nedited after submission\nH 0 0 0\nH 0 0 9.99\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="dependency changed since the crashed submission"):
+        _build(job_dir, selected, executable, recovery_from=crashed)
+
+
+def test_second_recovery_missing_seed_uses_unchanged_submitted_source(tmp_path: Path) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    first = _build(job_dir, selected, executable)
+    _crash_generation(first)
+    second = _build(job_dir, selected, executable, recovery_from=first)
+    second_generation = Path(second["execution_dir"])
+    (second_generation / "h2.out").write_text("interrupted again\n", encoding="utf-8")
+    (second_generation / "h2.xyz").unlink()
+
+    third = _build(job_dir, selected, executable, recovery_from=second)
+
+    assert third["recovery"]["seeded_roles"] == {}
+    bound_text = Path(third["selected_inp"]).read_text(encoding="utf-8")
+    assert "H 0 0 0.74" in bound_text
+    _verify(job_dir, third)
 
 
 def test_recovery_build_orders_roles_by_stored_source_paths(tmp_path: Path) -> None:
@@ -294,6 +492,63 @@ def test_recovery_checkpoint_skipped_when_source_already_moreads(tmp_path: Path)
     )
 
 
+@pytest.mark.parametrize(
+    "scf_block",
+    [
+        '%scf Guess MORead MOInp "guess.gbw" end',
+        "% SCF\n  GUESS   moread\n  MOINP = 'guess.gbw'\nEND",
+    ],
+)
+def test_recovery_checkpoint_skipped_when_scf_block_already_moreads(
+    tmp_path: Path,
+    scf_block: str,
+) -> None:
+    job_dir = tmp_path / "moread_scf_job"
+    job_dir.mkdir()
+    (job_dir / "h2.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
+    (job_dir / "guess.gbw").write_bytes(b"user-supplied-orbitals")
+    selected = job_dir / "h2.inp"
+    selected.write_text(
+        f"! HF STO-3G Opt\n{scf_block}\n* xyzfile 0 1 h2.xyz\n",
+        encoding="utf-8",
+    )
+    executable = _write_executable(tmp_path / "moread-scf-orca")
+    crashed = _build(job_dir, selected, executable)
+    generation = _crash_generation(crashed)
+    (generation / "h2.gbw").write_bytes(b"runtime-orbitals")
+
+    replacement = _build(job_dir, selected, executable, recovery_from=crashed)
+
+    assert replacement["recovery"]["checkpoint_role"] == ""
+    bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
+    assert "guess.gbw" in bound_text
+    assert "moinp.gbw" not in bound_text
+    _verify(job_dir, replacement)
+
+
+def test_recovery_build_rejects_changed_executable_before_reserving_generation(
+    tmp_path: Path,
+) -> None:
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    old_generation = _crash_generation(crashed)
+    replacement_executable = _write_executable(tmp_path / "replacement-orca")
+
+    with pytest.raises(ValueError, match="executable does not match the submitted identity"):
+        _build(
+            job_dir,
+            selected,
+            replacement_executable,
+            recovery_from=crashed,
+        )
+
+    assert [
+        child
+        for child in job_dir.iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
+
+
 def test_second_crash_reseeds_the_latest_checkpoint(tmp_path: Path) -> None:
     job_dir, selected, executable = _mutable_job(tmp_path)
     first = _build(job_dir, selected, executable)
@@ -336,6 +591,20 @@ def _hessian_job(tmp_path: Path) -> tuple[Path, Path, Path]:
     )
     executable = _write_executable(tmp_path / "freq-orca")
     return job_dir, selected, executable
+
+
+def test_recovery_build_rejects_changed_immutable_dependency(tmp_path: Path) -> None:
+    job_dir, selected, executable = _hessian_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    generation = Path(crashed["execution_dir"])
+    (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
+    (job_dir / "ts.inhess.hess").write_text(
+        "$hessian\n1\n9.9\n$end\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="dependency changed since the crashed submission"):
+        _build(job_dir, selected, executable, recovery_from=crashed)
 
 
 def test_recovery_checkpoint_with_freq_and_hessian_dependency(tmp_path: Path) -> None:
@@ -673,6 +942,41 @@ def test_rebind_consumes_budget_before_building(
     (row,) = list_queue(queue_root)
     assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
+
+
+@pytest.mark.parametrize("mismatch_kind", ["path", "sha256", "size"])
+def test_rebind_rejects_executable_mismatch_before_consuming_budget(
+    tmp_path: Path,
+    mismatch_kind: str,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    if mismatch_kind == "path":
+        configured_executable = _write_executable(tmp_path / "replacement-orca")
+    elif mismatch_kind == "sha256":
+        executable.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+        configured_executable = executable
+    else:
+        executable.write_text("#!/bin/sh\n# replacement\nexit 0\n", encoding="utf-8")
+        configured_executable = executable
+    configured_executable.chmod(0o755)
+    cfg = _worker_cfg(queue_root, configured_executable)
+
+    with pytest.raises(ValueError, match="executable does not match the submitted identity"):
+        worker_job._maybe_rebind_recovery_generation(
+            running,
+            queue_root=queue_root,
+            cfg_factory=lambda: cfg,
+        )
+
+    (row,) = list_queue(queue_root)
+    assert worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
+    assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
+    assert [
+        child
+        for child in Path(row.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
 
 
 _COMPLETED_OUT = "\n".join(

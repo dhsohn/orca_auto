@@ -28,12 +28,14 @@ from orca_auto.core.artifacts import (
     WORKFLOW_REPORT_HTML_FILE,
 )
 from orca_auto.core.engine_process import read_confined_text
-from orca_auto.core.queue.generation import (
-    is_visible_generation_name,
-    visible_generation_children,
-)
 from orca_auto.core.utils.persistence import atomic_write_text
-from orca_auto.flow.contracts.workflow import is_interaction_role
+from orca_auto.flow.conformer_selection import OrcaSelectedInputScienceIdentity
+from orca_auto.flow.contracts.workflow import is_supported_orca_stage_contract
+from orca_auto.flow.orca_stage_evidence import (
+    collect_verified_orca_stage_evidence,
+    resolve_verified_orca_stage_report,
+    stage_report_identity_matches,
+)
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.parser.patterns import (
     FINAL_SINGLE_POINT_ENERGY_BYTES_RE,
@@ -46,7 +48,7 @@ from orca_auto.orca.report.render import (
     render_page,
     status_badge_kind,
 )
-from orca_auto.orca.state import load_report_json
+from orca_auto.orca.report.si import SiBlock
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,7 @@ class OrcaStageResult:
     attempt_count: int
     report_href: str | None
     machine_path: Path | None = None
+    science_identity: tuple[OrcaSelectedInputScienceIdentity, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -161,17 +164,6 @@ def _task_kind(stage: Mapping[str, Any]) -> str:
     if not isinstance(task, dict):
         return ""
     return _text(task.get("task_kind"))
-
-
-def _interaction_role_stage(stage: Mapping[str, Any]) -> bool:
-    """True for interaction-energy fan-out stages (``role: interaction_*``).
-
-    Fragment and complex single points carry a different stoichiometry or
-    level of theory than the conformer/TS candidates, so they are ΔE_int
-    inputs only and must never rank in the candidate table or set its ΔE
-    baseline.
-    """
-    return is_interaction_role(_text(_stage_metadata(stage).get("role")))
 
 
 def _stage_artifacts(stage: Mapping[str, Any], kind: str) -> list[dict[str, Any]]:
@@ -329,7 +321,7 @@ def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, 
             if (
                 state is not None
                 and _text(state.get("engine")).lower() == internal_engine
-                and _stage_report_identity_matches(
+                and stage_report_identity_matches(
                     stage,
                     state,
                     require_job_and_run=False,
@@ -339,118 +331,18 @@ def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, 
         return None, None
     if task_engine in _INTERNAL_STAGE_ENGINES.values():
         return None, None
-    for job_dir in _stage_job_dirs(stage):
-        candidate_dirs = (
-            (job_dir,)
-            if is_visible_generation_name(job_dir.name)
-            else visible_generation_children(job_dir)
-        )
-        for candidate_dir in candidate_dirs:
-            report_path = candidate_dir / RUN_REPORT_JSON_FILE
-            report = _verified_orca_stage_report(stage, report_path)
-            if report is not None:
-                return report_path, report
-    return None, None
-
-
-def _verified_orca_stage_report(
-    stage: Mapping[str, Any],
-    report_path: Path | None,
-) -> dict[str, Any] | None:
-    if (
-        report_path is None
-        or not report_path.is_absolute()
-        or report_path.name != RUN_REPORT_JSON_FILE
-        or report_path != report_path.parent / RUN_REPORT_JSON_FILE
-        or not is_visible_generation_name(report_path.parent.name)
-    ):
-        return None
-    if report_path.is_symlink() or not report_path.is_file():
-        return None
-    try:
-        if report_path.resolve(strict=True) != report_path:
-            return None
-    except OSError:
-        return None
-    report = load_report_json(report_path.parent, require_consumable_success=True)
-    if report is None or not _stage_report_identity_matches(stage, report):
-        return None
-    return report
+    return resolve_verified_orca_stage_report(stage)
 
 
 def _resolve_orca_stage_report(
     stage: Mapping[str, Any],
 ) -> tuple[Path | None, dict[str, Any] | None]:
     """Resolve the canonical verified report for one ORCA workflow stage."""
-
-    report_path = _stage_artifact_path(stage, "orca_report_json")
-    report = _verified_orca_stage_report(stage, report_path)
-    if report is not None:
-        return report_path, report
     return _stage_job_report(stage)
 
 
 def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
-
-
-def _identity_values(*values: Any) -> frozenset[str]:
-    return frozenset(text for value in values if (text := _text(value)))
-
-
-def _stage_report_identity_matches(
-    stage: Mapping[str, Any],
-    report: Mapping[str, Any],
-    *,
-    require_job_and_run: bool = True,
-) -> bool:
-    metadata = _stage_metadata(stage)
-    task = _stage_task(stage)
-    task_payload = _stage_task_payload(stage)
-    submission = _mapping(task.get("submission_result"))
-    job = _mapping(report.get("job"))
-    engine_payload = _mapping(report.get("engine_payload"))
-
-    stage_job_ids = _identity_values(
-        metadata.get("child_job_id"),
-        submission.get("job_id"),
-    )
-    # Only the nested identities are read: the flat top-level keys belong to a
-    # pre-schema artifact layout that the engine-key and schema gates above no
-    # longer admit, so accepting them here would only widen the conflict guard
-    # against values no writer produces.
-    report_job_ids = _identity_values(job.get("id"), job.get("task_id"))
-    stage_run_ids = _identity_values(metadata.get("run_id"), task_payload.get("run_id"))
-    report_run_ids = _identity_values(engine_payload.get("run_id"))
-    stage_queue_ids = _identity_values(metadata.get("queue_id"), submission.get("queue_id"))
-    report_queue_ids = _identity_values(job.get("queue_id"))
-    identity_pairs = (
-        (stage_job_ids, report_job_ids),
-        (stage_run_ids, report_run_ids),
-        (stage_queue_ids, report_queue_ids),
-    )
-    if any(
-        len(stage_values) > 1 or len(report_values) > 1
-        for stage_values, report_values in identity_pairs
-    ):
-        return False
-    if require_job_and_run:
-        required_pairs = identity_pairs[:2]
-        if any(
-            not stage_values or report_values != stage_values
-            for stage_values, report_values in required_pairs
-        ):
-            return False
-        return not (stage_queue_ids and report_queue_ids and report_queue_ids != stage_queue_ids)
-
-    declared_pairs = tuple(
-        (stage_values, report_values)
-        for stage_values, report_values in identity_pairs
-        if stage_values
-    )
-    return bool(declared_pairs) and all(
-        report_values == stage_values for stage_values, report_values in declared_pairs
-    )
 
 
 def _stage_status_reason(stage: Mapping[str, Any], report: Mapping[str, Any] | None) -> str:
@@ -592,7 +484,8 @@ def _pread_exact(descriptor: int, offset: int, size: int) -> bytes | None:
 
 
 def _last_final_energy_line_from_output(
-    output_root: Path, candidate: Path
+    output_root: Path,
+    candidate: Path,
 ) -> tuple[bool, bytes | None] | None:
     """Locate the file-final energy line of one confined, stable output.
 
@@ -604,8 +497,8 @@ def _last_final_energy_line_from_output(
     single bounded tail cannot see past.
 
     Returns ``None`` when the output cannot be read safely, and
-    ``(annotated, energy_text)`` otherwise; ``energy_text`` is ``None`` when
-    no final-energy line exists or the last one is annotated.
+    ``(annotated, energy_text)`` otherwise; ``energy_text`` is
+    ``None`` when no final-energy line exists or the last one is annotated.
     """
     parent_fd = -1
     output_fd = -1
@@ -756,7 +649,16 @@ def _orca_report_output_energy_state(
     return False, None
 
 
-def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaStageResult:
+def _orca_stage_result(
+    stage: Mapping[str, Any],
+    workspace_dir: Path,
+    *,
+    authoritative_evidence: tuple[
+        SiBlock,
+        OrcaSelectedInputScienceIdentity | None,
+    ]
+    | None = None,
+) -> OrcaStageResult:
     metadata = _stage_metadata(stage)
     stage_id = _text(stage.get("stage_id"))
     label = _text(metadata.get("selected_input_label")) or stage_id
@@ -783,7 +685,15 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
                     imaginary_count = None
 
     energy = None
-    if report_json_path is not None and report_payload is not None:
+    if authoritative_evidence is not None:
+        block, _selected_input_identity = authoritative_evidence
+        energy = block.result.energy_hartree
+        imaginary_count = block.imaginary_count
+    elif (
+        _text(stage.get("status")).lower() != "completed"
+        and report_json_path is not None
+        and report_payload is not None
+    ):
         # A reusable job root can retain pre-generation ``*.engrad`` files.
         # Both energy sources must therefore be confined to the generation
         # whose report provenance and workflow-stage identity were verified.
@@ -811,6 +721,17 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
             except ValueError:
                 report_href = str(job_report_html)
 
+    science_identity = None
+    if authoritative_evidence is not None:
+        block, selected_input_identity = authoritative_evidence
+        orca_version = block.result.orca_version.strip()
+        if (
+            selected_input_identity is not None
+            and orca_version
+            and block.result.electronic_state_verified
+        ):
+            science_identity = (selected_input_identity, orca_version)
+
     return OrcaStageResult(
         stage_id=stage_id,
         label=label,
@@ -822,11 +743,12 @@ def _orca_stage_result(stage: Mapping[str, Any], workspace_dir: Path) -> OrcaSta
         attempt_count=attempt_count,
         report_href=report_href,
         machine_path=report_json_path if report_payload is not None else None,
+        science_identity=science_identity,
     )
 
 
 def _with_relative_energies(results: list[OrcaStageResult]) -> tuple[OrcaStageResult, ...]:
-    """Rank results by energy with completed stages first.
+    """Rank scientifically comparable results by energy with completed stages first.
 
     Only completed stages enter the ΔE baseline and carry a ``rel_kcal``: a
     failed or cancelled stage's ``.engrad`` holds a transient (non-stationary)
@@ -839,6 +761,15 @@ def _with_relative_energies(results: list[OrcaStageResult]) -> tuple[OrcaStageRe
         if entry.energy is not None and entry.status == "completed"
     ]
     if not completed_energies:
+        return tuple(results)
+    comparable = [
+        entry for entry in results if entry.energy is not None and entry.status == "completed"
+    ]
+    science_identities = {entry.science_identity for entry in comparable}
+    if None in science_identities or len(science_identities) != 1:
+        # Absolute energies remain useful diagnostics, but a cross-level ΔE
+        # has no physical meaning. Preserve workflow order instead of silently
+        # ranking the candidates by those incomparable values.
         return tuple(results)
     best = min(completed_energies)
     ranked = [
@@ -893,18 +824,47 @@ def collect_workflow_report_data(
             detail, candidates = _xtb_stage_detail(stage)
             xtb_total = (xtb_total or 0) + candidates
         elif stage_kind == "orca_stage":
-            result = _orca_stage_result(stage, workspace_dir)
-            if result.machine_path is not None:
-                consumed_orca_machine_paths.append(result.machine_path)
-            # A relaxed scan is a prerequisite, not a TS candidate: keep it in
-            # the stage chain but out of the ranked candidate table so its
-            # non-stationary energy never sets the ΔE baseline. Interaction
-            # fan-out stages stay out for the same reason — their energies
-            # belong to the ΔE_int table, not the candidate ranking.
-            if _task_kind(stage) != "relaxed_scan" and not _interaction_role_stage(stage):
-                orca_results.append(result)
-            detail_parts = [part for part in (result.label, result.reason) if part]
-            detail = " · ".join(detail_parts)
+            if is_supported_orca_stage_contract(stage):
+                task_kind = _task_kind(stage)
+                candidate_task = task_kind in {"opt", "optts_freq"}
+                authoritative_evidence = None
+                evidence_reason = ""
+                if candidate_task and stage_status == "completed":
+                    block, evidence_reason, selected_input_identity = (
+                        collect_verified_orca_stage_evidence(stage)
+                    )
+                    if block is not None:
+                        authoritative_evidence = (block, selected_input_identity)
+                result = _orca_stage_result(
+                    stage,
+                    workspace_dir,
+                    authoritative_evidence=authoritative_evidence,
+                )
+                if result.machine_path is not None and (
+                    not candidate_task
+                    or stage_status != "completed"
+                    or authoritative_evidence is not None
+                ):
+                    consumed_orca_machine_paths.append(result.machine_path)
+                # Only stationary-point task kinds enter the ranked candidate
+                # table. Relaxed scans are prerequisites, while ordinary and
+                # interaction single points are SI refinement inputs.
+                if candidate_task and (
+                    stage_status != "completed" or authoritative_evidence is not None
+                ):
+                    orca_results.append(result)
+                detail_parts = [
+                    part
+                    for part in (
+                        result.label,
+                        result.reason,
+                        evidence_reason if stage_status == "completed" else "",
+                    )
+                    if part
+                ]
+                detail = " · ".join(detail_parts)
+            else:
+                detail = "unsupported or contradictory ORCA stage contract"
         diagnostic_detail = explanation or reason
         if diagnostic_detail and diagnostic_detail not in detail:
             detail = " · ".join(part for part in (detail, diagnostic_detail) if part)
@@ -1102,8 +1062,21 @@ def _failure_verdict_html(data: WorkflowReportData) -> str:
 def _orca_table_html(data: WorkflowReportData) -> str:
     if not data.orca_results:
         return '<p class="muted">No ORCA stages in this workflow yet.</p>'
+    comparable = [
+        entry
+        for entry in data.orca_results
+        if entry.status == "completed" and entry.energy is not None
+    ]
+    provenance_note = ""
+    comparison_omitted = bool(comparable) and all(entry.rel_kcal is None for entry in comparable)
+    if comparison_omitted:
+        provenance_note = (
+            '<p class="muted">Relative energies are omitted because executed route/'
+            "electronic-state provenance is missing or differs across completed candidates.</p>"
+        )
     rows = []
     for rank, entry in enumerate(data.orca_results, start=1):
+        rank_text = "&#8211;" if comparison_omitted else str(rank)
         energy = f"{entry.energy:.6f}" if entry.energy is not None else "&#8211;"
         rel = f"{entry.rel_kcal:+.2f}" if entry.rel_kcal is not None else "&#8211;"
         imag = str(entry.imaginary_count) if entry.imaginary_count is not None else "&#8211;"
@@ -1115,7 +1088,7 @@ def _orca_table_html(data: WorkflowReportData) -> str:
             label_html = html.escape(entry.label)
         rows.append(
             "<tr>"
-            f"<td>{rank}</td>"
+            f"<td>{rank_text}</td>"
             f'<td>{label_html}<div class="sub">{html.escape(entry.stage_id)}</div></td>'
             f'<td class="{_status_cell_class(entry.status)}">{html.escape(entry.status)}'
             f'<div class="sub">{html.escape(entry.reason)}</div></td>'
@@ -1125,7 +1098,7 @@ def _orca_table_html(data: WorkflowReportData) -> str:
             f"<td>{entry.attempt_count or '&#8211;'}</td>"
             "</tr>"
         )
-    return (
+    return provenance_note + (
         "<table><thead><tr><th>Rank</th><th>Candidate</th><th>Status</th>"
         "<th>E / Eh</th><th>&#916;E / kcal&#183;mol&#8315;&#185;</th>"
         "<th>Imag.</th><th>Attempts</th></tr></thead>"

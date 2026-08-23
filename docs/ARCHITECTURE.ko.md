@@ -166,6 +166,9 @@ import-linter 계약으로 보호합니다.
   복사본으로 참조를 다시 씁니다. Raw 출력도 그와 나란히 쓰며, 새 ORCA
   generation에는 숨은 실행 parent나 중첩 입력 단계가 없습니다. 워커는 변경 가능한 소스
   파일을 실행 계약으로 다시 읽지 않고 입력 및 실행 파일의 콘텐츠 정체성을 검증합니다.
+  Recovery는 최초 executable identity에 계속 고정되고, semantic orbital-input reference는
+  top-level과 `%scf` 문법을 함께 보아 snapshot에 바인딩합니다. Mutable runtime XYZ seed는
+  엄격한 유한 atom row가 identity-bound atom-label 순서를 보존할 때만 사용합니다.
 - **워커가 실행 중이 아니면 작업은 대기 상태로 남습니다** — 워커가 돌아올 때까지
   `queue.json`에 보관됩니다. `status: queued` 이후 제출 터미널을 닫아도
   안전합니다.
@@ -262,6 +265,12 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   기록합니다. `_slot_owner_alive`가 해당 PID가 여전히 같은 프로세스인지 검증하므로,
   크래시된 소유자의 슬롯은 용량을 누수하지 않고 `reconcile_stale_slots`로
   회수됩니다.
+- **pending launch 복구:** 엔진 catalog는 ORCA launch gate 사용 여부를 durable하게
+  기록합니다. 같은 boot에서 소유자가 죽었고 gated slot이 engine identity 없는
+  `pending` 상태라면 owner와 policy를 compare-and-swap으로 재확인해 회수할 수 있습니다.
+  Gate가 엔진이 아직 exec되지 않았음을 증명하기 때문입니다. Direct-launch xTB/CREST와
+  legacy record는 기본적으로 non-gated이며 기록되지 않은 process가 있을 수 있으므로
+  보수적인 pending fence를 유지합니다.
 
 이것이 `queue list`의 `active_simulations` 줄이 현재 공유 슬롯을 소비하는 실행만
 세는 이유입니다.
@@ -310,7 +319,9 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   `--scratch` copier는 계속 사용하지 않습니다.
   최종 process group에는 one-byte launch gate를 먼저 시작합니다. worker가 해당 PID/PGID를 공유
   admission slot에 durable하게 확정한 뒤에만 gate가 ORCA를 `exec`하므로, 등록 전 parent hard
-  failure가 소유권 없는 계산을 남기지 않습니다.
+  failure가 소유권 없는 계산을 남기지 않습니다. 그보다 일찍 parent가 죽어 durable record가
+  engine identity 없는 `pending`에 머물면, 같은 gate 근거로 reboot를 기다리지 않고 orphan
+  recovery가 slot을 회수할 수 있습니다.
 - **시도 엔진**(`attempt/engine.py`, `attempt/retry.py`, `attempt/resume.py`):
   시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
 - **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
@@ -334,8 +345,9 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   자동 변경하지 않으며, 원본 `.inp`는 보존되고, 재시도는 `<name>.retryNN.inp`로
   기록됩니다.
 - **재시작/재개:** 재시도/재개 시, 일치하는 비어 있지 않은 `.gbw` 체크포인트가
-  있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 재개된 입력은
-  `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
+  있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 기존 top-level 또는 `%scf`
+  orbital-input 선언을 semantic하게 인식하므로 recovery가 두 번째 source를 주입하지
+  않습니다. 재개된 입력은 `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
 - **상태 & 리포트:** `state.py`/`state_machine.py`가 private `job_state.json`을
   영속화하고, 완료 시 공통 `machine.json`을 마지막에 발행합니다. Opt,
   OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업은 추가로
@@ -384,6 +396,18 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 순환/재귀 graph를
 거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, xTB/ORCA Hessian 생성 작업
 1,000원자입니다.
+
+Workflow ORCA task 역할은 생성, restart, 제출 직전 실제 입력 선택, 완료 결과 수락 때
+materialized input과 다시 대조합니다. Relaxed scan은 각 dynamic stage에서 닫힌 scan
+coordinate 하나를 선택 geometry에 추가로 바인딩합니다. Submitter는 서로 같은 두 durable
+경로 사본을 실제 선택과 묶고 execution snapshot이 바로 그 바이트를 기록·식별하기 전에 최종
+rewrite된 바이트를 검증합니다. 후보 상대 에너지와 interaction RMSD 대표 선택은 authoritative
+selected input과 final output이 route, resource가 아닌 active directive, atom-label 순서,
+identity-bound 비-geometry dependency content, electronic state, ORCA version provenance가
+동일함을 입증할 때만 발행합니다. Geometry 좌표 자체는 후보별 값으로 남고 private dependency
+경로명은 canonicalize됩니다. HTML과 SI도 같은 과학 정체성을 사용하며 resource control은
+정체성에 영향을 주지 않습니다. `flow/orca_stage_evidence.py`는 report, SI, interaction
+materialization이 함께 쓰는 authoritative report/state/input/output reader입니다.
 
 ### Supporting Information 소유권
 
@@ -502,7 +526,8 @@ orca_auto는 단방향 발신 알림만 전송합니다. 작업 및 워크플로
 
 `DiscordBotChannel`(`discord_bot.py`)은 각 `Message`를 Discord embed(`render_discord.py`)로
 렌더링해 bot 인증 Discord API로 전송하며, 공유 HTTP 재시도/백오프 헬퍼는
-`discord_http.py`에 있습니다.
+`discord_http.py`에 있습니다. 모든 transport 및 response-read 실패를 이 adapter 경계에서
+정규화하므로 알림 실패는 durable publication에 대한 advisory로 남습니다.
 
 `core/notifications/`는 엔진 알림 훅 계층(`engines.py`)을
 유지합니다. 각 `EngineDefinition`은 `job_started` / `job_finished` / `retry` 훅을 등록할
@@ -552,7 +577,9 @@ xTB 자식 페이즈는 각각 한 메시지로 요약합니다.
 | `orca_auto-runtime@.target`           | 엔진 워커 시작                                  |
 
 `orca_auto systemd install --user <user> --repo <repo>`가 유닛을 렌더링하고
-활성화합니다. WSL에서는 `/etc/wsl.conf`에서 `systemd`가 활성화되어 있어야 합니다.
+활성화합니다. Data path의 literal percent는 escape하고, quote·backslash·dollar sign 때문에
+unit parsing이 달라질 경로는 거부합니다. WSL에서는 `/etc/wsl.conf`에서 `systemd`가
+활성화되어 있어야 합니다.
 
 기본 ORCA 워커는 자체 서비스 감독자로 실행되어 opt-in workflow 감독자와 독립적으로
 실패하거나 재시작할 수 있습니다. opt-in workflow 감독자는 각 워커를 별도
@@ -561,6 +588,10 @@ xTB 자식 페이즈는 각각 한 메시지로 요약합니다.
 유휴 상태의 전체 상태 조정은 1분에 한 번으로 제한하고 가벼운 큐/상태 poll은 기존
 주기를 유지합니다. 서비스는 실패 후 30초 뒤 재시도하며 5분 동안 unit 시작을 최대
 세 번만 허용하고, 감독자가 정상 종료되면 재시작하지 않습니다.
+
+Worker는 시작할 때 resolve한 package source를 자기 process environment에 바인딩합니다.
+Status는 PID/start-tick race를 검사하며 그 provenance를 읽은 뒤 worker별로 새 HEAD/reflog와
+package-tree clean 상태를 판정하고, process cwd는 import-source 근거로 취급하지 않습니다.
 
 ---
 

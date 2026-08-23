@@ -97,14 +97,19 @@ def _optional_discord_snowflake(value: object, *, field_name: str) -> str:
     return _discord_snowflake(value, field_name=field_name)
 
 
-def _optional_identity_text(
+def _optional_discord_bot_token(
     value: object,
     *,
     field_name: str,
 ) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    raise ValueError(f"{field_name} must be a string when configured.")
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string when configured.")
+    text = value.strip()
+    if text and any(character < "!" or character > "~" for character in text):
+        raise ValueError(
+            f"{field_name} must contain only printable ASCII characters without whitespace."
+        )
+    return text
 
 
 def positive_int(value: Any) -> int | None:
@@ -224,7 +229,7 @@ class DiscordConfig:
         object.__setattr__(
             self,
             "bot_token",
-            _optional_identity_text(
+            _optional_discord_bot_token(
                 self.bot_token,
                 field_name="messenger.discord.bot_token",
             ),
@@ -258,7 +263,7 @@ def discord_config_from_mapping(raw: object) -> DiscordConfig:
     )
     return DiscordConfig(
         bot_token=(
-            _optional_identity_text(
+            _optional_discord_bot_token(
                 discord_raw.get("bot_token"),
                 field_name="messenger.discord.bot_token",
             )

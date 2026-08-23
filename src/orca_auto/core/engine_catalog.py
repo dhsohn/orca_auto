@@ -26,6 +26,7 @@ class EngineCatalogEntry:
     workflow_stage_role: WorkflowStageRole
     workflow_stage_dirname: str | None
     managed_admission: bool
+    engine_launch_gated: bool
     default_supervision_role: SupervisionRole
     supervision_order: int
     activity_order: int
@@ -44,6 +45,7 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         workflow_stage_role="shared-root",
         workflow_stage_dirname="03_orca",
         managed_admission=True,
+        engine_launch_gated=True,
         default_supervision_role="default",
         supervision_order=0,
         activity_order=2,
@@ -60,6 +62,7 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         workflow_stage_role="workflow-stage",
         workflow_stage_dirname="02_xtb",
         managed_admission=True,
+        engine_launch_gated=False,
         default_supervision_role="with-workflow",
         supervision_order=3,
         activity_order=1,
@@ -76,6 +79,7 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         workflow_stage_role="workflow-stage",
         workflow_stage_dirname="01_crest",
         managed_admission=True,
+        engine_launch_gated=False,
         default_supervision_role="with-workflow",
         supervision_order=2,
         activity_order=0,

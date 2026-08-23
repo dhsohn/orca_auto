@@ -6,12 +6,13 @@ import shutil
 import subprocess
 import sys
 from argparse import Namespace
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from orca_auto import cli_systemd_apply, cli_systemd_status, systemd_plan
+from orca_auto import _process_evidence, cli_systemd_apply, cli_systemd_status, systemd_plan
 
 
 def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -48,6 +49,72 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     return repo, config_path
+
+
+def _make_fake_git_checkout(source_root: Path) -> None:
+    (source_root / ".git").mkdir(parents=True)
+
+
+def _fake_proc_stat(pid: int, *, start_ticks: int = 123_456) -> bytes:
+    fields_after_comm = ["S", *("0" for _ in range(18)), str(start_ticks)]
+    return f"{pid} (orca worker) {' '.join(fields_after_comm)}\n".encode()
+
+
+def _process_file_reader(
+    import_sources: dict[int, Path], *, start_ticks: int = 123_456
+) -> Callable[[str], bytes]:
+    def _read(path: str) -> bytes:
+        parts = Path(path).parts
+        pid = int(parts[-2])
+        if parts[-1] == "stat":
+            return _fake_proc_stat(pid, start_ticks=start_ticks)
+        assert parts[-1] == "environ"
+        source = import_sources[pid]
+        return f"{cli_systemd_status.PROCESS_IMPORT_SOURCE_ENV}={source}\0".encode()
+
+    return _read
+
+
+def test_module_cli_reexecs_once_with_actual_import_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.delenv(_process_evidence.PROCESS_IMPORT_SOURCE_ENV, raising=False)
+    monkeypatch.setattr(
+        _process_evidence.sys,
+        "argv",
+        ["orca_auto.cli", "queue", "worker", "--app", "orca"],
+    )
+
+    def _fake_execve(executable: str, argv: list[str], environment: dict[str, str]) -> None:
+        captured.update(executable=executable, argv=argv, environment=environment)
+        raise RuntimeError("exec intercepted")
+
+    monkeypatch.setattr(_process_evidence.os, "execve", _fake_execve)
+
+    with pytest.raises(RuntimeError, match="exec intercepted"):
+        _process_evidence.exec_with_import_source_evidence()
+
+    import_source = str(Path(_process_evidence.__file__).resolve(strict=False))
+    assert captured["executable"] == sys.executable
+    assert captured["argv"] == [
+        sys.executable,
+        "-m",
+        "orca_auto.cli",
+        "queue",
+        "worker",
+        "--app",
+        "orca",
+    ]
+    assert captured["environment"][_process_evidence.PROCESS_IMPORT_SOURCE_ENV] == import_source
+
+    monkeypatch.setenv(_process_evidence.PROCESS_IMPORT_SOURCE_ENV, import_source)
+    monkeypatch.setattr(
+        _process_evidence.os,
+        "execve",
+        lambda *_args, **_kwargs: pytest.fail("matching evidence must not re-exec"),
+    )
+    _process_evidence.exec_with_import_source_evidence()
 
 
 def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path) -> None:
@@ -110,6 +177,47 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert unit_by_name["orca_auto-runtime@.target"].destination == (
         unit_dir.resolve(strict=False) / "orca_auto-runtime@.target"
     )
+
+
+def test_systemd_renderer_escapes_literal_percent_only_in_rendered_paths(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path / "checkout%i")
+    unit_dir = tmp_path / "units"
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=unit_dir,
+        no_enable=True,
+        is_root=lambda: True,
+    )
+
+    unit_by_name = {unit.name: unit for unit in plan.units}
+    escaped_repo = str(repo.resolve(strict=False)).replace("%", "%%")
+    escaped_config = str(config_path.resolve(strict=False)).replace("%", "%%")
+    worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
+    assert f"WorkingDirectory={escaped_repo}" in worker_content
+    assert f"Environment=ORCA_AUTO_CONFIG={escaped_config}" in worker_content
+    assert f"ExecStart={escaped_repo}/.venv/bin/python" in worker_content
+    assert f"ReadWritePaths={escaped_repo}/admission {escaped_repo}/orca_runs" in worker_content
+    # Template-owned instance specifiers are not path data and must still expand.
+    assert "User=%i" in worker_content
+    assert "PartOf=orca_auto-engine-workers@%i.target" in worker_content
+    assert (
+        "Wants=orca_auto-queue-worker@%i.service"
+        in unit_by_name["orca_auto-engine-workers@.target"].content
+    )
+    if shutil.which("systemd-analyze") is not None:
+        unit_dir.mkdir()
+        for unit in plan.units:
+            unit.destination.write_text(unit.content, encoding="utf-8")
+        result = subprocess.run(
+            ["systemd-analyze", "verify", *(str(unit.destination) for unit in plan.units)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
@@ -296,6 +404,88 @@ def test_build_systemd_install_plan_rejects_paths_that_break_unit_syntax(
             unit_dir=tmp_path / "units",
             is_root=lambda: True,
         )
+
+
+@pytest.mark.parametrize("character", ['"', "'", "\\", "$"])
+@pytest.mark.parametrize("path_kind", ["repo", "config", "runtime"])
+def test_systemd_rejects_unquoted_setting_metacharacters(
+    tmp_path: Path,
+    character: str,
+    path_kind: str,
+) -> None:
+    repo_base = tmp_path / (f"checkout{character}value" if path_kind == "repo" else "checkout")
+    repo, config_path = _make_repo(repo_base)
+    if path_kind == "config":
+        unsafe_config = config_path.with_name(f"orca{character}auto.yaml")
+        config_path.rename(unsafe_config)
+        config_path = unsafe_config
+    elif path_kind == "runtime":
+        config_path.write_text(
+            "\n".join(
+                [
+                    f"runs_root: {repo / f'runs{character}root'}",
+                    "scheduler:",
+                    f"  admission_root: {repo / 'admission'}",
+                    "messenger:",
+                    "  discord:",
+                    "    bot_token: token",
+                    "    default_channel_id: '123'",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="must not contain quotes, backslashes, or dollar signs",
+    ):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            no_enable=True,
+            is_root=lambda: True,
+        )
+
+
+def test_systemd_install_rejects_metacharacter_before_any_apply(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    unsafe_config = config_path.with_name("orca$auto.yaml")
+    config_path.rename(unsafe_config)
+    unit_dir = tmp_path / "units"
+    commands: list[tuple[str, ...]] = []
+
+    def reject_run(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(tuple(argv))
+        return subprocess.CompletedProcess(argv, 99)
+
+    result = cli_systemd_apply.cmd_systemd_install(
+        Namespace(
+            target_user="alice",
+            repo=str(repo),
+            config=str(unsafe_config),
+            unit_dir=str(unit_dir),
+            worker_only=False,
+            no_enable=True,
+            no_start=False,
+            dry_run=False,
+            no_sudo=True,
+        ),
+        deps=cli_systemd_apply.SystemdInstallCliDeps(
+            run=reject_run,
+            is_root=lambda: True,
+        ),
+    )
+
+    assert result == 1
+    assert commands == []
+    assert not unit_dir.exists()
+    assert "must not contain quotes, backslashes, or dollar signs" in capsys.readouterr().err
 
 
 def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) -> None:
@@ -941,12 +1131,17 @@ def test_cmd_service_status_consults_the_real_staleness_collector_by_default(
     assert json.loads(capsys.readouterr().out)["worker_staleness"] == verdict
 
 
-def test_collect_worker_staleness_flags_workers_started_before_head(tmp_path: Path) -> None:
-    # 2026-08-03 09:02:30 UTC; the stale worker's systemd record predates it by
-    # an hour and the fresh one follows it by an hour.
-    head_epoch = 1_785_747_750
+def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
+    tmp_path: Path,
+) -> None:
+    # The commit object was created a day before this checkout deployed it. The
+    # stale worker started after the commit timestamp but before the checkout
+    # update, which the former `%ct` comparison incorrectly reported as fresh.
+    head_update_epoch = 1_785_747_750
+    head_commit_epoch = head_update_epoch - 86_400
+    head_sha = "a" * 40
     source_root = tmp_path / "checkout"
-    (source_root / ".git").mkdir(parents=True)
+    _make_fake_git_checkout(source_root)
     start_stamps = {
         "orca_auto-queue-worker@alice.service": "Mon 2026-08-03 08:02:30 UTC",
         "orca_auto-workflow-worker@alice.service": "Mon 2026-08-03 10:02:30 UTC",
@@ -966,7 +1161,17 @@ def test_collect_worker_staleness_flags_workers_started_before_head(tmp_path: Pa
         del check, stdout, stderr, text
         if argv[0] == "git":
             assert argv[1:3] == ["-C", str(source_root)]
-            return subprocess.CompletedProcess(argv, 0, stdout=f"{head_epoch}\n", stderr="")
+            git_args = argv[3:]
+            if git_args == ["rev-parse", "--show-toplevel"]:
+                value = str(source_root)
+            elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                value = head_sha
+            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
+            else:
+                assert git_args == ["show", "-s", "--format=%ct", head_sha]
+                value = str(head_commit_epoch)
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
         if argv[:4] == ["systemctl", "show", "--property=ExecMainStartTimestamp", "--value"]:
             assert argv[4] == "--timestamp=utc"
             return subprocess.CompletedProcess(
@@ -1003,13 +1208,659 @@ def test_collect_worker_staleness_flags_workers_started_before_head(tmp_path: Pa
     )
 
     assert verdict is not None
-    assert verdict["head_commit_epoch"] == head_epoch
+    assert verdict["head_commit_epoch"] == head_commit_epoch
+    assert verdict["head_update_epoch"] == head_update_epoch
+    assert verdict["source_root"] == str(source_root)
+    assert verdict["head_sha"] == head_sha
     assert verdict["undetermined"] == []
-    # Only the pre-HEAD worker service is stale; the fresh workflow worker and
-    # the non-service engines target are not inspected as stale.
+    # Only the pre-update worker service is stale; the fresh workflow worker and
+    # the non-service engines target are not inspected as stale. In particular,
+    # the stale worker started *after* the old commit object's timestamp.
     assert [entry["unit"] for entry in verdict["stale"]] == ["orca_auto-queue-worker@alice.service"]
     assert verdict["stale"][0]["pid"] == 41
-    assert verdict["stale"][0]["started_epoch"] == head_epoch - 3600
+    assert verdict["stale"][0]["started_epoch"] == head_update_epoch - 3600
+    assert verdict["stale"][0]["started_epoch"] > head_commit_epoch
+    assert verdict["stale"][0]["head_update_epoch"] == head_update_epoch
+    assert {entry["source_root"] for entry in verdict["workers"]} == {str(source_root)}
+
+
+def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "checkout"
+    _make_fake_git_checkout(source_root)
+    old_sha = "a" * 40
+    new_sha = "b" * 40
+    old_update_epoch = 1_785_744_000
+    worker_start_epoch = 1_785_747_600
+    new_update_epoch = 1_785_751_200
+    head_moved = False
+    units = {
+        "orca_auto-queue-worker@alice.service": "41",
+        "orca_auto-workflow-worker@alice.service": "42",
+    }
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        nonlocal head_moved
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            assert argv[1:3] == ["-C", str(source_root)]
+            git_args = argv[3:]
+            head_sha = new_sha if head_moved else old_sha
+            update_epoch = new_update_epoch if head_moved else old_update_epoch
+            if git_args == ["rev-parse", "--show-toplevel"]:
+                value = str(source_root)
+            elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                value = head_sha
+            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+                value = f"{head_sha}\0HEAD@{{{update_epoch}}}"
+            else:
+                assert git_args == ["show", "-s", "--format=%ct", head_sha]
+                value = str(update_epoch - 86_400)
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
+        if argv[:4] == ["systemctl", "show", "--property=ExecMainStartTimestamp", "--value"]:
+            assert argv[4] == "--timestamp=utc"
+            if argv[5] == "orca_auto-workflow-worker@alice.service":
+                head_moved = True
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="Mon 2026-08-03 09:00:00 UTC\n",
+                stderr="",
+            )
+        assert argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{units[argv[4]]}\n", stderr="")
+
+    statuses = tuple(
+        cli_systemd_status.ServiceUnitStatus(
+            label=label,
+            unit=unit,
+            active="active",
+            enabled="enabled",
+        )
+        for label, unit in (
+            ("worker", "orca_auto-queue-worker@alice.service"),
+            ("workflow", "orca_auto-workflow-worker@alice.service"),
+        )
+    )
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        statuses,
+        run=_fake_run,
+        source_root=source_root,
+    )
+
+    assert verdict is not None
+    assert [entry["unit"] for entry in verdict["stale"]] == [
+        "orca_auto-workflow-worker@alice.service"
+    ]
+    assert verdict["workers"][0]["head_sha"] == old_sha
+    assert verdict["workers"][0]["started_epoch"] == worker_start_epoch
+    assert verdict["workers"][1]["head_sha"] == new_sha
+    assert verdict["workers"][1]["head_update_epoch"] == new_update_epoch
+
+
+def test_collect_worker_staleness_observes_the_active_process_checkout(tmp_path: Path) -> None:
+    unit_checkout = tmp_path / "unit-editable-checkout"
+    import_source = unit_checkout / "src" / "orca_auto" / "_process_evidence.py"
+    head_update_epoch = 1_785_747_750
+    head_commit_epoch = head_update_epoch - 86_400
+    head_sha = "b" * 40
+    _make_fake_git_checkout(unit_checkout)
+    import_source.parent.mkdir(parents=True)
+    import_source.write_text("# process evidence\n", encoding="utf-8")
+    unit = "orca_auto-queue-worker@alice.service"
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            # A regression to the status CLI's own editable checkout would not
+            # match this process-observed root and fails the fixture immediately.
+            assert argv[1:3] == ["-C", str(unit_checkout)]
+            git_args = argv[3:]
+            if git_args == ["rev-parse", "--show-toplevel"]:
+                value = str(unit_checkout)
+            elif git_args == [
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                "src/orca_auto/_process_evidence.py",
+            ]:
+                value = "src/orca_auto/_process_evidence.py"
+            elif git_args == [
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                "src/orca_auto",
+            ]:
+                value = ""
+            elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                value = head_sha
+            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
+            else:
+                assert git_args == ["show", "-s", "--format=%ct", head_sha]
+                value = str(head_commit_epoch)
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="77\n", stderr="")
+        assert argv[:4] == [
+            "systemctl",
+            "show",
+            "--property=ExecMainStartTimestamp",
+            "--value",
+        ]
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="Mon 2026-08-03 08:02:30 UTC\n",
+            stderr="",
+        )
+
+    statuses = (
+        cli_systemd_status.ServiceUnitStatus(
+            label="worker",
+            unit=unit,
+            active="active",
+            enabled="enabled",
+        ),
+    )
+    observed_proc_paths: list[str] = []
+    read_process_file = _process_file_reader({77: import_source})
+
+    def _read_process_file(path: str) -> bytes:
+        observed_proc_paths.append(path)
+        return read_process_file(path)
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        statuses,
+        run=_fake_run,
+        read_process_file=_read_process_file,
+    )
+
+    assert verdict is not None
+    assert "/proc/77/environ" in observed_proc_paths
+    assert all(not path.endswith("/cwd") for path in observed_proc_paths)
+    assert verdict["source_root"] == str(unit_checkout)
+    assert verdict["head_sha"] == head_sha
+    assert verdict["workers"][0]["import_source"] == str(import_source)
+    assert [entry["unit"] for entry in verdict["stale"]] == [unit]
+
+
+def test_collect_worker_staleness_refuses_dirty_import_package(tmp_path: Path) -> None:
+    unit_checkout = tmp_path / "dirty-editable-checkout"
+    import_source = unit_checkout / "src" / "orca_auto" / "_process_evidence.py"
+    head_update_epoch = 1_785_744_000
+    head_sha = "c" * 40
+    _make_fake_git_checkout(unit_checkout)
+    import_source.parent.mkdir(parents=True)
+    import_source.write_text("# process evidence\n", encoding="utf-8")
+    unit = "orca_auto-queue-worker@alice.service"
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            assert argv[1:3] == ["-C", str(unit_checkout)]
+            git_args = argv[3:]
+            if git_args == ["rev-parse", "--show-toplevel"]:
+                value = str(unit_checkout)
+            elif git_args == [
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                "src/orca_auto/_process_evidence.py",
+            ]:
+                value = "src/orca_auto/_process_evidence.py"
+            elif git_args == [
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                "src/orca_auto",
+            ]:
+                value = " M src/orca_auto/cli.py"
+            elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                value = head_sha
+            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
+            else:
+                assert git_args == ["show", "-s", "--format=%ct", head_sha]
+                value = str(head_update_epoch - 86_400)
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="79\n", stderr="")
+        assert argv[:4] == [
+            "systemctl",
+            "show",
+            "--property=ExecMainStartTimestamp",
+            "--value",
+        ]
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="Mon 2026-08-03 09:00:00 UTC\n",
+            stderr="",
+        )
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (
+            cli_systemd_status.ServiceUnitStatus(
+                label="worker",
+                unit=unit,
+                active="active",
+                enabled="enabled",
+            ),
+        ),
+        run=_fake_run,
+        read_process_file=_process_file_reader({79: import_source}),
+    )
+
+    assert verdict is not None
+    assert verdict["workers"] == []
+    assert verdict["stale"] == []
+    assert verdict["undetermined"][0]["unit"] == unit
+    assert "uncommitted source changes" in verdict["undetermined"][0]["detail"]
+
+
+def test_collect_worker_staleness_returns_none_for_active_wheel_worker(tmp_path: Path) -> None:
+    wheel_root = tmp_path / "wheel-runtime"
+    import_source = (
+        wheel_root / "lib" / "python3.13" / "site-packages" / "orca_auto" / "_process_evidence.py"
+    )
+    import_source.parent.mkdir(parents=True)
+    import_source.write_text("# installed wheel\n", encoding="utf-8")
+    unit = "orca_auto-queue-worker@alice.service"
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            pytest.fail("a wheel worker has no checkout to inspect with git")
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="91\n", stderr="")
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="Mon 2026-08-03 10:02:30 UTC\n",
+            stderr="",
+        )
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (
+            cli_systemd_status.ServiceUnitStatus(
+                label="worker",
+                unit=unit,
+                active="active",
+                enabled="enabled",
+            ),
+        ),
+        run=_fake_run,
+        read_process_file=_process_file_reader({91: import_source}),
+    )
+
+    assert verdict is None
+
+
+def test_collect_worker_staleness_treats_wheel_inside_git_cwd_as_uncompared(
+    tmp_path: Path,
+) -> None:
+    git_cwd = tmp_path / "git-working-directory"
+    _make_fake_git_checkout(git_cwd)
+    import_source = (
+        git_cwd
+        / ".venv"
+        / "lib"
+        / "python3.13"
+        / "site-packages"
+        / "orca_auto"
+        / "_process_evidence.py"
+    )
+    import_source.parent.mkdir(parents=True)
+    import_source.write_text("# installed wheel\n", encoding="utf-8")
+    unit = "orca_auto-queue-worker@alice.service"
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            assert argv[1:3] == ["-C", str(git_cwd)]
+            if argv[3:] == ["rev-parse", "--show-toplevel"]:
+                return subprocess.CompletedProcess(argv, 0, stdout=f"{git_cwd}\n", stderr="")
+            assert argv[3:6] == ["ls-files", "--error-unmatch", "--"]
+            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="path is not tracked\n")
+        assert argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]
+        return subprocess.CompletedProcess(argv, 0, stdout="93\n", stderr="")
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (
+            cli_systemd_status.ServiceUnitStatus(
+                label="worker",
+                unit=unit,
+                active="active",
+                enabled="enabled",
+            ),
+        ),
+        run=_fake_run,
+        read_process_file=_process_file_reader({93: import_source}),
+    )
+
+    assert verdict is None
+
+
+def test_collect_worker_staleness_fails_closed_when_process_identity_changes(
+    tmp_path: Path,
+) -> None:
+    import_source = tmp_path / "wheel" / "site-packages" / "orca_auto" / "_process_evidence.py"
+    import_source.parent.mkdir(parents=True)
+    import_source.write_text("# installed wheel\n", encoding="utf-8")
+    observed_ticks = iter((111, 222))
+    unit = "orca_auto-queue-worker@alice.service"
+
+    def _read_process_file(path: str) -> bytes:
+        if path.endswith("/stat"):
+            return _fake_proc_stat(94, start_ticks=next(observed_ticks))
+        return f"{cli_systemd_status.PROCESS_IMPORT_SOURCE_ENV}={import_source}\0".encode()
+
+    def _fake_run(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0, stdout="94\n", stderr="")
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (
+            cli_systemd_status.ServiceUnitStatus(
+                label="worker",
+                unit=unit,
+                active="active",
+                enabled="enabled",
+            ),
+        ),
+        run=_fake_run,
+        read_process_file=_read_process_file,
+    )
+
+    assert verdict is not None
+    assert verdict["workers"] == []
+    assert verdict["stale"] == []
+    assert verdict["undetermined"][0]["unit"] == unit
+    assert "process identity changed" in verdict["undetermined"][0]["detail"]
+
+
+def test_collect_worker_staleness_does_not_require_start_time_for_wheel_worker(
+    tmp_path: Path,
+) -> None:
+    wheel_root = tmp_path / "wheel-runtime"
+    import_source = (
+        wheel_root / "lib" / "python3.13" / "site-packages" / "orca_auto" / "_process_evidence.py"
+    )
+    import_source.parent.mkdir(parents=True)
+    import_source.write_text("# installed wheel\n", encoding="utf-8")
+    unit = "orca_auto-queue-worker@alice.service"
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="91\n", stderr="")
+        pytest.fail("a non-git worker has no checkout timestamp to compare")
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (
+            cli_systemd_status.ServiceUnitStatus(
+                label="worker",
+                unit=unit,
+                active="active",
+                enabled="enabled",
+            ),
+        ),
+        run=_fake_run,
+        read_process_file=_process_file_reader({91: import_source}),
+    )
+
+    assert verdict is None
+
+
+def test_collect_worker_staleness_rechecks_pid_before_accepting_wheel_worker(
+    tmp_path: Path,
+) -> None:
+    wheel_root = tmp_path / "wheel-runtime"
+    import_source = (
+        wheel_root / "lib" / "python3.13" / "site-packages" / "orca_auto" / "_process_evidence.py"
+    )
+    import_source.parent.mkdir(parents=True)
+    import_source.write_text("# installed wheel\n", encoding="utf-8")
+    unit = "orca_auto-queue-worker@alice.service"
+    observed_pids = iter(("91", "92"))
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=f"{next(observed_pids)}\n", stderr=""
+            )
+        pytest.fail("a raced non-git worker must not be inspected as stable")
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (
+            cli_systemd_status.ServiceUnitStatus(
+                label="worker",
+                unit=unit,
+                active="active",
+                enabled="enabled",
+            ),
+        ),
+        run=_fake_run,
+        read_process_file=_process_file_reader({91: import_source}),
+    )
+
+    assert verdict is not None
+    assert verdict["stale"] == []
+    assert verdict["uncompared"] == []
+    assert verdict["undetermined"][0]["unit"] == unit
+    assert verdict["undetermined"][0]["detail"] == ("main PID changed during freshness inspection")
+
+
+def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
+    tmp_path: Path,
+) -> None:
+    git_root = tmp_path / "git-worker"
+    wheel_root = tmp_path / "wheel-worker"
+    git_import_source = git_root / "src" / "orca_auto" / "_process_evidence.py"
+    wheel_import_source = (
+        wheel_root / "lib" / "python3.13" / "site-packages" / "orca_auto" / "_process_evidence.py"
+    )
+    _make_fake_git_checkout(git_root)
+    git_import_source.parent.mkdir(parents=True)
+    git_import_source.write_text("# editable source\n", encoding="utf-8")
+    wheel_import_source.parent.mkdir(parents=True)
+    wheel_import_source.write_text("# installed wheel\n", encoding="utf-8")
+    head_update_epoch = 1_785_747_750
+    head_commit_epoch = head_update_epoch - 86_400
+    head_sha = "d" * 40
+    git_unit = "orca_auto-queue-worker@alice.service"
+    wheel_unit = "orca_auto-workflow-worker@alice.service"
+    pids = {git_unit: "101", wheel_unit: "102"}
+    starts = {
+        git_unit: "Mon 2026-08-03 08:02:30 UTC",
+        wheel_unit: "Mon 2026-08-03 10:02:30 UTC",
+    }
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            assert argv[1:3] == ["-C", str(git_root)]
+            git_args = argv[3:]
+            if git_args == ["rev-parse", "--show-toplevel"]:
+                value = str(git_root)
+            elif git_args == [
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                "src/orca_auto/_process_evidence.py",
+            ]:
+                value = "src/orca_auto/_process_evidence.py"
+            elif git_args == [
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+                "--",
+                "src/orca_auto",
+            ]:
+                value = ""
+            elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                value = head_sha
+            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
+            else:
+                assert git_args == ["show", "-s", "--format=%ct", head_sha]
+                value = str(head_commit_epoch)
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{pids[argv[4]]}\n", stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{starts[argv[5]]}\n", stderr="")
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (
+            cli_systemd_status.ServiceUnitStatus(
+                label="worker",
+                unit=git_unit,
+                active="active",
+                enabled="enabled",
+            ),
+            cli_systemd_status.ServiceUnitStatus(
+                label="workflow",
+                unit=wheel_unit,
+                active="active",
+                enabled="disabled",
+            ),
+        ),
+        run=_fake_run,
+        read_process_file=_process_file_reader({101: git_import_source, 102: wheel_import_source}),
+    )
+
+    assert verdict is not None
+    assert [entry["unit"] for entry in verdict["stale"]] == [git_unit]
+    assert verdict["undetermined"] == []
+    assert verdict["uncompared"] == [
+        {
+            "label": "workflow",
+            "unit": wheel_unit,
+            "pid": 102,
+            "source_root": str(wheel_import_source.parent),
+            "import_source": str(wheel_import_source),
+            "reason": "installed_distribution",
+        }
+    ]
+
+
+def test_collect_worker_staleness_fails_closed_without_checkout_update_evidence(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "checkout-without-reflog"
+    (source_root / ".git").mkdir(parents=True)
+    head_sha = "c" * 40
+    unit = "orca_auto-queue-worker@alice.service"
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            git_args = argv[3:]
+            if git_args == ["rev-parse", "--show-toplevel"]:
+                value = str(source_root)
+            elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                value = head_sha
+            else:
+                assert git_args == [
+                    "reflog",
+                    "-1",
+                    "--date=unix",
+                    "--format=%H%x00%gd",
+                ]
+                return subprocess.CompletedProcess(
+                    argv,
+                    1,
+                    stdout="",
+                    stderr="fatal: no reflog for HEAD\n",
+                )
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="88\n", stderr="")
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout="Mon 2026-08-03 10:02:30 UTC\n",
+            stderr="",
+        )
+
+    verdict = cli_systemd_status.collect_worker_staleness(
+        (
+            cli_systemd_status.ServiceUnitStatus(
+                label="worker",
+                unit=unit,
+                active="active",
+                enabled="enabled",
+            ),
+        ),
+        run=_fake_run,
+        source_root=source_root,
+    )
+
+    assert verdict is not None
+    assert verdict["stale"] == []
+    assert verdict["workers"] == []
+    assert [entry["unit"] for entry in verdict["undetermined"]] == [unit]
+    assert "cannot read checkout HEAD" in verdict["undetermined"][0]["detail"]
+    assert "no reflog for HEAD" in verdict["undetermined"][0]["detail"]
 
 
 def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_starts(
@@ -1026,10 +1877,16 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         del check, stdout, stderr, text
-        if argv[0] == "git":
-            return subprocess.CompletedProcess(argv, 0, stdout="1000000\n", stderr="")
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="41\n", stderr="")
         # An empty ExecMainStartTimestamp is what systemd reports when it has
         # no start record to offer.
+        assert argv[:4] == [
+            "systemctl",
+            "show",
+            "--property=ExecMainStartTimestamp",
+            "--value",
+        ]
         return subprocess.CompletedProcess(argv, 0, stdout="\n", stderr="")
 
     statuses = (
@@ -1100,7 +1957,7 @@ def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: P
     assert verdict is not None
     assert verdict["head_commit_epoch"] is None
     assert verdict["stale"] == []
-    assert "cannot read HEAD commit" in verdict["undetermined"][0]["detail"]
+    assert "cannot read checkout HEAD" in verdict["undetermined"][0]["detail"]
     assert "fatal: bad revision" in verdict["undetermined"][0]["detail"]
 
 
