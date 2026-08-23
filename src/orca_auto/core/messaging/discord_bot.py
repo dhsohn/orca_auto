@@ -15,6 +15,7 @@ import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -103,8 +104,13 @@ class DiscordBotChannel:
                 _is_retryable_status(status),
                 retry_after,
             )
-        except (URLError, OSError):
+        except (HTTPException, URLError, OSError):
             return SendResult(sent=False, error="discord_network_error"), True, None
+        except ValueError:
+            # urllib includes malformed header bytes in these exceptions.  The
+            # Authorization header contains the bot token, so expose only a
+            # stable redacted transport code and do not retry the bad request.
+            return SendResult(sent=False, error="discord_request_error"), False, None
 
     def send(self, message: Message) -> SendResult:
         if not self.enabled:

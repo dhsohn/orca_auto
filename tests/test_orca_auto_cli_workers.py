@@ -334,7 +334,6 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
         unified_cli,
         "_detect_existing_orca_worker_conflict",
         lambda built_specs, args: worker_conflicts._ExistingWorkerConflict(
-            app="orca",
             pid=3589996,
             allowed_root="/home/user/orca_runs",
             command="/home/user/orca_auto/.venv/bin/python -m orca_auto.orca.commands.queue --config /tmp/orca_auto.yaml",
@@ -349,10 +348,11 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
     )
 
     assert result == 1
-    out = capsys.readouterr().out
-    assert "existing ORCA queue worker detected" in out
-    assert "-m orca_auto.orca.commands.queue" in out
-    assert "Stop the existing worker before starting another worker." in out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error: existing ORCA queue worker detected" in captured.err
+    assert "-m orca_auto.orca.commands.queue" in captured.err
+    assert "hint: Stop the existing worker before starting another worker." in captured.err
 
 
 def test_spawn_supervised_worker_starts_each_worker_in_a_new_session(
@@ -896,7 +896,6 @@ def test_detect_existing_orca_worker_conflict_edges(
     )
 
     assert conflict == worker_conflicts._ExistingWorkerConflict(
-        app="orca",
         pid=43210,
         allowed_root=str(allowed_root.resolve()),
         command="python worker.py",

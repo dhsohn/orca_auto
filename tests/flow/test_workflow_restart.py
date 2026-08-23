@@ -10,6 +10,7 @@ import pytest
 from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.flow.cli import run_dir as flow_cli
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
+from orca_auto.flow.restart import mutation as restart_mutation
 from orca_auto.flow.restart import restart_failed_workflow
 from orca_auto.flow.restart import settings as restart_settings
 
@@ -24,9 +25,11 @@ def _failed_orca_restart_stage(stage_id: str, reaction_dir: Path) -> dict[str, o
     selected_xyz = reaction_dir / "input.xyz"
     return {
         "stage_id": stage_id,
+        "stage_kind": "orca_stage",
         "status": "failed",
         "task": {
             "engine": "orca",
+            "task_kind": "optts_freq",
             "status": "failed",
             "payload": {
                 "reaction_dir": str(reaction_dir),
@@ -96,6 +99,501 @@ def test_restart_manifest_rejects_lossy_workflow_caps(
         restart_settings._flow_restart_settings_from_manifest(tmp_path, payload, manifest)
 
 
+@pytest.mark.parametrize(
+    ("template_name", "manifest"),
+    [
+        ("reaction_ts_search", {"orca": {"route_line": "! Opt r2scan-3c"}}),
+        ("reaction_ts_search", {"orca": {"route_line": "! ScanTS Freq r2scan-3c"}}),
+        ("reaction_ts_search", {"orca": {"route_line": "! NEB-TS Freq r2scan-3c"}}),
+        ("conformer_screening", {"orca": {"route_line": "! SP r2scan-3c"}}),
+        ("scan_ts_search", {"orca": {"route_line": "! SP r2scan-3c"}}),
+        ("scan_ts_search", {"orca_optts_route_line": "! Opt r2scan-3c"}),
+    ],
+)
+def test_restart_manifest_rejects_orca_route_role_mismatch(
+    tmp_path: Path,
+    template_name: str,
+    manifest: dict[str, object],
+) -> None:
+    payload = {
+        "template_name": template_name,
+        "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
+        "stages": [],
+    }
+    manifest = {"workflow_type": template_name, **manifest}
+
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        restart_settings._flow_restart_settings_from_manifest(tmp_path, payload, manifest)
+
+
+@pytest.mark.parametrize("frequency_keyword", ("Freq", "NumFreq", "AnFreq"))
+def test_restart_manifest_accepts_exact_optts_with_supported_frequency_keyword(
+    tmp_path: Path,
+    frequency_keyword: str,
+) -> None:
+    payload: dict[str, Any] = {
+        "template_name": "reaction_ts_search",
+        "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
+        "stages": [],
+    }
+    route_line = f"! OptTS {frequency_keyword} r2scan-3c"
+
+    settings = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        payload,
+        {
+            "workflow_type": "reaction_ts_search",
+            "orca": {"route_line": route_line},
+        },
+    )
+
+    assert settings["orca_route_line"] == route_line
+
+
+@pytest.mark.parametrize(
+    ("template_name", "manifest"),
+    [
+        ("reaction_ts_search", {"orca_route_line": ["! OptTS", "! Freq"]}),
+        ("conformer_screening", {"orca": {"route_line": {"method": "HF"}}}),
+        ("scan_ts_search", {"orca_optts_route_line": ["! OptTS Freq"]}),
+    ],
+)
+def test_restart_manifest_rejects_structured_orca_route_fields(
+    tmp_path: Path,
+    template_name: str,
+    manifest: dict[str, object],
+) -> None:
+    payload = {
+        "template_name": template_name,
+        "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
+        "stages": [],
+    }
+
+    with pytest.raises(ValueError, match="route_line must be a string"):
+        restart_settings._flow_restart_settings_from_manifest(tmp_path, payload, manifest)
+
+
+@pytest.mark.parametrize(
+    ("template_name", "parameters", "manifest", "changed_field"),
+    [
+        (
+            "reaction_ts_search",
+            {
+                "orca_route_line": "! OLD OptTS Freq",
+                "charge": 0,
+                "multiplicity": 1,
+            },
+            {"orca": {"route_line": "! NEW OptTS Freq"}},
+            "orca_route_line",
+        ),
+        (
+            "conformer_screening",
+            {"orca_route_line": "! Opt HF", "charge": 0, "multiplicity": 1},
+            {"charge": -1},
+            "charge",
+        ),
+        (
+            "scan_ts_search",
+            {
+                "orca_route_line": "! Opt HF",
+                "orca_optts_route_line": "! OptTS Freq HF",
+                "charge": 0,
+                "multiplicity": 1,
+            },
+            {"multiplicity": 2},
+            "multiplicity",
+        ),
+        (
+            "scan_ts_search",
+            {
+                "orca_route_line": "! Opt HF",
+                "orca_optts_route_line": "! OptTS Freq HF",
+                "charge": 0,
+                "multiplicity": 1,
+            },
+            {"orca_optts_route_line": "! OptTS Freq PBE0"},
+            "orca_optts_route_line",
+        ),
+    ],
+)
+def test_restart_rejects_scientific_change_after_primary_orca_completion(
+    tmp_path: Path,
+    template_name: str,
+    parameters: dict[str, object],
+    manifest: dict[str, object],
+    changed_field: str,
+) -> None:
+    payload: dict[str, Any] = {
+        "template_name": template_name,
+        "metadata": {"request": {"parameters": dict(parameters)}},
+        "stages": [
+            {
+                "stage_id": "orca_completed_01",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {"engine": "orca", "status": "completed"},
+                "metadata": {},
+            }
+        ],
+    }
+    original = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValueError, match=rf"fields=.*{changed_field}"):
+        restart_settings._flow_restart_settings_from_manifest(tmp_path, payload, manifest)
+
+    assert payload == original
+
+
+def test_restart_allows_unchanged_science_and_non_scientific_updates_after_completion(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "template_name": "conformer_screening",
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "orca_route_line": "# note # ! Opt # hidden # HF",
+                    "charge": "0",
+                    "multiplicity": "1",
+                }
+            }
+        },
+        "stages": [
+            {
+                "stage_id": "orca_completed_01",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {"engine": "orca", "status": "completed"},
+                "metadata": {},
+            }
+        ],
+    }
+    manifest = {
+        "orca": {"route_line": "! Opt HF", "charge": 0, "multiplicity": 1},
+        "resources": {"max_cores": 12, "max_memory_gb": 48},
+        "priority": 4,
+    }
+
+    settings = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        payload,
+        manifest,
+    )
+
+    parameters = payload["metadata"]["request"]["parameters"]
+    assert settings["orca_route_line"] == "! Opt HF"
+    assert parameters["orca_route_line"] == "! Opt HF"
+    assert parameters["max_cores"] == 12
+    assert parameters["max_memory_gb"] == 48
+    assert parameters["priority"] == 4
+
+
+def test_restart_treats_route_case_as_same_science_after_completion(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "template_name": "conformer_screening",
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "orca_route_line": "! Opt HF",
+                    "charge": 0,
+                    "multiplicity": 1,
+                }
+            }
+        },
+        "stages": [
+            {
+                "stage_id": "orca_completed_case_only",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {
+                    "engine": "orca",
+                    "task_kind": "opt",
+                    "status": "completed",
+                },
+                "metadata": {},
+            }
+        ],
+    }
+
+    settings = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        payload,
+        {
+            "orca": {"route_line": "! opt hf"},
+            "resources": {"max_cores": 12},
+        },
+    )
+
+    parameters = payload["metadata"]["request"]["parameters"]
+    assert settings["orca_route_line"].lower() == "! opt hf"
+    assert parameters["orca_route_line"].lower() == "! opt hf"
+    assert parameters["max_cores"] == 12
+
+
+def test_restart_allows_unquoted_pal_resource_change_after_orca_completion(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "template_name": "conformer_screening",
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "orca_route_line": "! HF Opt PAL4",
+                    "charge": 0,
+                    "multiplicity": 1,
+                }
+            }
+        },
+        "stages": [
+            {
+                "stage_id": "orca_completed_pal_resource_change",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {
+                    "engine": "orca",
+                    "task_kind": "opt",
+                    "status": "completed",
+                },
+                "metadata": {},
+            }
+        ],
+    }
+
+    settings = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        payload,
+        {"orca": {"route_line": "! HF Opt PAL8"}},
+    )
+
+    assert settings["orca_route_line"] == "! HF Opt PAL8"
+    parameters = payload["metadata"]["request"]["parameters"]
+    assert parameters["orca_route_line"] == "! HF Opt PAL8"
+
+
+def test_restart_does_not_let_primary_task_kind_spoof_interaction_role(
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "template_name": "conformer_screening",
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "orca_route_line": "! Opt HF",
+                    "charge": 0,
+                    "multiplicity": 1,
+                }
+            }
+        },
+        "stages": [
+            {
+                "stage_id": "orca_primary_with_spoofed_role",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {
+                    "engine": "orca",
+                    "task_kind": "opt",
+                    "status": "completed",
+                },
+                "metadata": {"role": "interaction_fragment"},
+            }
+        ],
+    }
+    original = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="scientific settings cannot change"):
+        restart_settings._flow_restart_settings_from_manifest(
+            tmp_path,
+            payload,
+            {"orca": {"route_line": "! Opt PBE0"}},
+        )
+
+    assert payload == original
+
+
+def test_wrong_interaction_fingerprint_cannot_bypass_completed_primary_science_guard(
+    tmp_path: Path,
+) -> None:
+    interaction = {
+        "enabled": True,
+        "sp_route_line": "! HF TightSCF",
+        "max_fragments": 2,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "a"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 1, "label": "b"},
+        ],
+    }
+    payload: dict[str, Any] = {
+        "template_name": "conformer_screening",
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "orca_route_line": "! Opt HF",
+                    "charge": 0,
+                    "multiplicity": 1,
+                    "interaction_energy": interaction,
+                }
+            }
+        },
+        "stages": [
+            {
+                "stage_id": "orca_parent",
+                "stage_kind": "orca_stage",
+                "status": "planned",
+                "task": {"engine": "orca", "task_kind": "opt", "status": "planned"},
+                "metadata": {},
+            },
+            {
+                "stage_id": "completed_primary_sp",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {"engine": "orca", "task_kind": "sp", "status": "completed"},
+                "metadata": {
+                    "role": "interaction_complex_sp",
+                    "parent_stage_id": "orca_parent",
+                    "interaction_config_fingerprint": "b" * 64,
+                },
+            },
+        ],
+    }
+
+    with pytest.raises(ValueError, match="scientific settings cannot change"):
+        restart_settings._flow_restart_settings_from_manifest(
+            tmp_path,
+            payload,
+            {"orca": {"route_line": "! Opt PBE0"}},
+        )
+
+
+def test_restart_preserves_primary_stage_with_spoofed_interaction_role(
+    tmp_path: Path,
+) -> None:
+    stage: dict[str, Any] = {
+        "stage_id": "orca_primary_spoofed_role_failed",
+        "stage_kind": "orca_stage",
+        "status": "failed",
+        "task": {
+            "engine": "orca",
+            "task_kind": "opt",
+            "status": "failed",
+            "payload": {},
+            "enqueue_payload": {"priority": 10},
+        },
+        "metadata": {"role": "interaction_fragment"},
+    }
+    payload: dict[str, Any] = {"stages": [stage], "metadata": {}}
+
+    restarted = restart_mutation._reset_restartable_stages(
+        payload,
+        flow_settings={
+            "applied": True,
+            "priority": 4,
+            "resources": {},
+            "interaction_energy_disabled": False,
+            "electronic_state_present": False,
+            "orca_route_line_present": False,
+            "orca_optts_route_line_present": False,
+        },
+        restart_allowed_root=tmp_path,
+    )
+
+    assert payload["stages"] == [stage]
+    assert stage["status"] == "planned"
+    assert stage["task"]["status"] == "planned"
+    assert stage["task"]["enqueue_payload"]["priority"] == 4
+    assert restarted[0]["stage_id"] == "orca_primary_spoofed_role_failed"
+
+
+def test_disabling_interaction_energy_does_not_retire_spoofed_primary_stage(
+    tmp_path: Path,
+) -> None:
+    parent: dict[str, Any] = {
+        "stage_id": "orca_parent",
+        "stage_kind": "orca_stage",
+        "status": "completed",
+        "task": {"engine": "orca", "task_kind": "opt", "status": "completed"},
+        "metadata": {},
+    }
+    stage: dict[str, Any] = {
+        "stage_id": "orca_primary_spoofed_role_disable",
+        "stage_kind": "orca_stage",
+        "status": "failed",
+        "task": {
+            "engine": "orca",
+            "task_kind": "sp",
+            "status": "failed",
+            "payload": {},
+        },
+        "metadata": {
+            "role": "interaction_complex_sp",
+            "parent_stage_id": "orca_parent",
+            "interaction_config_fingerprint": "b" * 64,
+        },
+    }
+    payload: dict[str, Any] = {"stages": [parent, stage], "metadata": {}}
+
+    restarted = restart_mutation._reset_restartable_stages(
+        payload,
+        flow_settings={
+            "applied": False,
+            "interaction_energy_disabled": True,
+            "persisted_interaction_energy_fingerprint": "a" * 64,
+        },
+        restart_allowed_root=tmp_path,
+    )
+
+    assert payload["stages"] == [parent, stage]
+    assert stage["status"] == "planned"
+    assert all(item.get("action") != "retired_disabled_interaction_energy" for item in restarted)
+
+
+def test_disabling_interaction_energy_still_retires_valid_interaction_child(
+    tmp_path: Path,
+) -> None:
+    parent: dict[str, Any] = {
+        "stage_id": "orca_parent",
+        "stage_kind": "orca_stage",
+        "status": "completed",
+        "task": {"engine": "orca", "task_kind": "opt", "status": "completed"},
+        "metadata": {},
+    }
+    child: dict[str, Any] = {
+        "stage_id": "orca_fragment_child",
+        "stage_kind": "orca_stage",
+        "status": "failed",
+        "task": {"engine": "orca", "task_kind": "sp", "status": "failed", "payload": {}},
+        "metadata": {
+            "role": "interaction_fragment",
+            "parent_stage_id": "orca_parent",
+            "fragment_index": 0,
+            "interaction_config_fingerprint": "a" * 64,
+        },
+    }
+    payload: dict[str, Any] = {"stages": [parent, child], "metadata": {}}
+
+    restarted = restart_mutation._reset_restartable_stages(
+        payload,
+        flow_settings={
+            "applied": False,
+            "interaction_energy_disabled": True,
+            "persisted_interaction_energy_fingerprint": "a" * 64,
+        },
+        restart_allowed_root=tmp_path,
+    )
+
+    assert payload["stages"] == [parent]
+    assert restarted == [
+        {
+            "stage_id": "orca_fragment_child",
+            "previous_status": "failed",
+            "previous_task_status": "failed",
+            "engine": "orca",
+            "action": "retired_disabled_interaction_energy",
+        }
+    ]
+
+
 def test_restart_manifest_accepts_zero_xtb_handoff_retries(tmp_path: Path) -> None:
     stage: dict[str, Any] = {
         "metadata": {"max_handoff_retries": 2},
@@ -120,6 +618,7 @@ def test_restart_manifest_accepts_zero_xtb_handoff_retries(tmp_path: Path) -> No
         stage,
         settings,
         restart_allowed_root=tmp_path,
+        workflow_stages=payload["stages"],
     )
 
     assert payload["metadata"]["request"]["parameters"]["max_xtb_handoff_retries"] == 0
@@ -350,6 +849,10 @@ def test_restart_preserves_interaction_fragment_sp_route_state_and_resources(
         encoding="utf-8",
     )
     stage = _failed_orca_restart_stage("ie_fragment", reaction_dir)
+    stage["stage_kind"] = "orca_stage"
+    stage_task = stage["task"]
+    assert isinstance(stage_task, dict)
+    stage_task["task_kind"] = "sp"
     stage["metadata"] = {
         "role": "interaction_fragment",
         "parent_stage_id": "orca_conf_01",
@@ -360,18 +863,26 @@ def test_restart_preserves_interaction_fragment_sp_route_state_and_resources(
         "fragment_atom_indices": [0],
         "interaction_config_fingerprint": fingerprint,
     }
+    parent_stage: dict[str, object] = {
+        "stage_id": "orca_conf_01",
+        "stage_kind": "orca_stage",
+        "status": "completed",
+        "task": {"engine": "orca", "task_kind": "opt", "status": "completed"},
+        "metadata": {},
+    }
     _write_workflow(
         workspace,
         {
             "workflow_id": "wf_ie_restart",
             "template_name": "conformer_screening",
             "status": "failed",
-            "stages": [stage],
+            "stages": [parent_stage, stage],
             "metadata": {
                 "request": {
                     "parameters": {
                         "charge": 0,
                         "multiplicity": 1,
+                        "orca_route_line": "! r2scan-3c Opt TightSCF",
                         "interaction_energy": interaction,
                         "rmsd_dedup": rmsd_dedup,
                     }
@@ -383,7 +894,7 @@ def test_restart_preserves_interaction_fragment_sp_route_state_and_resources(
     restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
 
     saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
-    restarted = saved["stages"][0]
+    restarted = saved["stages"][1]
     restarted_dir = workspace / "03_orca" / "fragment.restart-001"
     restarted_text = (restarted_dir / "input.inp").read_text(encoding="utf-8")
     assert "! r2scan-3c TightSCF" in restarted_text
@@ -453,9 +964,17 @@ def test_restart_disabling_interaction_energy_retires_existing_stages(tmp_path: 
     interaction = {
         "enabled": True,
         "sp_route_line": "! HF TightSCF",
-        "max_fragments": 1,
-        "fragments": [{"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "fragment"}],
+        "max_fragments": 2,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "fragment_a"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 1, "label": "fragment_b"},
+        ],
     }
+    fingerprint = interaction_energy_config_fingerprint(
+        interaction,
+        complex_charge=0,
+        complex_multiplicity=1,
+    )
     _write_workflow(
         workspace,
         {
@@ -464,11 +983,33 @@ def test_restart_disabling_interaction_energy_retires_existing_stages(tmp_path: 
             "status": "failed",
             "stages": [
                 {
+                    "stage_id": "orca_parent",
+                    "stage_kind": "orca_stage",
+                    "status": "completed",
+                    "task": {
+                        "engine": "orca",
+                        "task_kind": "opt",
+                        "status": "completed",
+                    },
+                    "metadata": {},
+                },
+                {
                     "stage_id": "ie_failed",
+                    "stage_kind": "orca_stage",
                     "status": "failed",
-                    "task": {"engine": "orca", "status": "failed", "payload": {}},
-                    "metadata": {"role": "interaction_fragment"},
-                }
+                    "task": {
+                        "engine": "orca",
+                        "task_kind": "sp",
+                        "status": "failed",
+                        "payload": {},
+                    },
+                    "metadata": {
+                        "role": "interaction_fragment",
+                        "parent_stage_id": "orca_parent",
+                        "fragment_index": 0,
+                        "interaction_config_fingerprint": fingerprint,
+                    },
+                },
             ],
             "metadata": {"request": {"parameters": {"interaction_energy": interaction}}},
         },
@@ -479,7 +1020,7 @@ def test_restart_disabling_interaction_energy_retires_existing_stages(tmp_path: 
     saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
     assert result["restarted_count"] == 1
     assert result["restarted_stages"][0]["action"] == "retired_disabled_interaction_energy"
-    assert saved["stages"] == []
+    assert [stage["stage_id"] for stage in saved["stages"]] == ["orca_parent"]
     assert "interaction_energy" not in saved["metadata"]["request"]["parameters"]
 
 
@@ -529,17 +1070,26 @@ def test_restart_rejects_rmsd_grouping_change_after_interaction_fanout(
         "stage_id": "ie_failed",
         "stage_kind": "orca_stage",
         "status": "failed",
-        "task": {"engine": "orca", "status": "failed", "payload": {}},
+        "task": {"engine": "orca", "task_kind": "sp", "status": "failed", "payload": {}},
         "metadata": {
             "role": "interaction_fragment",
+            "parent_stage_id": "orca_parent",
+            "fragment_index": 0,
             "interaction_config_fingerprint": fingerprint,
         },
+    }
+    parent_stage = {
+        "stage_id": "orca_parent",
+        "stage_kind": "orca_stage",
+        "status": "completed",
+        "task": {"engine": "orca", "task_kind": "opt", "status": "completed"},
+        "metadata": {},
     }
     payload: dict[str, object] = {
         "workflow_id": "wf_ie_rmsd_change",
         "template_name": "conformer_screening",
         "status": "failed",
-        "stages": [stage],
+        "stages": [parent_stage, stage],
         "metadata": {
             "request": {
                 "parameters": {
@@ -563,6 +1113,20 @@ def test_restart_rejects_primary_orca_reopen_after_interaction_fanout(
 ) -> None:
     root = tmp_path / "workflow_runs"
     workspace = root / "wf_ie_primary_restart"
+    interaction = {
+        "enabled": True,
+        "sp_route_line": "! HF TightSCF",
+        "max_fragments": 2,
+        "fragments": [
+            {"atom_indices": [0], "charge": 0, "multiplicity": 1, "label": "a"},
+            {"atom_indices": [1], "charge": 0, "multiplicity": 1, "label": "b"},
+        ],
+    }
+    fingerprint = interaction_energy_config_fingerprint(
+        interaction,
+        complex_charge=0,
+        complex_multiplicity=1,
+    )
     payload: dict[str, object] = {
         "workflow_id": "wf_ie_primary_restart",
         "template_name": "conformer_screening",
@@ -572,18 +1136,35 @@ def test_restart_rejects_primary_orca_reopen_after_interaction_fanout(
                 "stage_id": "orca_conf_failed",
                 "stage_kind": "orca_stage",
                 "status": "failed",
-                "task": {"engine": "orca", "status": "failed", "payload": {}},
+                "task": {
+                    "engine": "orca",
+                    "task_kind": "opt",
+                    "status": "failed",
+                    "payload": {},
+                },
                 "metadata": {},
             },
             {
                 "stage_id": "ie_existing",
                 "stage_kind": "orca_stage",
                 "status": "completed",
-                "task": {"engine": "orca", "status": "completed", "payload": {}},
-                "metadata": {"role": "interaction_complex_sp"},
+                "task": {"engine": "orca", "task_kind": "sp", "status": "completed"},
+                "metadata": {
+                    "role": "interaction_complex_sp",
+                    "parent_stage_id": "orca_conf_failed",
+                    "interaction_config_fingerprint": fingerprint,
+                },
             },
         ],
-        "metadata": {},
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "charge": 0,
+                    "multiplicity": 1,
+                    "interaction_energy": interaction,
+                }
+            }
+        },
     }
     _write_workflow(workspace, payload)
     with pytest.raises(ValueError, match="cannot restart primary ORCA stages"):
@@ -1035,7 +1616,7 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
                 "  max_pairs: 5",
                 "  direction: both",
                 "orca:",
-                "  route_line: '! PBE0 def2-SVP'",
+                "  route_line: '! PBE0 def2-SVP OptTS Freq'",
                 "  multiplicity: 2",
                 "charge: -1",
             ]
@@ -1084,9 +1665,11 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
                 },
                 {
                     "stage_id": "orca_failed",
+                    "stage_kind": "orca_stage",
                     "status": "failed",
                     "task": {
                         "engine": "orca",
+                        "task_kind": "optts_freq",
                         "status": "failed",
                         "resource_request": {"max_cores": 1, "max_memory_gb": 1},
                         "payload": {
@@ -1181,7 +1764,7 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
     assert orca_task["payload"]["selected_inp"] == str(restarted_inp)
     assert orca_task["payload"]["selected_input_xyz"] == str(restarted_xyz)
     restarted_text = restarted_inp.read_text(encoding="utf-8")
-    assert "! PBE0 def2-SVP" in restarted_text
+    assert "! PBE0 def2-SVP OptTS Freq" in restarted_text
     assert "nprocs 7" in restarted_text
     assert "%maxcore 3072" in restarted_text
     assert "%geom\n  MaxIter 99\nend" in restarted_text
@@ -1212,9 +1795,114 @@ def test_restart_failed_workflow_reloads_xtb_orca_and_endpoint_manifest_settings
         "max_pairs": 5,
         "direction": "both",
     }
-    assert params["orca_route_line"] == "! PBE0 def2-SVP"
+    assert params["orca_route_line"] == "! PBE0 def2-SVP OptTS Freq"
     assert params["charge"] == -1
     assert params["multiplicity"] == 2
+
+
+def test_scan_restart_selects_route_by_durable_orca_task_kind(tmp_path: Path) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_scan_route_restart"
+
+    def failed_stage(stage_id: str, dirname: str, task_kind: str, route_line: str) -> dict:
+        reaction_dir = workspace / dirname
+        reaction_dir.mkdir(parents=True)
+        selected_xyz = reaction_dir / "input.xyz"
+        selected_inp = reaction_dir / "input.inp"
+        selected_xyz.write_text("2\nsource\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+        geom_block = (
+            "%geom\n  Scan\n    B 0 1 = 0.7, 2.0, 8\n  end\nend\n"
+            if task_kind == "relaxed_scan"
+            else ""
+        )
+        selected_inp.write_text(
+            f"{route_line}\n{geom_block}* xyzfile 0 1 input.xyz\n",
+            encoding="utf-8",
+        )
+        return {
+            "stage_id": stage_id,
+            "stage_kind": "orca_stage",
+            "status": "failed",
+            "task": {
+                "engine": "orca",
+                "task_kind": task_kind,
+                "status": "failed",
+                "resource_request": {"max_cores": 8, "max_memory_gb": 32},
+                "payload": {
+                    "reaction_dir": str(reaction_dir),
+                    "selected_inp": str(selected_inp),
+                    "selected_input_xyz": str(selected_xyz),
+                },
+                "enqueue_payload": {
+                    "reaction_dir": str(reaction_dir),
+                    "selected_inp": str(selected_inp),
+                    "priority": 10,
+                },
+            },
+            "metadata": {"reaction_dir": str(reaction_dir)},
+        }
+
+    relaxed_stage = failed_stage(
+        "orca_scan_01",
+        "01_scan",
+        "relaxed_scan",
+        "! OLD Opt",
+    )
+    optts_stage = failed_stage(
+        "orca_optts_freq_01",
+        "02_scan_maximum",
+        "optts_freq",
+        "! OLD OptTS Freq",
+    )
+    (workspace / "flow.yaml").write_text(
+        "\n".join(
+            [
+                "workflow_type: scan_ts_search",
+                "orca:",
+                "  route_line: '! NEW-RELAXED Opt r2scan-3c TightSCF'",
+                "orca_optts_route_line: '! NEW-TS OptTS Freq r2scan-3c TightSCF'",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_scan_route_restart",
+            "template_name": "scan_ts_search",
+            "status": "failed",
+            "stages": [relaxed_stage, optts_stage],
+            "metadata": {
+                "request": {
+                    "parameters": {
+                        "orca_route_line": "! OLD Opt",
+                        "orca_optts_route_line": "! OLD OptTS Freq",
+                        "charge": 0,
+                        "multiplicity": 1,
+                    }
+                }
+            },
+        },
+    )
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    relaxed_task = saved["stages"][0]["task"]
+    optts_task = saved["stages"][1]["task"]
+    relaxed_input = Path(relaxed_task["payload"]["selected_inp"]).read_text(encoding="utf-8")
+    optts_input = Path(optts_task["payload"]["selected_inp"]).read_text(encoding="utf-8")
+    params = saved["metadata"]["request"]["parameters"]
+
+    assert result["restarted_count"] == 2
+    assert relaxed_input.splitlines()[0] == "! NEW-RELAXED Opt r2scan-3c TightSCF"
+    assert optts_input.splitlines()[0] == "! NEW-TS OptTS Freq r2scan-3c TightSCF"
+    assert "NEW-RELAXED" not in optts_input
+    assert relaxed_task["task_kind"] == "relaxed_scan"
+    assert optts_task["task_kind"] == "optts_freq"
+    assert params["orca_route_line"] == "! NEW-RELAXED Opt r2scan-3c TightSCF"
+    assert params["orca_optts_route_line"] == "! NEW-TS OptTS Freq r2scan-3c TightSCF"
 
 
 def test_restart_cleans_created_orca_dir_when_workflow_commit_fails(
@@ -1228,7 +1916,7 @@ def test_restart_cleans_created_orca_dir_when_workflow_commit_fails(
     (reaction_dir / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
     (reaction_dir / "input.inp").write_text("! OLD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     (workspace / "flow.yaml").write_text(
-        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW'\n",
+        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW OptTS Freq'\n",
         encoding="utf-8",
     )
     original: dict[str, object] = {
@@ -1266,7 +1954,7 @@ def test_restart_rejects_orca_reaction_dir_outside_workflow_workspace(
     )
     workspace.mkdir(parents=True)
     (workspace / "flow.yaml").write_text(
-        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW'\n",
+        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW OptTS Freq'\n",
         encoding="utf-8",
     )
     original: dict[str, object] = {
@@ -1301,7 +1989,7 @@ def test_restart_preserves_orca_dir_when_workflow_commit_visibility_is_unknown(
         encoding="utf-8",
     )
     (workspace / "flow.yaml").write_text(
-        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW'\n",
+        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW OptTS Freq'\n",
         encoding="utf-8",
     )
     _write_workflow(
@@ -1352,7 +2040,7 @@ def test_restart_cleans_prior_orca_dirs_when_later_rematerialization_fails(
     (valid_dir / "input.inp").write_text("! OLD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     missing_dir = workspace / "orca_missing"
     (workspace / "flow.yaml").write_text(
-        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW'\n",
+        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW OptTS Freq'\n",
         encoding="utf-8",
     )
     original: dict[str, object] = {

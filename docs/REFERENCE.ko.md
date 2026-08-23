@@ -170,6 +170,8 @@ orca:
   실행 경로
 - `workflow.paths.crest_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 CREST
   실행 경로
+- `messenger.discord.bot_token`: Discord bot 자격증명. 앞뒤 공백을 제거한 뒤 비어
+  있지 않은 token은 공백 없는 출력 가능한 ASCII 문자만 사용해야 합니다
 - 내부 xTB/CREST 런타임은 각 워크플로우 범위로 한정됩니다.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은 오직
   `<runs_root>/<스캐폴드>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`) 아래에만 저장됩니다.
@@ -237,8 +239,8 @@ ORCA 고유 노트:
 
 - visible generation 이름 규칙과 예약된 `YYYYMMDD-HHMMSS-<8자리 hex>` 이름 형태,
   재제출/`--force` 차단, 의존성 basename 충돌·예약 이름 규칙, 모호한 중복
-  `%pal`/`nprocs`/`%maxcore`/`%moinp`/`PALn` 지시어 거부, snapshot에 바인딩하지
-  않는 외부 include/program hook 거부는
+  resource/orbital-input 거부, 모든 `MORead`에 대한 명시적 snapshot-bound `MOInp`,
+  snapshot에 바인딩하지 않는 외부 include/program hook 거부는
   [큐와 activity 계약](PUBLIC_CONTRACTS.ko.md#큐와-activity-계약)에 명세되어
   있습니다.
 - 큐 워커는 직접 `reaction_dir` 명령줄을 전달하는 대신 큐 id로 실행합니다. 큐 항목은
@@ -252,8 +254,12 @@ ORCA 고유 노트:
   자원 reader는 모든 활성값 중 최댓값을 사용하므로 뒤쪽 중복값으로 더 큰 요청을
   숨길 수 없습니다.
 - 재시도 입력과 재개된 워커-종료 입력은, 원본 입력에 일치하는 비어 있지 않은 `.gbw`
-  체크포인트가 있을 때 `MORead`와 `%moinp`를 추가합니다. 재개 입력은 `*.resume.inp`로
-  작성되므로 원본 사용자 입력은 변경되지 않습니다.
+  체크포인트가 있을 때 `MORead`와 `%moinp`를 추가합니다. Top-level과 `%scf`
+  orbital-input 형식은 함께 해석하며 중복 주입하지 않습니다. Recovery는 최초 snapshot의
+  executable을 검증하고 유효한 frozen runtime-geometry seed가 있으면 삭제된 source file을
+  다시 열지 않고 사용할 수 있습니다. 그 seed는 atom label/order를 보존하고 선언한 atom마다
+  정확히 3개의 유한 좌표를 가지며 trailing row가 없어야 합니다. 재개 입력은
+  `*.resume.inp`로 작성되므로 원본 사용자 입력은 변경되지 않습니다.
 
 워크플로우 노트:
 
@@ -282,7 +288,9 @@ ORCA 고유 노트:
   단축 명령은 `orca_auto scaffold conformer_search <path>`입니다.
 - `scan_ts_search`는 `orca.route_line`과 필수 manifest 키 `scan_coordinate`
   (ORCA scan 문법, 0-based 원자 인덱스)로 만든 ORCA relaxed scan으로 시작합니다.
-  scan이 완료되면 결합 프로파일의 내부 maximum마다(prominence ≥
+  Coordinate는 arity가 맞고 atom이 서로 다르며 geometry 범위 안에 있고, endpoint가
+  유한하고 서로 다르며, point가 2개 이상인 정확한 `B`/`A`/`D` instruction 하나여야
+  합니다. scan이 완료되면 결합 프로파일의 내부 maximum마다(prominence ≥
   `barrier_threshold_kcal`, 기본 0.5; 끝점 제외; `max_orca_stages`로 상한;
   route는 `orca_optts_route_line`) OptTS+Freq 자식 작업을 하나씩 체인하고,
   워크플로우 리포트가 후보들을 랭킹합니다. 무장벽 프로파일은 먼저 최대
@@ -296,6 +304,31 @@ ORCA 고유 노트:
   이후 생성 순서대로 `02_scan_maximum`/`02_scan_extension`, …)로 생성되고,
   소스 지오메트리의 `inputs/` 사본도 만들지 않습니다. 스캐폴드 단축 명령은
   `orca_auto scaffold scan_ts <path>`입니다.
+- Workflow ORCA route는 생성·restart·구체화·완료 결과 수락 때 역할을 검사합니다.
+  제출 직전 실제 input 선택 때도 같은 검사를 적용합니다.
+  Reaction TS route와 `orca_optts_route_line`은 active하며 quote되지 않은 정확한 `OptTS`와
+  `Freq`/`NumFreq`/`AnFreq`를 요청하고 `ScanTS`/`NEB-TS`를 거부하며, conformer와
+  relaxed-scan route는 TS가 아닌 optimization을 요청해야
+  하며 relaxed scan에는 선택 geometry의 atom 범위에 맞는 닫힌 `%geom Scan` coordinate
+  block이 정확히 하나 필요합니다. 같은 strict scan 계약을 dynamic extension과 완료 결과
+  수락에도 재사용합니다. Route는 route
+  line으로만 된 문자열이어야 하며 quoted token, marker-prefixed payload token, active
+  non-route input은 렌더링하지 않고 거부합니다.
+  Closed `# ... #` inline comment 안과 닫히지 않은 `#` marker 뒤의 token은 무시합니다.
+  제출은 두 durable `reaction_dir`/`selected_inp`가 같아야 하고 direct submitter와 같은 규칙으로
+  실제 입력을 선택한 뒤, snapshot 경계에서 최종 rewrite된 바이트를 검증하고 같은 바이트를
+  identity에 바인딩합니다.
+  Primary ORCA stage가 완료된 뒤에는 restart로 route·charge·multiplicity를 바꿀 수 없고,
+  report는 route·resource가 아닌 active input directive·electronic-state·ORCA-version·
+  identity-bound 비-geometry dependency content provenance가 없거나 섞였거나 선택 geometry의
+  atom-label 순서가 다르면 energy 비교를 생략합니다. Geometry 좌표 자체는 후보별 값으로
+  남고 private dependency 경로명은 비교에서 canonicalize됩니다. HTML, SI, interaction RMSD 대표 선택은
+  같은 과학 정체성을 사용하며 `%pal`, `%maxcore`, route `PALn`은 resource-only입니다.
+  이 경우 HTML report는 stage 순서를
+  보존하고 숫자 순위를 붙이지 않습니다.
+  Interaction-role metadata는 구조적으로 유효한 ORCA single-point child만 제외하므로 primary
+  stage를 숨길 수 없습니다. 불일치는 과학적으로 호환되지 않는 출력을 수락하지 않고
+  fail-closed합니다.
 - 워크플로우가 advance될 때마다 워크스페이스에 `workflow_report.html`을 다시
   씁니다: 스테이지 체인, CREST → (xTB) → ORCA 깔때기 요약, ORCA 결과 순위표
   (상대 에너지, 허수 진동수, 개별 작업 `job_report.html` 링크)를 담은 단일 파일
@@ -498,12 +531,16 @@ orca_auto queue list --engine xtb
   인터프리터를 함께 밝히며, `pip install -e .` 힌트를 stderr에 출력하고 0이 아닌 코드로
   종료합니다. `orca_auto --version`은 여전히 설치된 버전만 출력하므로, 버전을 되읽는
   대신 `service status`로 확인해야 합니다.
-- `orca_auto service status`는 실행 중인 워커 프로세스의 나이도 게이트합니다.
-  워커는 체크아웃을 라이브로 import하지만 리로드하지 않으므로, 워커 시작 이후에
-  랜딩한 배포는 그 프로세스를 배포 전 코드에 남겨둡니다. 이 명령은 그런 워커를
-  `worker_staleness`(stale 또는 undetermined, unit·PID 포함)로 보고하고 `service
-  restart` 힌트를 stderr에 출력하며 0이 아닌 코드로 종료합니다. 워커가 import하는
-  코드를 건드린 배포 뒤에는 유휴 창에서 워커를 재시작해야 합니다.
+- `orca_auto service status`는 실행 중인 각 워커의 main process에서 관측한 체크아웃의
+  현재 HEAD와 일치하는 최신 HEAD reflog 갱신 시각을 worker별로 새로 잡아 워커 나이를
+  게이트합니다.
+  체크아웃은 워커가 실제 import한 module에서 기록하며 process PID와 start ticks에
+  바인딩합니다. cwd, 커밋 시각, status 명령 자체의 체크아웃은 기준으로 쓰지 않습니다.
+  Import한 package tree에 commit하지 않은 source 변경이 있으면 `undetermined`입니다. stale 또는
+  undetermined인 git-backed 워커는 per-worker 근거와 함께 `worker_staleness`에 보고하고
+  stderr에 `service restart` 힌트를 출력하며 0이 아닌 코드로 종료합니다. Non-git 워커는
+  판정하지 않고 혼합 배포에서는 `uncompared`로 표시합니다. 워커가 import하는 코드를
+  건드린 배포 뒤에는 유휴 창에서 워커를 재시작해야 합니다.
 
 ### 7.6 장기 실행 서비스
 
@@ -575,7 +612,8 @@ journalctl -u "orca_auto-queue-worker@$(whoami)" -f
 
 기본값과 경로가 다르면 installer에 명시적 `--repo`와 `--config` 값을 넘기세요. installer가
 모든 unit에 해당 경로를 렌더링합니다. `--worker-only`는 boot target으로 full runtime
-target 대신 engine-worker target을 선택합니다. 그런 설치는 `service status`가
+target 대신 engine-worker target을 선택합니다. Path의 literal `%`는 escape하고 quote,
+backslash, dollar sign은 unit 파일을 쓰기 전에 거부합니다. 그런 설치는 `service status`가
 `worker-only`로 보고합니다. 현재 runtime target은 engine-worker target만 끌어오므로
 오늘은 두 모드가 같은 unit 집합을 시작합니다 — 플래그는 boot 선택을 고정하며,
 runtime target이 나중에 커져도 worker-only 설치는 worker-only로 남습니다.

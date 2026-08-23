@@ -82,6 +82,11 @@
   대상으로 받을 수 있습니다.
 - 스크립트는 `queue list --json`, `queue cancel --json`, `service status --json`을 사용해야
   합니다.
+- `queue list`, `queue list clear`, `queue cancel`에서 예상 가능한 설정·queue store·index·
+  workflow registry 실패는 stderr의 간결한 `error:`/`hint:` 진단으로 출력합니다. Python
+  traceback이나 stdout의 불완전한 JSON 없이 0이 아닌 코드로 종료합니다. 출력 중
+  downstream pipe가 닫히면 durable clear/cancel 동작 후의 출력 조건으로 별도 처리하며,
+  설정이나 상태 손상으로 진단하지 않습니다.
 
 비계약 CLI 표면:
 
@@ -164,10 +169,16 @@
 - 발신 Discord 전송에는 `messenger.provider: discord`와 비어 있지 않은
   `messenger.discord.bot_token`, `messenger.discord.default_channel_id` 값이
   필요합니다. 알림은 단방향이며 수신 명령 표면은 없습니다.
-- 명시한 bot token은 문자열, `default_channel_id`는 문서화된 양의 Discord ID여야
-  합니다. 이 scalar 필드의 명시한 null·boolean·collection은 거부합니다. 빈
-  token/destination 문자열은 발신 전송을 의도적으로 비활성화하는 기존 방법으로 계속
-  지원합니다.
+- 앞뒤 공백을 제거한 뒤 명시한 bot token은 공백 없는 출력 가능한 ASCII 문자로만 된
+  문자열이어야 하고, `default_channel_id`는 문서화된 양의 Discord ID여야 합니다. 이
+  scalar 필드의 명시한 null·boolean·collection과 token 내부 공백·제어 문자·비 ASCII
+  문자는 token 값을 되비추지 않고 거부합니다. 빈 token/destination 문자열은 발신
+  전송을 의도적으로 비활성화하는 기존 방법으로 계속 지원합니다.
+- 알림 transport 실패는 큐 제출에 대한 경고입니다. 비밀을 제거한 경고를 남기되,
+  그 밖에는 완결된 durable queue publication을 되돌리거나 repair 상태로 주차하지
+  않습니다. 요청 생성, HTTP 상태 처리, response body 읽기 모두 이 규칙을 따릅니다.
+  성공 응답이나 rate-limit 응답의 body를 읽지 못해도 bounded 전송 실패일 뿐 queue
+  publication 실패가 아닙니다.
 - Discord adapter는 유한한 전송 timeout을 0.1~120초, 정수 총 시도 횟수를 1~10회,
   유한한 retry backoff를 0~120초로 제한합니다. 생략하면 문서화된 기본값을 사용하고
   범위를 벗어난 유한값은 clamp하지만, 명시한 boolean·숫자가 아닌 값·분수 시도 횟수·
@@ -269,9 +280,22 @@ Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable 
 Worker는 bounded intent만 raw queue 행 및 생성자 생존 여부와 대조해 보수적으로 복구하고,
 예약된 child를 시작하기 전에 intent를 종료합니다. Generation 제거가 불확실하면 intent를
 보존합니다. 이 intent 파일은 내부 구현 상태이므로 client가 편집하면 안 됩니다.
-ORCA snapshot은 실행 전에 중복 `%pal`/`nprocs`, `%maxcore`, `%moinp`, route `PALn`
-지시어처럼 선후순위가 모호한 입력도 거부합니다. 명시적으로 snapshot에 바인딩하지 않는
-외부 include/program hook은 지원하지 않고 fail-closed합니다.
+ORCA snapshot은 실행 전에 중복 `%pal`/`nprocs`, `%maxcore`, orbital-input, route `PALn`
+지시어처럼 선후순위가 모호한 입력도 거부합니다. Top-level `%moinp`와 `%scf` 안의
+`MOInp`는 하나의 semantic orbital-input namespace입니다. Route나 `%scf`가 `MORead`를
+요청하면 명시적으로 snapshot에 바인딩한 orbital input을 정확히 하나 지정해야 하며,
+현재 디렉터리 checkpoint를 암묵적으로 찾는 방식은 지원하지 않습니다. 명시적으로
+snapshot에 바인딩하지 않는 외부 include/program hook은 지원하지 않고 fail-closed합니다.
+Crash recovery는 같은 stem의 runtime geometry를 이전에 검증된 generation에서만 seed합니다.
+제출한 atom-label 순서를 보존하고, 선언한 개수만큼의 atom row에 정확히 3개의 유한한 숫자
+좌표가 있으며 trailing row가 없어야 합니다. 유효한 seed가 있으면 원래 job-root geometry가
+더 존재할 필요는 없습니다. 그 seed가 없거나 malformed이거나 immutable 의존성을 다시
+복사해야 하면, 현재 job-root 파일의 byte size와 SHA-256이 최초 제출 때와 일치하는 경우에만
+사용합니다. 변경·삭제됐거나 검증할 수 없는 의존성은 재개하는 계산을 바꾸지 않고 recovery를
+fail-closed합니다. Parse할 수 있지만 atom label이나 순서가 바뀐 seed는 substitution
+evidence이므로 fallback하지 않고 fail-closed합니다. Recovery는 snapshot에 기록한 ORCA
+executable의 경로, byte size, SHA-256도 검증해 그대로 재사용합니다. 설정의 executable을
+바꿔도 기존 계산의 실행파일은 바뀌지 않습니다.
 
 새 xTB/CREST 종료 산출물은 보존 출력에 SHA-256과 byte-size 정체성을 연결하고 downstream
 reader는 현재 파일을 그 종료 정체성과 대조합니다. 종료 정체성이 없는 완료 산출물은 지원하지
@@ -494,6 +518,45 @@ ORCA analyzer 상태:
 - `interaction_energy.fragments[].label`
 - `allow_external_inputs`
 
+ORCA route는 durable workflow task 역할에 바인딩됩니다. `reaction_ts_search`의 route와
+`scan_ts_search`의 `orca_optts_route_line`은 active하며 quote되지 않은 정확한 `OptTS` token과
+지원하는 frequency token(`Freq`, `NumFreq`, `AnFreq`) 하나를 포함하고 `ScanTS`와 `NEB-TS`를
+포함하지 않아야 합니다. `conformer_screening` route와 relaxed scan용 `orca.route_line`은
+TS가 아닌 geometry optimization을 요청해야 하며 relaxed scan 입력에는 유효한 `%geom Scan`
+coordinate block도 있어야 합니다. Route 값은 문자열이어야 하고 route line만 포함할 수
+있습니다. 주석-only/blank line은 버리고 quoted token, `!`/`%`/`*`/`$`로 시작하는 payload
+token, 그 밖의 active ORCA input line은 렌더링하지 않고 거부합니다. `!B3LYP` 같은 compact
+leading 문법은 계속 허용합니다. Closed `# ... #` inline comment 안의 token과 닫히지 않은 `#` marker 뒤의 token은
+무시하고 active route token만 판정에 사용합니다. Workflow 생성, restart 재구체화, 완료 stage 수락 시 route-role
+불일치를 거부해 다른 task 역할의 결과로 발행하지 않습니다. Queue 제출은 두 durable payload의
+`reaction_dir`와 `selected_inp`가 모두 존재하고 서로 같아야 하며, direct submitter와 같은
+input-selection 규칙으로 실제 선택 입력을 구해 durable selected input과 같은지 확인합니다.
+그 뒤 execution snapshot 경계에서 최종 rewrite된 입력 바이트를 검증하고 바로 그 바이트를
+기록해 identity에 바인딩합니다. 완료 stage 수락은 artifact contract 자체가 지정한
+selected input을 요구하며 제출 전 task payload 경로로 대체하지 않습니다.
+
+`scan_coordinate`는 `B`, `A`, `D`에 각각 2개, 3개, 4개의 서로 다른 0-based atom index와
+유한하고 서로 다른 두 endpoint, 2 이상의 정수 point count를 지정하는 완전한 한 줄이어야
+합니다. 모든 index는 해당 stage가 선택한 XYZ geometry 안에 있어야 합니다. 입력에는 닫힌
+`%geom` block 하나, 그 안에 닫힌 `Scan` sub-block 하나와 active coordinate 하나만 있어야
+합니다. Trailing command나 여러 coordinate는 workspace를 만들기 전에 거부합니다. 생성,
+dynamic scan extension, 제출, 완료 결과 수락이 이 계약을 함께 사용합니다. Endpoint는 shortest
+round-trip float text로 canonicalize하므로 유효한 정밀도를 소수점 여덟 자리로 반올림하지 않습니다.
+
+Restart는 비과학적 control을 바꿀 수 있지만, primary ORCA stage 하나라도 완료된 뒤에는 그
+stage가 사용한 durable route, charge, multiplicity를 바꿀 수 없습니다. Report aggregation은
+selected input을 검증하고 완료 후보 사이의 route·resource가 아닌 active input directive·
+electronic-state·ORCA version provenance가 없거나 섞였으면 relative energy 비교와 숫자 후보
+순위를 생략합니다. 선택한 inline 또는 confined XYZ도 같은 atom-label 순서를 입증해야 하며
+좌표 자체는 후보별 값으로 남습니다. Point charge, orbital input, NEB auxiliary 같은 identity-bound
+비-geometry dependency도 kind와 content identity가 같아야 하며 private snapshot 경로명 자체는
+비교에 영향을 주지 않습니다. HTML report, SI population/refinement, interaction fan-out의
+RMSD 대표 선택은 같은 bound-input 과학 정체성을 사용합니다. `%pal`, `%maxcore`, route `PALn`은
+resource-only이므로 이 정체성을 나누지 않습니다. ORCA single point,
+알려진 role, 유일한 non-interaction ORCA parent, 그리고 fragment일 때 유효한 index를 모두 갖춘
+정확한 interaction child 계약만 primary-stage restart와 ranking 검사에서 제외합니다. Role
+metadata만으로 primary stage를 숨길 수 없습니다.
+
 `max_crest_candidates`는 반응물/생성물 각 side마다 최대 32입니다. Endpoint pairing은
 이 제한된 Cartesian 공간을 평가하면서 요청한 최상위 pair만 보존하며, 모든 pair를 메모리에
 구체화해 정렬하지 않습니다. Geometry metric pairing은 effective 비교 원자를 최대 256개로
@@ -585,6 +648,11 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
   공개 dedup 보고가 꺼져도 fan-out 제한에는 같은 all-atom 기본 grouping을 쓰지만 SI 구조
   표 자체는 dedup하지 않습니다. interaction generation fingerprint에는 이 RMSD grouping
   설정도 포함됩니다.
+- interaction 소유권은 현재 durable config에 fail-closed로 결합됩니다. child의 canonical
+  SHA-256 generation fingerprint가 workflow의 durable interaction 설정과 일치할 때만
+  primary ORCA 결과에서 격리하고, fan-out에서 재사용하거나 restart에서 retire합니다.
+  fingerprint가 없거나 형식이 잘못됐거나 다른 경우 임의 SP role metadata가 primary
+  stage를 숨기거나 retire할 수 없습니다.
 - 확정된 interaction energy는 현재 config generation의 completed complex SP 정확히 1개와
   각 예상 fragment index의 completed SP 정확히 1개를 요구합니다. 선택 입력과 파싱 출력의
   route 및 전자상태가 일치해야 하고, 실제 method, basis, solvation, ORCA version, 최적화
@@ -681,6 +749,10 @@ stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 �
 
 동작:
 
+- 설정한 저장소·설정·admission·runs 경로의 literal `%`는 unit 파일 렌더링 때 escape하고,
+  template이 소유한 `%i` 같은 instance specifier는 그대로 동작합니다. Quote, backslash,
+  dollar sign이 든 경로는 systemd tokenization이나 expansion을 바꿀 수 있으므로 unit을 쓰기
+  전에 거부합니다.
 - full-runtime 설치는 runtime target을, worker-only 설치는 engine-worker target을
   활성화합니다. 현재 runtime target은 engine-worker target만 끌어들이므로 두 방식이
   시작하는 unit 집합은 동일합니다.
@@ -702,16 +774,22 @@ stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 �
   health만 뜻하므로, 유닛이 정상인 채 드리프트만 있는 배포는 `ok: true`를 보고하면서도
   0이 아닌 코드로 종료합니다. 휠 설치처럼 소스 `pyproject.toml`이 없어 대조 대상이
   없으면 `version_drift: null`입니다.
-- `service status`는 활성 워커 프로세스 각각을 체크아웃의 HEAD 커밋과도 대조합니다.
-  유닛은 체크아웃을 라이브로 import하지만 리로드하지 않으므로, 워커 시작 이후에
-  랜딩한 배포는 그 프로세스를 배포 전 캐시 모듈과 배포 후 새로 import된 코드가 섞인
-  상태로 남깁니다. main 프로세스가 HEAD 커밋보다 먼저 시작된 워커 서비스는
-  `worker_staleness.stale`에 unit·PID·시작 시각과 함께 보고되고, 프로세스를 검사할
-  수 없는 활성 워커는 fresh로 간주되는 대신 `worker_staleness.undetermined`에
-  보고됩니다. 어느 쪽이든 해당 unit과 `service restart` 힌트를 stderr에 쓰고 0이
-  아닌 코드로 종료하며, `ok`는 여전히 유닛 health만 뜻합니다. 소스 트리가 git
-  체크아웃이 아니면 대조 대상이 없어 `worker_staleness: null`입니다. 비활성 유닛은
-  판정하지 않습니다.
+- 각 워커는 시작할 때 resolve한 `orca_auto` module source를 자기 process environment에
+  기록합니다. `service status`는 active main process에서 그 import provenance를 읽고 같은
+  PID/start ticks에 바인딩한 뒤, worker별로 독립해 잡은 체크아웃의 현재 HEAD와 일치하는
+  최신 HEAD reflog 갱신 시각과 unit 시작 시각을 대조합니다. 커밋 객체 시각, status 명령
+  자체의 체크아웃, worker current directory는 freshness 기준이 아닙니다. Import한 package tree에
+  commit하지 않은 source 변경이 있으면 fresh로 보지 않고 `undetermined`로 보고합니다. 유닛은
+  체크아웃을 라이브로 import하지만 리로드하지 않으므로 워커 시작 뒤 HEAD를 이동한 배포는
+  캐시된 배포 전 모듈과 새로 import된 배포 후 코드가 섞인 상태를 남깁니다. 이런 워커는
+  `worker_staleness.stale`에 unit·PID·체크아웃·HEAD·시작/갱신 근거와 함께 보고합니다.
+  활성 git-backed 워커의 process·체크아웃·일치하는 reflog 근거를 검사할 수 없으면 fresh로
+  간주하지 않고 `worker_staleness.undetermined`에 보고합니다. 어느 쪽이든 해당 unit과
+  `service restart` 힌트를 stderr에 쓰고 0이 아닌 코드로 종료하며, `ok`는 여전히 unit
+  health만 뜻합니다. 활성 non-git 워커만 있으면 대조 근거가 없어
+  `worker_staleness: null`이고, git/non-git 혼합 배포에서는 non-git 워커를 additive
+  `worker_staleness.uncompared`에 기록하되 git-backed 워커 판정을 가리지 않습니다. 비활성
+  unit은 판정하지 않습니다.
 - `service restart`는 재시작할 워커 서비스 각각의 start-limit 실패 상태를 지웁니다. runtime
   target이 enable되어 있으면 그것을, 아니면 engine-worker target을 재시작한 뒤, 워커 서비스
   자체를 재시작합니다 — ORCA 엔진 서비스는 항상, opt-in workflow 워커는 그것이 실행 중이거나

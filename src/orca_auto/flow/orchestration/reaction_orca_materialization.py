@@ -405,7 +405,7 @@ def _build_reaction_orca_stage(
         input_artifact_kind="xtb_candidate",
         candidate=candidate,
         task_kind="optts_freq",
-        route_line=str(plan.params.get("orca_route_line", "! r2scan-3c OptTS Freq TightSCF")),
+        route_line=plan.params.get("orca_route_line", "! r2scan-3c OptTS Freq TightSCF"),
         charge=strict_int(plan.params.get("charge", 0), field="charge"),
         multiplicity=strict_int(
             plan.params.get("multiplicity", 1), field="multiplicity", minimum=1

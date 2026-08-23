@@ -19,6 +19,7 @@ class AdmissionSlot:
     work_dir: str = ""
     queue_id: str = ""
     engine_process_state: str = "idle"
+    engine_launch_gated: bool = False
     engine_pid: int | None = None
     engine_pgid: int | None = None
     engine_process_start_ticks: int | None = None
@@ -37,6 +38,7 @@ class AdmissionReservationRequest:
     queue_id: str = ""
     owner_pid: int | None = None
     engine_process_state: str = "idle"
+    engine_launch_gated: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,7 +109,11 @@ def _engine_process_fields(
 
 def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
     expected_fields = set(AdmissionSlot.__dataclass_fields__)
-    missing = expected_fields - set(raw)
+    # Records written before launch-gate ownership was persisted are direct by
+    # default.  Treating them as gated would make same-boot recovery discard a
+    # potentially running process in the Popen-to-record interval.
+    legacy_optional_fields = {"engine_launch_gated"}
+    missing = expected_fields - set(raw) - legacy_optional_fields
     unknown = set(raw) - expected_fields
     if missing or unknown:
         raise ValueError(
@@ -128,6 +134,9 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
         raise ValueError("Active admission engine boot identity is incomplete")
     if engine_state == "active" and owner_boot_id != engine_boot_id:
         raise ValueError("Admission owner and engine process boot IDs do not match")
+    engine_launch_gated = raw.get("engine_launch_gated", False)
+    if type(engine_launch_gated) is not bool:
+        raise ValueError("Invalid admission engine launch-gated flag")
     return AdmissionSlot(
         token=str(raw.get("token", "")).strip(),
         owner_pid=owner_pid_raw,
@@ -142,6 +151,7 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
         work_dir=str(raw.get("work_dir", "")).strip(),
         queue_id=str(raw.get("queue_id", "")).strip(),
         engine_process_state=engine_state,
+        engine_launch_gated=engine_launch_gated,
         engine_pid=engine_pid,
         engine_pgid=engine_pgid,
         engine_process_start_ticks=engine_start_ticks,

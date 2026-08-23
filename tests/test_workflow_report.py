@@ -15,6 +15,10 @@ from orca_auto.core.artifacts import (
     RUN_STATE_FILE,
     WORKFLOW_SI_MD_FILE,
 )
+from orca_auto.core.engine_runner import (
+    confined_output_identity,
+    executable_identity,
+)
 from orca_auto.core.machine_observation import machine_json_bytes
 from orca_auto.flow.workflow import report as workflow_report
 from orca_auto.flow.workflow.machine import write_workflow_machine_observation
@@ -58,11 +62,37 @@ def _validate_common_machine(path: Path) -> None:
 
 
 def _write_orca_generation_report(job_dir: Path, report: dict[str, Any]) -> Path:
-    generation, provenance = _orca_generation(job_dir)
+    generation, provenance = _orca_generation(job_dir, route_line="! Opt")
     report["schema_version"] = 1
     report["engine"] = "orca"
     report["input"] = {"primary_path": provenance["bound_selected_identity"]["path"]}
     report["execution_provenance"] = provenance
+    status = report.setdefault("status", {"state": "completed", "reason": "normal_termination"})
+    if isinstance(status, dict) and status.get("state") == "completed":
+        output = generation / "orca.out"
+        output.write_text(
+            _completed_opt_output_text(
+                route_line="! Opt",
+                charge=0,
+                multiplicity=1,
+                atom_label="H",
+                energy=-100.0,
+            ),
+            encoding="utf-8",
+        )
+        engine_payload = report.setdefault("engine_payload", {})
+        assert isinstance(engine_payload, dict)
+        attempts = engine_payload.setdefault("attempts", [{"index": 1}])
+        assert isinstance(attempts, list) and attempts and isinstance(attempts[-1], dict)
+        attempts[-1].update(
+            {
+                "out_path": str(output),
+                "output_identity": confined_output_identity(generation, output),
+            }
+        )
+        final_result = engine_payload.setdefault("final_result", {"reason": "normal_termination"})
+        assert isinstance(final_result, dict)
+        final_result["last_out_path"] = str(output)
     return _publish_orca_machine(generation, report)
 
 
@@ -74,23 +104,110 @@ def _publish_orca_machine(generation: Path, report: dict[str, Any]) -> Path:
     return path
 
 
-def _orca_generation(job_dir: Path) -> tuple[Path, dict[str, Any]]:
+def _orca_generation(
+    job_dir: Path,
+    *,
+    route_line: str = "! SP",
+    charge: int = 0,
+    multiplicity: int = 1,
+    extra_directives: str = "",
+    atom_label: str = "H",
+    xyzfile: bool = False,
+) -> tuple[Path, dict[str, Any]]:
     selected = job_dir / "current.inp"
-    selected.write_text("! SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    directives = f"{extra_directives.strip()}\n" if extra_directives.strip() else ""
+    if xyzfile:
+        (job_dir / "input.xyz").write_text(
+            f"1\nbound geometry\n{atom_label} 0 0 0\n",
+            encoding="utf-8",
+        )
+        geometry = f"* xyzfile {charge} {multiplicity} input.xyz\n"
+    else:
+        geometry = f"* xyz {charge} {multiplicity}\n{atom_label} 0 0 0\n*\n"
+    selected.write_text(
+        f"{route_line}\n{directives}{geometry}",
+        encoding="utf-8",
+    )
     state: dict[str, Any] = {"selected_inp": str(selected)}
     generation = bind_report_generation(job_dir, state)
-    return generation, state["execution_provenance"]
+    provenance = state["execution_provenance"]
+    if xyzfile:
+        materialized_geometry = generation / "input.xyz"
+        materialized_geometry.write_bytes((job_dir / "input.xyz").read_bytes())
+        provenance["materialized_inputs"] = {
+            "dependency_000000": executable_identity(materialized_geometry)
+        }
+    return generation, provenance
 
 
-def _orca_stage_dir(root: Path, name: str, *, energy: float, reason: str) -> Path:
+def _completed_opt_output_text(
+    *,
+    route_line: str,
+    charge: int,
+    multiplicity: int,
+    atom_label: str,
+    energy: float,
+    version: str = "6.0.1",
+) -> str:
+    return "\n".join(
+        (
+            f"Program Version {version}",
+            f"|  1> {route_line}",
+            f"|  2> * xyz {charge} {multiplicity}",
+            "",
+            "CARTESIAN COORDINATES (ANGSTROEM)",
+            "---------------------------------",
+            f"  {atom_label:<2}      0.000000     0.000000     0.000000",
+            "",
+            f"FINAL SINGLE POINT ENERGY     {energy:.12f}",
+            "THE OPTIMIZATION HAS CONVERGED",
+            "****ORCA TERMINATED NORMALLY****",
+            "",
+        )
+    )
+
+
+def _orca_stage_dir(
+    root: Path,
+    name: str,
+    *,
+    energy: float,
+    reason: str,
+    route_line: str = "! Opt",
+    charge: int = 0,
+    multiplicity: int = 1,
+    extra_directives: str = "",
+    atom_label: str = "H",
+    xyzfile: bool = False,
+    version: str = "6.0.1",
+) -> Path:
     job_dir = root / name
     job_dir.mkdir(parents=True)
-    generation, provenance = _orca_generation(job_dir)
+    generation, provenance = _orca_generation(
+        job_dir,
+        route_line=route_line,
+        charge=charge,
+        multiplicity=multiplicity,
+        extra_directives=extra_directives,
+        atom_label=atom_label,
+        xyzfile=xyzfile,
+    )
     (generation / "opt.engrad").write_text(
         _ENGRAD_TEMPLATE.format(energy=f"{energy:.12f}"), encoding="utf-8"
     )
     output = generation / "orca.out"
-    output.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+    output.write_text(
+        _completed_opt_output_text(
+            route_line=route_line,
+            charge=charge,
+            multiplicity=multiplicity,
+            atom_label=atom_label,
+            energy=energy,
+            version=version,
+        ),
+        encoding="utf-8",
+    )
+    output_identity = confined_output_identity(generation, output)
     report = {
         "schema_version": 1,
         "engine": "orca",
@@ -102,6 +219,8 @@ def _orca_stage_dir(root: Path, name: str, *, energy: float, reason: str) -> Pat
             "attempts": [
                 {
                     "index": 1,
+                    "out_path": str(output),
+                    "output_identity": output_identity,
                     "markers": {"imaginary_frequency_count": 0},
                 }
             ],
@@ -116,7 +235,14 @@ def _orca_stage_dir(root: Path, name: str, *, energy: float, reason: str) -> Pat
     return generation
 
 
-def _orca_stage(stage_id: str, stage_dir: Path, *, status: str, label: str) -> dict[str, Any]:
+def _orca_stage(
+    stage_id: str,
+    stage_dir: Path,
+    *,
+    status: str,
+    label: str,
+    task_kind: str = "opt",
+) -> dict[str, Any]:
     report = json.loads((stage_dir / RUN_STATE_FILE).read_text(encoding="utf-8"))
     report["job"] = {"id": stage_id}
     engine_payload = report.setdefault("engine_payload", {})
@@ -127,6 +253,7 @@ def _orca_stage(stage_id: str, stage_dir: Path, *, status: str, label: str) -> d
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
         "status": status,
+        "task": {"engine": "orca", "task_kind": task_kind},
         "metadata": {
             "selected_input_label": label,
             "child_job_id": stage_id,
@@ -253,9 +380,398 @@ def test_collect_ranks_orca_results_and_counts_funnel(tmp_path: Path) -> None:
     assert [entry.label for entry in data.orca_results] == ["conf_02", "conf_01"]
     assert data.orca_results[0].rel_kcal == pytest.approx(0.0)
     assert data.orca_results[1].rel_kcal == pytest.approx(0.004 * 627.5094740631, rel=1e-6)
-    assert data.orca_results[0].imaginary_count == 0
+    assert data.orca_results[0].imaginary_count is None
     assert data.orca_results[0].report_href is not None
     assert "orca_b" in data.orca_results[0].report_href
+
+
+@pytest.mark.parametrize(
+    ("second_route", "second_charge", "second_multiplicity"),
+    [
+        ("! B3LYP Opt", 0, 1),
+        ("! HF Opt", -1, 1),
+        ("! HF Opt", 0, 2),
+    ],
+)
+def test_workflow_report_omits_relative_energies_for_mixed_executed_science(
+    tmp_path: Path,
+    second_route: str,
+    second_charge: int,
+    second_multiplicity: int,
+) -> None:
+    first = _orca_stage_dir(
+        tmp_path,
+        "orca_first",
+        energy=-100.001,
+        reason="normal_termination",
+        route_line="! HF Opt",
+    )
+    second = _orca_stage_dir(
+        tmp_path,
+        "orca_second",
+        energy=-100.005,
+        reason="normal_termination",
+        route_line=second_route,
+        charge=second_charge,
+        multiplicity=second_multiplicity,
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            _orca_stage("orca_first", first, status="completed", label="first"),
+            _orca_stage("orca_second", second, status="completed", label="second"),
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.001, -100.005])
+    assert all(entry.rel_kcal is None for entry in data.orca_results)
+    rendered = workflow_report.render_workflow_report_html(data)
+    assert "Relative energies are omitted" in rendered
+    assert "provenance is missing or differs" in rendered
+    orca_table = rendered.split("<h2>ORCA results</h2>", 1)[1].split("<h2>", 1)[0]
+    assert orca_table.count("<tr><td>&#8211;</td>") == 2
+    assert "<tr><td>1</td>" not in orca_table
+
+
+def test_workflow_report_omits_relative_energies_for_mixed_orca_versions(
+    tmp_path: Path,
+) -> None:
+    first = _orca_stage_dir(
+        tmp_path,
+        "orca_version_first",
+        energy=-100.001,
+        reason="normal_termination",
+        route_line="! HF Opt",
+        version="6.0.1",
+    )
+    second = _orca_stage_dir(
+        tmp_path,
+        "orca_version_second",
+        energy=-100.005,
+        reason="normal_termination",
+        route_line="! HF Opt",
+        version="6.1.0",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            _orca_stage("orca_version_first", first, status="completed", label="first"),
+            _orca_stage("orca_version_second", second, status="completed", label="second"),
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert all(entry.rel_kcal is None for entry in data.orca_results)
+    rendered = workflow_report.render_workflow_report_html(data)
+    assert "Relative energies are omitted" in rendered
+    assert "provenance is missing or differs" in rendered
+
+
+def test_workflow_report_omits_relative_energies_for_mixed_active_directives(
+    tmp_path: Path,
+) -> None:
+    first = _orca_stage_dir(
+        tmp_path,
+        "orca_directive_first",
+        energy=-100.001,
+        reason="normal_termination",
+        route_line="! HF Opt",
+    )
+    second = _orca_stage_dir(
+        tmp_path,
+        "orca_directive_second",
+        energy=-100.005,
+        reason="normal_termination",
+        route_line="! HF Opt",
+        extra_directives="%scf\n  MaxIter 999\nend",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            _orca_stage("orca_directive_first", first, status="completed", label="first"),
+            _orca_stage("orca_directive_second", second, status="completed", label="second"),
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.001, -100.005])
+    assert all(entry.rel_kcal is None for entry in data.orca_results)
+    assert "Relative energies are omitted" in workflow_report.render_workflow_report_html(data)
+
+
+def test_single_completed_candidate_without_science_identity_has_no_relative_energy() -> None:
+    candidate = workflow_report.OrcaStageResult(
+        stage_id="orca_unbound",
+        label="unbound",
+        status="completed",
+        reason="",
+        energy=-100.0,
+        rel_kcal=None,
+        imaginary_count=0,
+        attempt_count=1,
+        report_href=None,
+        science_identity=None,
+    )
+
+    assert workflow_report._with_relative_energies([candidate]) == (candidate,)
+
+
+def test_single_completed_candidate_without_science_identity_has_no_numeric_rank(
+    tmp_path: Path,
+) -> None:
+    stage_dir = _orca_stage_dir(
+        tmp_path,
+        "orca_missing_science_dependency",
+        energy=-100.0,
+        reason="normal_termination",
+        extra_directives='%pointcharges "missing.pc"',
+    )
+    stage = _orca_stage(
+        "orca_missing_science_dependency",
+        stage_dir,
+        status="completed",
+        label="missing provenance",
+    )
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+    rendered = workflow_report.render_workflow_report_html(data)
+    orca_table = rendered.split("<h2>ORCA results</h2>", 1)[1].split("<h2>", 1)[0]
+
+    assert data.orca_results[0].energy == pytest.approx(-100.0)
+    assert data.orca_results[0].science_identity is None
+    assert data.orca_results[0].rel_kcal is None
+    assert "Relative energies are omitted" in orca_table
+    assert "<tr><td>&#8211;</td>" in orca_table
+    assert "<tr><td>1</td>" not in orca_table
+
+
+def test_workflow_report_ignores_resource_only_directive_differences(
+    tmp_path: Path,
+) -> None:
+    first = _orca_stage_dir(
+        tmp_path,
+        "orca_resource_first",
+        energy=-100.001,
+        reason="normal_termination",
+        route_line="! HF Opt",
+        extra_directives="%pal\n  nprocs 4\nend\n%maxcore 2048",
+    )
+    second = _orca_stage_dir(
+        tmp_path,
+        "orca_resource_second",
+        energy=-100.005,
+        reason="normal_termination",
+        route_line="! hf opt",
+        extra_directives="%pal nprocs 16 end\n%maxcore 8192",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            _orca_stage("orca_resource_first", first, status="completed", label="first"),
+            _orca_stage("orca_resource_second", second, status="completed", label="second"),
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.005, -100.001])
+    assert [entry.rel_kcal for entry in data.orca_results] == pytest.approx(
+        [0.0, (-100.001 + 100.005) * workflow_report.KCAL_PER_HARTREE]
+    )
+
+
+def test_workflow_report_ignores_pal_route_resource_shorthand_differences(
+    tmp_path: Path,
+) -> None:
+    first = _orca_stage_dir(
+        tmp_path,
+        "orca_pal_first",
+        energy=-100.001,
+        reason="normal_termination",
+        route_line="! HF Opt PAL4",
+    )
+    second = _orca_stage_dir(
+        tmp_path,
+        "orca_pal_second",
+        energy=-100.005,
+        reason="normal_termination",
+        route_line="! HF Opt PAL8",
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            _orca_stage("orca_pal_first", first, status="completed", label="first"),
+            _orca_stage("orca_pal_second", second, status="completed", label="second"),
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.005, -100.001])
+    assert [entry.rel_kcal for entry in data.orca_results] == pytest.approx(
+        [0.0, (-100.001 + 100.005) * workflow_report.KCAL_PER_HARTREE]
+    )
+
+
+@pytest.mark.parametrize("xyzfile", [False, True])
+def test_workflow_report_omits_relative_energies_for_mixed_atom_sequences(
+    tmp_path: Path,
+    xyzfile: bool,
+) -> None:
+    first = _orca_stage_dir(
+        tmp_path,
+        "orca_atoms_first",
+        energy=-100.001,
+        reason="normal_termination",
+        route_line="! HF Opt",
+        atom_label="H",
+        xyzfile=xyzfile,
+    )
+    second = _orca_stage_dir(
+        tmp_path,
+        "orca_atoms_second",
+        energy=-100.005,
+        reason="normal_termination",
+        route_line="! HF Opt",
+        atom_label="He",
+        xyzfile=xyzfile,
+    )
+    payload = _payload(
+        tmp_path,
+        [
+            _orca_stage("orca_atoms_first", first, status="completed", label="first"),
+            _orca_stage("orca_atoms_second", second, status="completed", label="second"),
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.001, -100.005])
+    assert all(entry.rel_kcal is None for entry in data.orca_results)
+
+
+def test_workflow_report_does_not_hide_primary_task_kind_with_spoofed_interaction_role(
+    tmp_path: Path,
+) -> None:
+    stage_dir = _orca_stage_dir(
+        tmp_path,
+        "orca_spoofed_interaction_role",
+        energy=-100.001,
+        reason="normal_termination",
+    )
+    stage = _orca_stage(
+        "orca_spoofed_interaction_role",
+        stage_dir,
+        status="completed",
+        label="primary candidate",
+    )
+    stage["task"] = {"engine": "orca", "task_kind": "opt", "status": "completed"}
+    stage["metadata"].update({"role": "interaction_fragment", "parent_stage_id": "orca_parent"})
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert [entry.label for entry in data.orca_results] == ["primary candidate"]
+
+
+@pytest.mark.parametrize(
+    ("engine", "task_kind"),
+    (("xtb", "opt"), ("orca", "unknown"), ("orca", "sp"), ("orca", "relaxed_scan")),
+)
+def test_workflow_report_candidate_admission_requires_exact_stationary_orca_task(
+    tmp_path: Path,
+    engine: str,
+    task_kind: str,
+) -> None:
+    stage_dir = _orca_stage_dir(
+        tmp_path,
+        f"orca_candidate_{engine}_{task_kind}",
+        energy=-100.001,
+        reason="normal_termination",
+    )
+    stage = _orca_stage(
+        f"orca_candidate_{engine}_{task_kind}",
+        stage_dir,
+        status="completed",
+        label="non-candidate",
+    )
+    stage["task"] = {"engine": engine, "task_kind": task_kind}
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results == ()
+
+
+def test_workflow_report_rejects_stationary_task_with_single_point_route(
+    tmp_path: Path,
+) -> None:
+    stage_dir = _orca_stage_dir(
+        tmp_path,
+        "orca_route_role_mismatch",
+        energy=-100.001,
+        reason="normal_termination",
+        route_line="! HF SP",
+    )
+    stage = _orca_stage(
+        "orca_route_role_mismatch",
+        stage_dir,
+        status="completed",
+        label="route mismatch",
+    )
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results == ()
+
+
+def test_workflow_report_accepts_authoritative_optts_frequency_candidate(
+    tmp_path: Path,
+) -> None:
+    stage_dir = _orca_stage_dir(
+        tmp_path,
+        "orca_optts_freq",
+        energy=-100.125,
+        reason="normal_termination",
+        route_line="! HF OptTS Freq",
+    )
+    stage = _orca_stage(
+        "orca_optts_freq",
+        stage_dir,
+        status="completed",
+        label="transition state",
+        task_kind="optts_freq",
+    )
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.125])
+
+
+def test_workflow_report_rejects_completed_stage_with_failed_task_state(
+    tmp_path: Path,
+) -> None:
+    stage_dir = _orca_stage_dir(
+        tmp_path,
+        "orca_task_failed",
+        energy=-100.125,
+        reason="normal_termination",
+    )
+    stage = _orca_stage(
+        "orca_task_failed",
+        stage_dir,
+        status="completed",
+        label="contradictory",
+    )
+    stage["task"]["status"] = "failed"
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results == ()
+    assert len(data.failure_rows) == 1
+    assert "stage/task is not durably completed" in data.stage_rows[0].detail
 
 
 def test_relaxed_scan_without_html_is_preserved_in_workflow_lineage(
@@ -315,18 +831,30 @@ def test_interaction_fanout_stages_stay_out_of_candidate_ranking(tmp_path: Path)
     fragment_dir = _orca_stage_dir(
         tmp_path, "orca_int_frag", energy=-50.002, reason="normal_termination"
     )
+    conformer_stage = _orca_stage("orca_conf", conf_dir, status="completed", label="conf_01")
+    conformer_stage["task"] = {"engine": "orca", "task_kind": "opt", "status": "completed"}
     complex_stage = _orca_stage(
         "orca_int_complex", complex_dir, status="completed", label="complex_sp"
     )
-    complex_stage["metadata"]["role"] = "interaction_complex_sp"
+    complex_stage["task"] = {"engine": "orca", "task_kind": "sp", "status": "completed"}
+    complex_stage["metadata"].update(
+        {"role": "interaction_complex_sp", "parent_stage_id": "orca_conf"}
+    )
     fragment_stage = _orca_stage(
         "orca_int_frag", fragment_dir, status="completed", label="fragment_a"
     )
-    fragment_stage["metadata"]["role"] = "interaction_fragment"
+    fragment_stage["task"] = {"engine": "orca", "task_kind": "sp", "status": "completed"}
+    fragment_stage["metadata"].update(
+        {
+            "role": "interaction_fragment",
+            "parent_stage_id": "orca_conf",
+            "fragment_index": 0,
+        }
+    )
     payload = _payload(
         tmp_path,
         [
-            _orca_stage("orca_conf", conf_dir, status="completed", label="conf_01"),
+            conformer_stage,
             complex_stage,
             fragment_stage,
         ],
@@ -378,13 +906,40 @@ def _energy_chain_payload(
     """One completed ORCA stage whose energy comes from the .out/.engrad chain."""
     job_dir = tmp_path / name
     job_dir.mkdir()
-    stage_dir, provenance = _orca_generation(job_dir)
+    route_line = next(
+        (
+            line.split(">", 1)[1].strip()
+            for line in out_text.splitlines()
+            if line.lstrip().startswith("|  1>") and ">" in line
+        ),
+        "! r2scan-3c Opt TightSCF",
+    )
+    stage_dir, provenance = _orca_generation(job_dir, route_line=route_line)
     if engrad_energy is not None:
         (stage_dir / "opt.engrad").write_text(
             _ENGRAD_TEMPLATE.format(energy=engrad_energy), encoding="utf-8"
         )
     out_path = stage_dir / "opt.out"
-    out_path.write_text(out_text, encoding="utf-8")
+    body = out_text.replace("****ORCA TERMINATED NORMALLY****", "").rstrip()
+    out_path.write_text(
+        "\n".join(
+            (
+                "Program Version 6.0.1",
+                body,
+                "|  2> * xyz 0 1",
+                "",
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                "  H       0.000000     0.000000     0.000000",
+                "",
+                "THE OPTIMIZATION HAS CONVERGED",
+                "****ORCA TERMINATED NORMALLY****",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    output_identity = confined_output_identity(stage_dir, out_path)
     report = {
         "schema_version": 1,
         "engine": "orca",
@@ -397,6 +952,7 @@ def _energy_chain_payload(
                 {
                     "index": 1,
                     "out_path": str(out_path),
+                    "output_identity": output_identity,
                     "markers": {"imaginary_frequency_count": 0},
                 }
             ],
@@ -446,8 +1002,8 @@ def test_collect_refuses_annotated_final_output_energy(tmp_path: Path) -> None:
 
     data = collect_workflow_report_data(tmp_path, payload)
 
-    assert data.orca_results[0].energy is None
-    assert data.orca_results[0].rel_kcal is None
+    assert data.orca_results == ()
+    assert "job evidence could not be parsed into a complete SI block" in data.stage_rows[0].detail
 
 
 def test_collect_refuses_engrad_energy_when_final_output_is_annotated(tmp_path: Path) -> None:
@@ -467,8 +1023,8 @@ def test_collect_refuses_engrad_energy_when_final_output_is_annotated(tmp_path: 
 
     data = collect_workflow_report_data(tmp_path, payload)
 
-    assert data.orca_results[0].energy is None
-    assert data.orca_results[0].rel_kcal is None
+    assert data.orca_results == ()
+    assert "job evidence could not be parsed into a complete SI block" in data.stage_rows[0].detail
 
 
 def test_collect_refuses_engrad_energy_when_annotation_is_beyond_scan_window(
@@ -490,8 +1046,8 @@ def test_collect_refuses_engrad_energy_when_annotation_is_beyond_scan_window(
 
     data = collect_workflow_report_data(tmp_path, payload)
 
-    assert data.orca_results[0].energy is None
-    assert data.orca_results[0].rel_kcal is None
+    assert data.orca_results == ()
+    assert "job evidence could not be parsed into a complete SI block" in data.stage_rows[0].detail
 
 
 def test_collect_finds_clean_output_energy_beyond_scan_window(tmp_path: Path) -> None:
@@ -543,6 +1099,105 @@ def test_collect_ignores_unbound_root_engrad_for_verified_orca_generation(
     assert data.orca_results[0].energy != pytest.approx(-999.0)
 
 
+def test_collect_ignores_generation_engrad_mutated_after_publication(
+    tmp_path: Path,
+) -> None:
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_mutated_engrad",
+        energy=-1.1,
+        reason="normal_termination",
+    )
+    stage = _orca_stage(
+        "orca_mutated_engrad",
+        generation,
+        status="completed",
+        label="current",
+    )
+    (generation / "opt.engrad").write_text(
+        _ENGRAD_TEMPLATE.format(energy="-999.000000000000"),
+        encoding="utf-8",
+    )
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results[0].energy == pytest.approx(-1.1)
+    assert data.orca_results[0].energy != pytest.approx(-999.0)
+
+
+def test_completed_candidate_rejects_terminal_output_identity_mutation(
+    tmp_path: Path,
+) -> None:
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_mutated_output",
+        energy=-1.1,
+        reason="normal_termination",
+    )
+    stage = _orca_stage(
+        "orca_mutated_output",
+        generation,
+        status="completed",
+        label="mutated output",
+    )
+    output = generation / "orca.out"
+    output.write_text(output.read_text(encoding="utf-8") + "post-publication mutation\n")
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results == ()
+    assert "no verified report generation recorded" in data.stage_rows[0].detail
+
+
+def test_completed_candidate_rejects_state_report_identity_divergence(
+    tmp_path: Path,
+) -> None:
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_mutated_state",
+        energy=-1.1,
+        reason="normal_termination",
+    )
+    stage = _orca_stage(
+        "orca_mutated_state",
+        generation,
+        status="completed",
+        label="mutated state",
+    )
+    state = json.loads((generation / RUN_STATE_FILE).read_text(encoding="utf-8"))
+    state["job"]["id"] = "different-job"
+    (generation / RUN_STATE_FILE).write_text(json.dumps(state), encoding="utf-8")
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results == ()
+    assert "no verified report generation recorded" in data.stage_rows[0].detail
+
+
+def test_completed_candidate_uses_verified_block_imaginary_count(
+    tmp_path: Path,
+) -> None:
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_forged_marker",
+        energy=-1.1,
+        reason="normal_termination",
+    )
+    stage = _orca_stage(
+        "orca_forged_marker",
+        generation,
+        status="completed",
+        label="forged marker",
+    )
+    state = json.loads((generation / RUN_STATE_FILE).read_text(encoding="utf-8"))
+    state["engine_payload"]["attempts"][-1]["markers"]["imaginary_frequency_count"] = 7
+    _publish_orca_machine(generation, state)
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results[0].imaginary_count is None
+
+
 @pytest.mark.parametrize(
     ("stage_job_id", "stage_run_id", "report_job_id", "report_run_id"),
     (
@@ -576,6 +1231,7 @@ def test_orca_stage_report_rejects_conflicting_partial_identity(
         "status": "completed",
         "task": {
             "engine": "orca",
+            "task_kind": "opt",
             "submission_result": {"job_id": stage_job_id},
             "payload": {"run_id": stage_run_id},
         },
@@ -591,10 +1247,8 @@ def test_orca_stage_report_rejects_conflicting_partial_identity(
 
     data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
 
-    assert data.orca_results[0].reason == ""
-    assert data.orca_results[0].attempt_count == 0
-    assert data.orca_results[0].energy is None
-    assert data.orca_results[0].report_href is None
+    assert data.orca_results == ()
+    assert "no verified report generation recorded" in data.stage_rows[0].detail
 
 
 def test_orca_stage_report_requires_declared_run_identity(tmp_path: Path) -> None:
@@ -619,16 +1273,19 @@ def test_orca_stage_report_requires_declared_run_identity(tmp_path: Path) -> Non
         "stage_id": "orca_missing_run",
         "stage_kind": "orca_stage",
         "status": "completed",
-        "task": {"engine": "orca", "submission_result": {"job_id": "job-current"}},
+        "task": {
+            "engine": "orca",
+            "task_kind": "opt",
+            "submission_result": {"job_id": "job-current"},
+        },
         "metadata": metadata,
         "output_artifacts": [{"kind": "orca_report_json", "path": str(report_path)}],
     }
 
     data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
 
-    assert data.orca_results[0].reason == ""
-    assert data.orca_results[0].attempt_count == 0
-    assert data.orca_results[0].report_href is None
+    assert data.orca_results == ()
+    assert "no verified report generation recorded" in data.stage_rows[0].detail
 
 
 def test_orca_stage_report_allows_writer_without_queue_identity(tmp_path: Path) -> None:
@@ -651,6 +1308,7 @@ def test_orca_stage_report_allows_writer_without_queue_identity(tmp_path: Path) 
         "status": "completed",
         "task": {
             "engine": "orca",
+            "task_kind": "opt",
             "submission_result": {"job_id": "job-current", "queue_id": "queue-current"},
             "payload": {"run_id": "run-current"},
         },
@@ -692,6 +1350,7 @@ def test_completed_orca_stage_rejects_explicit_root_report(tmp_path: Path) -> No
                 "stage_id": "orca_root_explicit",
                 "stage_kind": "orca_stage",
                 "status": "completed",
+                "task": {"engine": "orca", "task_kind": "opt"},
                 "metadata": {
                     "child_job_id": "orca_root_explicit",
                     "latest_known_path": str(job_dir),
@@ -707,9 +1366,8 @@ def test_completed_orca_stage_rejects_explicit_root_report(tmp_path: Path) -> No
 
     data = collect_workflow_report_data(tmp_path, payload)
 
-    assert data.orca_results[0].reason == ""
-    assert data.orca_results[0].attempt_count == 0
-    assert data.orca_results[0].report_href is None
+    assert data.orca_results == ()
+    assert "no verified report generation recorded" in data.stage_rows[0].detail
 
 
 def test_completed_orca_stage_rejects_noncanonical_generation_json(tmp_path: Path) -> None:
@@ -737,6 +1395,7 @@ def test_completed_orca_stage_rejects_noncanonical_generation_json(tmp_path: Pat
                 "stage_id": "orca_noncanonical_json",
                 "stage_kind": "orca_stage",
                 "status": "completed",
+                "task": {"engine": "orca", "task_kind": "opt"},
                 "metadata": {
                     "child_job_id": "orca_noncanonical_json",
                     "run_id": "run-noncanonical-json",
@@ -1525,7 +2184,11 @@ def test_orca_stage_report_requires_declared_job_identity(tmp_path: Path) -> Non
         "stage_id": "orca_missing_job",
         "stage_kind": "orca_stage",
         "status": "completed",
-        "task": {"engine": "orca", "payload": {"run_id": "run-current"}},
+        "task": {
+            "engine": "orca",
+            "task_kind": "opt",
+            "payload": {"run_id": "run-current"},
+        },
         "metadata": {
             "run_id": "run-current",
             "latest_known_path": str(job_dir),
@@ -1535,9 +2198,8 @@ def test_orca_stage_report_requires_declared_job_identity(tmp_path: Path) -> Non
 
     data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
 
-    assert data.orca_results[0].reason == ""
-    assert data.orca_results[0].attempt_count == 0
-    assert data.orca_results[0].report_href is None
+    assert data.orca_results == ()
+    assert "no verified report generation recorded" in data.stage_rows[0].detail
 
 
 def test_orca_diagnostic_falls_back_to_report_json_without_html(tmp_path: Path) -> None:

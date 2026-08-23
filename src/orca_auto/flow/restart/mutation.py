@@ -13,7 +13,7 @@ from orca_auto.core.paths.workflow import (
 from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
-from ..contracts.workflow import is_interaction_role
+from ..contracts.workflow import is_valid_interaction_stage_contract
 from ..registry import sync_workflow_registry
 from ..state import load_workflow_payload, workflow_summary, write_workflow_payload
 from ..workflow.status import WORKFLOW_FAILED_STATUSES
@@ -137,27 +137,32 @@ def _reset_restartable_stages(
     directory_transaction: RestartDirectoryTransaction | None = None,
 ) -> list[dict[str, str]]:
     restarted_stages: list[dict[str, str]] = []
+    workflow_stages = [
+        raw_stage for raw_stage in payload.get("stages", []) if isinstance(raw_stage, dict)
+    ]
+    trusted_interaction_fingerprint = _normalize_text(
+        flow_settings.get("persisted_interaction_energy_fingerprint")
+    )
     has_interaction_stages = any(
-        isinstance(raw_stage, dict)
-        and is_interaction_role(
-            _normalize_text(
-                raw_stage.get("metadata", {}).get("role")
-                if isinstance(raw_stage.get("metadata"), dict)
-                else ""
-            )
+        is_valid_interaction_stage_contract(
+            raw_stage,
+            workflow_stages,
+            expected_config_fingerprint=trusted_interaction_fingerprint,
         )
-        for raw_stage in payload.get("stages", [])
+        for raw_stage in workflow_stages
     )
     if has_interaction_stages and not flow_settings.get("interaction_energy_disabled"):
         reopening_primary_orca = []
-        for raw_stage in payload.get("stages", []):
-            if not isinstance(raw_stage, dict) or not _stage_needs_restart(raw_stage):
+        for raw_stage in workflow_stages:
+            if not _stage_needs_restart(raw_stage):
                 continue
-            metadata = raw_stage.get("metadata")
-            role = _normalize_text(metadata.get("role")) if isinstance(metadata, dict) else ""
-            if _normalize_text(
-                raw_stage.get("stage_kind")
-            ) == "orca_stage" and not is_interaction_role(role):
+            if _normalize_text(raw_stage.get("stage_kind")) == "orca_stage" and not (
+                is_valid_interaction_stage_contract(
+                    raw_stage,
+                    workflow_stages,
+                    expected_config_fingerprint=trusted_interaction_fingerprint,
+                )
+            ):
                 reopening_primary_orca.append(_normalize_text(raw_stage.get("stage_id")))
         if reopening_primary_orca:
             raise ValueError(
@@ -171,9 +176,11 @@ def _reset_restartable_stages(
             if not isinstance(raw_stage, dict):
                 retained.append(raw_stage)
                 continue
-            metadata = raw_stage.get("metadata")
-            role = _normalize_text(metadata.get("role")) if isinstance(metadata, dict) else ""
-            if not is_interaction_role(role):
+            if not is_valid_interaction_stage_contract(
+                raw_stage,
+                workflow_stages,
+                expected_config_fingerprint=trusted_interaction_fingerprint,
+            ):
                 retained.append(raw_stage)
                 continue
             task = raw_stage.get("task")
@@ -189,6 +196,9 @@ def _reset_restartable_stages(
                 }
             )
         payload["stages"] = retained
+    remaining_stages = [
+        raw_stage for raw_stage in payload.get("stages", []) if isinstance(raw_stage, dict)
+    ]
     for raw_stage in payload.get("stages", []):
         if not isinstance(raw_stage, dict) or not _stage_needs_restart(raw_stage):
             continue
@@ -196,6 +206,7 @@ def _reset_restartable_stages(
             raw_stage,
             flow_settings,
             restart_allowed_root=restart_allowed_root,
+            workflow_stages=remaining_stages,
             created_restart_dirs=(
                 directory_transaction.created_dirs if directory_transaction is not None else None
             ),

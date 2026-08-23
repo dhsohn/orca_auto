@@ -168,6 +168,7 @@ def test_every_catalog_engine_has_registry_supervision_admission_and_stage_metad
         assert captured[0]["source"] == entry.admission_source
         assert captured[0]["app_name"] == entry.app_id
         assert ("engine_process_state" in captured[0]) is entry.managed_admission
+        assert captured[0].get("engine_launch_gated", False) is entry.engine_launch_gated
 
         assert WORKFLOW_STAGE_DIRNAMES[entry.engine_id] == entry.workflow_stage_dirname
         assert workflow_stage_dirnames_for_engine(entry.engine_id) == (
@@ -197,6 +198,7 @@ def test_orca_worker_reservation_uses_catalog_identity(
     orca_entry = next(entry for entry in engine_catalog() if entry.engine_id == "orca")
     assert captured[0]["source"] == orca_entry.admission_source
     assert captured[0]["app_name"] == orca_entry.app_id
+    assert captured[0]["engine_launch_gated"] is True
 
 
 def test_every_catalog_engine_has_queue_filter_list_cancel_and_clear_coverage() -> None:

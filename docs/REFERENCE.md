@@ -168,6 +168,9 @@ Field descriptions:
   split the shared admission pool.
 - `workflow.paths.xtb_executable`: xTB executable path used by workflow-managed internal stages
 - `workflow.paths.crest_executable`: CREST executable path used by workflow-managed internal stages
+- `messenger.discord.bot_token`: Discord bot credential; after surrounding
+  whitespace is trimmed, a non-empty token must use printable ASCII characters
+  without whitespace
 - Internal xTB/CREST runtimes are scoped to each workflow
 - Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under the generation workspace `<runs_root>/<scaffold>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
 - `orca.paths.orca_executable`: ORCA executable path
@@ -237,9 +240,9 @@ ORCA-specific notes:
 
 - Visible-generation naming, the reserved `YYYYMMDD-HHMMSS-<8-hex>` name
   shape, resubmission/`--force` barriers, dependency basename-collision and
-  reserved-name rules, ambiguous duplicate `%pal`/`nprocs`/`%maxcore`/
-  `%moinp`/`PALn` rejection, and the rejection of non-snapshot-bound external
-  include/program hooks are specified in the
+  reserved-name rules, ambiguous duplicate resource/orbital-input rejection,
+  explicit snapshot-bound `MOInp` for every `MORead`, and the rejection of
+  non-snapshot-bound external include/program hooks are specified in the
   [Queue And Activity Contract](PUBLIC_CONTRACTS.md#queue-and-activity-contract).
 - Queue workers execute by queue id rather than passing a direct
   `reaction_dir` command line. The queue entry still stores `reaction_dir`, and
@@ -253,8 +256,14 @@ ORCA-specific notes:
   the largest active value before normalization so a later duplicate cannot
   hide a larger request.
 - Retry inputs and resumed worker-shutdown inputs add `MORead` plus `%moinp`
-  when the source input has a matching non-empty `.gbw` checkpoint. Resumed
-  inputs are written as `*.resume.inp` so the original user input is not mutated.
+  when the source input has a matching non-empty `.gbw` checkpoint. Top-level
+  and `%scf` orbital-input forms are interpreted together and never duplicated.
+  Recovery verifies the originally snapshotted executable and can use a valid
+  frozen runtime-geometry seed without reopening its deleted source file. Such
+  a seed must preserve atom labels/order and contain exactly three finite
+  coordinates per declared atom, with no trailing rows.
+  Resumed inputs are written as `*.resume.inp` so the original user input is not
+  mutated.
 
 Workflow notes:
 
@@ -281,7 +290,9 @@ Workflow notes:
 - `conformer_screening` starts with one CREST child job and then hands off up to 20 retained conformers to ORCA child jobs in the next workflow cycle. The scaffold shortcut is `orca_auto scaffold conformer_search <path>`.
 - `scan_ts_search` starts with an ORCA relaxed scan built from `orca.route_line`
   plus the required `scan_coordinate` manifest key (ORCA scan syntax, 0-based
-  atom indices). When the scan completes, one OptTS+Freq child job is chained
+  atom indices). The coordinate is one exact `B`/`A`/`D` instruction with the
+  matching arity, distinct in-bounds atoms, finite unequal endpoints, and at
+  least two points. When the scan completes, one OptTS+Freq child job is chained
   per interior maximum of the combined profile with prominence above
   `barrier_threshold_kcal` (default 0.5; endpoints excluded; capped by
   `max_orca_stages`; route from `orca_optts_route_line`), and the workflow
@@ -297,6 +308,34 @@ Workflow notes:
   (`01_scan`, then `02_scan_maximum`/`02_scan_extension`, ... in creation
   order) with no `03_orca` engine root and no `inputs/` copy of the source
   geometry. The scaffold shortcut is `orca_auto scaffold scan_ts <path>`.
+- Workflow ORCA routes are role-checked at creation, restart, materialization,
+  pre-submission selection, and completed-result acceptance. Reaction TS routes and
+  `orca_optts_route_line` require the exact active, unquoted `OptTS` token plus
+  `Freq`, `NumFreq`, or `AnFreq`, and reject `ScanTS`/`NEB-TS`; conformer
+  and relaxed-scan routes require a non-TS optimization, and relaxed scans also
+  require exactly one closed `%geom Scan` coordinate block whose atom indices
+  fit the selected geometry. The same strict scan contract is reused during
+  dynamic extension and completed-result acceptance. A route must be a string of
+  route lines; quoted tokens, marker-prefixed payload tokens, and active
+  non-route input are rejected rather than rendered. Tokens
+  inside a closed `# ... #` inline comment and after an unmatched `#` marker are
+  ignored. Submission requires equal durable `reaction_dir`/`selected_inp`
+  copies, resolves the same actual input as the direct submitter, and validates
+  the final rewritten bytes at the snapshot boundary before binding those same
+  bytes. After a
+  primary ORCA stage completes, restart cannot change its route, charge, or
+  multiplicity, and reports omit energy comparisons across missing or mixed
+  route, non-resource active input directives, electronic-state, ORCA-version,
+  or identity-bound non-geometry dependency content provenance, or when the
+  selected geometries do not share one ordered atom-label sequence. Geometry
+  coordinates remain candidate-specific, and private dependency pathnames are
+  canonicalized away. HTML, SI, and interaction
+  RMSD representative selection share this scientific identity; `%pal`,
+  `%maxcore`, and route `PALn` are resource-only. The HTML report preserves
+  stage order and omits numeric rank in that case. Interaction-role metadata
+  excludes only a structurally valid ORCA single-point child, so it cannot hide
+  a primary stage. A mismatch fails closed instead of accepting scientifically
+  incompatible output.
 - Every workflow advance rewrites `workflow_report.html` in the workflow
   workspace: a self-contained visual summary with the stage chain, the
   CREST → (xTB) → ORCA funnel, and a ranked ORCA results table (relative
@@ -525,13 +564,16 @@ released plain table.
   inspected, prints a `pip install -e .` hint on stderr, and exits non-zero.
   `orca_auto --version` keeps reporting the installed version alone, so use
   `service status` rather than reading the version back.
-- `orca_auto service status` also gates the age of the running worker
-  processes. The workers import the checkout live but never reload, so a deploy
-  that lands after a worker started leaves that process on pre-deploy code; the
-  command reports such workers as `worker_staleness` (stale or undetermined,
-  with the unit and PID), prints a `service restart` hint on stderr, and exits
-  non-zero. Restart the workers in an idle window after every deploy that
-  touches code they import.
+- `orca_auto service status` also gates the age of each running worker against
+  a per-worker snapshot of the latest matching HEAD-reflog update in the
+  checkout recorded from that worker's actual imported module. The provenance
+  is bound to the process PID and start ticks; it does not use cwd, commit
+  timestamp, or the command's own checkout. An imported package tree with
+  uncommitted source changes is undetermined. Stale or undetermined git-backed workers are reported
+  in `worker_staleness` with per-worker evidence, print a `service restart` hint
+  on stderr, and make the command exit non-zero. Non-git workers are not judged;
+  in a mixed deployment they appear as `uncompared`. Restart workers in an idle
+  window after every deploy that touches code they import.
 
 ### 7.6 Long-Running Services
 
@@ -605,6 +647,8 @@ Assumptions of the unified runtime templates:
 The installer renders these paths into every unit; pass explicit `--repo` and
 `--config` values when the defaults differ. `--worker-only` selects the
 engine-worker target as the boot target instead of the full runtime target;
+literal `%` path characters are escaped, while quotes, backslashes, and dollar
+signs are rejected before unit files are written.
 `service status` reports such an install as `worker-only`. The runtime target
 currently pulls in only the engine-worker target, so both modes start the same
 unit set today — the flag fixes the boot selection, and a worker-only install

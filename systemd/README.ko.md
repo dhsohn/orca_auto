@@ -40,7 +40,8 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 
 설치 프로그램은 저장소 경로로 유닛 파일을 렌더링해 `/etc/systemd/system`에 쓰고,
 `systemctl daemon-reload`를 실행한 뒤, 런타임 타깃(또는 `--worker-only`를 쓰면
-engine-worker 타깃)을 활성화/시작합니다.
+engine-worker 타깃)을 활성화/시작합니다. 렌더링하는 data path의 literal `%`는
+escape하고 quote, backslash, dollar sign이 든 경로는 unit을 쓰기 전에 거부합니다.
 
 checkout을 업데이트했거나 이 디렉터리의 유닛 템플릿을 수정했다면, 같은 `--user`와
 `--repo` 값으로 설치 프로그램을 다시 실행하세요. 설치된 유닛은
@@ -111,6 +112,11 @@ xTB/CREST 엔진 워커로 확장됩니다. 이 unit은 설치되지만 기본 r
   자체를 재시작하므로 진행 중인 ORCA 작업을 중단시킵니다 — 유휴 창에서 실행하세요.
   재시작에 실패한 worker는 낡은 코드로 계속 도는 대신 정지 상태로 남고, workflow
   worker 상태를 읽을 수 없으면 아무것도 바꾸지 않고 non-zero로 종료합니다.
+- supervised worker는 startup exec에서 resolve한 package import source를 기록합니다.
+  `service status`는 그 근거를 PID/start ticks에 바인딩해 worker별로 새 Git HEAD reflog와
+  import package clean 상태를 검사하며, process cwd는 source 근거가 아닙니다. 이전 release에서
+  실행 중이던 worker나 commit하지 않은 source 변경이 있는 package tree는 `undetermined`로
+  보고됩니다.
 
 기본 ORCA 엔진 워커 설치:
 

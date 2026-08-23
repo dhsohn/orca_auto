@@ -11,7 +11,10 @@ from orca_auto.core.engine_process import atomic_write_confined_bytes
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils import atomic_write_json, normalize_text
 from orca_auto.core.utils.persistence import load_json_mapping_file
-from orca_auto.flow._orca_stage_materialization import ensure_route_line
+from orca_auto.flow._orca_stage_materialization import (
+    ensure_route_line,
+    validate_workflow_orca_input,
+)
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView
 from orca_auto.orca.input_artifacts import derive_selected_input_xyz
 from orca_auto.orca.input_blocks import (
@@ -444,6 +447,10 @@ def rematerialize_orca_restart_input(
                 read_stable_regular_file(previous_xyz),
                 label="ORCA restart geometry",
             )
+        validate_workflow_orca_input(
+            task_kind=task_view.kind(),
+            inp_path=target_inp,
+        )
         provenance = _source_payload(
             previous_dir,
             previous_inp=previous_inp,

@@ -85,6 +85,12 @@ Behavior:
   workflow id, queue id, run id, or path aliases.
 - `queue list --json`, `queue cancel --json`, and `service status --json` are
   the script-friendly surfaces.
+- Expected configuration, queue-store, index, and workflow-registry failures
+  from `queue list`, `queue list clear`, and `queue cancel` are concise
+  `error:`/`hint:` diagnostics on stderr. They return non-zero without a Python
+  traceback or partial JSON on stdout. A downstream pipe closing during output
+  is handled as an output condition after any durable clear/cancel action; it
+  is not diagnosed as damaged configuration or state.
 
 Non-contract CLI surfaces:
 
@@ -173,10 +179,18 @@ Behavior:
 - Outbound Discord delivery uses `messenger.provider: discord` plus non-empty
   `messenger.discord.bot_token` and `messenger.discord.default_channel_id`
   values. Notifications are one-way; there is no inbound command surface.
-- The explicit bot token must be a string and `default_channel_id` a documented
-  positive Discord ID. Explicit nulls, booleans, and collections in those scalar
-  fields are rejected. Empty token and destination strings remain the
-  intentional way to disable outbound delivery.
+- After surrounding whitespace is trimmed, an explicit bot token must be a
+  string containing only printable ASCII characters with no whitespace;
+  `default_channel_id` must be a documented positive Discord ID. Explicit
+  nulls, booleans, collections, control characters, non-ASCII text, and
+  whitespace inside a token are rejected without echoing the token. Empty token
+  and destination strings remain the intentional way to disable outbound
+  delivery.
+- Notification transport failure is advisory to queue submission: it produces a
+  redacted warning and does not roll back or park an otherwise complete durable
+  queue publication. Request construction, HTTP status handling, and response
+  body reads all follow this rule; an unreadable success or rate-limit response
+  is a bounded delivery failure, not a queue-publication failure.
 - The Discord adapter bounds finite delivery timeouts to 0.1–120 seconds, integer
   total attempts to 1–10, and finite retry backoff to 0–120 seconds. Omission uses
   the documented defaults and finite values outside those ranges are clamped;
@@ -288,8 +302,24 @@ queue rows and retire the intent before starting a reserved child; cleanup retai
 the intent whenever generation removal is uncertain. These intent files are
 implementation state and must not be edited by clients.
 ORCA snapshots also reject ambiguous duplicate `%pal`/`nprocs`, `%maxcore`,
-`%moinp`, and route `PALn` directives before execution. External include/program
-hooks that are not explicitly snapshot-bound are unsupported and fail closed.
+orbital-input, and route `PALn` directives before execution. Top-level `%moinp`
+and `MOInp` inside `%scf` are one semantic orbital-input namespace. A route or
+`%scf` block that requests `MORead` must name exactly one explicit,
+snapshot-bound orbital input; implicit current-directory checkpoint lookup is
+unsupported. External include/program hooks that are not explicitly
+snapshot-bound are unsupported and fail closed.
+Crash recovery seeds a same-stem runtime geometry only from the prior verified
+generation. It must preserve the submitted atom-label sequence and contain the
+declared number of atom rows with exactly three finite numeric coordinates and
+no trailing rows. A valid seed does not require the original job-root geometry
+still to exist. If that seed is absent or malformed, or if an immutable
+dependency must be copied again, the current job-root file is accepted only when
+its byte size and SHA-256 still match the original submission; changed, deleted,
+or unverifiable dependencies fail recovery closed instead of changing the
+calculation being resumed. A parseable seed that changes atom labels or order is
+substitution evidence and fails closed rather than falling back. Recovery also
+verifies and reuses the snapshotted ORCA executable path, byte size, and SHA-256;
+changing the configured executable does not change an existing calculation.
 
 New xTB/CREST terminal artifacts bind retained outputs to SHA-256 and byte-size
 identities. Downstream readers verify the current file against that terminal
@@ -530,6 +560,59 @@ Manifest keys that users may rely on:
 - `interaction_energy.fragments[].label`
 - `allow_external_inputs`
 
+ORCA routes are bound to durable workflow task roles. A
+`reaction_ts_search` route and `scan_ts_search`'s
+`orca_optts_route_line` must contain the exact active, unquoted `OptTS` token
+and one supported active frequency token (`Freq`, `NumFreq`, or `AnFreq`),
+without `ScanTS` or `NEB-TS`. A `conformer_screening` route and the relaxed-scan
+`orca.route_line` must request a non-TS geometry optimization, and a relaxed
+scan input must also carry a valid `%geom Scan` coordinate block. Route values
+must be strings containing only route lines; comment-only and blank lines are
+discarded, while quoted tokens, `!`/`%`/`*`/`$`-prefixed payload tokens, and any
+other active ORCA input line are rejected instead of being rendered. Compact
+leading syntax such as `!B3LYP` remains valid. Only active route tokens count:
+tokens inside a closed `# ... #` inline comment and after an unmatched `#`
+marker are ignored. Workflow creation,
+restart rematerialization, pre-submission validation, and completed-stage
+acceptance reject a route-role mismatch instead of publishing the result under
+the wrong task role. Queue submission requires `reaction_dir` and `selected_inp`
+to be present and equal in both durable payload copies, uses the direct
+submitter's actual input-selection rule, and requires that selection to equal
+the durable selected input. The validator then runs on the final rewritten
+input bytes at the execution-snapshot boundary before those same bytes are
+written and identity-bound.
+Completed-stage acceptance requires the selected input named by the artifact
+contract itself and does not substitute a pre-submission task-payload path.
+
+`scan_coordinate` is one complete line using `B`, `A`, or `D` with respectively
+two, three, or four distinct zero-based atom indices, two finite unequal
+endpoints, and an integer point count of at least two. Every index must exist in
+the stage's selected XYZ geometry. The input must contain exactly one closed
+`%geom` block with one closed `Scan` sub-block and one active coordinate.
+Trailing commands and multiple coordinates are rejected before a workspace is
+created. Creation, dynamic scan extension, submission, and completed-result
+acceptance reuse this contract. Canonical endpoints use shortest round-trip
+float text, so valid precision is not silently rounded to eight decimal places.
+
+Restart may change non-scientific controls, but once a primary ORCA stage has
+completed it cannot change the durable route, charge, or multiplicity used by
+that stage. Report aggregation verifies the selected inputs and omits relative
+energy comparisons and numeric rankings if route, non-resource active input
+directives, electronic-state, or ORCA version provenance is missing or mixed
+across completed candidates. The selected inline or confined XYZ also must
+prove the same ordered atom-label sequence; coordinates themselves remain
+candidate-specific. Every identity-bound non-geometry dependency (for example,
+point charges, orbital inputs, or NEB auxiliaries) must also have the same kind
+and content identity; private snapshot pathnames do not affect comparison. The
+HTML report, SI populations/refinements, and
+interaction fan-out's RMSD representative selection use the same bound-input
+scientific identity. `%pal`, `%maxcore`, and route `PALn` are resource-only and
+do not split that identity. Only an
+exact interaction child contract (ORCA single point, recognized role, unique
+non-interaction ORCA parent, and valid fragment index when applicable) is
+excluded from primary-stage restart and ranking checks; role metadata alone
+cannot hide a primary stage.
+
 `max_crest_candidates` is capped at 32 per reaction side. Endpoint pairing
 keeps only the requested best pairs while evaluating this bounded Cartesian
 space, rather than materializing and sorting every pair. Geometry-metric pairing
@@ -641,6 +724,11 @@ Workflow runtime artifacts:
   default grouping still bounds fan-out while the SI structure table remains
   undeduplicated. The interaction generation fingerprint includes those RMSD
   grouping settings.
+- Interaction ownership is fail-closed and config-bound. A child is quarantined
+  from primary ORCA results, reused by fan-out, or retired by restart only when
+  its canonical SHA-256 generation fingerprint matches the workflow's durable
+  interaction configuration. Missing, malformed, or different fingerprints do
+  not let arbitrary SP role metadata hide or retire a primary stage.
 - A resolved interaction energy requires exactly one completed current-generation
   complex SP and one completed fragment SP at every expected index. The selected
   input and parsed output must agree on route and electronic state; executed
@@ -750,6 +838,11 @@ Supported operator commands:
 
 Behavior:
 
+- Literal `%` characters in configured repository, configuration, admission,
+  or runs paths are escaped when unit files are rendered; template-owned
+  instance specifiers such as `%i` remain active. Paths containing quotes,
+  backslashes, or dollar signs are rejected before any unit is written because
+  those characters would change systemd tokenization or expansion.
 - A full-runtime install enables the runtime target; a worker-only install
   enables the engine-worker target instead. The runtime target currently pulls
   in only the engine-worker target, so both modes start the same unit set.
@@ -774,18 +867,27 @@ Behavior:
   deployment with healthy units reports `ok: true` and still exits non-zero. An
   install with no source `pyproject.toml`, such as a wheel install, has nothing
   to compare and reports `version_drift: null`.
-- `service status` also compares each active worker process against the
-  checkout's HEAD commit. The units import the checkout live but never reload,
-  so a deploy that lands after a worker started leaves that process running a
+- Each worker records its resolved `orca_auto` module source in its own process
+  environment at startup. `service status` reads that import provenance from
+  the active main process, binds it to the same PID/start ticks, and compares
+  the unit start time with an independently captured, per-worker snapshot of
+  that checkout's latest matching HEAD-reflog update, not the commit object's
+  timestamp or the status command's checkout or the worker's current directory.
+  The imported package tree must also be clean relative to Git; uncommitted
+  source changes make the verdict `undetermined`. The units import a
+  checkout live but never reload, so
+  a deploy that moves HEAD after a worker started leaves that process running a
   torn mix of cached pre-deploy modules and freshly imported post-deploy code.
-  A worker service whose main process started before HEAD was committed is
-  reported under `worker_staleness.stale` with its unit, PID, and start time;
-  an active worker whose process cannot be inspected is reported under
-  `worker_staleness.undetermined` rather than assumed fresh. Either finding
-  writes the affected unit and a `service restart` hint to stderr and exits
-  non-zero; `ok` continues to describe unit health alone. A source tree that is
-  not a git checkout has nothing to compare and reports
-  `worker_staleness: null`. Inactive units are not judged.
+  Such a worker is reported under `worker_staleness.stale` with its unit, PID,
+  checkout, HEAD, and start/update evidence. An active git-backed worker whose
+  process, checkout, or matching reflog evidence cannot be inspected is
+  reported under `worker_staleness.undetermined` rather than assumed fresh.
+  Either finding writes the affected unit and a `service restart` hint to
+  stderr and exits non-zero; `ok` continues to describe unit health alone.
+  Active non-git workers have no checkout evidence to compare: an all-wheel set
+  reports `worker_staleness: null`, while a mixed set lists them under additive
+  `worker_staleness.uncompared` without masking verdicts for git-backed workers.
+  Inactive units are not judged.
 - `service restart` clears the start-limit failure state of every worker service
   it is about to restart. It restarts the runtime target when enabled, otherwise
   the engine-worker target, and then restarts the worker services themselves:

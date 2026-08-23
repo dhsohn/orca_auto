@@ -25,8 +25,19 @@ from orca_auto.cli_common import (
 from orca_auto.cli_errors import emit_error
 from orca_auto.core import statuses as _s
 from orca_auto.core.activity_icons import activity_status_icon
+from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.indexing import JobLocationIndexError
+from orca_auto.core.queue import QueueStoreCorruptError
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.activity import cancel_activity, clear_activities, list_activities
+from orca_auto.flow.registry import WorkflowRegistryCorruptError
+
+_QUEUE_STATE_ERRORS = (
+    *YAML_CONFIG_LOAD_EXCEPTIONS,
+    QueueStoreCorruptError,
+    JobLocationIndexError,
+    WorkflowRegistryCorruptError,
+)
 
 
 @dataclass(frozen=True)
@@ -232,24 +243,17 @@ def _queue_list_request(args: Any) -> _QueueListRequest:
     )
 
 
-def _cmd_queue_list_clear(args: Any, request: _QueueListRequest) -> int:
-    if (
-        any(getattr(args, field, None) for field in ("engine", "status", "kind"))
-        or request.limit > 0
-    ):
-        emit_error(
-            "`orca_auto queue list clear` does not support "
-            "--engine/--status/--kind/--limit filters."
-        )
-        return 1
-
-    payload = clear_activities(
+def _queue_list_clear_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
+    return clear_activities(
         workflow_root=_workflow_root_for_args(args, config_path=request.shared_config),
         crest_config=request.shared_config,
         xtb_config=request.shared_config,
         orca_config=request.shared_config,
     )
-    if request.json_output:
+
+
+def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int:
+    if json_output:
         print(json.dumps(payload, ensure_ascii=True, indent=2))
         return 0
     for line in _activity_rendering.queue_clear_lines(payload):
@@ -369,11 +373,11 @@ def _print_queue_list_text(
 
 
 def _emit_queue_list_once(
-    args: Any,
+    payload: dict[str, Any],
+    filtered_payload: dict[str, Any],
+    filtered_activities: Sequence[dict[str, Any]],
     request: _QueueListRequest,
 ) -> int:
-    payload = _queue_list_payload(args, request)
-    filtered_payload, filtered_activities = _filtered_queue_payload(payload, request)
     if request.json_output:
         print(json.dumps(filtered_payload, ensure_ascii=True, indent=2))
         return 0
@@ -386,10 +390,71 @@ def _emit_queue_list_once(
 
 
 def cmd_queue_list(args: Any) -> int:
-    request = _queue_list_request(args)
+    try:
+        request = _queue_list_request(args)
+    except _QUEUE_STATE_ERRORS as exc:
+        emit_error(
+            exc,
+            hint="Check the config path and repair the reported state file before retrying.",
+        )
+        return 1
+
     if normalize_text(getattr(args, "action", None)).lower() == "clear":
-        return _cmd_queue_list_clear(args, request)
-    return _emit_queue_list_once(args, request)
+        if (
+            any(getattr(args, field, None) for field in ("engine", "status", "kind"))
+            or request.limit > 0
+        ):
+            emit_error(
+                "`orca_auto queue list clear` does not support "
+                "--engine/--status/--kind/--limit filters."
+            )
+            return 1
+        try:
+            clear_payload = _queue_list_clear_payload(args, request)
+        except _QUEUE_STATE_ERRORS as exc:
+            emit_error(
+                exc,
+                hint="Check the config path and repair the reported state file before retrying.",
+            )
+            return 1
+        try:
+            return _emit_queue_list_clear(clear_payload, json_output=request.json_output)
+        except BrokenPipeError:
+            return 0
+
+    try:
+        payload = _queue_list_payload(args, request)
+        filtered_payload, filtered_activities = _filtered_queue_payload(payload, request)
+    except _QUEUE_STATE_ERRORS as exc:
+        emit_error(
+            exc,
+            hint="Check the config path and repair the reported state file before retrying.",
+        )
+        return 1
+    try:
+        return _emit_queue_list_once(
+            payload,
+            filtered_payload,
+            filtered_activities,
+            request,
+        )
+    except BrokenPipeError:
+        return 0
+
+
+def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
+    if json_output:
+        print(json.dumps(payload, ensure_ascii=True, indent=2))
+        return 0
+
+    print(f"{cli_style.label('activity_id:')} {payload.get('activity_id', '-')}")
+    print(f"{cli_style.label('kind:')} {payload.get('kind', '-')}")
+    print(f"{cli_style.label('engine:')} {payload.get('engine', '-')}")
+    print(f"{cli_style.label('source:')} {payload.get('source', '-')}")
+    print(f"{cli_style.label('label:')} {payload.get('label', '-')}")
+    print(f"{cli_style.label('status:')} {cli_style.status_text(payload.get('status', '-'))}")
+    print(f"{cli_style.label('cancel_target:')} {payload.get('cancel_target', '-')}")
+    return 0
 
 
 def cmd_queue_cancel(args: Any) -> int:
@@ -402,19 +467,17 @@ def cmd_queue_cancel(args: Any) -> int:
             xtb_config=shared_config,
             orca_config=shared_config,
         )
-    except (LookupError, ValueError, TimeoutError) as exc:
-        emit_error(exc, hint="Run `orca_auto queue list` to see valid targets.")
+    except (LookupError, *_QUEUE_STATE_ERRORS) as exc:
+        emit_error(
+            exc,
+            hint=(
+                "Check the configured runtime state, then run `orca_auto queue list` "
+                "to see valid targets."
+            ),
+        )
         return 1
 
-    if bool(getattr(args, "json", False)):
-        print(json.dumps(payload, ensure_ascii=True, indent=2))
+    try:
+        return _emit_queue_cancel(payload, json_output=bool(getattr(args, "json", False)))
+    except BrokenPipeError:
         return 0
-
-    print(f"{cli_style.label('activity_id:')} {payload.get('activity_id', '-')}")
-    print(f"{cli_style.label('kind:')} {payload.get('kind', '-')}")
-    print(f"{cli_style.label('engine:')} {payload.get('engine', '-')}")
-    print(f"{cli_style.label('source:')} {payload.get('source', '-')}")
-    print(f"{cli_style.label('label:')} {payload.get('label', '-')}")
-    print(f"{cli_style.label('status:')} {cli_style.status_text(payload.get('status', '-'))}")
-    print(f"{cli_style.label('cancel_target:')} {payload.get('cancel_target', '-')}")
-    return 0

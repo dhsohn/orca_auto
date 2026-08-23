@@ -344,12 +344,52 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
             "work_dir": "",
             "queue_id": "",
             "engine_process_state": "idle",
+            "engine_launch_gated": False,
             "engine_pid": None,
             "engine_pgid": None,
             "engine_process_start_ticks": None,
             "engine_process_boot_id": None,
         }
     ]
+
+
+def test_legacy_admission_record_defaults_to_direct_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch)
+    token = store.reserve_slot(
+        tmp_path,
+        1,
+        source="legacy-source",
+        engine_process_state="pending",
+    )
+    assert token is not None
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    payload = _read_slots_file(tmp_path)
+    del payload[0]["engine_launch_gated"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    [slot] = store.list_all_slots(tmp_path)
+
+    assert slot.engine_launch_gated is False
+    assert slot.engine_process_state == "pending"
+
+
+def test_admission_record_rejects_non_boolean_launch_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch)
+    token = store.reserve_slot(tmp_path, 1, source="invalid-gate")
+    assert token is not None
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    payload = _read_slots_file(tmp_path)
+    payload[0]["engine_launch_gated"] = 1
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(store.AdmissionStoreCorruptError):
+        store.list_all_slots(tmp_path)
 
 
 def test_read_active_slot_count_does_not_prune_or_rewrite(

@@ -186,7 +186,7 @@ def append_crest_orca_stages_impl(
             input_artifact_kind="crest_conformer",
             candidate=candidate,
             task_kind="opt",
-            route_line=str(plan.params.get("orca_route_line", "! r2scan-3c Opt TightSCF")),
+            route_line=plan.params.get("orca_route_line", "! r2scan-3c Opt TightSCF"),
             charge=strict_int(plan.params.get("charge", 0), field="charge"),
             multiplicity=strict_int(
                 plan.params.get("multiplicity", 1), field="multiplicity", minimum=1

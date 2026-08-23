@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping
+from http.client import HTTPException
 from urllib.error import HTTPError
 
 _MAX_RETRY_DELAY_SECONDS = 120.0
@@ -76,7 +77,7 @@ def _numeric_retry_after(value: object) -> float | None:
 def _close_http_error(exc: HTTPError) -> None:
     try:
         exc.close()
-    except OSError:
+    except (HTTPException, OSError):
         pass
 
 
@@ -87,13 +88,27 @@ def _retry_after_from_error(exc: HTTPError) -> tuple[float | None, str]:
     header_value = headers.get("Retry-After") if headers is not None else None
     header_delay = _numeric_retry_after(header_value)
     if header_delay is not None:
-        candidates.append(header_delay)
+        # Discord documents the response header as authoritative. Avoid reading
+        # an error stream we do not need: a truncated 429 body must not turn a
+        # perfectly usable header into an exception at the notification boundary.
+        _close_http_error(exc)
+        if header_delay > _MAX_RETRY_DELAY_SECONDS:
+            return None, "discord_retry_after_exceeds_limit"
+        return header_delay, ""
 
     try:
         try:
             body = exc.read(_MAX_ERROR_BODY_BYTES)
             decoded = json.loads(body.decode("utf-8")) if body else None
-        except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        except (
+            AttributeError,
+            HTTPException,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+        ):
             decoded = None
     finally:
         # HTTPError owns the response stream. Closing it here prevents a socket
@@ -106,8 +121,7 @@ def _retry_after_from_error(exc: HTTPError) -> tuple[float | None, str]:
 
     if not candidates:
         return None, ""
-    # Discord's Retry-After response header is authoritative. The JSON body value
-    # is a fallback for responses/proxies which omit the header.
+    # The JSON body is a fallback for responses/proxies which omit the header.
     delay = candidates[0]
     if delay > _MAX_RETRY_DELAY_SECONDS:
         return None, "discord_retry_after_exceeds_limit"

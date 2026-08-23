@@ -13,8 +13,9 @@ import pytest
 from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, WORKFLOW_SI_MD_FILE
 from orca_auto.core.engine_runner import confined_output_identity, executable_identity
 from orca_auto.core.machine_observation import machine_json_bytes
+from orca_auto.flow import orca_stage_evidence as stage_evidence
 from orca_auto.flow.manifest import interaction_energy_config_fingerprint
-from orca_auto.flow.workflow.si import collection as si_evidence
+from orca_auto.flow.workflow.si import collection as si_collection
 from orca_auto.flow.workflow.si.collection import collect_workflow_si_data
 from orca_auto.flow.workflow.si.publication import write_workflow_si
 from orca_auto.flow.workflow.si.rendering import render_workflow_si_md
@@ -181,7 +182,12 @@ def _stage_dir(
 
 
 def _orca_stage(
-    stage_id: str, stage_dir: Path, *, status: str = "completed", label: str = ""
+    stage_id: str,
+    stage_dir: Path,
+    *,
+    status: str = "completed",
+    label: str = "",
+    task_kind: str | None = None,
 ) -> dict[str, Any]:
     report_path = stage_dir / RUN_REPORT_JSON_FILE
     if stage_id:
@@ -194,7 +200,7 @@ def _orca_stage(
         _write_machine(stage_dir, state)
     state = json.loads((stage_dir / "job_state.json").read_text(encoding="utf-8"))
     run_id = str(state.get("engine_payload", {}).get("run_id", ""))
-    return {
+    stage: dict[str, Any] = {
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
         "status": status,
@@ -208,6 +214,17 @@ def _orca_stage(
             {"kind": "orca_report_json", "path": str(report_path)},
         ],
     }
+    if task_kind is None:
+        selected_input = stage_dir / "job.inp"
+        route_text = selected_input.read_text(encoding="utf-8").splitlines()[0].casefold()
+        if "optts" in route_text:
+            task_kind = "optts_freq"
+        elif " opt" in route_text:
+            task_kind = "opt"
+        else:
+            task_kind = "sp"
+    stage["task"] = {"engine": "orca", "task_kind": task_kind}
+    return stage
 
 
 def _payload(
@@ -289,6 +306,214 @@ def test_workflow_si_ranks_structures_and_reports_funnel(tmp_path: Path) -> None
     assert "== conf_02 ==" in rendered
     # ΔE between the two conformers: 0.004 Eh ≈ +2.51 kcal/mol
     assert "+2.51" in rendered
+
+
+@pytest.mark.parametrize(
+    ("engine", "task_kind"),
+    (("xtb", "opt"), ("orca", "unknown")),
+)
+def test_workflow_si_excludes_contradictory_or_unknown_orca_stage(
+    tmp_path: Path,
+    engine: str,
+    task_kind: str,
+) -> None:
+    generation = _minimum(
+        tmp_path,
+        f"invalid_{engine}_{task_kind}",
+        energy=-100.0,
+        coords=_COORDS_A,
+    )
+    stage = _orca_stage("orca_invalid", generation, label="invalid")
+    stage["task"] = {"engine": engine, "task_kind": task_kind}
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "unsupported or contradictory ORCA stage contract"
+
+
+def test_workflow_si_omits_relative_table_for_mixed_executed_science(
+    tmp_path: Path,
+) -> None:
+    first = _stage_dir(
+        tmp_path,
+        "mixed_first",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.001,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    second = _stage_dir(
+        tmp_path,
+        "mixed_second",
+        route="PBE0 def2-SVP Opt Freq",
+        energy=-100.005,
+        coords=_COORDS_B,
+        freqs=_ALT_MIN_FREQS,
+        thermo=True,
+    )
+
+    rendered = render_workflow_si_md(
+        collect_workflow_si_data(
+            _payload(
+                [
+                    _orca_stage("mixed_first", first),
+                    _orca_stage("mixed_second", second),
+                ]
+            )
+        )
+    )
+
+    assert "relative energies omitted" in rendered
+    assert "provenance is missing or differs" in rendered
+    assert "+2.51" not in rendered
+
+
+def test_workflow_si_omits_relative_table_when_one_provenance_is_incomplete(
+    tmp_path: Path,
+) -> None:
+    first = _stage_dir(
+        tmp_path,
+        "complete_first",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.001,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    second = _stage_dir(
+        tmp_path,
+        "incomplete_second",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.005,
+        coords=_COORDS_B,
+        freqs=_ALT_MIN_FREQS,
+        thermo=True,
+    )
+    data = collect_workflow_si_data(
+        _payload(
+            [
+                _orca_stage("complete_first", first),
+                _orca_stage("incomplete_second", second),
+            ]
+        )
+    )
+    incomplete = data.entries[0]
+    incomplete = replace(
+        incomplete,
+        block=replace(
+            incomplete.block,
+            result=replace(incomplete.block.result, electronic_state_verified=False),
+        ),
+    )
+    rendered = render_workflow_si_md(replace(data, entries=(incomplete, *data.entries[1:])))
+    relative_section = rendered.split("## Relative energies", 1)[1].split(
+        "## Boltzmann populations", 1
+    )[0]
+
+    assert "relative energies omitted" in relative_section
+    assert "provenance is missing or differs" in relative_section
+    assert "+2.51" not in relative_section
+
+
+def test_workflow_si_omits_comparisons_for_mixed_selected_input_directives(
+    tmp_path: Path,
+) -> None:
+    first = _minimum(tmp_path, "directive_first", energy=-100.01, coords=_COORDS_A)
+    second = _minimum(tmp_path, "directive_second", energy=-100.00, coords=_COORDS_B)
+    second_input = second / "job.inp"
+    second_input.write_text(
+        second_input.read_text(encoding="utf-8").replace(
+            "* xyz",
+            "%scf\n  MaxIter 400\nend\n* xyz",
+        ),
+        encoding="utf-8",
+    )
+    _refresh_bound_input_identity(second)
+
+    data = collect_workflow_si_data(
+        _payload(
+            [
+                _orca_stage("directive_first", first),
+                _orca_stage("directive_second", second),
+            ]
+        )
+    )
+    rendered = render_workflow_si_md(data)
+
+    assert "relative energies omitted" in rendered
+    assert "+6.28" not in rendered
+    assert data.populations == (None, None)
+    assert "provenance is missing or differs" in data.population_note
+
+
+def test_workflow_si_allows_resource_only_selected_input_differences(tmp_path: Path) -> None:
+    first = _minimum(tmp_path, "resource_first", energy=-100.01, coords=_COORDS_A)
+    second = _minimum(tmp_path, "resource_second", energy=-100.00, coords=_COORDS_B)
+    first_input = first / "job.inp"
+    second_input = second / "job.inp"
+    first_input.write_text(
+        first_input.read_text(encoding="utf-8").replace(
+            "* xyz",
+            "%maxcore 1024\n%pal nprocs 2 end\n* xyz",
+        ),
+        encoding="utf-8",
+    )
+    second_input.write_text(
+        second_input.read_text(encoding="utf-8").replace(
+            "* xyz",
+            "%maxcore 2048\n%pal nprocs 8 end\n* xyz",
+        ),
+        encoding="utf-8",
+    )
+    _refresh_bound_input_identity(first)
+    _refresh_bound_input_identity(second)
+
+    data = collect_workflow_si_data(
+        _payload(
+            [
+                _orca_stage("resource_first", first),
+                _orca_stage("resource_second", second),
+            ]
+        )
+    )
+
+    assert "+6.28" in render_workflow_si_md(data)
+    assert all(row is not None and row.population is not None for row in data.populations)
+
+
+def test_workflow_si_allows_pal_route_resource_shorthand_differences(tmp_path: Path) -> None:
+    first = _stage_dir(
+        tmp_path,
+        "pal_first",
+        route="B3LYP def2-SVP Opt Freq PAL4",
+        energy=-100.01,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    second = _stage_dir(
+        tmp_path,
+        "pal_second",
+        route="B3LYP def2-SVP Opt Freq PAL8",
+        energy=-100.00,
+        coords=_COORDS_B,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+
+    data = collect_workflow_si_data(
+        _payload(
+            [
+                _orca_stage("pal_first", first),
+                _orca_stage("pal_second", second),
+            ]
+        )
+    )
+
+    assert "+6.28" in render_workflow_si_md(data)
+    assert all(row is not None and row.population is not None for row in data.populations)
 
 
 def test_single_point_pairs_by_identical_geometry(tmp_path: Path) -> None:
@@ -538,7 +763,7 @@ def test_failed_and_scan_stages_are_excluded_with_reasons(tmp_path: Path) -> Non
         coords=_COORDS_B,
     )
     scan_stage = _orca_stage("orca_scan", ok_dir, label="scan")
-    scan_stage["task"] = {"task_kind": "relaxed_scan"}
+    scan_stage["task"] = {"engine": "orca", "task_kind": "relaxed_scan"}
 
     payload = _payload(
         [
@@ -563,6 +788,27 @@ def test_failed_and_scan_stages_are_excluded_with_reasons(tmp_path: Path) -> Non
         0
     ]
     assert "100.00" not in population_section
+
+
+def test_workflow_si_rejects_completed_stage_with_failed_task_state(
+    tmp_path: Path,
+) -> None:
+    stage_dir = _stage_dir(
+        tmp_path,
+        "contradictory_status",
+        route="B3LYP def2-SVP Opt Freq",
+        energy=-100.0,
+        coords=_COORDS_A,
+        freqs=_MIN_FREQS,
+        thermo=True,
+    )
+    stage = _orca_stage("orca_contradictory_status", stage_dir)
+    stage["task"]["status"] = "failed"
+
+    data = collect_workflow_si_data(_payload([stage]))
+
+    assert data.entries == ()
+    assert data.excluded[0].reason == "stage/task is not durably completed"
 
 
 def test_workflow_si_discovers_verified_generation_without_report_artifact(
@@ -750,14 +996,14 @@ def test_workflow_si_rechecks_terminal_output_after_parsing(
     )
     stage = _orca_stage("orca_output_parse_race", generation)
     out = generation / "job.out"
-    original_collect = si_evidence.collect_si_block
+    original_collect = stage_evidence.collect_si_block
 
     def replace_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
         block = original_collect(reaction_dir, state)
         out.write_text(out.read_text(encoding="utf-8") + "\nraced replacement\n", encoding="utf-8")
         return block
 
-    monkeypatch.setattr(si_evidence, "collect_si_block", replace_after_parse)
+    monkeypatch.setattr(stage_evidence, "collect_si_block", replace_after_parse)
 
     data = collect_workflow_si_data(_payload([stage]))
 
@@ -780,7 +1026,7 @@ def test_workflow_si_rechecks_bound_input_after_parsing(
     )
     stage = _orca_stage("orca_input_parse_race", generation)
     selected = generation / "job.inp"
-    original_collect = si_evidence.collect_si_block
+    original_collect = stage_evidence.collect_si_block
 
     def replace_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
         block = original_collect(reaction_dir, state)
@@ -789,7 +1035,7 @@ def test_workflow_si_rechecks_bound_input_after_parsing(
         )
         return block
 
-    monkeypatch.setattr(si_evidence, "collect_si_block", replace_after_parse)
+    monkeypatch.setattr(stage_evidence, "collect_si_block", replace_after_parse)
 
     data = collect_workflow_si_data(_payload([stage]))
 
@@ -811,14 +1057,14 @@ def test_workflow_si_rechecks_generation_owner_after_parsing(
         thermo=True,
     )
     stage = _orca_stage("orca_owner_parse_race", generation)
-    original_collect = si_evidence.collect_si_block
+    original_collect = stage_evidence.collect_si_block
 
     def remove_owner_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
         block = original_collect(reaction_dir, state)
         os.removexattr(generation, "user.orca_auto.generation_owner")
         return block
 
-    monkeypatch.setattr(si_evidence, "collect_si_block", remove_owner_after_parse)
+    monkeypatch.setattr(stage_evidence, "collect_si_block", remove_owner_after_parse)
 
     data = collect_workflow_si_data(_payload([stage]))
 
@@ -1646,6 +1892,7 @@ def _interaction_stage(
         "stage_id": stage_id,
         "stage_kind": "orca_stage",
         "status": status,
+        "task": {"engine": "orca", "task_kind": "sp"},
         "metadata": metadata,
         "output_artifacts": artifacts,
     }
@@ -1716,7 +1963,7 @@ def _interaction_payload(tmp_path: Path, *, fragment_b_completed: bool = True) -
     complex_sp = _stage_dir(tmp_path, "cx_sp", route=_SP_ROUTE, energy=-100.0, coords=_IE_COORDS)
     frag_a = _stage_dir(tmp_path, "frag_a", route=_SP_ROUTE, energy=-60.0, coords=(_IE_COORDS[0],))
     stages = [
-        _orca_stage("orca_conf_01", complex_opt, label="conf1"),
+        _orca_stage("orca_conf_01", complex_opt, label="conf1", task_kind="opt"),
         _interaction_stage(
             "ie_complex", complex_sp, role="interaction_complex_sp", parent="orca_conf_01"
         ),
@@ -1766,6 +2013,65 @@ def test_interaction_stages_never_leak_into_the_structure_path(tmp_path: Path) -
     assert structure_ids == {"orca_conf_01"}
     assert "ie_complex" not in structure_ids
     assert "ie_f0" not in structure_ids and "ie_f1" not in structure_ids
+
+
+def test_interaction_quarantine_requires_the_exact_stage_contract(tmp_path: Path) -> None:
+    payload = _interaction_payload(tmp_path)
+    spoofed_dir = _stage_dir(
+        tmp_path,
+        "spoofed_primary",
+        route=_OPT_ROUTE,
+        energy=-99.0,
+        coords=_IE_COORDS,
+    )
+    spoofed_primary = _orca_stage("orca_conf_02", spoofed_dir, label="conf2")
+    spoofed_primary["task"] = {"engine": "orca", "task_kind": "opt"}
+    spoofed_primary["metadata"].update(
+        {
+            "role": "interaction_fragment",
+            "parent_stage_id": "orca_conf_01",
+            "fragment_index": 0,
+        }
+    )
+    payload["stages"].append(spoofed_primary)
+
+    data = collect_workflow_si_data(payload)
+
+    structure_ids = {entry.stage_id for entry in (*data.entries, *data.extra_blocks)}
+    assert structure_ids == {"orca_conf_01", "orca_conf_02"}
+    assert {stage["stage_id"] for stage in payload["stages"]} - structure_ids == {
+        "ie_complex",
+        "ie_f0",
+        "ie_f1",
+    }
+
+
+def test_wrong_generation_fingerprint_cannot_hide_a_primary_single_point(
+    tmp_path: Path,
+) -> None:
+    payload = _interaction_payload(tmp_path)
+    spoofed_dir = _stage_dir(
+        tmp_path,
+        "spoofed_primary_sp",
+        route=_SP_ROUTE,
+        energy=-98.0,
+        coords=(("H", 20.0, 0.0, 0.0), ("H", 22.0, 0.0, 0.0)),
+    )
+    spoofed = _interaction_stage(
+        "primary_sp_with_spoofed_role",
+        spoofed_dir,
+        role="interaction_complex_sp",
+        parent="orca_conf_01",
+    )
+    spoofed["metadata"]["interaction_config_fingerprint"] = "b" * 64
+    payload["stages"].append(spoofed)
+
+    data = collect_workflow_si_data(payload)
+
+    published_ids = {entry.stage_id for entry in (*data.entries, *data.extra_blocks)}
+    assert "primary_sp_with_spoofed_role" in published_ids
+    assert len(data.interaction_energies) == 1
+    assert data.interaction_energies[0].resolved
 
 
 def test_interaction_energy_is_computed_and_rendered(tmp_path: Path) -> None:
@@ -2054,7 +2360,7 @@ def test_rmsd_dedup_failure_preserves_last_good_artifacts(
     def fail_dedup(*args: object, **kwargs: object) -> object:
         raise RuntimeError("rmsd dedup bug")
 
-    monkeypatch.setattr(si_evidence, "_dedup_minima", fail_dedup)
+    monkeypatch.setattr(si_collection, "_dedup_minima", fail_dedup)
 
     # Degrading instead of raising would return the un-deduplicated ensemble,
     # putting the merged duplicate back as a second table row and recomputing
@@ -2281,8 +2587,8 @@ def test_interaction_parent_grouping_ignores_known_saddle_in_sp_convention(
             ]
     payload = _params_payload(
         [
-            _orca_stage("parent_a", opt_a),
-            _orca_stage("parent_b", opt_b),
+            _orca_stage("parent_a", opt_a, task_kind="opt"),
+            _orca_stage("parent_b", opt_b, task_kind="opt"),
             _orca_stage("known_saddle", saddle),
             _orca_stage("refine_a", refine_a),
             _orca_stage("refine_b", refine_b),

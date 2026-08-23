@@ -139,6 +139,53 @@ def test_submit_reaction_dir_uses_direct_submission_api(
     assert "worker_pid: 4321" in result["stdout"]
 
 
+def test_workflow_submitter_injects_final_bound_payload_validator(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    reaction_dir = tmp_path / "rxn_input"
+    selected_inp = reaction_dir / "job.inp"
+    captured: dict[str, Any] = {}
+
+    def fake_submit_reaction_dir_to_queue(args: Any) -> Any:
+        captured["args"] = args
+        return SimpleNamespace(
+            status="failed",
+            reason="invalid_submission_target",
+            stderr="test stop",
+            context=None,
+            queued_result=None,
+        )
+
+    monkeypatch.setattr(
+        submission_mod,
+        "submit_reaction_dir_to_queue",
+        fake_submit_reaction_dir_to_queue,
+    )
+
+    orca_submitter.submit_reaction_dir(
+        reaction_dir=str(reaction_dir),
+        priority=10,
+        config_path="/tmp/orca.yaml",
+        expected_selected_inp=str(selected_inp),
+        workflow_task_kind="sp",
+    )
+
+    args = captured["args"]
+    assert args.expected_selected_inp == str(selected_inp)
+    assert args.workflow_task_kind == "sp"
+    assert callable(args.bound_selected_validator)
+    args.bound_selected_validator(
+        selected_inp,
+        b"! HF TightSCF\n* xyz 0 1\nH 0 0 0\n*\n",
+    )
+    with pytest.raises(ValueError, match="single-point"):
+        args.bound_selected_validator(
+            selected_inp,
+            b"! HF Opt TightSCF\n* xyz 0 1\nH 0 0 0\n*\n",
+        )
+
+
 def test_submit_reaction_dir_reports_resolution_conflict_and_submission_failures(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

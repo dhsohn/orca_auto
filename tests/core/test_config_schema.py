@@ -386,6 +386,30 @@ def test_discord_config_rejects_invalid_explicit_bot_tokens(value: object) -> No
 
 
 @pytest.mark.parametrize(
+    "value",
+    [
+        "synthetic-secret\ncontinuation",
+        "synthetic-secret\rcontinuation",
+        "synthetic-secret\tcontinuation",
+        "synthetic secret",
+        "synthetic-secret-\N{SNOWMAN}",
+    ],
+)
+def test_discord_config_rejects_unsafe_bot_token_text_without_echoing(value: str) -> None:
+    with pytest.raises(ValueError) as raised:
+        discord_config_from_mapping({"bot_token": value})
+
+    message = str(raised.value)
+    assert "printable ASCII characters without whitespace" in message
+    assert "synthetic-secret" not in message
+
+
+def test_direct_discord_config_rejects_unsafe_bot_token_text() -> None:
+    with pytest.raises(ValueError, match="printable ASCII characters without whitespace"):
+        DiscordConfig(bot_token="synthetic-secret\ncontinuation")
+
+
+@pytest.mark.parametrize(
     ("field", "value"),
     [
         ("default_channel_id", None),

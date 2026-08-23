@@ -35,12 +35,12 @@ from orca_auto.core.statuses import STATUS_COMPLETED, is_stage_terminal_status
 from orca_auto.core.utils.coercion import normalize_text, safe_int
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage, safe_name
 from orca_auto.flow.conformer_selection import (
+    OrcaSelectedInputScienceIdentity,
     eligible_minimum_block,
     finite,
     has_required_provenance,
     rmsd_candidate_for_block,
     rmsd_grouping,
-    selected_input_state_matches,
     unique_single_point_matches,
 )
 from orca_auto.flow.contracts import WorkflowStageInput
@@ -48,7 +48,9 @@ from orca_auto.flow.contracts.workflow import (
     INTERACTION_COMPLEX_SP_ROLE,
     INTERACTION_CONFIG_FINGERPRINT_KEY,
     INTERACTION_FRAGMENT_ROLE,
+    is_exact_orca_stage_contract,
     is_interaction_role,
+    is_valid_interaction_stage_contract,
     workflow_request_parameters,
 )
 from orca_auto.flow.manifest import (
@@ -60,18 +62,25 @@ from orca_auto.flow.manifest import (
     require_int,
     validate_interaction_energy_state_balance,
 )
+from orca_auto.flow.orca_stage_evidence import collect_verified_orca_stage_evidence
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.flow.xyz_utils import write_fragment_xyz
 from orca_auto.orca.report.interaction_energy import (
     validate_fragment_electronic_states,
     validate_fragment_partition,
 )
-from orca_auto.orca.report.si import SiBlock, SiBlockError, collect_si_block
-from orca_auto.orca.state import load_state
+from orca_auto.orca.report.si import SiBlock
 
 logger = logging.getLogger(__name__)
 
 _INTERACTION_SOURCE_DIRNAME = "_interaction_sources"
+
+_OptimizedEvidence = tuple[
+    str,
+    dict[str, Any],
+    SiBlock,
+    OrcaSelectedInputScienceIdentity,
+]
 
 
 def _text(value: Any) -> str:
@@ -116,88 +125,61 @@ def _record_interaction_energy_error(
     }
 
 
-def _orca_reaction_dir(stage: Mapping[str, Any]) -> Path | None:
-    artifacts = stage.get("output_artifacts")
-    if isinstance(artifacts, list):
-        for artifact in artifacts:
-            if isinstance(artifact, dict) and _text(artifact.get("kind")) == "orca_output_dir":
-                path_text = _text(artifact.get("path"))
-                if path_text:
-                    return Path(path_text)
-    reaction_dir = _text(_stage_metadata(stage).get("reaction_dir"))
-    return Path(reaction_dir) if reaction_dir else None
-
-
-def _completed_complex_block(
+def _completed_complex_evidence(
     stage: Mapping[str, Any],
     *,
     expected_charge: int,
     expected_multiplicity: int,
-) -> SiBlock | None:
+) -> tuple[SiBlock, OrcaSelectedInputScienceIdentity] | None:
     if _task_kind(stage) != "opt":
         return None
-    reaction_dir = _orca_reaction_dir(stage)
-    if reaction_dir is None:
-        return None
-    state = load_state(reaction_dir)
-    if state is None:
-        return None
-    try:
-        block = collect_si_block(reaction_dir, state)
-    except SiBlockError:
-        return None
+    block, _reason, selected_input_identity = collect_verified_orca_stage_evidence(stage)
     # ``eligible_minimum_block`` fails closed on non-finite parsed data so a
     # corrupt optimized geometry can never seed the RMSD grouping.
     if (
         block is None
+        or selected_input_identity is None
         or not eligible_minimum_block(
             block,
             expected_charge=expected_charge,
             expected_multiplicity=expected_multiplicity,
         )
-        or not selected_input_state_matches(block, state)
     ):
         return None
-    return block
+    return block, selected_input_identity
 
 
-def _completed_single_point_block(stage: Mapping[str, Any]) -> SiBlock | None:
+def _completed_single_point_evidence(
+    stage: Mapping[str, Any],
+) -> tuple[SiBlock, OrcaSelectedInputScienceIdentity] | None:
     if _task_kind(stage) != "sp":
         return None
-    reaction_dir = _orca_reaction_dir(stage)
-    if reaction_dir is None:
-        return None
-    state = load_state(reaction_dir)
-    if state is None:
-        return None
-    try:
-        block = collect_si_block(reaction_dir, state)
-    except SiBlockError:
-        return None
+    block, _reason, selected_input_identity = collect_verified_orca_stage_evidence(stage)
     if (
         block is None
+        or selected_input_identity is None
         or block.analysis is not None
         or not finite(block.result.energy_hartree)
         or not block.result.coordinates
         or not has_required_provenance(block)
-        or not selected_input_state_matches(block, state)
     ):
         return None
     if any(
         not math.isfinite(value) for _element, *xyz in block.result.coordinates for value in xyz
     ):
         return None
-    return block
+    return block, selected_input_identity
 
 
 def _uniform_single_point_energies(
-    optimized: list[tuple[str, dict[str, Any], SiBlock]],
-    single_points: list[SiBlock],
+    optimized: list[_OptimizedEvidence],
+    single_points: list[tuple[SiBlock, OrcaSelectedInputScienceIdentity]],
 ) -> dict[str, float]:
     if not optimized:
         return {}
+    single_point_blocks = [block for block, _identity in single_points]
     unique = unique_single_point_matches(
-        [block for _stage_id, _stage, block in optimized], single_points
+        [block for _stage_id, _stage, block, _identity in optimized], single_point_blocks
     )
     # All-or-nothing: every optimized entry must have its own unique match, or
     # the single-point energies are not a uniform substitute basis at all.
@@ -210,29 +192,37 @@ def _uniform_single_point_energies(
             block.result.basis_set,
             block.result.solvation,
             block.result.orca_version,
-            block.result.input_line,
+            selected_input_identity,
         )
-        for index, block in enumerate(single_points)
+        for index, (block, selected_input_identity) in enumerate(single_points)
         if index in matched_indices
     }
     if len(levels) != 1:
         return {}
     energies: dict[str, float] = {}
-    for (stage_id, _stage, _block), index in zip(optimized, unique, strict=True):
+    for (stage_id, _stage, _block, _identity), index in zip(optimized, unique, strict=True):
         assert index is not None  # guaranteed by the all-or-nothing gate above
-        energy = single_points[index].result.energy_hartree
+        energy = single_point_blocks[index].result.energy_hartree
         if energy is None:
             return {}
         energies[stage_id] = energy
     return energies
 
 
-def _existing_interaction_keys(stages: list[dict[str, Any]]) -> set[tuple[str, str, int]]:
+def _existing_interaction_keys(
+    stages: list[dict[str, Any]],
+    *,
+    expected_config_fingerprint: str,
+) -> set[tuple[str, str, int]]:
     """(role, parent_stage_id, fragment_index) already present, for idempotency."""
     keys: set[tuple[str, str, int]] = set()
     for stage in stages:
         role = _stage_role(stage)
-        if not is_interaction_role(role):
+        if not is_valid_interaction_stage_contract(
+            stage,
+            stages,
+            expected_config_fingerprint=expected_config_fingerprint,
+        ):
             continue
         meta = _stage_metadata(stage)
         parent = _text(meta.get("parent_stage_id"))
@@ -242,7 +232,7 @@ def _existing_interaction_keys(stages: list[dict[str, Any]]) -> set[tuple[str, s
 
 
 def _rmsd_representative_ids(
-    parsed: list[tuple[str, dict[str, Any], SiBlock]],
+    parsed: list[_OptimizedEvidence],
     rmsd_cfg: Mapping[str, Any] | None,
     *,
     effective_energies: Mapping[str, float] | None = None,
@@ -255,8 +245,9 @@ def _rmsd_representative_ids(
                 energy_hartree=(effective_energies or {}).get(
                     stage_id, block.result.energy_hartree
                 ),
+                selected_input_identity=selected_input_identity,
             )
-            for stage_id, _stage, block in parsed
+            for stage_id, _stage, block, selected_input_identity in parsed
         ],
         rmsd_cfg,
     )
@@ -397,9 +388,29 @@ def append_interaction_energy_stages_impl(
         )
         return False
 
+    config_fingerprint = interaction_energy_config_fingerprint(
+        cfg,
+        complex_charge=complex_charge,
+        complex_multiplicity=complex_multiplicity,
+        rmsd_dedup=rmsd_cfg,
+    )
+
     stages = _stage_dicts(payload)
-    orca_stages = [stage for stage in stages if _text(stage.get("stage_kind")) == "orca_stage"]
-    complex_stages = [stage for stage in orca_stages if not is_interaction_role(_stage_role(stage))]
+    declared_orca_stages = [
+        stage for stage in stages if _text(stage.get("stage_kind")) == "orca_stage"
+    ]
+    if any(not is_exact_orca_stage_contract(stage) for stage in declared_orca_stages):
+        return False
+    orca_stages = declared_orca_stages
+    complex_stages = [
+        stage
+        for stage in orca_stages
+        if not is_valid_interaction_stage_contract(
+            stage,
+            stages,
+            expected_config_fingerprint=config_fingerprint,
+        )
+    ]
     if not complex_stages:
         return False
     # Fire only once the primary ORCA set is terminal. Partial-success conformer
@@ -409,26 +420,28 @@ def append_interaction_energy_stages_impl(
     if not all(is_stage_terminal_status(_text(stage.get("status"))) for stage in complex_stages):
         return False
 
-    parsed: list[tuple[str, dict[str, Any], SiBlock]] = []
-    single_points: list[SiBlock] = []
+    parsed: list[_OptimizedEvidence] = []
+    single_points: list[tuple[SiBlock, OrcaSelectedInputScienceIdentity]] = []
     for stage in complex_stages:
         if _text(stage.get("status")) != STATUS_COMPLETED:
             continue
         if _task_kind(stage) == "opt":
-            block = _completed_complex_block(
+            opt_evidence = _completed_complex_evidence(
                 stage,
                 expected_charge=complex_charge,
                 expected_multiplicity=complex_multiplicity,
             )
-            if block is None:
+            if opt_evidence is None:
                 continue
-            parsed.append((_text(stage.get("stage_id")), stage, block))
+            block, selected_input_identity = opt_evidence
+            parsed.append((_text(stage.get("stage_id")), stage, block, selected_input_identity))
             continue
         if _task_kind(stage) == "sp":
-            single_point = _completed_single_point_block(stage)
-            if single_point is not None:
-                single_points.append(single_point)
-    if not parsed:
+            single_point_evidence = _completed_single_point_evidence(stage)
+            if single_point_evidence is not None:
+                single_points.append(single_point_evidence)
+    optimized_science_identities = {identity for _stage_id, _stage, _block, identity in parsed}
+    if not parsed or len(optimized_science_identities) != 1:
         return False
 
     representative_ids = _rmsd_representative_ids(
@@ -437,30 +450,22 @@ def append_interaction_energy_stages_impl(
         effective_energies=_uniform_single_point_energies(parsed, single_points),
     )
     representatives = [item for item in parsed if item[0] in representative_ids]
+    # ``role`` is reserved workflow metadata. A corrupt/spoofed interaction
+    # role on an otherwise valid optimization must not hide that primary, but
+    # generated fan-out children may only point to a non-interaction parent.
+    for _stage_id, stage, _block, _identity in representatives:
+        if is_interaction_role(_stage_role(stage)):
+            _stage_metadata(stage).pop("role", None)
     fragment_index_lists = [fragment.get("atom_indices", []) for fragment in fragments]
     sp_route_line = _text(cfg.get("sp_route_line")) or DEFAULT_INTERACTION_SP_ROUTE_LINE
-    config_fingerprint = interaction_energy_config_fingerprint(
-        cfg,
-        complex_charge=complex_charge,
-        complex_multiplicity=complex_multiplicity,
-        rmsd_dedup=rmsd_cfg,
-    )
     priority = safe_int(cfg.get("priority", params.get("priority", 10)), default=10)
     max_cores = safe_int(cfg.get("max_cores", params.get("max_cores", 8)), default=8)
     max_memory_gb = safe_int(cfg.get("max_memory_gb", params.get("max_memory_gb", 32)), default=32)
 
-    existing_interaction = [
-        stage for stage in orca_stages if is_interaction_role(_stage_role(stage))
-    ]
-    if any(
-        _text(_stage_metadata(stage).get(INTERACTION_CONFIG_FINGERPRINT_KEY)) != config_fingerprint
-        for stage in existing_interaction
-    ):
-        logger.warning(
-            "interaction_energy fan-out skipped: persisted stages belong to another config generation"
-        )
-        return False
-    existing = _existing_interaction_keys(orca_stages)
+    existing = _existing_interaction_keys(
+        stages,
+        expected_config_fingerprint=config_fingerprint,
+    )
     orca_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
     allowed_root = orca_paths["allowed_root"]
     source_root = ensure_confined_directory(
@@ -470,7 +475,7 @@ def append_interaction_energy_stages_impl(
     )
     created = 0
 
-    for stage_id, _stage, block in representatives:
+    for stage_id, _stage, block, _identity in representatives:
         coordinates = list(block.result.coordinates)
         natoms = len(coordinates)
         reason = validate_fragment_partition(fragment_index_lists, natoms)

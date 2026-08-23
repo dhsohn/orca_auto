@@ -81,10 +81,10 @@ def test_creation_materializes_scan_stage_with_geom_block(tmp_path: Path) -> Non
     inp_text = Path(stage["task"]["payload"]["selected_inp"]).read_text(encoding="utf-8")
     assert "! Opt r2scan-3c TightSCF" in inp_text
     assert "%geom" in inp_text
-    assert "B 0 1 = 1.20, 3.00, 10" in inp_text
+    assert "B 0 1 = 1.2, 3, 10" in inp_text
     assert "* xyzfile 0 1 scan_input.xyz" in inp_text
     parameters = payload["metadata"]["request"]["parameters"]
-    assert parameters["scan_coordinate"] == "B 0 1 = 1.20, 3.00, 10"
+    assert parameters["scan_coordinate"] == "B 0 1 = 1.2, 3, 10"
     assert parameters["barrier_threshold_kcal"] == pytest.approx(0.5)
     workflow_json = json.loads(
         (tmp_path / "root" / "wf_scan_ts_test" / "workflow.json").read_text(encoding="utf-8")
@@ -95,6 +95,66 @@ def test_creation_materializes_scan_stage_with_geom_block(tmp_path: Path) -> Non
 def test_creation_rejects_malformed_scan_coordinate(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="scan_coordinate"):
         _create_workflow(tmp_path, scan_coordinate="not a scan")
+
+
+@pytest.mark.parametrize(
+    ("scan_coordinate", "message"),
+    [
+        (["B 0 1 = 1, 2, 8"], "must be a string"),
+        ("X 0 1 = 1, 2, 8", "exactly one scan_coordinate"),
+        ("B 0 1 2 = 1, 2, 8", "B requires 2 atom indices"),
+        ("A 0 1 = 90, 120, 8", "A requires 3 atom indices"),
+        ("B 0 0 = 1, 2, 8", "atom indices must be distinct"),
+        ("B 0 3 = 1, 2, 8", "within input XYZ"),
+        ("B -1 1 = 1, 2, 8", "exactly one scan_coordinate"),
+        ("B 0 1 = 1, 2, 1", "points must be an integer >= 2"),
+        ("B 0 1 = 1, 1, 8", "range endpoints must differ"),
+        ("B 0 1 = 1e999, 2, 8", "range endpoints must be finite"),
+        ("B 0 1 = 1, 2, 8 trailing", "exactly one scan_coordinate"),
+        ("B 0 1 = 1, 2, 8\nA 0 1 2 = 90, 120, 8", "exactly one scan_coordinate"),
+    ],
+)
+def test_creation_rejects_noncanonical_or_unsafe_scan_coordinate(
+    tmp_path: Path,
+    scan_coordinate: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _create_workflow(tmp_path, scan_coordinate=scan_coordinate)
+
+
+@pytest.mark.parametrize(
+    ("scan_coordinate", "canonical"),
+    [
+        ("B 0 1 = 1e-9, 2, 8", "B 0 1 = 1e-09, 2, 8"),
+        ("B 0 1 = 1.123456789, 2, 8", "B 0 1 = 1.123456789, 2, 8"),
+        (" A   0  1 2 = 90.00, 120.0, 5 ", "A 0 1 2 = 90, 120, 5"),
+        ("d 0 1 2 3 = -180.0, 180.00, 9", "D 0 1 2 3 = -180, 180, 9"),
+    ],
+)
+def test_creation_canonicalizes_supported_scan_coordinate_kinds(
+    tmp_path: Path,
+    scan_coordinate: str,
+    canonical: str,
+) -> None:
+    input_xyz = tmp_path / "four_atoms.xyz"
+    input_xyz.write_text(
+        "4\ntest\nH 0 0 0\nC 1 0 0\nO 1 1 0\nH 1 1 1\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "canonical_root"
+    root.mkdir()
+
+    payload = create_scan_ts_search_workflow(
+        input_xyz=str(input_xyz),
+        scan_coordinate=scan_coordinate,
+        workflow_root=root,
+    )
+
+    stage = payload["stages"][0]
+    assert payload["metadata"]["request"]["parameters"]["scan_coordinate"] == canonical
+    assert stage["metadata"]["scan_coordinate"] == canonical
+    assert canonical in Path(stage["task"]["payload"]["selected_inp"]).read_text(encoding="utf-8")
 
 
 def test_completed_scan_fans_out_ranked_optts_candidates(tmp_path: Path) -> None:
@@ -127,6 +187,42 @@ def test_completed_scan_fans_out_ranked_optts_candidates(tmp_path: Path) -> None
     assert "* xyzfile 0 1 ts_guess.xyz" in inp_text
     # Idempotent: a second advance does not duplicate candidates.
     assert not append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+
+
+def test_scan_candidate_materialization_rejects_stale_route_role_mismatch(
+    tmp_path: Path,
+) -> None:
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    _write_scan_results(scan_stage, [-100.0, -99.5, -100.2])
+    payload["metadata"]["request"]["parameters"]["orca_optts_route_line"] = (
+        "! Opt r2scan-3c TightSCF"
+    )
+
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+
+    assert len(payload["stages"]) == 1
+    assert not (workspace / "02_scan_maximum").exists()
+
+
+def test_dynamic_scan_extension_revalidates_durable_coordinate_against_input_atoms(
+    tmp_path: Path,
+) -> None:
+    payload = _create_workflow(tmp_path)
+    workspace = tmp_path / "root" / "wf_scan_ts_test"
+    scan_stage = payload["stages"][0]
+    scan_stage["status"] = "completed"
+    _write_scan_results(scan_stage, [-100.3, -100.2, -100.1, -100.0])
+    scan_stage["metadata"]["scan_coordinate"] = "B 0 99 = 1.2, 3, 10"
+
+    with pytest.raises(ValueError, match="within input XYZ"):
+        append_scan_optts_stages_impl(payload, workspace_dir=workspace)
+
+    assert len(payload["stages"]) == 1
+    assert not (workspace / "02_scan_extension").exists()
 
 
 def test_candidate_cap_respects_max_orca_stages(tmp_path: Path) -> None:
@@ -305,18 +401,20 @@ def test_relaxed_scan_excluded_from_ts_candidate_ranking(tmp_path: Path) -> None
     scan_stage["status"] = "completed"
     _write_scan_results(scan_stage, [-100.0, -99.5, -100.2, -99.85, -100.3, -99.3])
     append_scan_optts_stages_impl(payload, workspace_dir=workspace)
-    for stage in payload["stages"][1:]:
-        stage["status"] = "completed"
 
     data = collect_workflow_report_data(workspace, payload)
 
-    # The scan stage stays in the stage chain but not the candidate ranking.
+    # The scan stage stays in the stage chain but never becomes a candidate;
+    # the newly planned OptTS jobs remain visible without fabricated results.
     assert any(row.stage_id == "orca_scan_01" for row in data.stage_rows)
     assert all(result.stage_id != "orca_scan_01" for result in data.orca_results)
     assert {result.stage_id for result in data.orca_results} == {
         "orca_optts_freq_01",
         "orca_optts_freq_02",
     }
+    assert all(
+        result.status == "planned" and result.rel_kcal is None for result in data.orca_results
+    )
 
 
 def test_cancelled_forward_candidates_do_not_trigger_reverse_scan(tmp_path: Path) -> None:

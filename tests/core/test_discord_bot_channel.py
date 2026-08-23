@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from email.message import Message as EmailMessage
+from http.client import IncompleteRead
 from io import BytesIO
 from typing import Literal
 from urllib.error import HTTPError
@@ -14,6 +15,7 @@ from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.core.messaging import (
     DiscordBotChannel,
     Message,
+    SendResult,
     build_channel,
 )
 from orca_auto.core.messaging import discord_bot as bot_mod
@@ -35,6 +37,17 @@ class _FakeResponse:
 
     def __exit__(self, *exc: object) -> Literal[False]:
         return False
+
+
+class _UnreadableBody(BytesIO):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error = error
+        self.read_calls = 0
+
+    def read(self, _size: int | None = -1) -> bytes:
+        self.read_calls += 1
+        raise self.error
 
 
 def _bot_config(**overrides: object) -> DiscordConfig:
@@ -108,13 +121,14 @@ def test_discord_bot_channel_retries_with_bounded_retry_after(
 ) -> None:
     headers = EmailMessage()
     headers["Retry-After"] = "0.25"
+    unreadable_body = _UnreadableBody(IncompleteRead(b"partial"))
     sequence: list[_FakeResponse | HTTPError] = [
         HTTPError(
             "https://discord.com/api/v10/channels/123/messages",
             429,
             "rate",
             headers,
-            BytesIO(b'{"retry_after": 9}'),
+            unreadable_body,
         ),
         _FakeResponse(),
     ]
@@ -139,6 +153,59 @@ def test_discord_bot_channel_retries_with_bounded_retry_after(
     assert delays == [0.25]
     assert request_bodies[0] == request_bodies[1]
     assert sequence == []
+    assert unreadable_body.read_calls == 0
+    assert unreadable_body.closed
+
+
+@pytest.mark.parametrize(
+    "body_error",
+    [
+        pytest.param(OSError("socket read failed"), id="os-error"),
+        pytest.param(IncompleteRead(b"partial"), id="http-exception"),
+    ],
+)
+def test_discord_bot_channel_redacts_unreadable_429_body(
+    monkeypatch: pytest.MonkeyPatch,
+    body_error: BaseException,
+) -> None:
+    unreadable_body = _UnreadableBody(body_error)
+
+    def fake_urlopen(request: object, timeout: float) -> _FakeResponse:
+        del request, timeout
+        raise HTTPError(
+            "https://discord.com/api/v10/channels/123/messages",
+            429,
+            "rate",
+            EmailMessage(),
+            unreadable_body,
+        )
+
+    monkeypatch.setattr(bot_mod, "urlopen", fake_urlopen)
+
+    result = DiscordBotChannel(_bot_config(max_attempts=1)).send(Message(title="T"))
+
+    assert not result.sent
+    assert result.error == "discord_http_429"
+    assert "socket read failed" not in result.error
+    assert unreadable_body.read_calls == 1
+    assert unreadable_body.closed
+
+
+def test_discord_bot_channel_redacts_truncated_success_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeResponse()
+    monkeypatch.setattr(
+        response,
+        "read",
+        lambda: (_ for _ in ()).throw(IncompleteRead(b'{"id":')),
+    )
+    monkeypatch.setattr(bot_mod, "urlopen", lambda *_args, **_kwargs: response)
+
+    result = DiscordBotChannel(_bot_config(max_attempts=1)).send(Message(title="T"))
+
+    assert not result.sent
+    assert result.error == "discord_network_error"
 
 
 def test_discord_bot_channel_errors_do_not_expose_token(
@@ -163,6 +230,24 @@ def test_discord_bot_channel_errors_do_not_expose_token(
     assert not result.sent
     assert result.error == "discord_http_401"
     assert "secret-token" not in result.error
+
+
+def test_discord_bot_channel_redacts_request_construction_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "synthetic-secret-token"
+
+    def reject_request(_self: DiscordBotChannel, _data: bytes) -> SendResult:
+        raise ValueError(f"Invalid header value containing {secret}")
+
+    monkeypatch.setattr(DiscordBotChannel, "_post_once", reject_request)
+
+    result = DiscordBotChannel(_bot_config()).send(Message(title="T"))
+
+    assert not result.sent
+    assert result.error == "discord_request_error"
+    assert secret not in caplog.text
 
 
 def test_registry_always_builds_discord_bot_channel() -> None:

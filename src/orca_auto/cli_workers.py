@@ -258,7 +258,6 @@ def _build_worker_specs(args: Any) -> list[WorkerSpec]:
 
 @dataclass(frozen=True)
 class _ExistingWorkerConflict:
-    app: str
     pid: int
     allowed_root: str
     command: str
@@ -313,7 +312,6 @@ def _detect_existing_orca_worker_conflict(
 
     command_argv = _read_process_command(existing_pid)
     return _ExistingWorkerConflict(
-        app="orca",
         pid=existing_pid,
         allowed_root=str(allowed_root),
         command=_format_command_argv(command_argv),
@@ -322,18 +320,12 @@ def _detect_existing_orca_worker_conflict(
 
 def _emit_existing_orca_worker_conflict(
     conflict: _ExistingWorkerConflict,
-    *,
-    command_name: str,
 ) -> int:
-    del command_name
-    print(
-        f"error: existing ORCA queue worker detected for allowed_root {conflict.allowed_root} "
-        f"(pid={conflict.pid})."
+    emit_error(
+        f"existing ORCA queue worker detected for allowed_root {conflict.allowed_root} "
+        f"(pid={conflict.pid}). command: {conflict.command}",
+        hint="Stop the existing worker before starting another worker.",
     )
-    # The recorded argv identifies the holder far better than a two-way label
-    # ever did, and the refusal is the same either way.
-    print(f"command: {conflict.command}")
-    print("Stop the existing worker before starting another worker.")
     return 1
 
 
@@ -577,6 +569,6 @@ def cmd_queue_worker(args: Any) -> int:
 
     conflict = _detect_existing_orca_worker_conflict(specs, args=args)
     if conflict is not None:
-        return _emit_existing_orca_worker_conflict(conflict, command_name="queue worker")
+        return _emit_existing_orca_worker_conflict(conflict)
 
     return _run_worker_supervisor(specs)

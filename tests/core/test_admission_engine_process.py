@@ -26,6 +26,7 @@ def _reserve_managed(
     *,
     owner_pid: int = 101,
     owner_ticks: int = 1001,
+    engine_launch_gated: bool = False,
 ) -> str:
     monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: owner_ticks)
     token = admission.reserve_slot(
@@ -34,6 +35,7 @@ def _reserve_managed(
         source="test-engine",
         owner_pid=owner_pid,
         engine_process_state="idle",
+        engine_launch_gated=engine_launch_gated,
     )
     assert token is not None
     return token
@@ -380,6 +382,67 @@ def test_global_recovery_clears_cross_boot_pending_fence(
     assert slot is not None and slot.engine_process_state == "idle"
 
 
+def test_global_recovery_clears_same_boot_launch_gated_pending_fence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch, engine_launch_gated=True)
+    pending = admission.prepare_slot_engine_process(tmp_path, token)
+    assert pending is not None and pending.owner_boot_id
+
+    recovered = engine_process.recover_orphaned_engine_slots(
+        tmp_path,
+        source="test-engine",
+        deps=engine_process.EngineProcessRecoveryDeps(
+            kill=lambda *_args: (_ for _ in ()).throw(ProcessLookupError),
+            killpg=lambda *_args: pytest.fail("gated pending slots have no group to probe"),
+            boot_id=lambda: pending.owner_boot_id,
+        ),
+    )
+
+    assert recovered == 1
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None
+    assert slot.engine_launch_gated is True
+    assert slot.engine_process_state == "idle"
+
+
+def test_same_boot_launch_gated_pending_cas_retains_direct_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch, engine_launch_gated=True)
+    pending = admission.prepare_slot_engine_process(tmp_path, token)
+    assert pending is not None and pending.owner_boot_id
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    real_complete = store.complete_slot_engine_process
+
+    def replace_then_complete(root: Path, slot_token: str, **kwargs: Any) -> Any:
+        replacement = json.loads(path.read_text(encoding="utf-8"))
+        replacement[0]["engine_launch_gated"] = False
+        path.write_text(json.dumps(replacement), encoding="utf-8")
+        return real_complete(root, slot_token, **kwargs)
+
+    monkeypatch.setattr(engine_process, "complete_slot_engine_process", replace_then_complete)
+
+    recovered = engine_process.recover_orphaned_engine_slots(
+        tmp_path,
+        source="test-engine",
+        deps=engine_process.EngineProcessRecoveryDeps(
+            kill=lambda *_args: (_ for _ in ()).throw(ProcessLookupError),
+            killpg=lambda *_args: pytest.fail("pending slots have no group to probe"),
+            boot_id=lambda: pending.owner_boot_id,
+        ),
+        strict=False,
+    )
+
+    assert recovered == 0
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None
+    assert slot.engine_launch_gated is False
+    assert slot.engine_process_state == "pending"
+
+
 def test_cross_boot_pending_cas_retains_concurrent_replacement(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -436,6 +499,7 @@ def test_global_recovery_handles_active_before_retaining_dead_pending(
         source="test-engine",
         owner_pid=101,
         engine_process_state="idle",
+        engine_launch_gated=True,
     )
     pending_token = admission.reserve_slot(
         tmp_path,
@@ -489,6 +553,7 @@ def test_global_recovery_handles_active_before_retaining_dead_pending(
     )
     assert admission.get_slot(tmp_path, active_token).engine_process_state == "idle"  # type: ignore[union-attr]
     assert admission.get_slot(tmp_path, pending_token).engine_process_state == "pending"  # type: ignore[union-attr]
+    assert admission.get_slot(tmp_path, pending_token).engine_launch_gated is False  # type: ignore[union-attr]
     with pytest.raises(engine_process.EngineProcessRecordError, match="pending engine launch"):
         engine_process.recover_orphaned_engine_slots(
             tmp_path,

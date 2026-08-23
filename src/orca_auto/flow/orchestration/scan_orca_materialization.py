@@ -39,6 +39,8 @@ from orca_auto.flow.contracts.workflow import workflow_request_parameters
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.support import required_stage_budget
 from orca_auto.flow.orchestration.template_builders import scan_geom_block
+from orca_auto.flow.xyz_utils import validated_xyz_atom_count
+from orca_auto.orca.input_artifacts import derive_selected_input_xyz
 from orca_auto.orca.scants import (
     ScanCoordinateSpec,
     ScanTSSurfacePoint,
@@ -46,6 +48,7 @@ from orca_auto.orca.scants import (
     parse_scan_coordinate,
     parse_scants_actual_surface,
     scan_profile_interior_maxima,
+    validate_scan_coordinate,
 )
 
 logger = logging.getLogger(__name__)
@@ -170,8 +173,29 @@ def _scan_selected_inp(scan_stage: dict[str, Any]) -> Path | None:
     return Path(selected_inp) if selected_inp else None
 
 
+def _scan_atom_count(scan_stage: dict[str, Any]) -> int:
+    task_payload = _task_payload(scan_stage)
+    xyz_path = normalize_text(task_payload.get("selected_input_xyz"))
+    if not xyz_path:
+        xyz_path = derive_selected_input_xyz(task_payload.get("selected_inp"))
+    if not xyz_path:
+        raise ValueError(
+            "relaxed scan coordinate cannot be validated without its selected input XYZ"
+        )
+    return validated_xyz_atom_count(xyz_path)
+
+
 def _scan_spec(scan_stage: dict[str, Any]) -> ScanCoordinateSpec | None:
-    return parse_scan_coordinate(normalize_text(_stage_metadata(scan_stage).get("scan_coordinate")))
+    coordinate = normalize_text(_stage_metadata(scan_stage).get("scan_coordinate"))
+    if not coordinate:
+        return None
+    canonical = validate_scan_coordinate(
+        coordinate,
+        atom_count=_scan_atom_count(scan_stage),
+    )
+    spec = parse_scan_coordinate(canonical)
+    assert spec is not None
+    return spec
 
 
 def _scan_surface(scan_stage: dict[str, Any]) -> list[ScanTSSurfacePoint]:
@@ -263,8 +287,9 @@ def _append_optts_candidate_stages(
 ) -> None:
     workflow_id = normalize_text(payload.get("workflow_id"))
     reaction_key = normalize_text(payload.get("reaction_key"))
-    route_line = normalize_text(parameters.get("orca_optts_route_line")) or (
-        "! OptTS Freq r2scan-3c TightSCF"
+    route_line = parameters.get(
+        "orca_optts_route_line",
+        "! OptTS Freq r2scan-3c TightSCF",
     )
     existing = len(_optts_stages(payload, direction="forward")) + len(
         _optts_stages(payload, direction="reverse")
@@ -325,7 +350,10 @@ def _append_scan_stage(
     direction: str,
     start_xyz: Path,
 ) -> None:
-    scan_coordinate = format_scan_coordinate(spec)
+    scan_coordinate = validate_scan_coordinate(
+        format_scan_coordinate(spec),
+        atom_count=validated_xyz_atom_count(start_xyz),
+    )
     candidate = WorkflowStageInput(
         source_job_id="",
         source_job_type="relaxed_scan",
@@ -348,7 +376,7 @@ def _append_scan_stage(
         input_artifact_kind="scan_endpoint",
         candidate=candidate,
         task_kind="relaxed_scan",
-        route_line=normalize_text(parameters.get("orca_route_line")) or "! Opt r2scan-3c TightSCF",
+        route_line=parameters.get("orca_route_line", "! Opt r2scan-3c TightSCF"),
         charge=strict_int(parameters.get("charge", 0), field="charge"),
         multiplicity=strict_int(parameters.get("multiplicity", 1), field="multiplicity", minimum=1),
         max_cores=int(parameters.get("max_cores", 8) or 8),
@@ -445,7 +473,12 @@ def _advance_forward(
     if extensions_used < max_extensions:
         previous_spec = _scan_spec(latest)
         if previous_spec is None and len(forward_scans) == 1:
-            previous_spec = parse_scan_coordinate(normalize_text(parameters.get("scan_coordinate")))
+            canonical = validate_scan_coordinate(
+                parameters.get("scan_coordinate"),
+                atom_count=_scan_atom_count(latest),
+            )
+            previous_spec = parse_scan_coordinate(canonical)
+            assert previous_spec is not None
         endpoint_xyz = _scan_endpoint_xyz(latest)
         extension = _extension_spec(previous_spec) if previous_spec is not None else None
         if extension is not None and endpoint_xyz is not None:

@@ -54,6 +54,7 @@ from .execution_binding import (
     orca_execution_snapshot_generation_dir,
     orca_execution_started_evidence,
     verify_orca_execution_snapshot,
+    verify_orca_snapshot_executable,
 )
 from .orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from .queue.adapter import (
@@ -439,6 +440,11 @@ def _maybe_rebind_recovery_generation(
             "ORCA crash recovery limit reached for this submission "
             f"({count}/{RECOVERY_REBIND_LIMIT}); resubmit the job to continue"
         )
+    cfg = cfg_factory()
+    recovery_executable = verify_orca_snapshot_executable(
+        snapshot,
+        expected_executable=cfg.paths.orca_executable,
+    )
     if not update_metadata(
         queue_root,
         str(entry.queue_id),
@@ -455,7 +461,6 @@ def _maybe_rebind_recovery_generation(
     ):
         raise ValueError("ORCA crash recovery lost its rebind budget reservation")
 
-    cfg = cfg_factory()
     source_selected = str(metadata.get("source_selected_inp") or "").strip()
     if not source_selected:
         raise ValueError("ORCA crash recovery requires the submission source input path")
@@ -480,7 +485,7 @@ def _maybe_rebind_recovery_generation(
             selected_input_xyz=str(metadata.get("selected_input_xyz") or ""),
             resource_request=prepared.resource_request,
             max_retries=max_retries,
-            orca_executable=cfg.paths.orca_executable,
+            orca_executable=recovery_executable,
             queue_root=queue_root,
             snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
             normalized_selected_payload=prepared.normalized_payload,

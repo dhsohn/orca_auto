@@ -272,6 +272,7 @@ INTERACTION_ROLE_PREFIX = "interaction_"
 INTERACTION_COMPLEX_SP_ROLE = "interaction_complex_sp"
 INTERACTION_FRAGMENT_ROLE = "interaction_fragment"
 INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
+SUPPORTED_WORKFLOW_ORCA_TASK_KINDS = frozenset({"opt", "optts_freq", "relaxed_scan", "sp"})
 
 
 def is_interaction_role(role: str) -> bool:
@@ -279,11 +280,100 @@ def is_interaction_role(role: str) -> bool:
     return role.startswith(INTERACTION_ROLE_PREFIX)
 
 
+def is_exact_orca_stage_contract(stage: Mapping[str, Any]) -> bool:
+    """Whether durable stage and task discriminators both identify ORCA."""
+
+    task = stage.get("task")
+    return bool(
+        isinstance(task, Mapping)
+        and normalize_text(stage.get("stage_kind")).lower() == "orca_stage"
+        and normalize_text(task.get("engine")).lower() == "orca"
+    )
+
+
+def is_supported_orca_stage_contract(stage: Mapping[str, Any]) -> bool:
+    """Whether an exact ORCA stage declares one supported workflow task kind."""
+
+    task = stage.get("task")
+    return bool(
+        is_exact_orca_stage_contract(stage)
+        and isinstance(task, Mapping)
+        and normalize_text(task.get("task_kind")).lower() in SUPPORTED_WORKFLOW_ORCA_TASK_KINDS
+    )
+
+
+def is_valid_interaction_stage_contract(
+    stage: Mapping[str, Any],
+    stages: list[dict[str, Any]],
+    *,
+    expected_config_fingerprint: str | None = None,
+) -> bool:
+    """True only for an interaction SP with an unambiguous primary parent."""
+
+    metadata = stage.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return False
+    role = normalize_text(metadata.get("role"))
+    if role not in {INTERACTION_COMPLEX_SP_ROLE, INTERACTION_FRAGMENT_ROLE}:
+        return False
+    fingerprint = normalize_text(metadata.get(INTERACTION_CONFIG_FINGERPRINT_KEY))
+    if len(fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in fingerprint
+    ):
+        return False
+    if expected_config_fingerprint is not None:
+        expected = normalize_text(expected_config_fingerprint)
+        if fingerprint != expected:
+            return False
+    task = stage.get("task")
+    if not is_exact_orca_stage_contract(stage) or not isinstance(task, Mapping):
+        return False
+    if normalize_text(task.get("task_kind")).lower() != "sp":
+        return False
+    parent_stage_id = normalize_text(metadata.get("parent_stage_id"))
+    stage_id = normalize_text(stage.get("stage_id"))
+    if not parent_stage_id or parent_stage_id == stage_id:
+        return False
+    parents = [
+        candidate
+        for candidate in stages
+        if normalize_text(candidate.get("stage_id")) == parent_stage_id
+    ]
+    if len(parents) != 1:
+        return False
+    parent = parents[0]
+    parent_metadata = parent.get("metadata")
+    parent_role = (
+        normalize_text(parent_metadata.get("role")) if isinstance(parent_metadata, Mapping) else ""
+    )
+    parent_task = parent.get("task")
+    parent_task_kind = (
+        normalize_text(parent_task.get("task_kind")).lower()
+        if isinstance(parent_task, Mapping)
+        else ""
+    )
+    if (
+        is_interaction_role(parent_role)
+        or not is_exact_orca_stage_contract(parent)
+        or parent_task_kind != "opt"
+    ):
+        return False
+    fragment_index = metadata.get("fragment_index")
+    if role == INTERACTION_FRAGMENT_ROLE and (
+        not isinstance(fragment_index, int)
+        or isinstance(fragment_index, bool)
+        or fragment_index < 0
+    ):
+        return False
+    return True
+
+
 __all__ = [
     "INTERACTION_COMPLEX_SP_ROLE",
     "INTERACTION_CONFIG_FINGERPRINT_KEY",
     "INTERACTION_FRAGMENT_ROLE",
     "INTERACTION_ROLE_PREFIX",
+    "SUPPORTED_WORKFLOW_ORCA_TASK_KINDS",
     "WorkflowArtifactRef",
     "WorkflowArtifactRefPayload",
     "WorkflowPlan",
@@ -296,6 +386,9 @@ __all__ = [
     "WorkflowTemplateRequest",
     "WorkflowTemplateRequestPayload",
     "coerce_workflow_plan_payload",
+    "is_exact_orca_stage_contract",
     "is_interaction_role",
+    "is_supported_orca_stage_contract",
+    "is_valid_interaction_stage_contract",
     "workflow_request_parameters",
 ]

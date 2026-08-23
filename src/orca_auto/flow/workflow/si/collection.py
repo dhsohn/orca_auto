@@ -6,18 +6,17 @@ import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engine_process import require_confined_regular_file
-from orca_auto.core.engine_runner import executable_identity, verify_confined_output_identity
-from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.flow.contracts.workflow import (
     INTERACTION_COMPLEX_SP_ROLE,
     INTERACTION_CONFIG_FINGERPRINT_KEY,
     INTERACTION_FRAGMENT_ROLE,
+    is_supported_orca_stage_contract,
+    is_valid_interaction_stage_contract,
     workflow_request_parameters,
 )
+from orca_auto.flow.orca_stage_evidence import collect_verified_orca_stage_evidence
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.interaction_energy import (
     InteractionEnergyResult,
@@ -28,10 +27,10 @@ from orca_auto.orca.report.interaction_energy import (
 )
 from orca_auto.orca.report.render import R_KCAL_PER_MOL_K
 from orca_auto.orca.report.rmsd import RmsdGroup
-from orca_auto.orca.report.si import SiBlock, SiBlockError, collect_si_block
-from orca_auto.orca.state import load_generation_state
+from orca_auto.orca.report.si import SiBlock
 
 from ...conformer_selection import (
+    OrcaSelectedInputScienceIdentity,
     blocks_match_geometry,
     coordinates_match,
     eligible_minimum_block,
@@ -40,7 +39,6 @@ from ...conformer_selection import (
     normalized_route_line,
     rmsd_candidate_for_block,
     rmsd_grouping,
-    selected_input_state_matches,
     unique_single_point_matches,
 )
 from ...manifest import (
@@ -52,8 +50,6 @@ from ...manifest import (
 )
 from ..report import (
     _crest_stage_detail,
-    _interaction_role_stage,
-    _resolve_orca_stage_report,
     _stage_dicts,
     _stage_metadata,
     _task_kind,
@@ -73,10 +69,12 @@ logger = logging.getLogger(__name__)
 class WorkflowSiEntry:
     stage_id: str
     block: SiBlock
+    selected_input_identity: OrcaSelectedInputScienceIdentity | None = None
     # The matched single-point block, kept so its level (method/basis/solvation/
     # version/route) can be documented: a composite energy is unreproducible
     # without the level that produced E(SP).
     sp_block: SiBlock | None = None
+    sp_selected_input_identity: OrcaSelectedInputScienceIdentity | None = None
     sp_energy: float | None = None
     sp_label: str = ""
     composite_gibbs: float | None = None
@@ -178,236 +176,16 @@ def _block_has_only_finite_numbers(block: SiBlock) -> bool:
     return all(math.isfinite(value) for value in analysis_values)
 
 
-def _mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _identity_values(payload: Mapping[str, Any], dimension: str) -> frozenset[str]:
-    job = _mapping(payload.get("job"))
-    engine_payload = _mapping(payload.get("engine_payload"))
-    # Flat top-level identity keys are a pre-schema artifact layout that no
-    # writer emits and the loaders no longer admit; only the nested ones count.
-    values: tuple[Any, ...]
-    if dimension == "job":
-        values = (job.get("id"), job.get("task_id"))
-    elif dimension == "run":
-        values = (engine_payload.get("run_id"),)
-    else:
-        values = (job.get("queue_id"),)
-    return frozenset(text for value in values if (text := _text(value)))
-
-
-def _report_state_identity_matches(
-    report: Mapping[str, Any],
-    state_payload: Mapping[str, Any],
-) -> bool:
-    report_job = _identity_values(report, "job")
-    state_job = _identity_values(state_payload, "job")
-    report_run = _identity_values(report, "run")
-    state_run = _identity_values(state_payload, "run")
-    report_queue = _identity_values(report, "queue")
-    state_queue = _identity_values(state_payload, "queue")
-    dimensions = (
-        (report_job, state_job),
-        (report_run, state_run),
-        (report_queue, state_queue),
-    )
-    return (
-        bool(report_job)
-        and bool(report_run)
-        and all(len(left) <= 1 and len(right) <= 1 for left, right in dimensions)
-        and all(left == right for left, right in dimensions)
-    )
-
-
-def _selected_input(payload: Mapping[str, Any]) -> str | None:
-    input_payload = _mapping(payload.get("input"))
-    values = frozenset(
-        text
-        for value in (payload.get("selected_inp"), input_payload.get("primary_path"))
-        if (text := _text(value))
-    )
-    if len(values) != 1:
-        return None
-    return next(iter(values))
-
-
-def _execution_provenance(payload: Mapping[str, Any]) -> dict[str, Any] | None:
-    candidates: list[dict[str, Any]] = []
-    if isinstance(payload.get("execution_provenance"), Mapping):
-        candidates.append(dict(payload["execution_provenance"]))
-    engine_payload = _mapping(payload.get("engine_payload"))
-    if isinstance(engine_payload.get("execution_provenance"), Mapping):
-        candidates.append(dict(engine_payload["execution_provenance"]))
-    if not candidates or any(candidate != candidates[0] for candidate in candidates[1:]):
-        return None
-    return candidates[0]
-
-
-def _generation_matches_provenance(
-    generation_dir: Path,
-    provenance: Mapping[str, Any],
-) -> bool:
-    execution_dir = Path(_text(provenance.get("execution_dir")))
-    identity = _mapping(provenance.get("execution_dir_identity"))
-    try:
-        status = generation_dir.stat()
-        job_status = generation_dir.parent.stat()
-        expected_identity = (int(identity.get("device", -1)), int(identity.get("inode", -1)))
-    except (OSError, TypeError, ValueError):
-        return False
-    if not (
-        execution_dir.is_absolute()
-        and execution_dir == generation_dir
-        and not generation_dir.is_symlink()
-        and expected_identity == (int(status.st_dev), int(status.st_ino))
-    ):
-        return False
-    try:
-        require_direct_generation_owner(
-            generation_dir.parent,
-            namespace=generation_dir.name,
-            expected_job_identity=(int(job_status.st_dev), int(job_status.st_ino)),
-            expected_generation_identity=expected_identity,
-            owner_token=_text(provenance.get("generation_owner_token")),
-        )
-    except (OSError, RuntimeError, TypeError, ValueError):
-        return False
-    return True
-
-
-def _direct_regular_file(generation_dir: Path, raw_path: str, *, label: str) -> Path | None:
-    path = Path(raw_path)
-    if not path.is_absolute() or path.parent != generation_dir or path.is_symlink():
-        return None
-    try:
-        resolved = require_confined_regular_file(generation_dir, path, label=label)
-    except (OSError, RuntimeError, ValueError):
-        return None
-    return resolved if path == resolved else None
-
-
-def _terminal_output_path(payload: Mapping[str, Any]) -> str:
-    engine_payload = _mapping(payload.get("engine_payload"))
-    final_result = _mapping(engine_payload.get("final_result"))
-    return _text(final_result.get("last_out_path"))
-
-
-def _terminal_output_identity(
-    payload: Mapping[str, Any],
-    output_path: str,
-) -> dict[str, Any] | None:
-    engine_payload = _mapping(payload.get("engine_payload"))
-    attempts = engine_payload.get("attempts")
-    if not isinstance(attempts, list):
-        return None
-    matches = [
-        attempt
-        for attempt in attempts
-        if isinstance(attempt, Mapping) and _text(attempt.get("out_path")) == output_path
-    ]
-    if len(matches) != 1:
-        return None
-    identity = matches[0].get("output_identity")
-    return dict(identity) if isinstance(identity, Mapping) else None
-
-
-def _terminal_output_issue(
-    generation_dir: Path,
-    report: Mapping[str, Any],
-    state_payload: Mapping[str, Any],
-) -> str:
-    report_path = _terminal_output_path(report)
-    state_path = _terminal_output_path(state_payload)
-    if not report_path or state_path != report_path:
-        return "job state terminal output differs from verified report"
-    report_identity = _terminal_output_identity(report, report_path)
-    state_identity = _terminal_output_identity(state_payload, state_path)
-    if (
-        report_identity is None
-        or state_identity != report_identity
-        or _text(report_identity.get("path")) != report_path
-    ):
-        return "job output content identity differs from verified report"
-    try:
-        verified = verify_confined_output_identity(generation_dir, report_identity)
-    except (OSError, RuntimeError, TypeError, ValueError):
-        return "job output no longer matches its terminal content identity"
-    if verified != Path(report_path) or verified.parent != generation_dir:
-        return "job output is not a regular file confined to the report generation"
-    return ""
-
-
-def _state_evidence_issue(
-    generation_dir: Path,
-    report: Mapping[str, Any],
-    state_payload: Mapping[str, Any],
-) -> str:
-    if not _report_state_identity_matches(report, state_payload):
-        return "job state identity differs from verified report"
-    report_selected = _selected_input(report)
-    state_selected = _selected_input(state_payload)
-    if report_selected is None or state_selected != report_selected:
-        return "job state selected input differs from verified report"
-    report_provenance = _execution_provenance(report)
-    state_provenance = _execution_provenance(state_payload)
-    if report_provenance is None or state_provenance != report_provenance:
-        return "job state execution provenance differs from verified report"
-    if not _generation_matches_provenance(generation_dir, report_provenance):
-        return "verified report provenance does not identify its generation"
-    selected_path = _direct_regular_file(
-        generation_dir,
-        report_selected,
-        label="workflow SI selected input",
-    )
-    bound_identity = _mapping(report_provenance.get("bound_selected_identity"))
-    try:
-        selected_identity_matches = selected_path is not None and executable_identity(
-            selected_path
-        ) == dict(bound_identity)
-    except (OSError, RuntimeError, TypeError, ValueError):
-        selected_identity_matches = False
-    if not selected_identity_matches:
-        return "selected input is not a provenance-bound generation file"
-    return _terminal_output_issue(generation_dir, report, state_payload)
-
-
 def _collect_stage_block(
     stage: Mapping[str, Any],
-) -> tuple[SiBlock | None, str]:
-    """(block, exclusion_reason) — exactly one side is meaningful."""
-    report_path, report = _resolve_orca_stage_report(stage)
-    if report is None or report_path is None:
-        return None, "no verified report generation recorded"
-    generation_dir = report_path.parent
-    loaded_state = load_generation_state(generation_dir)
-    if loaded_state is None:
-        return None, "no job state found"
-    state_payload, state = loaded_state
-    if issue := _state_evidence_issue(generation_dir, report, state_payload):
-        return None, issue
-    try:
-        block = collect_si_block(generation_dir, state)
-    except (OSError, SiBlockError):
-        return None, "job evidence could not be parsed into a complete SI block"
-    # Recheck the complete input/output/provenance binding after parsers have
-    # reopened the files so a normal overwrite or rename cannot be published.
-    if issue := _state_evidence_issue(generation_dir, report, state_payload):
-        return None, issue
+) -> tuple[SiBlock | None, str, OrcaSelectedInputScienceIdentity | None]:
+    """Return a parsed block, exclusion reason, and bound selected-input identity."""
+    block, reason, selected_input_identity = collect_verified_orca_stage_evidence(stage)
     if block is None:
-        return None, "job type has no SI block"
+        return None, reason, None
     if not _block_has_only_finite_numbers(block):
-        return None, "output contains a non-finite numeric result"
-    result = block.result
-    state_verified = result.electronic_state_verified and selected_input_state_matches(block, state)
-    if not state_verified:
-        warning = "route/electronic-state provenance missing or inconsistent with selected input"
-        block = replace(
-            block,
-            result=replace(result, electronic_state_verified=False),
-            warnings=(*block.warnings, warning),
-        )
-    return replace(block, name=_stage_label(stage)), ""
+        return None, "output contains a non-finite numeric result", None
+    return replace(block, name=_stage_label(stage)), "", selected_input_identity
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +241,7 @@ def _pair_single_points(
             replace(
                 entry,
                 sp_block=match.block,
+                sp_selected_input_identity=match.selected_input_identity,
                 sp_energy=sp_energy,
                 sp_label=match.block.name,
                 composite_gibbs=composite,
@@ -526,6 +305,7 @@ def _dedup_minima(
                 if convention.use_single_point_energy
                 else entry.block.result.energy_hartree
             ),
+            selected_input_identity=entry.selected_input_identity,
         )
         for entry in mins
     ]
@@ -554,12 +334,29 @@ def _completed_interaction_block(stage: Mapping[str, Any]) -> tuple[SiBlock | No
     status = _text(stage.get("status"))
     if status != "completed":
         return None, f"stage status is {status or 'unknown'}"
-    block, reason = _collect_stage_block(stage)
+    block, reason, _ = _collect_stage_block(stage)
     if block is None:
         return None, reason
     if block.kind != "sp" or block.analysis is not None:
         return None, "stage did not execute as a pure single point"
     return block, ""
+
+
+def _interaction_config_fingerprint(
+    cfg: dict[str, Any],
+    parameters: Mapping[str, Any],
+    rmsd_cfg: dict[str, Any] | None,
+) -> str:
+    complex_charge = require_int(parameters.get("charge", 0), field="charge")
+    complex_multiplicity = require_int(
+        parameters.get("multiplicity", 1), field="multiplicity", minimum=1
+    )
+    return interaction_energy_config_fingerprint(
+        cfg,
+        complex_charge=complex_charge,
+        complex_multiplicity=complex_multiplicity,
+        rmsd_dedup=rmsd_cfg,
+    )
 
 
 def _interaction_energy_results(
@@ -603,12 +400,7 @@ def _interaction_energy_results(
         if not parent or parent not in entry_by_stage:
             continue
         stages_by_parent.setdefault(parent, []).append(stage)
-    expected_fingerprint = interaction_energy_config_fingerprint(
-        cfg,
-        complex_charge=complex_charge,
-        complex_multiplicity=complex_multiplicity,
-        rmsd_dedup=rmsd_cfg,
-    )
+    expected_fingerprint = _interaction_config_fingerprint(cfg, parameters, rmsd_cfg)
     # ``rmsd_grouping`` applies the shared defaults when the block is absent,
     # exactly as the materializer does for its fan-out decision.
     expected_ranked, _hidden_groups = _dedup_minima(eligible, rmsd_cfg or {})
@@ -806,7 +598,10 @@ def _cluster_key(entry: WorkflowSiEntry) -> str:
     return f"{result.formula or '?'}|{result.charge}|{result.multiplicity}"
 
 
-def _provenance_key(block: SiBlock) -> tuple[str, str, str, str, str, int, int]:
+def _provenance_key(
+    block: SiBlock,
+    selected_input_identity: OrcaSelectedInputScienceIdentity,
+) -> tuple[str, str, str, str, OrcaSelectedInputScienceIdentity]:
     """Exact executed level and electronic state used for cross-structure comparisons."""
     result = block.result
     return (
@@ -814,9 +609,16 @@ def _provenance_key(block: SiBlock) -> tuple[str, str, str, str, str, int, int]:
         result.basis_set,
         result.solvation,
         result.orca_version,
-        result.input_line,
-        result.charge,
-        result.multiplicity,
+        selected_input_identity,
+    )
+
+
+def _has_complete_comparison_provenance(
+    block: SiBlock | None,
+    selected_input_identity: OrcaSelectedInputScienceIdentity | None,
+) -> bool:
+    return (
+        block is not None and selected_input_identity is not None and has_required_provenance(block)
     )
 
 
@@ -851,7 +653,10 @@ def _energy_convention(entries: tuple[WorkflowSiEntry, ...]) -> _EnergyConventio
         )
 
     if not all(
-        entry.sp_block is not None and has_required_provenance(entry.sp_block)
+        _has_complete_comparison_provenance(
+            entry.sp_block,
+            entry.sp_selected_input_identity,
+        )
         for entry in candidates
     ):
         return _EnergyConvention(
@@ -860,7 +665,11 @@ def _energy_convention(entries: tuple[WorkflowSiEntry, ...]) -> _EnergyConventio
             "single-point provenance is incomplete; optimization-level E and G are used throughout",
         )
 
-    sp_levels = {_provenance_key(entry.sp_block) for entry in candidates if entry.sp_block}
+    sp_levels = {
+        _provenance_key(entry.sp_block, entry.sp_selected_input_identity)
+        for entry in candidates
+        if entry.sp_block is not None and entry.sp_selected_input_identity is not None
+    }
     if len(sp_levels) != 1:
         return _EnergyConvention(
             False,
@@ -869,7 +678,11 @@ def _energy_convention(entries: tuple[WorkflowSiEntry, ...]) -> _EnergyConventio
         )
 
     composite_ready = all(finite(entry.composite_gibbs) for entry in candidates)
-    opt_levels = {_provenance_key(entry.block) for entry in candidates}
+    opt_levels = {
+        _provenance_key(entry.block, entry.selected_input_identity)
+        for entry in candidates
+        if entry.selected_input_identity is not None
+    }
     if not composite_ready:
         return _EnergyConvention(
             True,
@@ -877,7 +690,10 @@ def _energy_convention(entries: tuple[WorkflowSiEntry, ...]) -> _EnergyConventio
             "single-point E is used, but G remains at the optimization level because "
             "thermochemical corrections are incomplete",
         )
-    if not all(has_required_provenance(entry.block) for entry in candidates):
+    if not all(
+        _has_complete_comparison_provenance(entry.block, entry.selected_input_identity)
+        for entry in candidates
+    ):
         return _EnergyConvention(
             True,
             False,
@@ -942,8 +758,21 @@ def _compute_populations(
         clusters.setdefault(_cluster_key(entries[i]), []).append(i)
     for key, members in clusters.items():
         if (
-            not all(has_required_provenance(entries[i].block) for i in members)
-            or len({_provenance_key(entries[i].block) for i in members}) != 1
+            not all(
+                _has_complete_comparison_provenance(
+                    entries[i].block,
+                    entries[i].selected_input_identity,
+                )
+                for i in members
+            )
+            or len(
+                {
+                    _provenance_key(entries[i].block, selected_input_identity)
+                    for i in members
+                    if (selected_input_identity := entries[i].selected_input_identity) is not None
+                }
+            )
+            != 1
         ):
             return (
                 blank,
@@ -1078,6 +907,18 @@ def collect_workflow_si_data(
         logger.warning("Conformer post-processing is disabled for this template", exc_info=True)
         interaction_cfg = None
         rmsd_cfg = None
+    expected_interaction_fingerprint = ""
+    if interaction_cfg is not None:
+        try:
+            expected_interaction_fingerprint = _interaction_config_fingerprint(
+                interaction_cfg,
+                parameters,
+                rmsd_cfg,
+            )
+        except ValueError:
+            # The requested feature will fail explicitly during assembly. Until
+            # then, no stage may be hidden as a trusted generated child.
+            pass
     crest_total: int | None = None
     xtb_total: int | None = None
     stationary: list[WorkflowSiEntry] = []
@@ -1086,13 +927,13 @@ def collect_workflow_si_data(
     excluded: list[ExcludedStage] = []
     incomplete_population_stages: list[str] = []
     # Interaction-energy fragment/complex single points are internal inputs, not
-    # SI structures: they carry a ``role`` starting ``interaction_`` and must be
-    # pulled out BEFORE any min/ts/sp classification so they can never leak into
-    # the relative-energy table or the structures list, nor be
-    # folded into a stationary structure by ``_pair_single_points``.
+    # SI structures. Only stages satisfying the complete interaction-stage
+    # contract are pulled out BEFORE any min/ts/sp classification, so arbitrary
+    # role metadata cannot hide a primary result from the structures list.
     interaction_raw_stages: list[Mapping[str, Any]] = []
+    stages = _stage_dicts(payload)
 
-    for stage in _stage_dicts(payload):
+    for stage in stages:
         stage_kind = _text(stage.get("stage_kind"))
         if stage_kind == "crest_stage":
             _, frames = _crest_stage_detail(stage)
@@ -1105,7 +946,24 @@ def collect_workflow_si_data(
             continue
         if stage_kind != "orca_stage":
             continue
-        if _interaction_role_stage(stage):
+        if not is_supported_orca_stage_contract(stage):
+            stage_id = _text(stage.get("stage_id"))
+            label = _stage_label(stage)
+            excluded.append(
+                ExcludedStage(
+                    stage_id,
+                    label,
+                    "unsupported or contradictory ORCA stage contract",
+                )
+            )
+            if template_name == "conformer_screening":
+                incomplete_population_stages.append(label or stage_id or "unknown")
+            continue
+        if is_valid_interaction_stage_contract(
+            stage,
+            stages,
+            expected_config_fingerprint=expected_interaction_fingerprint,
+        ):
             interaction_raw_stages.append(stage)
             continue
 
@@ -1124,7 +982,7 @@ def collect_workflow_si_data(
             if template_name == "conformer_screening":
                 incomplete_population_stages.append(label or stage_id or "unknown")
             continue
-        block, reason = _collect_stage_block(stage)
+        block, reason, selected_input_identity = _collect_stage_block(stage)
         if block is None:
             excluded.append(ExcludedStage(stage_id, label, reason))
             if template_name == "conformer_screening":
@@ -1136,7 +994,11 @@ def collect_workflow_si_data(
             and (_task_kind(stage) == "opt" or block.kind == "ts")
         ):
             incomplete_population_stages.append(label or stage_id or "unknown")
-        entry = WorkflowSiEntry(stage_id=stage_id, block=block)
+        entry = WorkflowSiEntry(
+            stage_id=stage_id,
+            block=block,
+            selected_input_identity=selected_input_identity,
+        )
         if block.kind in ("min", "ts"):
             stationary.append(entry)
         elif block.analysis is None:

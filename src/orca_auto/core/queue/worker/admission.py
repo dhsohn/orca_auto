@@ -47,6 +47,8 @@ def reserve_engine_queue_worker_slot(
         # Internal-engine child entrypoints publish engine identities through
         # register_running_job (ORCA once per retry attempt).
         reservation_kwargs["engine_process_state"] = "idle"
+        if entry.engine_launch_gated:
+            reservation_kwargs["engine_launch_gated"] = True
     return reserve_slot_fn(
         resolve_admission_root(cfg),
         cfg.runtime.resolved_admission_limit,

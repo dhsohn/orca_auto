@@ -14,6 +14,8 @@ from .collection import (
     WorkflowSiData,
     WorkflowSiEntry,
     _energy_convention,
+    _has_complete_comparison_provenance,
+    _provenance_key,
 )
 
 # ---------------------------------------------------------------------------
@@ -189,6 +191,30 @@ def _table_lines(data: WorkflowSiData) -> list[str]:
         return ["(no completed stationary structures yet)"]
 
     convention = _energy_convention(data.entries)
+    provenance_items = [
+        (
+            (entry.sp_block, entry.sp_selected_input_identity)
+            if convention.use_single_point_energy
+            else (entry.block, entry.selected_input_identity)
+        )
+        for entry in candidates
+    ]
+    known_levels = {
+        _provenance_key(block, selected_input_identity)
+        for block, selected_input_identity in provenance_items
+        if block is not None
+        and selected_input_identity is not None
+        and _has_complete_comparison_provenance(block, selected_input_identity)
+    }
+    complete_provenance = all(
+        _has_complete_comparison_provenance(block, selected_input_identity)
+        for block, selected_input_identity in provenance_items
+    )
+    if len(candidates) > 1 and (not complete_provenance or len(known_levels) != 1):
+        return [
+            "(relative energies omitted: executed route/electronic-state provenance "
+            "is missing or differs across completed structures)"
+        ]
 
     def gibbs_of(entry: WorkflowSiEntry) -> float | None:
         return (

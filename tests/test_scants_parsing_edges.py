@@ -25,6 +25,7 @@ from orca_auto.orca.scants import (
     parse_scants_actual_surface,
     prepare_scants_optts_fallback_input,
     prepare_scants_scan_retry_input,
+    validate_scan_coordinate_lines,
 )
 
 
@@ -85,6 +86,26 @@ def test_surface_and_refinement_parsers_tolerate_missing_output(tmp_path: Path) 
     missing = tmp_path / "absent.out"
     assert parse_scants_actual_surface(missing) == []
     assert output_indicates_scants_optts_refinement(missing) is False
+
+
+def test_strict_scan_coordinate_rejects_unclosed_geom_nesting() -> None:
+    with pytest.raises(ValueError, match="closed"):
+        validate_scan_coordinate_lines(
+            ["%geom", "  Scan", "    B 0 1 = 1.2, 3.0, 10", "  end"],
+            atom_count=2,
+        )
+
+
+def test_strict_scan_coordinate_rejects_duplicate_active_geom_blocks() -> None:
+    lines = _scants_lines()
+    lines[lines.index("* xyzfile 0 1 input.xyz") : lines.index("* xyzfile 0 1 input.xyz")] = [
+        "%geom",
+        "  MaxIter 50",
+        "end",
+    ]
+
+    with pytest.raises(ValueError, match="exactly one active %geom"):
+        validate_scan_coordinate_lines(lines, atom_count=32)
 
 
 def test_relaxed_scan_resume_requires_progress_and_scan_block(tmp_path: Path) -> None:
@@ -302,7 +323,8 @@ def test_scan_line_rewriters_reject_impossible_progress() -> None:
 
 
 def test_format_scan_float_normalizes_negative_zero() -> None:
-    assert _format_scan_float(-1e-9) == "0"
+    assert _format_scan_float(-0.0) == "0"
+    assert _format_scan_float(-1e-9) == "-1e-09"
     assert _format_scan_float(1.86) == "1.86"
 
 

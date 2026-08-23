@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from orca_auto.core.commands.run_dir import (
     active_run_dir_pinned_target,
     assert_run_dir_publication_allowed,
 )
+from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.messaging import build_channel
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
@@ -213,6 +215,11 @@ def build_queue_metadata(
 ) -> dict[str, Any]:
     from .job_locations import resolve_job_metadata
 
+    bound_selected_validator = _workflow_bound_selected_validator(
+        args,
+        reaction_dir=reaction_dir,
+        selected_inp=selected_inp,
+    )
     artifacts = selected_input_artifacts(selected_inp)
     job_type, molecule_key = resolve_job_metadata(artifacts.selected_inp, reaction_dir)
     prepared_input = prepared_resource_input_from_selected_inp(
@@ -245,6 +252,7 @@ def build_queue_metadata(
         snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
         normalized_selected_payload=prepared_input.normalized_payload,
         source_selected_sha256=prepared_input.source_sha256,
+        bound_selected_validator=bound_selected_validator,
     )
     if artifacts.selected_inp:
         metadata["source_selected_inp"] = artifacts.selected_inp
@@ -253,6 +261,38 @@ def build_queue_metadata(
     metadata["selected_input_xyz"] = artifacts.selected_input_xyz
     metadata["execution_snapshot"] = execution_snapshot
     return metadata
+
+
+def _workflow_bound_selected_validator(
+    args: Any | None,
+    *,
+    reaction_dir: Path,
+    selected_inp: Path | None,
+) -> Callable[[Path, bytes], None] | None:
+    task_kind_raw = getattr(args, "workflow_task_kind", None) if args is not None else None
+    expected_raw = getattr(args, "expected_selected_inp", None) if args is not None else None
+    validator = getattr(args, "bound_selected_validator", None) if args is not None else None
+    task_kind = task_kind_raw.strip().lower() if isinstance(task_kind_raw, str) else ""
+    expected_text = expected_raw.strip() if isinstance(expected_raw, str) else ""
+    if not task_kind and not expected_text and validator is None:
+        return None
+    if not task_kind or not expected_text or selected_inp is None or not callable(validator):
+        raise ValueError(
+            "Workflow ORCA submission requires task kind, durable selected input, and "
+            "an upper-layer bound-payload validator together"
+        )
+    expected = require_confined_regular_file(
+        reaction_dir,
+        Path(expected_text),
+        label="Workflow ORCA durable selected input",
+    )
+    if expected != selected_inp.expanduser().resolve():
+        raise ValueError(
+            "Workflow ORCA actual selected input differs from durable selected input: "
+            f"actual={str(selected_inp)!r}, expected={str(expected)!r}"
+        )
+
+    return validator
 
 
 def upsert_queued_job_record(

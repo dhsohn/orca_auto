@@ -6,6 +6,77 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [Unreleased]
+
+### Fixed
+
+- ORCA crash recovery no longer substitutes edited job-root dependencies for
+  the bytes captured by the crashed submission; verified runtime geometry is
+  reused even when its original job-root source is gone, while changed or
+  unverifiable fallback inputs fail closed. Runtime XYZ seeds must preserve the
+  submitted atom labels and order and contain exactly three finite coordinates
+  per atom. Recovery also remains pinned to the originally snapshotted ORCA
+  executable identity.
+- ORCA input binding treats top-level `%moinp` and `%scf` `MOInp` declarations
+  as one semantic namespace, rejects duplicates, and requires an explicit
+  snapshot-bound orbital file whenever `MORead` is requested. Checkpoint
+  rewrites update the sole semantic declaration in place instead of creating a
+  second reference.
+- Workflow ORCA stages now bind Opt, relaxed-scan, and exact OptTS+Freq routes to
+  their durable task roles at creation, materialization, restart, and completed
+  result acceptance. Routes are strings of route lines only; active injected
+  input blocks, quoted route tokens, marker-prefixed payload tokens, and
+  non-string values fail closed instead of being rendered. The direct submitter
+  requires its selected path to match both durable copies, then validates the
+  final rewritten bytes at the execution-snapshot boundary before those same
+  bytes are written and identity-bound.
+- Relaxed-scan coordinates now require one complete `B`/`A`/`D` coordinate,
+  valid arity, finite non-equal endpoints, at least two points, distinct
+  zero-based atoms, and indices within the submitted geometry. The same strict
+  contract covers creation, dynamic extension, submission, and completed-result
+  acceptance, rejects unclosed `%geom`/`Scan` nesting, and preserves endpoint
+  values with shortest round-trip float formatting instead of eight-decimal
+  rounding.
+- Scan workflow restart keeps the relaxed-scan and OptTS route settings
+  separate and selects the replacement route from each durable task kind.
+  Once a primary ORCA stage completes, restart cannot change its route, charge,
+  or multiplicity. Mixed route, non-resource active input directives,
+  ordered atom-label sequence, identity-bound non-geometry dependency content,
+  electronic-state, or ORCA-version provenance
+  cannot publish relative energies or numeric candidate rankings. HTML, SI,
+  and interaction representative selection share this scientific identity;
+  `%pal`, `%maxcore`, and route `PALn` remain resource-only. Spoofed
+  interaction-role metadata cannot hide a primary stage from these checks:
+  a generated child must carry a canonical SHA-256 interaction fingerprint
+  matching the workflow's durable current configuration before SI, fan-out,
+  or restart treats it as interaction-owned.
+- Discord bot tokens reject embedded whitespace, control characters, and
+  non-ASCII values after documented surrounding-whitespace normalization,
+  without echoing credentials, and request-construction failures remain
+  redacted and advisory to an otherwise durable queue submission. Response-body
+  read failures, including rate-limit error bodies, are advisory too.
+- Same-boot dead-owner ORCA admission records can reclaim pending engine-launch
+  slots when the durable launch-gate policy proves that no engine escaped;
+  legacy and direct-launch records retain the conservative behavior.
+- Expected queue list, clear, and cancel configuration or state failures now
+  produce concise stderr diagnostics instead of Python tracebacks or partial
+  stdout payloads. A downstream pipe closing during list, clear, or cancel
+  output is handled separately and is never misreported as state corruption.
+- Systemd installation escapes literal percent characters in rendered data
+  paths without disabling template-owned instance specifiers and rejects path
+  characters whose quoting or expansion would change unit syntax.
+- Worker freshness now uses import provenance captured by each active process,
+  not its working directory, and compares that actual checkout's matching
+  HEAD-reflog update time instead of commit time or the status command's own
+  checkout. HEAD evidence is refreshed per worker, and an imported package
+  tree with uncommitted changes is reported as undetermined rather than fresh.
+- Existing-worker conflicts now follow the CLI error contract by writing the
+  error, recorded command, and recovery hint to stderr only.
+- Concrete mypy override entries now match the current notification module
+  inventory, with a regression test that rejects future stale module entries.
+- Unused existing-worker exception state, queue command-name plumbing, and a
+  redundant systemd config-path local have been removed.
+
 ## [3.0.1] - 2026-08-20
 
 ### Fixed
