@@ -7,7 +7,7 @@ from typing import Any
 from orca_auto.core.queue.engine import admission as engine_admission
 
 
-def test_start_engine_child_process_can_include_or_omit_admission_root(tmp_path: Path) -> None:
+def test_start_engine_child_process_builds_queue_identity_command(tmp_path: Path) -> None:
     entry = SimpleNamespace(queue_id="queue-1")
     commands: list[dict[str, Any]] = []
 
@@ -19,22 +19,9 @@ def test_start_engine_child_process_can_include_or_omit_admission_root(tmp_path:
         config_path="/tmp/orca_auto.yaml",
         queue_root=tmp_path / "queue",
         entry=entry,
-        admission_root="/tmp/admission",
         admission_token="slot-1",
         start_background_process_fn=lambda command: command,
         build_worker_child_command_fn=build_command,
-        include_admission_root=True,
-    ) == ["python", "-m", "worker"]
-
-    assert engine_admission.start_engine_child_process(
-        config_path="/tmp/orca_auto.yaml",
-        queue_root=tmp_path / "queue",
-        entry=entry,
-        admission_root="/tmp/admission",
-        admission_token="slot-2",
-        start_background_process_fn=lambda command: command,
-        build_worker_child_command_fn=build_command,
-        include_admission_root=False,
     ) == ["python", "-m", "worker"]
 
     assert commands == [
@@ -43,13 +30,6 @@ def test_start_engine_child_process_can_include_or_omit_admission_root(tmp_path:
             "queue_root": tmp_path / "queue",
             "queue_id": "queue-1",
             "admission_token": "slot-1",
-            "admission_root": "/tmp/admission",
-        },
-        {
-            "config_path": "/tmp/orca_auto.yaml",
-            "queue_root": tmp_path / "queue",
-            "queue_id": "queue-1",
-            "admission_token": "slot-2",
         },
     ]
 

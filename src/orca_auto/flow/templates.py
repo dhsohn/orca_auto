@@ -17,6 +17,14 @@ STANDARD_REACTION_REACTANT_FILENAME = "reactant.xyz"
 STANDARD_REACTION_PRODUCT_FILENAME = "product.xyz"
 STANDARD_CONFORMER_INPUT_FILENAME = "input.xyz"
 
+# Default ORCA route lines per template. These are creation-time defaults only:
+# once a workflow is created its durable request parameters are the single
+# source of truth, and stage materialization fails closed when they are absent.
+DEFAULT_REACTION_TS_ORCA_ROUTE_LINE = "! r2scan-3c OptTS Freq TightSCF"
+DEFAULT_CONFORMER_ORCA_ROUTE_LINE = "! r2scan-3c Opt TightSCF"
+DEFAULT_SCAN_ORCA_ROUTE_LINE = "! Opt r2scan-3c TightSCF"
+DEFAULT_SCAN_OPTTS_ORCA_ROUTE_LINE = "! OptTS Freq r2scan-3c TightSCF"
+
 
 @dataclass(frozen=True)
 class WorkflowTemplateSpec:
@@ -95,6 +103,10 @@ def workflow_template_shortcut(workflow_type: Any, *, default: str = "workflow")
 __all__ = [
     "CONFORMER_SCREENING_SHORTCUT",
     "CONFORMER_SCREENING_TEMPLATE_ID",
+    "DEFAULT_CONFORMER_ORCA_ROUTE_LINE",
+    "DEFAULT_REACTION_TS_ORCA_ROUTE_LINE",
+    "DEFAULT_SCAN_OPTTS_ORCA_ROUTE_LINE",
+    "DEFAULT_SCAN_ORCA_ROUTE_LINE",
     "REACTION_TS_SEARCH_SHORTCUT",
     "REACTION_TS_SEARCH_TEMPLATE_ID",
     "STANDARD_CONFORMER_INPUT_FILENAME",

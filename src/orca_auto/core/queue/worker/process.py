@@ -155,7 +155,6 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
                 config_path=self.config_path,
                 queue_root=queue_root,
                 entry=entry,
-                admission_root=self.admission_root,
                 admission_token=admission_token,
             )
         except OSError as exc:

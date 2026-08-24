@@ -279,7 +279,6 @@ def test_engine_queue_runtime_builds_child_worker_deps(tmp_path: Path) -> None:
         config_path="/tmp/config.yaml",
         queue_root=reserved.queue_root,
         entry=reserved.entry,
-        admission_root=deps.admission_root(cfg),
         admission_token=reserved.admission_token,
     )
 
@@ -288,7 +287,6 @@ def test_engine_queue_runtime_builds_child_worker_deps(tmp_path: Path) -> None:
             "config_path": "/tmp/config.yaml",
             "queue_root": tmp_path / "a",
             "entry": entry,
-            "admission_root": "/tmp/admission",
             "admission_token": "slot-1",
         }
     ]
@@ -448,7 +446,7 @@ def test_engine_queue_runtime_reserves_admission_slot(tmp_path: Path) -> None:
     ]
 
 
-def test_engine_queue_runtime_starts_child_process_with_optional_admission_root(
+def test_engine_queue_runtime_starts_child_process_with_queue_identity(
     tmp_path: Path,
 ) -> None:
     runtime = _runtime(tmp_path)
@@ -466,11 +464,9 @@ def test_engine_queue_runtime_starts_child_process_with_optional_admission_root(
         config_path="/tmp/config.yaml",
         queue_root=tmp_path / "queue",
         entry=entry,
-        admission_root="/tmp/admission",
         admission_token="slot-1",
         start_background_process_fn=start_background_process,
         build_worker_child_command_fn=build_child_command,
-        include_admission_root=False,
     )
 
     assert result == "proc"

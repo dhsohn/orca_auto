@@ -7,6 +7,12 @@ from orca_auto.core.queue.generation import new_visible_generation_name
 from orca_auto.core.utils import normalize_text, now_utc_iso
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import write_workflow_payload
+from orca_auto.flow.templates import (
+    DEFAULT_CONFORMER_ORCA_ROUTE_LINE,
+    DEFAULT_REACTION_TS_ORCA_ROUTE_LINE,
+    DEFAULT_SCAN_OPTTS_ORCA_ROUTE_LINE,
+    DEFAULT_SCAN_ORCA_ROUTE_LINE,
+)
 from orca_auto.flow.xyz_utils import load_xyz_atom_sequence
 
 from .advance import advance_workflow, cancel_materialized_workflow
@@ -77,7 +83,7 @@ def create_reaction_ts_search_workflow(
     max_xtb_stages: int = 9,
     max_xtb_handoff_retries: int = 2,
     max_orca_stages: int = 3,
-    orca_route_line: str = "! r2scan-3c OptTS Freq TightSCF",
+    orca_route_line: str = DEFAULT_REACTION_TS_ORCA_ROUTE_LINE,
     charge: int = 0,
     multiplicity: int = 1,
     crest_job_manifest: dict[str, Any] | None = None,
@@ -134,8 +140,8 @@ def create_scan_ts_search_workflow(
     max_memory_gb: int = 32,
     max_orca_stages: int = 5,
     max_scan_extensions: int = 1,
-    orca_route_line: str = "! Opt r2scan-3c TightSCF",
-    orca_optts_route_line: str = "! OptTS Freq r2scan-3c TightSCF",
+    orca_route_line: str = DEFAULT_SCAN_ORCA_ROUTE_LINE,
+    orca_optts_route_line: str = DEFAULT_SCAN_OPTTS_ORCA_ROUTE_LINE,
     barrier_threshold_kcal: float = 0.5,
     charge: int = 0,
     multiplicity: int = 1,
@@ -172,7 +178,7 @@ def create_conformer_screening_workflow(
     max_cores: int = 8,
     max_memory_gb: int = 32,
     max_orca_stages: int = 20,
-    orca_route_line: str = "! r2scan-3c Opt TightSCF",
+    orca_route_line: str = DEFAULT_CONFORMER_ORCA_ROUTE_LINE,
     charge: int = 0,
     multiplicity: int = 1,
     boltzmann_temperature_k: float | None = None,

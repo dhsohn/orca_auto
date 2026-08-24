@@ -10,6 +10,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- Workflow ORCA stage materialization now requires the route line recorded in
+  the durable request parameters and fails closed when it is missing or empty,
+  instead of silently building the stage at a hard-coded default level of
+  theory. The per-template creation defaults are single-sourced in
+  `flow/templates.py`; workflows created by any released version always record
+  the parameter, so valid payloads are unaffected.
+- Worker PID liveness now uses one fail-closed predicate everywhere: a PID
+  probe that fails with a permission or unknown OS error is treated as alive,
+  so orphan reconciliation and worker-status checks no longer disagree about
+  the same PID. Previously the queue-side check treated any `OSError` as dead,
+  which could requeue a job whose worker was still running.
+
 - ORCA crash recovery no longer substitutes edited job-root dependencies for
   the bytes captured by the crashed submission; verified runtime geometry is
   reused even when its original job-root source is gone, while changed or
@@ -76,6 +88,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   inventory, with a regression test that rejects future stale module entries.
 - Unused existing-worker exception state, queue command-name plumbing, and a
   redundant systemd config-path local have been removed.
+
+### Removed
+
+- The dead `--admission-root` child-command plumbing: no released worker-child
+  parser ever accepted the flag, its only emitters were reachable solely from tests,
+  and its default configuration built a command argparse would reject. The
+  `admission_root`/`include_admission_root` parameters are gone from the whole
+  worker-start callback chain.
+- The always-empty `stage_root_name` parameter chain in ORCA stage
+  materialization; every caller passed the empty string, so stage directories
+  resolve exactly as before.
 
 ## [3.0.1] - 2026-08-20
 

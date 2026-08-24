@@ -14,6 +14,7 @@ from typing import Protocol
 
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.persistence import atomic_write_text, now_utc_iso
+from orca_auto.core.utils.process_tracking import read_pid_file
 
 LOGGER = logging.getLogger(__name__)
 
@@ -276,16 +277,6 @@ def install_shutdown_signal_handlers(request_shutdown: Callable[[], None]) -> No
         LOGGER.debug("shutdown signal handlers can only be installed from the main thread")
 
 
-def pid_is_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
 def _process_start_ticks(pid: int) -> int | None:
     return process_utils.process_start_ticks(pid, proc_root=Path("/proc"))
 
@@ -318,17 +309,7 @@ def remove_worker_pid_file(allowed_root: Path | str, file_name: str = "queue_wor
 def read_worker_pid_file(
     allowed_root: Path | str, file_name: str = "queue_worker.pid"
 ) -> int | None:
-    return read_live_pid_file(worker_pid_file_path(allowed_root, file_name))
-
-
-def read_live_pid_file(pid_path: Path) -> int | None:
-    return process_utils.read_live_pid_file(
-        pid_path,
-        is_process_alive_fn=pid_is_alive,
-        process_start_ticks_fn=_process_start_ticks,
-        boot_id_fn=lambda: process_utils.linux_boot_id(proc_root=Path("/proc")),
-        remove_file_fn=process_utils.remove_file_silent,
-    )
+    return read_pid_file(worker_pid_file_path(allowed_root, file_name))
 
 
 __all__ = [
@@ -337,9 +318,7 @@ __all__ = [
     "current_worker_pid_payload",
     "install_shutdown_signal_handlers",
     "managed_process_group_has_exited",
-    "pid_is_alive",
     "process_group_exists",
-    "read_live_pid_file",
     "read_worker_pid_file",
     "remove_worker_pid_file",
     "terminate_process_group",

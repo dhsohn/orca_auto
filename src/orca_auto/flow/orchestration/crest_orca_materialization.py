@@ -7,7 +7,10 @@ from typing import Any
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.utils import mapping_or_empty, normalize_text
 from orca_auto.flow.contracts import CrestDownstreamPolicy
-from orca_auto.flow.contracts.workflow import workflow_request_parameters
+from orca_auto.flow.contracts.workflow import (
+    required_route_line,
+    workflow_request_parameters,
+)
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.scan_orca_materialization import (
     _all_terminal_none_verified,
@@ -181,12 +184,11 @@ def append_crest_orca_stages_impl(
             stage_key=(
                 f"{created:02d}_{resolved.engines.safe_name(candidate.kind, fallback='conformer')}"
             ),
-            stage_root_name="",
             workspace_dir=plan.orca_allowed_root,
             input_artifact_kind="crest_conformer",
             candidate=candidate,
             task_kind="opt",
-            route_line=plan.params.get("orca_route_line", "! r2scan-3c Opt TightSCF"),
+            route_line=required_route_line(plan.params, "orca_route_line"),
             charge=strict_int(plan.params.get("charge", 0), field="charge"),
             multiplicity=strict_int(
                 plan.params.get("multiplicity", 1), field="multiplicity", minimum=1

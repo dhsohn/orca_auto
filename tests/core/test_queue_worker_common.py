@@ -506,79 +506,6 @@ def test_start_background_process_redirects_output_to_log_file(
     assert calls[0]["text"] is True
 
 
-def test_child_worker_command_requires_admission_root_when_included() -> None:
-    with pytest.raises(ValueError, match="admission_root is required"):
-        child_process_helpers.build_background_worker_command(
-            config_path="/tmp/orca_auto.yaml",
-            queue_root="/tmp/queue",
-            queue_id="queue-1",
-            worker_job_module="orca_auto.worker",
-        )
-
-    assert child_process_helpers.build_background_worker_command(
-        config_path="/tmp/orca_auto.yaml",
-        queue_root="/tmp/queue",
-        queue_id="queue-1",
-        worker_job_module="orca_auto.worker",
-        include_admission_root=False,
-    ) == [
-        child_process_helpers.sys.executable,
-        "-m",
-        "orca_auto.worker",
-        "--config",
-        "/tmp/orca_auto.yaml",
-        "--queue-root",
-        "/tmp/queue",
-        "--queue-id",
-        "queue-1",
-    ]
-
-
-def test_start_background_job_process_builds_child_command(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    commands: list[list[str]] = []
-    expected = object()
-
-    def fake_start_background_process(command: list[str]) -> object:
-        commands.append(list(command))
-        return expected
-
-    monkeypatch.setattr(
-        child_process_helpers,
-        "start_background_process",
-        fake_start_background_process,
-    )
-
-    result = child_process_helpers.start_background_job_process(
-        config_path="/tmp/orca_auto.yaml",
-        queue_root="/tmp/queue",
-        entry=SimpleNamespace(queue_id="queue-1"),
-        worker_job_module="orca_auto.worker",
-        admission_root="/tmp/admission",
-        admission_token="slot-1",
-    )
-
-    assert result is expected
-    assert commands == [
-        [
-            child_process_helpers.sys.executable,
-            "-m",
-            "orca_auto.worker",
-            "--config",
-            "/tmp/orca_auto.yaml",
-            "--queue-root",
-            "/tmp/queue",
-            "--queue-id",
-            "queue-1",
-            "--admission-root",
-            "/tmp/admission",
-            "--admission-token",
-            "slot-1",
-        ]
-    ]
-
-
 def test_hooked_pidfile_child_worker_runs_engine_hooks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1289,48 +1216,45 @@ def test_install_shutdown_signal_handlers_ignores_non_main_thread_error(
     worker_common.install_shutdown_signal_handlers(lambda: pytest.fail("should not be called"))
 
 
-def test_pid_helpers_handle_alive_missing_and_stale_pids(
+def test_worker_pid_file_handles_live_stale_dead_missing_and_invalid_pids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert worker_common.pid_is_alive(0) is False
-    monkeypatch.setattr(process_helpers.os, "kill", lambda _pid, _signal: None)
-    assert worker_common.pid_is_alive(123) is True
-
-    json_pid_path = tmp_path / "json-worker.pid"
+    pid_path = process_helpers.worker_pid_file_path(tmp_path)
     boot_id = process_helpers.process_utils.linux_boot_id()
     assert boot_id is not None
-    json_pid_path.write_text(
-        json.dumps({"pid": 123, "process_start_ticks": 111, "boot_id": boot_id}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(process_helpers, "_process_start_ticks", lambda _pid: 111)
-    assert process_helpers.read_live_pid_file(json_pid_path) == 123
+    payload = json.dumps({"pid": 123, "process_start_ticks": 111, "boot_id": boot_id})
 
-    reused_pid_path = tmp_path / "reused-worker.pid"
-    reused_pid_path.write_text(
-        json.dumps({"pid": 123, "process_start_ticks": 111, "boot_id": boot_id}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(process_helpers, "_process_start_ticks", lambda _pid: 222)
-    assert process_helpers.read_live_pid_file(reused_pid_path) is None
-    assert not reused_pid_path.exists()
-
+    pid_path.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(process_helpers.process_utils.os, "kill", lambda _pid, _signal: None)
     monkeypatch.setattr(
-        process_helpers.os,
-        "kill",
-        lambda _pid, _signal: (_ for _ in ()).throw(OSError()),
+        process_helpers.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 111
     )
-    assert worker_common.pid_is_alive(123) is False
-    assert process_helpers.read_live_pid_file(json_pid_path) is None
-    assert not json_pid_path.exists()
+    assert process_helpers.read_worker_pid_file(tmp_path) == 123
 
-    missing = tmp_path / "missing.pid"
-    assert process_helpers.read_live_pid_file(missing) is None
+    pid_path.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(
+        process_helpers.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 222
+    )
+    assert process_helpers.read_worker_pid_file(tmp_path) is None
+    assert not pid_path.exists()
 
-    invalid = tmp_path / "invalid.pid"
-    invalid.write_text("not-a-pid\n", encoding="utf-8")
-    assert process_helpers.read_live_pid_file(invalid) is None
+    pid_path.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(
+        process_helpers.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 111
+    )
+    monkeypatch.setattr(
+        process_helpers.process_utils.os,
+        "kill",
+        lambda _pid, _signal: (_ for _ in ()).throw(ProcessLookupError()),
+    )
+    assert process_helpers.read_worker_pid_file(tmp_path) is None
+    assert not pid_path.exists()
+
+    assert process_helpers.read_worker_pid_file(tmp_path) is None
+
+    pid_path.write_text("not-a-pid\n", encoding="utf-8")
+    assert process_helpers.read_worker_pid_file(tmp_path) is None
 
 
 def test_reconcile_orphaned_child_queue_entries_cancels_or_requeues_only_orphans(

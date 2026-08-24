@@ -1009,7 +1009,6 @@ def test_queue_worker_starts_up_to_max_concurrent_children(
         config_path: str,
         queue_root: Path,
         entry: object,
-        admission_root: str,
         admission_token: str,
     ) -> _Process:
         started.append((config_path, str(queue_root), admission_token))

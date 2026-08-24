@@ -28,22 +28,17 @@ def start_engine_child_process(
     config_path: str,
     queue_root: Path,
     entry: Any,
-    admission_root: str | Path,
     admission_token: str,
     start_background_process_fn: Callable[[list[str]], Any],
     build_worker_child_command_fn: Callable[..., list[str]],
-    include_admission_root: bool,
 ) -> Any:
-    command_kwargs: dict[str, Any] = {
-        "config_path": config_path,
-        "queue_root": queue_root,
-        "queue_id": entry.queue_id,
-        "admission_token": admission_token,
-    }
-    if include_admission_root:
-        command_kwargs["admission_root"] = admission_root
     return start_background_process_fn(
-        build_worker_child_command_fn(**command_kwargs),
+        build_worker_child_command_fn(
+            config_path=config_path,
+            queue_root=queue_root,
+            queue_id=entry.queue_id,
+            admission_token=admission_token,
+        ),
     )
 
 

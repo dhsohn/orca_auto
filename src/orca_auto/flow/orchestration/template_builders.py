@@ -288,7 +288,6 @@ def _scan_ts_scan_stage(
         template_name="scan_ts_search",
         stage_id="orca_scan_01",
         stage_key="01_scan",
-        stage_root_name="",
         workspace_dir=workspace.workspace_dir,
         input_artifact_kind="input_xyz",
         candidate=candidate,

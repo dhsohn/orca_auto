@@ -1650,7 +1650,12 @@ def test_append_reaction_orca_stages_materializes_under_workflow_orca_stage_root
     payload: dict[str, Any] = {
         "workflow_id": "wf_reaction_local",
         "metadata": {
-            "request": {"parameters": {"max_orca_stages": 1}},
+            "request": {
+                "parameters": {
+                    "max_orca_stages": 1,
+                    "orca_route_line": "! r2scan-3c OptTS Freq TightSCF",
+                }
+            },
             "workspace_dir": str((tmp_path / "wf_reaction_local").resolve()),
         },
         "stages": [
@@ -1698,7 +1703,6 @@ def test_append_reaction_orca_stages_materializes_under_workflow_orca_stage_root
 
     assert created is True
     assert build_calls[0]["workspace_dir"] == (tmp_path / "wf_reaction_local" / "03_orca").resolve()
-    assert build_calls[0]["stage_root_name"] == ""
 
 
 def test_append_crest_orca_stages_materializes_orca_stages_from_completed_crest(
@@ -1716,7 +1720,12 @@ def test_append_crest_orca_stages_materializes_orca_stages_from_completed_crest(
     payload: dict[str, Any] = {
         "workflow_id": "wf_conf_01",
         "metadata": {
-            "request": {"parameters": {"max_orca_stages": 1}},
+            "request": {
+                "parameters": {
+                    "max_orca_stages": 1,
+                    "orca_route_line": "! r2scan-3c Opt TightSCF",
+                }
+            },
             "workspace_dir": str((tmp_path / "wf_conf_01").resolve()),
         },
         "stages": [
@@ -1761,7 +1770,6 @@ def test_append_crest_orca_stages_materializes_orca_stages_from_completed_crest(
 
     assert created is True
     assert build_calls[0]["workspace_dir"] == (tmp_path / "wf_conf_01" / "03_orca").resolve()
-    assert build_calls[0]["stage_root_name"] == ""
     assert payload["stages"][-1]["stage_id"] == "orca_conformer_01"
     assert payload["stages"][-1]["task"]["engine"] == "orca"
 
@@ -1876,7 +1884,14 @@ def test_append_crest_orca_stages_materializes_twenty_orca_children(
     )
     payload: dict[str, Any] = {
         "workflow_id": "wf_conf_20",
-        "metadata": {"request": {"parameters": {"max_orca_stages": 20}}},
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "max_orca_stages": 20,
+                    "orca_route_line": "! r2scan-3c Opt TightSCF",
+                }
+            }
+        },
         "stages": [
             {
                 "stage_id": "crest_stage_01",

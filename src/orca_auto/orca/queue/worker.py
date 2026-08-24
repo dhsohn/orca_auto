@@ -118,10 +118,8 @@ def _start_background_job_process(
     config_path: str,
     queue_root: Path,
     entry: QueueEntry,
-    admission_root: Any,
     admission_token: str,
 ) -> BackgroundRunJobProcess:
-    del admission_root
     log_path = str(worker_log_path(queue_root, queue_entry_id(entry)))
     return start_background_process(
         build_worker_child_command(

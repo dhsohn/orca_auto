@@ -35,7 +35,10 @@ from orca_auto.core.statuses import (
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import WorkflowStageInput
-from orca_auto.flow.contracts.workflow import workflow_request_parameters
+from orca_auto.flow.contracts.workflow import (
+    required_route_line,
+    workflow_request_parameters,
+)
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.support import required_stage_budget
 from orca_auto.flow.orchestration.template_builders import scan_geom_block
@@ -287,10 +290,7 @@ def _append_optts_candidate_stages(
 ) -> None:
     workflow_id = normalize_text(payload.get("workflow_id"))
     reaction_key = normalize_text(payload.get("reaction_key"))
-    route_line = parameters.get(
-        "orca_optts_route_line",
-        "! OptTS Freq r2scan-3c TightSCF",
-    )
+    route_line = required_route_line(parameters, "orca_optts_route_line")
     existing = len(_optts_stages(payload, direction="forward")) + len(
         _optts_stages(payload, direction="reverse")
     )
@@ -320,7 +320,6 @@ def _append_optts_candidate_stages(
             template_name="scan_ts_search",
             stage_id=f"{_OPTTS_STAGE_PREFIX}{stage_number:02d}",
             stage_key=_next_stage_key(payload, "scan_maximum"),
-            stage_root_name="",
             workspace_dir=workspace_dir,
             input_artifact_kind="scan_maximum",
             candidate=candidate,
@@ -371,12 +370,11 @@ def _append_scan_stage(
         template_name="scan_ts_search",
         stage_id=stage_id,
         stage_key=_next_stage_key(payload, stage_kind),
-        stage_root_name="",
         workspace_dir=workspace_dir,
         input_artifact_kind="scan_endpoint",
         candidate=candidate,
         task_kind="relaxed_scan",
-        route_line=parameters.get("orca_route_line", "! Opt r2scan-3c TightSCF"),
+        route_line=required_route_line(parameters, "orca_route_line"),
         charge=strict_int(parameters.get("charge", 0), field="charge"),
         multiplicity=strict_int(parameters.get("multiplicity", 1), field="multiplicity", minimum=1),
         max_cores=int(parameters.get("max_cores", 8) or 8),

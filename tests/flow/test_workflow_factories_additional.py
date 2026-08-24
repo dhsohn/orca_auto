@@ -310,7 +310,6 @@ def test_materialization_rejects_unknown_orca_task_kind_before_workspace_creatio
             template_name="test",
             stage_id="orca_unknown_kind",
             stage_key="unknown_kind",
-            stage_root_name="",
             workspace_dir=workspace,
             input_artifact_kind="unknown",
             candidate=candidate,

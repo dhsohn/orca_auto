@@ -96,7 +96,6 @@ def _materialization_request(
     source_xyz.write_text(_XYZ_2_ATOMS, encoding="utf-8")
     return OrcaStageMaterializationRequest(
         workspace_dir=tmp_path / "workspace",
-        stage_root_name="",
         stage_key="01_ts_guess",
         source_artifact_path=str(source_xyz),
         candidate_kind="ts_guess",
