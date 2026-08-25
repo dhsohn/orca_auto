@@ -11,7 +11,6 @@ from orca_auto.core.queue.engine.input_snapshot import (
     read_stable_regular_file,
     verify_input_snapshots,
 )
-from orca_auto.flow.engines.crest import artifacts as _queue_artifacts
 
 from .job_locations import molecule_key_from_selected_xyz, runtime_roots_for_cfg
 
@@ -46,20 +45,22 @@ def build_execution_context(
     cfg: Any,
     entry: Any,
     *,
-    molecule_key_resolver: Callable[[Any, Path, Path], str],
+    context_deps: Any,
+    molecule_key_resolver: Callable[[Any, Path, Path], str] | None = None,
     verify_execution_snapshot: bool = True,
 ) -> ExecutionContext:
     job_dir = _engine_execution.require_path_within_roots(
-        _engine_execution.entry_metadata_resolved_path(entry, "job_dir"),
+        context_deps.job_dir(entry),
         runtime_roots_for_cfg(cfg),
         label="Queue metadata 'job_dir'",
     )
     selected_xyz = _engine_execution.require_path_within_root(
-        _engine_execution.entry_metadata_resolved_path(entry, "selected_input_xyz"),
+        context_deps.selected_xyz(entry),
         job_dir,
         label="Queue metadata 'selected_input_xyz'",
     )
-    resource_request = _queue_artifacts.entry_resource_request(cfg, entry)
+    resolve_molecule_key = molecule_key_resolver or context_deps.molecule_key
+    resource_request = context_deps.entry_resource_request(cfg, entry)
     snapshot = _engine_execution.entry_metadata_dict(entry, "execution_snapshot")
     if verify_execution_snapshot and snapshot.get("version") != 1:
         raise ValueError("Queue metadata 'execution_snapshot' has an unsupported version")
@@ -69,15 +70,17 @@ def build_execution_context(
         not isinstance(manifest_snapshot, dict) or not isinstance(input_snapshots, dict)
     ):
         raise ValueError("Queue metadata 'execution_snapshot' is incomplete")
+    resolved_mode = context_deps.mode(entry)
+    resolved_molecule_key = resolve_molecule_key(entry, selected_xyz, job_dir)
     if verify_execution_snapshot:
-        assert isinstance(manifest_snapshot, dict)
         assert isinstance(input_snapshots, dict)
         verified_inputs = verify_input_snapshots(job_dir, input_snapshots)
         if verified_inputs.get("selected") != selected_xyz:
             raise ValueError("Queued selected CREST input does not match its immutable snapshot")
         manifest_path = verified_inputs.get("manifest")
         if (
-            manifest_path is None
+            not isinstance(manifest_snapshot, dict)
+            or manifest_path is None
             or str(snapshot.get("manifest_path") or "") != str(manifest_path)
             or read_stable_regular_file(manifest_path, require_single_link=True)
             != json.dumps(
@@ -89,21 +92,14 @@ def build_execution_context(
             ).encode("utf-8")
         ):
             raise ValueError("Queued CREST manifest payload does not match its immutable snapshot")
-    resolved_mode = mode(entry)
-    resolved_molecule_key = molecule_key_resolver(entry, selected_xyz, job_dir)
-    if verify_execution_snapshot and str(snapshot.get("selected_input_xyz") or "") != str(
-        selected_xyz
-    ):
-        raise ValueError("Queued CREST execution snapshot has a mismatched selected input")
-    if verify_execution_snapshot and str(snapshot.get("mode") or "") != resolved_mode:
-        raise ValueError("Queued CREST execution snapshot has a mismatched mode")
-    if (
-        verify_execution_snapshot
-        and str(snapshot.get("molecule_key") or "") != resolved_molecule_key
-    ):
-        raise ValueError("Queued CREST execution snapshot has a mismatched molecule key")
-    if verify_execution_snapshot and snapshot.get("resource_request") != resource_request:
-        raise ValueError("Queued CREST execution snapshot has a mismatched resource request")
+        if str(snapshot.get("selected_input_xyz") or "") != str(selected_xyz):
+            raise ValueError("Queued CREST execution snapshot has a mismatched selected input")
+        if str(snapshot.get("mode") or "") != resolved_mode:
+            raise ValueError("Queued CREST execution snapshot has a mismatched mode")
+        if str(snapshot.get("molecule_key") or "") != resolved_molecule_key:
+            raise ValueError("Queued CREST execution snapshot has a mismatched molecule key")
+        if snapshot.get("resource_request") != resource_request:
+            raise ValueError("Queued CREST execution snapshot has a mismatched resource request")
     return ExecutionContext(
         entry=entry,
         job_dir=job_dir,

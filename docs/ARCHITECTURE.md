@@ -190,10 +190,9 @@ child-process management, terminal side effects, and orphan recovery uniform.
 bundles everything the shared runtime needs for an engine:
 
 - `load_config` — engine config loader
-- `queue_worker_module` — parent-worker entrypoint
 - `queue_functions` — runtime roots, queue operations, entry lookup, and PID-file name
 - `runner_callbacks` — child runner and child-command builder
-- `queue_worker_runner` — optional directly bound parent-worker callable
+- `queue_worker_runner` — directly bound parent-worker callable
 
 `EngineDefinition.build_queue_runtime()` is the canonical bridge from that
 declaration to `EngineQueueRuntime`: it installs the engine's queue functions,

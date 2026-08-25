@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import argparse
 import dataclasses
-import json
 import os
 import signal
 import subprocess
@@ -47,7 +45,6 @@ from orca_auto.core.queue.engine.child import (
     run_engine_worker_child_job,
 )
 from orca_auto.core.queue.engine.input_snapshot import (
-    read_stable_regular_file,
     verify_input_snapshots,
 )
 from orca_auto.core.queue.lifecycle import entry_status_is_running
@@ -59,7 +56,7 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.flow.engines.crest import artifacts as _queue_artifacts
-from orca_auto.flow.engines.crest.job_locations import runtime_roots_for_cfg, upsert_job_record
+from orca_auto.flow.engines.crest.job_locations import upsert_job_record
 from orca_auto.flow.engines.crest.runner import CrestRunResult, finalize_crest_job, start_crest_job
 from orca_auto.flow.engines.crest.state import mark_recovery_pending
 from orca_auto.flow.engines.crest.terminal import (
@@ -85,6 +82,9 @@ from orca_auto.flow.engines.crest.terminal import (
 )
 from orca_auto.flow.engines.crest.worker_context import (
     ExecutionContext,
+)
+from orca_auto.flow.engines.crest.worker_context import (
+    build_execution_context as _build_worker_execution_context,
 )
 from orca_auto.flow.engines.crest.worker_context import (
     mode as _mode,
@@ -397,66 +397,12 @@ def _build_execution_context(
     molecule_key_resolver: Callable[[Any, Path, Path], str] | None = None,
     verify_execution_snapshot: bool = True,
 ) -> ExecutionContext:
-    context_deps = dependencies.context
-    job_dir = _engine_execution.require_path_within_roots(
-        context_deps.job_dir(entry),
-        runtime_roots_for_cfg(cfg),
-        label="Queue metadata 'job_dir'",
-    )
-    selected_xyz = _engine_execution.require_path_within_root(
-        context_deps.selected_xyz(entry),
-        job_dir,
-        label="Queue metadata 'selected_input_xyz'",
-    )
-    resolve_molecule_key = molecule_key_resolver or context_deps.molecule_key
-    resource_request = context_deps.entry_resource_request(cfg, entry)
-    snapshot = _engine_execution.entry_metadata_dict(entry, "execution_snapshot")
-    if verify_execution_snapshot and snapshot.get("version") != 1:
-        raise ValueError("Queue metadata 'execution_snapshot' has an unsupported version")
-    manifest_snapshot = snapshot.get("manifest")
-    input_snapshots = snapshot.get("input_snapshots")
-    if verify_execution_snapshot and (
-        not isinstance(manifest_snapshot, dict) or not isinstance(input_snapshots, dict)
-    ):
-        raise ValueError("Queue metadata 'execution_snapshot' is incomplete")
-    resolved_mode = context_deps.mode(entry)
-    resolved_molecule_key = resolve_molecule_key(entry, selected_xyz, job_dir)
-    if verify_execution_snapshot:
-        assert isinstance(input_snapshots, dict)
-        verified_inputs = verify_input_snapshots(job_dir, input_snapshots)
-        if verified_inputs.get("selected") != selected_xyz:
-            raise ValueError("Queued selected CREST input does not match its immutable snapshot")
-        manifest_path = verified_inputs.get("manifest")
-        if (
-            not isinstance(manifest_snapshot, dict)
-            or manifest_path is None
-            or str(snapshot.get("manifest_path") or "") != str(manifest_path)
-            or read_stable_regular_file(manifest_path, require_single_link=True)
-            != json.dumps(
-                manifest_snapshot,
-                allow_nan=False,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-        ):
-            raise ValueError("Queued CREST manifest payload does not match its immutable snapshot")
-        if str(snapshot.get("selected_input_xyz") or "") != str(selected_xyz):
-            raise ValueError("Queued CREST execution snapshot has a mismatched selected input")
-        if str(snapshot.get("mode") or "") != resolved_mode:
-            raise ValueError("Queued CREST execution snapshot has a mismatched mode")
-        if str(snapshot.get("molecule_key") or "") != resolved_molecule_key:
-            raise ValueError("Queued CREST execution snapshot has a mismatched molecule key")
-        if snapshot.get("resource_request") != resource_request:
-            raise ValueError("Queued CREST execution snapshot has a mismatched resource request")
-    return ExecutionContext(
-        entry=entry,
-        job_dir=job_dir,
-        selected_xyz=selected_xyz,
-        molecule_key=resolved_molecule_key,
-        mode=resolved_mode,
-        resource_request=resource_request,
-        execution_snapshot=snapshot,
+    return _build_worker_execution_context(
+        cfg,
+        entry,
+        context_deps=dependencies.context,
+        molecule_key_resolver=molecule_key_resolver,
+        verify_execution_snapshot=verify_execution_snapshot,
     )
 
 
@@ -833,26 +779,3 @@ def run_worker_child_job(
         mark_recovery_pending_context_fn=_mark_recovery_pending_context,
         process_dequeued_entry_kwargs={"molecule_key_resolver": _molecule_key},
     )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m orca_auto.flow.engines.crest.execution")
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--queue-root", required=True)
-    parser.add_argument("--queue-id", required=True)
-    parser.add_argument("--admission-token", default="")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    return run_worker_child_job(
-        config_path=args.config,
-        queue_root=args.queue_root,
-        queue_id=args.queue_id,
-        admission_token=str(args.admission_token).strip() or None,
-    )
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

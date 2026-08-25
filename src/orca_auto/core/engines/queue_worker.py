@@ -199,10 +199,17 @@ def run_engine_queue_worker(engine: str, argv: list[str]) -> int:
     return definition.queue_worker_main(argv)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=f"python -m {QUEUE_WORKER_MODULE}")
-    parser.add_argument("--engine", required=True)
+def build_engine_queue_worker_parser(prog: str) -> argparse.ArgumentParser:
+    """The argv contract every engine's parent queue worker is invoked with."""
+
+    parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--config", required=True)
+    return parser
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = build_engine_queue_worker_parser(f"python -m {QUEUE_WORKER_MODULE}")
+    parser.add_argument("--engine", required=True)
     return parser
 
 
@@ -217,6 +224,7 @@ __all__ = [
     "EngineQueueWorker",
     "QUEUE_WORKER_MODULE",
     "build_runtime_engine_queue_worker",
+    "build_engine_queue_worker_parser",
     "build_parser",
     "main",
     "run_engine_queue_worker",

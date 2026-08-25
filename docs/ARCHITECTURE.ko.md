@@ -187,10 +187,9 @@ import-linter 계약으로 보호합니다.
 묶는 frozen 데이터클래스 `EngineDefinition`을 정의합니다:
 
 - `load_config` — 엔진 설정 로더
-- `queue_worker_module` — 부모 워커 진입점
 - `queue_functions` — runtime root, 큐 연산, 엔트리 조회, PID 파일 이름
 - `runner_callbacks` — 자식 러너와 자식 명령 빌더
-- `queue_worker_runner` — 선택적으로 직접 바인딩하는 부모 워커 callable
+- `queue_worker_runner` — 직접 바인딩하는 부모 워커 callable
 
 `EngineDefinition.build_queue_runtime()`은 이 선언을 `EngineQueueRuntime`으로
 연결하는 canonical 경계입니다. 엔진의 큐 함수, PID 파일 이름, 정확한 identity

@@ -140,7 +140,6 @@ def build_queue_engine_definition(
     return EngineDefinition(
         engine=engine_id,
         load_config=load_config,
-        queue_worker_module="orca_auto.core.engines.queue_worker",
         queue_functions=EngineQueueFunctions(
             runtime_roots_for_cfg=runtime_roots,
             list_queue=queue_lister,

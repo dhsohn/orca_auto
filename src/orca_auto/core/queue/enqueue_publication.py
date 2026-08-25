@@ -5,8 +5,8 @@ published exactly once, no matter where the publisher crashes. The engines
 (workflow xtb/crest, ORCA) grew separate copies of that
 protocol; this module is the single implementation they converge on. Engine
 differences stay in the :class:`EnqueuePublicationSpec` — commit guards,
-duplicate policy, the publish callback, snapshot-intent finalization, and
-the generation comparator — while the crash-safety state machine lives here.
+duplicate policy, the publish callback, and the generation comparator — while
+the crash-safety state machine lives here.
 
 Protocol invariants:
 
@@ -98,7 +98,6 @@ class EnqueuePublicationSpec:
     duplicate_policy: Callable[..., None] | None = None
     before_commit_fn: Callable[[], Any] | None = None
     after_commit_fn: Callable[[], Any] | None = None
-    finalize_intent: Callable[[QueueEntry], None] | None = None
     on_compensated_failure: Callable[[], None] | None = None
     enqueue_fn: Callable[..., Any] | None = None
     mark_failed_fn: Callable[..., Any] | None = None
@@ -588,35 +587,6 @@ def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationO
             published=False,
             warnings=(warning,),
         )
-
-    if spec.finalize_intent is not None:
-        try:
-            spec.finalize_intent(entry)
-        except BaseException as exc:  # noqa: BLE001
-            _park_repair_pending(
-                spec,
-                entry,
-                expected_token=publication_token,
-                expected_state=QUEUE_RECORD_SYNC_PREPARING,
-            )
-            if not isinstance(exc, Exception):
-                raise
-            warning = (
-                "snapshot intent finalization failed; queue submission succeeded and "
-                f"worker repair will publish the queued record ({exc.__class__.__name__}: {exc})"
-            )
-            logger.warning(
-                "%s: %s: queue_id=%s",
-                spec.label,
-                warning,
-                entry.queue_id,
-                exc_info=True,
-            )
-            return EnqueuePublicationOutcome(
-                entry=entry,
-                published=False,
-                warnings=(warning,),
-            )
 
     return _publish_owned_record(spec, entry, publication_token=publication_token)
 

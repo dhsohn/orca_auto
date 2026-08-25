@@ -1208,27 +1208,28 @@ def _load_state_for_terminal_generation(
     )
 
 
-def record_cancelled_run_state(
+def _record_terminal_run_state(
     job_dir: Path,
     *,
+    status: str,
+    reason: str,
     fallback_job_id: str | None = None,
     selected_inp: str | None = None,
     observed_state: StateGenerationFingerprint | None = None,
     execution_provenance: Mapping[str, Any] | None = None,
 ) -> tuple[str | None, str | None]:
-    """Write a terminal "cancelled" run state for an interrupted run.
+    """Write a terminal run state for a run that never recorded its own outcome.
 
-    A cancelled run is stopped by a signal and never writes its own terminal
+    A run stopped by a signal or an exited child never writes its terminal
     result, so the run state lingers as ``running``. That leaves a stale run
     snapshot in the activity list and starves the terminal notification
-    (which requires ``final_result``). Persist a cancelled outcome here.
+    (which requires ``final_result``). Persist the outcome here instead.
 
     Returns ``(run_id, terminal_status)``: the run_id when known (so the queue
     entry can be matched to this snapshot) and the terminal status now recorded
-    in the run state -- "cancelled" when we wrote it, or a pre-existing terminal
-    status we refused to clobber. When no state exists yet, a minimal cancelled
-    state is created from the queue identity so indexing cannot fall back to
-    ``unknown``.
+    in the run state -- ``status`` when we wrote it, or a pre-existing terminal
+    status we refused to clobber. When no state exists yet, a minimal state is
+    created from the queue identity so indexing cannot fall back to ``unknown``.
     """
     expected_job_id = str(fallback_job_id or "").strip()
     with acquire_run_lock(job_dir):
@@ -1255,7 +1256,7 @@ def record_cancelled_run_state(
                 # A real terminal outcome was already recorded (e.g. the run finished
                 # just before cancellation landed); do not clobber it, and report the
                 # real status so the queue entry is reconciled to what actually
-                # happened instead of being mislabeled "cancelled".
+                # happened instead of being mislabeled with the requested status.
                 finalize_state(
                     job_dir,
                     state,
@@ -1264,15 +1265,36 @@ def record_cancelled_run_state(
                 )
                 write_report_files(job_dir, state)
                 return run_id, existing_status
-        cancelled_result = build_final_result(
-            status=STATUS_CANCELLED,
+        terminal_result = build_final_result(
+            status=status,
             analyzer_status=AnalyzerStatus.INCOMPLETE,
-            reason="cancel_requested",
+            reason=reason,
             last_out_path=last_out_path_from_state(state),
         )
-        finalize_state(job_dir, state, status=STATUS_CANCELLED, final_result=cancelled_result)
+        finalize_state(job_dir, state, status=status, final_result=terminal_result)
         write_report_files(job_dir, state)
-        return run_id, STATUS_CANCELLED
+        return run_id, status
+
+
+def record_cancelled_run_state(
+    job_dir: Path,
+    *,
+    fallback_job_id: str | None = None,
+    selected_inp: str | None = None,
+    observed_state: StateGenerationFingerprint | None = None,
+    execution_provenance: Mapping[str, Any] | None = None,
+) -> tuple[str | None, str | None]:
+    """Record the terminal state a signal-interrupted run never wrote."""
+
+    return _record_terminal_run_state(
+        job_dir,
+        status=STATUS_CANCELLED,
+        reason="cancel_requested",
+        fallback_job_id=fallback_job_id,
+        selected_inp=selected_inp,
+        observed_state=observed_state,
+        execution_provenance=execution_provenance,
+    )
 
 
 def record_failed_run_state(
@@ -1286,45 +1308,15 @@ def record_failed_run_state(
 ) -> tuple[str | None, str | None]:
     """Ensure an exited child has a terminal state for its queue generation."""
 
-    expected_job_id = str(fallback_job_id or "").strip()
-    with acquire_run_lock(job_dir):
-        state = _load_state_for_terminal_generation(
-            job_dir,
-            expected_job_id=expected_job_id,
-            observed_state=observed_state,
-        )
-        if state is None:
-            selected_text = str(selected_inp or "").strip()
-            selected_path = Path(selected_text).expanduser() if selected_text else job_dir / "-"
-            if not selected_path.is_absolute():
-                selected_path = job_dir / selected_path
-            state = new_state(job_dir, selected_path, max_retries=0)
-            if expected_job_id:
-                state["job_id"] = expected_job_id
-        if execution_provenance:
-            state["execution_provenance"] = dict(execution_provenance)
-        run_id = str(state.get("run_id") or "").strip() or None
-        final_result = state.get("final_result")
-        if isinstance(final_result, dict):
-            existing_status = str(final_result.get("status") or "").strip()
-            if existing_status in {STATUS_COMPLETED, STATUS_CANCELLED, STATUS_FAILED}:
-                finalize_state(
-                    job_dir,
-                    state,
-                    status=existing_status,
-                    final_result=final_result,
-                )
-                write_report_files(job_dir, state)
-                return run_id, existing_status
-        failed_result = build_final_result(
-            status=STATUS_FAILED,
-            analyzer_status=AnalyzerStatus.INCOMPLETE,
-            reason=reason,
-            last_out_path=last_out_path_from_state(state),
-        )
-        finalize_state(job_dir, state, status=STATUS_FAILED, final_result=failed_result)
-        write_report_files(job_dir, state)
-        return run_id, STATUS_FAILED
+    return _record_terminal_run_state(
+        job_dir,
+        status=STATUS_FAILED,
+        reason=reason,
+        fallback_job_id=fallback_job_id,
+        selected_inp=selected_inp,
+        observed_state=observed_state,
+        execution_provenance=execution_provenance,
+    )
 
 
 __all__ = [
@@ -1343,6 +1335,7 @@ __all__ = [
     "reaction_generation_key",
     "reconcile_worker_state",
     "record_cancelled_run_state",
+    "record_failed_run_state",
     "get_replay_state",
     "strictly_finish_terminal_replay",
     "terminal_replay_blocks_new_generation",
