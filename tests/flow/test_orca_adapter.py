@@ -1,28 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.flow.adapters.orca import load_orca_artifact_contract
 from tests.engine_artifact_helpers import orca_artifact_payload
-
-
-def _write_json(path: Path, payload: object) -> None:
-    if path.name == "queue.json" and isinstance(payload, list):
-        payload = [
-            {
-                "app_name": "orca_auto_orca",
-                "engine": "orca",
-                "task_kind": "orca_run_inp",
-                **item,
-            }
-            if isinstance(item, dict)
-            else item
-            for item in payload
-        ]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+from tests.flow.artifact_file_helpers import _write_json
 
 
 def test_load_orca_artifact_contract_rejects_root_report_paths_in_both_loaders(
