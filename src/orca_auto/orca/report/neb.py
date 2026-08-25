@@ -35,6 +35,8 @@ from .render import (
     job_meta_html,
     line_chart_svg,
     metric_card,
+    path_marker_point,
+    relative_energy_cycle_chart_svg,
     status_badges,
 )
 from .settings import ReportSetting, match_dotted_setting, settings_table_html
@@ -470,14 +472,6 @@ def _path_peak(points: Sequence[NebPathPoint]) -> NebPathPoint | None:
     return max(points, key=lambda point: point.relative_kcal)
 
 
-def _path_marker(points: Sequence[NebPathPoint], marker: str) -> NebPathPoint | None:
-    marker = marker.upper()
-    for point in points:
-        if point.marker == marker or point.label == marker:
-            return point
-    return None
-
-
 def _path_marker_index(points: Sequence[NebPathPoint], marker: str) -> int | None:
     marker = marker.upper()
     for index, point in enumerate(points):
@@ -526,19 +520,6 @@ def _path_x_ticks(points: Sequence[NebPathPoint]) -> tuple[float, ...]:
     if ticks[-1] != high:
         ticks.append(high)
     return tuple(float(tick) for tick in ticks)
-
-
-def _convergence_chart_svg(steps: Sequence[tuple[int, float]]) -> str:
-    if len(steps) < 2:
-        return ""
-    e_min = min(energy for _cycle, energy in steps)
-    points = tuple((float(cycle), (energy - e_min) * KCAL_PER_HARTREE) for cycle, energy in steps)
-    return line_chart_svg(
-        (ChartSeries(label="", color="#2f6fb2", dash="", points=points),),
-        x_label="TS optimization cycle",
-        y_label="dE / kcal mol⁻¹",
-        x_tick_fmt=".0f",
-    )
 
 
 def _path_chart_svg(data: NebReportData) -> str:
@@ -641,8 +622,8 @@ def _metric_cards(
 ) -> str:
     cards = []
     peak = _path_peak(data.path_points)
-    ci = _path_marker(data.path_points, "CI")
-    ts = _path_marker(data.path_points, "TS")
+    ci = path_marker_point(data.path_points, "CI")
+    ts = path_marker_point(data.path_points, "TS")
     if peak is not None:
         peak_label = f"image {peak.label}"
         if peak.marker:
@@ -771,7 +752,7 @@ def neb_report_component(
     include_frequency_metric: bool = True,
     include_vibrational: bool = True,
 ) -> ReportComponent:
-    ts_chart = _convergence_chart_svg(data.ts_steps) or (
+    ts_chart = relative_energy_cycle_chart_svg(data.ts_steps, x_label="TS optimization cycle") or (
         '<p class="muted">No TS optimization cycles were parsed from the attempt outputs.</p>'
     )
     sections: list[tuple[str, str]] = [

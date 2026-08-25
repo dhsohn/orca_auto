@@ -102,13 +102,13 @@ def test_stage_view_status_pair_ignores_missing_task() -> None:
     assert stage["task"] is None
 
 
-def test_stage_view_status_pair_snapshot_uses_normalizer() -> None:
+def test_stage_view_status_pair_snapshot_normalizes_statuses() -> None:
     stage: dict[str, Any] = {
         "status": " Queued ",
         "task": {"status": " Submitted "},
     }
 
-    status = WorkflowStageView(stage).status_pair_with(lambda value: str(value).strip())
+    status = WorkflowStageView(stage).status_pair()
 
     assert status.stage == "queued"
     assert status.task == "submitted"

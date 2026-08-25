@@ -10,13 +10,12 @@ from orca_auto.core.paths.workflow import (
     validate_workflow_workspace_identity,
     workflow_root_for_workspace,
 )
-from orca_auto.core.statuses import STATUS_CANCELLED
+from orca_auto.core.statuses import STATUS_CANCELLED, WORKFLOW_FAILED_STATUSES
 from orca_auto.core.utils import normalize_text as _normalize_text
 
-from ..contracts.workflow import is_valid_interaction_stage_contract
+from ..contracts.workflow import is_orca_stage_kind, is_valid_interaction_stage_contract
 from ..registry import sync_workflow_registry
 from ..state import load_workflow_payload, workflow_summary, write_workflow_payload
-from ..workflow.status import WORKFLOW_FAILED_STATUSES
 from .settings import _apply_flow_restart_settings, _stage_should_rematerialize
 from .stage_ops import (
     _active_restart_error,
@@ -156,7 +155,7 @@ def _reset_restartable_stages(
         for raw_stage in workflow_stages:
             if not _stage_needs_restart(raw_stage):
                 continue
-            if _normalize_text(raw_stage.get("stage_kind")) == "orca_stage" and not (
+            if is_orca_stage_kind(raw_stage) and not (
                 is_valid_interaction_stage_contract(
                     raw_stage,
                     workflow_stages,

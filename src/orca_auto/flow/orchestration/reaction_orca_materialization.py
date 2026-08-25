@@ -67,7 +67,6 @@ def _completed_or_recoverable_xtb_stages(payload: dict[str, Any]) -> list[dict[s
         if view.status() == "completed"
         or stage_failure_is_recoverable_impl(
             view.raw,
-            normalize_text_fn=normalize_text,
             stage_metadata_fn=workflow_stage_metadata,
         )
     ]

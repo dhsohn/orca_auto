@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import QUEUE_FILE as QUEUE_FILE_NAME
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue.priority import normalize_queue_priority
@@ -28,7 +29,6 @@ from .entries import (
     ACTIVE_STATUSES,
     QUEUE_APP_NAME,
     QUEUE_ENGINE,
-    QUEUE_FILE_NAME,
     QUEUE_TASK_KIND,
     TERMINAL_STATUSES,
     entry_metadata,

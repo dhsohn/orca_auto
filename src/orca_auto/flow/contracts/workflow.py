@@ -79,7 +79,7 @@ def coerce_workflow_plan_payload(value: Any) -> WorkflowPlanPayload:
     return cast(WorkflowPlanPayload, coerce_mapping(value))
 
 
-def workflow_stage_dicts(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def workflow_stage_dicts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     stages = payload.get("stages")
     if not isinstance(stages, list):
         return []
@@ -295,13 +295,19 @@ def is_interaction_role(role: str) -> bool:
     return role.startswith(INTERACTION_ROLE_PREFIX)
 
 
+def is_orca_stage_kind(stage: Mapping[str, Any]) -> bool:
+    """Whether the durable stage-kind discriminator identifies an ORCA stage."""
+
+    return normalize_text(stage.get("stage_kind")).lower() == "orca_stage"
+
+
 def is_exact_orca_stage_contract(stage: Mapping[str, Any]) -> bool:
     """Whether durable stage and task discriminators both identify ORCA."""
 
     task = stage.get("task")
     return bool(
         isinstance(task, Mapping)
-        and normalize_text(stage.get("stage_kind")).lower() == "orca_stage"
+        and is_orca_stage_kind(stage)
         and normalize_text(task.get("engine")).lower() == "orca"
     )
 
@@ -403,6 +409,7 @@ __all__ = [
     "coerce_workflow_plan_payload",
     "is_exact_orca_stage_contract",
     "is_interaction_role",
+    "is_orca_stage_kind",
     "is_supported_orca_stage_contract",
     "is_valid_interaction_stage_contract",
     "required_route_line",

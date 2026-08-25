@@ -778,32 +778,27 @@ def build_materialized_orca_stage(
     geom_block: str = "",
     inhess_source_path: str = "",
 ) -> WorkflowStage:
-    return build_materialized_orca_stage_from_context(
-        OrcaStageBuildContext(
-            workflow_id=workflow_id,
-            template_name=template_name,
-            stage_id=stage_id,
-            stage_key=stage_key,
-            workspace_dir=workspace_dir,
-            input_artifact_kind=input_artifact_kind,
-            candidate=candidate,
-            task_kind=task_kind,
-            route_line=route_line,
-            charge=charge,
-            multiplicity=multiplicity,
-            max_cores=max_cores,
-            max_memory_gb=max_memory_gb,
-            priority=priority,
-            xyz_filename=xyz_filename,
-            inp_filename=inp_filename,
-            input_label=input_label,
-            geom_block=geom_block,
-            inhess_source_path=inhess_source_path,
-        )
+    ctx = OrcaStageBuildContext(
+        workflow_id=workflow_id,
+        template_name=template_name,
+        stage_id=stage_id,
+        stage_key=stage_key,
+        workspace_dir=workspace_dir,
+        input_artifact_kind=input_artifact_kind,
+        candidate=candidate,
+        task_kind=task_kind,
+        route_line=route_line,
+        charge=charge,
+        multiplicity=multiplicity,
+        max_cores=max_cores,
+        max_memory_gb=max_memory_gb,
+        priority=priority,
+        xyz_filename=xyz_filename,
+        inp_filename=inp_filename,
+        input_label=input_label,
+        geom_block=geom_block,
+        inhess_source_path=inhess_source_path,
     )
-
-
-def build_materialized_orca_stage_from_context(ctx: OrcaStageBuildContext) -> WorkflowStage:
     ctx = replace(
         ctx,
         route_line=validate_workflow_orca_route(
@@ -862,7 +857,6 @@ def build_materialized_orca_stage_from_context(ctx: OrcaStageBuildContext) -> Wo
 
 __all__ = [
     "build_materialized_orca_stage",
-    "build_materialized_orca_stage_from_context",
     "build_orca_enqueue_payload",
     "ensure_route_line",
     "materialize_orca_stage_from_request",

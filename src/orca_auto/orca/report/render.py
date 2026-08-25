@@ -10,6 +10,9 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
+
+from ..parser import KCAL_PER_HARTREE
 
 # Molar gas constant R in kcal·mol⁻¹·K⁻¹ (CODATA 8.314462618 J·mol⁻¹·K⁻¹),
 # used for Boltzmann populations: p_i ∝ exp(−ΔG_i / (R·T)).
@@ -150,6 +153,33 @@ def verdict_note(reason: str, fallback_reason: str = "") -> str:
     if note is None:
         return ""
     return f'<p class="verdict">{html.escape(note)}</p>'
+
+
+def path_marker_point(points: Sequence[Any], marker: str) -> Any | None:
+    """First path point whose ``marker`` or ``label`` equals ``marker`` (upper-cased)."""
+    marker = marker.upper()
+    for point in points:
+        if point.marker == marker or point.label == marker:
+            return point
+    return None
+
+
+def relative_energy_cycle_chart_svg(
+    steps: Sequence[tuple[int, float]],
+    *,
+    x_label: str = "optimization cycle",
+) -> str:
+    """Relative-energy-per-cycle line chart shared by the opt/IRC/NEB reports."""
+    if len(steps) < 2:
+        return ""
+    e_min = min(energy for _cycle, energy in steps)
+    points = tuple((float(cycle), (energy - e_min) * KCAL_PER_HARTREE) for cycle, energy in steps)
+    return line_chart_svg(
+        (ChartSeries(label="", color="#2f6fb2", dash="", points=points),),
+        x_label=x_label,
+        y_label="ΔE / kcal mol⁻¹",
+        x_tick_fmt=".0f",
+    )
 
 
 def _chart_ticks(low: float, high: float, count: int) -> list[float]:

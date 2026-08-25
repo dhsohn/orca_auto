@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,27 +25,25 @@ class RestartStageContext:
     restartable_stage_statuses: frozenset[str]
     stale_stage_metadata_keys: frozenset[str]
     stale_task_payload_keys: frozenset[str]
-    coerce_mapping: Callable[[Any], dict[str, Any]] = _coerce_mapping
-    normalize_text: Callable[[Any], str] = _normalize_text
 
     def stage_status(self, stage_view: WorkflowStageView) -> str:
-        return stage_view.status_with(self.normalize_text)
+        return stage_view.status()
 
     def task_status(self, task_view: WorkflowTaskView | None) -> str:
         if task_view is None:
             return ""
-        return task_view.status_with(self.normalize_text)
+        return task_view.status()
 
     def task_engine(self, task_view: WorkflowTaskView | None) -> str:
         if task_view is None:
             return ""
-        return task_view.text_field("engine", self.normalize_text).lower()
+        return task_view.engine()
 
     def task_is_orca(self, task_view: WorkflowTaskView) -> bool:
         engine = self.task_engine(task_view)
         if engine == "orca":
             return True
-        enqueue_payload = self.coerce_mapping(task_view.raw.get("enqueue_payload"))
+        enqueue_payload = _coerce_mapping(task_view.raw.get("enqueue_payload"))
         return is_orca_submitter(enqueue_payload.get("submitter"))
 
 
@@ -78,7 +75,7 @@ def active_stage_rows(
             continue
         rows.append(
             {
-                "stage_id": stage_view.stage_id_with(context.normalize_text),
+                "stage_id": stage_view.stage_id(),
                 "status": stage_status,
                 "task_status": task_status,
                 "engine": context.task_engine(task_view),
@@ -114,9 +111,9 @@ def clear_phase_notification_state(
         return
 
     engines = {
-        context.normalize_text(stage.get("engine")).lower()
+        _normalize_text(stage.get("engine")).lower()
         for stage in restarted_stages
-        if context.normalize_text(stage.get("engine"))
+        if _normalize_text(stage.get("engine"))
     }
     for engine in engines:
         phase_notifications.pop(f"{engine}_summary", None)
@@ -135,10 +132,10 @@ def reset_stage_for_restart(
     engine = context.task_engine(task_view)
 
     previous = {
-        "stage_id": stage_view.stage_id_with(context.normalize_text),
-        "previous_status": stage_view.text_field("status", context.normalize_text),
-        "previous_task_status": task_view.text_field("status", context.normalize_text),
-        "engine": task_view.text_field("engine", context.normalize_text),
+        "stage_id": stage_view.stage_id(),
+        "previous_status": _normalize_text(stage_view.raw.get("status")),
+        "previous_task_status": _normalize_text(task_view.raw.get("status")),
+        "engine": _normalize_text(task_view.raw.get("engine")),
     }
 
     stage_view.set_status_pair(stage_status="planned", task_status="planned")

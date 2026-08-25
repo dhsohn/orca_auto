@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..child.execution import build_queue_entry_lookup as _build_queue_entry_lookup
-from ..child.execution import find_queue_entry_by_id as _find_queue_entry_by_id
 from ..engine.worker_execution import (
     EngineWorkerQueueDependencies,
     EngineWorkerTimingDependencies,
@@ -42,31 +40,6 @@ class WorkerProcessDependencyCallbacks:
     engine_runner_dependencies: Mapping[str, Any]
 
 
-def build_worker_process_dependency_callbacks(
-    *,
-    terminate_process: Callable[..., bool],
-    wait_for_cancellable_process: Callable[..., Any],
-    sleep: Callable[..., Any],
-    now_utc_iso: Callable[..., Any],
-    get_cancel_requested: Callable[..., Any],
-    mark_completed: Callable[..., Any],
-    mark_cancelled: Callable[..., Any],
-    mark_failed: Callable[..., Any],
-    engine_runner_dependencies: Mapping[str, Any],
-) -> WorkerProcessDependencyCallbacks:
-    return WorkerProcessDependencyCallbacks(
-        terminate_process=terminate_process,
-        wait_for_cancellable_process=wait_for_cancellable_process,
-        sleep=sleep,
-        now_utc_iso=now_utc_iso,
-        get_cancel_requested=get_cancel_requested,
-        mark_completed=mark_completed,
-        mark_cancelled=mark_cancelled,
-        mark_failed=mark_failed,
-        engine_runner_dependencies=engine_runner_dependencies,
-    )
-
-
 def worker_process_dependency_callbacks_from_attrs(
     source: Any,
     *,
@@ -80,7 +53,7 @@ def worker_process_dependency_callbacks_from_attrs(
     mark_cancelled_name: str = "mark_cancelled",
     mark_failed_name: str = "mark_failed",
 ) -> WorkerProcessDependencyCallbacks:
-    return build_worker_process_dependency_callbacks(
+    return WorkerProcessDependencyCallbacks(
         terminate_process=getattr(source, terminate_process_name),
         wait_for_cancellable_process=getattr(source, wait_for_cancellable_process_name),
         sleep=getattr(source, sleep_name),
@@ -93,26 +66,6 @@ def worker_process_dependency_callbacks_from_attrs(
             name: getattr(source, name) for name in engine_runner_dependency_names
         },
     )
-
-
-def queue_entry_by_id(
-    queue_root: Path | str,
-    queue_id: str,
-    *,
-    list_queue_fn: Callable[..., Any],
-) -> Any | None:
-    return _find_queue_entry_by_id(
-        queue_root,
-        queue_id,
-        list_queue_fn=list_queue_fn,
-    )
-
-
-def build_queue_entry_lookup(
-    *,
-    list_queue_fn: Callable[[str | Path], Any],
-) -> Callable[[str | Path, str], Any | None]:
-    return _build_queue_entry_lookup(list_queue_fn=list_queue_fn)
 
 
 def build_worker_config_dependencies(
@@ -256,15 +209,12 @@ __all__ = [
     "WorkerAdmissionDependencies",
     "WorkerConfigDependencies",
     "WorkerProcessDependencyCallbacks",
-    "build_queue_entry_lookup",
     "build_worker_admission_dependencies",
     "build_worker_config_dependencies",
     "build_worker_execution_dependencies_from_groups",
     "build_worker_execution_dependency_container",
-    "build_worker_process_dependency_callbacks",
     "build_worker_process_dependency_groups",
     "build_worker_process_default_factories",
     "build_worker_process_default_factories_from_callbacks",
-    "queue_entry_by_id",
     "worker_process_dependency_callbacks_from_attrs",
 ]

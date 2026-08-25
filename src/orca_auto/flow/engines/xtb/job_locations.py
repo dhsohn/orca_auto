@@ -4,9 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.indexing import engines as _engine_locations
-from orca_auto.core.indexing.engine_job_locations import (
-    build_store_backed_engine_job_location_exports,
-)
+from orca_auto.core.indexing.engine_job_locations import EngineJobLocations
 from orca_auto.core.paths.workflow import (
     iter_workflow_runtime_workspaces,
     workflow_stage_dirnames_for_engine,
@@ -29,7 +27,7 @@ def reaction_key_from_job_dir(job_dir: Path) -> str:
     return normalize_key(job_dir.name)
 
 
-_LOCATION_EXPORTS = build_store_backed_engine_job_location_exports(
+_LOCATION_EXPORTS = EngineJobLocations(
     engine="xtb",
     spec=_engine_locations.EngineLocationSpec(
         app_name="orca_auto_xtb",

@@ -14,7 +14,7 @@ from orca_auto.core.paths.workflow import (
 
 from .location import JobLocationRecord
 from .store import list_job_locations, resolve_job_location
-from .text import normalize_index_text as normalize_text
+from .store import normalize_index_text as normalize_text
 
 _KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 

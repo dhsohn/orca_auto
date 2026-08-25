@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.statuses import WORKFLOW_TERMINAL_STATUSES
+
 from ..engine_options import WorkflowEngineOptions
-from ..workflow.status import WORKFLOW_TERMINAL_STATUSES
 from . import _cancel as _activity_cancel
 from . import _clear as _activity_clear
 from . import _list as _activity_list

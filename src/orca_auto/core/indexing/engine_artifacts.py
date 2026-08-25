@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .location import JobLocationRecord
-from .text import normalize_index_text as normalize_text
+from .store import normalize_index_text as normalize_text
 
 
 def resource_mapping(raw: object, *, fallback: dict[str, int] | None = None) -> dict[str, int]:

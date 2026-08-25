@@ -132,25 +132,6 @@ class EngineWorkerExecutionSpec:
     build_outcome: EngineOutcomeBuilder = lambda _context, _result, finalized: finalized
 
 
-def build_engine_worker_execution_spec(
-    *,
-    build_context: EngineContextBuilder,
-    mark_running: EngineMarkRunning,
-    run_job: EngineJobRunner,
-    finalize_entry: EngineEntryFinalizer,
-    shutdown_exception_type: type[BaseException],
-    build_outcome: EngineOutcomeBuilder = lambda _context, _result, finalized: finalized,
-) -> EngineWorkerExecutionSpec:
-    return EngineWorkerExecutionSpec(
-        build_context=build_context,
-        mark_running=mark_running,
-        run_job=run_job,
-        finalize_entry=finalize_entry,
-        shutdown_exception_type=shutdown_exception_type,
-        build_outcome=build_outcome,
-    )
-
-
 def raise_if_shutdown_requested(
     context: Any,
     options: EngineWorkerOptions,
@@ -310,7 +291,6 @@ __all__ = [
     "EngineWorkerOptions",
     "build_engine_worker_process_default_factories",
     "build_engine_worker_process_dependencies",
-    "build_engine_worker_execution_spec",
     "queue_cancel_callback",
     "queue_cancel_requested",
     "raise_if_shutdown_callback_requested",

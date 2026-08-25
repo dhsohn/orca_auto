@@ -16,12 +16,9 @@ from orca_auto.core.utils.process_tracking import (
 logger = logging.getLogger(__name__)
 
 
-LOCK_FILE_NAME = RUN_LOCK_FILE_NAME
-
-
 @contextmanager
 def acquire_run_lock(reaction_dir: Path) -> Iterator[None]:
-    lock_path = reaction_dir / LOCK_FILE_NAME
+    lock_path = reaction_dir / RUN_LOCK_FILE_NAME
     payload = json.dumps(current_process_lock_payload(), ensure_ascii=True)
     try:
         with file_lock(lock_path, timeout_seconds=0.0, payload=payload):

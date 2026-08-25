@@ -145,51 +145,6 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         self._check_cancel_requests_callback(self)
 
 
-def build_engine_queue_worker(
-    cfg: Any,
-    *,
-    config_path: str,
-    engine: str,
-    max_concurrent: int | None,
-    deps: Any,
-    hooks: Any,
-    worker_pid_file_name: str,
-    admission_root: str | Path,
-    after_init: WorkerCallback | None = None,
-    before_run: WorkerCallback | None = None,
-    after_run: WorkerCallback | None = None,
-    keyboard_interrupt: WorkerCallback | None = None,
-    running_queue_id: WorkerCallback | None = None,
-    running_job_factory: WorkerCallback | None = None,
-    finalize_finished_job: WorkerCallback | None = None,
-    finalize_child_exit: WorkerCallback | None = None,
-    reconcile_orphaned_running: WorkerCallback | None = None,
-    check_cancel_requests: WorkerCallback | None = None,
-    reserve_gate: WorkerCallback | None = None,
-) -> EngineQueueWorker:
-    return EngineQueueWorker(
-        cfg,
-        config_path=config_path,
-        engine=engine,
-        max_concurrent=max_concurrent,
-        deps=deps,
-        hooks=hooks,
-        worker_pid_file_name=worker_pid_file_name,
-        admission_root=admission_root,
-        after_init=after_init,
-        before_run=before_run,
-        after_run=after_run,
-        keyboard_interrupt=keyboard_interrupt,
-        running_queue_id=running_queue_id,
-        running_job_factory=running_job_factory,
-        finalize_finished_job=finalize_finished_job,
-        finalize_child_exit=finalize_child_exit,
-        reconcile_orphaned_running=reconcile_orphaned_running,
-        check_cancel_requests=check_cancel_requests,
-        reserve_gate=reserve_gate,
-    )
-
-
 def build_runtime_engine_queue_worker(
     cfg: Any,
     *,
@@ -212,10 +167,9 @@ def build_runtime_engine_queue_worker(
     reconcile_orphaned_running: WorkerCallback | None = None,
     check_cancel_requests: WorkerCallback | None = None,
     reserve_gate: WorkerCallback | None = None,
-    worker_builder: Callable[..., EngineQueueWorker] = build_engine_queue_worker,
 ) -> EngineQueueWorker:
     resolved_config_path = str(config_path or "").strip() or default_config_path()
-    return worker_builder(
+    return EngineQueueWorker(
         cfg,
         config_path=resolved_config_path,
         engine=engine,
@@ -262,7 +216,6 @@ def main(argv: list[str] | None = None) -> int:
 __all__ = [
     "EngineQueueWorker",
     "QUEUE_WORKER_MODULE",
-    "build_engine_queue_worker",
     "build_runtime_engine_queue_worker",
     "build_parser",
     "main",

@@ -60,6 +60,7 @@ from orca_auto.core.utils.persistence import (
 
 from .report import write_job_html_report
 from .report.si import write_si_block
+from .statuses import RunStatus
 from .types import RunFinalResult, RunState
 
 logger = logging.getLogger(__name__)
@@ -461,7 +462,7 @@ def new_state(reaction_dir: Path, selected_inp: Path, max_retries: int) -> RunSt
         "reaction_dir": str(reaction_dir),
         "selected_inp": str(selected_inp),
         "max_retries": int(max_retries),
-        "status": "created",
+        "status": RunStatus.CREATED.value,
         "started_at": ts,
         "updated_at": ts,
         "attempts": [],

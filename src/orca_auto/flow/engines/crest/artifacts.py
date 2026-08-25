@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import CREST_JOB_MANIFEST_FILE
 from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.flow.engines.crest.runner import CrestRunResult
@@ -185,7 +186,7 @@ def build_terminal_result(
         job_dir=job_dir,
         selected_xyz=selected_xyz,
         log_prefix="crest",
-        manifest_filename="crest_job.yaml",
+        manifest_filename=CREST_JOB_MANIFEST_FILE,
         resource_request=resource_request,
         status=status,
         reason=reason,

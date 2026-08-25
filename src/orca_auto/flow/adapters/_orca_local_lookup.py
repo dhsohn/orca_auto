@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import QUEUE_FILE as QUEUE_FILE_NAME
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue.metadata import (
     mapping_metadata as queue_entry_metadata_impl,
@@ -14,8 +15,6 @@ from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.core.utils.persistence import load_json_mapping_list_file
 
 from ._orca_path_helpers import resolve_candidate_path_impl
-
-QUEUE_FILE_NAME = "queue.json"
 
 JsonPayload = dict[str, Any]
 JsonPayloadList = list[JsonPayload]

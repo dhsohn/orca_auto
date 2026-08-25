@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .location import JobLocationRecord
-from .text import normalize_index_text as normalize_text
+from .store import normalize_index_text as normalize_text
 
 
 @dataclass(frozen=True)

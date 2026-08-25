@@ -14,10 +14,10 @@ from orca_auto.core.engines.artifacts import (
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
 )
+from orca_auto.core.queue.execution import coerce_mapping as coerce_dict
 from orca_auto.core.utils import (
     atomic_write_json,
     load_json_mapping_file,
-    mapping_or_empty,
     normalize_text,
     now_utc_iso,
 )
@@ -26,10 +26,6 @@ from orca_auto.core.utils import (
 )
 
 RECOVERY_PENDING_REASONS = frozenset({"worker_shutdown", "crashed_recovery"})
-
-
-def coerce_dict(value: Any) -> dict[str, Any]:
-    return dict(mapping_or_empty(value))
 
 
 def coerce_list(value: Any) -> list[Any]:

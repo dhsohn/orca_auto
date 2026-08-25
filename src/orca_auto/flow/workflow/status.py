@@ -3,29 +3,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from orca_auto.core.statuses import (
-    WORKFLOW_FAILED_STATUSES,
-    WORKFLOW_STATUS_ORDER,
-    WORKFLOW_TERMINAL_STATUSES,
-    is_workflow_terminal_status,
-    normalize_status,
-)
-
-
-def normalize_workflow_status(value: Any) -> str:
-    return normalize_status(value)
-
-
-def workflow_status_is_terminal(value: Any) -> bool:
-    return is_workflow_terminal_status(value)
+from orca_auto.core.statuses import is_workflow_terminal_status, normalize_status
 
 
 def workflow_stage_is_terminal(stage_summary: dict[str, Any]) -> bool:
     stage_status = stage_summary.get("status")
-    task_status = normalize_workflow_status(stage_summary.get("task_status"))
+    task_status = normalize_status(stage_summary.get("task_status"))
     if task_status in {"", "unknown"}:
-        return workflow_status_is_terminal(stage_status)
-    return workflow_status_is_terminal(stage_status) and workflow_status_is_terminal(task_status)
+        return is_workflow_terminal_status(stage_status)
+    return is_workflow_terminal_status(stage_status) and is_workflow_terminal_status(task_status)
 
 
 def select_current_stage(stage_summaries: Iterable[Any]) -> dict[str, Any]:
@@ -40,11 +26,6 @@ def select_current_stage(stage_summaries: Iterable[Any]) -> dict[str, Any]:
 
 
 __all__ = [
-    "WORKFLOW_FAILED_STATUSES",
-    "WORKFLOW_STATUS_ORDER",
-    "WORKFLOW_TERMINAL_STATUSES",
-    "normalize_workflow_status",
     "select_current_stage",
-    "workflow_status_is_terminal",
     "workflow_stage_is_terminal",
 ]

@@ -377,7 +377,6 @@ def _recompute_status(payload: dict) -> str:
 
     return recompute_workflow_status_impl(
         payload,
-        normalize_text_fn=normalize,
         effective_stage_status_fn=effective,
     )
 

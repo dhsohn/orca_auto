@@ -41,31 +41,4 @@ def run_engine_worker_lifecycle(
     return lifecycle.build_outcome(context, result, sync_result)
 
 
-def run_engine_worker_entry(
-    cfg: Any,
-    entry: Any,
-    *,
-    queue_root: Path | None,
-    build_context: Callable[[Any, Any], Any],
-    mark_running: Callable[[Any, Any], None],
-    run_job: Callable[[Any, Any, Path], Any],
-    finalize_entry: Callable[[Any, Any, Any, Path], Any],
-    build_outcome: Callable[[Any, Any, Any], Any],
-    check_shutdown: Callable[[Any], None] | None = None,
-) -> Any:
-    return run_engine_worker_lifecycle(
-        cfg,
-        entry,
-        queue_root=queue_root,
-        lifecycle=EngineWorkerLifecycle(
-            build_context=build_context,
-            mark_running=mark_running,
-            run_job=run_job,
-            finalize_entry=finalize_entry,
-            build_outcome=build_outcome,
-            check_shutdown=check_shutdown,
-        ),
-    )
-
-
-__all__ = ["EngineWorkerLifecycle", "run_engine_worker_entry", "run_engine_worker_lifecycle"]
+__all__ = ["EngineWorkerLifecycle", "run_engine_worker_lifecycle"]

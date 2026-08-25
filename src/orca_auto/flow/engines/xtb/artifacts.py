@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.flow.engines.xtb.runner import XtbRunResult
@@ -190,7 +191,7 @@ def build_terminal_result(
         job_dir=job_dir,
         selected_xyz=selected_xyz,
         log_prefix="xtb",
-        manifest_filename="xtb_job.yaml",
+        manifest_filename=XTB_JOB_MANIFEST_FILE,
         resource_request=resource_request,
         status=status,
         reason=reason,

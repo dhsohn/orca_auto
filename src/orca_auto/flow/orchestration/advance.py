@@ -178,7 +178,7 @@ def advance_workflow(
             workflow_root_path=workflow_root_path,
             services=resolved,
         )
-        sync_only = workflow_sync_only_impl(payload, normalize_text_fn=normalize_text)
+        sync_only = workflow_sync_only_impl(payload)
         context = _AdvanceContext(
             services=resolved,
             workflow_root_path=workflow_root_path,

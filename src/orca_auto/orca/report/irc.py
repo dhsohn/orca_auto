@@ -11,7 +11,7 @@ from typing import Any
 
 from ..completion_rules import IRC_ROUTE_RE
 from ..input_blocks import file_route_lines
-from ..parser import KCAL_PER_HARTREE, OrcaResult, parse_opt_progress, parse_orca_output
+from ..parser import OrcaResult, parse_opt_progress, parse_orca_output
 from ..parser.io import read_orca_text
 from .attempts import (
     AttemptReportRow,
@@ -29,6 +29,8 @@ from .render import (
     job_meta_html,
     line_chart_svg,
     metric_card,
+    path_marker_point,
+    relative_energy_cycle_chart_svg,
     status_badges,
 )
 from .settings import ReportSetting, match_dotted_setting, settings_table_html
@@ -249,7 +251,7 @@ def render_irc_si_block_md(block: IrcSiBlock) -> str:
         f"{block.route_line}{version_note}",
         "IRC validation summary",
     ]
-    ts = _path_marker(block.path_points, "TS")
+    ts = path_marker_point(block.path_points, "TS")
     endpoint_1, endpoint_2 = _path_endpoints(block.path_points)
     if block.path_points:
         lines.append(f"Parsed IRC path points = {len(block.path_points)}")
@@ -523,14 +525,6 @@ def _path_x(point: IrcPathPoint) -> float:
     return float(point.step if point.step is not None else point.order)
 
 
-def _path_marker(points: Sequence[IrcPathPoint], marker: str) -> IrcPathPoint | None:
-    marker = marker.upper()
-    for point in points:
-        if point.marker == marker or point.label == marker:
-            return point
-    return None
-
-
 def _path_endpoints(
     points: Sequence[IrcPathPoint],
 ) -> tuple[IrcPathPoint | None, IrcPathPoint | None]:
@@ -566,7 +560,7 @@ def _path_chart_svg(data: IrcReportData) -> str:
                     points=((_path_x(endpoint), endpoint.relative_kcal),),
                 )
             )
-    ts = _path_marker(data.path_points, "TS")
+    ts = path_marker_point(data.path_points, "TS")
     if ts is not None:
         series.append(
             ChartSeries(
@@ -596,26 +590,10 @@ def _optimization_section_title(data: IrcReportData) -> str:
     )
 
 
-def _optimization_chart_svg(data: IrcReportData) -> str:
-    if len(data.optimization_steps) < 2:
-        return ""
-    e_min = min(energy for _cycle, energy in data.optimization_steps)
-    points = tuple(
-        (float(cycle), (energy - e_min) * KCAL_PER_HARTREE)
-        for cycle, energy in data.optimization_steps
-    )
-    return line_chart_svg(
-        (ChartSeries(label="", color="#2f6fb2", dash="", points=points),),
-        x_label="optimization cycle",
-        y_label="ΔE / kcal mol⁻¹",
-        x_tick_fmt=".0f",
-    )
-
-
 def _optimization_section_html(data: IrcReportData) -> str:
     if not data.optimization_steps:
         return ""
-    chart = _optimization_chart_svg(data)
+    chart = relative_energy_cycle_chart_svg(data.optimization_steps)
     final_cycle, final_energy = data.optimization_steps[-1]
     status = "converged" if data.optimization_converged else "not converged"
     note = (
@@ -667,7 +645,7 @@ def _metric_cards(
         cards.append(
             metric_card("IRC path points", str(len(data.path_points)), "parsed summary rows")
         )
-    ts = _path_marker(data.path_points, "TS")
+    ts = path_marker_point(data.path_points, "TS")
     if ts is not None:
         cards.append(
             metric_card(

@@ -13,7 +13,6 @@ from orca_auto.core.utils import normalize_text as _shared_normalize_text
 
 from ...core.app_ids import ORCA_AUTO_ORCA_APP_NAME
 
-QUEUE_FILE_NAME = "queue.json"
 WORKER_PID_FILE_NAME = "queue_worker.pid"
 QUEUE_APP_NAME = ORCA_AUTO_ORCA_APP_NAME
 QUEUE_ENGINE = "orca"

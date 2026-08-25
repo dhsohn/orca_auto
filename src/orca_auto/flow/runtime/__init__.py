@@ -95,7 +95,6 @@ def _workflow_needs_terminal_sync(workspace_dir: str | Path) -> bool:
         workspace_dir,
         load_workflow_payload_fn=load_workflow_payload,
         workflow_has_active_downstream_fn=workflow_has_active_downstream,
-        normalize_text_fn=_runtime_common.normalize_text,
     )
 
 
@@ -257,7 +256,6 @@ def _start_workflow_cycle(
         return workflow_submission_has_capacity(
             *config_paths,
             submission_admission_has_capacity_fn=submission_has_capacity,
-            normalize_text_fn=_runtime_common.normalize_text,
         )
 
     return start_workflow_cycle(
@@ -282,7 +280,6 @@ def _workflow_advance_deps() -> WorkflowAdvanceDeps:
         workflow_skipped_terminal_result_fn=workflow_skipped_terminal_result,
         workflow_advance_failed_result_fn=workflow_advance_failed_result,
         workflow_advanced_result_fn=workflow_advanced_result,
-        normalize_text_fn=_runtime_common.normalize_text,
     )
 
 

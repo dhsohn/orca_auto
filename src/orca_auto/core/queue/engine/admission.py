@@ -5,41 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..worker import reserve_engine_queue_worker_slot
-
 LOGGER = logging.getLogger(__name__)
-
-
-def reserve_engine_admission_slot(
-    cfg: Any,
-    *,
-    engine: str,
-    reserve_slot_fn: Callable[..., str | None],
-) -> str | None:
-    return reserve_engine_queue_worker_slot(
-        cfg,
-        engine=engine,
-        reserve_slot_fn=reserve_slot_fn,
-    )
-
-
-def start_engine_child_process(
-    *,
-    config_path: str,
-    queue_root: Path,
-    entry: Any,
-    admission_token: str,
-    start_background_process_fn: Callable[[list[str]], Any],
-    build_worker_child_command_fn: Callable[..., list[str]],
-) -> Any:
-    return start_background_process_fn(
-        build_worker_child_command_fn(
-            config_path=config_path,
-            queue_root=queue_root,
-            queue_id=entry.queue_id,
-            admission_token=admission_token,
-        ),
-    )
 
 
 def mark_worker_start_error(
@@ -171,6 +137,4 @@ __all__ = [
     "attach_started_process_metadata",
     "mark_worker_start_error",
     "queue_entry_work_dir",
-    "reserve_engine_admission_slot",
-    "start_engine_child_process",
 ]

@@ -32,12 +32,11 @@ from .definitions import (
     EngineRunnerCallbacks,
 )
 from .identity import entry_matches_engine_identity, own_engine_accept_entry
-from .registry import get_engine_definition, known_engine_ids
+from .registry import get_engine_definition
 
 if TYPE_CHECKING:
     from .queue_worker import EngineQueueWorker
     from .worker_child import (
-        EngineWorkerChild,
         build_worker_child_command,
         build_worker_child_command_for_engine,
         run_engine_worker_child_job,
@@ -45,7 +44,6 @@ if TYPE_CHECKING:
 
 _LAZY_WORKER_CHILD_EXPORTS = frozenset(
     {
-        "EngineWorkerChild",
         "build_worker_child_command",
         "build_worker_child_command_for_engine",
         "run_engine_worker_child_job",
@@ -82,7 +80,6 @@ __all__ = [
     "EngineQueueFunctions",
     "EngineQueueWorker",
     "EngineRunnerCallbacks",
-    "EngineWorkerChild",
     "build_engine_artifact_payload",
     "build_engine_runtime_roots",
     "build_lazy_queue_worker_runner",
@@ -93,7 +90,6 @@ __all__ = [
     "build_worker_child_command_for_engine",
     "entry_matches_engine_identity",
     "get_engine_definition",
-    "known_engine_ids",
     "load_engine_artifact_payload",
     "own_engine_accept_entry",
     "run_engine_worker_child_job",

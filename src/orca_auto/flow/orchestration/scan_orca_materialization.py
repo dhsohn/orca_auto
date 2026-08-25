@@ -38,6 +38,7 @@ from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.contracts.workflow import (
     required_route_line,
     workflow_request_parameters,
+    workflow_stage_dicts,
 )
 from orca_auto.flow.orchestration.charge_spin import strict_int
 from orca_auto.flow.orchestration.support import required_stage_budget
@@ -65,20 +66,13 @@ _MIN_EXTENSION_STEPS = 6
 _EXTENSION_FRACTION = 0.2
 
 
-def _stage_dicts(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    stages = payload.get("stages")
-    if not isinstance(stages, list):
-        return []
-    return [stage for stage in stages if isinstance(stage, dict)]
-
-
 def _next_stage_key(payload: dict[str, Any], kind: str) -> str:
     """Workflow-ordered stage directory name: 01_scan, 02_scan_maximum, ...
 
     scan_ts_search stages live directly under the workspace (no engine root),
     so the key numbering runs across the whole workflow in creation order.
     """
-    return f"{len(_stage_dicts(payload)) + 1:02d}_{kind}"
+    return f"{len(workflow_stage_dicts(payload)) + 1:02d}_{kind}"
 
 
 def _stage_status(stage: dict[str, Any]) -> str:
@@ -112,14 +106,14 @@ def _scan_direction(stage: dict[str, Any]) -> str:
 def _scan_stages(payload: dict[str, Any], *, direction: str) -> list[dict[str, Any]]:
     return [
         stage
-        for stage in _stage_dicts(payload)
+        for stage in workflow_stage_dicts(payload)
         if _task_kind(stage) == "relaxed_scan" and _scan_direction(stage) == direction
     ]
 
 
 def _optts_stages(payload: dict[str, Any], *, direction: str) -> list[dict[str, Any]]:
     stages = []
-    for stage in _stage_dicts(payload):
+    for stage in workflow_stage_dicts(payload):
         if not normalize_text(stage.get("stage_id")).startswith(_OPTTS_STAGE_PREFIX):
             continue
         candidate_direction = ""

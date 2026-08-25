@@ -85,10 +85,6 @@ class RunDirWorkflowConfig:
     def endpoint_pairing(self) -> dict[str, Any]:
         return self.sections.endpoint_pairing
 
-    @property
-    def orca_manifest(self) -> dict[str, Any]:
-        return self.sections.orca
-
 
 @dataclass(frozen=True)
 class _RunDirWorkflowOptionDefaults:

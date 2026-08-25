@@ -1155,7 +1155,6 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceCliDeps | None
 
 
 __all__ = [
-    "SERVICE_UNIT_ORDER",
     "ServiceCliDeps",
     "ServiceUnitStatus",
     "cmd_service_restart",

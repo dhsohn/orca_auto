@@ -12,11 +12,18 @@ from orca_auto.flow.contracts.workflow import (
     INTERACTION_COMPLEX_SP_ROLE,
     INTERACTION_CONFIG_FINGERPRINT_KEY,
     INTERACTION_FRAGMENT_ROLE,
+    is_orca_stage_kind,
     is_supported_orca_stage_contract,
     is_valid_interaction_stage_contract,
     workflow_request_parameters,
+    workflow_stage_dicts,
 )
-from orca_auto.flow.orca_stage_evidence import collect_verified_orca_stage_evidence
+from orca_auto.flow.orca_stage_evidence import (
+    collect_verified_orca_stage_evidence,
+)
+from orca_auto.flow.orca_stage_evidence import (
+    stage_metadata as _stage_metadata,
+)
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.interaction_energy import (
     InteractionEnergyResult,
@@ -50,8 +57,6 @@ from ...manifest import (
 )
 from ..report import (
     _crest_stage_detail,
-    _stage_dicts,
-    _stage_metadata,
     _task_kind,
     _text,
     _xtb_stage_detail,
@@ -931,7 +936,7 @@ def collect_workflow_si_data(
     # contract are pulled out BEFORE any min/ts/sp classification, so arbitrary
     # role metadata cannot hide a primary result from the structures list.
     interaction_raw_stages: list[Mapping[str, Any]] = []
-    stages = _stage_dicts(payload)
+    stages = workflow_stage_dicts(payload)
 
     for stage in stages:
         stage_kind = _text(stage.get("stage_kind"))
@@ -944,7 +949,7 @@ def collect_workflow_si_data(
             _, candidates = _xtb_stage_detail(stage)
             xtb_total = (xtb_total or 0) + candidates
             continue
-        if stage_kind != "orca_stage":
+        if not is_orca_stage_kind(stage):
             continue
         if not is_supported_orca_stage_contract(stage):
             stage_id = _text(stage.get("stage_id"))

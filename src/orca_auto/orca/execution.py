@@ -18,7 +18,7 @@ from orca_auto.core.admission import (
 from orca_auto.core.admission import activate_reserved_slot as _activate_reserved_slot
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.messaging import build_channel
-from orca_auto.core.utils.process_tracking import run_lock_status
+from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, run_lock_status
 
 from .attempt.engine import _exit_with_result, run_attempts
 from .completion_rules import detect_completion_mode
@@ -32,7 +32,7 @@ from .orca_runner import OrcaRunner
 from .out_analyzer import analyze_output
 from .retry_policy import retry_input_path
 from .run_context import RunExecutionContext, resolve_execution_context
-from .runtime.run_lock import LOCK_FILE_NAME, acquire_run_lock
+from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy
 from .state import load_state, save_state
 from .state_machine import RESUMABLE_RUN_STATUSES, load_or_create_state
@@ -247,7 +247,7 @@ def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> st
     status = run_lock_status(
         reaction_dir,
         logger=logger,
-        lock_file_name=LOCK_FILE_NAME,
+        lock_file_name=RUN_LOCK_FILE_NAME,
     )
     if not status.held:
         return None
@@ -256,7 +256,7 @@ def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> st
     started = status.started_at or "unknown"
     return (
         "Another orca_auto instance is already running in this directory "
-        f"({owner}, started_at={started}). Lock file: {reaction_dir / LOCK_FILE_NAME}"
+        f"({owner}, started_at={started}). Lock file: {reaction_dir / RUN_LOCK_FILE_NAME}"
     )
 
 

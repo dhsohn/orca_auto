@@ -12,7 +12,7 @@ from orca_auto.flow._orca_stage_materialization import (
 )
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.orchestration import template_builders
-from orca_auto.flow.orchestration.builders import new_crest_stage_impl
+from orca_auto.flow.orchestration.stage_builders import new_crest_stage_impl
 
 
 def _write_xyz(path: Path, atoms: list[tuple[str, float, float, float]]) -> None:

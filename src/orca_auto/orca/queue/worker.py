@@ -18,7 +18,6 @@ from orca_auto.core.config.schema import resolved_admission_limit
 from orca_auto.core.engine_catalog import get_engine_catalog_entry
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
-    build_engine_queue_worker,
     build_runtime_engine_queue_worker,
 )
 from orca_auto.core.queue.types import QueueEntry
@@ -294,6 +293,5 @@ def QueueWorker(
         reconcile_orphaned_running=replay.reconcile_worker_state,
         check_cancel_requests=_check_orca_cancel_requests,
         reserve_gate=_orca_reserve_gate,
-        worker_builder=build_engine_queue_worker,
     )
     return worker

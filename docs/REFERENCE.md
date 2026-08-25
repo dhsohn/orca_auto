@@ -523,6 +523,7 @@ orca_auto queue list
 orca_auto queue list --engine orca
 orca_auto queue list --status pending
 orca_auto queue list --engine xtb
+orca_auto queue list --limit 20
 ```
 
 `queue list` shows workflow and engine activity in one view, but workflow child simulations
@@ -532,7 +533,8 @@ workflow or job intent such as `ts_search(nci)`, `IRC`, or `NEB`. CREST, xTB,
 and ORCA child jobs are all expanded beneath workflow parents in the default
 combined text view, so every queued workflow simulation and its current status
 are visible together. The `--engine ... --kind job` filters and `--json` expose
-the same jobs. Top-level ORCA jobs remain top-level entries. The
+the same jobs, and `--limit N` caps the listing to the newest `N` activities
+after filtering. Top-level ORCA jobs remain top-level entries. The
 `active_simulations` line counts only the currently running
 simulations that consume the shared `scheduler.max_active_simulations` slots.
 

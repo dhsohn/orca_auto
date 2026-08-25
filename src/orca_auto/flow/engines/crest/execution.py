@@ -37,7 +37,10 @@ from orca_auto.core.queue import (
     mark_failed,
     requeue_running_entry,
 )
-from orca_auto.core.queue.child.execution import install_shutdown_request_handlers
+from orca_auto.core.queue.child.execution import (
+    build_queue_entry_lookup,
+    install_shutdown_request_handlers,
+)
 from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.core.queue.engine.child import (
     WorkerChildRunSpec,
@@ -193,7 +196,7 @@ def build_worker_execution_dependencies_from_groups(
 
 
 def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDependencyCallbacks:
-    return _worker_dependencies.build_worker_process_dependency_callbacks(
+    return _worker_dependencies.WorkerProcessDependencyCallbacks(
         terminate_process=_terminate_process,
         wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
         sleep=time.sleep,
@@ -224,7 +227,7 @@ def _worker_execution_default_factories() -> dict[str, Callable[[], Any]]:
     }
 
 
-_queue_entry_by_id = _worker_dependencies.build_queue_entry_lookup(
+_queue_entry_by_id = build_queue_entry_lookup(
     list_queue_fn=lambda root: list_queue(root),
 )
 
@@ -674,7 +677,7 @@ def _worker_execution_spec(
     molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
 ) -> _engine_execution.EngineWorkerExecutionSpec:
-    return _engine_execution.build_engine_worker_execution_spec(
+    return _engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,
             entry_obj,

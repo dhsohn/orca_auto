@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 from orca_auto.core.engine_runner import executable_identity
 from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
+from orca_auto.orca import run_lock
 from orca_auto.orca import state as state_module
-from orca_auto.orca.runtime import run_lock
-from orca_auto.orca.runtime.run_lock import acquire_run_lock
+from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import (
     atomic_write_text,
     load_report_json,
@@ -154,7 +154,7 @@ class TestState(unittest.TestCase):
             )
 
             with patch(
-                "orca_auto.orca.runtime.run_lock.current_process_lock_payload",
+                "orca_auto.orca.run_lock.current_process_lock_payload",
                 return_value={
                     "pid": os.getpid(),
                     "started_at": "2026-03-22T00:00:00+00:00",
@@ -646,7 +646,7 @@ class TestState(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
             with acquire_run_lock(reaction):
-                lock_path = reaction / run_lock.LOCK_FILE_NAME
+                lock_path = reaction / run_lock.RUN_LOCK_FILE_NAME
                 self.assertTrue(lock_path.exists())
             with acquire_run_lock(reaction):
                 self.assertTrue(lock_path.exists())
