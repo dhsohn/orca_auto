@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from orca_auto.core.statuses import is_workflow_terminal_status, normalize_status
 from orca_auto.flow.workflow import status as workflow_status
 
 
 def test_workflow_status_helpers_cover_terminal_attention_and_current_stage_selection() -> None:
-    assert workflow_status.normalize_workflow_status(None) == ""
-    assert workflow_status.workflow_status_is_terminal("cancel_failed") is True
+    assert normalize_status(None) == ""
+    assert is_workflow_terminal_status("cancel_failed") is True
     assert (
         workflow_status.workflow_stage_is_terminal(
             {"status": "submission_failed", "task_status": "submission_failed"}

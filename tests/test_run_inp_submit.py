@@ -12,7 +12,7 @@ from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_in
 from orca_auto.orca.commands.run_inp import cmd_run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
-from orca_auto.orca.runtime.run_lock import acquire_run_lock
+from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.submission import submit_reaction_dir_to_queue
 
 

@@ -8,6 +8,7 @@ from typing import Any
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 
 from ..engine_options import WorkflowEngineOptions
+from . import _common as _runtime_common
 from . import models as runtime_models
 
 WorkflowAdvanceResult = runtime_models.WorkflowAdvanceResult
@@ -29,7 +30,6 @@ class WorkflowAdvanceDeps:
     workflow_skipped_terminal_result_fn: Callable[..., WorkflowAdvanceResult]
     workflow_advance_failed_result_fn: Callable[..., WorkflowAdvanceResult]
     workflow_advanced_result_fn: Callable[..., WorkflowAdvanceResult]
-    normalize_text_fn: Callable[[Any], str]
 
 
 @dataclass(frozen=True)
@@ -54,8 +54,8 @@ def _workspace_matches_registry_record(
         payload = deps.load_workflow_payload_fn(workspace_dir)
     except (FileNotFoundError, ValueError, OSError, TypeError):
         return False
-    persisted_raw_id = deps.normalize_text_fn(payload.get("workflow_id"))
-    record_id = deps.normalize_text_fn(record.workflow_id)
+    persisted_raw_id = _runtime_common.normalize_text(payload.get("workflow_id"))
+    record_id = _runtime_common.normalize_text(record.workflow_id)
     try:
         persisted_id = validate_workflow_workspace_identity(
             Path(workspace_dir),
@@ -73,14 +73,18 @@ def _workspace_matches_registry_record(
             return False
         cached_quarantine = isinstance(record_metadata, dict) and bool(
             record_metadata.get("identity_quarantined")
-            or deps.normalize_text_fn(record_metadata.get("quarantined_persisted_workflow_id"))
+            or _runtime_common.normalize_text(
+                record_metadata.get("quarantined_persisted_workflow_id")
+            )
         )
         quarantine_match = bool(
-            deps.normalize_text_fn(payload.get("status")).lower() == "failed"
+            _runtime_common.normalize_text(payload.get("status")).lower() == "failed"
             and isinstance(workflow_error, dict)
             and workflow_error.get("scope") == "workflow_identity_validation"
             and cached_quarantine
-            and deps.normalize_text_fn(record_metadata.get("quarantined_persisted_workflow_id"))
+            and _runtime_common.normalize_text(
+                record_metadata.get("quarantined_persisted_workflow_id")
+            )
             == persisted_raw_id
         )
         return workspace_name == record_id and quarantine_match
@@ -178,7 +182,7 @@ def advanced_workflow_outcome(
     terminal_sync: bool,
     deps: WorkflowAdvanceDeps,
 ) -> WorkflowAdvanceOutcome:
-    status = deps.normalize_text_fn(payload.get("status")).lower()
+    status = _runtime_common.normalize_text(payload.get("status")).lower()
     current_summary = deps.safe_workflow_summary_fn(workspace_dir, payload=payload)
     reason = "terminal_child_sync" if terminal_sync else ""
     deps.append_workflow_advanced_events_fn(
@@ -191,7 +195,6 @@ def advanced_workflow_outcome(
         worker_session_id=cycle.session_id,
         reason=reason,
         append_workflow_journal_event_fn=deps.append_workflow_journal_event_fn,
-        normalize_text_fn=deps.normalize_text_fn,
     )
     return WorkflowAdvanceOutcome(
         "advanced",
@@ -201,7 +204,6 @@ def advanced_workflow_outcome(
             previous_status=previous_status,
             status=status,
             reason=reason,
-            normalize_text_fn=deps.normalize_text_fn,
         ),
     )
 
@@ -213,7 +215,7 @@ def advance_workflow_record_outcome(
     options: WorkflowEngineOptions,
     deps: WorkflowAdvanceDeps,
 ) -> WorkflowAdvanceOutcome:
-    previous_status = deps.normalize_text_fn(record.status).lower()
+    previous_status = _runtime_common.normalize_text(record.status).lower()
     location = _workflow_record_location(cycle, record, deps=deps)
     terminal_sync = deps.workflow_needs_terminal_child_sync_fn(
         record,

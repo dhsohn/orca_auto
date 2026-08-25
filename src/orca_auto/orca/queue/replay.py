@@ -43,7 +43,7 @@ from ..attempt.reporting import build_final_result, last_out_path_from_state
 from ..config import AppConfig
 from ..engine import ENGINE_RUNTIME
 from ..execution_binding import orca_execution_provenance
-from ..runtime.run_lock import acquire_run_lock
+from ..run_lock import acquire_run_lock
 from ..state import (
     finalize_state,
     load_state,

@@ -18,23 +18,9 @@ from typing import Any
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE
 from orca_auto.core.engine_process import atomic_write_confined_bytes
 
-from .composer import collect_html_report_parts, compose_job_report_html
-from .frequencies import FrequencyAnalysis, parse_frequency_analysis
-from .irc import (
-    IrcReportData,
-    collect_irc_report_data,
-    input_uses_irc,
-)
-from .neb import NebReportData, collect_neb_report_data
-from .opt import OptReportData, collect_opt_report_data
-from .scants import ScantsReportData, collect_scants_report_data
-from .sp import SpReportData, collect_sp_report_data
+from .composer import compose_job_report_html
 
 logger = logging.getLogger(__name__)
-
-
-def _render_job_report(reaction_dir: Path, state: Mapping[str, Any]) -> str | None:
-    return compose_job_report_html(reaction_dir, state)
 
 
 def write_job_html_report(
@@ -53,7 +39,7 @@ def write_job_html_report(
     """
     path = generation_target[0] / RUN_REPORT_HTML_FILE
     try:
-        rendered = _render_job_report(reaction_dir, state)
+        rendered = compose_job_report_html(reaction_dir, state)
         if rendered is None:
             path.unlink(missing_ok=True)
             return None
@@ -71,21 +57,4 @@ def write_job_html_report(
         return None
 
 
-__all__ = [
-    "FrequencyAnalysis",
-    "IrcReportData",
-    "NebReportData",
-    "OptReportData",
-    "ScantsReportData",
-    "SpReportData",
-    "collect_html_report_parts",
-    "collect_irc_report_data",
-    "collect_neb_report_data",
-    "collect_opt_report_data",
-    "collect_scants_report_data",
-    "collect_sp_report_data",
-    "compose_job_report_html",
-    "input_uses_irc",
-    "parse_frequency_analysis",
-    "write_job_html_report",
-]
+__all__ = ["write_job_html_report"]

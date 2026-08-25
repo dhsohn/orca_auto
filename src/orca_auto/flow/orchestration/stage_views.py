@@ -59,9 +59,6 @@ class WorkflowTaskView(
     def resource_request(self) -> dict[str, Any]:
         return _mapping_field(self.raw, "resource_request")
 
-    def text_field(self, key: str, normalize_text: Callable[[Any], str]) -> str:
-        return normalize_text(self.raw.get(key))
-
     def engine(self) -> str:
         return normalize_text(self.raw.get("engine")).lower()
 
@@ -70,9 +67,6 @@ class WorkflowTaskView(
 
     def status(self) -> str:
         return normalize_text(self.raw.get("status")).lower()
-
-    def status_with(self, normalize_text: Callable[[Any], str]) -> str:
-        return self.text_field("status", normalize_text).lower()
 
     def set_status(self, status: str) -> None:
         self.raw["status"] = status
@@ -180,30 +174,14 @@ class WorkflowStageView(
     def existing_metadata(self) -> dict[str, Any] | None:
         return _existing_mapping_field(self.raw, "metadata")
 
-    def text_field(self, key: str, normalize_text: Callable[[Any], str]) -> str:
-        return normalize_text(self.raw.get(key))
-
     def stage_id(self) -> str:
         return normalize_text(self.raw.get("stage_id"))
-
-    def stage_id_with(self, normalize_text: Callable[[Any], str]) -> str:
-        return self.text_field("stage_id", normalize_text)
 
     def status(self) -> str:
         return normalize_text(self.raw.get("status")).lower()
 
-    def status_with(self, normalize_text: Callable[[Any], str]) -> str:
-        return self.text_field("status", normalize_text).lower()
-
     def status_pair(self) -> WorkflowStageStatus:
         return WorkflowStageStatus(stage=self.status(), task=self.task_status())
-
-    def status_pair_with(self, normalize_text: Callable[[Any], str]) -> WorkflowStageStatus:
-        task = self.existing_task
-        return WorkflowStageStatus(
-            stage=self.status_with(normalize_text),
-            task=task.status_with(normalize_text) if task is not None else "",
-        )
 
     def set_status(self, status: str) -> None:
         self.raw["status"] = status

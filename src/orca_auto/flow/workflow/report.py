@@ -28,13 +28,27 @@ from orca_auto.core.artifacts import (
     WORKFLOW_REPORT_HTML_FILE,
 )
 from orca_auto.core.engine_process import read_confined_text
+from orca_auto.core.utils import mapping_or_empty as _mapping
 from orca_auto.core.utils.persistence import atomic_write_text
 from orca_auto.flow.conformer_selection import OrcaSelectedInputScienceIdentity
-from orca_auto.flow.contracts.workflow import is_supported_orca_stage_contract
+from orca_auto.flow.contracts.workflow import (
+    is_orca_stage_kind,
+    is_supported_orca_stage_contract,
+    workflow_stage_dicts,
+)
 from orca_auto.flow.orca_stage_evidence import (
     collect_verified_orca_stage_evidence,
     resolve_verified_orca_stage_report,
     stage_report_identity_matches,
+)
+from orca_auto.flow.orca_stage_evidence import (
+    stage_job_dirs as _stage_job_dirs,
+)
+from orca_auto.flow.orca_stage_evidence import (
+    stage_metadata as _stage_metadata,
+)
+from orca_auto.flow.orca_stage_evidence import (
+    stage_task as _stage_task,
 )
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.parser.patterns import (
@@ -130,28 +144,6 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _stage_dicts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
-    stages = payload.get("stages")
-    if not isinstance(stages, list):
-        return []
-    return [stage for stage in stages if isinstance(stage, dict)]
-
-
-def _stage_metadata(stage: Mapping[str, Any]) -> dict[str, Any]:
-    metadata = stage.get("metadata")
-    return metadata if isinstance(metadata, dict) else {}
-
-
-def _stage_task(stage: Mapping[str, Any]) -> dict[str, Any]:
-    task = stage.get("task")
-    return task if isinstance(task, dict) else {}
-
-
-def _stage_task_payload(stage: Mapping[str, Any]) -> dict[str, Any]:
-    payload = _stage_task(stage).get("payload")
-    return payload if isinstance(payload, dict) else {}
-
-
 def _stage_has_diagnostic_status(stage: Mapping[str, Any]) -> bool:
     return (
         _text(stage.get("status")).lower() in _DIAGNOSTIC_STAGE_STATUSES
@@ -175,14 +167,6 @@ def _stage_artifacts(stage: Mapping[str, Any], kind: str) -> list[dict[str, Any]
         for artifact in artifacts
         if isinstance(artifact, dict) and _text(artifact.get("kind")) == kind
     ]
-
-
-def _stage_artifact_path(stage: Mapping[str, Any], kind: str) -> Path | None:
-    for artifact in _stage_artifacts(stage, kind):
-        path_text = _text(artifact.get("path"))
-        if path_text:
-            return Path(path_text)
-    return None
 
 
 def count_xyz_frames(path: Path) -> int | None:
@@ -292,24 +276,8 @@ def _load_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _stage_job_dirs(stage: Mapping[str, Any]) -> tuple[Path, ...]:
-    metadata = _stage_metadata(stage)
-    task_payload = _stage_task_payload(stage)
-    paths: list[Path] = []
-    seen: set[str] = set()
-    for value in (
-        metadata.get("latest_known_path"),
-        task_payload.get("job_dir"),
-        task_payload.get("reaction_dir"),
-    ):
-        path_text = _text(value)
-        if path_text and path_text not in seen:
-            paths.append(Path(path_text))
-            seen.add(path_text)
-    return tuple(paths)
-
-
 def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, Any] | None]:
+    """Resolve the canonical verified report for one workflow stage."""
     task_engine = _text(_stage_task(stage).get("engine")).lower()
     internal_engine = _INTERNAL_STAGE_ENGINES.get(_text(stage.get("stage_kind")).lower())
     if internal_engine is not None:
@@ -332,17 +300,6 @@ def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, 
     if task_engine in _INTERNAL_STAGE_ENGINES.values():
         return None, None
     return resolve_verified_orca_stage_report(stage)
-
-
-def _resolve_orca_stage_report(
-    stage: Mapping[str, Any],
-) -> tuple[Path | None, dict[str, Any] | None]:
-    """Resolve the canonical verified report for one ORCA workflow stage."""
-    return _stage_job_report(stage)
-
-
-def _mapping(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
 
 
 def _stage_status_reason(stage: Mapping[str, Any], report: Mapping[str, Any] | None) -> str:
@@ -431,8 +388,6 @@ def _stage_diagnostic(
 ) -> tuple[str, str, str | None]:
     if not include_job_artifacts:
         report_path, report = None, None
-    elif _text(stage.get("stage_kind")) == "orca_stage":
-        report_path, report = _resolve_orca_stage_report(stage)
     else:
         report_path, report = _stage_job_report(stage)
     reason = _stage_status_reason(stage, report)
@@ -666,7 +621,7 @@ def _orca_stage_result(
     reason = ""
     attempt_count = 0
     imaginary_count: int | None = None
-    report_json_path, report_payload = _resolve_orca_stage_report(stage)
+    report_json_path, report_payload = _stage_job_report(stage)
     if report_payload is not None:
         engine_payload = report_payload.get("engine_payload")
         engine_payload = engine_payload if isinstance(engine_payload, dict) else {}
@@ -803,7 +758,7 @@ def collect_workflow_report_data(
     consumed_orca_machine_paths: list[Path] = []
     crest_total: int | None = None
     xtb_total: int | None = None
-    for stage in _stage_dicts(payload):
+    for stage in workflow_stage_dicts(payload):
         stage_kind = _text(stage.get("stage_kind"))
         stage_status = _text(stage.get("status")).lower()
         task = _stage_task(stage)
@@ -823,7 +778,7 @@ def collect_workflow_report_data(
         elif stage_kind == "xtb_stage":
             detail, candidates = _xtb_stage_detail(stage)
             xtb_total = (xtb_total or 0) + candidates
-        elif stage_kind == "orca_stage":
+        elif is_orca_stage_kind(stage):
             if is_supported_orca_stage_contract(stage):
                 task_kind = _task_kind(stage)
                 candidate_task = task_kind in {"opt", "optts_freq"}

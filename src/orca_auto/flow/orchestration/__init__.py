@@ -6,7 +6,6 @@ from typing import Any
 from orca_auto.core.queue.generation import new_visible_generation_name
 from orca_auto.core.utils import normalize_text, now_utc_iso
 from orca_auto.flow.registry import sync_workflow_registry
-from orca_auto.flow.state import write_workflow_payload
 from orca_auto.flow.templates import (
     DEFAULT_CONFORMER_ORCA_ROUTE_LINE,
     DEFAULT_REACTION_TS_ORCA_ROUTE_LINE,
@@ -33,20 +32,16 @@ from .requests import (
     ReactionTsSearchWorkflowRequest,
     ScanTsSearchWorkflowRequest,
 )
-from .stage_builders import new_crest_stage_impl
-from .workflow_builders import _copy_input_impl
 
 
 def _workflow_factory_deps() -> WorkflowFactoryDeps:
+    # These three read this module's globals at call time so tests can inject
+    # deterministic ids, timestamps and registry syncs by patching this module.
     return WorkflowFactoryDeps(
         normalize_text=normalize_text,
         workflow_id_factory=new_visible_generation_name,
-        copy_input_fn=_copy_input_impl,
         now_utc_iso_fn=now_utc_iso,
-        new_crest_stage_fn=new_crest_stage_impl,
-        write_workflow_payload_fn=write_workflow_payload,
         sync_workflow_registry_fn=sync_workflow_registry,
-        load_xyz_atom_sequence_fn=load_xyz_atom_sequence,
     )
 
 

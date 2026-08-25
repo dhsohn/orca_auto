@@ -5,13 +5,17 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from ..utils.coercion import normalize_text
 from ..utils.lock import file_lock
 from ..utils.persistence import atomic_write_json, coerce_int, resolve_root_path
 from .location import JobLocationRecord
-from .text import normalize_index_text as _normalize_text
 
 JOB_LOCATION_INDEX_FILE_NAME = "job_locations.json"
 JOB_LOCATION_INDEX_LOCK_NAME = "job_locations.lock"
+
+
+def normalize_index_text(value: Any) -> str:
+    return normalize_text(value, none="None")
 
 
 class JobLocationIndexError(RuntimeError):
@@ -49,14 +53,14 @@ def _normalize_resource_payload(raw: Any) -> dict[str, int]:
 
 def _record_from_dict(raw: dict[str, Any]) -> JobLocationRecord:
     return JobLocationRecord(
-        job_id=_normalize_text(raw.get("job_id", "")),
-        app_name=_normalize_text(raw.get("app_name", "")),
-        job_type=_normalize_text(raw.get("job_type", "")),
-        status=_normalize_text(raw.get("status", "")),
-        original_run_dir=_normalize_text(raw.get("original_run_dir", "")),
-        molecule_key=_normalize_text(raw.get("molecule_key", "")),
-        selected_input_xyz=_normalize_text(raw.get("selected_input_xyz", "")),
-        latest_known_path=_normalize_text(raw.get("latest_known_path", "")),
+        job_id=normalize_index_text(raw.get("job_id", "")),
+        app_name=normalize_index_text(raw.get("app_name", "")),
+        job_type=normalize_index_text(raw.get("job_type", "")),
+        status=normalize_index_text(raw.get("status", "")),
+        original_run_dir=normalize_index_text(raw.get("original_run_dir", "")),
+        molecule_key=normalize_index_text(raw.get("molecule_key", "")),
+        selected_input_xyz=normalize_index_text(raw.get("selected_input_xyz", "")),
+        latest_known_path=normalize_index_text(raw.get("latest_known_path", "")),
         resource_request=_normalize_resource_payload(raw.get("resource_request")),
         resource_actual=_normalize_resource_payload(raw.get("resource_actual")),
     )
@@ -91,7 +95,7 @@ def _save_records(root: Path, records: list[JobLocationRecord]) -> None:
 
 
 def _resolve_candidate_path(path_text: str) -> Path | None:
-    raw = _normalize_text(path_text)
+    raw = normalize_index_text(path_text)
     if not raw:
         return None
     try:
@@ -120,7 +124,7 @@ def list_job_locations(root: str | Path) -> list[JobLocationRecord]:
 
 
 def get_job_location(root: str | Path, job_id: str) -> JobLocationRecord | None:
-    target = _normalize_text(job_id)
+    target = normalize_index_text(job_id)
     if not target:
         return None
     resolved_root = resolve_root_path(root)
@@ -136,14 +140,14 @@ def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocat
     with file_lock(_lock_path(resolved_root)):
         records = _load_records(resolved_root)
         replacement = JobLocationRecord(
-            job_id=_normalize_text(record.job_id),
-            app_name=_normalize_text(record.app_name),
-            job_type=_normalize_text(record.job_type),
-            status=_normalize_text(record.status),
-            original_run_dir=_normalize_text(record.original_run_dir),
-            molecule_key=_normalize_text(record.molecule_key),
-            selected_input_xyz=_normalize_text(record.selected_input_xyz),
-            latest_known_path=_normalize_text(record.latest_known_path),
+            job_id=normalize_index_text(record.job_id),
+            app_name=normalize_index_text(record.app_name),
+            job_type=normalize_index_text(record.job_type),
+            status=normalize_index_text(record.status),
+            original_run_dir=normalize_index_text(record.original_run_dir),
+            molecule_key=normalize_index_text(record.molecule_key),
+            selected_input_xyz=normalize_index_text(record.selected_input_xyz),
+            latest_known_path=normalize_index_text(record.latest_known_path),
             resource_request=_normalize_resource_payload(record.resource_request),
             resource_actual=_normalize_resource_payload(record.resource_actual),
         )
@@ -162,7 +166,7 @@ def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocat
 
 
 def resolve_job_location(root: str | Path, lookup_target: str) -> JobLocationRecord | None:
-    target = _normalize_text(lookup_target)
+    target = normalize_index_text(lookup_target)
     if not target:
         return None
 

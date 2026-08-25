@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..input_blocks import file_route_lines
-from ..parser import KCAL_PER_HARTREE, OptProgress, parse_opt_progress
+from ..parser import OptProgress, parse_opt_progress
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
@@ -20,11 +20,10 @@ from .attempts import (
 )
 from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
 from .render import (
-    ChartSeries,
     ReportComponent,
     job_meta_html,
-    line_chart_svg,
     metric_card,
+    relative_energy_cycle_chart_svg,
     status_badges,
 )
 
@@ -135,22 +134,6 @@ def collect_opt_report_data(
     )
 
 
-def _convergence_chart_svg(data: OptReportData) -> str:
-    if len(data.steps) < 2:
-        return ""
-    e_min = min(energy for _cycle, energy in data.steps)
-    points = tuple(
-        (float(cycle), (energy - e_min) * KCAL_PER_HARTREE) for cycle, energy in data.steps
-    )
-    series = (ChartSeries(label="", color="#2f6fb2", dash="", points=points),)
-    return line_chart_svg(
-        series,
-        x_label="optimization cycle",
-        y_label="ΔE / kcal mol⁻¹",
-        x_tick_fmt=".0f",
-    )
-
-
 def _imaginary_note(data: OptReportData) -> str:
     if data.imaginary_count is None:
         return ""
@@ -228,7 +211,7 @@ def opt_report_component(
     include_frequency_metric: bool = True,
     include_vibrational: bool = True,
 ) -> ReportComponent:
-    chart = _convergence_chart_svg(data) or (
+    chart = relative_energy_cycle_chart_svg(data.steps) or (
         '<p class="muted">No optimization cycles were parsed from the attempt outputs.</p>'
     )
     section_title = (

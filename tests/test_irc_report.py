@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.report import collect_irc_report_data, write_job_html_report
-from orca_auto.orca.report.irc import parse_irc_output
+from orca_auto.orca.report import write_job_html_report
+from orca_auto.orca.report.irc import collect_irc_report_data, parse_irc_output
 from orca_auto.orca.state import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 

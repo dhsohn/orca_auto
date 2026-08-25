@@ -3,31 +3,9 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 WORKER_CHILD_MODULE = "orca_auto.core.engines.worker_child"
-
-
-@dataclass(frozen=True)
-class EngineWorkerChild:
-    engine: str
-
-    def run(
-        self,
-        *,
-        config_path: str,
-        queue_root: str | Path,
-        queue_id: str,
-        admission_token: str | None = None,
-    ) -> int:
-        return run_engine_worker_child_job(
-            engine=self.engine,
-            config_path=config_path,
-            queue_root=queue_root,
-            queue_id=queue_id,
-            admission_token=admission_token,
-        )
 
 
 def build_worker_child_command(
@@ -118,7 +96,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = [
-    "EngineWorkerChild",
     "WORKER_CHILD_MODULE",
     "build_parser",
     "build_worker_child_command",

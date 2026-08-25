@@ -13,13 +13,14 @@ from unittest.mock import MagicMock, patch
 from orca_auto import cli as unified_cli
 from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.core.admission import reserve_slot
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as CONFIG_ENV_VAR
+from orca_auto.core.config.engines import default_shared_config_path as default_config_path
 from orca_auto.orca.cli_logging import (
     configure_logging as _configure_logging,
 )
 from orca_auto.orca.cli_logging import (
     remove_managed_handlers as _remove_managed_handlers,
 )
-from orca_auto.orca.commands._helpers import CONFIG_ENV_VAR, default_config_path
 from orca_auto.orca.execution import (
     _emit,
     execute_orca_run,
@@ -28,7 +29,7 @@ from orca_auto.orca.execution import (
     select_latest_inp,
 )
 from orca_auto.orca.orca_runner import RunResult, WorkerShutdownInterrupt
-from orca_auto.orca.runtime.run_lock import acquire_run_lock
+from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import load_state, save_state, state_path
 from orca_auto.orca.types import RunFinalResult, RunState
 

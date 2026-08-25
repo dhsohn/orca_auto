@@ -1,3 +1,1 @@
-from orca_auto import __version__
-
-__all__ = ["__version__"]
+"""xTB internal workflow engine."""

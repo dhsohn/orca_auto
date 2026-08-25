@@ -22,7 +22,6 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
-    build_engine_queue_worker,
     build_runtime_engine_queue_worker,
 )
 from orca_auto.core.notifications.engines import (
@@ -510,7 +509,6 @@ def QueueWorker(
         after_init=_after_crest_worker_init,
         finalize_child_exit=_finalize_child_exit,
         reconcile_orphaned_running=_reconcile_orphaned_running,
-        worker_builder=build_engine_queue_worker,
     )
 
 

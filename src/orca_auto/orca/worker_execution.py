@@ -69,7 +69,7 @@ from .queue.adapter import (
     update_metadata,
 )
 from .resource_directives import prepare_submission_resource_request
-from .runtime.run_lock import acquire_run_lock
+from .run_lock import acquire_run_lock
 from .state import finalize_state, load_state
 from .statuses import AnalyzerStatus
 from .submission import mark_orca_snapshot_owned
@@ -553,7 +553,7 @@ def _worker_execution_spec(
     worker_config_path: str,
     admission_token: str | None,
 ) -> _engine_execution.EngineWorkerExecutionSpec:
-    return _engine_execution.build_engine_worker_execution_spec(
+    return _engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,
             entry_obj,

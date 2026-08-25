@@ -56,9 +56,6 @@ WORKFLOW_TEMPLATES: tuple[WorkflowTemplateSpec, ...] = (
 )
 
 WORKFLOW_TEMPLATE_BY_ID = {template.template_id: template for template in WORKFLOW_TEMPLATES}
-WORKFLOW_TEMPLATE_BY_CLI_SHORTCUT = {
-    template.cli_shortcut: template for template in WORKFLOW_TEMPLATES
-}
 WORKFLOW_TEMPLATE_IDS = frozenset(WORKFLOW_TEMPLATE_BY_ID)
 WORKFLOW_SCAFFOLD_SHORTCUTS = tuple(
     (template.cli_shortcut, template.template_id, template.scaffold_help)
@@ -113,7 +110,6 @@ __all__ = [
     "STANDARD_REACTION_PRODUCT_FILENAME",
     "STANDARD_REACTION_REACTANT_FILENAME",
     "WORKFLOW_SCAFFOLD_SHORTCUTS",
-    "WORKFLOW_TEMPLATE_BY_CLI_SHORTCUT",
     "WORKFLOW_TEMPLATE_BY_ID",
     "WORKFLOW_TEMPLATE_IDS",
     "WORKFLOW_TEMPLATES",

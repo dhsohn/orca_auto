@@ -125,7 +125,7 @@ def _foreign_entry(
 def test_load_entries_cover_edge_cases(tmp_path: Path) -> None:
     assert _load_entries(tmp_path) == []
 
-    queue_path = tmp_path / queue_entries.QUEUE_FILE_NAME
+    queue_path = tmp_path / queue_adapter.QUEUE_FILE_NAME
     queue_path.write_text("{not-json", encoding="utf-8")
     with pytest.raises(queue_store.QueueStoreCorruptError):
         _load_entries(tmp_path)
@@ -358,7 +358,7 @@ def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> 
         ],
     )
 
-    payload = json.loads((root / queue_entries.QUEUE_FILE_NAME).read_text(encoding="utf-8"))
+    payload = json.loads((root / queue_adapter.QUEUE_FILE_NAME).read_text(encoding="utf-8"))
     assert payload[0]["app_name"] == "orca_auto_orca"
     assert payload[0]["task_id"] == "task_backend"
     assert payload[0]["task_kind"] == "orca_run_inp"
@@ -618,7 +618,7 @@ def test_administrative_failed_mark_rejects_side_effect_marker(tmp_path: Path) -
     reaction_dir = root / "administrative_fence"
     reaction_dir.mkdir(parents=True)
     entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-fence")
-    before = (root / queue_entries.QUEUE_FILE_NAME).read_bytes()
+    before = (root / queue_adapter.QUEUE_FILE_NAME).read_bytes()
 
     with pytest.raises(ValueError, match="cannot carry a side-effect replay marker"):
         queue_adapter.mark_failed(
@@ -630,7 +630,7 @@ def test_administrative_failed_mark_rejects_side_effect_marker(tmp_path: Path) -
             expected_entry=entry,
         )
 
-    assert (root / queue_entries.QUEUE_FILE_NAME).read_bytes() == before
+    assert (root / queue_adapter.QUEUE_FILE_NAME).read_bytes() == before
     [unchanged] = queue_adapter.list_queue(root)
     assert unchanged.status == QueueStatus.PENDING
 
@@ -843,7 +843,7 @@ def test_enqueue_recovery_never_matches_a_foreign_row(tmp_path: Path) -> None:
         metadata=dict(metadata),
     )
     _save_entries(root, [foreign])
-    queue_path = root / queue_entries.QUEUE_FILE_NAME
+    queue_path = root / queue_adapter.QUEUE_FILE_NAME
     before = queue_path.read_bytes()
 
     spec = _driver_recovery_spec(root)

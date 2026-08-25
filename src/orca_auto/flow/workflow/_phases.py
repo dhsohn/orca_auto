@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from typing import Any
 
 from orca_auto.core.statuses import (
-    STAGE_TERMINAL_STATUSES,
     STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -19,7 +18,6 @@ from orca_auto.core.utils.coercion import (
 )
 
 WORKFLOW_PHASE_FINISHED_EVENT = "workflow_phase_finished"
-TERMINAL_STAGE_STATUSES = STAGE_TERMINAL_STATUSES
 BASE_PHASE_DEFINITIONS = ({"phase": "crest", "phase_label": "CREST", "engine": "crest"},)
 TEMPLATE_PHASE_DEFINITIONS = {
     "reaction_ts_search": ({"phase": "xtb", "phase_label": "xTB", "engine": "xtb"},),
@@ -320,7 +318,6 @@ def phase_transition_event_payloads(
 
 
 __all__ = [
-    "TERMINAL_STAGE_STATUSES",
     "WORKFLOW_PHASE_FINISHED_EVENT",
     "phase_finished",
     "phase_outcome_from_results",

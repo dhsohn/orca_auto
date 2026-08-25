@@ -16,7 +16,9 @@ from orca_auto.flow.contracts.workflow import (
     INTERACTION_COMPLEX_SP_ROLE,
     INTERACTION_CONFIG_FINGERPRINT_KEY,
     INTERACTION_FRAGMENT_ROLE,
+    is_orca_stage_kind,
     is_valid_interaction_stage_contract,
+    workflow_request_parameters,
 )
 from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
@@ -220,17 +222,6 @@ def _request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-def _existing_request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        return {}
-    request = metadata.get("request")
-    if not isinstance(request, dict):
-        return {}
-    params = request.get("parameters")
-    return params if isinstance(params, dict) else {}
-
-
 def _apply_restart_request_basics(
     params: dict[str, Any],
     *,
@@ -404,8 +395,7 @@ def _completed_primary_orca_stage_ids(
         task = raw_stage.get("task")
         task = task if isinstance(task, dict) else {}
         if not (
-            _normalize_text(raw_stage.get("stage_kind")).lower() == "orca_stage"
-            or _normalize_text(task.get("engine")).lower() == "orca"
+            is_orca_stage_kind(raw_stage) or _normalize_text(task.get("engine")).lower() == "orca"
         ):
             continue
         if "completed" not in {
@@ -426,7 +416,7 @@ def _changed_completed_orca_science_fields(
     manifest_charge: int | None,
     manifest_multiplicity: int | None,
 ) -> list[str]:
-    params = _existing_request_parameters(payload)
+    params = workflow_request_parameters(payload)
     changed: list[str] = []
     route_updates = [("orca_route_line", route_line)]
     if template_name == "scan_ts_search":

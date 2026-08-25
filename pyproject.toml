@@ -95,7 +95,6 @@ module = [
     "orca_auto.core.indexing.engine_records",
     "orca_auto.core.indexing.engines",
     "orca_auto.core.indexing.location",
-    "orca_auto.core.indexing.text",
     "orca_auto.core.notifications.engines",
     "orca_auto.core.paths",
     "orca_auto.core.paths.*",

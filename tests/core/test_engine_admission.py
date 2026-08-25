@@ -7,33 +7,6 @@ from typing import Any
 from orca_auto.core.queue.engine import admission as engine_admission
 
 
-def test_start_engine_child_process_builds_queue_identity_command(tmp_path: Path) -> None:
-    entry = SimpleNamespace(queue_id="queue-1")
-    commands: list[dict[str, Any]] = []
-
-    def build_command(**kwargs: Any) -> list[str]:
-        commands.append(kwargs)
-        return ["python", "-m", "worker"]
-
-    assert engine_admission.start_engine_child_process(
-        config_path="/tmp/orca_auto.yaml",
-        queue_root=tmp_path / "queue",
-        entry=entry,
-        admission_token="slot-1",
-        start_background_process_fn=lambda command: command,
-        build_worker_child_command_fn=build_command,
-    ) == ["python", "-m", "worker"]
-
-    assert commands == [
-        {
-            "config_path": "/tmp/orca_auto.yaml",
-            "queue_root": tmp_path / "queue",
-            "queue_id": "queue-1",
-            "admission_token": "slot-1",
-        },
-    ]
-
-
 def test_attach_started_process_records_owner_and_marks_missing_slot(tmp_path: Path) -> None:
     entry = SimpleNamespace(queue_id="queue-1", metadata={"job_dir": str(tmp_path / "job")})
     process = SimpleNamespace(pid=321)

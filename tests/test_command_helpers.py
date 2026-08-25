@@ -8,8 +8,9 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-import orca_auto.orca.commands._helpers as command_helpers
-from orca_auto.orca.commands._helpers import CONFIG_ENV_VAR, default_config_path
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as CONFIG_ENV_VAR
+from orca_auto.core.config import engines as config_engines
+from orca_auto.core.config.engines import default_shared_config_path as default_config_path
 from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.execution import _emit
 from orca_auto.orca.run_context import _validate_reaction_dir
@@ -77,7 +78,7 @@ class TestCommandPathValidators(unittest.TestCase):
 
 class TestHelperUtilities(unittest.TestCase):
     def test_default_config_path_prefers_primary_repo_then_home_then_repo_default(self) -> None:
-        repo_root = Path(command_helpers.__file__).resolve().parents[4]
+        repo_root = Path(config_engines.__file__).resolve().parents[4]
         repo_default = repo_root / "config" / "orca_auto.yaml"
         original_exists = Path.exists
 

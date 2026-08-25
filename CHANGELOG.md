@@ -99,6 +99,34 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - The always-empty `stage_root_name` parameter chain in ORCA stage
   materialization; every caller passed the empty string, so stage directories
   resolve exactly as before.
+- A sweep of runtime-unreached internal surfaces confirmed dead by unfiltered
+  search: the `EngineWorkerChild` facade class, the `run_engine_worker_entry`
+  adapter, never-produced status constants (`partially_submitted`, `deferred`,
+  `admission_blocked` and the two unused submitted-status sets — durable state
+  on the operating host was scanned to confirm no row carries them), three
+  unused artifact-name constants, duplicate `queue_entry_by_id` /
+  `build_queue_entry_lookup` / `coerce_dict` definitions, five constructor
+  forwarders and rename-only aliases, the `worker_builder` injection seam
+  nothing injected into, the static callback layer
+  `flow/engines/xtb/queue_runtime_terminal.py`, the `orca/runtime` one-module
+  package (flattened to `orca/run_lock.py`), `orca/commands/_helpers.py` (a
+  byte-duplicate of the shared config-path helper), dead workflow-worker
+  `getattr` plumbing for CLI flags no parser defines (durable payload shape
+  unchanged), the always-`None` normalizer-injection seams whose only
+  production binding was the canonical `normalize_text`, and re-export facades
+  with zero package-level consumers (`core/__init__`, `core/state/__init__`,
+  `stage_runtime/__init__`, engine `__init__` version re-exports, and trimmed
+  `orca/report`, `orca/job_locations`, `core/indexing/engines` barrels).
+- Duplicated logic collapsed onto single sources: `"queue.json"` now comes
+  from `core/artifacts.py` everywhere, and the engine job-manifest filename
+  constants in the engine artifact/state modules do too;
+  the restart module reuses the canonical `workflow_request_parameters` and
+  `workflow_stage_dicts` accessors; the per-report relative-energy chart
+  builders share one `relative_energy_cycle_chart_svg` (the NEB TS chart
+  y-label unifies to the `ΔE / kcal mol⁻¹` form the other reports already
+  use); the stage-kind test is a shared `is_orca_stage_kind` predicate; and
+  the two single-importer `stage_runtime` xtb modules were folded into their
+  consumers.
 
 ## [3.0.1] - 2026-08-20
 

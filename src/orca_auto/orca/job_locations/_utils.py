@@ -20,7 +20,6 @@ from orca_auto.core.utils.persistence import load_json_mapping_list_file
 from ..input_artifacts import derive_selected_input_xyz as _derive_selected_input_xyz
 from ._generation import current_generation_payloads
 
-QUEUE_FILE_NAME = "queue.json"
 INDEX_DIR_NAME = "index"
 
 

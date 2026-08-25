@@ -40,7 +40,6 @@ class _WorkflowWorkerOptions:
     lock_timeout_seconds: float
     refresh_registry: bool
     refresh_each_cycle: bool
-    service_mode: bool
     json_mode: bool
     workflow_root: Any
     workflow_root_text: str
@@ -67,29 +66,19 @@ def _workflow_worker_options(args: Any) -> _WorkflowWorkerOptions:
             "orca_auto.yaml."
         )
 
-    worker_session_id = normalize_text(getattr(args, "worker_session_id", "")) or timestamped_token(
-        "wf_worker"
-    )
     return _WorkflowWorkerOptions(
         max_cycles=max_cycles,
         interval_seconds=interval_seconds,
         lock_timeout_seconds=float(getattr(args, "lock_timeout_seconds", 5.0) or 5.0),
         refresh_registry=bool(getattr(args, "refresh_registry", False)),
         refresh_each_cycle=bool(getattr(args, "refresh_each_cycle", False)),
-        service_mode=bool(getattr(args, "service_mode", False)),
         json_mode=bool(getattr(args, "json", False)),
         workflow_root=workflow_root,
         workflow_root_text=str(workflow_root),
-        worker_session_id=worker_session_id,
-        lease_seconds=max(
-            float(getattr(args, "lease_seconds", 60.0) or 60.0),
-            interval_seconds * 2.5,
-        ),
+        worker_session_id=timestamped_token("wf_worker"),
+        lease_seconds=max(60.0, interval_seconds * 2.5),
         submit_ready=not bool(getattr(args, "no_submit", False)),
-        engines=WorkflowEngineOptions.from_values(
-            shared_config=shared_config,
-            orca_repo_root=getattr(args, "orca_repo_root", None),
-        ),
+        engines=WorkflowEngineOptions.from_values(shared_config=shared_config),
     )
 
 
@@ -158,7 +147,7 @@ def _record_workflow_worker_started(options: _WorkflowWorkerOptions) -> None:
     _append_workflow_worker_event(
         options,
         event_type="worker_started",
-        metadata={"started_at": started_at, "service_mode": options.service_mode},
+        metadata={"started_at": started_at, "service_mode": False},
     )
 
 
@@ -201,7 +190,7 @@ def _record_workflow_worker_stopped(
         metadata={
             "stop_reason": "max_cycles_reached",
             "cycle_count": cycle_count,
-            "service_mode": options.service_mode,
+            "service_mode": False,
         },
     )
     _append_workflow_worker_event(
@@ -228,7 +217,7 @@ def _record_workflow_worker_interrupted(
         metadata={
             "stop_reason": "keyboard_interrupt",
             "cycle_count": cycle_count,
-            "service_mode": options.service_mode,
+            "service_mode": False,
         },
     )
     _append_workflow_worker_event(

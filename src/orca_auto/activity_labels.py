@@ -215,18 +215,9 @@ def queue_name_text(item: dict[str, Any]) -> str:
 
 
 __all__ = [
-    "crest_detail_text",
-    "infer_orca_detail_from_metadata",
     "queue_detail_text",
-    "queue_elapsed_started_at",
     "queue_elapsed_text",
-    "queue_metadata_path_name",
     "queue_name_text",
-    "queue_path_name",
     "queue_status_icon",
     "queue_table_now",
-    "queue_task_label",
-    "queue_looks_like_path",
-    "workflow_detail_text",
-    "xtb_detail_text",
 ]

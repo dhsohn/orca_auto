@@ -10,6 +10,9 @@ from typing import Any, TypedDict
 
 import yaml
 
+from orca_auto.core.config.engines import (
+    default_shared_config_path as default_config_path,
+)
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
     load_shared_config_mapping,
@@ -21,7 +24,6 @@ from orca_auto.core.paths import is_rejected_windows_path, validate_configured_e
 from orca_auto.core.utils.persistence import atomic_write_text
 
 from ..config import load_config
-from ._helpers import default_config_path
 
 logger = logging.getLogger(__name__)
 

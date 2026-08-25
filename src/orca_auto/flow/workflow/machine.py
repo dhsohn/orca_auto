@@ -26,9 +26,9 @@ from orca_auto.core.machine_observation import (
     required_delivery_complete,
     results_payload_from_observation,
 )
+from orca_auto.core.statuses import is_workflow_terminal_status
 from orca_auto.core.utils.persistence import atomic_write_text
 from orca_auto.flow.workflow.report import collect_workflow_report_data
-from orca_auto.flow.workflow.status import workflow_status_is_terminal
 
 
 def _text(value: object) -> str:
@@ -125,7 +125,7 @@ def build_workflow_machine_observation(
     metadata = payload.get("metadata")
     metadata = metadata if isinstance(metadata, Mapping) else {}
     if (
-        not workflow_status_is_terminal(status)
+        not is_workflow_terminal_status(status)
         or bool(metadata.get("final_child_sync_pending"))
         or bool(metadata.get("si_publish_pending"))
     ):

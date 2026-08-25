@@ -1081,7 +1081,7 @@ def test_zero_distance_refinement_crash_retries_as_optts_from_maximum(
     assert "scants_guess_from_rxn.002.xyz" in actions
     # The synthetic attempt harness binds no execution generation, so no report
     # file is published (fail closed); render the report body directly instead.
-    from orca_auto.orca.report import compose_job_report_html
+    from orca_auto.orca.report.composer import compose_job_report_html
 
     report_html = compose_job_report_html(tmp_path, saved)
     assert report_html is not None

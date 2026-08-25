@@ -45,24 +45,6 @@ class InternalEngineSubmitter:
         )
 
 
-def build_internal_engine_submitter(
-    *,
-    run_dir_api_name: str,
-    cancel_api_name: str,
-    deps_factory: Callable[[], InternalEngineSubmitterDeps],
-    extra_fields_fn: Callable[[Any | None, Any | None], dict[str, Any]] | None = None,
-) -> tuple[Callable[..., dict[str, Any]], Callable[..., dict[str, Any]]]:
-    submitter = InternalEngineSubmitter(
-        spec=InternalEngineSubmitterSpec(
-            run_dir_api_name=run_dir_api_name,
-            cancel_api_name=cancel_api_name,
-            extra_fields_fn=extra_fields_fn,
-        ),
-        deps_factory=deps_factory,
-    )
-    return submitter.submit_job_dir, submitter.cancel_target
-
-
 def build_internal_engine_module_submitter(
     *,
     engine: str,
@@ -72,9 +54,12 @@ def build_internal_engine_module_submitter(
     engine_name = normalize_text(engine)
     if not engine_name:
         raise ValueError("build_internal_engine_module_submitter requires engine")
-    return build_internal_engine_submitter(
-        run_dir_api_name=f"orca_auto.{engine_name}.submission.direct_enqueue",
-        cancel_api_name=f"orca_auto.{engine_name}.queue_runtime.direct_cancel",
+    submitter = InternalEngineSubmitter(
+        spec=InternalEngineSubmitterSpec(
+            run_dir_api_name=f"orca_auto.{engine_name}.submission.direct_enqueue",
+            cancel_api_name=f"orca_auto.{engine_name}.queue_runtime.direct_cancel",
+            extra_fields_fn=extra_fields_fn,
+        ),
         deps_factory=deps_factory,
-        extra_fields_fn=extra_fields_fn,
     )
+    return submitter.submit_job_dir, submitter.cancel_target

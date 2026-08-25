@@ -23,7 +23,6 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.worker.execution_dependencies import (
     WorkerProcessDependencyCallbacks,
     build_worker_process_default_factories_from_callbacks,
-    build_worker_process_dependency_callbacks,
     build_worker_process_dependency_groups,
     worker_process_dependency_callbacks_from_attrs,
 )
@@ -315,7 +314,7 @@ def test_worker_process_dependency_callbacks_from_attrs_maps_common_callbacks() 
         source,
         engine_runner_dependency_names=("run_demo_job",),
     )
-    rebuilt = build_worker_process_dependency_callbacks(
+    rebuilt = WorkerProcessDependencyCallbacks(
         terminate_process=callbacks.terminate_process,
         wait_for_cancellable_process=callbacks.wait_for_cancellable_process,
         sleep=callbacks.sleep,

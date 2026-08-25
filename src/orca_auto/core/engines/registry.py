@@ -3,13 +3,8 @@ from __future__ import annotations
 from importlib import import_module
 
 from orca_auto.core.engine_catalog import get_engine_catalog_entry
-from orca_auto.core.engine_catalog import known_engine_ids as catalog_engine_ids
 
 from .definitions import EngineDefinition
-
-
-def known_engine_ids() -> tuple[str, ...]:
-    return catalog_engine_ids()
 
 
 def get_engine_definition(engine: str) -> EngineDefinition:
@@ -21,4 +16,4 @@ def get_engine_definition(engine: str) -> EngineDefinition:
     return definition
 
 
-__all__ = ["get_engine_definition", "known_engine_ids"]
+__all__ = ["get_engine_definition"]

@@ -23,7 +23,6 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
-    build_engine_queue_worker,
     build_runtime_engine_queue_worker,
 )
 from orca_auto.core.notifications.engines import (
@@ -65,7 +64,6 @@ from orca_auto.flow.engines.xtb import execution as _worker_execution
 from orca_auto.flow.engines.xtb import terminal as _queue_terminal
 from orca_auto.flow.engines.xtb import worker_terminal as _worker_terminal
 
-from . import queue_runtime_terminal as _runtime_terminal
 from .engine import ENGINE_DEFINITION
 from .job_locations import (
     list_job_records_for_cfg,
@@ -181,31 +179,6 @@ _build_terminal_result = _worker_terminal.build_terminal_result
 build_worker_child_command = _worker_execution.build_worker_child_command
 
 
-def _runtime_terminal_callbacks() -> _runtime_terminal.XtbQueueRuntimeTerminalCallbacks:
-    return _runtime_terminal.XtbQueueRuntimeTerminalCallbacks(
-        queue_terminal=_queue_terminal,
-        queue_lifecycle=_queue_lifecycle,
-        worker_execution_outcome_cls=_worker_execution.WorkerExecutionOutcome,
-        job_dir=_job_dir,
-        selected_xyz=_selected_xyz,
-        queue_entry_by_id=_queue_entry_by_id,
-        write_execution_artifacts=_write_execution_artifacts,
-        load_terminal_summary_fn=_load_terminal_summary,
-        ensure_terminal_queue_status_fn=_ensure_terminal_queue_status,
-        print_terminal_summary_fn=_print_terminal_summary,
-        live_worker_pid_slots_fn=_live_worker_pid_slots,
-        pid_is_alive=_pid_is_alive,
-        queue_entries_with_roots=queue_entries_with_roots,
-        list_slots=list_slots,
-        load_state=load_state,
-        mark_completed=mark_completed,
-        mark_cancelled=mark_cancelled,
-        mark_failed=mark_failed,
-        upsert_job_record=upsert_job_record,
-        notify_job_finished=notify_job_finished,
-    )
-
-
 def _mark_recovery_pending_state(cfg: Any, entry: Any, *, reason: str) -> None:
     _worker_execution._mark_recovery_pending_entry(cfg, entry, reason=reason)
 
@@ -229,20 +202,25 @@ def _print_terminal_summary(summary: _TerminalSummary) -> None:
 def _load_terminal_summary(
     queue_root: Path, entry: Any, *, rc: int | None = None
 ) -> _TerminalSummary:
-    return _runtime_terminal.load_terminal_summary(
-        _runtime_terminal_callbacks(),
+    return _queue_terminal.load_terminal_summary(
         queue_root,
         entry,
         rc=rc,
+        job_dir_fn=_job_dir,
+        load_state_fn=load_state,
+        queue_entry_by_id_fn=_queue_entry_by_id,
     )
 
 
 def _ensure_terminal_queue_status(queue_root: Path, entry: Any, summary: _TerminalSummary) -> None:
-    _runtime_terminal.ensure_terminal_queue_status(
-        _runtime_terminal_callbacks(),
+    _queue_terminal.ensure_terminal_queue_status(
         queue_root,
         entry,
         summary,
+        queue_entry_by_id_fn=_queue_entry_by_id,
+        mark_completed_fn=mark_completed,
+        mark_cancelled_fn=mark_cancelled,
+        mark_failed_fn=mark_failed,
     )
 
 
@@ -256,8 +234,7 @@ def _finalize_execution_result(
     previous_state: dict[str, Any] | None = None,
     resumed: bool = False,
 ) -> _worker_execution.WorkerExecutionOutcome:
-    return _runtime_terminal.finalize_execution_result(
-        _runtime_terminal_callbacks(),
+    return _queue_terminal.finalize_execution_result(
         cfg,
         queue_root=queue_root,
         entry=entry,
@@ -265,6 +242,15 @@ def _finalize_execution_result(
         emit_output=emit_output,
         previous_state=previous_state,
         resumed=resumed,
+        outcome_cls=_worker_execution.WorkerExecutionOutcome,
+        write_execution_artifacts_fn=_write_execution_artifacts,
+        selected_xyz_fn=_selected_xyz,
+        job_dir_fn=_job_dir,
+        mark_completed_fn=mark_completed,
+        mark_cancelled_fn=mark_cancelled,
+        mark_failed_fn=mark_failed,
+        upsert_job_record_fn=upsert_job_record,
+        notify_job_finished_fn=notify_job_finished,
     )
 
 
@@ -333,13 +319,10 @@ def _handle_worker_start_error(
 
 def _finalize_completed_job(worker: Any, _queue_id: str, job: Any, rc: int) -> None:
     _adopt_terminal_artifacts(worker.cfg, job.queue_root, job.entry)
-    _runtime_terminal.finalize_completed_job(
-        _runtime_terminal_callbacks(),
-        worker,
-        _queue_id,
-        job,
-        rc,
-    )
+    summary = _load_terminal_summary(job.queue_root, job.entry, rc=rc)
+    _ensure_terminal_queue_status(job.queue_root, job.entry, summary)
+    _print_terminal_summary(summary)
+    worker._release_admission_slot(job.admission_token)
 
 
 def _finalize_child_exit(worker: Any, job: _RunningJob, *, rc: int) -> None:
@@ -699,18 +682,22 @@ def _after_xtb_worker_init(worker: Any) -> None:
 
 
 def _live_worker_pid_slots(worker: Any) -> list[Any]:
-    return _runtime_terminal.live_worker_pid_slots(_runtime_terminal_callbacks(), worker)
+    return _queue_lifecycle.live_worker_pid_slots(
+        queue_entries_with_roots(worker.cfg),
+        load_state_fn=load_state,
+        job_dir_fn=_job_dir,
+        pid_is_alive_fn=_pid_is_alive,
+    )
 
 
 def _list_slots_preserving_live_worker_pids(
     worker: Any,
     admission_root: str | Path,
 ) -> list[Any]:
-    return _runtime_terminal.list_slots_preserving_live_worker_pids(
-        _runtime_terminal_callbacks(),
-        worker,
-        admission_root,
-    )
+    return [
+        *list_slots(admission_root),
+        *_live_worker_pid_slots(worker),
+    ]
 
 
 def _reconcile_orphaned_running(worker: Any) -> None:
@@ -769,7 +756,6 @@ def QueueWorker(
         after_init=_after_xtb_worker_init,
         finalize_child_exit=_finalize_child_exit,
         reconcile_orphaned_running=_reconcile_orphaned_running,
-        worker_builder=build_engine_queue_worker,
     )
 
 

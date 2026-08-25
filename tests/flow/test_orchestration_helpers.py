@@ -51,12 +51,8 @@ from orca_auto.flow.orchestration.support import (
 from tests.flow.orchestration_services import orchestration_services
 
 
-def _normalize_text(value: Any) -> str:
-    return str(value or "").strip()
-
-
 def _workflow_sync_only(payload: dict[str, Any]) -> bool:
-    return workflow_sync_only_impl(payload, normalize_text_fn=_normalize_text)
+    return workflow_sync_only_impl(payload)
 
 
 def _workflow_has_active_children(
@@ -66,7 +62,6 @@ def _workflow_has_active_children(
 ) -> bool:
     return workflow_has_active_children_impl(
         payload,
-        normalize_text_fn=_normalize_text,
         workflow_has_active_downstream_fn=lambda current_payload: active_downstream,
     )
 
@@ -105,7 +100,6 @@ def test_load_contract_or_none_propagates_corrupt_contract_errors() -> None:
 def _stage_failure_is_recoverable(stage: dict[str, Any]) -> bool:
     return stage_failure_is_recoverable_impl(
         stage,
-        normalize_text_fn=_normalize_text,
         stage_metadata_fn=workflow_stage_metadata,
     )
 
@@ -113,10 +107,8 @@ def _stage_failure_is_recoverable(stage: dict[str, Any]) -> bool:
 def _recompute_workflow_status(payload: dict[str, Any]) -> str:
     return recompute_workflow_status_impl(
         payload,
-        normalize_text_fn=_normalize_text,
         effective_stage_status_fn=lambda stage: effective_stage_status_impl(
             stage,
-            normalize_text_fn=_normalize_text,
             stage_failure_is_recoverable_fn=_stage_failure_is_recoverable,
         ),
     )
@@ -315,7 +307,6 @@ def test_stage_candidate_and_failure_helpers_cover_recoverable_paths() -> None:
     assert (
         effective_stage_status_impl(
             xtb_stage,
-            normalize_text_fn=_normalize_text,
             stage_failure_is_recoverable_fn=_stage_failure_is_recoverable,
         )
         == "completed"
@@ -323,7 +314,6 @@ def test_stage_candidate_and_failure_helpers_cover_recoverable_paths() -> None:
     assert (
         effective_stage_status_impl(
             {"status": "running"},
-            normalize_text_fn=_normalize_text,
             stage_failure_is_recoverable_fn=_stage_failure_is_recoverable,
         )
         == "running"

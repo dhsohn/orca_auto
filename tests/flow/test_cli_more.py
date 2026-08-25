@@ -55,16 +55,12 @@ def test_cmd_workflow_worker_handles_negative_cycles_and_lock_timeout(monkeypatc
         lock_timeout_seconds=5.0,
         refresh_registry=False,
         refresh_each_cycle=False,
-        service_mode=False,
         json=False,
         workflow_root="/tmp/wf",
-        worker_session_id="",
-        lease_seconds=60.0,
         no_submit=False,
         crest_config=None,
         xtb_config=None,
         orca_config=None,
-        orca_repo_root=None,
     )
     assert cli_workflow.cmd_workflow_worker(args) == 1
     assert "--max-cycles must be >= 0" in capsys.readouterr().err
@@ -149,16 +145,12 @@ def test_cmd_workflow_worker_single_cycle_and_keyboard_interrupt(monkeypatch, ca
         lock_timeout_seconds=5.0,
         refresh_registry=True,
         refresh_each_cycle=False,
-        service_mode=False,
         json=False,
         workflow_root="/tmp/wf",
-        worker_session_id="",
-        lease_seconds=60.0,
         no_submit=True,
         crest_config=None,
         xtb_config=None,
         orca_config=None,
-        orca_repo_root=None,
     )
 
     assert cli_workflow.cmd_workflow_worker(args) == 0

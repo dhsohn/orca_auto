@@ -323,7 +323,6 @@ def _finalize_advanced_workflow(
         or payload_status in {STATUS_CANCEL_REQUESTED, STATUS_CANCEL_FAILED}
     ) and workflow_has_active_children_impl(
         payload,
-        normalize_text_fn=normalize_text,
         workflow_has_active_downstream_fn=workflow_has_active_downstream,
     )
     metadata["final_child_sync_pending"] = final_child_sync_pending
@@ -337,16 +336,13 @@ def _recompute_workflow_status(payload: dict[str, Any]) -> str:
     def stage_failure_is_recoverable(stage: dict[str, Any]) -> bool:
         return stage_failure_is_recoverable_impl(
             stage,
-            normalize_text_fn=normalize_text,
             stage_metadata_fn=workflow_stage_metadata,
         )
 
     return recompute_workflow_status_impl(
         payload,
-        normalize_text_fn=normalize_text,
         effective_stage_status_fn=lambda stage: effective_stage_status_impl(
             stage,
-            normalize_text_fn=normalize_text,
             stage_failure_is_recoverable_fn=stage_failure_is_recoverable,
         ),
     )

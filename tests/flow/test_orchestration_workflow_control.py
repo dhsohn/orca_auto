@@ -12,10 +12,10 @@ import orca_auto.flow.orchestration.advance as advance_module
 import orca_auto.flow.orchestration.advance_phases as advance_phases_module
 from orca_auto.flow import orchestration
 from orca_auto.flow.orchestration.stage_runtime.crest import ensure_crest_job_dir_impl
-from orca_auto.flow.orchestration.stage_runtime.xtb_inputs import (
+from orca_auto.flow.orchestration.stage_runtime.xtb_path_jobs import (
     _materialize_xtb_override_xcontrol,
+    write_xtb_path_job_impl,
 )
-from orca_auto.flow.orchestration.stage_runtime.xtb_path_jobs import write_xtb_path_job_impl
 from orca_auto.flow.orchestration.stage_runtime.xtb_retry import (
     xtb_current_attempt_number_impl,
     xtb_path_retry_limit_impl,

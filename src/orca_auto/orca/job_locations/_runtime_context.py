@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core import engine_runner as _engine_runner
+from orca_auto.core.artifacts import QUEUE_FILE as QUEUE_FILE_NAME
 from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_STATE_FILE
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.engines import entry_matches_engine_identity
@@ -25,7 +26,6 @@ from ._artifacts import first_artifact_context, job_artifact_context
 from ._generation import payload_matches_queue_generation
 from ._models import JobRuntimeContext
 from ._utils import (
-    QUEUE_FILE_NAME,
     load_json_list,
     normalize_text,
     queue_entry_metadata_value,

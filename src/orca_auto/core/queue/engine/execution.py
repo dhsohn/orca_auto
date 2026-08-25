@@ -47,7 +47,6 @@ from .artifacts import (
 )
 from .lifecycle import (
     EngineWorkerLifecycle,
-    run_engine_worker_entry,
     run_engine_worker_lifecycle,
 )
 from .worker_execution import (
@@ -57,7 +56,6 @@ from .worker_execution import (
     EngineWorkerProcessDependencies,
     EngineWorkerQueueDependencies,
     EngineWorkerTimingDependencies,
-    build_engine_worker_execution_spec,
     build_engine_worker_process_default_factories,
     build_engine_worker_process_dependencies,
     queue_cancel_callback,
@@ -105,12 +103,10 @@ __all__ = [
     "mark_engine_job_running",
     "mark_recovery_pending_and_record",
     "mark_result_terminal_status",
-    "build_engine_worker_execution_spec",
     "build_engine_worker_process_default_factories",
     "build_engine_worker_process_dependencies",
     "run_cancellable_process_execution",
     "run_cancellable_engine_process",
-    "run_engine_worker_entry",
     "run_engine_worker_lifecycle",
     "queue_cancel_callback",
     "queue_cancel_requested",

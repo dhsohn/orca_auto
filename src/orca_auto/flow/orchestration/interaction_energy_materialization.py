@@ -50,9 +50,11 @@ from orca_auto.flow.contracts.workflow import (
     INTERACTION_FRAGMENT_ROLE,
     is_exact_orca_stage_contract,
     is_interaction_role,
+    is_orca_stage_kind,
     is_valid_interaction_stage_contract,
     required_route_line,
     workflow_request_parameters,
+    workflow_stage_dicts,
 )
 from orca_auto.flow.manifest import (
     INTERACTION_ENERGY_MAX_FRAGMENTS_CAP,
@@ -85,13 +87,6 @@ _OptimizedEvidence = tuple[
 
 def _text(value: Any) -> str:
     return normalize_text(value)
-
-
-def _stage_dicts(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    stages = payload.get("stages")
-    if not isinstance(stages, list):
-        return []
-    return [stage for stage in stages if isinstance(stage, dict)]
 
 
 def _stage_metadata(stage: Mapping[str, Any]) -> dict[str, Any]:
@@ -394,10 +389,8 @@ def append_interaction_energy_stages_impl(
         rmsd_dedup=rmsd_cfg,
     )
 
-    stages = _stage_dicts(payload)
-    declared_orca_stages = [
-        stage for stage in stages if _text(stage.get("stage_kind")) == "orca_stage"
-    ]
+    stages = workflow_stage_dicts(payload)
+    declared_orca_stages = [stage for stage in stages if is_orca_stage_kind(stage)]
     if any(not is_exact_orca_stage_contract(stage) for stage in declared_orca_stages):
         return False
     orca_stages = declared_orca_stages

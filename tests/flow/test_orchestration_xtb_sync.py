@@ -6,7 +6,6 @@ from typing import Any, cast
 
 import pytest
 
-from orca_auto.flow.orchestration.stage_runtime import xtb_submission
 from orca_auto.flow.orchestration.stage_runtime import xtb_sync as xtb_sync_runtime
 from orca_auto.flow.orchestration.stage_runtime.xtb_sync import sync_xtb_stage_impl
 from tests.flow.orchestration_services import orchestration_services
@@ -78,7 +77,7 @@ def test_sync_xtb_stage_submits_initial_attempt_and_records_handoff_metadata(
         }
     )
     monkeypatch.setattr(
-        xtb_submission,
+        xtb_sync_runtime,
         "ensure_xtb_job_dir_impl",
         lambda stage, **kwargs: str(tmp_path / "xtb_allowed" / "wf_01" / "job_01"),
     )

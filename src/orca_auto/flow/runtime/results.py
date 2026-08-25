@@ -72,11 +72,12 @@ def workflow_advanced_result(
     previous_status: str,
     status: str,
     reason: str = "",
-    normalize_text_fn: Callable[[Any], str] = _runtime_common.normalize_text,
 ) -> WorkflowAdvanceResult:
     result: WorkflowAdvanceResult = {
-        "workflow_id": normalize_text_fn(payload.get("workflow_id")) or record.workflow_id,
-        "template_name": normalize_text_fn(payload.get("template_name")) or record.template_name,
+        "workflow_id": _runtime_common.normalize_text(payload.get("workflow_id"))
+        or record.workflow_id,
+        "template_name": _runtime_common.normalize_text(payload.get("template_name"))
+        or record.template_name,
         "previous_status": previous_status,
         "status": status,
         "advanced": True,
@@ -95,7 +96,6 @@ def workflow_needs_terminal_sync(
     *,
     load_workflow_payload_fn: Callable[[str | Path], dict[str, Any]],
     workflow_has_active_downstream_fn: Callable[[dict[str, Any]], bool],
-    normalize_text_fn: Callable[[Any], str] = _runtime_common.normalize_text,
 ) -> bool:
     try:
         payload = load_workflow_payload_fn(workspace_dir)
@@ -109,12 +109,16 @@ def workflow_needs_terminal_sync(
     for raw_stage in payload.get("stages", []):
         if not isinstance(raw_stage, dict):
             continue
-        if normalize_text_fn(raw_stage.get("status")).lower() in ACTIVE_TERMINAL_SYNC_STATUSES:
+        if (
+            _runtime_common.normalize_text(raw_stage.get("status")).lower()
+            in ACTIVE_TERMINAL_SYNC_STATUSES
+        ):
             return True
         task = raw_stage.get("task")
         if (
             isinstance(task, dict)
-            and normalize_text_fn(task.get("status")).lower() in ACTIVE_TERMINAL_SYNC_STATUSES
+            and _runtime_common.normalize_text(task.get("status")).lower()
+            in ACTIVE_TERMINAL_SYNC_STATUSES
         ):
             return True
     return workflow_has_active_downstream_fn(payload)

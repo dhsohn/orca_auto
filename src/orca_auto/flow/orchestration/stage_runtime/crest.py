@@ -210,7 +210,7 @@ def completed_crest_roles_impl(payload: dict[str, Any]) -> dict[str, dict[str, A
             latest_by_role[role] = stage_view.raw
     rows: dict[str, dict[str, Any]] = {}
     for role, stage in latest_by_role.items():
-        status = WorkflowStageView(stage).status_pair_with(normalize_text)
+        status = WorkflowStageView(stage).status_pair()
         if status.stage == "completed" and status.task in {"", "completed"}:
             rows[role] = stage
     return rows

@@ -171,11 +171,10 @@ def submission_admission_has_capacity(
 def workflow_submission_has_capacity(
     *config_paths: str | Path | None,
     submission_admission_has_capacity_fn: Callable[[str | Path], bool | None] | None = None,
-    normalize_text_fn: Callable[[Any], str] = _runtime_common.normalize_text,
 ) -> bool:
     has_capacity_fn = submission_admission_has_capacity_fn or submission_admission_has_capacity
     for config_path in config_paths:
-        config_text = normalize_text_fn(config_path)
+        config_text = _runtime_common.normalize_text(config_path)
         if not config_text:
             continue
         has_capacity = has_capacity_fn(config_text)

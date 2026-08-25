@@ -15,6 +15,7 @@ from orca_auto.core.queue.generation import (
     is_visible_generation_name,
     visible_generation_children,
 )
+from orca_auto.core.utils import mapping_or_empty as _mapping
 from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_input
 from orca_auto.flow.conformer_selection import (
     OrcaSelectedInputScienceIdentity,
@@ -30,20 +31,16 @@ def _text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _mapping(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _stage_metadata(stage: Mapping[str, Any]) -> dict[str, Any]:
+def stage_metadata(stage: Mapping[str, Any]) -> dict[str, Any]:
     return _mapping(stage.get("metadata"))
 
 
-def _stage_task(stage: Mapping[str, Any]) -> dict[str, Any]:
+def stage_task(stage: Mapping[str, Any]) -> dict[str, Any]:
     return _mapping(stage.get("task"))
 
 
 def _stage_task_payload(stage: Mapping[str, Any]) -> dict[str, Any]:
-    return _mapping(_stage_task(stage).get("payload"))
+    return _mapping(stage_task(stage).get("payload"))
 
 
 def _stage_artifact_path(stage: Mapping[str, Any], kind: str) -> Path | None:
@@ -58,8 +55,8 @@ def _stage_artifact_path(stage: Mapping[str, Any], kind: str) -> Path | None:
     return None
 
 
-def _stage_job_dirs(stage: Mapping[str, Any]) -> tuple[Path, ...]:
-    metadata = _stage_metadata(stage)
+def stage_job_dirs(stage: Mapping[str, Any]) -> tuple[Path, ...]:
+    metadata = stage_metadata(stage)
     task_payload = _stage_task_payload(stage)
     paths: list[Path] = []
     seen: set[str] = set()
@@ -87,8 +84,8 @@ def stage_report_identity_matches(
 ) -> bool:
     """Whether one durable stage unambiguously names the report job/run/queue."""
 
-    metadata = _stage_metadata(stage)
-    task = _stage_task(stage)
+    metadata = stage_metadata(stage)
+    task = stage_task(stage)
     task_payload = _stage_task_payload(stage)
     submission = _mapping(task.get("submission_result"))
     job = _mapping(report.get("job"))
@@ -162,7 +159,7 @@ def resolve_verified_orca_stage_report(
     report = verified_orca_stage_report(stage, report_path)
     if report is not None:
         return report_path, report
-    for job_dir in _stage_job_dirs(stage):
+    for job_dir in stage_job_dirs(stage):
         candidate_dirs = (
             (job_dir,)
             if is_visible_generation_name(job_dir.name)
@@ -390,7 +387,7 @@ def _selected_input_role_matches(
     )
     try:
         validate_workflow_orca_input(
-            task_kind=_text(_stage_task(stage).get("task_kind")),
+            task_kind=_text(stage_task(stage).get("task_kind")),
             inp_path=selected_path,
         )
     except ValueError:
@@ -406,7 +403,7 @@ def collect_verified_orca_stage_evidence(
     if not is_supported_orca_stage_contract(stage):
         return None, "unsupported or contradictory ORCA stage contract", None
     stage_status = _text(stage.get("status")).lower()
-    task_status = _text(_stage_task(stage).get("status")).lower()
+    task_status = _text(stage_task(stage).get("status")).lower()
     if stage_status != "completed" or task_status not in {"", "completed"}:
         return None, "stage/task is not durably completed", None
     report_path, report = resolve_verified_orca_stage_report(stage)
@@ -453,6 +450,9 @@ def collect_verified_orca_stage_evidence(
 __all__ = [
     "collect_verified_orca_stage_evidence",
     "resolve_verified_orca_stage_report",
+    "stage_job_dirs",
+    "stage_metadata",
     "stage_report_identity_matches",
+    "stage_task",
     "verified_orca_stage_report",
 ]

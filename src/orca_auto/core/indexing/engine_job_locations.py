@@ -157,28 +157,6 @@ class EngineJobLocations:
         )
 
 
-def build_store_backed_engine_job_location_exports(
-    *,
-    engine: str,
-    spec: EngineLocationSpec,
-    load_state_fn: Callable[[Path], dict[str, Any] | None],
-    load_report_json_fn: Callable[[Path], dict[str, Any] | None] | None,
-    payload_kind_kwarg: str,
-    molecule_key_kwarg: str,
-    default_payload_kind_kwarg: str,
-) -> EngineJobLocations:
-    return EngineJobLocations(
-        engine=engine,
-        spec=spec,
-        load_state_fn=load_state_fn,
-        load_report_json_fn=load_report_json_fn,
-        payload_kind_kwarg=payload_kind_kwarg,
-        molecule_key_kwarg=molecule_key_kwarg,
-        default_payload_kind_kwarg=default_payload_kind_kwarg,
-    )
-
-
 __all__ = [
     "EngineJobLocations",
-    "build_store_backed_engine_job_location_exports",
 ]

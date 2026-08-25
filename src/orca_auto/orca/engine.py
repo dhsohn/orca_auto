@@ -34,8 +34,6 @@ ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
 build_worker_child_command = ENGINE_DEFINITION.runner_callbacks.build_worker_child_command
 
 
-def read_worker_pid(allowed_root: Path) -> int | None:
-    return ENGINE_RUNTIME.read_worker_pid(allowed_root)
-
+read_worker_pid = ENGINE_RUNTIME.read_worker_pid
 
 __all__ = ["ENGINE_DEFINITION", "ENGINE_RUNTIME", "build_worker_child_command", "read_worker_pid"]
