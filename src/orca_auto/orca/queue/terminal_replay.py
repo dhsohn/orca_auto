@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ..state import load_state, state_path
+from ..state import load_state, state_path, state_payload_job_id
 from ..types import RunState
 from .entries import (
     TERMINAL_STATUSES,
@@ -45,14 +45,6 @@ class StateGenerationFingerprint:
     terminal_status: str = ""
 
 
-def _payload_job_id(payload: Any) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    job = payload.get("job")
-    job = job if isinstance(job, dict) else {}
-    return str(payload.get("job_id") or job.get("id") or "").strip()
-
-
 def terminal_status_from_run_state(state: RunState | None) -> str | None:
     if state is None:
         return None
@@ -78,7 +70,7 @@ def load_state_generation_fingerprint(
     return StateGenerationFingerprint(
         present=True,
         readable=True,
-        job_id=_payload_job_id(state),
+        job_id=state_payload_job_id(state),
         run_id=str(state.get("run_id") or "").strip(),
         terminal_status=terminal_status_from_run_state(state) or "",
     )

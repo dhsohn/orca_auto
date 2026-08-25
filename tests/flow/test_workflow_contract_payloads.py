@@ -12,6 +12,7 @@ from orca_auto.flow.contracts import (
 from orca_auto.flow.contracts.workflow import (
     coerce_workflow_plan_payload,
     required_route_line,
+    workflow_metadata,
     workflow_request_parameters,
 )
 
@@ -144,6 +145,16 @@ def test_workflow_request_parameters_reads_only_the_canonical_mapping_path() -> 
     )
     assert workflow_request_parameters({"metadata": {"request": {"parameters": []}}}) == {}
     assert workflow_request_parameters({"metadata": "invalid"}) == {}
+
+
+def test_workflow_metadata_repairs_missing_or_invalid_root_mapping() -> None:
+    existing = {"metadata": {"kept": True}}
+    assert workflow_metadata(existing) is existing["metadata"]
+
+    for payload in ({}, {"metadata": "invalid"}):
+        metadata = workflow_metadata(payload)
+        assert metadata == {}
+        assert payload["metadata"] is metadata
 
 
 def test_required_route_line_fails_closed_on_missing_empty_or_blank_values() -> None:

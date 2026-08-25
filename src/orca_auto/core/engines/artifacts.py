@@ -6,6 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.utils.coercion import safe_int
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 ENGINE_ARTIFACT_SCHEMA_VERSION = 1
@@ -97,22 +98,6 @@ def _clean_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _clean_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _clean_optional_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def build_engine_artifact_payload(
     *,
     engine: str,
@@ -145,7 +130,7 @@ def build_engine_artifact_payload(
         "status": {
             "state": _clean_text(status.state),
             "reason": _clean_text(status.reason),
-            "exit_code": _clean_optional_int(status.exit_code),
+            "exit_code": safe_int(status.exit_code, default=None),
         },
         "input": {
             "primary_path": _clean_text(active_input.primary_path),
@@ -164,11 +149,11 @@ def build_engine_artifact_payload(
         "recovery": {
             "pending": bool(active_recovery.pending),
             "reason": _clean_text(active_recovery.reason),
-            "count": _clean_int(active_recovery.count),
+            "count": safe_int(active_recovery.count, default=0),
             "resumed": bool(active_recovery.resumed),
         },
         "process": {
-            "worker_pid": _clean_optional_int(active_process.worker_pid),
+            "worker_pid": safe_int(active_process.worker_pid, default=None),
         },
         "artifacts": _artifact_paths(artifacts),
         "engine_payload": _clean_dict(engine_payload),
@@ -180,22 +165,15 @@ def load_engine_artifact_payload(path: Path) -> dict[str, Any] | None:
     payload = load_json_mapping_file(path)
     if payload is None:
         return None
-    if _clean_int(payload.get("schema_version"), -1) != ENGINE_ARTIFACT_SCHEMA_VERSION:
+    if safe_int(payload.get("schema_version"), default=-1) != ENGINE_ARTIFACT_SCHEMA_VERSION:
         return None
     if not _clean_text(payload.get("engine")):
         return None
     return payload
 
 
-class EngineArtifactSchema:
-    schema_version = ENGINE_ARTIFACT_SCHEMA_VERSION
-    build_payload = staticmethod(build_engine_artifact_payload)
-    load_payload = staticmethod(load_engine_artifact_payload)
-
-
 __all__ = [
     "ENGINE_ARTIFACT_SCHEMA_VERSION",
-    "EngineArtifactSchema",
     "EngineArtifactInput",
     "EngineArtifactJob",
     "EngineArtifactProcess",

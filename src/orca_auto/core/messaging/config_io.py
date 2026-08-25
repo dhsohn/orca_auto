@@ -8,7 +8,6 @@ from pathlib import Path
 from orca_auto.core.config import MessengerConfig
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
-    load_required_shared_config_mapping,
     load_yaml_mapping,
     messenger_mapping_from_root,
     validate_shared_config_sections,
@@ -48,27 +47,6 @@ def _load_messenger_config(config_path: str | Path | None) -> MessengerConfig:
     return messenger_config_from_mapping(messenger_mapping_from_root(raw))
 
 
-def load_messenger_config_from_file(config_path: str | Path | None) -> MessengerConfig:
-    return _load_messenger_config(config_path)
-
-
-def load_required_messenger_config_from_file(
-    config_path: str | Path | None,
-) -> MessengerConfig:
-    """Load bot runtime config without notification-style fail-soft fallback."""
-
-    text = normalize_text(config_path)
-    if not text:
-        raise ValueError("orca_auto bot config path could not be resolved")
-    _, raw = load_required_shared_config_mapping(
-        text,
-        missing_error=lambda path: FileNotFoundError(
-            f"orca_auto bot config does not exist: {path}"
-        ),
-    )
-    return messenger_config_from_mapping(messenger_mapping_from_root(raw))
-
-
 def build_channel_from_config_path(
     config_path: str | Path | None,
     *,
@@ -80,6 +58,4 @@ def build_channel_from_config_path(
 
 __all__ = [
     "build_channel_from_config_path",
-    "load_messenger_config_from_file",
-    "load_required_messenger_config_from_file",
 ]

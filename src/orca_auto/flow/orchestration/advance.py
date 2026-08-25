@@ -10,6 +10,7 @@ from orca_auto.core.engine_process import read_confined_text
 from orca_auto.core.machine_observation import MACHINE_OBSERVATION_FILE
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.utils import normalize_text
+from orca_auto.flow.contracts.workflow import workflow_metadata
 from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.advance_phases import (
     AdvanceContext as _AdvanceContext,
@@ -70,15 +71,6 @@ def _terminal_observation_published(workspace_dir: Path) -> bool:
     return True
 
 
-def _workflow_metadata(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    if isinstance(metadata, dict):
-        return metadata
-    metadata = {}
-    payload["metadata"] = metadata
-    return metadata
-
-
 def _validate_or_quarantine_workflow_identity(
     payload: dict[str, Any],
     *,
@@ -86,7 +78,7 @@ def _validate_or_quarantine_workflow_identity(
     workflow_root_path: Path,
     services: OrchestrationServices,
 ) -> str:
-    metadata = _workflow_metadata(payload)
+    metadata = workflow_metadata(payload)
     workflow_error = metadata.get("workflow_error")
     if (
         isinstance(workflow_error, dict)
@@ -204,7 +196,7 @@ def advance_workflow(
                 payload,
             )
             return payload
-        metadata = _workflow_metadata(payload)
+        metadata = workflow_metadata(payload)
         was_blocked = bool(metadata.get("si_publish_blocked"))
         try:
             previous_attempts = max(0, int(metadata.get("si_publish_attempts", 0)))

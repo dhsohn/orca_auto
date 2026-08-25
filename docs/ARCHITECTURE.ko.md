@@ -50,7 +50,7 @@ src/orca_auto/
 │   ├── state/           # 공용 엔진 상태 헬퍼
 │   ├── config/          # 설정 스키마 + 로딩
 │   ├── messaging/       # 중립 Doc/port + Discord 알림 adapter
-│   ├── notifications/   # 엔진 알림 훅 + 전송
+│   ├── notifications/   # 엔진 알림 함수 + 전송
 │   ├── commands/        # 공용 run-dir / queue 명령 로직
 │   ├── paths/           # 경로 검증 + 워크플로우 경로 해석
 │   └── utils/           # 락, 영속화, 프로세스 추적, 형 변환
@@ -190,9 +190,7 @@ import-linter 계약으로 보호합니다.
 - `queue_worker_module` — 부모 워커 진입점
 - `queue_functions` — runtime root, 큐 연산, 엔트리 조회, PID 파일 이름
 - `runner_callbacks` — 자식 러너와 자식 명령 빌더
-- `artifact_adapter` — 페이로드 빌드/로드
-- `notification_hooks` — started / finished / retry 콜백
-- `context_builder` — 실행을 위한 DI 이음새
+- `queue_worker_runner` — 선택적으로 직접 바인딩하는 부모 워커 callable
 
 `EngineDefinition.build_queue_runtime()`은 이 선언을 `EngineQueueRuntime`으로
 연결하는 canonical 경계입니다. 엔진의 큐 함수, PID 파일 이름, 정확한 identity
@@ -529,10 +527,10 @@ orca_auto는 단방향 발신 알림만 전송합니다. 작업 및 워크플로
 `discord_http.py`에 있습니다. 모든 transport 및 response-read 실패를 이 adapter 경계에서
 정규화하므로 알림 실패는 durable publication에 대한 advisory로 남습니다.
 
-`core/notifications/`는 엔진 알림 훅 계층(`engines.py`)을
-유지합니다. 각 `EngineDefinition`은 `job_started` / `job_finished` / `retry` 훅을 등록할
-수 있습니다. 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 및 반응 경로
-xTB 자식 페이즈는 각각 한 메시지로 요약합니다.
+`core/notifications/`는 엔진별 알림 함수(`engines.py`)를 유지합니다. 제출·실행·종료
+adapter가 해당 queued/started/finished callback을 직접 연결하고, ORCA 재시도 알림은
+ORCA 실행 adapter가 연결합니다. 워크플로우 알림은 작업별 ORCA 메시지는 유지하되,
+내부 CREST 및 반응 경로 xTB 자식 페이즈는 각각 한 메시지로 요약합니다.
 
 채널은 해당 credential이 완전할 때만 활성화됩니다. Discord에는
 `messenger.discord.bot_token`과 `messenger.discord.default_channel_id`가 필요합니다.

@@ -18,7 +18,6 @@ from . import _orca_local_lookup as _local_lookup
 from . import _orca_path_helpers as _path_helpers
 
 ContractPayload = dict[str, Any]
-StatusTuple = tuple[str, str, str, str]
 
 
 @dataclass(frozen=True)
@@ -73,7 +72,7 @@ def load_orca_artifact_contract_impl(
     )
     roots = _contract_context.resolve_roots(orca_allowed_root)
     context = _load_contract_context(request, roots)
-    return _contract_from_context(request, roots, context)
+    return _contract_from_context(request, context)
 
 
 def contract_from_orca_payload_impl(
@@ -137,18 +136,16 @@ def _load_contract_context(
 
 def _contract_from_context(
     request: _contract_context.LoadRequest,
-    roots: _contract_context.LoadRoots,
     context: _contract_context.LoaderContext,
 ) -> Any:
     return _contract_from_payload(
-        _payload_from_context(request, roots, context),
+        _payload_from_context(request, context),
         request,
     )
 
 
 def _payload_from_context(
     request: _contract_context.LoadRequest,
-    roots: _contract_context.LoadRoots,
     context: _contract_context.LoaderContext,
 ) -> ContractPayload:
     latest_known_path = _latest_known_path(request, context)

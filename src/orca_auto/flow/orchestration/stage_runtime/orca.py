@@ -6,19 +6,13 @@ from typing import Any
 
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import STATUS_FAILED
-from orca_auto.core.utils import mapping_or_empty, normalize_text, safe_int
+from orca_auto.core.utils import coerce_bool, normalize_text, safe_int
 from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_input
-from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
-from orca_auto.flow.orchestration.services import (
-    OrchestrationServices,
-    resolve_orchestration_services,
-)
+from orca_auto.flow.orchestration.services import OrchestrationServices
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _apply_contract_status,
     _apply_submission_result,
-    _coerce_bool,
     _engine_stage_sync_context,
-    _load_contract_or_none,
     append_unique_artifact_impl,
 )
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView, WorkflowTaskView
@@ -40,7 +34,7 @@ def _orca_submission_resource_kwargs(enqueue_payload: dict[str, Any]) -> dict[st
         resource_kwargs["max_cores"] = max_cores
     if max_memory_gb > 0:
         resource_kwargs["max_memory_gb"] = max_memory_gb
-    if _coerce_bool(enqueue_payload.get("force", False)):
+    if coerce_bool(enqueue_payload.get("force", False)):
         resource_kwargs["force"] = True
     return resource_kwargs
 
@@ -329,38 +323,3 @@ def sync_orca_stage_impl(
         contract,
     )
     context.set_output_artifacts(_orca_output_artifacts(contract))
-
-
-def completed_orca_stage_impl(
-    stage: dict[str, Any],
-    *,
-    orca_config: str | None,
-    services: OrchestrationServices | None = None,
-) -> Any | None:
-    resolved = resolve_orchestration_services(services)
-    task = stage.get("task")
-    if not isinstance(task, dict):
-        return None
-    payload = workflow_task_payload_dict(task)
-    enqueue_payload = mapping_or_empty(task.get("enqueue_payload"))
-    stage_metadata = workflow_stage_metadata(stage)
-    reaction_dir_hint = normalize_text(
-        payload.get("reaction_dir") or enqueue_payload.get("reaction_dir")
-    )
-    target = (
-        normalize_text(stage_metadata.get("run_id"))
-        or reaction_dir_hint
-        or normalize_text(stage_metadata.get("queue_id"))
-    )
-    if not target:
-        return None
-    return _load_contract_or_none(
-        resolved.engines.load_orca_artifact_contract,
-        engine="orca",
-        target=target,
-        stage=stage,
-        orca_allowed_root=load_config_root_impl(orca_config, engine="orca", services=resolved),
-        queue_id=normalize_text(stage_metadata.get("queue_id")),
-        run_id=normalize_text(stage_metadata.get("run_id")),
-        reaction_dir=reaction_dir_hint,
-    )

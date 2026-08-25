@@ -26,6 +26,7 @@ from orca_auto.flow.contracts.workflow import coerce_workflow_plan_payload
 
 WORKFLOW_LOCK_NAME = "workflow.lock"
 WORKFLOW_CREATE_LOCK_NAME = ".workflow_create.lock"
+WORKFLOW_CREATION_MARKER_FILE = ".orca_auto_workflow_creation.json"
 
 
 def _workflow_parent_dir(path: Path) -> Path:
@@ -132,6 +133,7 @@ def iter_workflow_workspaces(workflow_root: str | Path) -> list[Path]:
 
 
 __all__ = [
+    "WORKFLOW_CREATION_MARKER_FILE",
     "WORKFLOW_FILE_NAME",
     "WORKFLOW_CREATE_LOCK_NAME",
     "WORKFLOW_STAGE_DIRNAMES",

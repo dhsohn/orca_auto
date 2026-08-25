@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import time
 from collections.abc import Callable, Sequence
@@ -45,18 +44,6 @@ def start_background_process(
             start_new_session=True,
             text=True,
         )
-
-
-def live_queue_ids_for_slots(
-    admission_root: str | Path,
-    *,
-    list_slots_fn: Callable[[str | Path], list[Any]],
-) -> set[str]:
-    return {
-        str(getattr(slot, "queue_id", "")).strip()
-        for slot in list_slots_fn(admission_root)
-        if str(getattr(slot, "queue_id", "")).strip()
-    }
 
 
 def live_queue_slot_keys_for_slots(
@@ -223,39 +210,9 @@ def shutdown_child_process_with_grace(
     return True
 
 
-def request_job_cancellation(
-    proc: Any,
-    *,
-    cancel_signal: int,
-    terminate_process_fn: Callable[[Any], None],
-) -> None:
-    try:
-        pid = getattr(proc, "pid", None)
-        if pid is not None:
-            try:
-                os.killpg(pid, cancel_signal)
-                return
-            except (OSError, ProcessLookupError, PermissionError):
-                pass
-
-        _send_process_cancellation_signal(proc, cancel_signal)
-    except (OSError, ProcessLookupError, PermissionError):
-        terminate_process_fn(proc)
-
-
-def _send_process_cancellation_signal(proc: Any, cancel_signal: int) -> None:
-    send_signal = getattr(proc, "send_signal", None)
-    if callable(send_signal):
-        send_signal(cancel_signal)
-        return
-    os.kill(proc.pid, cancel_signal)
-
-
 __all__ = [
-    "live_queue_ids_for_slots",
     "live_queue_slot_keys_for_slots",
     "reconcile_orphaned_child_queue_entries",
-    "request_job_cancellation",
     "requeue_result_is_cancelled",
     "shutdown_child_process_with_grace",
     "start_background_process",

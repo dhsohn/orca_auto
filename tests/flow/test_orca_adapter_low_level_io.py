@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.utils.coercion import normalize_bool, safe_int
+from orca_auto.core.utils.coercion import coerce_bool, normalize_bool, safe_int
 from orca_auto.flow.adapters import _orca_local_lookup, _orca_path_helpers
 
 
@@ -13,6 +13,9 @@ def test_normalize_bool_and_safe_int_cover_string_and_default_paths() -> None:
     assert normalize_bool(True) is True
     assert normalize_bool(" yes ") is True
     assert normalize_bool("off") is False
+    assert coerce_bool("off") is False
+    assert coerce_bool(["truthy"]) is True
+    assert coerce_bool([]) is False
 
     assert safe_int("12") == 12
     assert safe_int("bad", default=7) == 7

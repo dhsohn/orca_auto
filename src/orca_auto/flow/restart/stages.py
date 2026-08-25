@@ -103,8 +103,6 @@ def active_restart_error(workflow_id: str, rows: list[dict[str, str]]) -> ValueE
 def clear_phase_notification_state(
     metadata: dict[str, Any],
     restarted_stages: list[dict[str, str]],
-    *,
-    context: RestartStageContext,
 ) -> None:
     phase_notifications = metadata.get("phase_notifications")
     if not isinstance(phase_notifications, dict):

@@ -50,7 +50,7 @@ src/orca_auto/
 │   ├── state/           # Shared engine state helpers
 │   ├── config/          # Config schema + loading
 │   ├── messaging/       # Neutral Doc/port + Discord notification adapter
-│   ├── notifications/   # Engine notification hooks + delivery
+│   ├── notifications/   # Engine notification functions + delivery
 │   ├── commands/        # Shared run-dir / queue command logic
 │   ├── paths/           # Path validation + workflow path resolution
 │   └── utils/           # Locks, persistence, process tracking, coercion
@@ -193,9 +193,7 @@ bundles everything the shared runtime needs for an engine:
 - `queue_worker_module` — parent-worker entrypoint
 - `queue_functions` — runtime roots, queue operations, entry lookup, and PID-file name
 - `runner_callbacks` — child runner and child-command builder
-- `artifact_adapter` — build/load payloads
-- `notification_hooks` — started / finished / retry callbacks
-- `context_builder` — DI seams for execution
+- `queue_worker_runner` — optional directly bound parent-worker callable
 
 `EngineDefinition.build_queue_runtime()` is the canonical bridge from that
 declaration to `EngineQueueRuntime`: it installs the engine's queue functions,
@@ -571,10 +569,11 @@ shared HTTP retry/backoff helpers live in `discord_http.py`. All transport and
 response-read failures are normalized at this adapter boundary, so notification
 failure remains advisory to durable publication.
 
-`core/notifications/` holds the engine notification hook layer (`engines.py`).
-Each `EngineDefinition` can register `job_started` /
-`job_finished` / `retry` hooks. Workflow alerts keep per-job ORCA messages but
-summarize internal CREST and reaction-path xTB child phases into one message each.
+`core/notifications/` holds the engine-specific notification functions
+(`engines.py`). Submission, execution, and terminal adapters bind the relevant
+queued/started/finished callbacks directly; ORCA retry notifications are bound by
+its execution adapter. Workflow alerts keep per-job ORCA messages but summarize
+internal CREST and reaction-path xTB child phases into one message each.
 
 The channel is enabled only when its credentials are complete: Discord requires
 `messenger.discord.bot_token` plus `messenger.discord.default_channel_id`.

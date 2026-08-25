@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.cli_common import _repo_root
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
     engine_config_mapping,
@@ -196,9 +197,10 @@ def _render_unit_template(template: str, *, repo: Path, config: Path) -> str:
     read_write_paths = _render_read_write_paths(config)
     rendered = template.replace("/home/%i/orca_auto", repo_text)
     lines = []
+    config_environment_prefix = f"Environment={ORCA_AUTO_CONFIG_ENV_VAR}="
     for line in rendered.splitlines():
-        if line.startswith("Environment=ORCA_AUTO_CONFIG="):
-            lines.append(f"Environment=ORCA_AUTO_CONFIG={config_text}")
+        if line.startswith(config_environment_prefix):
+            lines.append(f"{config_environment_prefix}{config_text}")
         elif line.strip() == _SYSTEMD_READ_WRITE_PLACEHOLDER:
             lines.append(read_write_paths)
         else:

@@ -30,34 +30,12 @@ class EngineRunnerCallbacks:
 
 
 @dataclass(frozen=True)
-class EngineContextBuilder:
-    build_worker_context: Callable[..., Any] | None = None
-    build_queue_context: Callable[..., Any] | None = None
-
-
-@dataclass(frozen=True)
-class EngineArtifactAdapter:
-    build_payload: Callable[..., dict[str, Any]]
-    load_payload: Callable[..., dict[str, Any] | None]
-
-
-@dataclass(frozen=True)
-class EngineNotificationHooks:
-    job_started: Callable[..., Any] | None = None
-    job_finished: Callable[..., Any] | None = None
-    retry: Callable[..., Any] | None = None
-
-
-@dataclass(frozen=True)
 class EngineDefinition:
     engine: str
     load_config: Callable[[str], Any]
     queue_worker_module: str
     queue_functions: EngineQueueFunctions
     runner_callbacks: EngineRunnerCallbacks
-    context_builder: EngineContextBuilder | None = None
-    artifact_adapter: EngineArtifactAdapter | None = None
-    notification_hooks: EngineNotificationHooks | None = None
     queue_worker_runner: Callable[[list[str]], int] | None = None
 
     def build_queue_runtime(self) -> EngineQueueRuntime:
@@ -105,10 +83,7 @@ class EngineDefinition:
 
 
 __all__ = [
-    "EngineArtifactAdapter",
-    "EngineContextBuilder",
     "EngineDefinition",
-    "EngineNotificationHooks",
     "EngineQueueFunctions",
     "EngineRunnerCallbacks",
 ]

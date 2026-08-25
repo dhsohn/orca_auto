@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.utils import (
+    coerce_bool as _coerce_bool,
+)
+from orca_auto.core.utils import (
     coerce_list as _coerce_sequence,
 )
 from orca_auto.core.utils import (
@@ -13,19 +16,12 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
-from orca_auto.core.utils.coercion import normalize_bool as _shared_normalize_bool
 from orca_auto.flow.contracts.workflow import (
     coerce_workflow_plan_payload,
     workflow_request_parameters,
 )
 
 from .store import iter_workflow_workspaces, load_workflow_payload, workflow_file_path
-
-
-def _coerce_bool(value: Any) -> bool:
-    if isinstance(value, (bool, str)) or value is None:
-        return _shared_normalize_bool(value)
-    return bool(value)
 
 
 def workflow_has_active_downstream(payload: dict[str, Any]) -> bool:

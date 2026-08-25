@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from orca_auto.core import engine_runner as _engine_runner
+from orca_auto.core.artifacts import CREST_JOB_MANIFEST_FILE
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
@@ -41,7 +42,6 @@ from orca_auto.flow.xyz_utils import (
 )
 
 from .job_inputs import (
-    MANIFEST_FILE_NAME,
     job_mode,
     load_job_manifest,
 )
@@ -617,7 +617,7 @@ def start_crest_job(
     resolved_selected_xyz = str(selected_xyz.resolve())
     resolved_job_dir = str(job_dir.resolve())
     resolved_mode = job_mode(manifest)
-    manifest_file = job_dir / MANIFEST_FILE_NAME
+    manifest_file = job_dir / CREST_JOB_MANIFEST_FILE
     resolved_manifest_path = (
         str(execution_snapshot.get("manifest_path") or "")
         if execution_snapshot is not None

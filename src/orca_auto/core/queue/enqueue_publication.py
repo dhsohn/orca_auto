@@ -314,6 +314,37 @@ def _recover_committed_enqueue(
     return recovered
 
 
+def _park_queue_record_repair_pending(
+    entries: list[QueueEntry],
+    entry: QueueEntry,
+    *,
+    expected_state: str,
+    expected_token: str,
+) -> tuple[None, bool]:
+    """Token-gated CAS transition from one owned lease to repair pending."""
+
+    for index, current in enumerate(entries):
+        if current.queue_id != entry.queue_id:
+            continue
+        if (
+            current.status != QueueStatus.PENDING
+            or queue_record_sync_state(current) != expected_state
+            or _entry_token(current) != expected_token
+        ):
+            return None, False
+        metadata = dict(current.metadata)
+        metadata.update(
+            queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                token=expected_token,
+                owner_pid=0,
+            )
+        )
+        entries[index] = replace(current, metadata=metadata)
+        return None, True
+    return None, False
+
+
 def _park_repair_pending(
     spec: EnqueuePublicationSpec,
     entry: QueueEntry,
@@ -324,26 +355,12 @@ def _park_repair_pending(
     """Token-gated CAS parking the owned lease back to the explicit repair queue."""
 
     def park(entries: list[QueueEntry]) -> tuple[None, bool]:
-        for index, current in enumerate(entries):
-            if current.queue_id != entry.queue_id:
-                continue
-            if (
-                current.status != QueueStatus.PENDING
-                or queue_record_sync_state(current) != expected_state
-                or _entry_token(current) != expected_token
-            ):
-                return None, False
-            metadata = dict(current.metadata)
-            metadata.update(
-                queue_record_sync_metadata(
-                    QUEUE_RECORD_SYNC_REPAIR_PENDING,
-                    token=expected_token,
-                    owner_pid=0,
-                )
-            )
-            entries[index] = replace(current, metadata=metadata)
-            return None, True
-        return None, False
+        return _park_queue_record_repair_pending(
+            entries,
+            entry,
+            expected_state=expected_state,
+            expected_token=expected_token,
+        )
 
     try:
         mutate_entries(spec.queue_root, park)
@@ -703,26 +720,12 @@ def repair_enqueue_publication_outcome(
         raise RuntimeError(f"{label}: queue entry disappeared during repair: {entry.queue_id}")
 
     def park_repair_lease(entries: list[QueueEntry]) -> tuple[None, bool]:
-        for index, current in enumerate(entries):
-            if current.queue_id != entry.queue_id:
-                continue
-            if (
-                current.status != QueueStatus.PENDING
-                or queue_record_sync_state(current) != QUEUE_RECORD_SYNC_REPAIRING
-                or _entry_token(current) != repair_token
-            ):
-                return None, False
-            metadata = dict(current.metadata)
-            metadata.update(
-                queue_record_sync_metadata(
-                    QUEUE_RECORD_SYNC_REPAIR_PENDING,
-                    token=repair_token,
-                    owner_pid=0,
-                )
-            )
-            entries[index] = replace(current, metadata=metadata)
-            return None, True
-        return None, False
+        return _park_queue_record_repair_pending(
+            entries,
+            entry,
+            expected_state=QUEUE_RECORD_SYNC_REPAIRING,
+            expected_token=repair_token,
+        )
 
     claimed = False
     try:

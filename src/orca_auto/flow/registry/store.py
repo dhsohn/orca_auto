@@ -26,6 +26,7 @@ from orca_auto.core.utils import (
     safe_int as _safe_int,
 )
 from orca_auto.core.utils.lock import file_lock
+from orca_auto.flow.workflow.store import WORKFLOW_CREATION_MARKER_FILE
 
 from ..state import (
     acquire_workflow_lock,
@@ -38,7 +39,6 @@ from . import _markers as _markers
 WORKFLOW_REGISTRY_FILE_NAME = "workflow_registry.json"
 WORKFLOW_REGISTRY_LOCK_NAME = "workflow_registry.lock"
 WORKFLOW_REGISTRY_CLEARED_FILE_NAME = "workflow_registry_cleared.json"
-_WORKFLOW_CREATION_MARKER = ".orca_auto_workflow_creation.json"
 _TERMINAL_WORKFLOW_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "cancel_failed", "submission_failed"}
 )
@@ -389,10 +389,10 @@ def list_workflow_registry(
     resolved_root.mkdir(parents=True, exist_ok=True)
     path = _registry_path(resolved_root)
     published_creation_markers = [
-        workspace / _WORKFLOW_CREATION_MARKER
+        workspace / WORKFLOW_CREATION_MARKER_FILE
         for workspace in iter_workflow_workspace_candidate_dirs(resolved_root)
         if (workspace / "workflow.json").is_file()
-        and (workspace / _WORKFLOW_CREATION_MARKER).is_file()
+        and (workspace / WORKFLOW_CREATION_MARKER_FILE).is_file()
     ]
     if published_creation_markers:
         repaired_records = (reindex_fn or reindex_workflow_registry)(resolved_root)

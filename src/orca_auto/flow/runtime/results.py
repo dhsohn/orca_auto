@@ -14,8 +14,8 @@ from orca_auto.core.statuses import (
     STATUS_RUNNING,
     STATUS_SUBMITTED,
 )
+from orca_auto.core.utils.coercion import normalize_text
 
-from . import _common as _runtime_common
 from .models import WorkflowAdvanceResult
 
 TERMINAL_WORKFLOW_STATUSES = frozenset(
@@ -74,10 +74,8 @@ def workflow_advanced_result(
     reason: str = "",
 ) -> WorkflowAdvanceResult:
     result: WorkflowAdvanceResult = {
-        "workflow_id": _runtime_common.normalize_text(payload.get("workflow_id"))
-        or record.workflow_id,
-        "template_name": _runtime_common.normalize_text(payload.get("template_name"))
-        or record.template_name,
+        "workflow_id": normalize_text(payload.get("workflow_id")) or record.workflow_id,
+        "template_name": normalize_text(payload.get("template_name")) or record.template_name,
         "previous_status": previous_status,
         "status": status,
         "advanced": True,
@@ -109,16 +107,12 @@ def workflow_needs_terminal_sync(
     for raw_stage in payload.get("stages", []):
         if not isinstance(raw_stage, dict):
             continue
-        if (
-            _runtime_common.normalize_text(raw_stage.get("status")).lower()
-            in ACTIVE_TERMINAL_SYNC_STATUSES
-        ):
+        if normalize_text(raw_stage.get("status")).lower() in ACTIVE_TERMINAL_SYNC_STATUSES:
             return True
         task = raw_stage.get("task")
         if (
             isinstance(task, dict)
-            and _runtime_common.normalize_text(task.get("status")).lower()
-            in ACTIVE_TERMINAL_SYNC_STATUSES
+            and normalize_text(task.get("status")).lower() in ACTIVE_TERMINAL_SYNC_STATUSES
         ):
             return True
     return workflow_has_active_downstream_fn(payload)

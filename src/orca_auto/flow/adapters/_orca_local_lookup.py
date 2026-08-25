@@ -6,9 +6,6 @@ from typing import Any
 from orca_auto.core.artifacts import QUEUE_FILE as QUEUE_FILE_NAME
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue.metadata import (
-    mapping_metadata as queue_entry_metadata_impl,
-)
-from orca_auto.core.queue.metadata import (
     mapping_metadata_value as queue_entry_metadata_value_impl,
 )
 from orca_auto.core.utils.coercion import normalize_text
@@ -77,6 +74,5 @@ def find_queue_entry_impl(
 __all__ = [
     "find_queue_entry_impl",
     "load_json_list_impl",
-    "queue_entry_metadata_impl",
     "queue_entry_metadata_value_impl",
 ]

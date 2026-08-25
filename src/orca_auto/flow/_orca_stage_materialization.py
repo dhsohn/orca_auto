@@ -32,6 +32,7 @@ from orca_auto.orca.input_blocks import (
     validate_supported_xyz_geometry_syntax,
 )
 from orca_auto.orca.job_type import FREQ_RE
+from orca_auto.orca.resource_directives import maxcore_mb_per_core
 from orca_auto.orca.scants import validate_scan_coordinate_lines
 
 from . import _orca_stage_payloads
@@ -322,11 +323,6 @@ def _validate_workflow_route_field_line(raw_line: str) -> None:
         raise ValueError(
             f"workflow ORCA route field contains a marker-prefixed payload token: {invalid!r}"
         )
-
-
-def maxcore_mb_per_core(*, max_memory_gb: int, max_cores: int) -> int:
-    total_mb = max(1, int(max_memory_gb)) * 1024
-    return max(1, total_mb // max(1, int(max_cores)))
 
 
 def _positive_multiplicity(value: int) -> int:

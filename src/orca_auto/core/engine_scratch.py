@@ -272,12 +272,10 @@ class EngineScratchWorkspace:
                         label="engine scratch workspace",
                     )
                     _write_workspace_manifest(
-                        workspace,
                         output_dir,
                         workspace_dir_fd=workspace_dir_fd,
                     )
                     staged = _stage_input_closure(
-                        workspace,
                         durable,
                         workspace_dir_fd=workspace_dir_fd,
                         captured_inputs=captured_inputs,
@@ -632,7 +630,6 @@ def _atomic_write_bytes_at(
 
 
 def _write_workspace_manifest(
-    workspace: Path,
     durable_dir: Path,
     *,
     workspace_dir_fd: int,
@@ -834,7 +831,6 @@ def _input_closure_size_bytes(
 
 
 def _stage_input_closure(
-    workspace: Path,
     durable_input: Path,
     *,
     workspace_dir_fd: int,
@@ -1296,7 +1292,7 @@ def _recover_incomplete_publication(
     return phase
 
 
-def _scratch_entries(workspace: Path, workspace_dir_fd: int) -> list[str]:
+def _scratch_entries(workspace_dir_fd: int) -> list[str]:
     entries: list[str] = []
     for name in sorted(os.listdir(workspace_dir_fd)):
         if Path(name).name != name:
@@ -1332,7 +1328,7 @@ def _publish_workspace(
     journal_written = False
     commit_durable = False
     try:
-        for source_name in _scratch_entries(workspace, workspace_dir_fd):
+        for source_name in _scratch_entries(workspace_dir_fd):
             baseline = staged_inputs.get(source_name)
             if baseline is not None:
                 digest, size = _regular_file_sha256_at(

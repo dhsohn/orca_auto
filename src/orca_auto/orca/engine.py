@@ -10,7 +10,6 @@ from orca_auto.core.engines import (
 )
 
 from .config import load_config
-from .notifications import notify_run_finished_event
 from .queue.adapter import dequeue_entry_if_pending, dequeue_next, get_entry_by_id, list_queue
 
 ENGINE_DEFINITION = build_queue_engine_definition(
@@ -28,7 +27,6 @@ ENGINE_DEFINITION = build_queue_engine_definition(
     ),
     queue_entry_by_id=lambda root, queue_id: get_entry_by_id(Path(root), queue_id),
     worker_pid_file_name="queue_worker.pid",
-    job_finished=notify_run_finished_event,
 )
 ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
 build_worker_child_command = ENGINE_DEFINITION.runner_callbacks.build_worker_child_command

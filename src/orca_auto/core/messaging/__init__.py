@@ -29,11 +29,7 @@ from .richtext import (
 )
 
 if TYPE_CHECKING:
-    from .config_io import (
-        build_channel_from_config_path,
-        load_messenger_config_from_file,
-        load_required_messenger_config_from_file,
-    )
+    from .config_io import build_channel_from_config_path
     from .discord_bot import DiscordBotChannel
     from .registry import build_channel
 
@@ -41,11 +37,6 @@ _LAZY_EXPORTS = {
     "DiscordBotChannel": (".discord_bot", "DiscordBotChannel"),
     "build_channel": (".registry", "build_channel"),
     "build_channel_from_config_path": (".config_io", "build_channel_from_config_path"),
-    "load_messenger_config_from_file": (".config_io", "load_messenger_config_from_file"),
-    "load_required_messenger_config_from_file": (
-        ".config_io",
-        "load_required_messenger_config_from_file",
-    ),
 }
 
 
@@ -76,8 +67,6 @@ __all__ = [
     "field_row",
     "group",
     "line",
-    "load_messenger_config_from_file",
-    "load_required_messenger_config_from_file",
     "raw",
     "render_discord_embed",
     "text",

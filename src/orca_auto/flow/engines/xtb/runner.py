@@ -13,6 +13,7 @@ from typing import Any, TextIO
 import yaml
 
 from orca_auto.core import engine_runner as _engine_runner
+from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
@@ -46,7 +47,6 @@ from orca_auto.flow.hessian_utils import parse_xtb_hessian
 
 from . import runner_ranking as _runner_ranking
 from .job_inputs import (
-    MANIFEST_FILE_NAME,
     load_job_manifest,
     resolve_job_inputs,
 )
@@ -320,7 +320,7 @@ def _run_candidate_sp_job(
                 candidate_run_dir,
             )
         )
-    candidate_manifest_path = candidate_run_dir / MANIFEST_FILE_NAME
+    candidate_manifest_path = candidate_run_dir / XTB_JOB_MANIFEST_FILE
     atomic_write_confined_bytes(
         candidate_run_dir,
         candidate_manifest_path,
@@ -734,7 +734,7 @@ def start_xtb_job(
     resolved_manifest_path = str(
         execution_snapshot.get("manifest_path")
         if execution_snapshot is not None
-        else (job_dir / MANIFEST_FILE_NAME).resolve()
+        else (job_dir / XTB_JOB_MANIFEST_FILE).resolve()
     )
     resolved_job_dir = str(job_dir.resolve())
     resolved_job_type = str(inputs["job_type"])

@@ -796,7 +796,10 @@ def test_queue_worker_fill_slots_starts_multiple_child_processes(
         activated_slots.append((Path(root), token, dict(kwargs)))
         return SimpleNamespace(token=token)
 
-    monkeypatch.setattr(queue_cmd.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        "orca_auto.core.queue.child.process.subprocess.Popen",
+        fake_popen,
+    )
     monkeypatch.setattr(
         queue_cmd,
         "activate_reserved_slot",

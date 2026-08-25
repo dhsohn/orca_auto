@@ -93,7 +93,7 @@ def terminal_reason(
     return "unknown"
 
 
-def terminal_metadata_update(state: dict[str, Any], entry: Any) -> dict[str, Any]:
+def terminal_metadata_update(state: dict[str, Any]) -> dict[str, Any]:
     state = _flatten_engine_payload(state)
     metadata_update: dict[str, Any] = {}
     candidate_count_raw = state.get("candidate_count")
@@ -140,7 +140,7 @@ def load_terminal_summary(
         job_id=entry.task_id,
         status=status,
         reason=reason,
-        metadata_update=terminal_metadata_update(state, entry),
+        metadata_update=terminal_metadata_update(state),
     )
 
 

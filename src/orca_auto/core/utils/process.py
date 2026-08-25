@@ -8,23 +8,14 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+
+from .coercion import positive_int as _positive_int
 
 PIDFD_SIGNAL_PROCESS_GROUP = 1 << 2
 
 
 class StableProcessSignalError(RuntimeError):
     """Raised when a process cannot be signalled through a stable pidfd target."""
-
-
-def positive_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
 
 
 def process_start_ticks(pid: int, *, proc_root: Path = Path("/proc")) -> int | None:
@@ -214,8 +205,8 @@ def read_pid_payload(pid_path: Path) -> tuple[int | None, int | None, str | None
 
     raw_boot_id = raw.get("boot_id")
     boot_id = raw_boot_id.strip() if isinstance(raw_boot_id, str) and raw_boot_id.strip() else None
-    pid = positive_int(raw.get("pid"))
-    ticks = positive_int(raw.get("process_start_ticks"))
+    pid = _positive_int(raw.get("pid"))
+    ticks = _positive_int(raw.get("process_start_ticks"))
     if pid is None or ticks is None or boot_id is None:
         return None, None, None
     return pid, ticks, boot_id

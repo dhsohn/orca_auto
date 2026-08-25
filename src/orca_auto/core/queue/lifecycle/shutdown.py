@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 
 from orca_auto.core.statuses import STATUS_CANCEL_REQUESTED
@@ -214,33 +214,10 @@ def finalize_child_exit_with_policy(
     )
 
 
-def request_pending_cancellations(
-    running_jobs: Iterable[tuple[str, Any]],
-    *,
-    get_cancel_requested_fn: Callable[..., bool],
-    request_job_cancellation_fn: Callable[[Any], Any],
-) -> None:
-    for _queue_id, job in running_jobs:
-        if job.cancel_requested:
-            continue
-        generation_kwargs = {"expected_entry": job.entry}
-        task_id = getattr(job.entry, "task_id", None)
-        if task_id:
-            generation_kwargs["expected_task_id"] = task_id
-        if get_cancel_requested_fn(
-            str(job.queue_root),
-            job.entry.queue_id,
-            **generation_kwargs,
-        ):
-            request_job_cancellation_fn(job.process)
-            job.cancel_requested = True
-
-
 __all__ = [
     "cancel_running_process_job",
     "finalize_child_exit_with_policy",
     "finalize_child_worker_exit",
-    "request_pending_cancellations",
     "shutdown_running_job",
     "shutdown_running_process_job",
 ]

@@ -16,6 +16,7 @@ from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.flow import activity
 from orca_auto.flow.activity import _cancel as _activity_cancel
 from orca_auto.flow.activity import _clear as _activity_clear
+from orca_auto.flow.activity import _collectors as _activity_collectors
 from orca_auto.flow.activity import _list as _activity_list
 from orca_auto.flow.activity import _model as _activity_model
 from orca_auto.flow.activity import _orca as _activity_orca
@@ -233,7 +234,7 @@ def test_list_activities_treats_submission_failed_stage_as_terminal_for_current_
 
 def test_cancel_activity_routes_workflow_targets(monkeypatch) -> None:
     monkeypatch.setattr(
-        _activity_list,
+        _activity_collectors,
         "collect_activity_records",
         lambda **kwargs: [
             activity.ActivityRecord(
@@ -266,7 +267,7 @@ def test_cancel_activity_routes_workflow_targets(monkeypatch) -> None:
 
 def test_cancel_activity_routes_xtb_targets(monkeypatch) -> None:
     monkeypatch.setattr(
-        _activity_list,
+        _activity_collectors,
         "collect_activity_records",
         lambda **kwargs: [
             activity.ActivityRecord(
@@ -381,14 +382,14 @@ def test_runtime_path_and_engine_root_edges(
         return {"allowed_root": allowed}
 
     monkeypatch.setattr(_activity_queue_records, "engine_runtime_paths", fake_engine_runtime_paths)
-    assert _activity_list.engine_queue_roots(
+    assert _activity_queue_records.engine_queue_roots(
         "/tmp/cfg.yaml",
         engine="orca",
     ) == (allowed,)
     monkeypatch.setattr(
         _activity_queue_records, "shared_workflow_root_from_config", lambda config_path: ""
     )
-    assert _activity_list.engine_queue_roots(
+    assert _activity_queue_records.engine_queue_roots(
         "/tmp/cfg.yaml",
         engine="xtb",
     ) == (allowed,)
@@ -416,7 +417,7 @@ def test_runtime_path_and_engine_root_edges(
             "allowed_root": runtime_a if workspace_dir == workspace_a else runtime_b,
         },
     )
-    assert _activity_list.engine_queue_roots(
+    assert _activity_queue_records.engine_queue_roots(
         "/tmp/cfg.yaml",
         engine="crest",
     ) == (runtime_a, runtime_b)
@@ -723,7 +724,9 @@ def test_match_activity_record_and_cancel_error_edges(monkeypatch: pytest.Monkey
         _activity_cancel.match_activity_record(records, "missing")
 
     def collect_one(record: activity.ActivityRecord) -> None:
-        monkeypatch.setattr(_activity_list, "collect_activity_records", lambda **kwargs: [record])
+        monkeypatch.setattr(
+            _activity_collectors, "collect_activity_records", lambda **kwargs: [record]
+        )
 
     monkeypatch.setattr(
         _activity_sources,
@@ -772,7 +775,9 @@ def test_cancel_activity_routes_crest_and_orca_targets(monkeypatch: pytest.Monke
         ),
     }
     monkeypatch.setattr(
-        _activity_list, "collect_activity_records", lambda **kwargs: list(records.values())
+        _activity_collectors,
+        "collect_activity_records",
+        lambda **kwargs: list(records.values()),
     )
     monkeypatch.setitem(
         _activity_cancel._CANCEL_ENGINE_TARGETS,
@@ -964,7 +969,7 @@ def test_cancel_activity_autodiscovers_defaults(monkeypatch) -> None:
         lambda explicit: "/tmp/orca_auto.yaml",
     )
     monkeypatch.setattr(
-        _activity_list,
+        _activity_collectors,
         "collect_activity_records",
         lambda **kwargs: [
             activity.ActivityRecord(

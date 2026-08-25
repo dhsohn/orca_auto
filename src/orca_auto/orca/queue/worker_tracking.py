@@ -28,23 +28,15 @@ from ..job_locations import (
     upsert_job_record,
 )
 from ..notifications import notify_run_finished_event
-from ..state import load_state
+from ..state import load_state, state_payload_job_id
 from .entries import queue_entry_metadata, queue_entry_reaction_dir, queue_entry_task_id
 
 logger = logging.getLogger(__name__)
 
 
-def payload_job_id(payload: Any) -> str:
-    if not isinstance(payload, dict):
-        return ""
-    job = payload.get("job")
-    job = job if isinstance(job, dict) else {}
-    return str(payload.get("job_id") or job.get("id") or "").strip()
-
-
 def payload_matches_expected_job_id(payload: Any, expected_job_id: str | None) -> bool:
     expected = str(expected_job_id or "").strip()
-    return not expected or payload_job_id(payload) == expected
+    return not expected or state_payload_job_id(payload) == expected
 
 
 def get_run_id_from_state(
@@ -206,7 +198,7 @@ def notify_terminal_job_from_state(
             "(expected_job_id=%s state_job_id=%s)",
             job_dir,
             str(expected_job_id or "").strip(),
-            payload_job_id(state),
+            state_payload_job_id(state),
         )
         return False
     if finished_notification_already_sent(state):
@@ -243,7 +235,6 @@ def notify_terminal_job_from_state(
 __all__ = [
     "get_run_id_from_state",
     "notify_terminal_job_from_state",
-    "payload_job_id",
     "payload_matches_expected_job_id",
     "tracking_metadata_from_queue_entry",
     "upsert_queued_job_record",

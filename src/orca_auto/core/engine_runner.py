@@ -12,10 +12,7 @@ from typing import Any
 
 from orca_auto.core.config import engines as _config_engines
 from orca_auto.core.engine_scratch import SCRATCH_RUNTIME_HOME_DIR_NAME
-from orca_auto.core.paths import (
-    validate_configured_executable_path,
-    validate_executable_file,
-)
+from orca_auto.core.paths import validate_configured_executable_path
 from orca_auto.core.utils.persistence import fsync_directory
 
 _INTEGER_TEXT_RE = re.compile(r"[-+]?\d+")
@@ -443,7 +440,6 @@ __all__ = [
     "manifest_int",
     "resolve_configured_executable",
     "resource_actual_dict",
-    "validate_executable_file",
     "validated_solvent_option",
     "verify_executable_identity",
 ]

@@ -38,6 +38,13 @@ def safe_int(value: Any, *, default: int | None = 0) -> int | None:
         return default
 
 
+def positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    parsed = safe_int(value, default=None)
+    return parsed if parsed is not None and parsed > 0 else None
+
+
 def safe_float(value: Any, *, default: float | None = None) -> float | None:
     try:
         return float(value)
@@ -64,6 +71,12 @@ def normalize_bool(
     return default
 
 
+def coerce_bool(value: Any) -> bool:
+    if isinstance(value, (bool, str)) or value is None:
+        return normalize_bool(value)
+    return bool(value)
+
+
 def coerce_int_mapping(value: Any, *, default: int = 0) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}
@@ -77,12 +90,14 @@ def coerce_int_mapping(value: Any, *, default: int = 0) -> dict[str, int]:
 
 
 __all__ = [
+    "coerce_bool",
     "coerce_int_mapping",
     "coerce_list",
     "coerce_mapping",
     "mapping_or_empty",
     "normalize_bool",
     "normalize_text",
+    "positive_int",
     "safe_float",
     "safe_int",
 ]

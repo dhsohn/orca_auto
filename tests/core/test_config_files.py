@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import stat
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -18,10 +17,9 @@ from orca_auto.core.config.files import (
     secure_config_file_permissions,
     shared_workflow_root_from_config,
     validate_shared_config_sections,
-    validated_absolute_linux_path_text,
     validated_runs_root_text,
 )
-from orca_auto.core.messaging.config_io import load_required_messenger_config_from_file
+from orca_auto.core.paths.validation import validated_absolute_linux_path_text
 
 
 def test_messenger_mapping_reads_messenger_section() -> None:
@@ -185,11 +183,6 @@ def test_shared_config_validation_rejects_unknown_fields(
 
 
 @pytest.mark.parametrize(
-    "loader",
-    [load_shared_config_mapping, load_required_messenger_config_from_file],
-    ids=["shared", "required-messenger"],
-)
-@pytest.mark.parametrize(
     ("payload", "message"),
     [
         (
@@ -219,9 +212,8 @@ def test_shared_config_validation_rejects_unknown_fields(
         ),
     ],
 )
-def test_complete_shared_loaders_reject_malformed_execution_controls(
+def test_complete_shared_loader_rejects_malformed_execution_controls(
     tmp_path: Path,
-    loader: Callable[[str | Path], object],
     payload: str,
     message: str,
 ) -> None:
@@ -229,7 +221,7 @@ def test_complete_shared_loaders_reject_malformed_execution_controls(
     config_path.write_text(payload, encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        loader(config_path)
+        load_shared_config_mapping(config_path)
 
 
 @pytest.mark.parametrize(

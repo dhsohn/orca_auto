@@ -26,6 +26,7 @@ from orca_auto.flow.orchestration.workflow_builders import (
     _workflow_workspace,
     _WorkflowWorkspace,
 )
+from orca_auto.flow.workflow.store import WORKFLOW_CREATION_MARKER_FILE
 
 
 def _workflow_context(
@@ -155,7 +156,7 @@ def test_workflow_workspace_reclaims_stale_owned_reservation(tmp_path: Path) -> 
     workflow_root = tmp_path / "workflows"
     workspace_dir = workflow_root / "wf_stale"
     workspace_dir.mkdir(parents=True)
-    (workspace_dir / ".orca_auto_workflow_creation.json").write_text(
+    (workspace_dir / WORKFLOW_CREATION_MARKER_FILE).write_text(
         '{"owner_pid": 999999999, "owner_process_start": "stale"}',
         encoding="utf-8",
     )
@@ -170,7 +171,7 @@ def test_workflow_workspace_reclaims_stale_owned_reservation(tmp_path: Path) -> 
 
     assert workspace.workspace_dir == workspace_dir.resolve()
     assert not (workspace_dir / "stale.txt").exists()
-    assert (workspace_dir / ".orca_auto_workflow_creation.json").is_file()
+    assert (workspace_dir / WORKFLOW_CREATION_MARKER_FILE).is_file()
 
 
 def test_workflow_workspace_rejects_second_live_reservation(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import CREST_JOB_MANIFEST_FILE
 from orca_auto.core.commands import run_dir as _shared_run_dir
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.engines.artifacts import (
@@ -19,13 +20,12 @@ from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_pat
 from orca_auto.core.utils import now_utc_iso, timestamped_token
 
 _PREFERRED_EXCLUDE_RE = re.compile(r"(?:^crest_|^struc|^coord)", re.IGNORECASE)
-MANIFEST_FILE_NAME = "crest_job.yaml"
 
 
 def load_job_manifest(job_dir: Path) -> dict[str, Any]:
     return _shared_run_dir.load_yaml_job_manifest(
         job_dir,
-        MANIFEST_FILE_NAME,
+        CREST_JOB_MANIFEST_FILE,
         invalid_message="Invalid CREST job manifest: {path}",
     )
 

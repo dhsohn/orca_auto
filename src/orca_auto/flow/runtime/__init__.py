@@ -6,6 +6,7 @@ from typing import Any
 from orca_auto.core.admission import active_slot_count
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.utils import now_utc_iso, timestamped_token
+from orca_auto.core.utils.coercion import normalize_text, positive_int
 
 from ..engine_options import WorkflowEngineOptions
 from ..orchestration import advance_workflow
@@ -24,7 +25,6 @@ from ..state import (
     workflow_has_active_downstream,
     workflow_summary,
 )
-from . import _common as _runtime_common
 from . import admission as runtime_admission
 from . import advance as runtime_advance
 from . import models as runtime_models
@@ -65,11 +65,6 @@ submission_admission_limit_from_config = runtime_admission.submission_admission_
 submission_admission_has_capacity = runtime_admission.submission_admission_has_capacity
 workflow_submission_has_capacity = runtime_admission.workflow_submission_has_capacity
 
-_advanced_workflow_outcome = runtime_advance.advanced_workflow_outcome
-_failed_workflow_advance_outcome = runtime_advance.failed_workflow_advance_outcome
-_skipped_terminal_workflow_outcome = runtime_advance.skipped_terminal_workflow_outcome
-_advance_workflow_record_outcome = runtime_advance.advance_workflow_record_outcome
-
 
 def _safe_workflow_summary(
     workspace_dir: str | Path,
@@ -87,7 +82,7 @@ def workflow_worker_lock_path(workflow_root: str | Path) -> Path:
 
 
 def _workflow_is_terminal_status(status: Any) -> bool:
-    return _runtime_common.normalize_text(status).lower() in TERMINAL_WORKFLOW_STATUSES
+    return normalize_text(status).lower() in TERMINAL_WORKFLOW_STATUSES
 
 
 def _workflow_needs_terminal_sync(workspace_dir: str | Path) -> bool:
@@ -117,9 +112,9 @@ def _workflow_needs_terminal_child_sync(
         payload_loaded = False
     else:
         payload_loaded = True
-    payload_status = _runtime_common.normalize_text(payload.get("status")).lower()
-    payload_workflow_id = _runtime_common.normalize_text(payload.get("workflow_id"))
-    record_workflow_id = _runtime_common.normalize_text(getattr(record, "workflow_id", ""))
+    payload_status = normalize_text(payload.get("status")).lower()
+    payload_workflow_id = normalize_text(payload.get("workflow_id"))
+    record_workflow_id = normalize_text(getattr(record, "workflow_id", ""))
     payload_metadata = payload.get("metadata")
     record_metadata = getattr(record, "metadata", {})
     workflow_error = (
@@ -174,9 +169,7 @@ def _workflow_needs_terminal_child_sync(
             return True
         record_quarantine_marker = isinstance(record_metadata, dict) and bool(
             record_metadata.get("identity_quarantined")
-            or _runtime_common.normalize_text(
-                record_metadata.get("quarantined_persisted_workflow_id")
-            )
+            or normalize_text(record_metadata.get("quarantined_persisted_workflow_id"))
         )
         if not identity_quarantined and record_quarantine_marker:
             # Identity recovery may have committed in workflow.json before the
@@ -192,7 +185,7 @@ def _workflow_needs_terminal_child_sync(
         # status or without the normalized quarantine identity; reconcile that
         # once, then suppress the intentionally irreconcilable durable ID.
         cached_quarantine_id = (
-            _runtime_common.normalize_text(record_metadata.get("quarantined_persisted_workflow_id"))
+            normalize_text(record_metadata.get("quarantined_persisted_workflow_id"))
             if isinstance(record_metadata, dict)
             else ""
         )
@@ -243,7 +236,7 @@ def _start_workflow_cycle(
         def submission_limit(config_path: str | Path) -> int | None:
             return submission_admission_limit_from_config(
                 config_path,
-                positive_int_fn=_runtime_common.positive_int,
+                positive_int_fn=positive_int,
             )
 
         def submission_has_capacity(config_path: str | Path) -> bool | None:

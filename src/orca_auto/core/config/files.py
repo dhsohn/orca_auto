@@ -8,13 +8,20 @@ from typing import Any
 import yaml
 from yaml.events import AliasEvent, CollectionEndEvent, CollectionStartEvent, NodeEvent
 
-from orca_auto.core.paths import is_rejected_windows_path
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as _ORCA_AUTO_CONFIG_ENV_VAR
+from orca_auto.core.paths.validation import (
+    validated_absolute_linux_path_text as _validated_absolute_linux_path_text,
+)
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils.coercion import normalize_text
 
-from .schema import explicit_nonnegative_int, explicit_positive_int, messenger_config_from_mapping
+from .schema import (
+    explicit_nonnegative_int,
+    explicit_positive_int,
+    messenger_config_from_mapping,
+)
+from .scratch import scratch_config_from_runtime_mapping
 
-ORCA_AUTO_CONFIG_ENV_VAR = "ORCA_AUTO_CONFIG"
 DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
 DEFAULT_SHARED_ADMISSION_DIRNAME = ".admission"
 SECURE_CONFIG_FILE_MODE = 0o600
@@ -156,7 +163,7 @@ def load_bounded_yaml_data(
     return parsed
 
 
-def config_env_value(env_var: str = ORCA_AUTO_CONFIG_ENV_VAR) -> str:
+def config_env_value(env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR) -> str:
     return os.getenv(env_var, "").strip()
 
 
@@ -171,7 +178,7 @@ def secure_config_file_permissions(
 def default_config_path_from_repo_root(
     repo_root: Path,
     *,
-    env_var: str = ORCA_AUTO_CONFIG_ENV_VAR,
+    env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR,
 ) -> str:
     env_path = config_env_value(env_var)
     if env_path:
@@ -192,7 +199,7 @@ def discover_shared_config_path(
     explicit: str | Path | None,
     repo_root: Path,
     *,
-    env_var: str = ORCA_AUTO_CONFIG_ENV_VAR,
+    env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR,
 ) -> str | None:
     explicit_text = str(explicit or "").strip()
     if explicit_text:
@@ -304,7 +311,7 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
             field_name="scheduler.max_active_simulations",
         )
     if "admission_root" in scheduler:
-        validated_absolute_linux_path_text(
+        _validated_absolute_linux_path_text(
             normalize_text(scheduler.get("admission_root")),
             field_name="scheduler.admission_root",
         )
@@ -356,11 +363,6 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
             orca_runtime.get("default_max_retries"),
             field_name="orca.runtime.default_max_retries",
         )
-    # Import lazily because the canonical scratch validator imports the path
-    # validation helpers from this module. Reusing it here keeps shared/bot and
-    # engine loaders on one scratch-root and reserve contract.
-    from .scratch import scratch_config_from_runtime_mapping
-
     scratch_config_from_runtime_mapping(orca_runtime)
     orca_paths = _configured_mapping_section(orca, "paths", field_name="orca.paths")
     _reject_unknown_config_fields(
@@ -462,7 +464,7 @@ def scheduler_admission_root(
     scheduler_raw = scheduler if isinstance(scheduler, dict) else {}
     if "admission_root" in scheduler_raw:
         raw_text = normalize_text(scheduler_raw.get("admission_root"))
-        validated = validated_absolute_linux_path_text(
+        validated = _validated_absolute_linux_path_text(
             raw_text,
             field_name="scheduler.admission_root",
         )
@@ -479,22 +481,6 @@ def runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
     return normalize_text((raw.get("runs_root") or "") if isinstance(raw, dict) else "")
 
 
-def validated_absolute_linux_path_text(path_text: str, *, field_name: str) -> str:
-    """Reject Windows-style and non-absolute paths before resolution."""
-
-    if is_rejected_windows_path(path_text):
-        raise ValueError(f"{field_name} must be a Linux path (Windows paths are not supported).")
-    if not Path(path_text).is_absolute():
-        raise ValueError(f"{field_name} must be an absolute Linux path.")
-    try:
-        resolved = str(Path(path_text).expanduser().resolve())
-    except (OSError, RuntimeError, ValueError):
-        raise ValueError(f"{field_name} must resolve to a valid absolute Linux path.") from None
-    if is_rejected_windows_path(resolved):
-        raise ValueError(f"{field_name} must resolve to a Linux path outside Windows mounts.")
-    return resolved
-
-
 def validated_runs_root_text(root_text: str) -> str:
     """Reject Windows-style and non-absolute runs_root values before resolution.
 
@@ -502,7 +488,7 @@ def validated_runs_root_text(root_text: str) -> str:
     every runs_root consumer must validate the raw text through this helper.
     """
 
-    return validated_absolute_linux_path_text(root_text, field_name="runs_root")
+    return _validated_absolute_linux_path_text(root_text, field_name="runs_root")
 
 
 def usable_runs_root_from_mapping(raw: dict[str, Any] | None) -> str:

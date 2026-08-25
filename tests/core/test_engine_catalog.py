@@ -30,7 +30,7 @@ from orca_auto.core.queue.worker.admission import (
 )
 from orca_auto.flow.activity import _cancel as activity_cancel
 from orca_auto.flow.activity import _clear as activity_clear
-from orca_auto.flow.activity import _list as activity_list
+from orca_auto.flow.activity import _collectors as activity_collectors
 from orca_auto.flow.engines.xtb.job_inputs import SUPPORTED_JOB_TYPES
 
 
@@ -217,7 +217,9 @@ def test_every_catalog_engine_has_queue_filter_list_cancel_and_clear_coverage() 
         "workflow",
     ]
 
-    provider_sources = {provider.source for provider in activity_list.activity_list_providers()}
+    provider_sources = {
+        provider.source for provider in activity_collectors.activity_list_providers()
+    }
     clear_counts = activity_clear._clear_counts()
     for entry in engine_catalog():
         assert entry.source_id in provider_sources

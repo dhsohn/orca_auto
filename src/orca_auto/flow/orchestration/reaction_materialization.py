@@ -11,9 +11,6 @@ from orca_auto.flow.contracts.workflow import workflow_request_parameters
 from orca_auto.flow.endpoint_pairing import EndpointPairingPolicy
 from orca_auto.flow.manifest import require_crest_candidate_count
 from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
-from orca_auto.flow.orchestration.reaction_orca_materialization import (
-    append_reaction_orca_stages_impl as append_reaction_orca_stages_impl,
-)
 from orca_auto.flow.orchestration.services import (
     OrchestrationServices,
     resolve_orchestration_services,

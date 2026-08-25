@@ -4,12 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-
-def _safe_int(value: Any, *, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+from orca_auto.core.utils.coercion import safe_int
 
 
 class WorkflowTaskOrcaMutationMixin:
@@ -224,11 +219,11 @@ class WorkflowStageXtbMutationMixin:
         rows = self.xtb_attempt_rows()
         target_number = int(attempt_number)
         for row in rows:
-            if _safe_int(row.get("attempt_number"), default=-1) == target_number:
+            if safe_int(row.get("attempt_number"), default=-1) == target_number:
                 return row
         record = {"attempt_number": target_number}
         rows.append(record)
-        rows.sort(key=lambda item: _safe_int(item.get("attempt_number"), default=0))
+        rows.sort(key=lambda item: safe_int(item.get("attempt_number"), default=0))
         return record
 
     def record_xtb_path_job_metadata(
@@ -272,12 +267,12 @@ class WorkflowStageXtbMutationMixin:
 
     def xtb_current_attempt_number(self: Any) -> int:
         metadata = self.metadata()
-        current = _safe_int(metadata.get("xtb_active_attempt_number"), default=-1)
+        current = safe_int(metadata.get("xtb_active_attempt_number"), default=-1)
         if current >= 0:
             return current
         attempts = self.xtb_attempt_rows()
         if attempts:
-            return max(_safe_int(item.get("attempt_number"), default=0) for item in attempts)
+            return max(safe_int(item.get("attempt_number"), default=0) for item in attempts)
         return 0
 
     def set_reaction_handoff(self: Any, handoff: dict[str, str]) -> None:

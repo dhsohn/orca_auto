@@ -7,7 +7,6 @@ from orca_auto.core.config.files import shared_workflow_root_from_config
 from orca_auto.core.engine_catalog import (
     EngineCatalogEntry,
     find_engine_catalog_entry,
-    get_engine_catalog_entry,
 )
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.paths.workflow import workflow_stage_dirnames_for_engine
@@ -199,20 +198,6 @@ def collect_child_queue_activity(
     )
 
 
-def collect_crest_activity(
-    resolved: ResolvedActivitySources,
-    request: ActivityListRequest,
-) -> list[ActivityRecord]:
-    return collect_catalog_engine_activity(get_engine_catalog_entry("crest"), resolved, request)
-
-
-def collect_xtb_activity(
-    resolved: ResolvedActivitySources,
-    request: ActivityListRequest,
-) -> list[ActivityRecord]:
-    return collect_catalog_engine_activity(get_engine_catalog_entry("xtb"), resolved, request)
-
-
 def collect_orca_activity(
     resolved: ResolvedActivitySources,
     request: ActivityListRequest,
@@ -252,9 +237,7 @@ __all__ = [
     "_queue_record_label",
     "collect_child_queue_activity",
     "collect_catalog_engine_activity",
-    "collect_crest_activity",
     "collect_orca_activity",
-    "collect_xtb_activity",
     "engine_queue_records",
     "engine_queue_roots",
     "queue_entry_status",

@@ -1032,7 +1032,6 @@ def test_scants_optts_fallback_builder_still_uses_highest_surface_xyz(
     prepared, actions = prepare_scants_optts_fallback_input(
         source_inp=selected_inp,
         target_inp=retry_inp,
-        reaction_dir=tmp_path,
         out_path=selected_inp.with_suffix(".out"),
     )
     retry_text = retry_inp.read_text(encoding="utf-8")

@@ -26,17 +26,6 @@ WORKFLOW_FAILED_STATUSES = FAILED_STATUSES
 WORKFLOW_TERMINAL_STATUSES = frozenset(
     {STATUS_COMPLETED, STATUS_CANCELLED, *WORKFLOW_FAILED_STATUSES}
 )
-WORKFLOW_STATUS_ORDER = (
-    STATUS_RUNNING,
-    STATUS_QUEUED,
-    STATUS_SUBMITTED,
-    STATUS_PLANNED,
-    STATUS_RETRYING,
-    STATUS_CANCEL_REQUESTED,
-    STATUS_FAILED,
-    STATUS_CANCEL_FAILED,
-    STATUS_SUBMISSION_FAILED,
-)
 QUEUE_ACTIVE_STATUSES = frozenset(
     {
         STATUS_PLANNED,
@@ -81,10 +70,6 @@ def normalize_status(value: object) -> str:
 
 def status_in(value: object, statuses: frozenset[str] | set[str] | tuple[str, ...]) -> bool:
     return normalize_status(value) in statuses
-
-
-def is_terminal_status(value: object) -> bool:
-    return status_in(value, TERMINAL_STATUSES)
 
 
 def is_failed_status(value: object) -> bool:
@@ -143,7 +128,6 @@ __all__ = [
     "SUBMISSION_DEFERRED_STATUSES",
     "TERMINAL_STATUSES",
     "WORKFLOW_FAILED_STATUSES",
-    "WORKFLOW_STATUS_ORDER",
     "WORKFLOW_TERMINAL_STATUSES",
     "SYNC_ONLY_WORKFLOW_STATUSES",
     "is_cancel_ack_status",
@@ -152,7 +136,6 @@ __all__ = [
     "is_stage_cancellable_status",
     "is_stage_terminal_status",
     "is_sync_only_workflow_status",
-    "is_terminal_status",
     "is_workflow_terminal_status",
     "normalize_status",
     "status_in",

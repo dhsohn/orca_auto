@@ -234,28 +234,6 @@ def record_terminal_process_side_effects(
     )
 
 
-def finalize_process_finished_job(
-    worker: Any,
-    queue_id: str,
-    job: Any,
-    *,
-    rc: int,
-    hooks: EngineQueueProcessLifecycleHooks,
-) -> None:
-    marked_terminal = mark_terminal_process_queue_entry_with_result(
-        worker,
-        queue_id,
-        job,
-        rc=rc,
-        hooks=hooks,
-    ).marked
-    try:
-        if marked_terminal:
-            record_terminal_process_side_effects(worker, queue_id, job, rc=rc, hooks=hooks)
-    finally:
-        worker._release_admission_slot(job.admission_token)
-
-
 def sync_terminal_running_entries(
     queue_entries: Iterable[tuple[Any, Any]],
     *,
@@ -275,7 +253,6 @@ __all__ = [
     "attach_started_process_metadata",
     "entry_status_is",
     "entry_status_is_running",
-    "finalize_process_finished_job",
     "job_queue_root",
     "mark_terminal_process_queue_entry_with_result",
     "record_terminal_process_side_effects",

@@ -33,11 +33,13 @@ from orca_auto.flow.orchestration.requests import (
     WorkflowCreationContext,
     WorkflowPersistenceContext,
 )
-from orca_auto.flow.workflow.store import acquire_workflow_create_lock
+from orca_auto.flow.workflow.store import (
+    WORKFLOW_CREATION_MARKER_FILE,
+    acquire_workflow_create_lock,
+)
 from orca_auto.flow.xyz_utils import validated_xyz_atom_count
 
 _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS: dict[str, Any] = {"rthr": 0.3}
-_CREATION_MARKER = ".orca_auto_workflow_creation.json"
 
 
 @dataclass(frozen=True)
@@ -175,7 +177,7 @@ def _persist_workflow(
         callback_payload,
     )
     try:
-        (persistence_context.workspace_dir / _CREATION_MARKER).unlink()
+        (persistence_context.workspace_dir / WORKFLOW_CREATION_MARKER_FILE).unlink()
     except FileNotFoundError:
         pass
     else:
@@ -243,7 +245,7 @@ def _workflow_workspace(
         ) from exc
     with acquire_workflow_create_lock(workflow_root_path):
         if workspace_dir.exists() and not (workspace_dir / WORKFLOW_FILE_NAME).exists():
-            marker = load_json_mapping_file(workspace_dir / _CREATION_MARKER) or {}
+            marker = load_json_mapping_file(workspace_dir / WORKFLOW_CREATION_MARKER_FILE) or {}
             owner_pid = marker.get("owner_pid")
             owner_start = str(marker.get("owner_process_start") or "")
             owner_is_current = (
@@ -260,7 +262,7 @@ def _workflow_workspace(
         try:
             durable_mkdir(staging_dir, mode=0o700, exist_ok=False)
             atomic_write_json(
-                staging_dir / _CREATION_MARKER,
+                staging_dir / WORKFLOW_CREATION_MARKER_FILE,
                 {
                     "workflow_id": resolved_workflow_id,
                     "owner_pid": os.getpid(),

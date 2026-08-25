@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -79,8 +78,6 @@ from .state import (
 )
 from .submission import _record_queued as _record_queued_submission
 
-# Keep queue_runtime.subprocess available for tests/callers that patch Popen.
-_SUBPROCESS_MODULE = subprocess
 POLL_INTERVAL_SECONDS = 5
 WORKER_SHUTDOWN_GRACE_SECONDS = 10.0
 TERMINAL_REPAIR_SCAN_INTERVAL_SECONDS = 300.0

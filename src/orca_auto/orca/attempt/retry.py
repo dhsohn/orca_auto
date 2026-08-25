@@ -136,7 +136,6 @@ def _prepare_scants_optts_fallback(
     return prepare_scants_optts_fallback_input(
         source_inp=ctx.current_inp,
         target_inp=next_inp,
-        reaction_dir=ctx.reaction_dir,
         out_path=ctx.out_path,
         max_memory_gb=ctx.max_memory_gb_per_task(),
     )
