@@ -115,6 +115,21 @@ def workflow_request_parameters(payload: Mapping[str, Any]) -> dict[str, Any]:
     return parameters if isinstance(parameters, dict) else {}
 
 
+def required_route_line(parameters: Mapping[str, Any], key: str) -> str:
+    """Return the recorded ORCA route line for ``key``, failing closed when absent.
+
+    Workflow creation always records the route line in the durable request
+    parameters, so a missing or empty value means the payload is corrupt or
+    foreign; refusing here prevents silently building a stage at an
+    unintended level of theory.
+    """
+
+    value = str(parameters.get(key) or "").strip()
+    if not value:
+        raise ValueError(f"workflow request parameters are missing {key}")
+    return value
+
+
 @dataclass(frozen=True)
 class WorkflowArtifactRef:
     kind: str
@@ -390,5 +405,6 @@ __all__ = [
     "is_interaction_role",
     "is_supported_orca_stage_contract",
     "is_valid_interaction_stage_contract",
+    "required_route_line",
     "workflow_request_parameters",
 ]

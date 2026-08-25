@@ -9,6 +9,7 @@ from orca_auto.core.statuses import is_failed_status, is_queue_active_status
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.contracts.workflow import (
+    required_route_line,
     workflow_request_parameters,
     workflow_stage_metadata,
     workflow_task_payload_dict,
@@ -400,12 +401,11 @@ def _build_reaction_orca_stage(
         stage_key=(
             f"{next_index:02d}_{services.engines.safe_name(candidate.kind, fallback='candidate')}"
         ),
-        stage_root_name="",
         workspace_dir=plan.orca_allowed_root,
         input_artifact_kind="xtb_candidate",
         candidate=candidate,
         task_kind="optts_freq",
-        route_line=plan.params.get("orca_route_line", "! r2scan-3c OptTS Freq TightSCF"),
+        route_line=required_route_line(plan.params, "orca_route_line"),
         charge=strict_int(plan.params.get("charge", 0), field="charge"),
         multiplicity=strict_int(
             plan.params.get("multiplicity", 1), field="multiplicity", minimum=1

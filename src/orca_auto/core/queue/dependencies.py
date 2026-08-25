@@ -37,7 +37,6 @@ class BackgroundJobProcessStarter(Protocol):
         config_path: str,
         queue_root: Path,
         entry: Any,
-        admission_root: Any,
         admission_token: str,
     ) -> Any: ...
 

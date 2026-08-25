@@ -18,6 +18,11 @@ from ..orchestration import (
 from ..restart import restart_failed_workflow
 from ..run_dir import manifest as _run_dir_manifest
 from ..run_dir import options as _run_dir_options
+from ..templates import (
+    DEFAULT_CONFORMER_ORCA_ROUTE_LINE,
+    DEFAULT_REACTION_TS_ORCA_ROUTE_LINE,
+    DEFAULT_SCAN_ORCA_ROUTE_LINE,
+)
 from . import workflow_output as _workflow_output
 
 
@@ -41,7 +46,7 @@ _REACTION_RUN_DIR_WORKFLOW_SPEC = _RunDirWorkflowCreationSpec(
     missing_inputs_error=(
         "reaction_ts_search requires both reactant.xyz and product.xyz (or manifest/CLI overrides)."
     ),
-    default_orca_route_line="! r2scan-3c OptTS Freq TightSCF",
+    default_orca_route_line=DEFAULT_REACTION_TS_ORCA_ROUTE_LINE,
     default_max_orca_stages=3,
     option_kwargs=(
         ("max_crest_candidates", "max_crest_candidates"),
@@ -58,7 +63,7 @@ _CONFORMER_RUN_DIR_WORKFLOW_SPEC = _RunDirWorkflowCreationSpec(
     workflow_type="conformer_screening",
     required_input_kwargs=(("input_xyz", "input_xyz"),),
     missing_inputs_error="conformer_screening requires input.xyz (or manifest/CLI override).",
-    default_orca_route_line="! r2scan-3c Opt TightSCF",
+    default_orca_route_line=DEFAULT_CONFORMER_ORCA_ROUTE_LINE,
     default_max_orca_stages=20,
     option_kwargs=(
         ("boltzmann_temperature_k", "boltzmann_temperature_k"),
@@ -166,7 +171,7 @@ _SCAN_TS_RUN_DIR_WORKFLOW_SPEC = _RunDirWorkflowCreationSpec(
     workflow_type="scan_ts_search",
     required_input_kwargs=(("input_xyz", "input_xyz"),),
     missing_inputs_error="scan_ts_search requires input.xyz (or manifest/CLI override).",
-    default_orca_route_line="! Opt r2scan-3c TightSCF",
+    default_orca_route_line=DEFAULT_SCAN_ORCA_ROUTE_LINE,
     default_max_orca_stages=5,
 )
 

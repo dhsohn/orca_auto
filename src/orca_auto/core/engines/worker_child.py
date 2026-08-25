@@ -37,9 +37,7 @@ def build_worker_child_command(
     queue_root: str | Path,
     queue_id: str,
     admission_token: str | None = None,
-    admission_root: str | Path | None = None,
 ) -> list[str]:
-    del admission_root
     command = [
         sys.executable,
         "-m",
@@ -67,7 +65,6 @@ def build_worker_child_command_for_engine(engine: str) -> Callable[..., list[str
         queue_root: str | Path,
         queue_id: str,
         admission_token: str | None = None,
-        admission_root: str | Path | None = None,
     ) -> list[str]:
         return build_worker_child_command(
             engine=engine_id,
@@ -75,7 +72,6 @@ def build_worker_child_command_for_engine(engine: str) -> Callable[..., list[str
             queue_root=queue_root,
             queue_id=queue_id,
             admission_token=admission_token,
-            admission_root=admission_root,
         )
 
     return build_engine_worker_child_command

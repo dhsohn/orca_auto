@@ -296,7 +296,7 @@ def test_cancel_materialized_workflow_journals_and_notifies_terminal_transition_
             return SendResult(sent=True)
 
     monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_DISABLED", raising=False)
-    monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_EVENTS", raising=False)
+    monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES", raising=False)
     monkeypatch.setattr(
         registry_notifications,
         "messenger_channel_from_env",
@@ -543,7 +543,7 @@ def test_cancel_materialized_workflow_recovers_journal_after_directory_fsync_fai
             raise OSError("journal directory durability barrier failed")
 
     monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_DISABLED", raising=False)
-    monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_EVENTS", raising=False)
+    monkeypatch.delenv("ORCA_AUTO_FLOW_NOTIFY_EVENT_TYPES", raising=False)
     monkeypatch.setattr(
         registry_notifications,
         "messenger_channel_from_env",

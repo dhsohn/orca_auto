@@ -3,13 +3,11 @@ from __future__ import annotations
 import signal as signal
 
 from ..child.process import (
-    build_background_worker_command,
     live_queue_ids_for_slots,
     live_queue_slot_keys_for_slots,
     reconcile_orphaned_child_queue_entries,
     request_job_cancellation,
     shutdown_child_process_with_grace,
-    start_background_job_process,
     start_background_process,
     status_matches,
 )
@@ -17,7 +15,6 @@ from ..processes import (
     ManagedProcess,
     current_worker_pid_payload,
     install_shutdown_signal_handlers,
-    pid_is_alive,
     read_worker_pid_file,
     remove_worker_pid_file,
     terminate_process_group,
@@ -65,7 +62,6 @@ __all__ = [
     "PidFileChildProcessQueueWorkerHooks",
     "ReservedQueueEntry",
     "SlotFillResult",
-    "build_background_worker_command",
     "config_path_for_worker",
     "current_worker_pid_payload",
     "dequeue_next_across_roots",
@@ -74,7 +70,6 @@ __all__ = [
     "install_shutdown_signal_handlers",
     "live_queue_ids_for_slots",
     "live_queue_slot_keys_for_slots",
-    "pid_is_alive",
     "pop_completed_worker_jobs",
     "queue_entry_by_id",
     "read_worker_pid_file",
@@ -88,7 +83,6 @@ __all__ = [
     "shutdown_child_process_with_grace",
     "signal",
     "start_background_process",
-    "start_background_job_process",
     "status_matches",
     "terminate_process_group",
     "worker_pid_file_path",

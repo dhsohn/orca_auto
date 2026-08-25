@@ -51,10 +51,10 @@ from orca_auto.flow.contracts.workflow import (
     is_exact_orca_stage_contract,
     is_interaction_role,
     is_valid_interaction_stage_contract,
+    required_route_line,
     workflow_request_parameters,
 )
 from orca_auto.flow.manifest import (
-    DEFAULT_INTERACTION_SP_ROUTE_LINE,
     INTERACTION_ENERGY_MAX_FRAGMENTS_CAP,
     interaction_energy_config_fingerprint,
     normalize_interaction_energy_block,
@@ -287,7 +287,6 @@ def _append_interaction_stage(
         template_name="conformer_screening",
         stage_id=stage_id,
         stage_key=stage_key,
-        stage_root_name="",
         workspace_dir=allowed_root,
         input_artifact_kind=kind,
         candidate=candidate,
@@ -457,7 +456,9 @@ def append_interaction_energy_stages_impl(
         if is_interaction_role(_stage_role(stage)):
             _stage_metadata(stage).pop("role", None)
     fragment_index_lists = [fragment.get("atom_indices", []) for fragment in fragments]
-    sp_route_line = _text(cfg.get("sp_route_line")) or DEFAULT_INTERACTION_SP_ROUTE_LINE
+    # The normalized durable block always carries a validated sp_route_line;
+    # read it fail-closed instead of silently substituting a level of theory.
+    sp_route_line = required_route_line(cfg, "sp_route_line")
     priority = safe_int(cfg.get("priority", params.get("priority", 10)), default=10)
     max_cores = safe_int(cfg.get("max_cores", params.get("max_cores", 8)), default=8)
     max_memory_gb = safe_int(cfg.get("max_memory_gb", params.get("max_memory_gb", 32)), default=32)

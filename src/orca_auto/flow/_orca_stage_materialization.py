@@ -482,7 +482,6 @@ class OrcaStageMaterialization:
 @dataclass(frozen=True)
 class OrcaStageMaterializationRequest:
     workspace_dir: Path
-    stage_root_name: str
     stage_key: str
     source_artifact_path: str
     candidate_kind: str
@@ -507,7 +506,6 @@ class OrcaStageBuildContext:
     template_name: str
     stage_id: str
     stage_key: str
-    stage_root_name: str
     workspace_dir: Path
     input_artifact_kind: str
     candidate: WorkflowStageInput
@@ -557,7 +555,6 @@ class OrcaStageBuildContext:
                 raise ValueError("TS geometry and Hessian terminal identities do not agree")
         return OrcaStageMaterializationRequest(
             workspace_dir=self.workspace_dir,
-            stage_root_name=self.stage_root_name,
             stage_key=self.stage_key,
             source_artifact_path=self.candidate.artifact_path,
             candidate_kind=self.candidate.kind,
@@ -638,9 +635,7 @@ def materialize_orca_stage_from_request(
 
 
 def _orca_stage_dir(request: OrcaStageMaterializationRequest) -> Path:
-    root_name = normalize_text(request.stage_root_name)
-    stage_root = request.workspace_dir / root_name if root_name else request.workspace_dir
-    return stage_root / request.stage_key
+    return request.workspace_dir / request.stage_key
 
 
 def _materialize_orca_geometry(
@@ -767,7 +762,6 @@ def build_materialized_orca_stage(
     template_name: str,
     stage_id: str,
     stage_key: str,
-    stage_root_name: str,
     workspace_dir: Path,
     input_artifact_kind: str,
     candidate: WorkflowStageInput,
@@ -790,7 +784,6 @@ def build_materialized_orca_stage(
             template_name=template_name,
             stage_id=stage_id,
             stage_key=stage_key,
-            stage_root_name=stage_root_name,
             workspace_dir=workspace_dir,
             input_artifact_kind=input_artifact_kind,
             candidate=candidate,

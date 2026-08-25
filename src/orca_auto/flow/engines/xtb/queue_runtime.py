@@ -56,11 +56,9 @@ from orca_auto.core.queue.worker import (
 from orca_auto.core.queue.worker import (
     ManagedProcess as _ManagedProcess,
 )
-from orca_auto.core.queue.worker import (
-    pid_is_alive as worker_pid_is_alive,
-)
 from orca_auto.core.statuses import TERMINAL_STATUSES
 from orca_auto.core.utils import now_utc_iso
+from orca_auto.core.utils.process import is_process_alive as worker_pid_is_alive
 from orca_auto.flow.engines import queue_runtime_common as _common
 from orca_auto.flow.engines.xtb import artifacts as _queue_artifacts
 from orca_auto.flow.engines.xtb import execution as _worker_execution
@@ -297,18 +295,15 @@ def _start_background_job_process(
     config_path: str,
     queue_root: Path,
     entry: Any,
-    admission_root: str | Path,
     admission_token: str,
 ) -> Any:
     return _ENGINE_RUNTIME.start_child_process(
         config_path=config_path,
         queue_root=queue_root,
         entry=entry,
-        admission_root=admission_root,
         admission_token=admission_token,
         start_background_process_fn=start_background_process,
         build_worker_child_command_fn=build_worker_child_command,
-        include_admission_root=False,
     )
 
 

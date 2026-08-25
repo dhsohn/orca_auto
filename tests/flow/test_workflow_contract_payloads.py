@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from orca_auto.flow.contracts import (
     WorkflowArtifactRef,
     WorkflowPlan,
@@ -9,6 +11,7 @@ from orca_auto.flow.contracts import (
 )
 from orca_auto.flow.contracts.workflow import (
     coerce_workflow_plan_payload,
+    required_route_line,
     workflow_request_parameters,
 )
 
@@ -141,6 +144,20 @@ def test_workflow_request_parameters_reads_only_the_canonical_mapping_path() -> 
     )
     assert workflow_request_parameters({"metadata": {"request": {"parameters": []}}}) == {}
     assert workflow_request_parameters({"metadata": "invalid"}) == {}
+
+
+def test_required_route_line_fails_closed_on_missing_empty_or_blank_values() -> None:
+    assert (
+        required_route_line({"orca_route_line": "! r2scan-3c Opt TightSCF"}, "orca_route_line")
+        == "! r2scan-3c Opt TightSCF"
+    )
+
+    for parameters in ({}, {"orca_route_line": ""}, {"orca_route_line": "   "}):
+        with pytest.raises(ValueError, match="missing orca_route_line"):
+            required_route_line(parameters, "orca_route_line")
+
+    with pytest.raises(ValueError, match="missing orca_optts_route_line"):
+        required_route_line({"orca_route_line": "! Opt"}, "orca_optts_route_line")
 
 
 def test_workflow_template_request_to_dict_serializes_source_artifacts() -> None:

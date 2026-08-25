@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from orca_auto.flow.contracts.workflow import WorkflowStageWithTaskPayload
+from orca_auto.flow.templates import (
+    DEFAULT_CONFORMER_ORCA_ROUTE_LINE,
+    DEFAULT_REACTION_TS_ORCA_ROUTE_LINE,
+    DEFAULT_SCAN_OPTTS_ORCA_ROUTE_LINE,
+    DEFAULT_SCAN_ORCA_ROUTE_LINE,
+)
 
 
 @dataclass(frozen=True)
@@ -22,7 +28,7 @@ class ReactionTsSearchWorkflowRequest:
     max_xtb_stages: int = 9
     max_xtb_handoff_retries: int = 2
     max_orca_stages: int = 3
-    orca_route_line: str = "! r2scan-3c OptTS Freq TightSCF"
+    orca_route_line: str = DEFAULT_REACTION_TS_ORCA_ROUTE_LINE
     charge: int = 0
     multiplicity: int = 1
     crest_job_manifest: dict[str, Any] | None = None
@@ -43,7 +49,7 @@ class ConformerScreeningWorkflowRequest:
     max_cores: int = 8
     max_memory_gb: int = 32
     max_orca_stages: int = 20
-    orca_route_line: str = "! r2scan-3c Opt TightSCF"
+    orca_route_line: str = DEFAULT_CONFORMER_ORCA_ROUTE_LINE
     charge: int = 0
     multiplicity: int = 1
     crest_job_manifest: dict[str, Any] | None = None
@@ -64,8 +70,8 @@ class ScanTsSearchWorkflowRequest:
     max_memory_gb: int = 32
     max_orca_stages: int = 5
     max_scan_extensions: int = 1
-    orca_route_line: str = "! Opt r2scan-3c TightSCF"
-    orca_optts_route_line: str = "! OptTS Freq r2scan-3c TightSCF"
+    orca_route_line: str = DEFAULT_SCAN_ORCA_ROUTE_LINE
+    orca_optts_route_line: str = DEFAULT_SCAN_OPTTS_ORCA_ROUTE_LINE
     barrier_threshold_kcal: float = 0.5
     charge: int = 0
     multiplicity: int = 1

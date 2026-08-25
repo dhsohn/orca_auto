@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -13,61 +12,6 @@ from orca_auto.core.engine_process import open_confined_log
 from orca_auto.core.statuses import STATUS_CANCELLED, normalize_status
 
 LOGGER = logging.getLogger(__name__)
-
-
-def build_background_worker_command(
-    *,
-    config_path: str,
-    queue_root: str | Path,
-    queue_id: str,
-    worker_job_module: str,
-    admission_root: str | Path | None = None,
-    admission_token: str | None = None,
-    include_admission_root: bool = True,
-) -> list[str]:
-    command = [
-        sys.executable,
-        "-m",
-        worker_job_module,
-        "--config",
-        config_path,
-        "--queue-root",
-        str(queue_root),
-        "--queue-id",
-        queue_id,
-    ]
-    if include_admission_root:
-        if admission_root is None:
-            raise ValueError("admission_root is required when include_admission_root is true")
-        command.extend(["--admission-root", str(admission_root)])
-    if admission_token:
-        command.extend(["--admission-token", admission_token])
-    return command
-
-
-def start_background_job_process(
-    *,
-    config_path: str,
-    queue_root: str | Path,
-    entry: Any,
-    worker_job_module: str,
-    admission_root: str | Path | None = None,
-    admission_token: str | None = None,
-    include_admission_root: bool = True,
-    log_path: str | Path | None = None,
-) -> subprocess.Popen[str]:
-    command = build_background_worker_command(
-        config_path=config_path,
-        queue_root=queue_root,
-        queue_id=entry.queue_id,
-        worker_job_module=worker_job_module,
-        admission_root=admission_root,
-        admission_token=admission_token,
-        include_admission_root=include_admission_root,
-    )
-    if log_path is None:
-        return start_background_process(command)
-    return start_background_process(command, log_path=log_path)
 
 
 def start_background_process(
@@ -308,7 +252,6 @@ def _send_process_cancellation_signal(proc: Any, cancel_signal: int) -> None:
 
 
 __all__ = [
-    "build_background_worker_command",
     "live_queue_ids_for_slots",
     "live_queue_slot_keys_for_slots",
     "reconcile_orphaned_child_queue_entries",
@@ -316,6 +259,5 @@ __all__ = [
     "requeue_result_is_cancelled",
     "shutdown_child_process_with_grace",
     "start_background_process",
-    "start_background_job_process",
     "status_matches",
 ]
