@@ -6,7 +6,7 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
-## [Unreleased]
+## [3.0.2] - 2026-08-25
 
 ### Fixed
 
@@ -21,7 +21,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   so orphan reconciliation and worker-status checks no longer disagree about
   the same PID. Previously the queue-side check treated any `OSError` as dead,
   which could requeue a job whose worker was still running.
-
 - ORCA crash recovery no longer substitutes edited job-root dependencies for
   the bytes captured by the crashed submission; verified runtime geometry is
   reused even when its original job-root source is gone, while changed or
@@ -52,10 +51,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - Scan workflow restart keeps the relaxed-scan and OptTS route settings
   separate and selects the replacement route from each durable task kind.
   Once a primary ORCA stage completes, restart cannot change its route, charge,
-  or multiplicity. Mixed route, non-resource active input directives,
-  ordered atom-label sequence, identity-bound non-geometry dependency content,
-  electronic-state, or ORCA-version provenance
-  cannot publish relative energies or numeric candidate rankings. HTML, SI,
+  or multiplicity. Result sets whose members disagree on route, non-resource
+  active input directives, ordered atom-label sequence, identity-bound
+  non-geometry dependency content, electronic state, or ORCA-version
+  provenance cannot publish relative energies or numeric candidate rankings.
+  HTML, SI,
   and interaction representative selection share this scientific identity;
   `%pal`, `%maxcore`, and route `PALn` remain resource-only. Spoofed
   interaction-role metadata cannot hide a primary stage from these checks:
