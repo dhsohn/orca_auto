@@ -22,22 +22,8 @@ from orca_auto.flow.orchestration.stage_runtime.xtb_retry import (
     xtb_retry_recipe_impl,
 )
 from orca_auto.flow.workflow.machine import write_workflow_machine_observation
+from tests.flow.artifact_file_helpers import _write_xyz_ensemble
 from tests.flow.orchestration_services import orchestration_services
-
-
-def _write_xyz_ensemble(path: Path, comments: tuple[str, ...]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines: list[str] = []
-    for comment in comments:
-        lines.extend(
-            [
-                "2",
-                comment,
-                "H 0 0 0",
-                "H 0 0 0.74",
-            ]
-        )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _si_publication_test_deps(

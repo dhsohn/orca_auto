@@ -8,23 +8,7 @@ import pytest
 
 from orca_auto.flow.adapters import _orca_local_lookup, _orca_path_helpers
 from orca_auto.orca.job_locations import _utils as _canonical_orca_status
-
-
-def _write_json(path: Path, payload: object) -> None:
-    if path.name == "queue.json" and isinstance(payload, list):
-        payload = [
-            {
-                "app_name": "orca_auto_orca",
-                "engine": "orca",
-                "task_kind": "orca_run_inp",
-                **item,
-            }
-            if isinstance(item, dict)
-            else item
-            for item in payload
-        ]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+from tests.flow.artifact_file_helpers import _write_json
 
 
 @pytest.mark.parametrize(

@@ -252,12 +252,19 @@ class TestCli(unittest.TestCase):
 
     def test_cmd_run_inp_dispatches_to_orca_command_module(self) -> None:
         seen: list[Namespace] = []
+        resolved_config = object()
 
         def _fake_run_inp(args: Namespace) -> int:
             seen.append(args)
             return 41
 
-        with patch("orca_auto.orca.commands.run_inp.cmd_run_inp", side_effect=_fake_run_inp):
+        with (
+            patch("orca_auto.orca.commands.run_inp.cmd_run_inp", side_effect=_fake_run_inp),
+            patch(
+                "orca_auto.cli_handlers._engine_config_for_command",
+                return_value=resolved_config,
+            ),
+        ):
             args = Namespace(
                 config="/tmp/orca_auto.yaml",
                 verbose=True,
@@ -272,6 +279,9 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(rc, 41)
         self.assertEqual(seen, [args])
+        # The wrapper must hand the command the engine-resolved config, not the
+        # raw parser value the identity check alone would accept.
+        self.assertIs(seen[0].config, resolved_config)
 
     def test_other_public_wrappers_dispatch_to_orca_command_modules(self) -> None:
         seen: list[tuple[str, Namespace]] = []
@@ -283,7 +293,14 @@ class TestCli(unittest.TestCase):
 
             return _inner
 
-        with patch("orca_auto.orca.commands.init.cmd_init", side_effect=_record("init", 42)):
+        resolved_config = object()
+        with (
+            patch("orca_auto.orca.commands.init.cmd_init", side_effect=_record("init", 42)),
+            patch(
+                "orca_auto.cli_handlers._engine_config_for_command",
+                return_value=resolved_config,
+            ),
+        ):
             init_args = Namespace(
                 config="/tmp/orca_auto.yaml",
                 verbose=False,
@@ -294,6 +311,9 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(init_rc, 42)
         self.assertEqual(seen, [("init", init_args)])
+        # The wrapper must hand the command the engine-resolved config, not the
+        # raw parser value the identity check alone would accept.
+        self.assertIs(seen[0][1].config, resolved_config)
 
     @patch("orca_auto.orca.cli_logging.remove_managed_handlers")
     @patch("orca_auto.orca.cli_logging.logging.handlers.RotatingFileHandler")

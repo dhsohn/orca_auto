@@ -16,21 +16,6 @@ from orca_auto.flow.registry import store as registry_store
 from tests.flow.orchestration_services import orchestration_services
 
 
-def _write_xyz_ensemble(path: Path, comments: tuple[str, ...]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines: list[str] = []
-    for comment in comments:
-        lines.extend(
-            [
-                "2",
-                comment,
-                "H 0 0 0",
-                "H 0 0 0.74",
-            ]
-        )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellations(
     tmp_path: Path,
 ) -> None:

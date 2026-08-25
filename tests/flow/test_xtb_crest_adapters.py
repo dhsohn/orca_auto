@@ -16,6 +16,7 @@ from orca_auto.flow.adapters.xtb import load_xtb_artifact_contract, select_xtb_d
 from orca_auto.flow.contracts.crest import CrestArtifactContract, CrestDownstreamPolicy
 from orca_auto.flow.contracts.xtb import XtbArtifactContract, XtbDownstreamPolicy
 from tests.engine_artifact_helpers import artifact_payload
+from tests.flow.artifact_file_helpers import _write_xyz_ensemble
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -37,21 +38,6 @@ def _write_xyz(path: Path, *, comment: str = "comment") -> None:
         ),
         encoding="utf-8",
     )
-
-
-def _write_xyz_ensemble(path: Path, comments: tuple[str, ...]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines: list[str] = []
-    for comment in comments:
-        lines.extend(
-            [
-                "2",
-                comment,
-                "H 0.0 0.0 0.0",
-                "H 0.0 0.0 0.74",
-            ]
-        )
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_engine_index(

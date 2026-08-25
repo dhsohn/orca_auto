@@ -41,6 +41,23 @@ def _reserve_managed(
     return token
 
 
+def _managed_slot_with_process(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    """Reserve a managed slot and publish an active engine process 202/2002."""
+    token = _reserve_managed(root, monkeypatch)
+    admission.prepare_slot_engine_process(root, token)
+    admission.set_slot_engine_process(
+        root,
+        token,
+        pid=202,
+        pgid=202,
+        process_start_ticks=2002,
+    )
+    return token
+
+
 def _recover_absent_group(
     root: str,
     token: str,
@@ -171,15 +188,7 @@ def test_active_recovery_terminates_group_and_clears_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    admission.prepare_slot_engine_process(tmp_path, token)
-    admission.set_slot_engine_process(
-        tmp_path,
-        token,
-        pid=202,
-        pgid=202,
-        process_start_ticks=2002,
-    )
+    token = _managed_slot_with_process(tmp_path, monkeypatch)
     group_alive = True
     signals: list[int] = []
 
@@ -217,15 +226,7 @@ def test_active_recovery_clears_reused_pid_without_signalling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    admission.prepare_slot_engine_process(tmp_path, token)
-    admission.set_slot_engine_process(
-        tmp_path,
-        token,
-        pid=202,
-        pgid=202,
-        process_start_ticks=2002,
-    )
+    token = _managed_slot_with_process(tmp_path, monkeypatch)
     signals: list[int] = []
 
     def killpg(_pgid: int, signum: int) -> None:
@@ -252,15 +253,7 @@ def test_active_recovery_retains_unknown_live_pid_without_signalling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    admission.prepare_slot_engine_process(tmp_path, token)
-    admission.set_slot_engine_process(
-        tmp_path,
-        token,
-        pid=202,
-        pgid=202,
-        process_start_ticks=2002,
-    )
+    token = _managed_slot_with_process(tmp_path, monkeypatch)
     signals: list[int] = []
 
     def killpg(_pgid: int, signum: int) -> None:
@@ -286,15 +279,7 @@ def test_active_recovery_retains_leaderless_group_without_signalling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    admission.prepare_slot_engine_process(tmp_path, token)
-    admission.set_slot_engine_process(
-        tmp_path,
-        token,
-        pid=202,
-        pgid=202,
-        process_start_ticks=2002,
-    )
+    token = _managed_slot_with_process(tmp_path, monkeypatch)
     signals: list[int] = []
 
     def killpg(_pgid: int, signum: int) -> None:
@@ -324,15 +309,7 @@ def test_active_recovery_clears_cross_boot_identity_without_signalling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    admission.prepare_slot_engine_process(tmp_path, token)
-    admission.set_slot_engine_process(
-        tmp_path,
-        token,
-        pid=202,
-        pgid=202,
-        process_start_ticks=2002,
-    )
+    token = _managed_slot_with_process(tmp_path, monkeypatch)
     signals: list[int] = []
 
     def killpg(_pgid: int, signum: int) -> None:
@@ -567,15 +544,7 @@ def test_concurrent_recovery_clear_is_idempotent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    admission.prepare_slot_engine_process(tmp_path, token)
-    admission.set_slot_engine_process(
-        tmp_path,
-        token,
-        pid=202,
-        pgid=202,
-        process_start_ticks=2002,
-    )
+    token = _managed_slot_with_process(tmp_path, monkeypatch)
     ctx = multiprocessing.get_context("fork")
     barrier = ctx.Barrier(2)
     results = ctx.Queue()
@@ -790,15 +759,7 @@ def test_global_dead_owner_recovery_escalates_term_to_kill(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    admission.prepare_slot_engine_process(tmp_path, token)
-    admission.set_slot_engine_process(
-        tmp_path,
-        token,
-        pid=202,
-        pgid=202,
-        process_start_ticks=2002,
-    )
+    token = _managed_slot_with_process(tmp_path, monkeypatch)
     group_alive = True
     signals: list[int] = []
     clock = iter([0.0, 3.0, 3.0])
@@ -876,15 +837,7 @@ def test_registrar_clear_failure_retains_active_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    admission.prepare_slot_engine_process(tmp_path, token)
-    admission.set_slot_engine_process(
-        tmp_path,
-        token,
-        pid=202,
-        pgid=202,
-        process_start_ticks=2002,
-    )
+    token = _managed_slot_with_process(tmp_path, monkeypatch)
     clear_calls = 0
 
     def fail_clear(*_args: Any, **_kwargs: Any) -> None:

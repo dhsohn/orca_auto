@@ -60,6 +60,54 @@ def _fake_proc_stat(pid: int, *, start_ticks: int = 123_456) -> bytes:
     return f"{pid} (orca worker) {' '.join(fields_after_comm)}\n".encode()
 
 
+def _states_run(
+    states: dict[tuple[str, str], str],
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    """Fake ``run`` answering ``systemctl <verb> <unit>`` from a state table."""
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=f"{states[(argv[1], argv[2])]}\n", stderr=""
+        )
+
+    return _fake_run
+
+
+def _recording_run(
+    commands: list[tuple[str, ...]],
+    responses: dict[str, tuple[int, str] | tuple[int, str, str]],
+    default: tuple[int, str] = (0, ""),
+) -> Callable[..., subprocess.CompletedProcess[str]]:
+    """Fake ``run`` that records every argv and answers by the ``argv[1]`` verb.
+
+    ``responses`` maps a systemctl verb to ``(returncode, stdout)`` or
+    ``(returncode, stdout, stderr)``; unmatched verbs answer ``default``.
+    """
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        commands.append(tuple(argv))
+        returncode, out, *rest = responses.get(argv[1], default)
+        return subprocess.CompletedProcess(
+            argv, returncode, stdout=out, stderr=rest[0] if rest else ""
+        )
+
+    return _fake_run
+
+
 def _process_file_reader(
     import_sources: dict[int, Path], *, start_ticks: int = 123_456
 ) -> Callable[[str], bytes]:
@@ -727,22 +775,11 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
         ("is-enabled", "orca_auto-workflow-worker@alice.service"): "disabled",
     }
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        value = states[(argv[1], argv[2])]
-        return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
-
     result = cli_systemd_status.cmd_service_status(
         Namespace(target_user=None),
         deps=cli_systemd_status.ServiceCliDeps(
             default_service_user=lambda: "alice",
-            run=_fake_run,
+            run=_states_run(states),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: None,
             collect_worker_staleness=lambda statuses, run=None: None,
@@ -872,23 +909,11 @@ def test_cmd_service_status_emits_json(capsys: Any) -> None:
         ("is-enabled", "orca_auto-bot@alice.service"): "disabled",
     }
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        return subprocess.CompletedProcess(
-            argv, 0, stdout=f"{states[(argv[1], argv[2])]}\n", stderr=""
-        )
-
     result = cli_systemd_status.cmd_service_status(
         Namespace(target_user=None, json=True),
         deps=cli_systemd_status.ServiceCliDeps(
             default_service_user=lambda: "alice",
-            run=_fake_run,
+            run=_states_run(states),
             which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
             installed_version_drift=lambda: None,
             collect_worker_staleness=lambda statuses, run=None: None,
@@ -1974,20 +1999,13 @@ def test_cmd_service_status_fails_when_systemctl_is_missing(capsys: Any) -> None
 def test_cmd_service_restart_prefers_runtime_when_enabled(capsys: Any) -> None:
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        commands.append(tuple(argv))
-        if argv[1] == "is-active":
-            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
-        if argv[1] == "is-enabled":
-            return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    _fake_run = _recording_run(
+        commands,
+        {
+            "is-active": (3, "inactive\n"),
+            "is-enabled": (0, "enabled\n"),
+        },
+    )
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user=None),
@@ -2011,20 +2029,13 @@ def test_cmd_service_restart_prefers_runtime_when_enabled(capsys: Any) -> None:
 def test_cmd_service_restart_falls_back_to_engine_target_when_runtime_is_disabled() -> None:
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        commands.append(tuple(argv))
-        if argv[1] == "is-active":
-            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
-        if argv[1] == "is-enabled":
-            return subprocess.CompletedProcess(argv, 1, stdout="disabled\n", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    _fake_run = _recording_run(
+        commands,
+        {
+            "is-active": (3, "inactive\n"),
+            "is-enabled": (1, "disabled\n"),
+        },
+    )
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user=None),
@@ -2104,22 +2115,14 @@ def test_cmd_service_restart_prefers_enabled_engine_target_over_active_runtime()
 def test_cmd_service_restart_uses_active_runtime_only_when_enablement_is_unreadable() -> None:
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        commands.append(tuple(argv))
-        if argv[1] == "show":
-            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
-        if argv[1] == "is-enabled":
-            return subprocess.CompletedProcess(argv, 1, stdout="", stderr="query failed\n")
-        if argv[1] == "is-active":
-            return subprocess.CompletedProcess(argv, 0, stdout="active\n", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    _fake_run = _recording_run(
+        commands,
+        {
+            "show": (0, "loaded\n"),
+            "is-enabled": (1, "", "query failed\n"),
+            "is-active": (0, "active\n"),
+        },
+    )
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user="alice"),
@@ -2177,18 +2180,11 @@ def test_cmd_service_restart_directs_missing_install_to_installer(
 def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        commands.append(tuple(argv))
-        if argv[1] == "is-active":
-            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="inactive\n", stderr="")
+    _fake_run = _recording_run(
+        commands,
+        {"is-active": (3, "inactive\n")},
+        default=(0, "inactive\n"),
+    )
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user=None),
@@ -2216,18 +2212,11 @@ def test_cmd_service_restart_uses_sudo_for_non_root_user() -> None:
 def test_cmd_service_restart_stops_when_reset_failed_cannot_clear_start_limit() -> None:
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        commands.append(tuple(argv))
-        if argv[1] == "is-active":
-            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
-        return subprocess.CompletedProcess(argv, 5, stdout="inactive\n", stderr="")
+    _fake_run = _recording_run(
+        commands,
+        {"is-active": (3, "inactive\n")},
+        default=(5, "inactive\n"),
+    )
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user=None),
@@ -2259,22 +2248,14 @@ def test_cmd_service_restart_reloads_the_worker_the_target_leaves_running() -> N
 
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        commands.append(tuple(argv))
-        if argv[1] == "show":
-            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
-        if argv[1] == "is-enabled":
-            return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
-        if argv[1] == "is-active":
-            return subprocess.CompletedProcess(argv, 3, stdout="inactive\n", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    _fake_run = _recording_run(
+        commands,
+        {
+            "show": (0, "loaded\n"),
+            "is-enabled": (0, "enabled\n"),
+            "is-active": (3, "inactive\n"),
+        },
+    )
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user="alice"),
@@ -2299,22 +2280,14 @@ def test_cmd_service_restart_restarts_a_running_workflow_worker() -> None:
 
     commands: list[tuple[str, ...]] = []
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        commands.append(tuple(argv))
-        if argv[1] == "show":
-            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
-        if argv[1] == "is-enabled":
-            return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
-        if argv[1] == "is-active":
-            return subprocess.CompletedProcess(argv, 0, stdout="active\n", stderr="")
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    _fake_run = _recording_run(
+        commands,
+        {
+            "show": (0, "loaded\n"),
+            "is-enabled": (0, "enabled\n"),
+            "is-active": (0, "active\n"),
+        },
+    )
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user="alice"),
@@ -2339,27 +2312,18 @@ def _service_restart_with_workflow_state(
     if workflow_returncode is None:
         workflow_returncode = 0 if workflow_state in {"active", "activating", "reloading"} else 3
 
-    def _fake_run(
-        argv: list[str],
-        check: bool = False,
-        stdout: Any = None,
-        stderr: Any = None,
-        text: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        del check, stdout, stderr, text
-        commands.append(tuple(argv))
-        if argv[1] == "show":
-            return subprocess.CompletedProcess(argv, 0, stdout="loaded\n", stderr="")
-        if argv[1] == "is-enabled":
-            return subprocess.CompletedProcess(argv, 0, stdout="enabled\n", stderr="")
-        if argv[1] == "is-active":
-            return subprocess.CompletedProcess(
-                argv,
+    _fake_run = _recording_run(
+        commands,
+        {
+            "show": (0, "loaded\n"),
+            "is-enabled": (0, "enabled\n"),
+            "is-active": (
                 workflow_returncode,
-                stdout=f"{workflow_state}\n" if workflow_state else "",
-                stderr=workflow_stderr,
-            )
-        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+                f"{workflow_state}\n" if workflow_state else "",
+                workflow_stderr,
+            ),
+        },
+    )
 
     result = cli_systemd_status.cmd_service_restart(
         Namespace(target_user="alice"),

@@ -22,6 +22,31 @@ def _create_payload(template_name: str) -> dict[str, Any]:
     }
 
 
+def _run_dir_args(workflow_dir: Path, **overrides: Any) -> SimpleNamespace:
+    args = SimpleNamespace(
+        workflow_dir=str(workflow_dir),
+        workflow_type=None,
+        workflow_root=None,
+        reactant_xyz=None,
+        product_xyz=None,
+        input_xyz=None,
+        crest_mode=None,
+        priority=None,
+        max_cores=None,
+        max_memory_gb=None,
+        max_crest_candidates=None,
+        max_xtb_stages=None,
+        max_orca_stages=None,
+        orca_route_line=None,
+        charge=None,
+        multiplicity=None,
+        json=False,
+    )
+    for name, value in overrides.items():
+        setattr(args, name, value)
+    return args
+
+
 def test_run_dir_options_preserve_existing_positional_field_order() -> None:
     options = run_dir_options.RunDirWorkflowOptions(
         "/runs",
@@ -68,25 +93,7 @@ def test_cmd_run_dir_reads_manifest_for_reaction_workflow(
         cli_run_dir, "create_reaction_ts_search_workflow", fake_create_reaction_ts_search_workflow
     )
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir)
 
     assert cli_run_dir.cmd_run_dir(args) == 0
     stdout = capsys.readouterr().out
@@ -150,26 +157,7 @@ def test_cmd_run_dir_reads_manifest_for_conformer_workflow(
         cli_run_dir, "create_conformer_screening_workflow", fake_create_conformer_screening_workflow
     )
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        orca_auto_config=str(config_path),
-        json=True,
-    )
+    args = _run_dir_args(workflow_dir, orca_auto_config=str(config_path), json=True)
 
     assert cli_run_dir.cmd_run_dir(args) == 0
     payload = json.loads(capsys.readouterr().out)
@@ -373,28 +361,6 @@ def _reaction_scaffold(workflow_dir: Path) -> None:
     (workflow_dir / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
 
 
-def _run_dir_args(workflow_dir: Path) -> SimpleNamespace:
-    return SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        json=False,
-    )
-
-
 @pytest.mark.parametrize(
     "manifest_value",
     ["null", '"   "'],
@@ -555,25 +521,7 @@ def test_cmd_run_dir_reports_ambiguous_layout(
     (workflow_dir / "product.xyz").write_text("x", encoding="utf-8")
     (workflow_dir / "input.xyz").write_text("x", encoding="utf-8")
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir)
 
     assert cli_run_dir.cmd_run_dir(args) == 1
     assert "Ambiguous workflow_dir" in capsys.readouterr().err
@@ -603,26 +551,7 @@ def test_cmd_run_dir_workflow_type_override_resolves_ambiguous_layout(
         lambda **kwargs: captured.update(kwargs) or _create_payload("conformer_screening"),
     )
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type="conformer_screening",
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        orca_auto_config=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir, workflow_type="conformer_screening", orca_auto_config=None)
 
     assert cli_run_dir.cmd_run_dir(args) == 0
     assert "workflow_id: wf_create_conformer_screening" in capsys.readouterr().out
@@ -638,25 +567,7 @@ def test_cmd_run_dir_requires_manifest_before_materializing_workflow(
     workflow_dir.mkdir()
     (workflow_dir / "input.xyz").write_text("x", encoding="utf-8")
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir)
 
     assert cli_run_dir.cmd_run_dir(args) == 1
     assert "workflow run-dir requires flow.yaml" in capsys.readouterr().err
@@ -673,25 +584,7 @@ def test_cmd_run_dir_requires_standard_input_xyz_name_for_conformer_workflow(
         "workflow_type: conformer_screening\n", encoding="utf-8"
     )
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir)
 
     assert cli_run_dir.cmd_run_dir(args) == 1
     assert "conformer_screening requires input.xyz" in capsys.readouterr().err
@@ -707,25 +600,7 @@ def test_cmd_run_dir_requires_standard_reaction_xyz_names_for_reaction_workflow(
     (workflow_dir / "products.xyz").write_text("x", encoding="utf-8")
     (workflow_dir / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir)
 
     assert cli_run_dir.cmd_run_dir(args) == 1
     assert (
@@ -759,26 +634,7 @@ def test_cmd_run_dir_requires_workflow_root_for_reaction_workflow(
         cli_run_dir, "create_reaction_ts_search_workflow", fake_create_reaction_ts_search_workflow
     )
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        orca_auto_config=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir, orca_auto_config=None)
 
     assert cli_run_dir.cmd_run_dir(args) == 1
     assert "workflow_root is not configured" in capsys.readouterr().err
@@ -812,26 +668,7 @@ def test_cmd_run_dir_requires_workflow_root_for_conformer_workflow(
         cli_run_dir, "create_conformer_screening_workflow", fake_create_conformer_screening_workflow
     )
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        orca_auto_config=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir, orca_auto_config=None)
 
     assert cli_run_dir.cmd_run_dir(args) == 1
     assert "workflow_root is not configured" in capsys.readouterr().err
@@ -895,25 +732,7 @@ def test_cmd_run_dir_for_reaction_uses_nested_engine_sections(
         cli_run_dir, "create_reaction_ts_search_workflow", fake_create_reaction_ts_search_workflow
     )
 
-    args = SimpleNamespace(
-        workflow_dir=str(workflow_dir),
-        workflow_type=None,
-        workflow_root=None,
-        reactant_xyz=None,
-        product_xyz=None,
-        input_xyz=None,
-        crest_mode=None,
-        priority=None,
-        max_cores=None,
-        max_memory_gb=None,
-        max_crest_candidates=None,
-        max_xtb_stages=None,
-        max_orca_stages=None,
-        orca_route_line=None,
-        charge=None,
-        multiplicity=None,
-        json=False,
-    )
+    args = _run_dir_args(workflow_dir)
 
     assert cli_run_dir.cmd_run_dir(args) == 0
     assert "workflow_id: wf_create_reaction_ts_search" in capsys.readouterr().out
