@@ -36,11 +36,7 @@ def _submission_admission_configured(raw: dict[str, Any]) -> bool:
     return _scheduler_section_has_admission_controls(mapping_section(orca_raw, "scheduler"))
 
 
-def submission_admission_limit_from_config(
-    config_path: str | Path,
-    *,
-    positive_int_fn: Callable[[Any], int | None] = positive_int,
-) -> int | None:
+def submission_admission_limit_from_config(config_path: str | Path) -> int | None:
     try:
         _, raw = load_shared_config_mapping(config_path)
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
@@ -55,7 +51,7 @@ def submission_admission_limit_from_config(
     orca_raw = engine_config_mapping(raw, "orca", inherit_keys=("scheduler", "workflow"))
     effective_scheduler = mapping_section(orca_raw, "scheduler") or top_level_scheduler
 
-    scheduler_limit = positive_int_fn(effective_scheduler.get("max_active_simulations"))
+    scheduler_limit = positive_int(effective_scheduler.get("max_active_simulations"))
     if scheduler_limit is not None:
         return scheduler_limit
     return None

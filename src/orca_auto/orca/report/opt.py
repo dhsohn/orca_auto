@@ -85,7 +85,7 @@ def collect_opt_report_data(
             continue
         try:
             progress = parse_opt_progress(out_raw)
-        except (OSError, FileNotFoundError):
+        except OSError:
             continue
         if fallback is None:
             fallback = progress

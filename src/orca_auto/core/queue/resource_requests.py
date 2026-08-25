@@ -28,9 +28,8 @@ def entry_resource_request(
     entry: Any,
     *,
     resource_caps_fn: Callable[[Any], dict[str, int]],
-    coerce_resource_request_fn: Callable[[Any], dict[str, int]] = coerce_resource_request,
 ) -> dict[str, int]:
-    return coerce_resource_request_fn(
+    return coerce_resource_request(
         entry_metadata_value(entry, "resource_request")
     ) or resource_caps_fn(cfg)
 

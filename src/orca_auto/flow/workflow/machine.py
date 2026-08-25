@@ -82,7 +82,7 @@ def _upstream_orca_observations(workspace_dir: Path, report_data: Any) -> list[d
             )
             payload_bytes = payload_text.encode("utf-8")
             payload = json.loads(payload_text)
-        except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+        except (OSError, RuntimeError, TypeError, ValueError):
             continue
         if not isinstance(payload, dict) or results_payload_from_observation(payload) is None:
             continue

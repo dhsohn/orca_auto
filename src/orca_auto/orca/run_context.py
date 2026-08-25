@@ -168,14 +168,10 @@ def resolve_submission_context(
     )
 
 
-def _explicit_or_env(
-    value: str | None,
-    env_var: str,
-    env_get_fn: Callable[[str, str], str | None],
-) -> str | None:
+def _explicit_or_env(value: str | None, env_var: str) -> str | None:
     if value is not None:
         return value
-    return (env_get_fn(env_var, "") or "").strip() or None
+    return (os.getenv(env_var, "") or "").strip() or None
 
 
 def resolve_execution_context(
@@ -193,7 +189,6 @@ def resolve_execution_context(
     load_config_fn: Callable[[Any], AppConfig],
     select_latest_inp_fn: Callable[[Path], Path],
     logger: Any,
-    env_get_fn: Callable[[str, str], str | None] = os.getenv,
 ) -> RunExecutionContext | None:
     if cfg is None:
         cfg = load_config_fn(args.config)
@@ -225,13 +220,9 @@ def resolve_execution_context(
         ),
         max_concurrent=configured_max_concurrent(cfg),
         admission_limit=configured_admission_limit(cfg),
-        reservation_token=_explicit_or_env(reservation_token, ADMISSION_TOKEN_ENV_VAR, env_get_fn),
-        admission_app_name=_explicit_or_env(
-            admission_app_name, ADMISSION_APP_NAME_ENV_VAR, env_get_fn
-        ),
-        admission_task_id=_explicit_or_env(
-            admission_task_id, ADMISSION_TASK_ID_ENV_VAR, env_get_fn
-        ),
+        reservation_token=_explicit_or_env(reservation_token, ADMISSION_TOKEN_ENV_VAR),
+        admission_app_name=_explicit_or_env(admission_app_name, ADMISSION_APP_NAME_ENV_VAR),
+        admission_task_id=_explicit_or_env(admission_task_id, ADMISSION_TASK_ID_ENV_VAR),
         execution_provenance=(
             dict(execution_provenance) if isinstance(execution_provenance, Mapping) else None
         ),

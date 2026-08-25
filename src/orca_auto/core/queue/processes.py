@@ -219,7 +219,7 @@ def terminate_process_group(
 
     try:
         active_killpg(pid, active_sigterm)
-    except (ProcessLookupError, PermissionError, OSError):
+    except OSError:
         try:
             proc.terminate()
         except Exception:  # noqa: BLE001
@@ -248,7 +248,7 @@ def terminate_process_group(
 
     try:
         active_killpg(pid, active_sigkill)
-    except (ProcessLookupError, PermissionError, OSError):
+    except OSError:
         try:
             proc.kill()
         except Exception:  # noqa: BLE001

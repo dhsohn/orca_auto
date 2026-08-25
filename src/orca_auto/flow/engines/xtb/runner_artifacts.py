@@ -105,7 +105,7 @@ def _load_xtbout_json(job_dir: Path) -> dict[str, Any]:
                 errors="strict",
             )
         )
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, ValueError):
         return {}
     return dict(parsed) if isinstance(parsed, dict) else {}
 

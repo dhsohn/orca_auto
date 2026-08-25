@@ -36,10 +36,6 @@ def _snapshot(
         completed_at="2026-03-10T01:00:00+00:00",
         selected_inp_name=selected_inp_name,
         attempts=2,
-        latest_out_path=None,
-        final_reason="",
-        elapsed=3600.0,
-        elapsed_text="1h 00m",
         reaction_dir_identity=(directory_stat.st_dev, directory_stat.st_ino),
     )
 

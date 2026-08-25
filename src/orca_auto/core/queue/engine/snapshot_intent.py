@@ -644,7 +644,7 @@ def reconcile_orphaned_snapshot_generations(
                         for intent_path in _bounded_intent_paths(resolved_intent_dir):
                             try:
                                 marker = _read_intent(intent_path, expected_root=root)
-                            except (FileNotFoundError, OSError, ValueError):
+                            except (OSError, ValueError):
                                 continue
                             if marker["state"] == SNAPSHOT_INTENT_STATE_OWNED or any(
                                 _entry_references_intent(entry, marker) for entry in entries

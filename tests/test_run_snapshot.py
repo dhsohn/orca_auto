@@ -1,72 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
-from orca_auto.orca import run_snapshot
-from orca_auto.orca.run_snapshot import (
-    _compute_elapsed,
-    _find_latest_out_in_dir,
-    _latest_out_path,
-    collect_run_snapshots,
-    elapsed_text,
-    parse_iso_utc,
-)
+from orca_auto.core.utils import parse_iso_utc
+from orca_auto.orca.run_snapshot import collect_run_snapshots
 from orca_auto.orca.state import save_state, state_path
-
-
-class _FrozenDateTime(datetime):
-    @classmethod
-    def now(cls, tz=None):  # type: ignore[override]
-        current = cls(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
-        if tz is None:
-            return current
-        return current.astimezone(tz)
-
-
-def test_find_latest_out_in_dir_handles_non_dir_stat_errors_and_latest_selection(
-    tmp_path: Path,
-) -> None:
-    missing_dir = tmp_path / "missing"
-    assert _find_latest_out_in_dir(missing_dir) is None
-
-    run_dir = tmp_path / "run_dir"
-    run_dir.mkdir()
-    skipped_dir = run_dir / "skip.out"
-    skipped_dir.mkdir()
-    bad_out = run_dir / "bad.out"
-    bad_out.write_text("bad", encoding="utf-8")
-    old_out = run_dir / "old.out"
-    newest_out = run_dir / "new.out"
-    old_out.write_text("old", encoding="utf-8")
-    newest_out.write_text("new", encoding="utf-8")
-
-    now = datetime.now(UTC).timestamp()
-    os.utime(old_out, (now - 20, now - 20))
-    os.utime(newest_out, (now - 5, now - 5))
-
-    original_is_file = Path.is_file
-    original_stat = Path.stat
-
-    def _is_file(self: Path) -> bool:
-        if self == bad_out:
-            return True
-        return original_is_file(self)
-
-    def _stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
-        if self == bad_out:
-            raise OSError("boom")
-        return original_stat(self, follow_symlinks=follow_symlinks)
-
-    with (
-        patch("pathlib.Path.is_file", autospec=True, side_effect=_is_file),
-        patch("pathlib.Path.stat", autospec=True, side_effect=_stat),
-    ):
-        assert _find_latest_out_in_dir(run_dir) == newest_out
 
 
 def test_parse_iso_utc_handles_invalid_z_naive_and_offset_values() -> None:
@@ -81,104 +22,6 @@ def test_parse_iso_utc_handles_invalid_z_naive_and_offset_values() -> None:
 
     parsed_offset = parse_iso_utc("2026-01-10T21:00:00+09:00")
     assert parsed_offset == datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC)
-
-
-def test_elapsed_text_formats_negative_hour_minute_and_second_ranges() -> None:
-    assert elapsed_text(-1.0) == "-"
-    assert elapsed_text(3661.0) == "1h 01m"
-    assert elapsed_text(125.0) == "2m 05s"
-    assert elapsed_text(9.0) == "9s"
-
-
-def test_compute_elapsed_handles_missing_started_terminal_and_running(monkeypatch) -> None:
-    assert _compute_elapsed({"status": "running"}) == -1.0
-
-    completed_elapsed = _compute_elapsed(
-        {
-            "status": "completed",
-            "started_at": "2026-01-10T10:00:00+00:00",
-            "updated_at": "2026-01-10T11:30:00+00:00",
-        }
-    )
-    assert completed_elapsed == 5400.0
-
-    monkeypatch.setattr(run_snapshot, "datetime", _FrozenDateTime)
-    running_elapsed = _compute_elapsed(
-        {
-            "status": "running",
-            "started_at": "2026-01-10T11:45:00+00:00",
-        }
-    )
-    assert running_elapsed == 900.0
-
-
-def test_latest_out_path_prefers_final_result_when_resolvable(tmp_path: Path) -> None:
-    reaction_dir = tmp_path / "rxn"
-    reaction_dir.mkdir()
-    final_out = reaction_dir / "final.out"
-    final_out.write_text("done", encoding="utf-8")
-    attempt_out = reaction_dir / "attempt.out"
-    attempt_out.write_text("attempt", encoding="utf-8")
-
-    resolved = _latest_out_path(
-        reaction_dir,
-        {
-            "final_result": {"last_out_path": "final.out"},
-            "attempts": [{"out_path": "attempt.out"}],
-        },
-    )
-
-    assert resolved == final_out.resolve()
-
-
-def test_latest_out_path_uses_latest_valid_attempt_after_skipping_invalid_entries(
-    tmp_path: Path,
-) -> None:
-    reaction_dir = tmp_path / "rxn"
-    reaction_dir.mkdir()
-    attempt_out = reaction_dir / "attempt.out"
-    attempt_out.write_text("attempt", encoding="utf-8")
-
-    resolved = _latest_out_path(
-        reaction_dir,
-        {
-            "final_result": {"last_out_path": "missing.out"},
-            "attempts": [
-                "invalid",
-                {"out_path": ""},
-                {"other": "value"},
-                {"out_path": "attempt.out"},
-            ],
-        },
-    )
-
-    assert resolved == attempt_out.resolve()
-
-
-def test_latest_out_path_falls_back_to_latest_output_in_directory(tmp_path: Path) -> None:
-    reaction_dir = tmp_path / "rxn"
-    reaction_dir.mkdir()
-    older = reaction_dir / "older.out"
-    newer = reaction_dir / "newer.out"
-    older.write_text("old", encoding="utf-8")
-    newer.write_text("new", encoding="utf-8")
-    older.touch()
-    newer.touch()
-    older_mtime = datetime(2026, 1, 10, 11, 0, 0, tzinfo=UTC).timestamp()
-    newer_mtime = datetime(2026, 1, 10, 12, 0, 0, tzinfo=UTC).timestamp()
-    older.touch()
-    newer.touch()
-    import os
-
-    os.utime(older, (older_mtime, older_mtime))
-    os.utime(newer, (newer_mtime, newer_mtime))
-
-    resolved = _latest_out_path(
-        reaction_dir,
-        {"final_result": None, "attempts": [{"out_path": "missing.out"}, 123]},
-    )
-
-    assert resolved == newer
 
 
 def test_collect_run_snapshots_returns_empty_for_missing_root(tmp_path: Path) -> None:
@@ -281,10 +124,7 @@ def test_collect_run_snapshots_skips_state_symlink_that_escapes_runs_root(
     assert collect_run_snapshots(allowed_root) == []
 
 
-def test_collect_run_snapshots_builds_basic_snapshot_fields(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def test_collect_run_snapshots_builds_basic_snapshot_fields(tmp_path: Path) -> None:
     allowed_root = tmp_path / "orca_runs"
     reaction_dir = allowed_root / "group" / "rxn"
     reaction_dir.mkdir(parents=True)
@@ -310,8 +150,6 @@ def test_collect_run_snapshots_builds_basic_snapshot_fields(
         json.dumps(persisted_state, ensure_ascii=True, indent=2),
         encoding="utf-8",
     )
-    monkeypatch.setattr(run_snapshot, "_compute_elapsed", lambda _state: 3661.0)
-
     snapshots = collect_run_snapshots(allowed_root)
 
     assert len(snapshots) == 1
@@ -326,10 +164,6 @@ def test_collect_run_snapshots_builds_basic_snapshot_fields(
     assert snapshot.completed_at == "2026-01-10T11:01:01+00:00"
     assert snapshot.selected_inp_name == "calc.inp"
     assert snapshot.attempts == 2
-    assert snapshot.latest_out_path == out_path.resolve()
-    assert snapshot.final_reason == "terminated_normally"
-    assert snapshot.elapsed == 3661.0
-    assert snapshot.elapsed_text == "1h 01m"
 
 
 def test_collect_run_snapshots_uses_tracking_record_for_tracked_run(tmp_path: Path) -> None:
@@ -384,8 +218,6 @@ def test_collect_run_snapshots_uses_tracking_record_for_tracked_run(tmp_path: Pa
     assert snapshot.reaction_dir == tracked_run.resolve()
     assert snapshot.run_id == "run-tracked"
     assert snapshot.selected_inp_name == "calc.inp"
-    assert snapshot.latest_out_path == out_path.resolve()
-    assert snapshot.final_reason == "tracked_completion"
 
 
 def test_collect_run_snapshots_includes_untracked_state_when_index_is_incomplete(

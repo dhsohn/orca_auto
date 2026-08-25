@@ -197,7 +197,7 @@ def bound_orca_selected_input_science_identity(
             atom_sequence=atom_sequence,
             dependency_identities=dependency_identities,
         )
-    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError):
         return None
 
 
@@ -339,7 +339,7 @@ def _orca_input_atom_sequence(
             label="ORCA selected XYZ science identity",
             max_bytes=MAX_INPUT_SNAPSHOT_BYTES,
         ).splitlines()
-    except (OSError, RuntimeError, UnicodeError, ValueError):
+    except (OSError, RuntimeError, ValueError):
         return None
     cursor = 0
     while cursor < len(xyz_lines) and not xyz_lines[cursor].strip():

@@ -272,8 +272,6 @@ def ensure_route_line(route_line: str, *, default: str = "r2scan-3c TightSCF") -
         raise ValueError(
             f"workflow ORCA route-role mismatch: route_line must be a string; got={route_line!r}"
         )
-    if not isinstance(default, str):
-        raise ValueError("workflow ORCA default route_line must be a string")
 
     raw_value = route_line.strip() or default.strip()
     active_lines = [

@@ -59,10 +59,8 @@ def build_lazy_worker_child_runner(
     return run_worker_child_job
 
 
-def build_lazy_queue_worker_runner(
-    module_name: str, function_name: str = "main"
-) -> QueueWorkerRunner:
-    queue_worker_main = _lazy_callable(module_name, function_name)
+def build_lazy_queue_worker_runner(module_name: str) -> QueueWorkerRunner:
+    queue_worker_main = _lazy_callable(module_name, "main")
 
     def run_queue_worker(argv: list[str]) -> int:
         return int(queue_worker_main(argv))

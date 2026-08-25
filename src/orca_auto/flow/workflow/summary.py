@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -184,7 +183,7 @@ def list_workflow_summaries(workflow_root: str | Path) -> list[dict[str, Any]]:
     for workspace in iter_workflow_workspaces(workflow_root):
         try:
             summaries.append(workflow_summary(workspace))
-        except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        except (FileNotFoundError, ValueError):
             continue
     return summaries
 

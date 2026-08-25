@@ -70,9 +70,6 @@ from .internal_engine_models import (
 
 logger = logging.getLogger(__name__)
 
-_QUEUED_RECORD_SYNC_KEY = QUEUE_RECORD_SYNC_KEY
-_QUEUED_RECORD_SYNC_PENDING = QUEUE_RECORD_SYNC_REPAIR_PENDING
-
 
 @dataclass(frozen=True)
 class _InternalEngineSubmissionRequest:

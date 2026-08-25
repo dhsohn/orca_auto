@@ -175,7 +175,7 @@ def _workspace_directory_text(workflow_id: str, workflow_root: str | Path) -> st
         return "-"
     try:
         return str(resolve_workflow_workspace(target=workflow_id, workflow_root=workflow_root))
-    except (FileNotFoundError, ValueError, OSError, RuntimeError):
+    except (ValueError, OSError, RuntimeError):
         return "-"
 
 

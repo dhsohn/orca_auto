@@ -259,8 +259,7 @@ def load_state(reaction_dir: Path) -> RunState | None:
     raw = _load_json_dict(state_path(reaction_dir))
     if raw is None:
         return None
-    normalized = _state_from_normalized_payload(raw)
-    return normalized
+    return _state_from_normalized_payload(raw)
 
 
 def load_generation_state(
@@ -329,7 +328,7 @@ def load_report_json(
                 max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
             )
         )
-    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError):
         return None
     if (
         raw_generation_dir != resolved_generation_dir
@@ -767,7 +766,7 @@ def _published_terminal_observation(
             max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
         )
         existing = json.loads(existing_text)
-    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise RuntimeError(f"existing machine observation is invalid: {path}") from exc
     lifecycle = _dict(existing.get("lifecycle")) if isinstance(existing, dict) else {}
     if lifecycle.get("phase") != "finished":

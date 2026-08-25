@@ -683,10 +683,6 @@ def test_snapshot_display_status_marks_dead_running_as_failed(
             completed_at="",
             selected_inp_name="",
             attempts=0,
-            latest_out_path=None,
-            final_reason="",
-            elapsed=0.0,
-            elapsed_text="",
         )
 
     running = _snap("running")

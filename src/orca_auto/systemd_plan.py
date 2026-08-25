@@ -425,8 +425,7 @@ def build_systemd_install_plan(
 
 
 def _systemd_command_argv(command: Sequence[str], *, use_sudo: bool) -> tuple[str, ...]:
-    parts = (("sudo",) if use_sudo else ()) + tuple(command)
-    return parts
+    return (("sudo",) if use_sudo else ()) + tuple(command)
 
 
 def _format_command(command: Sequence[str], *, use_sudo: bool) -> str:

@@ -100,6 +100,9 @@ def mark_terminal_status(
     )
 
 
+BLOCKED_TERMINAL_REASON = "terminal_state_unrecoverable"
+
+
 def mark_terminal_repair_blocked(
     queue_root: str | Path,
     entry: Any,
@@ -108,7 +111,6 @@ def mark_terminal_repair_blocked(
     mark_completed_fn: Callable[..., Any],
     mark_cancelled_fn: Callable[..., Any],
     mark_failed_fn: Callable[..., Any],
-    blocked_reason: str = "terminal_state_unrecoverable",
 ) -> Any:
     normalized_status = str(durable_status).strip().lower()
     if normalized_status == "completed":
@@ -116,7 +118,7 @@ def mark_terminal_repair_blocked(
     elif normalized_status == "cancelled":
         reason = "cancel_requested"
     elif normalized_status == "failed":
-        reason = str(getattr(entry, "error", "") or blocked_reason).strip()
+        reason = str(getattr(entry, "error", "") or BLOCKED_TERMINAL_REASON).strip()
     else:
         raise ValueError(f"Terminal repair blocker requires terminal status: {durable_status}")
     return mark_terminal_status(
@@ -124,7 +126,7 @@ def mark_terminal_repair_blocked(
         entry.queue_id,
         status=normalized_status,
         reason=reason,
-        metadata_update={"terminal_repair_blocked_reason": blocked_reason},
+        metadata_update={"terminal_repair_blocked_reason": BLOCKED_TERMINAL_REASON},
         mark_completed_fn=mark_completed_fn,
         mark_cancelled_fn=mark_cancelled_fn,
         mark_failed_fn=mark_failed_fn,

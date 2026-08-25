@@ -2159,7 +2159,6 @@ def test_disabled_interaction_config_ignores_persisted_stages(tmp_path: Path) ->
     payload["metadata"]["request"]["parameters"].pop("interaction_energy")
     data = collect_workflow_si_data(payload)
     assert data.interaction_energies == ()
-    assert not data.interaction_energy_enabled
     assert "## Interaction energies" not in render_workflow_si_md(data)
 
 

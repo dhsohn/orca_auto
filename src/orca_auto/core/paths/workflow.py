@@ -258,7 +258,7 @@ def _workflow_payload_has_engine_stage(workspace_dir: Path, engine: str) -> bool
         return False
     try:
         raw = json.loads((workspace_dir / WORKFLOW_FILE_NAME).read_text(encoding="utf-8"))
-    except (FileNotFoundError, ValueError, TypeError, json.JSONDecodeError, OSError):
+    except (ValueError, TypeError, OSError):
         return False
     payload = coerce_mapping(raw)
     for raw_stage in coerce_list(payload.get("stages")):

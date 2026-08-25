@@ -97,14 +97,12 @@ class ExcludedStage:
 class PopulationRow:
     """One minimum's Boltzmann result within its ``formula|charge|multiplicity`` group.
 
-    ``rel_e_kcalmol`` is relative to the group's lowest-electronic-energy member and
-    ``rel_g_kcalmol`` to its lowest-Gibbs member (the population reference) — the same
-    two-baseline convention as the relative-energy table; ``population`` is the
-    within-group fraction (each group sums to 1).
+    ``rel_g_kcalmol`` is relative to the group's lowest-Gibbs member, which is the
+    population reference; ``population`` is the within-group fraction (each group
+    sums to 1).
     """
 
     cluster_key: str
-    rel_e_kcalmol: float | None
     rel_g_kcalmol: float | None
     population: float | None
 
@@ -137,7 +135,6 @@ class WorkflowSiData:
     # RMSD re-dedup grouping applied to the minima. Both are empty/off unless the
     # respective manifest feature is enabled.
     interaction_energies: tuple[InteractionEnergyResult, ...] = ()
-    interaction_energy_enabled: bool = False
     rmsd_dedup_enabled: bool = False
     rmsd_groups: tuple[RmsdGroup, ...] = ()
 
@@ -863,7 +860,6 @@ def _compute_populations(
         for i in members:
             rows[i] = PopulationRow(
                 cluster_key=key,
-                rel_e_kcalmol=rel_e[i],
                 rel_g_kcalmol=rel_g[i],
                 population=weights[i] / partition,
             )
@@ -1110,7 +1106,6 @@ def collect_workflow_si_data(
         population_note=population_note,
         populations=populations,
         interaction_energies=interaction_energies,
-        interaction_energy_enabled=interaction_cfg is not None,
         rmsd_dedup_enabled=rmsd_cfg is not None,
         rmsd_groups=rmsd_groups,
     )

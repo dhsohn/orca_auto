@@ -141,7 +141,7 @@ def signal_process_group_stable(
     try:
         try:
             observed_identity = active_deps.read_identity(process_fd)
-        except (OSError, UnicodeError, ValueError) as exc:
+        except (OSError, ValueError) as exc:
             raise StableProcessSignalError(
                 f"Cannot verify the stable process identity for pid={pid}"
             ) from exc

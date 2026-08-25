@@ -195,7 +195,6 @@ def line_chart_svg(
     x_label: str,
     y_label: str,
     x_tick_fmt: str = ".2f",
-    y_tick_fmt: str = ".1f",
     x_ticks: Sequence[float] | None = None,
 ) -> str:
     """Dependency-free SVG line chart; empty string when under two points."""
@@ -238,7 +237,7 @@ def line_chart_svg(
     for tick in _chart_ticks(y_low, y_high, 5):
         parts.append(
             f'<text x="{left - 8}" y="{sy(tick):.1f}" text-anchor="end" '
-            f'dominant-baseline="middle" font-size="11" fill="#69707c">{tick:{y_tick_fmt}}</text>'
+            f'dominant-baseline="middle" font-size="11" fill="#69707c">{tick:.1f}</text>'
         )
     parts.append(
         f'<text x="{left + plot_w / 2:.1f}" y="{height - 6}" text-anchor="middle" '

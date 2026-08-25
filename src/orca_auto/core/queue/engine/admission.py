@@ -26,16 +26,15 @@ def mark_worker_start_error(
     )
 
 
-def queue_entry_work_dir(
-    entry: Any,
-    *,
-    metadata_keys: tuple[str, ...] = ("job_dir", "reaction_dir"),
-) -> str | None:
+_WORK_DIR_METADATA_KEYS = ("job_dir", "reaction_dir")
+
+
+def queue_entry_work_dir(entry: Any) -> str | None:
     metadata = getattr(entry, "metadata", {})
     getter = getattr(metadata, "get", None)
     if not callable(getter):
         return None
-    for key in metadata_keys:
+    for key in _WORK_DIR_METADATA_KEYS:
         text = str(getter(key, "") or "").strip()
         if text:
             return text

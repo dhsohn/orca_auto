@@ -34,7 +34,7 @@ def run_lock_status(
     lock_path = reaction_dir / lock_file_name
     try:
         payload = held_file_lock_payload(lock_path)
-    except (OSError, UnicodeError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         if logger is not None:
             logger.warning("Cannot inspect %s ownership; treating it as held: %s", lock_path, exc)
         return RunLockStatus(held=True)

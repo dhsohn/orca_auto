@@ -355,7 +355,7 @@ def reindex_workflow_registry(workflow_root: str | Path) -> list[WorkflowRegistr
         try:
             payload = load_workflow_payload(workspace_dir)
             record = _record_for_workspace(workspace_dir, payload)
-        except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        except (FileNotFoundError, ValueError):
             continue
         records.append(record)
     records.sort(key=lambda item: (item.requested_at, item.workflow_id), reverse=True)
@@ -472,7 +472,7 @@ def clear_terminal_workflow_registry(
                 authoritative = load_workflow_payload(current.workspace_dir)
             except FileNotFoundError:
                 authoritative = None
-            except (OSError, ValueError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 # Corrupt/unreadable durable state is not safe to hide.
                 return False
             if authoritative is not None:
@@ -536,7 +536,7 @@ def clear_terminal_workflow_registry(
             # checkpoints. Keep the row and let a later clear retry.
             with acquire_workflow_lock(workspace, timeout_seconds=0.0):
                 removed_count += int(remove_if_still_clearable(candidate))
-        except (OSError, TimeoutError):
+        except OSError:
             continue
     return removed_count
 
