@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import json
 import os
 import re
 import stat
@@ -701,6 +702,36 @@ def cleanup_unowned_input_snapshot_namespace(
     )
 
 
+def verify_execution_manifest(
+    execution_snapshot: dict[str, Any],
+    verified_inputs: dict[str, Path],
+    *,
+    display_name: str,
+) -> dict[str, Any]:
+    """Return the immutable manifest after verifying it against its snapshot."""
+
+    manifest = execution_snapshot.get("manifest")
+    manifest_path = verified_inputs.get("manifest")
+    if not isinstance(manifest, dict) or manifest_path is None:
+        raise ValueError(f"Queued {display_name} execution snapshot has no immutable manifest")
+    if str(execution_snapshot.get("manifest_path") or "") != str(
+        manifest_path
+    ) or read_stable_regular_file(
+        manifest_path,
+        require_single_link=True,
+    ) != json.dumps(
+        manifest,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8"):
+        raise ValueError(
+            f"Queued {display_name} manifest payload does not match its immutable snapshot"
+        )
+    return dict(manifest)
+
+
 __all__ = [
     "SNAPSHOT_DIR_NAME",
     "MAX_INPUT_SNAPSHOT_BYTES",
@@ -711,6 +742,7 @@ __all__ = [
     "reserve_input_snapshot_namespace",
     "snapshot_input_file",
     "snapshot_input_payload",
+    "verify_execution_manifest",
     "verify_input_snapshot",
     "verify_input_snapshots",
 ]

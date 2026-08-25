@@ -295,6 +295,34 @@ def verified_engine_runtime_environment(
     return environment
 
 
+def verified_runtime_environment_for_job(
+    job_dir: str | Path,
+    *,
+    manifest: dict[str, Any],
+    execution_snapshot: dict[str, Any] | None,
+    display_name: str,
+) -> dict[str, str]:
+    """Resolve the runtime identity for a job and materialize its environment.
+
+    Queued submissions must match the identity captured in their immutable
+    manifest; direct runs fall back to the manifest's recorded identity or a
+    freshly captured one.
+    """
+
+    runtime_identity = (
+        execution_snapshot.get("runtime_identity")
+        if execution_snapshot is not None
+        else manifest.get("_orca_auto_runtime_identity")
+    )
+    if runtime_identity is None:
+        runtime_identity = engine_runtime_identity(job_dir)
+    if execution_snapshot is not None and runtime_identity != manifest.get(
+        "_orca_auto_runtime_identity"
+    ):
+        raise ValueError(f"Queued {display_name} manifest has a mismatched runtime identity")
+    return verified_engine_runtime_environment(job_dir, runtime_identity)
+
+
 def scratch_engine_runtime_environment(
     scratch_dir: str | Path,
     environment: Mapping[str, str],

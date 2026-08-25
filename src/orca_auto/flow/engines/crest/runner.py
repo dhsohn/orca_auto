@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import math
 import resource
@@ -21,19 +20,19 @@ from orca_auto.core.engine_process import (
     cleanup_failed_logged_process_start,
     start_logged_process,
 )
-from orca_auto.core.engine_scratch import (
-    EngineScratchWorkspace,
-    scratch_publication_provenance,
-)
+from orca_auto.core.engine_scratch import EngineScratchWorkspace
 from orca_auto.core.queue.engine.input_snapshot import (
-    read_stable_regular_file,
+    verify_execution_manifest,
     verify_input_snapshots,
 )
 from orca_auto.core.utils import fsync_directory, now_utc_iso
 from orca_auto.core.utils import process as process_utils
 from orca_auto.flow.engines.scratch import (
+    abort_launch_publication,
+    close_and_wait,
     create_engine_scratch_workspace,
-    publish_engine_scratch_workspace,
+    finalize_snapshot_is_valid,
+    publish_running_scratch,
 )
 from orca_auto.flow.xyz_utils import (
     load_output_xyz_frames,
@@ -124,30 +123,6 @@ def _resolve_crest_executable(cfg: AppConfig) -> str:
         executable_name="crest",
         display_name="CREST",
     )
-
-
-def _verify_execution_manifest(
-    execution_snapshot: dict[str, Any],
-    verified_inputs: dict[str, Path],
-) -> dict[str, Any]:
-    manifest = execution_snapshot.get("manifest")
-    manifest_path = verified_inputs.get("manifest")
-    if not isinstance(manifest, dict) or manifest_path is None:
-        raise ValueError("Queued CREST execution snapshot has no immutable manifest")
-    if str(execution_snapshot.get("manifest_path") or "") != str(
-        manifest_path
-    ) or read_stable_regular_file(
-        manifest_path,
-        require_single_link=True,
-    ) != json.dumps(
-        manifest,
-        allow_nan=False,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8"):
-        raise ValueError("Queued CREST manifest payload does not match its immutable snapshot")
-    return dict(manifest)
 
 
 def _append_crest_mode_flags(command: list[str], manifest: dict[str, Any]) -> None:
@@ -605,7 +580,9 @@ def start_crest_job(
         if not isinstance(input_snapshots, dict):
             raise ValueError("Queued CREST execution snapshot has no input descriptors")
         verified_inputs = verify_input_snapshots(job_dir, input_snapshots)
-        manifest = _verify_execution_manifest(execution_snapshot, verified_inputs)
+        manifest = verify_execution_manifest(
+            execution_snapshot, verified_inputs, display_name="CREST"
+        )
         identities = execution_snapshot.get("executable_identities")
         if not isinstance(identities, dict):
             raise ValueError("Queued CREST execution snapshot has no executable identities")
@@ -622,20 +599,11 @@ def start_crest_job(
         if not isinstance(resource_raw, dict):
             raise ValueError("Queued CREST execution snapshot has no resource request")
         resource_request = dict(resource_raw)
-    runtime_identity = (
-        execution_snapshot.get("runtime_identity")
-        if execution_snapshot is not None
-        else manifest.get("_orca_auto_runtime_identity")
-    )
-    if runtime_identity is None:
-        runtime_identity = _engine_runner.engine_runtime_identity(job_dir)
-    if execution_snapshot is not None and runtime_identity != manifest.get(
-        "_orca_auto_runtime_identity"
-    ):
-        raise ValueError("Queued CREST manifest has a mismatched runtime identity")
-    runtime_environment = _engine_runner.verified_engine_runtime_environment(
+    runtime_environment = _engine_runner.verified_runtime_environment_for_job(
         job_dir,
-        runtime_identity,
+        manifest=manifest,
+        execution_snapshot=execution_snapshot,
+        display_name="CREST",
     )
     resource_actual = _engine_runner.resource_actual_dict(resource_request)
     command = _build_command(
@@ -695,12 +663,7 @@ def start_crest_job(
             ),
         )
     except Exception:
-        try:
-            if scratch_workspace is not None:
-                publish_engine_scratch_workspace(scratch_workspace, logger=LOGGER)
-        finally:
-            if on_launch_aborted is not None:
-                on_launch_aborted()
+        abort_launch_publication(scratch_workspace, on_launch_aborted, logger=LOGGER)
         raise
     try:
         return CrestRunningJob(
@@ -724,12 +687,7 @@ def start_crest_job(
         )
     except BaseException:
         cleanup_failed_logged_process_start(launched)
-        try:
-            if scratch_workspace is not None:
-                publish_engine_scratch_workspace(scratch_workspace, logger=LOGGER)
-        finally:
-            if on_launch_aborted is not None:
-                on_launch_aborted()
+        abort_launch_publication(scratch_workspace, on_launch_aborted, logger=LOGGER)
         raise
 
 
@@ -739,39 +697,11 @@ def finalize_crest_job(
     forced_status: str | None = None,
     forced_reason: str | None = None,
 ) -> CrestRunResult:
-    try:
-        running.stdout_handle.flush()
-        running.stderr_handle.flush()
-    finally:
-        running.stdout_handle.close()
-        running.stderr_handle.close()
+    exit_code = close_and_wait(running)
 
-    exit_code = running.process.poll()
-    if exit_code is None:
-        exit_code = running.process.wait()
+    scratch_provenance = publish_running_scratch(running, logger=LOGGER)
 
-    scratch_provenance: dict[str, Any] = {}
-    if running.scratch_workspace is not None:
-        publication = publish_engine_scratch_workspace(
-            running.scratch_workspace,
-            logger=LOGGER,
-        )
-        scratch_provenance = scratch_publication_provenance(publication)
-        durable_job_dir = Path(running.durable_job_dir)
-        running.job_dir = str(durable_job_dir)
-        running.stdout_log = str((durable_job_dir / Path(running.stdout_log).name).resolve())
-        running.stderr_log = str((durable_job_dir / Path(running.stderr_log).name).resolve())
-        running.scratch_workspace = None
-
-    snapshot_valid = True
-    if running.execution_snapshot:
-        try:
-            descriptors = running.execution_snapshot.get("input_snapshots")
-            if not isinstance(descriptors, dict):
-                raise ValueError("Queued CREST execution snapshot has no input descriptors")
-            verify_input_snapshots(running.job_dir, descriptors)
-        except (OSError, RuntimeError, TypeError, ValueError):
-            snapshot_valid = False
+    snapshot_valid = finalize_snapshot_is_valid(running, display_name="CREST")
     output_identities: dict[str, dict[str, Any]] = {}
     if snapshot_valid:
         retained_count, retained_paths = _retained_outputs(
