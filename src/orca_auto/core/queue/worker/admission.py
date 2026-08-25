@@ -187,13 +187,12 @@ def make_child_queue_worker_deps(
     dequeue_next_entry_fn: Callable[[Any], tuple[Path, Any] | None],
     start_background_job_process_fn: Callable[..., Any],
     try_reserve_admission_slot_fn: Callable[[Any], str | None],
-    reserve_dequeued_entry_fn: Callable[..., tuple[str, Any | None]] = reserve_dequeued_entry,
 ) -> ChildQueueWorkerDeps:
     return ChildQueueWorkerDeps(
         poll_interval_seconds=poll_interval_seconds,
         time=time_module,
         release_slot=release_slot_fn,
-        reserve_dequeued_entry=reserve_dequeued_entry_fn,
+        reserve_dequeued_entry=reserve_dequeued_entry,
         admission_root=admission_root_fn,
         dequeue_next_entry=dequeue_next_entry_fn,
         start_background_job_process=start_background_job_process_fn,

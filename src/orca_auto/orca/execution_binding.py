@@ -78,7 +78,6 @@ _XYZ_COORDINATE_RE = re.compile(r"\A[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d
 class _SelectedSnapshotInput:
     source_inputs: dict[str, dict[str, Any]]
     selected_payload: bytes
-    selected_text: str
     lines: list[str]
     references: list[OrcaFileReference]
     requests_moread: bool
@@ -923,7 +922,6 @@ def _load_selected_snapshot_input(
     return _SelectedSnapshotInput(
         source_inputs=source_inputs,
         selected_payload=selected_payload,
-        selected_text=selected_text,
         lines=lines,
         references=scan_orca_file_references(lines),
         requests_moread=requests_moread,

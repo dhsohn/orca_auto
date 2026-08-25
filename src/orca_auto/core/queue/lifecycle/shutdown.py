@@ -110,10 +110,9 @@ def shutdown_running_job(
     finalize_child_exit_fn: Callable[[Any, int], Any],
     grace_seconds: float,
     sleep_fn: Callable[[float], None],
-    shutdown_child_process_with_grace_fn: Callable[..., Any] = shutdown_child_process_with_grace,
 ) -> bool:
     return bool(
-        shutdown_child_process_with_grace_fn(
+        shutdown_child_process_with_grace(
             job,
             finalize_child_exit_fn=lambda current_job, rc: finalize_child_exit_fn(
                 current_job,

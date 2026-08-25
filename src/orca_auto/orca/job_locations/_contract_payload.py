@@ -177,7 +177,7 @@ def _runtime_payload_for_generation(
                 return None
             payload = raw_payload
         schema_version = int(payload.get("schema_version", -1))
-    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError):
         return None
     if (
         schema_version != ENGINE_ARTIFACT_SCHEMA_VERSION

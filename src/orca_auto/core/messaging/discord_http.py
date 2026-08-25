@@ -46,7 +46,7 @@ def _response_message_id(response: object) -> str:
     try:
         body = response.read()  # type: ignore[attr-defined]
         decoded = json.loads(body.decode("utf-8"))
-    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return ""
     if not isinstance(decoded, Mapping):
         return ""
@@ -100,15 +100,7 @@ def _retry_after_from_error(exc: HTTPError) -> tuple[float | None, str]:
         try:
             body = exc.read(_MAX_ERROR_BODY_BYTES)
             decoded = json.loads(body.decode("utf-8")) if body else None
-        except (
-            AttributeError,
-            HTTPException,
-            OSError,
-            UnicodeDecodeError,
-            json.JSONDecodeError,
-            TypeError,
-            ValueError,
-        ):
+        except (AttributeError, HTTPException, OSError, TypeError, ValueError):
             decoded = None
     finally:
         # HTTPError owns the response stream. Closing it here prevents a socket

@@ -52,7 +52,7 @@ def _workspace_matches_registry_record(
 ) -> bool:
     try:
         payload = deps.load_workflow_payload_fn(workspace_dir)
-    except (FileNotFoundError, ValueError, OSError, TypeError):
+    except (ValueError, OSError, TypeError):
         return False
     persisted_raw_id = normalize_text(payload.get("workflow_id"))
     record_id = normalize_text(record.workflow_id)
@@ -104,7 +104,7 @@ def _workflow_record_location(
                 advance_target=registry_target,
                 workspace_dir=str(registry_workspace),
             )
-    except (FileNotFoundError, ValueError, OSError):
+    except (ValueError, OSError):
         pass
 
     workflow_id = str(record.workflow_id)
@@ -118,7 +118,7 @@ def _workflow_record_location(
                 advance_target=workflow_id,
                 workspace_dir=str(fallback),
             )
-    except (FileNotFoundError, ValueError, OSError):
+    except (ValueError, OSError):
         pass
     return _WorkflowRecordLocation(
         advance_target=registry_target,

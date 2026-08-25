@@ -52,21 +52,23 @@ def safe_float(value: Any, *, default: float | None = None) -> float | None:
         return default
 
 
+_TRUE_TEXTS = frozenset({"1", "true", "yes", "y", "on"})
+_FALSE_TEXTS = frozenset({"0", "false", "no", "n", "off"})
+
+
 def normalize_bool(
     value: Any,
     *,
     default: bool = False,
-    true_values: frozenset[str] = frozenset({"1", "true", "yes", "y", "on"}),
-    false_values: frozenset[str] = frozenset({"0", "false", "no", "n", "off"}),
 ) -> bool:
     if value is None:
         return default
     if isinstance(value, bool):
         return value
     text = normalize_text(value).lower()
-    if text in true_values:
+    if text in _TRUE_TEXTS:
         return True
-    if text in false_values:
+    if text in _FALSE_TEXTS:
         return False
     return default
 

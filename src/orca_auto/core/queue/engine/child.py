@@ -48,7 +48,6 @@ def _shutdown_exception_context(exc: BaseException) -> Any:
 class WorkerChildRunSpec:
     shutdown_exception_type: type[BaseException]
     entry_ready_fn: Callable[[Any], bool] | None = None
-    shutdown_context_fn: Callable[[BaseException], Any] = _shutdown_exception_context
     outcome_exit_code_fn: Callable[[Any], int] | None = None
 
 
@@ -124,7 +123,7 @@ class _EngineChildJobRunner:
         if updated is not None and not requeue_result_is_cancelled(updated):
             self.mark_recovery_pending_context_fn(
                 job.cfg,
-                self.spec.shutdown_context_fn(exc),
+                _shutdown_exception_context(exc),
                 reason="worker_shutdown",
             )
         return 0

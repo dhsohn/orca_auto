@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 import unicodedata
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 # Gap rendered between adjacent table columns.
@@ -22,10 +22,7 @@ QUEUE_HEADERS = {
 }
 
 
-def terminal_max_width(
-    *,
-    get_terminal_size: Callable[..., Any] | None = None,
-) -> int | None:
+def terminal_max_width() -> int | None:
     """Return the usable terminal width, or ``None`` when it cannot be detected.
 
     ``shutil.get_terminal_size`` honors ``COLUMNS`` first, then queries the
@@ -35,8 +32,7 @@ def terminal_max_width(
     """
 
     try:
-        getter = get_terminal_size or shutil.get_terminal_size
-        columns = getter(fallback=(0, 0)).columns
+        columns = shutil.get_terminal_size(fallback=(0, 0)).columns
     except (ValueError, OSError):
         return None
     return columns if columns > 0 else None

@@ -478,7 +478,7 @@ def _parse_attempt_irc_output(attempt: Mapping[str, Any]) -> IrcParsedOutput | N
         return None
     try:
         return parse_irc_output(out_path)
-    except (OSError, FileNotFoundError):
+    except OSError:
         return None
 
 
@@ -513,7 +513,7 @@ def _latest_opt_progress(
             continue
         try:
             progress = parse_opt_progress(out_raw)
-        except (OSError, FileNotFoundError):
+        except OSError:
             continue
         steps = tuple((step.cycle, step.energy_hartree) for step in progress.steps)
         if steps:

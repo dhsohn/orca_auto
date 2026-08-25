@@ -213,7 +213,7 @@ def latest_engrad_energy(directory: Path) -> float | None:
                 label="ORCA gradient energy",
                 max_bytes=_MAX_ENGRAD_ENERGY_FILE_BYTES,
             ).splitlines()
-        except (OSError, RuntimeError, UnicodeError, ValueError):
+        except (OSError, RuntimeError, ValueError):
             continue
         marker_seen = False
         for line in lines:
@@ -320,12 +320,15 @@ def _stage_status_reason(stage: Mapping[str, Any], report: Mapping[str, Any] | N
     return ""
 
 
-def _read_log_tail(path: Path, *, limit_bytes: int = 256 * 1024) -> str:
+_LOG_TAIL_LIMIT_BYTES = 256 * 1024
+
+
+def _read_log_tail(path: Path) -> str:
     try:
         with path.open("rb") as handle:
             handle.seek(0, os.SEEK_END)
             size = handle.tell()
-            handle.seek(max(0, size - limit_bytes))
+            handle.seek(max(0, size - _LOG_TAIL_LIMIT_BYTES))
             return handle.read().decode("utf-8", errors="ignore")
     except OSError:
         return ""

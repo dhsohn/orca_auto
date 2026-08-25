@@ -118,7 +118,7 @@ def _first_declared_atom_count(payload: bytes) -> tuple[int | None, str]:
                 return None, "invalid_atom_count"
             try:
                 return int(raw_line.decode("ascii", errors="strict")), ""
-            except (UnicodeError, ValueError):
+            except ValueError:
                 return None, "invalid_atom_count"
         if newline < 0:
             break
@@ -282,12 +282,15 @@ def load_xyz_atom_sequence(path: str | Path) -> tuple[str, ...]:
     return tuple(line.split()[0] for line in frames[0].atom_lines)
 
 
+# Radon closes the last fully parameterized row for the supported engines.
+MAX_SUPPORTED_ATOMIC_NUMBER = 86
+
+
 def validate_electronic_state(
     path: str | Path,
     *,
     charge: int,
     uhf: int,
-    max_atomic_number: int = 86,
 ) -> dict[str, int]:
     frames = load_xyz_frames(path)
     if len(frames) != 1:
@@ -298,10 +301,10 @@ def validate_electronic_state(
         atomic_number = _ATOMIC_NUMBERS.get(symbol)
         if atomic_number is None:
             raise ValueError(f"Unknown element symbol in XYZ input: {line.split()[0]!r}")
-        if atomic_number > max_atomic_number:
+        if atomic_number > MAX_SUPPORTED_ATOMIC_NUMBER:
             raise ValueError(
                 f"Element {line.split()[0]!r} exceeds the supported GFN atomic-number "
-                f"range 1..{max_atomic_number}"
+                f"range 1..{MAX_SUPPORTED_ATOMIC_NUMBER}"
             )
         nuclear_charge += atomic_number
     electron_count = nuclear_charge - charge

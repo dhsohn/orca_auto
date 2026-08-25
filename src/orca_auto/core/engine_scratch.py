@@ -327,7 +327,7 @@ class EngineScratchWorkspace:
                                 workspace.name,
                                 workspace_identity,
                             )
-                        except (FileNotFoundError, EngineScratchError, OSError):
+                        except (EngineScratchError, OSError):
                             pass
                     raise
         finally:
@@ -463,7 +463,7 @@ def _linux_available_memory_bytes() -> int:
                 if available > 0:
                     return available
                 break
-    except (OSError, UnicodeError, ValueError):
+    except (OSError, ValueError):
         pass
     raise EngineScratchError("Cannot determine available host memory for engine scratch")
 
@@ -710,7 +710,7 @@ def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
                 )
                 parsed = json.loads(raw_payload.decode("utf-8", errors="strict"))
                 payload = parsed if isinstance(parsed, dict) else None
-            except (FileNotFoundError, OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 payload = None
         finally:
             os.close(workspace_fd)
@@ -1111,7 +1111,7 @@ def _load_publication_journal(
         return None
     try:
         parsed = json.loads(payload.decode("utf-8", errors="strict"))
-    except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise EngineScratchError("engine scratch publication journal is corrupt") from exc
     if not isinstance(parsed, dict) or parsed.get("schema_version") != 1:
         raise EngineScratchError("engine scratch publication journal has an invalid schema")

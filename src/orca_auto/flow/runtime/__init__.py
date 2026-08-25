@@ -6,7 +6,7 @@ from typing import Any
 from orca_auto.core.admission import active_slot_count
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.utils import now_utc_iso, timestamped_token
-from orca_auto.core.utils.coercion import normalize_text, positive_int
+from orca_auto.core.utils.coercion import normalize_text
 
 from ..engine_options import WorkflowEngineOptions
 from ..orchestration import advance_workflow
@@ -233,16 +233,10 @@ def _start_workflow_cycle(
     context: WorkflowRuntimeContext,
 ) -> _WorkflowCycle:
     def cycle_submission_has_capacity(*config_paths: str | Path | None) -> bool:
-        def submission_limit(config_path: str | Path) -> int | None:
-            return submission_admission_limit_from_config(
-                config_path,
-                positive_int_fn=positive_int,
-            )
-
         def submission_has_capacity(config_path: str | Path) -> bool | None:
             return submission_admission_has_capacity(
                 config_path,
-                submission_admission_limit_from_config_fn=submission_limit,
+                submission_admission_limit_from_config_fn=submission_admission_limit_from_config,
                 active_slot_count_fn=active_slot_count,
             )
 

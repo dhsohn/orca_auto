@@ -77,13 +77,11 @@ _GEOM_CYCLE_RE = re.compile(r"Geometry Optimization Cycle\s+(\d+)", re.I)
 @dataclass(frozen=True)
 class NebIterationPoint:
     phase: str
-    optimizer: str
     iteration: int
     image: int
     delta_e_hartree: float
     max_force: float
     rms_force: float
-    path_length: float
     ci_max_force: float | None
     ci_rms_force: float | None
 
@@ -270,7 +268,7 @@ def _parse_attempt_neb_output(attempt: Mapping[str, Any]) -> NebParsedOutput | N
         return None
     try:
         return parse_neb_output(out_path)
-    except (OSError, FileNotFoundError):
+    except OSError:
         return None
 
 
@@ -283,7 +281,7 @@ def _parse_attempt_opt_progress(attempt: Mapping[str, Any]) -> OptProgress | Non
         return None
     try:
         return parse_opt_progress(str(out_path))
-    except (OSError, FileNotFoundError):
+    except OSError:
         return None
 
 
@@ -296,7 +294,7 @@ def _parse_attempt_ts_steps(attempt: Mapping[str, Any]) -> tuple[tuple[int, floa
         return ()
     try:
         return _parse_ts_refinement_steps(out_path)
-    except (OSError, FileNotFoundError):
+    except OSError:
         return ()
 
 
@@ -408,13 +406,11 @@ def _parse_neb_iterations(text: str) -> tuple[NebIterationPoint, ...]:
         points.append(
             NebIterationPoint(
                 phase=phase,
-                optimizer=match.group(1),
                 iteration=int(match.group(2)),
                 image=int(match.group(3)),
                 delta_e_hartree=float(match.group(4)),
                 max_force=float(match.group(5)),
                 rms_force=float(match.group(6)),
-                path_length=float(match.group(7)),
                 ci_max_force=_optional_float(match.group(8)),
                 ci_rms_force=_optional_float(match.group(9)),
             )

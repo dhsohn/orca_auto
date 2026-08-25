@@ -18,6 +18,8 @@ from orca_auto import cli_workers as cli_worker_specs
 from orca_auto.core.queue import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_KEY,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     DuplicateQueueEntryError,
     QueueEntry,
@@ -394,7 +396,7 @@ def test_submit_job_dir_uses_structured_engine_dependencies(
     enqueue_metadata = captured["enqueue"][1]["metadata"]
     assert enqueue_metadata["job_dir"] == str(resolved_job_dir)
     assert {key: enqueue_metadata[key] for key in extras} == extras
-    assert enqueue_metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "preparing"
+    assert enqueue_metadata[QUEUE_RECORD_SYNC_KEY] == "preparing"
     assert enqueue_metadata["_orca_auto_queued_record_sync_owner_pid"] > 0
     assert enqueue_metadata["_orca_auto_queued_record_sync_token"]
     assert enqueue_metadata["_orca_auto_queued_record_sync_updated_at"]
@@ -421,7 +423,7 @@ def test_submit_job_dir_uses_structured_engine_dependencies(
             duplicate_policy([existing], proposed)
     assert captured["record"][0] is cfg
     [persisted] = list_queue(tmp_path / engine / "queue")
-    assert persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert persisted.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
     assert result["status"] == "submitted"
     assert result["returncode"] == 0
     assert result["command_argv"] == [
@@ -493,9 +495,7 @@ def test_submit_job_dir_preserves_durable_success_when_queued_record_update_fail
     entries = list_queue(queue_root)
     assert len(entries) == 1
     assert entries[0].status.value == "pending"
-    assert (
-        entries[0].metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
-    )
+    assert entries[0].metadata[QUEUE_RECORD_SYNC_KEY] == "repair_pending"
     assert result["status"] == "submitted"
     assert result["returncode"] == 0
     assert result["queue_id"] == entries[0].queue_id
@@ -727,9 +727,7 @@ def test_enqueue_post_commit_error_recovers_and_defers_to_worker_repair(
     assert result["queue_id"] == persisted.queue_id
     # A recovered enqueue whose result was lost is parked for the worker
     # repair pass instead of being published after an unknown failure.
-    assert (
-        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
-    )
+    assert persisted.metadata[QUEUE_RECORD_SYNC_KEY] == "repair_pending"
     assert "OSError: enqueue durability barrier failed" in result["stderr"]
     assert publications == []
 
@@ -741,7 +739,7 @@ def test_enqueue_post_commit_error_recovers_and_defers_to_worker_repair(
         entry_matches_fn=lambda current: current.engine == "crest",
     )
     repaired = list_queue(queue_root)[0]
-    assert repaired.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
     assert len(publications) == 1
     assert publications[0][0].context.get(
         internal_engine_submission.SUPPRESS_QUEUED_NOTIFICATION_CONTEXT_KEY,
@@ -765,9 +763,7 @@ def test_enqueue_post_commit_control_flow_is_fenced_then_propagated(tmp_path: Pa
         )
 
     persisted = list_queue(queue_root)[0]
-    assert (
-        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
-    )
+    assert persisted.metadata[QUEUE_RECORD_SYNC_KEY] == "repair_pending"
     assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
 
 
@@ -809,9 +805,7 @@ def test_enqueue_post_commit_recovery_barrier_failure_reports_outcome_unknown(
     # honestly reports the enqueue outcome as unknown instead of success.
     assert result["status"] == "failed"
     persisted = list_queue(queue_root)[0]
-    assert (
-        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
-    )
+    assert persisted.metadata[QUEUE_RECORD_SYNC_KEY] == "repair_pending"
     assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
 
 
@@ -850,9 +844,7 @@ def test_enqueue_post_commit_recovery_propagates_new_control_flow_after_visible_
         )
 
     persisted = list_queue(queue_root)[0]
-    assert (
-        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
-    )
+    assert persisted.metadata[QUEUE_RECORD_SYNC_KEY] == "repair_pending"
     assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
 
 
@@ -873,7 +865,7 @@ def test_enqueue_post_commit_recovery_never_mutates_a_different_submission(tmp_p
     foreign = list_queue(queue_root)[0]
     assert result["status"] == "failed"
     assert foreign.task_id == "different-task"
-    assert foreign.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "preparing"
+    assert foreign.metadata[QUEUE_RECORD_SYNC_KEY] == "preparing"
     assert foreign.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] > 0
 
 
@@ -904,10 +896,7 @@ def test_enqueue_post_commit_recovery_terminally_fences_ambiguous_exact_rows(
     assert len(rows) == 2
     assert all(row.status == QueueStatus.CANCELLED for row in rows)
     assert all(row.cancel_requested for row in rows)
-    assert all(
-        row.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "aborted"
-        for row in rows
-    )
+    assert all(row.metadata[QUEUE_RECORD_SYNC_KEY] == "aborted" for row in rows)
 
 
 def test_repair_publication_system_exit_is_retryable_and_propagates(tmp_path: Path) -> None:
@@ -925,7 +914,7 @@ def test_repair_publication_system_exit_is_retryable_and_propagates(tmp_path: Pa
         engine="crest",
         metadata={
             "job_dir": str(job_dir),
-            internal_engine_submission._QUEUED_RECORD_SYNC_KEY: "repair_pending",
+            QUEUE_RECORD_SYNC_KEY: "repair_pending",
         },
     )
     state = internal_engine_submission._InternalEngineSubmissionState(
@@ -945,9 +934,7 @@ def test_repair_publication_system_exit_is_retryable_and_propagates(tmp_path: Pa
         )
 
     persisted = list_queue(queue_root)[0]
-    assert (
-        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
-    )
+    assert persisted.metadata[QUEUE_RECORD_SYNC_KEY] == "repair_pending"
     assert persisted.metadata[internal_engine_submission.QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
 
 
@@ -990,7 +977,7 @@ def test_internal_publication_repair_reclaims_abandoned_live_pid_lease(
 
     assert recorded == ["xtb-live-owner"]
     [repaired] = list_queue(queue_root)
-    assert repaired.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
 
 
 def test_xtb_active_replay_rejects_conflicting_job_identity(
@@ -1064,7 +1051,7 @@ def test_active_replay_quarantines_unknown_publication_marker(
         metadata={
             "job_dir": str(job_dir),
             "mode": "standard",
-            internal_engine_submission._QUEUED_RECORD_SYNC_KEY: "future_protocol_state",
+            QUEUE_RECORD_SYNC_KEY: "future_protocol_state",
         },
     )
     record_calls: list[str] = []
@@ -1099,10 +1086,7 @@ def test_active_replay_quarantines_unknown_publication_marker(
     assert record_calls == []
     [persisted] = list_queue(queue_root)
     assert persisted.queue_id == existing.queue_id
-    assert (
-        persisted.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
-        == "future_protocol_state"
-    )
+    assert persisted.metadata[QUEUE_RECORD_SYNC_KEY] == "future_protocol_state"
 
 
 def test_active_cancellation_returns_blocked_until_terminal(
@@ -1208,7 +1192,7 @@ def test_record_failure_replay_repairs_existing_identity_without_duplicate_notif
     assert indexes == states
     assert notifications == ["crest-original"]
     entry = list_queue(queue_root)[0]
-    assert entry.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
 
 
 def test_worker_cannot_claim_entry_while_fresh_queued_record_is_being_published(
@@ -1258,9 +1242,7 @@ def test_worker_cannot_claim_entry_while_fresh_queued_record_is_being_published(
     try:
         assert _wait_for_thread_event(publish_started, thread)
         publishing = list_queue(queue_root)[0]
-        assert (
-            publishing.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "preparing"
-        )
+        assert publishing.metadata[QUEUE_RECORD_SYNC_KEY] == "preparing"
         assert (
             update_metadata(
                 queue_root,
@@ -1280,7 +1262,7 @@ def test_worker_cannot_claim_entry_while_fresh_queued_record_is_being_published(
     assert not thread.is_alive()
     assert results[0]["status"] == "submitted"
     published = list_queue(queue_root)[0]
-    assert published.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert published.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
     assert dequeue_next(queue_root) is not None
 
 
@@ -1351,9 +1333,7 @@ def test_cancel_during_fresh_publication_terminalizes_only_after_side_effects(
         assert not cancel_finished.wait(timeout=0.25)
         publishing = list_queue(queue_root)[0]
         assert publishing.status.value == "pending"
-        assert (
-            publishing.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "preparing"
-        )
+        assert publishing.metadata[QUEUE_RECORD_SYNC_KEY] == "preparing"
     finally:
         allow_publish.set()
         _join_thread(submit_thread)
@@ -1368,7 +1348,7 @@ def test_cancel_during_fresh_publication_terminalizes_only_after_side_effects(
     assert events == ["record_started", "record_finished", "cancel_finished"]
     terminal = list_queue(queue_root)[0]
     assert terminal.status.value == "cancelled"
-    assert terminal.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert terminal.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
 
 
 def test_cancel_before_fresh_publication_revokes_fence_and_skips_all_side_effects(
@@ -1424,10 +1404,7 @@ def test_cancel_before_fresh_publication_revokes_fence_and_skips_all_side_effect
     assert record_calls == []
     terminal = list_queue(queue_root)[0]
     assert terminal.status.value == "cancelled"
-    assert (
-        terminal.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
-        == QUEUE_RECORD_SYNC_ABORTED
-    )
+    assert terminal.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
 
 
 def test_cancel_during_repair_publication_waits_for_complete_fenced_write(
@@ -1444,9 +1421,7 @@ def test_cancel_during_repair_publication_waits_for_complete_fenced_write(
         engine="crest",
         metadata={
             "job_dir": str(job_dir),
-            internal_engine_submission._QUEUED_RECORD_SYNC_KEY: (
-                internal_engine_submission._QUEUED_RECORD_SYNC_PENDING
-            ),
+            QUEUE_RECORD_SYNC_KEY: (QUEUE_RECORD_SYNC_REPAIR_PENDING),
         },
     )
     repair_started = Event()
@@ -1496,7 +1471,7 @@ def test_cancel_during_repair_publication_waits_for_complete_fenced_write(
     try:
         assert _wait_for_thread_event(repair_started, replay_thread)
         repairing = list_queue(queue_root)[0]
-        assert repairing.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repairing"
+        assert repairing.metadata[QUEUE_RECORD_SYNC_KEY] == "repairing"
 
         def cancel() -> None:
             cancel_started.set()
@@ -1523,7 +1498,7 @@ def test_cancel_during_repair_publication_waits_for_complete_fenced_write(
     assert events == ["repair_started", "repair_finished", "cancel_finished"]
     terminal = list_queue(queue_root)[0]
     assert terminal.status.value == "cancelled"
-    assert terminal.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert terminal.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
 
 
 def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
@@ -1540,9 +1515,7 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
         engine="crest",
         metadata={
             "job_dir": str(job_dir),
-            internal_engine_submission._QUEUED_RECORD_SYNC_KEY: (
-                internal_engine_submission._QUEUED_RECORD_SYNC_PENDING
-            ),
+            QUEUE_RECORD_SYNC_KEY: (QUEUE_RECORD_SYNC_REPAIR_PENDING),
         },
     )
     waiting_before_lock = Event()
@@ -1600,17 +1573,12 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
     try:
         assert _wait_for_thread_event(waiting_before_lock, replay_thread)
         waiting = list_queue(queue_root)[0]
-        assert (
-            waiting.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "repair_pending"
-        )
+        assert waiting.metadata[QUEUE_RECORD_SYNC_KEY] == "repair_pending"
 
         cancelled = request_cancel(queue_root, existing.queue_id)
         assert cancelled is not None
         assert cancelled.status.value == "cancelled"
-        assert (
-            cancelled.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
-            == QUEUE_RECORD_SYNC_ABORTED
-        )
+        assert cancelled.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
     finally:
         allow_publication_lock.set()
         _join_thread(replay_thread)
@@ -1621,10 +1589,7 @@ def test_cancel_after_repair_claim_revokes_fence_before_any_side_effect(
     assert record_calls == []
     terminal = list_queue(queue_root)[0]
     assert terminal.status.value == "cancelled"
-    assert (
-        terminal.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY]
-        == QUEUE_RECORD_SYNC_ABORTED
-    )
+    assert terminal.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
 
 
 def test_repair_pending_replay_repairs_before_dequeue(
@@ -1675,7 +1640,7 @@ def test_repair_pending_replay_repairs_before_dequeue(
     assert "state/index repaired" in replay["stderr"]
     assert record_calls == ["crest-original", "crest-original"]
     assert repaired.status.value == "pending"
-    assert repaired.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
     running = dequeue_next(queue_root)
     assert running is not None and running.queue_id == repaired.queue_id
 
@@ -1712,7 +1677,7 @@ def test_known_notification_failure_is_warned_and_not_retried(
     assert result["status"] == "submitted"
     assert "at-most-once delivery" in result["stderr"]
     entry = list_queue(queue_root)[0]
-    assert entry.metadata[internal_engine_submission._QUEUED_RECORD_SYNC_KEY] == "complete"
+    assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == "complete"
 
 
 def test_same_job_dir_contention_is_atomic_across_processes(tmp_path: Path) -> None:

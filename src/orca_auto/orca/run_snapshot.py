@@ -4,7 +4,6 @@ import os
 import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +11,8 @@ from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
     path_is_inside_workflow_workspace,
-    resolve_artifact_path,
     should_exclude_from_production_runs_scan,
 )
-from orca_auto.core.utils import parse_iso_utc as _parse_iso_utc
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from .job_locations import list_job_location_records, resolve_record_job_dir
@@ -36,84 +33,10 @@ class RunSnapshot:
     completed_at: str
     selected_inp_name: str
     attempts: int
-    latest_out_path: Path | None
-    final_reason: str
-    elapsed: float
-    elapsed_text: str
     reaction_dir_identity: tuple[int, int] | None = None
     state_file_identity: StateFileIdentity | None = None
     state_run_identity: str = ""
     state_generation_identity: str = ""
-
-
-def parse_iso_utc(value: Any) -> datetime | None:
-    return _parse_iso_utc(value)
-
-
-def elapsed_text(seconds: float) -> str:
-    if seconds < 0:
-        return "-"
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    if hours > 0:
-        return f"{hours}h {minutes:02d}m"
-    secs = int(seconds % 60)
-    if minutes > 0:
-        return f"{minutes}m {secs:02d}s"
-    return f"{secs}s"
-
-
-def _compute_elapsed(state: Mapping[str, Any]) -> float:
-    started = parse_iso_utc(state.get("started_at"))
-    if started is None:
-        return -1.0
-
-    status = str(state.get("status", "")).lower()
-    if status in ("completed", "failed"):
-        ended = parse_iso_utc(state.get("updated_at"))
-        if ended is not None:
-            return (ended - started).total_seconds()
-
-    return (datetime.now(UTC) - started).total_seconds()
-
-
-def _find_latest_out_in_dir(directory: Path) -> Path | None:
-    if not directory.is_dir():
-        return None
-    latest: tuple[float, Path] | None = None
-    for candidate in directory.glob("*.out"):
-        if not candidate.is_file():
-            continue
-        try:
-            mtime = candidate.stat().st_mtime
-        except OSError:
-            continue
-        if latest is None or mtime > latest[0]:
-            latest = (mtime, candidate)
-    return latest[1] if latest is not None else None
-
-
-def _latest_out_path(reaction_dir: Path, state: Mapping[str, Any]) -> Path | None:
-    final_result = state.get("final_result")
-    if isinstance(final_result, dict):
-        last_out_path = final_result.get("last_out_path")
-        if isinstance(last_out_path, str) and last_out_path.strip():
-            resolved = resolve_artifact_path(last_out_path, reaction_dir)
-            if resolved is not None:
-                return resolved
-
-    attempts = state.get("attempts")
-    if isinstance(attempts, list):
-        for attempt in reversed(attempts):
-            if not isinstance(attempt, dict):
-                continue
-            out_path = attempt.get("out_path")
-            if isinstance(out_path, str) and out_path.strip():
-                resolved = resolve_artifact_path(out_path, reaction_dir)
-                if resolved is not None:
-                    return resolved
-
-    return _find_latest_out_in_dir(reaction_dir)
 
 
 def _dir_key(path: Path) -> str:
@@ -189,7 +112,7 @@ def _open_snapshot_directory(
     path: Path,
     *,
     expected_identity: tuple[int, int],
-) -> tuple[int, Path] | None:
+) -> int | None:
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         directory_fd = os.open(path, flags)
@@ -207,7 +130,7 @@ def _open_snapshot_directory(
     except OSError:
         os.close(directory_fd)
         return None
-    return directory_fd, pinned_path
+    return directory_fd
 
 
 def _snapshot_directory_is_still_production_visible(
@@ -337,13 +260,12 @@ def collect_run_snapshots(allowed_root: Path) -> list[RunSnapshot]:
     for reaction_dir, original_run_dir, reaction_dir_identity in _candidate_snapshot_dirs(
         allowed_root
     ):
-        opened_directory = _open_snapshot_directory(
+        directory_fd = _open_snapshot_directory(
             reaction_dir,
             expected_identity=reaction_dir_identity,
         )
-        if opened_directory is None:
+        if directory_fd is None:
             continue
-        directory_fd, pinned_reaction_dir = opened_directory
         try:
             loaded_state = _load_pinned_state(directory_fd)
             if loaded_state is None:
@@ -358,10 +280,8 @@ def collect_run_snapshots(allowed_root: Path) -> list[RunSnapshot]:
 
             final_result = state.get("final_result")
             completed_at = ""
-            final_reason = ""
             if isinstance(final_result, dict):
                 completed_at = str(final_result.get("completed_at", "")).strip()
-                final_reason = str(final_result.get("reason", "")).strip()
 
             selected_inp = state.get("selected_inp", "")
             selected_inp_name = "-"
@@ -374,14 +294,6 @@ def collect_run_snapshots(allowed_root: Path) -> list[RunSnapshot]:
                 reaction_dir,
                 original_run_dir=original_run_dir,
             )
-            elapsed = _compute_elapsed(state)
-            latest_out_path = _latest_out_path(pinned_reaction_dir, state)
-            if latest_out_path is not None:
-                try:
-                    latest_out_path = latest_out_path.resolve(strict=True)
-                except OSError:
-                    latest_out_path = None
-
             if not _snapshot_directory_is_still_production_visible(
                 reaction_dir,
                 allowed_root,
@@ -403,10 +315,6 @@ def collect_run_snapshots(allowed_root: Path) -> list[RunSnapshot]:
                     completed_at=completed_at,
                     selected_inp_name=selected_inp_name,
                     attempts=len(state.get("attempts", [])),
-                    latest_out_path=latest_out_path,
-                    final_reason=final_reason,
-                    elapsed=elapsed,
-                    elapsed_text=elapsed_text(elapsed),
                     reaction_dir_identity=reaction_dir_identity,
                     state_file_identity=state_file_identity,
                     state_run_identity=state_run_identity,

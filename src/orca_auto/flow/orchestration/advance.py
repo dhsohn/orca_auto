@@ -60,7 +60,7 @@ def _terminal_observation_published(workspace_dir: Path) -> bool:
                 max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
             )
         )
-    except (OSError, RuntimeError, TypeError, UnicodeError, ValueError) as exc:
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise ValueError(
             f"existing workflow machine observation is invalid: {machine_path}"
         ) from exc

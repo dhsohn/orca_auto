@@ -216,7 +216,6 @@ def record_engine_run_dir_queued_with_callbacks(
 def engine_run_dir_queued_recorder_from_callbacks(
     callbacks: EngineQueuedRecordCallbacks,
     *,
-    recorder_name: str = "_record_queued",
     module_name: str = __name__,
 ) -> Callable[[Any, EngineRunDirSubmission, Any], bool]:
     def record_queued(cfg: Any, submission: EngineRunDirSubmission, entry: Any) -> bool:
@@ -227,8 +226,8 @@ def engine_run_dir_queued_recorder_from_callbacks(
             callbacks=callbacks,
         )
 
-    record_queued.__name__ = recorder_name
-    record_queued.__qualname__ = recorder_name
+    record_queued.__name__ = "_record_queued"
+    record_queued.__qualname__ = "_record_queued"
     record_queued.__module__ = module_name
     return record_queued
 
