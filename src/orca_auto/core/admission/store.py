@@ -219,8 +219,19 @@ def _slot_from_reservation_request(
     )
 
 
-def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> AdmissionSlot:
-    resolved_owner_pid = update.owner_pid if update.owner_pid is not None else os.getpid()
+def _resolved_slot_ownership(
+    slot: AdmissionSlot,
+    update: AdmissionSlotActivation | AdmissionSlotMetadataUpdate,
+    *,
+    default_owner_pid: int,
+) -> tuple[int, int, str, str]:
+    """Resolve the owner identity a slot update may claim.
+
+    An update either keeps the current owner or takes over an inactive slot; an
+    active or pending engine slot never changes hands, and an owner whose start
+    ticks or boot id cannot be observed is refused rather than trusted.
+    """
+    resolved_owner_pid = update.owner_pid if update.owner_pid is not None else default_owner_pid
     if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
         raise ValueError("Admission slot owner PID must be a positive integer")
     if slot.engine_process_state in {"active", "pending"} and resolved_owner_pid != slot.owner_pid:
@@ -241,6 +252,16 @@ def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> Adm
         owner_boot_id = _linux_boot_id()
     if owner_start_ticks is None or owner_boot_id is None:
         raise ValueError("Cannot verify admission slot owner process identity")
+    return resolved_owner_pid, owner_start_ticks, owner_boot_id, engine_process_state
+
+
+def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> AdmissionSlot:
+    (
+        resolved_owner_pid,
+        owner_start_ticks,
+        owner_boot_id,
+        engine_process_state,
+    ) = _resolved_slot_ownership(slot, update, default_owner_pid=os.getpid())
     return replace(
         slot,
         state=update.state.strip() or slot.state or "active",
@@ -261,27 +282,12 @@ def _metadata_updated_slot(
     slot: AdmissionSlot,
     update: AdmissionSlotMetadataUpdate,
 ) -> AdmissionSlot:
-    resolved_owner_pid = update.owner_pid if update.owner_pid is not None else slot.owner_pid
-    if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
-        raise ValueError("Admission slot owner PID must be a positive integer")
-    if slot.engine_process_state in {"active", "pending"} and resolved_owner_pid != slot.owner_pid:
-        raise ValueError("Cannot transfer ownership of an active or pending engine slot")
-    owner_start_ticks = (
-        slot.process_start_ticks
-        if resolved_owner_pid == slot.owner_pid
-        else _process_start_ticks(resolved_owner_pid)
-    )
-    engine_process_state = _updated_inactive_engine_process_state(
-        slot,
-        update.engine_process_state,
-    )
-    owner_boot_id: str | None
-    if resolved_owner_pid == slot.owner_pid:
-        owner_boot_id = slot.owner_boot_id
-    else:
-        owner_boot_id = _linux_boot_id()
-    if owner_start_ticks is None or owner_boot_id is None:
-        raise ValueError("Cannot verify admission slot owner process identity")
+    (
+        resolved_owner_pid,
+        owner_start_ticks,
+        owner_boot_id,
+        engine_process_state,
+    ) = _resolved_slot_ownership(slot, update, default_owner_pid=slot.owner_pid)
     return replace(
         slot,
         state=slot.state if update.state is None else update.state.strip() or slot.state,

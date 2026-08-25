@@ -485,27 +485,3 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
     )
 
     assert rc == 1
-
-
-@patch("orca_auto.orca.worker_execution.run_worker_child_job", return_value=6)
-def test_worker_job_main_returns_queue_child_status(mock_run_child: MagicMock) -> None:
-    rc = worker_job.main(
-        [
-            "--config",
-            "/tmp/config.yaml",
-            "--queue-root",
-            "/tmp/queue",
-            "--queue-id",
-            "queue-1",
-            "--admission-token",
-            "slot-1",
-        ]
-    )
-
-    assert rc == 6
-    mock_run_child.assert_called_once_with(
-        config_path="/tmp/config.yaml",
-        queue_root="/tmp/queue",
-        queue_id="queue-1",
-        admission_token="slot-1",
-    )

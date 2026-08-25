@@ -85,23 +85,3 @@ def test_run_worker_child_job_wires_canonical_child_runtime(
     assert captured["mark_recovery_pending_context_fn"] is (
         worker_child._mark_recovery_pending_context
     )
-
-
-def test_worker_child_parser_preserves_entrypoint_contract() -> None:
-    args = worker_child.build_parser().parse_args(
-        [
-            "--config",
-            "/tmp/orca_auto.yaml",
-            "--queue-root",
-            "/tmp/queue",
-            "--queue-id",
-            "queue-1",
-            "--admission-token",
-            "slot-1",
-        ]
-    )
-
-    assert args.config == "/tmp/orca_auto.yaml"
-    assert args.queue_root == "/tmp/queue"
-    assert args.queue_id == "queue-1"
-    assert args.admission_token == "slot-1"

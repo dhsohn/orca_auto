@@ -3,7 +3,6 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import logging
-import resource
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -24,7 +23,6 @@ from orca_auto.core.engine_process import (
     atomic_write_confined_bytes,
     cleanup_failed_logged_process_start,
     recreate_confined_directory,
-    start_logged_process,
 )
 from orca_auto.core.engine_scratch import EngineScratchWorkspace
 from orca_auto.core.queue.engine import execution as _engine_execution
@@ -35,12 +33,11 @@ from orca_auto.core.queue.engine.input_snapshot import (
 )
 from orca_auto.core.queue.processes import terminate_process_group
 from orca_auto.core.utils import fsync_directory, now_utc_iso
-from orca_auto.core.utils import process as process_utils
 from orca_auto.flow.engines.scratch import (
     abort_launch_publication,
     close_and_wait,
-    create_engine_scratch_workspace,
     finalize_snapshot_is_valid,
+    launch_engine_process,
     publish_running_scratch,
 )
 from orca_auto.flow.hessian_utils import parse_xtb_hessian
@@ -740,60 +737,33 @@ def start_xtb_job(
     resolved_job_type = str(inputs["job_type"])
     resolved_reaction_key = str(inputs["reaction_key"])
     resolved_input_summary = dict(inputs["input_summary"])
-    scratch_workspace: EngineScratchWorkspace | None = None
-    try:
-        _clear_stale_xtb_outputs(
+    launch = launch_engine_process(
+        cfg,
+        command,
+        job_dir=job_dir,
+        manifest_path=resolved_manifest_path,
+        resource_request=resource_request,
+        runtime_environment=runtime_environment,
+        log_basename="xtb",
+        publish_name=lambda name: _publish_xtb_scratch_name(resolved_job_type, name),
+        clear_stale_outputs=lambda: _clear_stale_xtb_outputs(
             job_dir,
             job_type=resolved_job_type,
             selected_input_xyz=selected_input_xyz,
             secondary_input_xyz=secondary_input_xyz,
-        )
-        scratch_workspace = create_engine_scratch_workspace(
-            cfg,
-            job_dir=job_dir,
-            manifest_path=Path(resolved_manifest_path),
-            max_memory_gb=resource_request["max_memory_gb"],
-            publish_name=lambda name: _publish_xtb_scratch_name(resolved_job_type, name),
-        )
-        execution_dir = scratch_workspace.path if scratch_workspace is not None else job_dir
-        process_environment = runtime_environment
-        if scratch_workspace is not None:
-            process_environment = _engine_runner.scratch_engine_runtime_environment(
-                scratch_workspace.path,
-                runtime_environment,
-            )
-        stdout_log = execution_dir / "xtb.stdout.log"
-        stderr_log = execution_dir / "xtb.stderr.log"
-        resolved_stdout_log = str(stdout_log.resolve())
-        resolved_stderr_log = str(stderr_log.resolve())
-        if before_popen is not None:
-            before_popen()
-        launched = start_logged_process(
-            command,
-            cwd=execution_dir,
-            stdout_log=stdout_log,
-            stderr_log=stderr_log,
-            max_cores=resource_request["max_cores"],
-            base_env=process_environment,
-            now_utc_iso_fn=now_utc_iso,
-            popen_fn=subprocess.Popen,
-            stdin_value=subprocess.DEVNULL,
-            preexec_fn=process_utils.memory_limit_preexec(
-                resource_request["max_memory_gb"],
-                setrlimit_fn=resource.setrlimit,
-                limit_resource=resource.RLIMIT_AS,
-            ),
-        )
-    except Exception:
-        abort_launch_publication(scratch_workspace, on_launch_aborted, logger=LOGGER)
-        raise
+        ),
+        before_popen=before_popen,
+        on_launch_aborted=on_launch_aborted,
+        logger=LOGGER,
+    )
+    launched = launch.launched
     try:
         return XtbRunningJob(
             process=launched.process,
             command=tuple(command),
             started_at=launched.started_at,
-            stdout_log=resolved_stdout_log,
-            stderr_log=resolved_stderr_log,
+            stdout_log=launch.stdout_log,
+            stderr_log=launch.stderr_log,
             stdout_handle=launched.stdout_handle,
             stderr_handle=launched.stderr_handle,
             selected_input_xyz=resolved_selected_input,
@@ -801,9 +771,9 @@ def start_xtb_job(
             reaction_key=resolved_reaction_key,
             input_summary=resolved_input_summary,
             manifest_path=resolved_manifest_path,
-            job_dir=str(execution_dir.resolve()),
+            job_dir=str(launch.execution_dir.resolve()),
             durable_job_dir=resolved_job_dir,
-            scratch_workspace=scratch_workspace,
+            scratch_workspace=launch.scratch_workspace,
             resource_request=resource_request,
             resource_actual=resource_actual,
             manifest_snapshot=dict(manifest),
@@ -811,7 +781,7 @@ def start_xtb_job(
         )
     except BaseException:
         cleanup_failed_logged_process_start(launched)
-        abort_launch_publication(scratch_workspace, on_launch_aborted, logger=LOGGER)
+        abort_launch_publication(launch.scratch_workspace, on_launch_aborted, logger=LOGGER)
         raise
 
 

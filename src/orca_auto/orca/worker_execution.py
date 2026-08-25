@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import copy
 import logging
 import subprocess
@@ -679,39 +678,14 @@ def execute_run_job(
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=f"python -m {WORKER_JOB_MODULE}")
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--queue-root", required=True)
-    parser.add_argument("--queue-id", required=True)
-    parser.add_argument("--admission-token", default="")
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
-    return run_worker_child_job(
-        config_path=args.config,
-        queue_root=str(args.queue_root).strip(),
-        queue_id=str(args.queue_id).strip(),
-        admission_token=str(args.admission_token).strip() or None,
-    )
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 __all__ = [
     "BackgroundRunJobProcess",
     "OrcaWorkerExecutionContext",
     "OrcaWorkerExecutionOutcome",
     "WORKER_JOB_MODULE",
     "WorkerShutdownRequested",
-    "build_parser",
     "build_worker_child_command",
     "execute_run_job",
-    "main",
     "process_dequeued_entry",
     "run_worker_child_job",
 ]

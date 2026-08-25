@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import signal
@@ -18,7 +17,11 @@ from orca_auto.core.engine_process import (
     require_confined_regular_file,
     thread_limited_env,
 )
-from orca_auto.core.engine_runner import confined_output_identity, executable_identity
+from orca_auto.core.engine_runner import (
+    confined_output_identity,
+    executable_identity,
+    open_pinned_executable,
+)
 from orca_auto.core.engine_scratch import (
     EngineScratchWorkspace,
     ScratchPublication,
@@ -169,39 +172,8 @@ class OrcaRunner:
         self._bound_durable_directory_identity = (device, inode)
 
     def _open_pinned_executable(self) -> tuple[int, dict[str, Any]]:
-        path = Path(self.orca_executable).expanduser().resolve()
-        # A pathname can be replaced after snapshot verification.  Open
-        # non-blocking so a substituted FIFO cannot stall the worker before
-        # fstat() rejects it as a non-regular executable.
-        flags = os.O_RDONLY | os.O_NONBLOCK
-        flags |= os.O_NOFOLLOW
-        descriptor = os.open(path, flags)
+        descriptor, observed = open_pinned_executable(self.orca_executable, label="ORCA executable")
         try:
-            before = os.fstat(descriptor)
-            if not stat.S_ISREG(before.st_mode):
-                raise ValueError(f"ORCA executable is not a regular file: {path}")
-            digest = hashlib.sha256()
-            while chunk := os.read(descriptor, 1024 * 1024):
-                digest.update(chunk)
-            after = os.fstat(descriptor)
-            if (
-                before.st_dev,
-                before.st_ino,
-                before.st_size,
-                before.st_mtime_ns,
-            ) != (
-                after.st_dev,
-                after.st_ino,
-                after.st_size,
-                after.st_mtime_ns,
-            ):
-                raise ValueError(f"ORCA executable changed while it was pinned: {path}")
-            os.lseek(descriptor, 0, os.SEEK_SET)
-            observed = {
-                "path": str(path),
-                "sha256": digest.hexdigest(),
-                "size_bytes": int(after.st_size),
-            }
             if self._bound_executable_identity and observed != self._bound_executable_identity:
                 raise ValueError("ORCA executable no longer matches its queued identity")
             return descriptor, observed

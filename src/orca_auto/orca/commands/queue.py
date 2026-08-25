@@ -6,6 +6,8 @@ import argparse
 import logging
 from typing import Any
 
+from orca_auto.core.engines.queue_worker import build_engine_queue_worker_parser
+
 from ..config import load_config
 from ..engine import ENGINE_DEFINITION, read_worker_pid
 from ..queue.worker import QueueWorker
@@ -18,9 +20,7 @@ _ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m orca_auto.orca.commands.queue")
-    parser.add_argument("--config", required=True)
-    return parser
+    return build_engine_queue_worker_parser("python -m orca_auto.orca.commands.queue")
 
 
 def cmd_queue_worker(args: Any) -> int:

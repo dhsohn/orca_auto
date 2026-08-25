@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 import dataclasses
 import time
 from collections.abc import Callable
@@ -918,34 +917,10 @@ def run_worker_job(
     return run_engine_worker_child_job(**worker_child_kwargs)
 
 
-def build_worker_job_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m orca_auto.flow.engines.xtb.execution")
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--queue-root", required=True)
-    parser.add_argument("--queue-id", required=True)
-    parser.add_argument("--admission-token", default="")
-    return parser
-
-
-build_parser = build_worker_job_parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_worker_job_parser().parse_args(argv)
-    return run_worker_job(
-        config_path=args.config,
-        queue_root=args.queue_root,
-        queue_id=args.queue_id,
-        admission_token=str(args.admission_token).strip() or None,
-    )
-
-
 __all__ = [
     "build_worker_child_command",
     "build_worker_execution_dependencies",
     "build_worker_execution_dependencies_from_groups",
-    "build_parser",
-    "build_worker_job_parser",
     "WorkerAdmissionDependencies",
     "WorkerArtifactDependencies",
     "WorkerConfigDependencies",
@@ -958,13 +933,8 @@ __all__ = [
     "WorkerTrackingDependencies",
     "default_worker_execution_dependencies",
     "execute_queue_entry",
-    "main",
     "process_dequeued_entry",
     "run_worker_job",
     "WorkerShutdownRequested",
     "WORKER_JOB_MODULE",
 ]
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

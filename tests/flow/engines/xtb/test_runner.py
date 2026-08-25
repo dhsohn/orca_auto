@@ -16,6 +16,7 @@ from orca_auto.core.config import ScratchConfig
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
+from orca_auto.flow.engines import scratch as engine_launch
 from orca_auto.flow.engines.xtb import ranking_inputs, runner_artifacts
 from orca_auto.flow.engines.xtb import runner as runner_mod
 from orca_auto.flow.engines.xtb.ranking_selection import (
@@ -974,7 +975,7 @@ def test_start_xtb_job_passes_expected_subprocess_options(
         },
     )
     monkeypatch.setattr(runner_mod, "_build_command", fake_build_command)
-    monkeypatch.setattr(runner_mod, "now_utc_iso", lambda: "2026-04-20T00:00:00Z")
+    monkeypatch.setattr(engine_launch, "now_utc_iso", lambda: "2026-04-20T00:00:00Z")
     monkeypatch.setattr(runner_mod.subprocess, "Popen", fake_popen)
 
     running = runner_mod.start_xtb_job(cfg, job_dir=job_dir, selected_input_xyz=selected_xyz)

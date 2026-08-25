@@ -21,6 +21,7 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
+    build_engine_queue_worker_parser,
     build_runtime_engine_queue_worker,
 )
 from orca_auto.core.notifications.engines import (
@@ -520,9 +521,7 @@ def cmd_queue_worker(args: Any) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m orca_auto.flow.engines.crest.queue_runtime")
-    parser.add_argument("--config", required=True)
-    return parser
+    return build_engine_queue_worker_parser("python -m orca_auto.flow.engines.crest.queue_runtime")
 
 
 def main(argv: list[str] | None = None) -> int:

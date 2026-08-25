@@ -180,7 +180,7 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
     definition = EngineDefinition(
         engine="demo",
         load_config=lambda path: path,
-        queue_worker_module="orca_auto.core.engines.queue_worker",
+        queue_worker_runner=lambda _argv: 0,
         queue_functions=EngineQueueFunctions(
             runtime_roots_for_cfg=lambda _cfg: (queue_root,),
             list_queue=lambda _root: [foreign_entry, own_entry],
@@ -212,7 +212,7 @@ def test_engine_definition_requires_worker_pid_in_queue_contract() -> None:
     definition = EngineDefinition(
         engine="demo",
         load_config=lambda path: path,
-        queue_worker_module="orca_auto.core.engines.queue_worker",
+        queue_worker_runner=lambda _argv: 0,
         queue_functions=EngineQueueFunctions(
             runtime_roots_for_cfg=lambda _cfg: (),
             list_queue=lambda _root: [],

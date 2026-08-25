@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -33,10 +32,9 @@ class EngineRunnerCallbacks:
 class EngineDefinition:
     engine: str
     load_config: Callable[[str], Any]
-    queue_worker_module: str
     queue_functions: EngineQueueFunctions
     runner_callbacks: EngineRunnerCallbacks
-    queue_worker_runner: Callable[[list[str]], int] | None = None
+    queue_worker_runner: Callable[[list[str]], int]
 
     def build_queue_runtime(self) -> EngineQueueRuntime:
         """Build the canonical queue runtime declared by this definition."""
@@ -58,11 +56,7 @@ class EngineDefinition:
         )
 
     def queue_worker_main(self, argv: list[str]) -> int:
-        if self.queue_worker_runner is not None:
-            return int(self.queue_worker_runner(argv))
-        module = import_module(self.queue_worker_module)
-        main = module.main
-        return int(main(argv))
+        return int(self.queue_worker_runner(argv))
 
     def worker_child_main(
         self,

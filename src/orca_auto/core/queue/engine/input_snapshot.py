@@ -201,6 +201,37 @@ def require_direct_generation_owner(
         os.close(job_fd)
 
 
+def _remove_emptied_directory_at(
+    parent_fd: int,
+    name: str,
+    *,
+    child_fd: int,
+    child_identity: tuple[int, int],
+    label: str,
+) -> None:
+    """Empty a pinned directory, then unlink it only while it is still that directory.
+
+    The name is reopened and matched against the identity that was pinned before
+    the contents were removed, so a directory swapped in during the removal is
+    refused instead of being unlinked in the original's place.
+    """
+
+    _remove_directory_contents_at(child_fd, label=label)
+    verified_child = _open_stable_directory_at(
+        parent_fd,
+        name,
+        label=label,
+        expected_identity=child_identity,
+    )
+    assert verified_child is not None
+    verified_child_fd, _identity = verified_child
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
+    finally:
+        os.close(verified_child_fd)
+    os.fsync(parent_fd)
+
+
 def _remove_directory_contents_at(directory_fd: int, *, label: str) -> None:
     """Remove entries below one pinned directory without following links."""
 
@@ -296,20 +327,13 @@ def _cleanup_unowned_generation_directory(
                 return
             namespace_fd, namespace_identity = opened_namespace
             try:
-                _remove_directory_contents_at(namespace_fd, label=f"{label} generation")
-                verified_namespace = _open_stable_directory_at(
+                _remove_emptied_directory_at(
                     root_fd,
                     safe_namespace,
+                    child_fd=namespace_fd,
+                    child_identity=namespace_identity,
                     label=f"{label} generation",
-                    expected_identity=namespace_identity,
                 )
-                assert verified_namespace is not None
-                verified_namespace_fd, _identity = verified_namespace
-                try:
-                    os.rmdir(safe_namespace, dir_fd=root_fd)
-                finally:
-                    os.close(verified_namespace_fd)
-                os.fsync(root_fd)
             finally:
                 os.close(namespace_fd)
 
@@ -375,20 +399,13 @@ def cleanup_unowned_direct_generation_directory(
         generation_fd, generation_identity = opened_generation
         try:
             _verify_direct_generation_owner(generation_fd, expected_owner_token)
-            _remove_directory_contents_at(generation_fd, label=f"{label} generation")
-            verified_generation = _open_stable_directory_at(
+            _remove_emptied_directory_at(
                 job_fd,
                 safe_namespace,
+                child_fd=generation_fd,
+                child_identity=generation_identity,
                 label=f"{label} generation",
-                expected_identity=generation_identity,
             )
-            assert verified_generation is not None
-            verified_generation_fd, _identity = verified_generation
-            try:
-                os.rmdir(safe_namespace, dir_fd=job_fd)
-            finally:
-                os.close(verified_generation_fd)
-            os.fsync(job_fd)
         finally:
             os.close(generation_fd)
     finally:

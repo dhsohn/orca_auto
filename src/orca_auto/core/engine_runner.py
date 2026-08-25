@@ -77,16 +77,26 @@ def resolve_configured_executable(
     raise ValueError(f"{display_name} executable not configured and not found on PATH.")
 
 
-def executable_identity(path: str | Path) -> dict[str, Any]:
+def open_pinned_executable(
+    path: str | Path, *, label: str = "Engine executable"
+) -> tuple[int, dict[str, Any]]:
+    """Pin an executable by descriptor and return it with its content identity.
+
+    The descriptor stays open and rewound so a caller can launch the pinned bytes
+    directly; a caller that only needs the identity uses `executable_identity`.
+    """
     resolved = Path(path).expanduser().resolve()
     flags = os.O_RDONLY
+    # A pathname can be replaced after snapshot verification.  Open non-blocking
+    # so a substituted FIFO cannot stall the caller before fstat() rejects it as
+    # a non-regular executable.
     flags |= os.O_NONBLOCK
     flags |= os.O_NOFOLLOW
     descriptor = os.open(resolved, flags)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
-            raise ValueError(f"Engine executable is not a regular file: {resolved}")
+            raise ValueError(f"{label} is not a regular file: {resolved}")
         digest = hashlib.sha256()
         while chunk := os.read(descriptor, 1024 * 1024):
             digest.update(chunk)
@@ -102,12 +112,22 @@ def executable_identity(path: str | Path) -> dict[str, Any]:
             after.st_size,
             after.st_mtime_ns,
         ):
-            raise ValueError(f"Engine executable changed while it was hashed: {resolved}")
-        return {
+            raise ValueError(f"{label} changed while it was hashed: {resolved}")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return descriptor, {
             "path": str(resolved),
             "sha256": digest.hexdigest(),
             "size_bytes": after.st_size,
         }
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def executable_identity(path: str | Path) -> dict[str, Any]:
+    descriptor, identity = open_pinned_executable(path)
+    try:
+        return identity
     finally:
         os.close(descriptor)
 
@@ -437,6 +457,7 @@ __all__ = [
     "append_solvent_option",
     "bool_flag",
     "executable_identity",
+    "open_pinned_executable",
     "manifest_int",
     "resolve_configured_executable",
     "resource_actual_dict",
