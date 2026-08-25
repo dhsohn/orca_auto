@@ -9,7 +9,6 @@ import yaml
 from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.config.engines import (
     CONFIG_ENV_VAR,
-    as_int,
     as_str,
 )
 from orca_auto.core.config.engines import (
@@ -18,6 +17,7 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.config.engines import (
     load_xtb_config as load_config,
 )
+from orca_auto.core.config.schema import as_int
 from orca_auto.flow.engines.xtb import state as state_mod
 from tests.engine_artifact_helpers import artifact_payload
 

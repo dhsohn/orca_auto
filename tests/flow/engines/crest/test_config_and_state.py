@@ -8,6 +8,7 @@ import pytest
 
 from orca_auto.core.artifacts import CREST_JOB_MANIFEST_FILE
 from orca_auto.core.config import engines as config_mod
+from orca_auto.core.config.schema import as_int
 from orca_auto.flow.engines.crest import state as state_mod
 from tests.engine_artifact_helpers import (
     artifact_payload,
@@ -81,7 +82,7 @@ def test_as_str_normalizes_values(value: object, default: str, expected: str) ->
 def test_as_int_returns_default_for_invalid_values(
     value: object, default: int, expected: int
 ) -> None:
-    assert config_mod.as_int(value, default) == expected
+    assert as_int(value, default) == expected
 
 
 def _write_fake_executable(path: Path) -> Path:

@@ -13,7 +13,11 @@ from orca_auto.core.paths.workflow import (
 from orca_auto.core.statuses import STATUS_CANCELLED, WORKFLOW_FAILED_STATUSES
 from orca_auto.core.utils import normalize_text as _normalize_text
 
-from ..contracts.workflow import is_orca_stage_kind, is_valid_interaction_stage_contract
+from ..contracts.workflow import (
+    is_orca_stage_kind,
+    is_valid_interaction_stage_contract,
+    workflow_metadata,
+)
 from ..registry import sync_workflow_registry
 from ..state import load_workflow_payload, workflow_summary, write_workflow_payload
 from .settings import _apply_flow_restart_settings, _stage_should_rematerialize
@@ -237,15 +241,6 @@ def _reset_restartable_stages(
     return restarted_stages
 
 
-def _restart_metadata(payload: dict[str, Any]) -> dict[str, Any]:
-    metadata = payload.get("metadata")
-    if isinstance(metadata, dict):
-        return metadata
-    metadata = {}
-    payload["metadata"] = metadata
-    return metadata
-
-
 def _apply_restart_summary(
     payload: dict[str, Any],
     *,
@@ -255,7 +250,7 @@ def _apply_restart_summary(
     flow_settings: dict[str, Any],
 ) -> None:
     payload["status"] = "planned"
-    metadata = _restart_metadata(payload)
+    metadata = workflow_metadata(payload)
     metadata.pop("workflow_error", None)
     _clear_phase_notification_state(metadata, restarted_stages)
     metadata["final_child_sync_pending"] = False

@@ -21,6 +21,22 @@ def is_rejected_windows_path(path_text: str) -> bool:
     )
 
 
+def validated_absolute_linux_path_text(path_text: str, *, field_name: str) -> str:
+    """Reject Windows-style and non-absolute paths before resolution."""
+
+    if is_rejected_windows_path(path_text):
+        raise ValueError(f"{field_name} must be a Linux path (Windows paths are not supported).")
+    if not Path(path_text).is_absolute():
+        raise ValueError(f"{field_name} must be an absolute Linux path.")
+    try:
+        resolved = str(Path(path_text).expanduser().resolve())
+    except (OSError, RuntimeError, ValueError):
+        raise ValueError(f"{field_name} must resolve to a valid absolute Linux path.") from None
+    if is_rejected_windows_path(resolved):
+        raise ValueError(f"{field_name} must resolve to a Linux path outside Windows mounts.")
+    return resolved
+
+
 def _executable_error_message(message: ExecutableErrorMessage, path: Path) -> str:
     if callable(message):
         return message(path)
@@ -117,16 +133,6 @@ def is_subpath(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
-
-
-def safe_is_subpath(path: Path, root: Path | None) -> bool:
-    if root is None:
-        return False
-    try:
-        path.resolve().relative_to(root.resolve())
-    except (OSError, ValueError):
-        return False
-    return True
 
 
 def resolved_path_text(path: Path) -> str:

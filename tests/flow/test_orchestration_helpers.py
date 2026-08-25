@@ -21,17 +21,11 @@ from orca_auto.flow.orchestration.stage_runtime.crest import (
 from orca_auto.flow.orchestration.stage_runtime.crest import (
     completed_crest_stage_impl as _completed_crest_stage,
 )
-from orca_auto.flow.orchestration.stage_runtime.orca import (
-    completed_orca_stage_impl as _completed_orca_stage,
-)
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _load_contract_or_none,
 )
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     append_unique_artifact_impl as _append_unique_artifact,
-)
-from orca_auto.flow.orchestration.stage_runtime.xtb_handoff import (
-    stage_has_xtb_candidates_impl as _stage_has_xtb_candidates,
 )
 from orca_auto.flow.orchestration.stage_runtime.xtb_handoff import (
     xtb_handoff_status_impl as _xtb_handoff_status,
@@ -278,18 +272,7 @@ def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None
     }
 
 
-def test_stage_candidate_and_failure_helpers_cover_recoverable_paths() -> None:
-    assert (
-        _stage_has_xtb_candidates(
-            {"output_artifacts": [{"kind": "xtb_candidate", "path": "/tmp/candidate.xyz"}]}
-        )
-        is True
-    )
-    assert (
-        _stage_has_xtb_candidates({"output_artifacts": [{"kind": "xtb_candidate", "path": ""}]})
-        is False
-    )
-
+def test_stage_failure_helpers_cover_recoverable_paths() -> None:
     xtb_stage = {
         "status": "failed",
         "task": {"engine": "xtb"},
@@ -351,7 +334,7 @@ def test_clear_reaction_xtb_handoff_error_and_unique_artifact_helpers() -> None:
     ]
 
 
-def test_completed_role_and_contract_helpers_use_expected_targets() -> None:
+def test_completed_crest_role_and_contract_helpers_use_expected_targets() -> None:
     payload = {
         "stages": [
             {
@@ -397,41 +380,6 @@ def test_completed_role_and_contract_helpers_use_expected_targets() -> None:
     )
     assert crest_calls == [
         {"crest_index_root": Path("/tmp/crest_allowed"), "target": "/tmp/crest_job"}
-    ]
-
-    orca_calls: list[dict[str, Any]] = []
-
-    def fake_load_orca_artifact_contract(**kwargs: Any) -> str:
-        orca_calls.append(kwargs)
-        return "orca_contract"
-
-    orca_stage = {
-        "metadata": {"run_id": "run_1", "queue_id": "q_1"},
-        "task": {
-            "payload": {"reaction_dir": "/tmp/reaction_dir"},
-            "enqueue_payload": {"reaction_dir": "/tmp/enqueue_dir"},
-        },
-    }
-    deps = orchestration_services(
-        overrides={
-            "engine_runtime_paths": lambda path, **kwargs: {
-                "allowed_root": Path("/tmp/orca_allowed")
-            },
-            "load_orca_artifact_contract": fake_load_orca_artifact_contract,
-        }
-    )
-    assert (
-        _completed_orca_stage(orca_stage, orca_config="/tmp/orca.yaml", services=deps)
-        == "orca_contract"
-    )
-    assert orca_calls == [
-        {
-            "target": "run_1",
-            "orca_allowed_root": Path("/tmp/orca_allowed"),
-            "queue_id": "q_1",
-            "run_id": "run_1",
-            "reaction_dir": "/tmp/reaction_dir",
-        }
     ]
 
 

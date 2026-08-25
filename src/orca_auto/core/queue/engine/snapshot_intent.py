@@ -28,6 +28,7 @@ SNAPSHOT_INTENT_QUEUE_ROOT_KEY = "snapshot_intent_queue_root"
 SNAPSHOT_INTENT_STATE_CREATING = "creating"
 SNAPSHOT_INTENT_STATE_ENQUEUEING = "enqueueing"
 SNAPSHOT_INTENT_STATE_OWNED = "owned"
+INPUT_SNAPSHOT_NAMESPACE_INTENT_KIND = "input_snapshot_namespace"
 
 SNAPSHOT_OWNERSHIP_REPAIR_PENDING_WARNING = "queued snapshot ownership marker repair is pending"
 
@@ -39,7 +40,7 @@ _MANAGED_PARENT_NAMES = frozenset({".orca_auto_input_snapshots", ".orca_auto_orc
 _DIRECT_VISIBLE_GENERATION_KINDS = frozenset({"orca_visible_generation"})
 _KINDS = frozenset(
     {
-        "input_snapshot_namespace",
+        INPUT_SNAPSHOT_NAMESPACE_INTENT_KIND,
         "orca_execution_pair",
         *_DIRECT_VISIBLE_GENERATION_KINDS,
     }
@@ -702,6 +703,7 @@ def snapshot_runtime_roots_for_cfg(cfg: Any) -> tuple[Path, ...]:
 
 
 __all__ = [
+    "INPUT_SNAPSHOT_NAMESPACE_INTENT_KIND",
     "SNAPSHOT_INTENT_QUEUE_ROOT_KEY",
     "SNAPSHOT_INTENT_STATE_CREATING",
     "SNAPSHOT_INTENT_STATE_ENQUEUEING",

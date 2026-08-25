@@ -5,6 +5,7 @@ from typing import Any
 
 import yaml
 
+from orca_auto.core.artifacts import CREST_JOB_MANIFEST_FILE
 from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.queue.priority import normalize_queue_priority
@@ -72,7 +73,7 @@ def ensure_crest_job_dir_impl(
     manifest_payload["input_xyz"] = "input.xyz"
     atomic_write_confined_bytes(
         job_dir,
-        job_dir / "crest_job.yaml",
+        job_dir / CREST_JOB_MANIFEST_FILE,
         yaml.safe_dump(manifest_payload, sort_keys=False, allow_unicode=False).encode("utf-8"),
         label="CREST materialized manifest",
     )

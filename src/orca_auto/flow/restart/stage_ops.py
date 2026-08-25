@@ -109,7 +109,6 @@ def _clear_phase_notification_state(
     _restart_stages.clear_phase_notification_state(
         metadata,
         restarted_stages,
-        context=_RESTART_STAGE_CONTEXT,
     )
 
 

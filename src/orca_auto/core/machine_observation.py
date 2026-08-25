@@ -8,7 +8,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-MACHINE_OBSERVATION_FILE = "machine.json"
+from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE as MACHINE_OBSERVATION_FILE
+
 MACHINE_CONTRACT_NAME = "factory/machine-observation"
 MACHINE_CONTRACT_VERSION = 1
 RESULTS_PAYLOAD_CONTRACT_NAME = "chemistry/results-bundle"

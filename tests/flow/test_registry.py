@@ -17,6 +17,7 @@ from orca_auto.flow.registry import _notifications as registry_notifications
 from orca_auto.flow.registry import journal as workflow_journal
 from orca_auto.flow.registry import store as registry_store
 from orca_auto.flow.registry import worker_state_store
+from orca_auto.flow.workflow.store import WORKFLOW_CREATION_MARKER_FILE
 from tests.flow.registry_test_helpers import (
     patch_file_locks as _patch_file_locks,
 )
@@ -995,7 +996,7 @@ def test_list_workflow_registry_repairs_published_creation_marker_before_cached_
     workspace = tmp_path / "wf_crash_repair"
     workspace.mkdir()
     (workspace / "workflow.json").write_text("{}", encoding="utf-8")
-    marker = workspace / ".orca_auto_workflow_creation.json"
+    marker = workspace / WORKFLOW_CREATION_MARKER_FILE
     marker.write_text("{}", encoding="utf-8")
     record = registry.WorkflowRegistryRecord(
         workflow_id=workspace.name,
@@ -1024,7 +1025,7 @@ def test_list_workflow_registry_keeps_marker_when_reindex_skips_workspace(tmp_pa
     workspace = tmp_path / "wf_corrupt_repair"
     workspace.mkdir()
     (workspace / "workflow.json").write_text("not-json", encoding="utf-8")
-    marker = workspace / ".orca_auto_workflow_creation.json"
+    marker = workspace / WORKFLOW_CREATION_MARKER_FILE
     marker.write_text("{}", encoding="utf-8")
 
     assert registry.list_workflow_registry(tmp_path, reindex_fn=lambda _root: []) == []
@@ -1035,7 +1036,7 @@ def test_list_workflow_registry_ignores_unpublished_creation_marker(tmp_path: Pa
     registry_store._save_records(tmp_path, [])
     workspace = tmp_path / "wf_incomplete_reservation"
     workspace.mkdir()
-    marker = workspace / ".orca_auto_workflow_creation.json"
+    marker = workspace / WORKFLOW_CREATION_MARKER_FILE
     marker.write_text("{}", encoding="utf-8")
 
     def unexpected_reindex(_root: str | Path) -> list[registry.WorkflowRegistryRecord]:

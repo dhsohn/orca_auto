@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.commands import run_dir as _shared_run_dir
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.engine_catalog import get_engine_catalog_entry
@@ -21,7 +22,6 @@ from orca_auto.core.utils import normalize_text as _normalize_text
 from orca_auto.core.utils import now_utc_iso, timestamped_token
 from orca_auto.flow.xyz_utils import load_xyz_frames
 
-MANIFEST_FILE_NAME = "xtb_job.yaml"
 SUPPORTED_JOB_TYPES = frozenset(
     task_kind.removeprefix("xtb_") for task_kind in get_engine_catalog_entry("xtb").task_kinds
 )
@@ -38,7 +38,7 @@ def _normalize_key(value: str) -> str:
 def load_job_manifest(job_dir: Path) -> dict[str, Any]:
     return _shared_run_dir.load_yaml_job_manifest(
         job_dir,
-        MANIFEST_FILE_NAME,
+        XTB_JOB_MANIFEST_FILE,
         missing_message="Missing xTB job manifest: {path}",
         invalid_message="Invalid xTB job manifest: {path}",
     )

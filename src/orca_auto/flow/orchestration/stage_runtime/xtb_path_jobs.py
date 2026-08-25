@@ -5,6 +5,7 @@ from typing import Any
 
 import yaml
 
+from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils import normalize_text, safe_int
@@ -230,7 +231,7 @@ def _write_xtb_path_manifest(
 
     atomic_write_confined_bytes(
         job_dir,
-        job_dir / "xtb_job.yaml",
+        job_dir / XTB_JOB_MANIFEST_FILE,
         yaml.safe_dump(manifest_payload, sort_keys=False, allow_unicode=False).encode("utf-8"),
         label="xTB path manifest",
     )
@@ -283,7 +284,7 @@ def _record_xtb_path_attempt(
     stage_view.record_xtb_path_attempt(
         recipe=recipe,
         job_dir=job_dir,
-        manifest_path=(job_dir / "xtb_job.yaml").resolve(),
+        manifest_path=(job_dir / XTB_JOB_MANIFEST_FILE).resolve(),
         xcontrol_path=(job_dir / selected_xcontrol_name).resolve()
         if selected_xcontrol_name
         else "",

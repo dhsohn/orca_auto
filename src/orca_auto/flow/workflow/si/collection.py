@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
+from orca_auto.core.utils.coercion import safe_int
 from orca_auto.flow.contracts.workflow import (
     INTERACTION_COMPLEX_SP_ROLE,
     INTERACTION_CONFIG_FINGERPRINT_KEY,
@@ -260,13 +261,6 @@ def _pair_single_points(
 # ---------------------------------------------------------------------------
 
 
-def _meta_int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
 def _meta_int_or_none(value: Any) -> int | None:
     """Strict metadata read: absent or non-integer is ``None``, never a guess.
 
@@ -426,7 +420,7 @@ def _interaction_energy_results(
             meta = _stage_metadata(stage)
             role = _text(meta.get("role"))
             if role == INTERACTION_FRAGMENT_ROLE:
-                index = _meta_int(meta.get("fragment_index"), -1)
+                index = safe_int(meta.get("fragment_index"), default=-1)
                 fragment_candidates.setdefault(index, []).append(stage)
             elif role != INTERACTION_COMPLEX_SP_ROLE:
                 blockers.append(f"unexpected interaction stage role {role or 'missing'}")

@@ -8,6 +8,7 @@ from orca_auto.core.statuses import WORKFLOW_TERMINAL_STATUSES
 from ..engine_options import WorkflowEngineOptions
 from . import _cancel as _activity_cancel
 from . import _clear as _activity_clear
+from . import _collectors as _activity_collectors
 from . import _list as _activity_list
 from . import _sources as _activity_sources
 from ._model import (
@@ -89,7 +90,7 @@ def cancel_activity(
     )
     resolved = _activity_sources.resolve_activity_source_request(request.sources)
     record = _activity_cancel.match_activity_record(
-        _activity_list.collect_activity_records(
+        _activity_collectors.collect_activity_records(
             workflow_root=resolved.workflow_root,
             refresh=False,
             crest_config=resolved.crest_config,

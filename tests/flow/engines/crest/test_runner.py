@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from orca_auto.core import engine_scratch
+from orca_auto.core.artifacts import CREST_JOB_MANIFEST_FILE
 from orca_auto.core.config import MessengerConfig, ScratchConfig
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
@@ -17,7 +18,6 @@ from orca_auto.core.config.engines import (
 )
 from orca_auto.core.config.schema import CommonResourceConfig, CommonRuntimeConfig
 from orca_auto.flow.engines.crest import runner as runner_mod
-from orca_auto.flow.engines.crest.job_inputs import MANIFEST_FILE_NAME
 from orca_auto.flow.engines.crest.runner import (
     CrestRunningJob,
     _build_command,
@@ -263,7 +263,7 @@ def test_start_crest_job_passes_expected_subprocess_options(
     _write_xyz(selected_xyz, ("conf_a",))
     stale_output = job_dir / "crest_conformers.xyz"
     _write_xyz(stale_output, ("stale",))
-    (job_dir / MANIFEST_FILE_NAME).write_text(
+    (job_dir / CREST_JOB_MANIFEST_FILE).write_text(
         "mode: standard\nresources:\n  max_cores: 11\n  max_memory_gb: 22\n",
         encoding="utf-8",
     )
@@ -341,7 +341,7 @@ def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
     job_dir.mkdir()
     selected_xyz = job_dir / "molecule.xyz"
     _write_xyz(selected_xyz, ("conf_a",))
-    (job_dir / MANIFEST_FILE_NAME).write_text(
+    (job_dir / CREST_JOB_MANIFEST_FILE).write_text(
         "mode: standard\nresources:\n  max_cores: 1\n  max_memory_gb: 1\n",
         encoding="utf-8",
     )
@@ -358,7 +358,7 @@ def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
             "runtime_identity": runtime_identity,
         },
     )
-    (job_dir / MANIFEST_FILE_NAME).unlink()
+    (job_dir / CREST_JOB_MANIFEST_FILE).unlink()
     popen_cwd: list[Path] = []
     popen_home: list[Path] = []
 
@@ -397,7 +397,7 @@ def test_crest_ram_scratch_publishes_retained_ensemble_and_omits_work_tree(
     assert len(popen_cwd) == 1
     assert popen_cwd[0].is_relative_to(scratch_root)
     assert popen_home[0].parent == popen_cwd[0]
-    assert not (job_dir / MANIFEST_FILE_NAME).exists()
+    assert not (job_dir / CREST_JOB_MANIFEST_FILE).exists()
     assert (job_dir / "crest_conformers.xyz").is_file()
     assert (job_dir / "crest.stdout.log").is_file()
     assert not (job_dir / "METADYN").exists()
@@ -453,7 +453,7 @@ def test_finalize_crest_job_collects_retained_outputs(tmp_path: Path) -> None:
         stderr_handle=stderr_handle,
         selected_input_xyz=str((job_dir / "input.xyz").resolve()),
         mode="standard",
-        manifest_path=str((job_dir / MANIFEST_FILE_NAME).resolve()),
+        manifest_path=str((job_dir / CREST_JOB_MANIFEST_FILE).resolve()),
         resource_request={"max_cores": 4, "max_memory_gb": 8},
         resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
         job_dir=str(job_dir.resolve()),
@@ -872,7 +872,9 @@ def test_start_crest_job_fails_closed_on_malformed_sampling_value(
     job_dir.mkdir()
     selected_xyz = job_dir / "molecule.xyz"
     _write_xyz(selected_xyz, ("conf_a",))
-    (job_dir / MANIFEST_FILE_NAME).write_text("mode: standard\nmdlen: fast\n", encoding="utf-8")
+    (job_dir / CREST_JOB_MANIFEST_FILE).write_text(
+        "mode: standard\nmdlen: fast\n", encoding="utf-8"
+    )
     monkeypatch.setattr(
         "orca_auto.flow.engines.crest.runner._resolve_crest_executable", lambda _cfg: "/opt/crest"
     )

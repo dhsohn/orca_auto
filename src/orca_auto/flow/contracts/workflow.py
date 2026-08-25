@@ -86,6 +86,14 @@ def workflow_stage_dicts(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [stage for stage in stages if isinstance(stage, dict)]
 
 
+def workflow_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        payload["metadata"] = metadata
+    return metadata
+
+
 def workflow_stage_metadata(stage: dict[str, Any]) -> dict[str, Any]:
     metadata = stage.get("metadata")
     if not isinstance(metadata, dict):

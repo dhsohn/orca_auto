@@ -61,10 +61,6 @@ from orca_auto.flow.engines.xtb.state import (
     state_matches_job,
 )
 from orca_auto.flow.engines.xtb.worker_context import (
-    WorkerExecutionHooks,
-    default_worker_execution_hooks,
-)
-from orca_auto.flow.engines.xtb.worker_context import (
     XtbExecutionContext as _XtbExecutionContext,
 )
 from orca_auto.flow.engines.xtb.worker_context import (
@@ -955,13 +951,11 @@ __all__ = [
     "WorkerConfigDependencies",
     "WorkerContextDependencies",
     "WorkerExecutionDependencies",
-    "WorkerExecutionHooks",
     "WorkerExecutionOutcome",
     "WorkerQueueDependencies",
     "WorkerRunnerDependencies",
     "WorkerTimingDependencies",
     "WorkerTrackingDependencies",
-    "default_worker_execution_hooks",
     "default_worker_execution_dependencies",
     "execute_queue_entry",
     "main",

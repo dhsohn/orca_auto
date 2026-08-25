@@ -83,6 +83,16 @@ def report_json_path(reaction_dir: Path) -> Path:
     return reaction_dir / REPORT_JSON_NAME
 
 
+def state_payload_job_id(payload: Any) -> str:
+    """Read the generation job id from legacy or normalized ORCA state."""
+
+    if not isinstance(payload, dict):
+        return ""
+    job = payload.get("job")
+    job = job if isinstance(job, dict) else {}
+    return str(payload.get("job_id") or job.get("id") or "").strip()
+
+
 def _load_json_dict(path: Path) -> dict[str, Any] | None:
     return load_json_mapping_file(path)
 

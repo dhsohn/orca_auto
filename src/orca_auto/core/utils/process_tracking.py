@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orca_auto.core.utils import process as process_utils
+from orca_auto.core.utils.coercion import positive_int
 from orca_auto.core.utils.lock import held_file_lock_payload
 from orca_auto.core.utils.persistence import now_utc_iso
 
@@ -45,7 +46,7 @@ def run_lock_status(
         return RunLockStatus(held=True)
     if not isinstance(raw, dict):
         return RunLockStatus(held=True)
-    pid = process_utils.positive_int(raw.get("pid"))
+    pid = positive_int(raw.get("pid"))
     started_at = raw.get("started_at")
     return RunLockStatus(
         held=True,

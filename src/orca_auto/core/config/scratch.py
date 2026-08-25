@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .files import validated_absolute_linux_path_text
+from orca_auto.core.paths.validation import validated_absolute_linux_path_text
+
 from .schema import as_nonempty_str, explicit_positive_int
 
 

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import math
-import secrets
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core import engine_runner as _engine_runner
+from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.commands.run_dir import (
     EngineQueuedRecord,
     EngineQueuedRecordCallbacks,
@@ -17,27 +17,20 @@ from orca_auto.core.commands.run_dir import (
     engine_run_dir_queued_recorder_from_callbacks,
 )
 from orca_auto.core.config.engines import (
-    load_xtb_config as load_config,
-)
-from orca_auto.core.config.engines import (
     resource_request_from_manifest,
 )
 from orca_auto.core.notifications import engines as _notification_engines
-from orca_auto.core.queue import enqueue
 from orca_auto.core.queue.engine.input_snapshot import (
     MAX_INPUT_SNAPSHOT_BYTES,
-    cleanup_unowned_input_snapshot_namespace,
     read_stable_regular_file,
-    reserve_input_snapshot_namespace,
     snapshot_input_file,
     snapshot_input_payload,
 )
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_TOKEN_KEY,
-    create_snapshot_intent,
-    discard_snapshot_intent_if_generations_absent,
 )
+from orca_auto.flow.engines.submission_snapshot import build_reserved_input_snapshot_submission
 
 from ...xyz_utils import (
     MAX_HESSIAN_ADMISSION_ATOMS,
@@ -48,10 +41,8 @@ from ...xyz_utils import (
 from . import job_locations as _job_locations
 from . import state as _state
 from .job_inputs import (
-    load_job_manifest,
     new_job_id,
     queued_state_payload,
-    resolve_job_dir,
     resolve_job_inputs,
 )
 from .job_locations import index_root_for_path
@@ -59,13 +50,6 @@ from .job_locations import index_root_for_path
 notify_job_queued = _notification_engines.notify_xtb_job_queued
 upsert_job_record = _job_locations.upsert_job_record
 write_state = _state.write_state
-
-__all__ = [
-    "enqueue",
-    "load_config",
-    "load_job_manifest",
-    "resolve_job_dir",
-]
 
 _XCONTROL_PATH_KEYS = {"nrun", "npoint", "anopt", "kpush", "kpull", "ppull", "alp"}
 _XTB_MANIFEST_KEYS = {
@@ -360,7 +344,7 @@ def _build_submission_impl(
         manifest_payload,
         role="manifest",
         suffix=".json",
-        source_path=Path(job_dir) / "xtb_job.yaml",
+        source_path=Path(job_dir) / XTB_JOB_MANIFEST_FILE,
         namespace=snapshot_namespace,
     )
     input_snapshots["manifest"] = manifest_descriptor
@@ -417,41 +401,15 @@ def _build_submission(
     manifest: dict[str, Any],
     args: Any,
 ) -> EngineRunDirSubmission:
-    job_id = new_job_id()
-    snapshot_namespace = f"snapshot-{secrets.token_hex(16)}"
-    resolved_job_dir = Path(job_dir).expanduser().resolve()
-    queue_root = (
-        index_root_for_path(cfg, resolved_job_dir)
-        if getattr(cfg, "runtime", None) is not None
-        else resolved_job_dir
+    return build_reserved_input_snapshot_submission(
+        cfg,
+        job_dir,
+        manifest,
+        args,
+        new_job_id_fn=new_job_id,
+        queue_root_for_path_fn=index_root_for_path,
+        build_submission_fn=_build_submission_impl,
     )
-    generation_path = resolved_job_dir / ".orca_auto_input_snapshots" / snapshot_namespace
-    reserved = False
-    intent_created = False
-    try:
-        create_snapshot_intent(
-            queue_root,
-            token=snapshot_namespace,
-            kind="input_snapshot_namespace",
-            generation_paths=[generation_path],
-        )
-        intent_created = True
-        reserve_input_snapshot_namespace(job_dir, snapshot_namespace)
-        reserved = True
-        return _build_submission_impl(
-            cfg,
-            job_dir,
-            manifest,
-            args,
-            job_id=job_id,
-            snapshot_namespace=snapshot_namespace,
-        )
-    except BaseException:
-        if reserved:
-            cleanup_unowned_input_snapshot_namespace(job_dir, snapshot_namespace)
-        if intent_created:
-            discard_snapshot_intent_if_generations_absent(queue_root, snapshot_namespace)
-        raise
 
 
 def _queued_record(submission: EngineRunDirSubmission, _entry: Any) -> EngineQueuedRecord:

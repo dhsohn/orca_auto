@@ -8,14 +8,8 @@ from typing import Any
 from orca_auto.core.indexing.roots import runtime_roots_for_cfg as _runtime_roots_for_cfg
 from orca_auto.core.queue.child.execution import build_queue_entry_lookup
 
-from .artifacts import (
-    build_engine_artifact_payload,
-    load_engine_artifact_payload,
-)
 from .definitions import (
-    EngineArtifactAdapter,
     EngineDefinition,
-    EngineNotificationHooks,
     EngineQueueFunctions,
     EngineRunnerCallbacks,
 )
@@ -28,7 +22,6 @@ RuntimeRootsBuilder = Callable[[Any], tuple[Path, ...]]
 WorkerChildCommandBuilder = Callable[..., list[str]]
 WorkerChildRunner = Callable[..., int]
 QueueWorkerRunner = Callable[[list[str]], int]
-NotificationHook = Callable[..., Any]
 
 
 def _lazy_callable(module_name: str, function_name: str) -> Callable[..., Any]:
@@ -135,9 +128,6 @@ def build_queue_engine_definition(
     build_worker_child_command: WorkerChildCommandBuilder | None = None,
     runtime_roots_for_cfg: RuntimeRootsBuilder | None = None,
     queue_entry_by_id: QueueEntryById | None = None,
-    job_started: NotificationHook | None = None,
-    job_finished: NotificationHook | None = None,
-    retry: NotificationHook | None = None,
 ) -> EngineDefinition:
     engine_id = str(engine).strip().lower()
     runtime_roots = runtime_roots_for_cfg or build_engine_runtime_roots(engine)
@@ -162,15 +152,6 @@ def build_queue_engine_definition(
         runner_callbacks=EngineRunnerCallbacks(
             run_worker_child_job=run_worker_child_job,
             build_worker_child_command=worker_child_command,
-        ),
-        artifact_adapter=EngineArtifactAdapter(
-            build_payload=build_engine_artifact_payload,
-            load_payload=load_engine_artifact_payload,
-        ),
-        notification_hooks=EngineNotificationHooks(
-            job_started=job_started,
-            job_finished=job_finished,
-            retry=retry,
         ),
         queue_worker_runner=queue_worker_runner,
     )

@@ -1,4 +1,5 @@
 from .coercion import (
+    coerce_bool,
     coerce_int_mapping,
     coerce_list,
     coerce_mapping,
@@ -25,6 +26,7 @@ from .persistence import (
 __all__ = [
     "atomic_write_json",
     "atomic_write_text",
+    "coerce_bool",
     "coerce_int_mapping",
     "coerce_list",
     "coerce_mapping",

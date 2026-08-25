@@ -17,8 +17,8 @@ from orca_auto.core.config.schema import (
     normalize_admission_limit,
     normalize_default_max_retries,
     normalize_max_concurrent,
-    positive_int,
 )
+from orca_auto.core.utils.coercion import positive_int
 
 
 @pytest.mark.parametrize(

@@ -15,7 +15,6 @@ from orca_auto.core.statuses import (
     STATUS_WAITING_FOR_SLOT,
     SUBMISSION_DEFERRED_STATUSES,
 )
-from orca_auto.core.utils import normalize_bool as _shared_normalize_bool
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
 from orca_auto.flow.orchestration.services import (
@@ -106,12 +105,6 @@ def _load_contract_or_none(
             exc_info=True,
         )
         return None
-
-
-def _coerce_bool(value: Any) -> bool:
-    if isinstance(value, (bool, str)) or value is None:
-        return _shared_normalize_bool(value)
-    return bool(value)
 
 
 def _submission_status(submission: dict[str, Any]) -> str:

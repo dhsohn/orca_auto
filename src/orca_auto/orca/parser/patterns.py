@@ -110,16 +110,6 @@ _CONVERGENCE_ITEM_RE = re.compile(
     re.MULTILINE,
 )
 
-# Normal termination marker
-_NORMAL_TERMINATION_RE = re.compile(r"ORCA TERMINATED NORMALLY")
-_ERROR_TERMINATION_RE = re.compile(
-    r"ORCA\s+finished\s+by\s+error\s+termination|"
-    r"aborting the run|"
-    r"ended prematurely and may have crashed|"
-    r"FATAL ERROR",
-    re.IGNORECASE,
-)
-
 # Known calculation type keywords (searched in input line). No bare "TS" or
 # "SCAN" entries: ORCA has no `! TS` keyword, and a route-level `SCAN` token is
 # the SCAN density functional — relaxed scans are requested via `%geom Scan`,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -63,6 +62,7 @@ from orca_auto.flow.engines.xtb import artifacts as _queue_artifacts
 from orca_auto.flow.engines.xtb import execution as _worker_execution
 from orca_auto.flow.engines.xtb import terminal as _queue_terminal
 from orca_auto.flow.engines.xtb import worker_terminal as _worker_terminal
+from orca_auto.flow.engines.xtb.worker_context import default_worker_execution_hooks
 
 from .engine import ENGINE_DEFINITION
 from .job_locations import (
@@ -88,8 +88,6 @@ from .state import (
 )
 from .submission import _record_queued as _record_queued_submission
 
-# Keep queue_runtime.subprocess available for tests/callers that patch Popen.
-_SUBPROCESS_MODULE = subprocess
 POLL_INTERVAL_SECONDS = 5
 CANCEL_CHECK_INTERVAL_SECONDS = 1
 WORKER_SHUTDOWN_GRACE_SECONDS = 10.0
@@ -166,7 +164,7 @@ def _pid_is_alive(pid: int) -> bool:
     return worker_pid_is_alive(pid)
 
 
-_worker_execution_hooks = _worker_execution.default_worker_execution_hooks()
+_worker_execution_hooks = default_worker_execution_hooks()
 _job_dir = _worker_execution_hooks.job_dir
 _selected_xyz = _worker_execution_hooks.selected_xyz
 _job_type = _worker_execution_hooks.job_type

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import signal
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -153,7 +154,7 @@ def test_terminate_process_uses_fallback_terminate_and_kill(
 
         def wait(self, timeout: int) -> None:
             self.wait_calls += 1
-            raise queue_cmd.subprocess.TimeoutExpired(cmd="xtb", timeout=timeout)
+            raise subprocess.TimeoutExpired(cmd="xtb", timeout=timeout)
 
     def fake_killpg(pid: int, sig: int) -> None:
         killpg_calls.append((pid, sig))
@@ -191,7 +192,7 @@ def test_terminate_process_swallows_terminate_and_kill_exceptions(
             raise RuntimeError("kill failed")
 
         def wait(self, timeout: int) -> None:
-            raise queue_cmd.subprocess.TimeoutExpired(cmd="xtb", timeout=timeout)
+            raise subprocess.TimeoutExpired(cmd="xtb", timeout=timeout)
 
     monkeypatch.setattr(
         queue_processes_mod.os,

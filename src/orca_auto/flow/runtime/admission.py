@@ -18,8 +18,7 @@ from orca_auto.core.engine_catalog import (
     engine_catalog,
     find_engine_catalog_entry,
 )
-
-from . import _common as _runtime_common
+from orca_auto.core.utils.coercion import normalize_text, positive_int
 
 LOGGER = logging.getLogger(__name__)
 _SUBMISSION_ADMISSION_CONFIG_KEYS = frozenset({"admission_root", "max_active_simulations"})
@@ -40,7 +39,7 @@ def _submission_admission_configured(raw: dict[str, Any]) -> bool:
 def submission_admission_limit_from_config(
     config_path: str | Path,
     *,
-    positive_int_fn: Callable[[Any], int | None] = _runtime_common.positive_int,
+    positive_int_fn: Callable[[Any], int | None] = positive_int,
 ) -> int | None:
     try:
         _, raw = load_shared_config_mapping(config_path)
@@ -174,7 +173,7 @@ def workflow_submission_has_capacity(
 ) -> bool:
     has_capacity_fn = submission_admission_has_capacity_fn or submission_admission_has_capacity
     for config_path in config_paths:
-        config_text = _runtime_common.normalize_text(config_path)
+        config_text = normalize_text(config_path)
         if not config_text:
             continue
         has_capacity = has_capacity_fn(config_text)

@@ -246,7 +246,6 @@ def test_optts_fallback_requires_existing_guess_xyz(tmp_path: Path) -> None:
     assert prepare_scants_optts_fallback_input(
         source_inp=source_inp,
         target_inp=tmp_path / "rxn.optts.inp",
-        reaction_dir=tmp_path,
         out_path=out_path,
     ) == (None, [])
 
@@ -271,7 +270,6 @@ def test_optts_fallback_requires_geometry_line(tmp_path: Path) -> None:
     assert prepare_scants_optts_fallback_input(
         source_inp=source_inp,
         target_inp=tmp_path / "rxn.optts.inp",
-        reaction_dir=tmp_path,
         out_path=out_path,
     ) == (None, [])
 
@@ -371,7 +369,6 @@ def test_prepare_builders_reject_non_scants_inputs(tmp_path: Path) -> None:
     assert prepare_scants_optts_fallback_input(
         source_inp=source_inp,
         target_inp=target_inp,
-        reaction_dir=tmp_path,
         out_path=out_path,
     ) == (None, [])
 

@@ -36,20 +36,6 @@ def xtb_handoff_status_impl(
     }
 
 
-def stage_has_xtb_candidates_impl(stage: dict[str, Any]) -> bool:
-    artifacts = stage.get("output_artifacts")
-    if not isinstance(artifacts, list):
-        return False
-    for artifact in artifacts:
-        if not isinstance(artifact, dict):
-            continue
-        if normalize_text(artifact.get("kind")) != "xtb_candidate":
-            continue
-        if normalize_text(artifact.get("path")):
-            return True
-    return False
-
-
 def _empty_xtb_handoff() -> dict[str, str]:
     return {
         "status": "",
@@ -60,6 +46,5 @@ def _empty_xtb_handoff() -> dict[str, str]:
 
 
 __all__ = [
-    "stage_has_xtb_candidates_impl",
     "xtb_handoff_status_impl",
 ]

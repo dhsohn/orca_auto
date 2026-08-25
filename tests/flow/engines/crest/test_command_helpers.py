@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import errno
-import json
 import os
 import re
 from pathlib import Path
@@ -9,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from orca_auto.core.artifacts import CREST_JOB_MANIFEST_FILE
 from orca_auto.core.config.engines import WorkflowEngineAppConfig as AppConfig
 from orca_auto.core.config.schema import CommonRuntimeConfig
 from orca_auto.core.queue.engine.input_snapshot import SNAPSHOT_DIR_NAME
@@ -34,31 +33,6 @@ from tests.engine_artifact_helpers import (
 )
 
 
-def test_default_submission_namespace_matches_durable_intent_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job_dir = tmp_path / "job"
-    job_dir.mkdir()
-    captured: dict[str, str] = {}
-    sentinel = object()
-
-    def capture_submission(*args: object, **kwargs: object) -> object:
-        captured["namespace"] = str(kwargs["snapshot_namespace"])
-        return sentinel
-
-    monkeypatch.setattr(crest_submission, "_build_submission_impl", capture_submission)
-
-    assert crest_submission._build_submission(object(), job_dir, {}, object()) is sentinel
-    namespace = captured["namespace"]
-    generation = (job_dir / SNAPSHOT_DIR_NAME / namespace).resolve()
-    marker = job_dir / ".orca_auto_snapshot_intents" / f"{namespace}.json"
-    payload = json.loads(marker.read_text(encoding="utf-8"))
-    assert len(namespace) <= 80
-    assert generation.is_dir()
-    assert payload["generation_paths"] == [str(generation)]
-
-
 def _cfg(tmp_path: Path) -> AppConfig:
     allowed_root = tmp_path / "allowed_root"
     organized_root = tmp_path / "organized_root"
@@ -82,32 +56,6 @@ def _set_mtime(path: Path, *, seconds: int) -> None:
 
 def test_load_job_manifest_returns_empty_dict_when_manifest_is_missing(tmp_path: Path) -> None:
     assert _helpers.load_job_manifest(tmp_path) == {}
-
-
-def test_submission_failure_removes_its_snapshot_namespace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job_dir = tmp_path / "job"
-    job_dir.mkdir()
-    namespace: Path | None = None
-
-    def fail_after_namespace(*args: object, **kwargs: object) -> object:
-        nonlocal namespace
-        snapshot_namespace = kwargs["snapshot_namespace"]
-        assert isinstance(snapshot_namespace, str)
-        namespace = job_dir / SNAPSHOT_DIR_NAME / snapshot_namespace
-        (namespace / "partial").write_text("partial", encoding="utf-8")
-        raise OSError(errno.EIO, "simulated snapshot fsync failure")
-
-    monkeypatch.setattr(crest_submission, "new_job_id", lambda: "crest-fsync-failure")
-    monkeypatch.setattr(crest_submission, "_build_submission_impl", fail_after_namespace)
-
-    with pytest.raises(OSError, match="simulated snapshot fsync failure"):
-        crest_submission._build_submission(object(), job_dir, {}, object())
-
-    assert namespace is not None
-    assert not namespace.exists()
 
 
 def test_submission_validates_electronic_state_on_selected_snapshot(
@@ -144,11 +92,14 @@ def test_submission_validates_electronic_state_on_selected_snapshot(
             SimpleNamespace(priority=10),
         )
 
-    assert not (job_dir / SNAPSHOT_DIR_NAME / "crest-electronic-state").exists()
+    snapshot_root = job_dir / SNAPSHOT_DIR_NAME
+    intent_root = job_dir / ".orca_auto_snapshot_intents"
+    assert not snapshot_root.exists() or not any(snapshot_root.iterdir())
+    assert not intent_root.exists() or not any(intent_root.glob("*.json"))
 
 
 def test_load_job_manifest_reads_yaml_mapping(tmp_path: Path) -> None:
-    manifest_path = tmp_path / _helpers.MANIFEST_FILE_NAME
+    manifest_path = tmp_path / CREST_JOB_MANIFEST_FILE
     manifest_path.write_text("mode: nci\ninput_xyz: picked.xyz\n", encoding="utf-8")
 
     manifest = _helpers.load_job_manifest(tmp_path)
@@ -157,7 +108,7 @@ def test_load_job_manifest_reads_yaml_mapping(tmp_path: Path) -> None:
 
 
 def test_load_job_manifest_rejects_non_mapping_yaml(tmp_path: Path) -> None:
-    manifest_path = tmp_path / _helpers.MANIFEST_FILE_NAME
+    manifest_path = tmp_path / CREST_JOB_MANIFEST_FILE
     manifest_path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="Invalid CREST job manifest"):

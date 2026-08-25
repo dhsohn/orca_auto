@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR, config_env_value
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
+from orca_auto.core.config.files import config_env_value
 from orca_auto.core.messaging import (
     Message,
     MessageChannel,

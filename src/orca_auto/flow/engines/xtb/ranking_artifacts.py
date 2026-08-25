@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.engine_process import atomic_write_confined_bytes
 
-from .job_inputs import MANIFEST_FILE_NAME
 from .ranking_models import RankingLogPaths, RankingRunContext
 
 
@@ -21,7 +21,7 @@ def _write_text(path: Path, text: str) -> str:
 
 def _ranking_manifest_path(context: RankingRunContext) -> str:
     return str(
-        context.inputs.get("manifest_path") or (context.job_dir / MANIFEST_FILE_NAME).resolve()
+        context.inputs.get("manifest_path") or (context.job_dir / XTB_JOB_MANIFEST_FILE).resolve()
     )
 
 

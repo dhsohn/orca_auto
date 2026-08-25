@@ -19,12 +19,11 @@ from orca_auto.core.messaging import (
     Severity,
     bold,
     build_channel,
+    build_channel_from_config_path,
     code,
     field_row,
     group,
     line,
-    load_messenger_config_from_file,
-    load_required_messenger_config_from_file,
     raw,
     render_discord_embed,
     text,
@@ -236,17 +235,6 @@ def test_messenger_config_rejects_malformed_sections(raw: object, expected: str)
         messenger_config_from_mapping(raw)
 
 
-def test_required_messenger_config_rejects_missing_and_invalid_files(tmp_path: Path) -> None:
-    missing = tmp_path / "missing.yaml"
-    with pytest.raises(FileNotFoundError, match="bot config does not exist"):
-        load_required_messenger_config_from_file(missing)
-
-    invalid = tmp_path / "invalid.yaml"
-    invalid.write_text("messenger: [\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="Invalid YAML syntax"):
-        load_required_messenger_config_from_file(invalid)
-
-
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
@@ -258,7 +246,7 @@ def test_required_messenger_config_rejects_missing_and_invalid_files(tmp_path: P
         ),
     ],
 )
-def test_messenger_file_loaders_reject_invalid_shared_config_before_selection(
+def test_messenger_channel_loader_rejects_invalid_shared_config_before_selection(
     tmp_path: Path,
     payload: str,
     message: str,
@@ -266,9 +254,5 @@ def test_messenger_file_loaders_reject_invalid_shared_config_before_selection(
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text(payload, encoding="utf-8")
 
-    for loader in (
-        load_messenger_config_from_file,
-        load_required_messenger_config_from_file,
-    ):
-        with pytest.raises(ValueError, match=message):
-            loader(config_path)
+    with pytest.raises(ValueError, match=message):
+        build_channel_from_config_path(config_path)

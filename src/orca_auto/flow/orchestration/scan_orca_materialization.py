@@ -32,7 +32,7 @@ from orca_auto.core.statuses import (
     STATUS_COMPLETED,
     is_stage_terminal_status,
 )
-from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.core.utils.coercion import mapping_or_empty, normalize_text
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.contracts.workflow import (
@@ -79,11 +79,6 @@ def _stage_status(stage: dict[str, Any]) -> str:
     return normalize_text(stage.get("status")).lower()
 
 
-def _stage_metadata(stage: dict[str, Any]) -> dict[str, Any]:
-    metadata = stage.get("metadata")
-    return metadata if isinstance(metadata, dict) else {}
-
-
 def _task_payload(stage: dict[str, Any]) -> dict[str, Any]:
     task = stage.get("task")
     if not isinstance(task, dict):
@@ -100,7 +95,9 @@ def _task_kind(stage: dict[str, Any]) -> str:
 
 
 def _scan_direction(stage: dict[str, Any]) -> str:
-    return normalize_text(_stage_metadata(stage).get("scan_direction")) or "forward"
+    return (
+        normalize_text(mapping_or_empty(stage.get("metadata")).get("scan_direction")) or "forward"
+    )
 
 
 def _scan_stages(payload: dict[str, Any], *, direction: str) -> list[dict[str, Any]]:
@@ -183,7 +180,7 @@ def _scan_atom_count(scan_stage: dict[str, Any]) -> int:
 
 
 def _scan_spec(scan_stage: dict[str, Any]) -> ScanCoordinateSpec | None:
-    coordinate = normalize_text(_stage_metadata(scan_stage).get("scan_coordinate"))
+    coordinate = normalize_text(mapping_or_empty(scan_stage.get("metadata")).get("scan_coordinate"))
     if not coordinate:
         return None
     canonical = validate_scan_coordinate(

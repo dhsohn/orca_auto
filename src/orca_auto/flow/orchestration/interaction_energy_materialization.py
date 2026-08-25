@@ -32,7 +32,7 @@ from typing import Any
 
 from orca_auto.core.engine_process import ensure_confined_directory
 from orca_auto.core.statuses import STATUS_COMPLETED, is_stage_terminal_status
-from orca_auto.core.utils.coercion import normalize_text, safe_int
+from orca_auto.core.utils.coercion import mapping_or_empty, normalize_text, safe_int
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage, safe_name
 from orca_auto.flow.conformer_selection import (
     OrcaSelectedInputScienceIdentity,
@@ -89,13 +89,8 @@ def _text(value: Any) -> str:
     return normalize_text(value)
 
 
-def _stage_metadata(stage: Mapping[str, Any]) -> dict[str, Any]:
-    metadata = stage.get("metadata")
-    return metadata if isinstance(metadata, dict) else {}
-
-
 def _stage_role(stage: Mapping[str, Any]) -> str:
-    return _text(_stage_metadata(stage).get("role"))
+    return _text(mapping_or_empty(stage.get("metadata")).get("role"))
 
 
 def _task_kind(stage: Mapping[str, Any]) -> str:
@@ -219,7 +214,7 @@ def _existing_interaction_keys(
             expected_config_fingerprint=expected_config_fingerprint,
         ):
             continue
-        meta = _stage_metadata(stage)
+        meta = mapping_or_empty(stage.get("metadata"))
         parent = _text(meta.get("parent_stage_id"))
         index = safe_int(meta.get("fragment_index", -1), default=-1)
         keys.add((role, parent, index))
@@ -447,7 +442,7 @@ def append_interaction_energy_stages_impl(
     # generated fan-out children may only point to a non-interaction parent.
     for _stage_id, stage, _block, _identity in representatives:
         if is_interaction_role(_stage_role(stage)):
-            _stage_metadata(stage).pop("role", None)
+            mapping_or_empty(stage.get("metadata")).pop("role", None)
     fragment_index_lists = [fragment.get("atom_indices", []) for fragment in fragments]
     # The normalized durable block always carries a validated sp_route_line;
     # read it fail-closed instead of silently substituting a level of theory.

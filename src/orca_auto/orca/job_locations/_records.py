@@ -19,7 +19,6 @@ from ..config import AppConfig
 from ..job_type import detect_job_type
 from ..molecule_key import resolve_molecule_key
 from ._utils import (
-    TERMINAL_STATUSES,
     derive_selected_input_xyz,
     normalize_path_text,
     normalize_text,
@@ -155,10 +154,6 @@ def resolve_record_job_dir(record: JobLocationRecord) -> Path | None:
         if resolved.exists() and resolved.is_dir():
             return resolved
     return None
-
-
-def is_terminal_status(status: str) -> bool:
-    return normalize_text(status).lower() in TERMINAL_STATUSES
 
 
 @dataclass(frozen=True)

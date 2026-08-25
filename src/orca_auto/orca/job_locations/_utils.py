@@ -13,14 +13,11 @@ from orca_auto.core.queue.metadata import (
     mapping_metadata,
     mapping_metadata_value,
 )
-from orca_auto.core.statuses import TERMINAL_STATUSES as TERMINAL_STATUSES
 from orca_auto.core.utils import normalize_bool, normalize_text, safe_int
 from orca_auto.core.utils.persistence import load_json_mapping_list_file
 
 from ..input_artifacts import derive_selected_input_xyz as _derive_selected_input_xyz
 from ._generation import current_generation_payloads
-
-INDEX_DIR_NAME = "index"
 
 
 def normalize_path_text(value: Any) -> str:

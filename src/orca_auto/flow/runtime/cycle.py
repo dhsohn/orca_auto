@@ -4,7 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from . import _common as _runtime_common
+from orca_auto.core.utils.coercion import normalize_text
+
 from .models import WorkflowRuntimeContext, _WorkflowCycle
 
 
@@ -27,9 +28,7 @@ def start_workflow_cycle_with_deps(
     deps: WorkflowCycleDeps,
 ) -> _WorkflowCycle:
     cycle_started_at = deps.now_utc_iso_fn()
-    session_id = _runtime_common.normalize_text(
-        context.worker_session_id
-    ) or deps.timestamped_token_fn("wf_worker")
+    session_id = normalize_text(context.worker_session_id) or deps.timestamped_token_fn("wf_worker")
     requested_submit_ready = bool(context.submit_ready)
     cycle_submit_ready = requested_submit_ready and deps.workflow_submission_has_capacity_fn(
         context.options.crest_config,

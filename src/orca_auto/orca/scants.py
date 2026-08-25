@@ -684,7 +684,6 @@ def prepare_scants_optts_fallback_input(
     *,
     source_inp: Path,
     target_inp: Path,
-    reaction_dir: Path,
     out_path: Path,
     max_memory_gb: int | None = None,
 ) -> tuple[Path | None, list[str]]:

@@ -5,10 +5,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.paths import validate_configured_executable_path
+from orca_auto.core.paths.validation import validated_absolute_linux_path_text
+from orca_auto.core.utils.coercion import positive_int
 
 from .files import (
-    ORCA_AUTO_CONFIG_ENV_VAR,
     default_config_path_from_repo_root,
     default_shared_admission_root,
     engine_config_mapping,
@@ -16,16 +18,12 @@ from .files import (
     mapping_section,
     messenger_mapping_from_root,
     runs_root_from_mapping,
-    validated_absolute_linux_path_text,
     validated_runs_root_text,
 )
 from .schema import (
     CommonResourceConfig,
     CommonRuntimeConfig,
     MessengerConfig,
-)
-from .schema import (
-    as_int as as_int,
 )
 from .schema import (
     as_nonempty_str as as_nonempty_str,
@@ -38,21 +36,6 @@ from .schema import (
 )
 from .schema import (
     messenger_config_from_mapping as messenger_config_from_mapping,
-)
-from .schema import (
-    normalize_admission_limit as normalize_admission_limit,
-)
-from .schema import (
-    normalize_default_max_retries as normalize_default_max_retries,
-)
-from .schema import (
-    normalize_max_concurrent as normalize_max_concurrent,
-)
-from .schema import (
-    positive_int as positive_int,
-)
-from .schema import (
-    resolved_admission_limit as resolved_admission_limit,
 )
 from .scratch import ScratchConfig, scratch_config_from_runtime_mapping
 

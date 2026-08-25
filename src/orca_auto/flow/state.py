@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from .workflow.store import (
     WORKFLOW_FILE_NAME,
     WORKFLOW_LOCK_NAME,
@@ -31,7 +29,6 @@ __all__ = [
     "WORKFLOW_FILE_NAME",
     "WORKFLOW_STAGE_DIRNAMES",
     "WORKFLOW_LOCK_NAME",
-    "Path",
     "acquire_workflow_create_lock",
     "acquire_workflow_lock",
     "iter_workflow_runtime_workspaces",

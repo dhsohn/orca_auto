@@ -4,11 +4,10 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any
 
 from orca_auto.core.utils.coercion import normalize_text, safe_float, safe_int
 
-_RuntimeAdmissionConfigT = TypeVar("_RuntimeAdmissionConfigT", bound="RuntimeAdmissionMixin")
 SUPPORTED_MESSENGER_PROVIDERS = frozenset({"discord"})
 MIN_MESSENGER_TIMEOUT_SECONDS = 0.1
 MAX_MESSENGER_TIMEOUT_SECONDS = 120.0
@@ -110,15 +109,6 @@ def _optional_discord_bot_token(
             f"{field_name} must contain only printable ASCII characters without whitespace."
         )
     return text
-
-
-def positive_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    parsed = safe_int(value, default=None)
-    if parsed is None:
-        return None
-    return parsed if parsed > 0 else None
 
 
 def explicit_positive_int(value: Any, *, field_name: str) -> int:

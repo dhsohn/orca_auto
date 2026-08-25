@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import errno
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.queue.engine.input_snapshot import SNAPSHOT_DIR_NAME
 from orca_auto.flow.engines.xtb import job_inputs as _helpers
 from orca_auto.flow.engines.xtb import submission as xtb_submission
@@ -31,31 +30,6 @@ from tests.engine_artifact_helpers import (
 )
 
 
-def test_default_submission_namespace_matches_durable_intent_path(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job_dir = tmp_path / "job"
-    job_dir.mkdir()
-    captured: dict[str, str] = {}
-    sentinel = object()
-
-    def capture_submission(*args: object, **kwargs: object) -> object:
-        captured["namespace"] = str(kwargs["snapshot_namespace"])
-        return sentinel
-
-    monkeypatch.setattr(xtb_submission, "_build_submission_impl", capture_submission)
-
-    assert xtb_submission._build_submission(object(), job_dir, {}, object()) is sentinel
-    namespace = captured["namespace"]
-    generation = (job_dir / SNAPSHOT_DIR_NAME / namespace).resolve()
-    marker = job_dir / ".orca_auto_snapshot_intents" / f"{namespace}.json"
-    payload = json.loads(marker.read_text(encoding="utf-8"))
-    assert len(namespace) <= 80
-    assert generation.is_dir()
-    assert payload["generation_paths"] == [str(generation)]
-
-
 def _write_xyz(path: Path, comment: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -75,7 +49,7 @@ def _write_xyz(path: Path, comment: str) -> Path:
 
 
 def _write_manifest(job_dir: Path, payload: object) -> Path:
-    path = job_dir / _helpers.MANIFEST_FILE_NAME
+    path = job_dir / XTB_JOB_MANIFEST_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return path
@@ -180,32 +154,6 @@ def test_resolve_job_inputs_ranking_collects_sorted_candidates(tmp_path: Path) -
     }
 
 
-def test_submission_failure_removes_its_snapshot_namespace(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    job_dir = tmp_path / "job"
-    job_dir.mkdir()
-    namespace: Path | None = None
-
-    def fail_after_namespace(*args: object, **kwargs: object) -> object:
-        nonlocal namespace
-        snapshot_namespace = kwargs["snapshot_namespace"]
-        assert isinstance(snapshot_namespace, str)
-        namespace = job_dir / SNAPSHOT_DIR_NAME / snapshot_namespace
-        (namespace / "partial").write_text("partial", encoding="utf-8")
-        raise OSError(errno.EIO, "simulated snapshot fsync failure")
-
-    monkeypatch.setattr(xtb_submission, "new_job_id", lambda: "xtb-fsync-failure")
-    monkeypatch.setattr(xtb_submission, "_build_submission_impl", fail_after_namespace)
-
-    with pytest.raises(OSError, match="simulated snapshot fsync failure"):
-        xtb_submission._build_submission(object(), job_dir, {}, object())
-
-    assert namespace is not None
-    assert not namespace.exists()
-
-
 def test_submission_validates_electronic_state_on_selected_snapshot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -235,7 +183,10 @@ def test_submission_validates_electronic_state_on_selected_snapshot(
             SimpleNamespace(priority=10),
         )
 
-    assert not (job_dir / SNAPSHOT_DIR_NAME / "xtb-electronic-state").exists()
+    snapshot_root = job_dir / SNAPSHOT_DIR_NAME
+    intent_root = job_dir / ".orca_auto_snapshot_intents"
+    assert not snapshot_root.exists() or not any(snapshot_root.iterdir())
+    assert not intent_root.exists() or not any(intent_root.glob("*.json"))
 
 
 def test_resolve_job_inputs_reports_missing_required_directories_and_candidates(
