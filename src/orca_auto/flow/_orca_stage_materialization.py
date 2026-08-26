@@ -70,7 +70,7 @@ def validate_workflow_orca_route(*, task_kind: str, route_line: str) -> str:
     """Require the ORCA run type promised by a durable workflow task role."""
 
     normalized_kind = validate_workflow_orca_task_kind(task_kind)
-    rendered_route = ensure_route_line(route_line, default="")
+    rendered_route = ensure_route_line(route_line)
     normalized_route = rendered_route
 
     route_tokens = tuple(
@@ -259,7 +259,7 @@ def safe_name(value: str, *, fallback: str) -> str:
     return cleaned or fallback
 
 
-def ensure_route_line(route_line: str, *, default: str = "r2scan-3c TightSCF") -> str:
+def ensure_route_line(route_line: str) -> str:
     """Return only canonical active route lines from a workflow route field.
 
     A one-line route may omit its leading ``!`` for backwards compatibility.
@@ -273,7 +273,7 @@ def ensure_route_line(route_line: str, *, default: str = "r2scan-3c TightSCF") -
             f"workflow ORCA route-role mismatch: route_line must be a string; got={route_line!r}"
         )
 
-    raw_value = route_line.strip() or default.strip()
+    raw_value = route_line.strip()
     active_lines = [
         raw_line for raw_line in raw_value.splitlines() if active_orca_line_text(raw_line).strip()
     ]
@@ -335,7 +335,6 @@ def render_orca_input(
     max_cores: int,
     max_memory_gb: int,
     xyz_filename: str,
-    default_route_line: str = "r2scan-3c TightSCF",
     geom_block: str = "",
 ) -> str:
     parsed_charge = require_int(charge, field="charge")
@@ -343,7 +342,7 @@ def render_orca_input(
     geom_lines = [*geom_block.splitlines(), ""] if geom_block.strip() else []
     return "\n".join(
         [
-            ensure_route_line(route_line, default=default_route_line),
+            ensure_route_line(route_line),
             "",
             "%pal",
             f"  nprocs {max(1, int(max_cores))}",

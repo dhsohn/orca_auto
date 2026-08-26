@@ -8,7 +8,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE as MACHINE_OBSERVATION_FILE
+# The external factory/machine-observation contract fixes this filename, and the
+# internal per-run report artifact happens to use the same one. They are two
+# separate contracts that coincide, so this is spelled out rather than aliased to
+# core.artifacts.RUN_REPORT_JSON_FILE: renaming the run report must not silently
+# rename the file the external contract names.
+MACHINE_OBSERVATION_FILE = "machine.json"
 
 MACHINE_CONTRACT_NAME = "factory/machine-observation"
 MACHINE_CONTRACT_VERSION = 1
