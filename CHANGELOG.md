@@ -6,6 +6,103 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [3.0.3] - 2026-08-26
+
+Mostly internal consolidation, with one crash fix in CREST terminal repair.
+No text in [docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md) changes and no
+documented promise is broken, which is what makes this a patch: the CLI,
+config, durable state and published reports behave as they did in 3.0.2. The
+one documented behavior this release touches is terminal repair, which it makes
+reliable rather than different.
+
+### Fixed
+
+- CREST terminal repair no longer crashes the worker on a malformed durable
+  `job_dir`. It resolved the path by hand and caught only `OSError` and
+  `RuntimeError`, so a queue row whose `job_dir` held an embedded NUL byte
+  raised `ValueError`, and a row whose `metadata` was not a mapping raised
+  `AttributeError` before the guard was even entered. The terminal-repair sweep
+  has no per-row guard — unlike the publication repair sweep, which logs and
+  continues — and the worker loop catches only `KeyboardInterrupt`, so either
+  exception ended the CREST worker and stalled every CREST job behind it. Both
+  engines now resolve the path through the same canonical resolver, which
+  declines repair for such a row. A relative `job_dir`, previously resolved
+  against the process working directory and then read from the wrong place,
+  also declines now.
+
+### Changed
+
+- Internals that had grown a second copy now have one owner: the CREST worker
+  execution context, executable content identity, the admission-slot ownership
+  invariant, the CREST and xTB engine-launch blocks, the ORCA terminal
+  run-state recorders, the queue input-snapshot directory removal, the
+  xTB/CREST submission snapshot transaction, the repair-pending enqueue
+  compare-and-set, the parent queue-worker argument parser, and config, state,
+  manifest, workflow-metadata, coercion, path and maxcore ownership. The two
+  CREST execution-context copies had already drifted: only the reachable one
+  had its incomplete-snapshot check tightened, and that is the one that
+  survives.
+- Executable content identity has a single implementation shared by the
+  identity helper and the ORCA pinned launch. The queue snapshot writer and the
+  launch-time verifier previously derived the same dictionary independently,
+  where any divergence between them would have failed every ORCA launch closed
+  at pin time.
+- Collecting ORCA run snapshots no longer globs and stats `*.out` files. That
+  work existed only to fill snapshot fields nothing read, so activity listings
+  and run cleanup now do correspondingly less filesystem work.
+- A blank workflow ORCA route line fails closed where the input is rendered,
+  not only where it is validated upstream. This is defense in depth rather than
+  a fix: no reachable path was found that renders one, because every
+  orchestration materializer already rejects an empty route earlier and the
+  interaction-energy branch normalizes its route through the manifest schema.
+- `MACHINE_OBSERVATION_FILE` is spelled out again instead of aliasing
+  `RUN_REPORT_JSON_FILE`. Both are `machine.json`, but they answer to different
+  contracts — one external, one the internal per-run report — and aliasing them
+  meant renaming the run report would silently rename the file the external
+  contract names.
+- `scripts/clean_artifacts.sh` prunes empty directories under `src` and
+  `tests`. Git cannot track an empty directory, so a package deleted in a
+  commit survives in existing checkouts and Python imports it as a namespace
+  package, which leaves a removed module looking importable.
+- `docs/ARCHITECTURE.md` and its Korean translation describe the reduced engine
+  definition and the direct notification wiring.
+
+### Removed
+
+- `EngineDefinition.queue_worker_module`, along with the dead engine artifact,
+  context and notification metadata beside it. The directly bound
+  `queue_worker_runner`, which every engine already supplied, is now the only
+  way a definition names its parent worker; the removed fallback was
+  unreachable and would have exited 2 had it run.
+- The `finalize_intent` enqueue hook, whose only assigned implementation went
+  with the standalone xTB-MD engine in 0.3.0. Snapshot-intent finalization
+  itself is unaffected and still runs from the worker.
+- The per-engine worker-child argument parsers and `main` functions, which
+  stopped spawning anything once children moved to the shared worker-child
+  module.
+- Internal routines with no callers: the queue cancellation-poll loop and
+  cancellation-signal path in `core/queue/lifecycle` and `core/queue/child`
+  (cancellation itself is unaffected and still terminates the process group),
+  `WORKFLOW_STATUS_ORDER` and `is_terminal_status`, `safe_is_subpath`, two ORCA
+  termination patterns, and `flow/runtime/_common.py`.
+- Two messenger config loaders exported from `orca_auto.core.messaging`, and
+  the contract re-exports and `__version__` from `orca_auto.flow`. Import the
+  workflow contracts from `orca_auto.flow.contracts` and the version from
+  `orca_auto`.
+- Fields that were written and never read: four on the ORCA run snapshot, the
+  NEB optimizer and path length, and two on the workflow SI data. The relative
+  electronic energies behind one of them are still computed, because they feed
+  the check that suppresses populations rather than publishing an unreliable
+  table.
+- Parameters whose default was the only value any caller passed, including
+  eight that turned type-checked attribute access into string lookups, plus a
+  few that were never read at all. Values that were smuggled in as defaults are
+  now named module constants.
+- Exception-tuple members that another class in the same tuple already catches,
+  across 22 files. Ruff's `B014` recognizes only exact duplicates and `UP024`
+  the `OSError`/`IOError` alias, so subclass shadowing passed the gate
+  unnoticed.
+
 ## [3.0.2] - 2026-08-25
 
 ### Fixed
