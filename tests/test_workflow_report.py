@@ -20,17 +20,21 @@ from orca_auto.core.engine_runner import (
     executable_identity,
 )
 from orca_auto.core.machine_observation import machine_json_bytes
-from orca_auto.flow.workflow import report as workflow_report
+from orca_auto.flow.workflow import report_collection as workflow_report_collection
 from orca_auto.flow.workflow.machine import write_workflow_machine_observation
-from orca_auto.flow.workflow.report import (
-    _energy_axis_ticks,
-    _tick_label,
+from orca_auto.flow.workflow.report_collection import (
     collect_workflow_report_data,
     count_xyz_frames,
     latest_engrad_energy,
+)
+from orca_auto.flow.workflow.report_rendering import (
+    _energy_axis_ticks,
+    _tick_label,
+    render_workflow_report_html,
     write_workflow_html_report,
 )
 from orca_auto.orca import state as orca_state
+from orca_auto.orca.parser import KCAL_PER_HARTREE
 from tests.engine_artifact_helpers import bind_report_generation
 
 _ENGRAD_TEMPLATE = """#
@@ -339,7 +343,7 @@ def test_engrad_energy_rejects_oversized_generation_file(
         _ENGRAD_TEMPLATE.format(energy="-100.0") + "x" * 128,
         encoding="utf-8",
     )
-    monkeypatch.setattr(workflow_report, "_MAX_ENGRAD_ENERGY_FILE_BYTES", 64)
+    monkeypatch.setattr(workflow_report_collection, "_MAX_ENGRAD_ENERGY_FILE_BYTES", 64)
 
     assert latest_engrad_energy(tmp_path) is None
 
@@ -427,7 +431,7 @@ def test_workflow_report_omits_relative_energies_for_mixed_executed_science(
 
     assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.001, -100.005])
     assert all(entry.rel_kcal is None for entry in data.orca_results)
-    rendered = workflow_report.render_workflow_report_html(data)
+    rendered = render_workflow_report_html(data)
     assert "Relative energies are omitted" in rendered
     assert "provenance is missing or differs" in rendered
     orca_table = rendered.split("<h2>ORCA results</h2>", 1)[1].split("<h2>", 1)[0]
@@ -465,7 +469,7 @@ def test_workflow_report_omits_relative_energies_for_mixed_orca_versions(
     data = collect_workflow_report_data(tmp_path, payload)
 
     assert all(entry.rel_kcal is None for entry in data.orca_results)
-    rendered = workflow_report.render_workflow_report_html(data)
+    rendered = render_workflow_report_html(data)
     assert "Relative energies are omitted" in rendered
     assert "provenance is missing or differs" in rendered
 
@@ -500,11 +504,11 @@ def test_workflow_report_omits_relative_energies_for_mixed_active_directives(
 
     assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.001, -100.005])
     assert all(entry.rel_kcal is None for entry in data.orca_results)
-    assert "Relative energies are omitted" in workflow_report.render_workflow_report_html(data)
+    assert "Relative energies are omitted" in render_workflow_report_html(data)
 
 
 def test_single_completed_candidate_without_science_identity_has_no_relative_energy() -> None:
-    candidate = workflow_report.OrcaStageResult(
+    candidate = workflow_report_collection.OrcaStageResult(
         stage_id="orca_unbound",
         label="unbound",
         status="completed",
@@ -517,7 +521,7 @@ def test_single_completed_candidate_without_science_identity_has_no_relative_ene
         science_identity=None,
     )
 
-    assert workflow_report._with_relative_energies([candidate]) == (candidate,)
+    assert workflow_report_collection._with_relative_energies([candidate]) == (candidate,)
 
 
 def test_single_completed_candidate_without_science_identity_has_no_numeric_rank(
@@ -538,7 +542,7 @@ def test_single_completed_candidate_without_science_identity_has_no_numeric_rank
     )
 
     data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-    rendered = workflow_report.render_workflow_report_html(data)
+    rendered = render_workflow_report_html(data)
     orca_table = rendered.split("<h2>ORCA results</h2>", 1)[1].split("<h2>", 1)[0]
 
     assert data.orca_results[0].energy == pytest.approx(-100.0)
@@ -580,7 +584,7 @@ def test_workflow_report_ignores_resource_only_directive_differences(
 
     assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.005, -100.001])
     assert [entry.rel_kcal for entry in data.orca_results] == pytest.approx(
-        [0.0, (-100.001 + 100.005) * workflow_report.KCAL_PER_HARTREE]
+        [0.0, (-100.001 + 100.005) * KCAL_PER_HARTREE]
     )
 
 
@@ -613,7 +617,7 @@ def test_workflow_report_ignores_pal_route_resource_shorthand_differences(
 
     assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.005, -100.001])
     assert [entry.rel_kcal for entry in data.orca_results] == pytest.approx(
-        [0.0, (-100.001 + 100.005) * workflow_report.KCAL_PER_HARTREE]
+        [0.0, (-100.001 + 100.005) * KCAL_PER_HARTREE]
     )
 
 
@@ -1039,7 +1043,7 @@ def test_collect_refuses_engrad_energy_when_annotation_is_beyond_scan_window(
         "|  1> ! r2scan-3c Opt Freq TightSCF\n"
         "FINAL SINGLE POINT ENERGY -1.000000000000\n"
         "FINAL SINGLE POINT ENERGY -1.100000000000 (SCF not fully converged!)\n"
-        + "x" * (workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES + 4096)
+        + "x" * (workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES + 4096)
         + "\n****ORCA TERMINATED NORMALLY****\n",
         engrad_energy="-1.050000000000",
     )
@@ -1059,7 +1063,7 @@ def test_collect_finds_clean_output_energy_beyond_scan_window(tmp_path: Path) ->
         "|  1> ! r2scan-3c Opt Freq TightSCF\n"
         "FINAL SINGLE POINT ENERGY -1.000000000000\n"
         "FINAL SINGLE POINT ENERGY -1.100000000000\n"
-        + "x" * (workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES + 4096)
+        + "x" * (workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES + 4096)
         + "\n****ORCA TERMINATED NORMALLY****\n",
     )
 
@@ -1423,25 +1427,25 @@ def test_orca_output_energy_reads_only_bounded_tail(
     out_path = stage_dir / "opt.out"
     out_path.write_bytes(
         b"FINAL SINGLE POINT ENERGY -9.000000000000\n"
-        + b"x" * (workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES + 4096)
+        + b"x" * (workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES + 4096)
         + b"\nFINAL SINGLE POINT ENERGY -2.500000000000\n"
     )
     bytes_requested = 0
-    original_pread = workflow_report.os.pread
+    original_pread = workflow_report_collection.os.pread
 
     def tracked_pread(descriptor: int, count: int, offset: int) -> bytes:
         nonlocal bytes_requested
         bytes_requested += count
         return original_pread(descriptor, count, offset)
 
-    monkeypatch.setattr(workflow_report.os, "pread", tracked_pread)
+    monkeypatch.setattr(workflow_report_collection.os, "pread", tracked_pread)
 
-    _annotated, energy = workflow_report._orca_report_output_energy_state(
+    _annotated, energy = workflow_report_collection._orca_report_output_energy_state(
         stage_dir, _orca_output_report(out_path)
     )
 
-    assert out_path.stat().st_size > workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES
-    assert bytes_requested == workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES
+    assert out_path.stat().st_size > workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES
+    assert bytes_requested == workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES
     assert energy == pytest.approx(-2.5)
 
 
@@ -1457,11 +1461,14 @@ def test_orca_output_energy_sees_annotated_line_cut_at_window_start(tmp_path: Pa
     out_path.write_bytes(
         prefix
         + annotated_line
-        + b"x" * (workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES - len(annotated_line))
+        + b"x" * (workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES - len(annotated_line))
     )
-    assert out_path.stat().st_size - workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES == len(prefix)
+    assert (
+        out_path.stat().st_size - workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES
+        == len(prefix)
+    )
 
-    annotated_state, energy = workflow_report._orca_report_output_energy_state(
+    annotated_state, energy = workflow_report_collection._orca_report_output_energy_state(
         stage_dir, _orca_output_report(out_path)
     )
 
@@ -1484,13 +1491,14 @@ def test_orca_output_energy_skips_false_match_at_mid_line_window_start(tmp_path:
         real_line
         + echo_head
         + fake_tail
-        + b"x" * (workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES - len(fake_tail))
+        + b"x" * (workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES - len(fake_tail))
     )
-    assert out_path.stat().st_size - workflow_report._ORCA_ENERGY_SCAN_WINDOW_BYTES == len(
-        real_line
-    ) + len(echo_head)
+    assert (
+        out_path.stat().st_size - workflow_report_collection._ORCA_ENERGY_SCAN_WINDOW_BYTES
+        == len(real_line) + len(echo_head)
+    )
 
-    annotated_state, energy = workflow_report._orca_report_output_energy_state(
+    annotated_state, energy = workflow_report_collection._orca_report_output_energy_state(
         stage_dir, _orca_output_report(out_path)
     )
 
@@ -1525,7 +1533,9 @@ def test_orca_output_energy_refuses_earlier_attempt_for_recorded_final(
         }
     }
 
-    annotated_state, energy = workflow_report._orca_report_output_energy_state(stage_dir, payload)
+    annotated_state, energy = workflow_report_collection._orca_report_output_energy_state(
+        stage_dir, payload
+    )
 
     assert annotated_state is False
     assert energy is None
@@ -1554,7 +1564,9 @@ def test_orca_output_energy_keeps_attempt_annotation_evidence_for_recorded_final
         }
     }
 
-    annotated_state, energy = workflow_report._orca_report_output_energy_state(stage_dir, payload)
+    annotated_state, energy = workflow_report_collection._orca_report_output_energy_state(
+        stage_dir, payload
+    )
 
     assert annotated_state is True
     assert energy is None
@@ -1574,7 +1586,9 @@ def test_orca_output_energy_scans_attempts_when_no_final_was_recorded(tmp_path: 
         }
     }
 
-    annotated_state, energy = workflow_report._orca_report_output_energy_state(stage_dir, payload)
+    annotated_state, energy = workflow_report_collection._orca_report_output_energy_state(
+        stage_dir, payload
+    )
 
     assert annotated_state is False
     assert energy == pytest.approx(-1.0)
@@ -1590,7 +1604,7 @@ def test_orca_output_energy_rejects_file_changed_during_tail_read(
         "FINAL SINGLE POINT ENERGY -1.100000000000\n",
         encoding="utf-8",
     )
-    original_pread = workflow_report.os.pread
+    original_pread = workflow_report_collection.os.pread
     changed = False
 
     def mutating_pread(descriptor: int, count: int, offset: int) -> bytes:
@@ -1602,9 +1616,9 @@ def test_orca_output_energy_rejects_file_changed_during_tail_read(
                 handle.write(b"changed\n")
         return chunk
 
-    monkeypatch.setattr(workflow_report.os, "pread", mutating_pread)
+    monkeypatch.setattr(workflow_report_collection.os, "pread", mutating_pread)
 
-    assert workflow_report._orca_report_output_energy_state(
+    assert workflow_report_collection._orca_report_output_energy_state(
         stage_dir, _orca_output_report(out_path)
     ) == (False, None)
 
@@ -1632,7 +1646,7 @@ def test_orca_output_energy_rejects_nonregular_multilink_or_unconfined_paths(
     )
 
     for candidate in (symlink, hardlink, fifo, outside):
-        assert workflow_report._orca_report_output_energy_state(
+        assert workflow_report_collection._orca_report_output_energy_state(
             stage_dir, _orca_output_report(candidate)
         ) == (False, None)
 

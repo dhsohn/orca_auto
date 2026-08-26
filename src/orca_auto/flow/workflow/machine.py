@@ -28,7 +28,7 @@ from orca_auto.core.machine_observation import (
 )
 from orca_auto.core.statuses import is_workflow_terminal_status
 from orca_auto.core.utils.persistence import atomic_write_text
-from orca_auto.flow.workflow.report import collect_workflow_report_data
+from orca_auto.flow.workflow.report_collection import collect_workflow_report_data
 
 
 def _text(value: object) -> str:

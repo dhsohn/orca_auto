@@ -56,7 +56,7 @@ from ...manifest import (
     require_int,
     validate_conformer_postprocessing_template,
 )
-from ..report import (
+from ..report_collection import (
     _crest_stage_detail,
     _task_kind,
     _text,

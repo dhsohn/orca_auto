@@ -35,6 +35,14 @@ so the following is a convention the reviewer enforces, not the build:
   both siblings, rendering imports collection, collection imports neither.
   Publication is the only file-writing SI owner; rendering stays text-only.
 
+Workflow HTML reporting also uses direct owners rather than a facade:
+
+- `report_collection.py` reads confined, validated workflow/engine evidence and
+  derives the immutable report data consumed by HTML, machine observations,
+  notifications, and workflow SI.
+- `report_rendering.py` imports collection, renders the page, and atomically
+  publishes `workflow_report.html`. Collection never imports rendering.
+
 ## Current Package Layout
 
 ```text

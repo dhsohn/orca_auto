@@ -29,7 +29,7 @@ from orca_auto.flow.orchestration.workflow_cancellation import (
     cancel_materialized_workflow,
 )
 from orca_auto.flow.workflow.machine import write_workflow_machine_observation
-from orca_auto.flow.workflow.report import write_workflow_html_report
+from orca_auto.flow.workflow.report_rendering import write_workflow_html_report
 from orca_auto.flow.workflow.si.publication import write_workflow_si
 
 logger = logging.getLogger(__name__)

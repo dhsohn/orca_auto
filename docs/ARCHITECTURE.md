@@ -531,10 +531,15 @@ durable mutation. The main on-disk artifacts:
 | `job_report.html`           | orca (reporting) | Human completion report                 |
 | job-location index (JSONL)  | core/indexing    | Where each job's outputs currently live  |
 | `workflow.json`             | flow             | Durable workflow payload                 |
-| `workflow_report.html`      | flow (report)    | Live visual workflow summary             |
+| `workflow_report.html`      | flow (report rendering) | Live visual workflow summary        |
 | `si_block.md`               | orca (report/si) | Per-structure SI block (paper-ready)     |
 | `workflow_si.md`            | flow (si)        | Assembled workflow SI (paper-ready)      |
 | workflow registry + journal | flow/registry    | Cross-workflow listing + event history   |
+
+Workflow report evidence and presentation have separate owners. The evidence
+owner consumes confined durable state and builds report data; the presentation
+owner depends on that data and alone publishes `workflow_report.html`. Machine
+observation, notification, and SI consumers stay below the presentation layer.
 
 The workflow journal records semantic workflow/stage transitions and worker
 lifecycle boundaries; idle polling cycles are not events. The CLI workflow

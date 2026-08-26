@@ -492,10 +492,15 @@ orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반�
 | `job_report.html`           | orca (reporting) | 사람용 완료 리포트                      |
 | 작업 위치 인덱스 (JSONL)    | core/indexing    | 각 작업 출력의 현재 위치                 |
 | `workflow.json`             | flow             | 내구성 워크플로우 페이로드               |
-| `workflow_report.html`      | flow (report)    | 실시간 갱신 워크플로우 시각 요약         |
+| `workflow_report.html`      | flow (리포트 렌더링) | 실시간 갱신 워크플로우 시각 요약      |
 | `si_block.md`               | orca (report/si) | 구조별 SI 블록 (논문용)                  |
 | `workflow_si.md`            | flow (si)        | 워크플로우 SI 조립본 (논문용)            |
 | 워크플로우 레지스트리 + 저널| flow/registry    | 워크플로우 간 목록 + 이벤트 이력         |
+
+워크플로우 리포트 근거와 표현은 별도의 owner가 담당합니다. 근거 owner는 confined
+durable 상태를 소비해 리포트 데이터를 만들고, 표현 owner는 그 데이터에 의존하며
+`workflow_report.html`을 단독으로 발행합니다. machine observation, notification, SI
+consumer는 표현 계층 아래에 머뭅니다.
 
 워크플로우 저널은 의미 있는 workflow/stage 전이와 worker lifecycle 경계만 기록하며,
 변화 없는 polling cycle은 이벤트로 남기지 않습니다. CLI workflow worker가
