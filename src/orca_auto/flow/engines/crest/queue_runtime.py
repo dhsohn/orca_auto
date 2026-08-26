@@ -54,6 +54,7 @@ from orca_auto.core.statuses import TERMINAL_STATUSES
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.flow.engines import queue_runtime_common as _common
 from orca_auto.flow.engines.crest.execution import (
+    _job_dir,
     _mark_recovery_pending_entry,
     _terminate_process,
     _write_execution_artifacts,
@@ -180,13 +181,10 @@ _artifact_value = _common.artifact_value
 def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
     if not _is_crest_queue_entry(entry):
         return False
-    job_dir_text = str(getattr(entry, "metadata", {}).get("job_dir") or "").strip()
-    if not job_dir_text:
-        return False
     try:
-        job_dir = Path(job_dir_text).expanduser().resolve()
+        job_dir = _job_dir(entry)
         resolved_queue_root = queue_root.expanduser().resolve()
-    except (OSError, RuntimeError):
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return False
     if not job_dir.is_relative_to(resolved_queue_root):
         return False
@@ -340,12 +338,9 @@ def _terminal_entry_needs_repair(
         or str(getattr(entry, "error", "") or "").strip() != "cancel_requested"
     ):
         return True
-    job_dir_text = str(getattr(entry, "metadata", {}).get("job_dir") or "").strip()
-    if not job_dir_text:
-        return False
     try:
-        job_dir = Path(job_dir_text).expanduser().resolve()
-    except (OSError, RuntimeError):
+        job_dir = _job_dir(entry)
+    except (KeyError, OSError, RuntimeError, TypeError, ValueError):
         return False
     state = load_state(job_dir) or {}
     expected_reason = (
