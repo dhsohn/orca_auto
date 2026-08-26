@@ -110,6 +110,8 @@ module = [
     "orca_auto.core.utils.lock",
     "orca_auto.core.utils.persistence",
     "orca_auto.core.utils.process",
+    "orca_auto.flow.workflow.report_collection",
+    "orca_auto.flow.workflow.report_rendering",
 ]
 check_untyped_defs = true
 disallow_any_generics = true
@@ -167,6 +169,17 @@ forbidden_modules = [
     "orca_auto.flow.orchestration.advance_phases",
     "orca_auto.flow.orchestration.services",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Workflow report evidence consumers stay below rendering"
+type = "forbidden"
+source_modules = [
+    "orca_auto.flow.workflow.report_collection",
+    "orca_auto.flow.workflow.machine",
+    "orca_auto.flow.workflow.notifications",
+    "orca_auto.flow.workflow.si.collection",
+]
+forbidden_modules = ["orca_auto.flow.workflow.report_rendering"]
 
 [tool.coverage.run]
 source = ["src/orca_auto"]

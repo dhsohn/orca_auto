@@ -10,7 +10,7 @@ from orca_auto.flow.orchestration.lifecycle import recompute_workflow_status_imp
 from orca_auto.flow.orchestration.scan_orca_materialization import (
     append_scan_optts_stages_impl,
 )
-from orca_auto.flow.workflow.report import collect_workflow_report_data
+from orca_auto.flow.workflow.report_collection import collect_workflow_report_data
 from orca_auto.orca.scants import scan_profile_interior_maxima
 
 

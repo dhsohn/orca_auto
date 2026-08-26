@@ -36,6 +36,14 @@ workflow SI는 `collection.py`·`publication.py`·`rendering.py` 세 모듈의 �
   임포트하고, rendering이 collection을 임포트하며, collection은 어느 쪽도 임포트하지
   않습니다. publication만 SI 파일을 쓰며 rendering은 text 생성만 담당합니다.
 
+워크플로우 HTML 리포트도 facade 대신 직접 owner를 사용합니다.
+
+- `report_collection.py`는 confined·검증된 workflow/engine 근거를 읽고 HTML, machine
+  observation, notification, workflow SI가 소비하는 불변 리포트 데이터를 도출합니다.
+- `report_rendering.py`는 collection을 임포트해 페이지를 렌더링하고
+  `workflow_report.html`을 원자적으로 발행합니다. collection은 rendering을 임포트하지
+  않습니다.
+
 ## 현재 패키지 레이아웃
 
 ```text

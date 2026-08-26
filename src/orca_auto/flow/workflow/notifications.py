@@ -36,7 +36,7 @@ from orca_auto.core.utils import (
 )
 
 from ._phases import phase_snapshot
-from .report import count_xyz_frames
+from .report_collection import count_xyz_frames
 
 LOGGER = logging.getLogger(__name__)
 
