@@ -6,6 +6,42 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [3.0.4] - 2026-08-27
+
+Internal only. No text in [docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md)
+changes, the published `workflow_report.html` is unchanged, and the CLI, config
+and durable state behave as they did in 3.0.3.
+
+### Changed
+
+- The workflow report has two owners instead of one module.
+  `flow/workflow/report_collection.py` gathers the evidence a report needs and
+  `flow/workflow/report_rendering.py` turns that evidence into HTML, and each
+  consumer imports from the owner it actually uses. The moved functions kept
+  their rendering logic — the only edits inside them are two literal status
+  sets swapped for `core.statuses` constants of identical value — so section
+  order, number formatting and escaping are unchanged, and the report logger is
+  pinned to the pre-split `orca_auto.flow.workflow.report` name so existing log
+  filters keep matching.
+- The report's failure statuses come from `core.statuses` instead of a private
+  literal copy of the same strings. The values are identical today, so nothing
+  renders differently; what changes is that widening the canonical failure set
+  now reaches the report too. The success comparisons in the metric cards and
+  the ORCA table still test the `"completed"` literal directly.
+- Both report modules are covered by the staged strict-style `mypy` overrides,
+  and an import-linter contract keeps every evidence consumer below rendering
+  so the split cannot quietly grow a cycle. Neither affects runtime behavior.
+- The 3.0.3 entry below described the drift between the two CREST
+  execution-context copies inaccurately — it named the incomplete-snapshot
+  check, which was in fact identical in both copies — and is corrected in
+  place.
+
+### Removed
+
+- `orca_auto.flow.workflow.report` no longer exists. Import the collection
+  helpers from `orca_auto.flow.workflow.report_collection`, and the renderer
+  and its writer from `orca_auto.flow.workflow.report_rendering`.
+
 ## [3.0.3] - 2026-08-26
 
 Mostly internal consolidation, with one crash fix in CREST terminal repair.
@@ -39,9 +75,14 @@ reliable rather than different.
   xTB/CREST submission snapshot transaction, the repair-pending enqueue
   compare-and-set, the parent queue-worker argument parser, and config, state,
   manifest, workflow-metadata, coercion, path and maxcore ownership. The two
-  CREST execution-context copies had already drifted: only the reachable one
-  had its incomplete-snapshot check tightened, and that is the one that
-  survives.
+  CREST execution-context copies had already drifted, and the body that
+  survives is the reachable one — the copy that takes its metadata accessors
+  through the injected worker dependencies. Their verification had drifted
+  inertly: both copies rejected an incomplete `execution_snapshot` with the
+  same check, and after it they differed only in a folded `ValueError` disjunct
+  against an `assert` that `python -O` strips, neither of which can fail once
+  that check has passed, and in the order the mode and molecule key are
+  resolved.
 - Executable content identity has a single implementation shared by the
   identity helper and the ORCA pinned launch. The queue snapshot writer and the
   launch-time verifier previously derived the same dictionary independently,
