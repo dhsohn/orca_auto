@@ -103,7 +103,7 @@ build_worker_child_command = build_worker_child_command_for_engine("crest")
 
 
 class WorkerShutdownRequested(RuntimeError):
-    def __init__(self, context: Any):
+    def __init__(self, context: Any) -> None:
         super().__init__("worker_shutdown")
         self.context = context
 

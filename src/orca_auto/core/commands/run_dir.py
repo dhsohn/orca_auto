@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.config.files import load_bounded_yaml_data
+from orca_auto.core.config.bounded_yaml import load_bounded_yaml_data
 from orca_auto.core.paths import validate_job_dir
 from orca_auto.core.paths.reserved import relative_reaches_reserved_generation
 from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths_from_path

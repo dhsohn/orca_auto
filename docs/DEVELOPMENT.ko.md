@@ -44,6 +44,63 @@ workflow SI는 `collection.py`·`publication.py`·`rendering.py` 세 모듈의 �
   `workflow_report.html`을 원자적으로 발행합니다. collection은 rendering을 임포트하지
   않습니다.
 
+ORCA 외부 파일 참조 탐색도 하나의 직접 owner를 사용합니다.
+
+- `orca/input_references.py`는 참조 발생 횟수 상한, 지원·거부 directive 집합, NEB 참조
+  context와 공용 scanner를 소유합니다.
+- `orca/input_blocks.py`는 tokenization, 공용 참조 model, 의미론적 `MOInp`/`MORead`
+  parsing, block/route/geometry 문법과 입력 편집을 소유합니다.
+
+의존 방향은 `input_references`에서 `input_blocks`로 향합니다. Execution binding, scratch
+staging, conformer selection, restart rematerialization은 scanner owner를 직접 import하며,
+`input_blocks`는 호환 facade로 scanner 정책을 재export하면 안 됩니다.
+
+Workflow ORCA stage 검증도 하나의 직접 owner를 사용합니다.
+
+- `orca_stage_validation.py`는 durable task kind, route field, route-role,
+  selected input, relaxed scan 검증을 소유합니다.
+- `_orca_stage_materialization.py`는 렌더링, payload 조립, confined
+  geometry/Hessian/input 쓰기를 소유하고 검증 모듈에 단방향으로 의존합니다.
+
+생성, restart, submission, stage runtime, evidence 소비자는 검증 owner를 직접
+임포트합니다. 검증 모듈은 materialization을 임포트하면 안 되며, materializer는
+호환 facade로 검증 함수를 재export하면 안 됩니다.
+
+systemd CLI도 단방향 의존 그래프의 직접 owner를 사용합니다.
+
+- `systemd_plan.py`는 정규 unit 이름 formatting과 install planning을 소유합니다.
+- `cli_systemd_units.py`는 unit role 순서, systemctl 조회, 공용 unit status 모델을 소유하며
+  정규 이름 formatter를 재사용합니다.
+- `cli_systemd_freshness.py`는 읽기 전용 worker/checkout freshness 근거를 소유하며 unit
+  substrate에만 의존합니다.
+- `cli_systemd_status.py`는 status 조립·렌더링을, `cli_systemd_restart.py`는 restart 변경을
+  소유합니다. 두 command owner는 서로 임포트하지 않으며, 하위 evidence 모듈은 어느
+  command owner도 임포트하지 않습니다.
+
+코드와 테스트는 이 owner를 직접 임포트하세요. status facade를 추가하거나 freshness,
+unit, restart 동작을 형제 모듈을 통해 재export하지 마세요.
+
+Foreground queue-worker 배선도 같은 direct-owner 규칙을 따릅니다.
+
+- `cli_workers.py`는 app 선택, command/spec 조립, 기존 ORCA worker 충돌 검사와 command
+  adapter를 소유합니다.
+- `cli_worker_supervision.py`는 `WorkerSpec` process model, subprocess session, signal 처리,
+  종료 escalation과 restart circuit을 소유합니다.
+
+Workflow restart도 설정 해석과 mutation을 분리합니다.
+
+- `flow/restart/settings.py`는 `flow.yaml`과 durable workflow state를 과학 불변성 검사를
+  포함한 검증된 effective restart settings로 해석합니다.
+- `flow/restart/stage_ops.py`는 그 설정을 stage/task/enqueue payload에 적용하고 engine
+  input 재구체화와 restartable stage reset을 소유합니다.
+- `flow/restart/mutation.py`는 workflow 전체에 stage operation을 적용하고
+  restart-directory transaction과 durable workflow commit을 소유하며, package entry
+  point가 독립 sibling이 해석한 settings를 전달합니다.
+
+코드와 테스트는 실제 owner를 직접 import하고 patch하세요. Assembly나 settings 모듈을 통해
+private supervision 또는 restart-mutation symbol을 전달하지 마세요. Restart settings와
+stage mutation은 package workflow 경계에서만 조합되는 독립된 sibling으로 유지합니다.
+
 ## 현재 패키지 레이아웃
 
 ```text

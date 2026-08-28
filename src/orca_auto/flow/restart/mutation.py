@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import orca_auto.flow.restart.stage_ops as _restart_stage_ops
 from orca_auto.core.paths.workflow import (
     validate_workflow_workspace_identity,
     workflow_root_for_workspace,
@@ -20,14 +21,6 @@ from ..contracts.workflow import (
 )
 from ..registry import sync_workflow_registry
 from ..state import load_workflow_payload, workflow_summary, write_workflow_payload
-from .settings import _apply_flow_restart_settings, _stage_should_rematerialize
-from .stage_ops import (
-    _active_restart_error,
-    _active_stage_rows,
-    _clear_phase_notification_state,
-    _reset_stage_for_restart,
-    _stage_needs_restart,
-)
 
 _RESTARTABLE_WORKFLOW_STATUSES = frozenset({*WORKFLOW_FAILED_STATUSES, STATUS_CANCELLED})
 
@@ -126,9 +119,9 @@ def _validate_restart_request(
             f"(status={previous_status or 'unknown'})"
         )
 
-    active_stages = _active_stage_rows(payload)
+    active_stages = _restart_stage_ops._active_stage_rows(payload)
     if active_stages:
-        raise _active_restart_error(workflow_id, active_stages)
+        raise _restart_stage_ops._active_restart_error(workflow_id, active_stages)
     return previous_status, workflow_id
 
 
@@ -157,7 +150,7 @@ def _reset_restartable_stages(
     if has_interaction_stages and not flow_settings.get("interaction_energy_disabled"):
         reopening_primary_orca = []
         for raw_stage in workflow_stages:
-            if not _stage_needs_restart(raw_stage):
+            if not _restart_stage_ops._stage_needs_restart(raw_stage):
                 continue
             if is_orca_stage_kind(raw_stage) and not (
                 is_valid_interaction_stage_contract(
@@ -203,9 +196,11 @@ def _reset_restartable_stages(
         raw_stage for raw_stage in payload.get("stages", []) if isinstance(raw_stage, dict)
     ]
     for raw_stage in payload.get("stages", []):
-        if not isinstance(raw_stage, dict) or not _stage_needs_restart(raw_stage):
+        if not isinstance(raw_stage, dict) or not _restart_stage_ops._stage_needs_restart(
+            raw_stage
+        ):
             continue
-        _apply_flow_restart_settings(
+        _restart_stage_ops._apply_flow_restart_settings(
             raw_stage,
             flow_settings,
             restart_allowed_root=restart_allowed_root,
@@ -215,9 +210,12 @@ def _reset_restartable_stages(
             ),
         )
         restarted_stages.append(
-            _reset_stage_for_restart(
+            _restart_stage_ops._reset_stage_for_restart(
                 raw_stage,
-                rematerialize=_stage_should_rematerialize(raw_stage, flow_settings),
+                rematerialize=_restart_stage_ops._stage_should_rematerialize(
+                    raw_stage,
+                    flow_settings,
+                ),
             )
         )
     metadata = payload.get("metadata")
@@ -252,7 +250,7 @@ def _apply_restart_summary(
     payload["status"] = "planned"
     metadata = workflow_metadata(payload)
     metadata.pop("workflow_error", None)
-    _clear_phase_notification_state(metadata, restarted_stages)
+    _restart_stage_ops._clear_phase_notification_state(metadata, restarted_stages)
     metadata["final_child_sync_pending"] = False
     metadata["final_child_sync_completed_at"] = ""
     metadata["last_restarted_at"] = restarted_at

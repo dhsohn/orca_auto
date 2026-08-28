@@ -10,7 +10,7 @@ from orca_auto.core.commands.queue import display_status
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import STATUS_WAITING_FOR_SLOT
 from orca_auto.core.utils import normalize_text as _normalize_text
-from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_input_bytes
+from orca_auto.flow.orca_stage_validation import validate_workflow_orca_input_bytes
 
 from . import internal_engine_models as _engine_models
 

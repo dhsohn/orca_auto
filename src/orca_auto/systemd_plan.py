@@ -9,8 +9,8 @@ from typing import Any
 
 from orca_auto.cli_common import _repo_root
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
+from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.config.files import (
-    YAML_CONFIG_LOAD_EXCEPTIONS,
     engine_config_mapping,
     load_shared_config_mapping,
     mapping_section,

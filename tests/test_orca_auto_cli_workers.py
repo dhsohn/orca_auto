@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import signal
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
 
 import pytest
 
 from orca_auto import cli_common
 from orca_auto import cli_handlers as cli_run_dir
+from orca_auto import cli_worker_supervision as worker_supervision
 from orca_auto import cli_workers as unified_cli
 from orca_auto import cli_workers as worker_conflicts
 from orca_auto import cli_workers as worker_specs
@@ -31,62 +31,75 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_common, "shared_workflow_root_from_config", lambda config_path: None)
 
 
-class _FakeWorkerProcess:
-    def __init__(self, poll_values: list[int | None]) -> None:
-        self._poll_values = list(poll_values)
-        self._terminal_returncode: int | None = None
-        self.terminate_calls = 0
-        self.kill_calls = 0
-
-    def poll(self) -> int | None:
-        if self._terminal_returncode is not None:
-            return self._terminal_returncode
-        if self._poll_values:
-            value = self._poll_values.pop(0)
-            if value is not None:
-                self._terminal_returncode = value
-            return value
-        return None
-
-    def terminate(self) -> None:
-        self.terminate_calls += 1
-        self._poll_values.clear()
-        self._terminal_returncode = -15
-
-    def kill(self) -> None:
-        self.kill_calls += 1
-        self._poll_values.clear()
-        self._terminal_returncode = -9
+@pytest.mark.parametrize(
+    "name",
+    [
+        "WorkerSpec",
+        "_SupervisedWorker",
+        "_SupervisorShutdown",
+        "_install_supervisor_signal_handlers",
+        "_poll_supervised_workers",
+        "_restart_or_stop_worker",
+        "_run_worker_supervisor",
+        "_spawn_supervised_worker",
+        "_supervise_worker_processes",
+        "_terminate_process",
+        "_terminate_supervised_workers",
+    ],
+)
+def test_cli_workers_does_not_forward_supervision_symbols(name: str) -> None:
+    assert not hasattr(unified_cli, name)
 
 
-class _HangingWorkerProcess:
-    def __init__(self) -> None:
-        self.terminate_calls = 0
-        self.kill_calls = 0
-        self._returncode: int | None = None
+def test_worker_module_command_without_repo_root_uses_module_execution() -> None:
+    argv, cwd, env = worker_specs.worker_module_command(
+        config_path="/tmp/config.yaml",
+        repo_root=None,
+        module_name="orca_auto.orca.commands.queue",
+        tail_argv=["--engine", "orca"],
+    )
 
-    def poll(self) -> int | None:
-        return self._returncode
+    assert argv == [
+        sys.executable,
+        "-m",
+        "orca_auto.orca.commands.queue",
+        "--config",
+        "/tmp/config.yaml",
+        "--engine",
+        "orca",
+    ]
+    assert cwd is None
+    assert env is None
 
-    def terminate(self) -> None:
-        self.terminate_calls += 1
 
-    def kill(self) -> None:
-        self.kill_calls += 1
-        self._returncode = -9
+def test_worker_module_command_with_repo_root_uses_module_execution_and_prepends_pythonpath(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    monkeypatch.setenv("PYTHONPATH", "/existing/site-packages")
 
+    argv, cwd, env = worker_specs.worker_module_command(
+        config_path="/tmp/config.yaml",
+        repo_root=str(repo_root),
+        module_name="orca_auto.cli",
+        tail_argv=["queue", "cancel", "job-1"],
+    )
 
-class _FakeTime:
-    def __init__(self) -> None:
-        self.current = 0.0
-        self.sleep_calls: list[float] = []
-
-    def monotonic(self) -> float:
-        return self.current
-
-    def sleep(self, seconds: float) -> None:
-        self.sleep_calls.append(seconds)
-        self.current += seconds
+    assert argv == [
+        sys.executable,
+        "-m",
+        "orca_auto.cli",
+        "--config",
+        "/tmp/config.yaml",
+        "queue",
+        "cancel",
+        "job-1",
+    ]
+    assert cwd == str(repo_root.resolve())
+    assert env is not None
+    assert env["PYTHONPATH"] == f"{repo_root.resolve()}:/existing/site-packages"
 
 
 def test_build_worker_specs_defaults_to_orca_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -302,14 +315,16 @@ def test_cmd_orca_run_dir_uses_discovered_shared_config(
 
 def test_cmd_queue_worker_returns_supervisor_status(monkeypatch: pytest.MonkeyPatch) -> None:
     specs = [
-        unified_cli.WorkerSpec(
+        worker_supervision.WorkerSpec(
             app="orca",
             argv=("python", "-m", "orca_auto.orca.commands.queue"),
         )
     ]
     monkeypatch.setattr(unified_cli, "_build_worker_specs", lambda args: specs)
     monkeypatch.setattr(
-        unified_cli, "_run_worker_supervisor", lambda built_specs: 0 if built_specs == specs else 1
+        worker_supervision,
+        "_run_worker_supervisor",
+        lambda built_specs: 0 if built_specs == specs else 1,
     )
 
     result = unified_cli.cmd_queue_worker(
@@ -324,7 +339,7 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     specs = [
-        unified_cli.WorkerSpec(
+        worker_supervision.WorkerSpec(
             app="orca",
             argv=("python", "-m", "orca_auto.orca.commands.queue"),
         )
@@ -339,7 +354,7 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
             command="/home/user/orca_auto/.venv/bin/python -m orca_auto.orca.commands.queue --config /tmp/orca_auto.yaml",
         ),
     )
-    monkeypatch.setattr(unified_cli, "_run_worker_supervisor", lambda built_specs: 99)
+    monkeypatch.setattr(worker_supervision, "_run_worker_supervisor", lambda built_specs: 99)
 
     result = unified_cli.cmd_queue_worker(
         SimpleNamespace(
@@ -355,311 +370,12 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
     assert "hint: Stop the existing worker before starting another worker." in captured.err
 
 
-def test_spawn_supervised_worker_starts_each_worker_in_a_new_session(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    process = _FakeWorkerProcess([None])
-    popen_kwargs: dict[str, Any] = {}
-
-    def _fake_popen(*args: Any, **kwargs: Any) -> _FakeWorkerProcess:
-        del args
-        popen_kwargs.update(kwargs)
-        return process
-
-    monkeypatch.setattr(unified_cli.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(unified_cli.time, "monotonic", lambda: 42.0)
-
-    managed = unified_cli._spawn_supervised_worker(
-        unified_cli.WorkerSpec(app="orca", argv=("orca", "worker"))
-    )
-
-    assert managed.process is process
-    assert managed.started_at_monotonic == 42.0
-    assert popen_kwargs["start_new_session"] is True
-
-
-def test_run_worker_supervisor_staggers_initial_worker_starts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    processes = [_FakeWorkerProcess([None]), _FakeWorkerProcess([None])]
-    sleep_calls: list[float] = []
-
-    monkeypatch.setattr(
-        unified_cli.subprocess,
-        "Popen",
-        lambda *_args, **_kwargs: processes.pop(0),
-    )
-    monkeypatch.setattr(unified_cli.signal, "getsignal", lambda _sig: None)
-    monkeypatch.setattr(unified_cli.signal, "signal", lambda _sig, _handler: None)
-    monkeypatch.setattr(unified_cli.time, "sleep", sleep_calls.append)
-    monkeypatch.setattr(
-        unified_cli,
-        "_supervise_worker_processes",
-        lambda _processes, _shutdown: 0,
-    )
-
-    result = unified_cli._run_worker_supervisor(
-        [
-            unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker")),
-            unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ],
-        startup_stagger_seconds=2.0,
-    )
-
-    assert result == 0
-    assert sleep_calls == [2.0]
-
-
-def test_run_worker_supervisor_keeps_siblings_running_after_clean_exit(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    processes = [
-        _FakeWorkerProcess([0]),
-        _FakeWorkerProcess([None]),
-        _FakeWorkerProcess([None]),
-    ]
-    popen_calls = 0
-    installed_handlers: dict[int, Any] = {}
-    sleep_calls = 0
-
-    def _fake_popen(*args: Any, **kwargs: Any) -> _FakeWorkerProcess:
-        del args, kwargs
-        nonlocal popen_calls
-        process = processes[popen_calls]
-        popen_calls += 1
-        return process
-
-    def _fake_signal(sig: int, handler: Any) -> None:
-        installed_handlers[sig] = handler
-
-    def _fake_sleep(seconds: float) -> None:
-        del seconds
-        nonlocal sleep_calls
-        sleep_calls += 1
-        if sleep_calls == 1:
-            installed_handlers[signal.SIGTERM](signal.SIGTERM, None)
-
-    monkeypatch.setattr(unified_cli.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(unified_cli.signal, "getsignal", lambda sig: None)
-    monkeypatch.setattr(unified_cli.signal, "signal", _fake_signal)
-    monkeypatch.setattr(unified_cli.time, "sleep", _fake_sleep)
-
-    result = unified_cli._run_worker_supervisor(
-        [
-            unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker")),
-            unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ],
-        startup_stagger_seconds=0,
-    )
-
-    assert result == 0
-    assert processes[0].terminate_calls == 0
-    assert processes[1].terminate_calls == 1
-    assert processes[2].terminate_calls == 1
-    assert popen_calls == 3
-    out = capsys.readouterr().out
-    assert "worker[workflow] exited with code 0" in out
-    assert "restarting worker[workflow]: workflow worker" in out
-
-
-def test_run_worker_supervisor_stops_after_finite_workflow_clean_exit(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    processes = [
-        _FakeWorkerProcess([0]),
-        _FakeWorkerProcess([None]),
-    ]
-    popen_calls = 0
-    installed_handlers: dict[int, Any] = {}
-
-    def _fake_popen(*args: Any, **kwargs: Any) -> _FakeWorkerProcess:
-        del args, kwargs
-        nonlocal popen_calls
-        process = processes[popen_calls]
-        popen_calls += 1
-        return process
-
-    def _fake_signal(sig: int, handler: Any) -> None:
-        installed_handlers[sig] = handler
-
-    def _fail_sleep(_seconds: float) -> None:
-        raise AssertionError("finite workflow clean exit should stop without sleeping")
-
-    monkeypatch.setattr(unified_cli.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(unified_cli.signal, "getsignal", lambda sig: None)
-    monkeypatch.setattr(unified_cli.signal, "signal", _fake_signal)
-    monkeypatch.setattr(unified_cli.time, "sleep", _fail_sleep)
-
-    result = unified_cli._run_worker_supervisor(
-        [
-            unified_cli.WorkerSpec(
-                app="workflow",
-                argv=("workflow", "worker", "--max-cycles", "3"),
-                restart_on_clean_exit=False,
-            ),
-            unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ],
-        startup_stagger_seconds=0,
-    )
-
-    assert result == 0
-    assert processes[0].terminate_calls == 0
-    assert processes[1].terminate_calls == 1
-    assert popen_calls == 2
-    out = capsys.readouterr().out
-    assert "worker[workflow] exited with code 0" in out
-    assert "worker[workflow] completed cleanly; stopping supervisor." in out
-    assert "restarting worker[workflow]" not in out
-
-
-def test_run_worker_supervisor_restarts_workers_after_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    processes = [
-        _FakeWorkerProcess([2]),
-        _FakeWorkerProcess([None]),
-        _FakeWorkerProcess([None]),
-    ]
-    popen_calls = 0
-    installed_handlers: dict[int, Any] = {}
-    sleep_calls = 0
-
-    def _fake_popen(*args: Any, **kwargs: Any) -> _FakeWorkerProcess:
-        del args, kwargs
-        nonlocal popen_calls
-        process = processes[popen_calls]
-        popen_calls += 1
-        return process
-
-    def _fake_signal(sig: int, handler: Any) -> None:
-        installed_handlers[sig] = handler
-
-    def _fake_sleep(seconds: float) -> None:
-        del seconds
-        nonlocal sleep_calls
-        sleep_calls += 1
-        if sleep_calls == 1:
-            installed_handlers[signal.SIGTERM](signal.SIGTERM, None)
-
-    monkeypatch.setattr(unified_cli.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(unified_cli.signal, "getsignal", lambda sig: None)
-    monkeypatch.setattr(unified_cli.signal, "signal", _fake_signal)
-    monkeypatch.setattr(unified_cli.time, "sleep", _fake_sleep)
-
-    result = unified_cli._run_worker_supervisor(
-        [
-            unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker")),
-            unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ],
-        startup_stagger_seconds=0,
-    )
-
-    assert result == 0
-    assert processes[0].terminate_calls == 0
-    assert processes[1].terminate_calls == 1
-    assert processes[2].terminate_calls == 1
-    assert popen_calls == 3
-    out = capsys.readouterr().out
-    assert "worker[workflow] exited with code 2" in out
-    assert "restarting worker[workflow]: workflow worker" in out
-
-
-def test_run_worker_supervisor_stops_after_repeated_startup_failures(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    processes = [
-        _FakeWorkerProcess([2]),
-        _FakeWorkerProcess([None]),
-        _FakeWorkerProcess([2]),
-    ]
-    popen_calls = 0
-    installed_handlers: dict[int, Any] = {}
-    sleep_calls = 0
-
-    def _fake_popen(*args: Any, **kwargs: Any) -> _FakeWorkerProcess:
-        del args, kwargs
-        nonlocal popen_calls
-        process = processes[popen_calls]
-        popen_calls += 1
-        return process
-
-    def _fake_signal(sig: int, handler: Any) -> None:
-        installed_handlers[sig] = handler
-
-    def _fake_sleep(seconds: float) -> None:
-        del seconds
-        nonlocal sleep_calls
-        sleep_calls += 1
-
-    monkeypatch.setattr(unified_cli.subprocess, "Popen", _fake_popen)
-    monkeypatch.setattr(unified_cli.signal, "getsignal", lambda sig: None)
-    monkeypatch.setattr(unified_cli.signal, "signal", _fake_signal)
-    monkeypatch.setattr(unified_cli.time, "sleep", _fake_sleep)
-
-    result = unified_cli._run_worker_supervisor(
-        [
-            unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker")),
-            unified_cli.WorkerSpec(app="orca", argv=("orca", "worker")),
-        ],
-        startup_stagger_seconds=0,
-    )
-
-    assert result == 2
-    assert processes[0].terminate_calls == 0
-    assert processes[1].terminate_calls == 1
-    assert processes[2].terminate_calls == 0
-    assert popen_calls == 3
-    assert sleep_calls == 1
-    out = capsys.readouterr().out
-    assert "worker[workflow] exited with code 2" in out
-    assert (
-        "worker[workflow] failed repeatedly during startup; stopping supervisor to avoid a restart loop."
-        in out
-    )
-    assert "restarting worker[workflow]: workflow worker" in out
-
-
-def test_restart_or_stop_worker_stops_repeated_non_startup_exits(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    spec = unified_cli.WorkerSpec(app="orca", argv=("orca", "worker"))
-    managed = unified_cli._SupervisedWorker(
-        spec=spec,
-        process=cast(Any, _FakeWorkerProcess([2])),
-        started_at_monotonic=0.0,
-        restart_timestamps=[10.0, 150.0],
-    )
-    processes = [managed]
-    monkeypatch.setattr(
-        unified_cli,
-        "_spawn_supervised_worker",
-        lambda *_args, **_kwargs: pytest.fail("restart circuit must open before spawning"),
-    )
-
-    result = unified_cli._restart_or_stop_worker(
-        processes,
-        index=0,
-        managed=managed,
-        returncode=2,
-        current_time=299.0,
-    )
-
-    assert result == 2
-    assert processes == [managed]
-    assert "exited repeatedly within 300 seconds" in capsys.readouterr().out
-
-
 def test_cmd_queue_worker_json_outputs_commands(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     specs = [
-        unified_cli.WorkerSpec(
+        worker_supervision.WorkerSpec(
             app="workflow",
             argv=(
                 "python",
@@ -682,32 +398,6 @@ def test_cmd_queue_worker_json_outputs_commands(
     payload = json.loads(capsys.readouterr().out)
     assert payload["workers"][0]["app"] == "workflow"
     assert payload["workers"][0]["argv"][2] == "orca_auto.flow.cli.workflow"
-
-
-def test_worker_spec_to_dict_redacts_unrelated_environment_keys() -> None:
-    spec = unified_cli.WorkerSpec(
-        app="orca",
-        argv=("python", "-m", "orca_auto.orca.commands.queue"),
-        cwd="/tmp/orca_auto",
-        env={
-            "PYTHONPATH": "/tmp/orca_auto/src:/tmp/orca_auto",
-            "SECRET_TOKEN": "do-not-print",
-        },
-    )
-
-    payload = spec.to_dict()
-
-    assert payload["env"] == {"PYTHONPATH": "/tmp/orca_auto/src:/tmp/orca_auto"}
-
-
-def test_worker_spec_to_dict_omits_empty_allowed_environment() -> None:
-    spec = unified_cli.WorkerSpec(
-        app="orca",
-        argv=("python", "-m", "orca_auto.orca.commands.queue"),
-        env={"SECRET_TOKEN": "do-not-print"},
-    )
-
-    assert spec.to_dict()["env"] is None
 
 
 def test_worker_command_and_selection_helpers_cover_edges() -> None:
@@ -814,18 +504,6 @@ def test_workflow_only_worker_flags_require_workflow_app() -> None:
     )
 
 
-def test_terminate_process_kills_after_grace_period(monkeypatch: pytest.MonkeyPatch) -> None:
-    process = _HangingWorkerProcess()
-    fake_time = _FakeTime()
-    monkeypatch.setattr(unified_cli, "time", fake_time)
-
-    unified_cli._terminate_process(cast(Any, process))
-
-    assert process.terminate_calls == 1
-    assert process.kill_calls == 1
-    assert fake_time.sleep_calls
-
-
 def test_cmd_queue_worker_reports_spec_build_errors(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -853,7 +531,7 @@ def test_detect_existing_orca_worker_conflict_edges(
 
     assert (
         worker_conflicts._detect_existing_orca_worker_conflict(
-            [unified_cli.WorkerSpec(app="workflow", argv=("workflow", "worker"))],
+            [worker_supervision.WorkerSpec(app="workflow", argv=("workflow", "worker"))],
             args=args,
         )
         is None
@@ -864,7 +542,7 @@ def test_detect_existing_orca_worker_conflict_edges(
     )
     assert (
         worker_conflicts._detect_existing_orca_worker_conflict(
-            [unified_cli.WorkerSpec(app="orca", argv=("orca", "worker"))],
+            [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
             args=args,
         )
         is None
@@ -880,7 +558,7 @@ def test_detect_existing_orca_worker_conflict_edges(
     monkeypatch.setattr(orca_engine, "read_worker_pid", lambda root: None)
     assert (
         worker_conflicts._detect_existing_orca_worker_conflict(
-            [unified_cli.WorkerSpec(app="orca", argv=("orca", "worker"))],
+            [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
             args=args,
         )
         is None
@@ -891,7 +569,7 @@ def test_detect_existing_orca_worker_conflict_edges(
         worker_conflicts, "_read_process_command", lambda pid: ("python", "worker.py")
     )
     conflict = worker_conflicts._detect_existing_orca_worker_conflict(
-        [unified_cli.WorkerSpec(app="orca", argv=("orca", "worker"))],
+        [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
         args=args,
     )
 

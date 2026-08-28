@@ -10,11 +10,65 @@ import pytest
 from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.orca import input_blocks, input_references
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
     verify_orca_execution_snapshot,
 )
-from orca_auto.orca.input_blocks import MAX_ORCA_INPUT_REFERENCES
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "MAX_ORCA_INPUT_REFERENCES",
+        "_BLOCK_FILE_REFERENCE_KEYS",
+        "_NEB_FILE_REFERENCE_KEYS",
+        "_SIMPLE_FILE_REFERENCE_KEYS",
+        "_UNSUPPORTED_EXTERNAL_HOOK_KEYS",
+        "_UNSUPPORTED_FILE_REFERENCE_KEYS",
+        "neb_file_reference_context",
+        "scan_orca_file_references",
+    ],
+)
+def test_input_blocks_does_not_forward_reference_scanner_symbols(name: str) -> None:
+    assert not hasattr(input_blocks, name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "OrcaFileReference",
+        "OrcaLineToken",
+        "input_blocks",
+        "orca_line_tokens",
+        "orca_moinp_references",
+    ],
+)
+def test_input_references_does_not_forward_input_syntax_symbols(name: str) -> None:
+    assert not hasattr(input_references, name)
+
+
+def test_input_reference_scanner_resolves_syntax_helpers_from_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = input_blocks.OrcaFileReference(0, "owner.gbw", 0, 9, "auxiliary")
+    calls = {"moinp": 0, "tokens": 0}
+
+    def owner_moinp_references(lines: list[str]) -> list[input_blocks.OrcaFileReference]:
+        calls["moinp"] += 1
+        assert lines == ["owner lookup"]
+        return [reference]
+
+    def owner_line_tokens(line: str) -> list[input_blocks.OrcaLineToken]:
+        calls["tokens"] += 1
+        assert line == "owner lookup"
+        return []
+
+    monkeypatch.setattr(input_blocks, "orca_moinp_references", owner_moinp_references)
+    monkeypatch.setattr(input_blocks, "orca_line_tokens", owner_line_tokens)
+
+    assert input_references.scan_orca_file_references(["owner lookup"]) == [reference]
+    assert calls == {"moinp": 1, "tokens": 1}
 
 
 def _visible_generations(job_dir: Path) -> list[Path]:
@@ -1341,7 +1395,8 @@ def test_orca_execution_snapshot_caps_external_reference_count(tmp_path: Path) -
     selected.write_text(
         "! SP\n"
         + "\n".join(
-            f'%pointcharges "input.xyz" # {index}' for index in range(MAX_ORCA_INPUT_REFERENCES + 1)
+            f'%pointcharges "input.xyz" # {index}'
+            for index in range(input_references.MAX_ORCA_INPUT_REFERENCES + 1)
         )
         + "\n* xyz 0 1\nH 0 0 0\n*\n",
         encoding="utf-8",

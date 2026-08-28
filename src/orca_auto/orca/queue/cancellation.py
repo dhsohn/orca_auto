@@ -38,7 +38,7 @@ def cancel_running_job(worker: EngineQueueWorker, queue_id: str, job: EngineRunn
             ),
             release_admission_slot=False,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(
             "Failed to durably mark cancelled ORCA job %s; retaining retry ownership",
             queue_id,
@@ -80,7 +80,7 @@ def cancel_running_job(worker: EngineQueueWorker, queue_id: str, job: EngineRunn
         replay.strictly_finish_terminal_replay(worker, job, replay_item)
         release_slot = True
         return True
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(
             "Failed to finish durable cancellation replay for %s; retaining retry ownership",
             queue_id,

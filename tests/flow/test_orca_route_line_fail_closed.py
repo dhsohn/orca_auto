@@ -2,17 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from orca_auto.flow._orca_stage_materialization import ensure_route_line, render_orca_input
-
-
-@pytest.mark.parametrize("route_line", ["", "   ", "\n\n", "# only a comment"])
-def test_blank_route_line_refuses_instead_of_substituting_a_level_of_theory(
-    route_line: str,
-) -> None:
-    # A durable payload without an active route must fail its cycle rather than
-    # render at whatever level of theory happens to be hard-coded here.
-    with pytest.raises(ValueError, match="route_line has no active route"):
-        ensure_route_line(route_line)
+from orca_auto.flow._orca_stage_materialization import render_orca_input
 
 
 def test_render_orca_input_refuses_a_blank_route_line() -> None:

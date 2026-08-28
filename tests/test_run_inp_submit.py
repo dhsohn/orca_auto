@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_input_bytes
+from orca_auto.flow.orca_stage_validation import validate_workflow_orca_input_bytes
 from orca_auto.orca.commands.run_inp import cmd_run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata

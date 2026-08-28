@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -93,13 +94,17 @@ def workflow_create_lock_path(workflow_root: str | Path) -> Path:
 
 
 @contextmanager
-def acquire_workflow_lock(workspace_dir: str | Path, *, timeout_seconds: float = 10.0):
+def acquire_workflow_lock(
+    workspace_dir: str | Path, *, timeout_seconds: float = 10.0
+) -> Iterator[None]:
     with file_lock(workflow_lock_path(workspace_dir), timeout_seconds=timeout_seconds):
         yield
 
 
 @contextmanager
-def acquire_workflow_create_lock(workflow_root: str | Path, *, timeout_seconds: float = 10.0):
+def acquire_workflow_create_lock(
+    workflow_root: str | Path, *, timeout_seconds: float = 10.0
+) -> Iterator[None]:
     with file_lock(workflow_create_lock_path(workflow_root), timeout_seconds=timeout_seconds):
         yield
 

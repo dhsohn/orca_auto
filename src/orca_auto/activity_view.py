@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.admission import AdmissionStoreCorruptError, read_active_slot_count
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.paths.workflow import (
     WORKFLOW_STAGE_DIRNAMES,
     workflow_stage_dirnames_for_engine,

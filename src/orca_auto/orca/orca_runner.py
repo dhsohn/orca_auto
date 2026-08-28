@@ -200,7 +200,7 @@ class OrcaRunner:
     def _cleanup_published_workspace(workspace: EngineScratchWorkspace) -> None:
         try:
             workspace.cleanup()
-        except BaseException:  # noqa: BLE001
+        except BaseException:
             logger.exception(
                 "Published ORCA scratch workspace could not be removed; "
                 "future scratch runs will remain fail-closed until it is inspected: %s",
@@ -230,7 +230,7 @@ class OrcaRunner:
         try:
             if self._terminate_subprocess_tree(proc):
                 return
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception(
                 "ORCA process-group termination raised; retaining ownership until group exit"
             )

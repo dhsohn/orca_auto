@@ -275,7 +275,7 @@ def repair_engine_queue_publications(
                 record_queued_fn=record_queued_fn,
                 entry_matches_fn=is_engine_entry_fn,
             )
-        except Exception:  # noqa: BLE001 - one bad row must not stop the sweep
+        except Exception:  # One bad row must not stop the sweep.
             logger.exception(
                 "%s queued publication repair raised: queue_id=%s queue_root=%s",
                 engine,

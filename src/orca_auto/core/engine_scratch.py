@@ -436,7 +436,7 @@ def publish_engine_scratch_workspace(
         raise
     try:
         workspace.cleanup()
-    except BaseException:  # noqa: BLE001
+    except BaseException:
         logger.exception(
             "Published engine scratch workspace could not be removed; future scratch runs "
             "will remain fail-closed until it is inspected: %s",

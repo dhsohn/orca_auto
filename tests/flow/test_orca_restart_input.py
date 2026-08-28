@@ -9,6 +9,7 @@ from orca_auto.core.utils import normalize_text
 from orca_auto.flow.adapters.orca import load_orca_artifact_contract
 from orca_auto.flow.orchestration.stage_views import WorkflowTaskView
 from orca_auto.flow.restart.orca_input import rematerialize_orca_restart_input
+from orca_auto.orca import input_references
 from orca_auto.orca.input_blocks import set_block_key_value
 from orca_auto.orca.resource_directives import read_maxcore, read_nprocs
 
@@ -874,17 +875,18 @@ def test_restart_reference_scan_counts_geometry_toward_the_cap() -> None:
     # The cap must match execution binding even though restart filters the
     # geometry reference out of the returned set: 128 auxiliary references
     # plus the ``* xyzfile`` geometry are 129 references on both sides.
-    from orca_auto.orca.input_blocks import (
-        MAX_ORCA_INPUT_REFERENCES,
-        scan_orca_file_references,
-    )
-
-    lines = [f'%pointcharges "charges_{index}.pc"' for index in range(MAX_ORCA_INPUT_REFERENCES)]
+    lines = [
+        f'%pointcharges "charges_{index}.pc"'
+        for index in range(input_references.MAX_ORCA_INPUT_REFERENCES)
+    ]
     lines.append("* xyzfile 0 1 input.xyz")
 
     with pytest.raises(ValueError, match="external file references"):
-        scan_orca_file_references(lines, include_geometry=False)
+        input_references.scan_orca_file_references(lines, include_geometry=False)
 
-    references = scan_orca_file_references(lines[:-1], include_geometry=False)
-    assert len(references) == MAX_ORCA_INPUT_REFERENCES
+    references = input_references.scan_orca_file_references(
+        lines[:-1],
+        include_geometry=False,
+    )
+    assert len(references) == input_references.MAX_ORCA_INPUT_REFERENCES
     assert all(reference.kind != "geometry" for reference in references)

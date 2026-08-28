@@ -7,7 +7,7 @@ from typing import Any
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import STATUS_FAILED
 from orca_auto.core.utils import coerce_bool, normalize_text, safe_int
-from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_input
+from orca_auto.flow.orca_stage_validation import validate_workflow_orca_input
 from orca_auto.flow.orchestration.services import OrchestrationServices
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _apply_contract_status,

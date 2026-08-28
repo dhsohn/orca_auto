@@ -43,6 +43,65 @@ Workflow HTML reporting also uses direct owners rather than a facade:
 - `report_rendering.py` imports collection, renders the page, and atomically
   publishes `workflow_report.html`. Collection never imports rendering.
 
+ORCA external file-reference discovery has one direct owner:
+
+- `orca/input_references.py` owns the occurrence cap, supported and rejected
+  directive sets, NEB reference context, and the shared scanner.
+- `orca/input_blocks.py` owns tokenization, the shared reference model, semantic
+  `MOInp`/`MORead` parsing, block/route/geometry syntax, and input edits.
+
+Dependencies run from `input_references` to `input_blocks`. Execution binding,
+scratch staging, conformer selection, and restart rematerialization import the
+scanner owner directly; `input_blocks` must not re-export scanner policy as a
+compatibility facade.
+
+Workflow ORCA stage validation likewise has one direct owner:
+
+- `orca_stage_validation.py` owns durable task-kind, route-field, route-role,
+  selected-input, and relaxed-scan validation.
+- `_orca_stage_materialization.py` owns rendering, payload assembly, and
+  confined geometry/Hessian/input writes, and depends one way on validation.
+
+Creation, restart, submission, stage-runtime, and evidence consumers import the
+validation owner directly. Validation must not import materialization, and the
+materializer must not re-export validation functions as a compatibility facade.
+
+The systemd CLI also uses direct owners with a one-way dependency graph:
+
+- `systemd_plan.py` owns canonical unit-name formatting and install planning.
+- `cli_systemd_units.py` owns unit-role ordering, systemctl queries, and the
+  shared unit status model; it reuses the canonical name formatters.
+- `cli_systemd_freshness.py` owns read-only worker/checkout freshness evidence
+  and depends only on the unit substrate.
+- `cli_systemd_status.py` assembles and renders status; `cli_systemd_restart.py`
+  owns restart mutation. The command owners do not import each other, and the
+  lower evidence modules never import either command owner.
+
+Import these owners directly in code and tests. Do not add a status facade or
+re-export freshness, unit, or restart operations through a sibling module.
+
+Foreground queue-worker wiring follows the same direct-owner rule:
+
+- `cli_workers.py` owns app selection, command/spec assembly, existing-ORCA-worker
+  conflict checks, and the command adapter.
+- `cli_worker_supervision.py` owns the `WorkerSpec` process model, subprocess
+  sessions, signal handling, termination escalation, and the restart circuit.
+
+Workflow restart also separates resolution from mutation:
+
+- `flow/restart/settings.py` resolves `flow.yaml` and durable workflow state into
+  validated effective restart settings, including science-invariance checks.
+- `flow/restart/stage_ops.py` applies those settings to stage/task/enqueue payloads,
+  rematerializes engine inputs, and resets restartable stages.
+- `flow/restart/mutation.py` applies stage operations across the workflow and
+  owns the restart-directory transaction and durable workflow commit; the
+  package entry point supplies settings resolved by its independent sibling.
+
+Import and patch the concrete owner. Do not forward private supervision or
+restart-mutation symbols through the assembly or settings modules. Restart
+settings and stage mutation remain independent siblings composed only at the
+package workflow boundary.
+
 ## Current Package Layout
 
 ```text

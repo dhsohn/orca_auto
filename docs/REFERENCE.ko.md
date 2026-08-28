@@ -875,7 +875,7 @@ pytest -q
 ```bash
 pytest tests/flow -q
 pytest tests/integration -q
-pytest tests/test_run_job.py tests/test_queue_worker.py -q
+pytest tests/test_run_job.py tests/test_queue_worker.py tests/test_orca_queue_publication_repair.py tests/test_orca_terminal_replay.py tests/test_queue_adapter.py -q
 pytest tests/core/test_engine_child.py tests/core/test_engine_admission.py -q
 ```
 

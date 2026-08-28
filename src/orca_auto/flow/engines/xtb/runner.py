@@ -479,7 +479,7 @@ def run_path_search_ts_hessian_followup(
         )
     except _engine_execution.ProcessCleanupError:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         LOGGER.exception("TS guess Hessian follow-up crashed; continuing without a Hessian")
         return _with_ts_hessian_provenance(
             result,

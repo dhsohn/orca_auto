@@ -6,8 +6,8 @@ import logging
 from pathlib import Path
 
 from orca_auto.core.config import MessengerConfig
+from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.config.files import (
-    YAML_CONFIG_LOAD_EXCEPTIONS,
     load_yaml_mapping,
     messenger_mapping_from_root,
     validate_shared_config_sections,
