@@ -11,6 +11,7 @@ from orca_auto import (
     cli_common,
     cli_queue,
     cli_systemd_apply,
+    cli_systemd_restart,
     cli_systemd_status,
 )
 from orca_auto import cli_handlers as cli_run_dir
@@ -222,7 +223,7 @@ def test_build_parser_parses_service_commands() -> None:
 
     assert restart_args.command == "service"
     assert restart_args.service_command == "restart"
-    assert restart_args.func is cli_systemd_status.cmd_service_restart
+    assert restart_args.func is cli_systemd_restart.cmd_service_restart
 
 
 def test_service_help_describes_engine_worker_restart(capsys: pytest.CaptureFixture[str]) -> None:

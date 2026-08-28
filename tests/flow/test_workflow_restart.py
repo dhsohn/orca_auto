@@ -13,6 +13,7 @@ from orca_auto.flow.manifest import interaction_energy_config_fingerprint
 from orca_auto.flow.restart import mutation as restart_mutation
 from orca_auto.flow.restart import restart_failed_workflow
 from orca_auto.flow.restart import settings as restart_settings
+from orca_auto.flow.restart import stage_ops as restart_stage_ops
 
 
 def _write_workflow(workspace: Path, payload: dict[str, object]) -> None:
@@ -44,6 +45,22 @@ def _failed_orca_restart_stage(stage_id: str, reaction_dir: Path) -> dict[str, o
         },
         "metadata": {},
     }
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "_active_restart_error",
+        "_active_stage_rows",
+        "_apply_flow_restart_settings",
+        "_clear_phase_notification_state",
+        "_reset_stage_for_restart",
+        "_stage_needs_restart",
+        "_stage_should_rematerialize",
+    ],
+)
+def test_restart_mutation_does_not_forward_stage_operations(name: str) -> None:
+    assert not hasattr(restart_mutation, name)
 
 
 @pytest.mark.parametrize(
@@ -614,7 +631,7 @@ def test_restart_manifest_accepts_zero_xtb_handoff_retries(tmp_path: Path) -> No
         payload,
         {"workflow_type": "reaction_ts_search", "max_xtb_handoff_retries": 0},
     )
-    restart_settings._apply_flow_restart_settings(
+    restart_stage_ops._apply_flow_restart_settings(
         stage,
         settings,
         restart_allowed_root=tmp_path,

@@ -25,7 +25,7 @@ from orca_auto.cli_common import (
 from orca_auto.cli_errors import emit_error
 from orca_auto.core import statuses as _s
 from orca_auto.core.activity_icons import activity_status_icon
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
 from orca_auto.core.utils import normalize_text

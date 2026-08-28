@@ -6,10 +6,7 @@ from typing import Any
 import pytest
 
 from orca_auto.flow import orchestration
-from orca_auto.flow._orca_stage_materialization import (
-    build_materialized_orca_stage,
-    validate_workflow_orca_route,
-)
+from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.orchestration import template_builders
 from orca_auto.flow.orchestration.stage_builders import new_crest_stage_impl
@@ -221,74 +218,6 @@ def test_reaction_factory_accepts_supported_frequency_route_tokens(
     assert payload["workflow_id"] == f"wf_supported_{frequency_keyword.lower()}"
 
 
-@pytest.mark.parametrize(
-    "route_line",
-    (
-        '! "OptTS" Freq r2scan-3c',
-        '! OptTS "Freq" r2scan-3c',
-        '! OptTS "NumFreq" r2scan-3c',
-        '! OptTS "AnFreq" r2scan-3c',
-    ),
-)
-def test_workflow_route_rejects_quoted_program_keywords(route_line: str) -> None:
-    with pytest.raises(ValueError, match="quoted tokens"):
-        validate_workflow_orca_route(task_kind="optts_freq", route_line=route_line)
-
-
-@pytest.mark.parametrize(
-    "route_line",
-    (
-        "!! Opt r2scan-3c",
-        "!%pal Opt r2scan-3c",
-        "! Opt %pal nprocs 8 end",
-        "! Opt * xyz 0 1",
-        "! Opt $new_job",
-    ),
-)
-def test_workflow_route_rejects_marker_prefixed_payload_tokens(route_line: str) -> None:
-    with pytest.raises(ValueError, match="marker-prefixed payload token"):
-        validate_workflow_orca_route(task_kind="opt", route_line=route_line)
-
-
-def test_workflow_route_accepts_compact_leading_bang_keyword() -> None:
-    assert (
-        validate_workflow_orca_route(task_kind="opt", route_line="!B3LYP Opt TightSCF")
-        == "! B3LYP Opt TightSCF"
-    )
-
-
-@pytest.mark.parametrize(
-    ("task_kind", "route_line"),
-    (
-        ("opt", "! HF fake-Opt TightSCF"),
-        ("optts_freq", "! HF OptTS fake-Freq TightSCF"),
-        ("optts_freq", "! HF OptTS Freq(foo) TightSCF"),
-    ),
-)
-def test_workflow_route_requires_full_keyword_tokens(
-    task_kind: str,
-    route_line: str,
-) -> None:
-    with pytest.raises(ValueError, match="route-role mismatch"):
-        validate_workflow_orca_route(task_kind=task_kind, route_line=route_line)
-
-
-@pytest.mark.parametrize(
-    "optimization_keyword",
-    ("Opt", "TightOpt", "COpt", "ZOpt", "VeryTightOpt"),
-)
-def test_workflow_opt_route_accepts_supported_exact_optimization_tokens(
-    optimization_keyword: str,
-) -> None:
-    route_line = f"! HF {optimization_keyword} TightSCF"
-    assert validate_workflow_orca_route(task_kind="opt", route_line=route_line) == route_line
-
-
-def test_workflow_sp_route_does_not_invent_bare_ts_run_type() -> None:
-    route_line = "! HF TS TightSCF"
-    assert validate_workflow_orca_route(task_kind="sp", route_line=route_line) == route_line
-
-
 def test_materialization_rejects_unknown_orca_task_kind_before_workspace_creation(
     tmp_path: Path,
 ) -> None:
@@ -344,35 +273,6 @@ def test_scan_workflow_refuses_materialization_without_a_geom_scan_block(
             scan_coordinate="B 0 1 = 0.7, 2.0, 8",
             workflow_root=tmp_path,
         )
-
-
-def test_route_role_validation_matches_multiline_route_rendering() -> None:
-    with pytest.raises(ValueError, match="route-role mismatch"):
-        validate_workflow_orca_route(
-            task_kind="optts_freq",
-            route_line="SP\nOptTS Freq",
-        )
-
-    assert (
-        validate_workflow_orca_route(
-            task_kind="optts_freq",
-            route_line="! SP\n! OptTS Freq",
-        )
-        == "! SP\n! OptTS Freq"
-    )
-
-
-@pytest.mark.parametrize(
-    "route_line",
-    [
-        "! OptTS Freq r2scan-3c\n%geom\n  MaxIter 999\nend",
-        "! OptTS Freq r2scan-3c\n* xyz 0 1\nH 0 0 0\n*",
-        "! OptTS Freq r2scan-3c\nPAL8",
-    ],
-)
-def test_workflow_route_rejects_active_non_route_lines(route_line: str) -> None:
-    with pytest.raises(ValueError, match="may contain only active '!' route lines"):
-        validate_workflow_orca_route(task_kind="optts_freq", route_line=route_line)
 
 
 def test_scan_factory_renders_the_same_canonical_commented_multiline_route(

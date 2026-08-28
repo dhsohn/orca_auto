@@ -7,7 +7,6 @@ from typing import Any, cast
 
 from orca_auto.core.queue.generation import new_visible_generation_name
 from orca_auto.core.utils import now_utc_iso
-from orca_auto.flow._orca_stage_materialization import validate_workflow_orca_route
 from orca_auto.flow.endpoint_pairing import (
     EndpointPairingPolicy,
     validate_endpoint_pairing_atom_budget,
@@ -19,6 +18,7 @@ from orca_auto.flow.manifest import (
     require_crest_candidate_count,
     validate_interaction_energy_state_balance,
 )
+from orca_auto.flow.orca_stage_validation import validate_workflow_orca_route
 from orca_auto.flow.orchestration.builders import (
     create_conformer_screening_workflow_impl,
     create_reaction_ts_search_workflow_impl,

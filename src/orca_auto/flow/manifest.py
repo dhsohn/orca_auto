@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from orca_auto.core.config.files import load_bounded_yaml_data
+from orca_auto.core.config.bounded_yaml import load_bounded_yaml_data
 from orca_auto.core.utils import normalize_bool, normalize_text
 from orca_auto.orca.completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from orca_auto.orca.job_type import FREQ_RE

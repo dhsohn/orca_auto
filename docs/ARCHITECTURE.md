@@ -326,7 +326,9 @@ logic. Notable pieces:
   `MemAvailable` can cover the configured task-memory limit, all free space in
   the scratch tmpfs, and the configured host reserve.
   The scratch workspace and journal implementation is owned by
-  `core.engine_scratch`; ORCA contributes only its flat input-dependency parser.
+  `core.engine_scratch`; ORCA contributes only its flat input-dependency scanner,
+  canonically owned by `orca.input_references`. ORCA input tokenization, shared
+  reference models, and edit operations remain owned by `orca.input_blocks`.
   Workflow xTB/CREST uses the same private workspace and transaction, and its
   input snapshots stay durable and absolute. xTB publishes its
   canonical job-type result set and logs; CREST publishes named retained
@@ -416,15 +418,22 @@ the submitted directory: each run mints a timestamped generation workspace
 the standalone ORCA execution layout. `scaffold` writes a starter `flow.yaml`
 plus the standard XYZ filenames.
 
-Manifest admission is bounded before materialization: the shared loader caps a
-job manifest at 1 MiB, 32 YAML aliases, 10,000 parsed/expanded nodes, and 64
-nesting levels, and rejects cyclic/recursive graphs. Central geometry limits cap
-local work at 10,000 atoms and xTB/ORCA Hessian-producing work at 1,000.
+Manifest admission is bounded before materialization. `core/config/bounded_yaml.py`
+is the canonical direct owner of bounded stable regular-file manifest reads, the
+unique-key loader, YAML limits, and the shared error taxonomy. Manifest readers
+import the bounded loader directly; config policy and config-error consumers
+directly reuse only the symbols they need, without a forwarding facade. The
+loader caps a job manifest at 1 MiB, 32 YAML aliases, 10,000 parsed/expanded
+nodes, and 64 nesting levels, and rejects cyclic/recursive graphs. Central
+geometry limits cap local work at 10,000 atoms and xTB/ORCA Hessian-producing
+work at 1,000.
 
 Workflow ORCA task roles are revalidated against the materialized input at
 creation, restart, actual pre-submission selection, and completed-result
 acceptance. Relaxed scans additionally bind one closed scan coordinate to the
-selected geometry at each dynamic stage. The submitter binds equal durable path
+selected geometry at each dynamic stage. `flow/orca_stage_validation.py` is
+the canonical owner of those checks; materialization and every lifecycle
+consumer depend on it directly, without a forwarding facade. The submitter binds equal durable path
 copies to its actual selection and validates the final rewritten bytes before
 the execution snapshot writes and identifies those same bytes. Candidate
 relative energies and interaction RMSD representative choices are published
@@ -436,6 +445,15 @@ are canonicalized away. HTML and SI consume that same scientific identity;
 resource controls do not affect it. `flow/orca_stage_evidence.py` is the shared
 authoritative report/state/input/output reader used by report, SI, and
 interaction materialization.
+
+Workflow restart has three explicit owners. `flow/restart/settings.py` resolves
+the manifest and durable workflow state while enforcing scientific invariants;
+`flow/restart/stage_ops.py` applies the resolved controls to individual stages
+and rematerializes their engine inputs; `flow/restart/mutation.py` applies those
+stage operations with restart-directory rollback and the durable workflow
+commit. The package entry point supplies the independently resolved settings.
+Settings resolution and per-stage mutation are independent siblings, so neither
+is exposed through a forwarding facade.
 
 ### Supporting Information ownership
 
@@ -639,6 +657,11 @@ startup, but idle full-state reconciliation is limited to once per minute while
 the light queue/status poll remains at its normal interval. The service retries failures
 after 30 seconds and permits at most three unit starts per five-minute window;
 clean supervisor exits are not restarted.
+
+`cli_workers.py` plans the selected worker commands and checks for an existing
+ORCA worker. `cli_worker_supervision.py` directly owns the process model,
+sessions, signals, termination escalation, and restart circuit used to run that
+plan; the command module does not re-export those private operations.
 
 Workers bind their resolved package source into their own process environment
 at startup. Status reads that provenance with PID/start-tick race checks before

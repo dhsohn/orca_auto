@@ -36,7 +36,7 @@ def cancel_running_process_job(
     logger.info("Cancelling running job: %s", queue_id)
     try:
         terminated = hooks.terminate_process_fn(job.process)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.exception(
             "Failed to terminate running job %s; retaining queue and admission ownership",
             queue_id,

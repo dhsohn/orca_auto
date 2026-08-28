@@ -37,6 +37,7 @@ from orca_auto.core.queue.generation import (
 )
 from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
 
+from . import input_references
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from .input_blocks import (
     GEOM_HEADER_RE,
@@ -46,7 +47,6 @@ from .input_blocks import (
     orca_moinp_references,
     orca_route_line,
     quote_orca_path,
-    scan_orca_file_references,
     set_moinp,
     unquoted_orca_path,
     validate_supported_xyz_geometry_syntax,
@@ -923,7 +923,7 @@ def _load_selected_snapshot_input(
         source_inputs=source_inputs,
         selected_payload=selected_payload,
         lines=lines,
-        references=scan_orca_file_references(lines),
+        references=input_references.scan_orca_file_references(lines),
         requests_moread=requests_moread,
         hessian_requested=hessian_requested,
         same_stem_xyz_is_output=same_stem_xyz_is_output,
@@ -1685,7 +1685,7 @@ def _verify_bound_snapshot_content(
     except UnicodeError as exc:
         raise ValueError("Queued ORCA bound selected input must be UTF-8 text") from exc
     selected_lines = selected_text.splitlines()
-    bound_references = scan_orca_file_references(selected_lines)
+    bound_references = input_references.scan_orca_file_references(selected_lines)
     hessian_requested = _route_requests_hessian(selected_lines)
     same_stem_xyz_is_output = _route_writes_same_stem_xyz(selected_lines)
     effective_retry_count = effective_max_retries(

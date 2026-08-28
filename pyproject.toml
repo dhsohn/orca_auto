@@ -65,7 +65,7 @@ line-length = 100
 # Layout (including line length) is owned by `ruff format`, which
 # `scripts/check.sh` enforces via `ruff format --check`. `E501` is intentionally
 # omitted so the formatter stays the single source of truth for line wrapping.
-select = ["E4", "E7", "E9", "F", "I", "B", "BLE", "UP"]
+select = ["E4", "E7", "E9", "F", "I", "B", "BLE", "UP", "RUF100"]
 # UP042 (str-Enum -> StrEnum) changes `str()`/format semantics of status enums
 # that are serialized and compared as plain strings; keep the str mixin.
 ignore = ["UP042"]
@@ -84,11 +84,18 @@ explicit_package_bases = true
 # the full src+tests tree passes the equivalent strict flags.
 [[tool.mypy.overrides]]
 module = [
+    "orca_auto.cli_systemd_freshness",
+    "orca_auto.cli_systemd_restart",
+    "orca_auto.cli_systemd_status",
+    "orca_auto.cli_systemd_units",
+    "orca_auto.cli_worker_supervision",
+    "orca_auto.cli_workers",
     "orca_auto.core.app_ids",
     "orca_auto.core.activity_icons",
     "orca_auto.core.admission.persistence",
     "orca_auto.core.admission.records",
     "orca_auto.core.artifacts",
+    "orca_auto.core.config.bounded_yaml",
     "orca_auto.core.config.files",
     "orca_auto.core.config.schema",
     "orca_auto.core.engines.artifacts",
@@ -110,12 +117,28 @@ module = [
     "orca_auto.core.utils.lock",
     "orca_auto.core.utils.persistence",
     "orca_auto.core.utils.process",
+    "orca_auto.flow.cli.worker_options",
+    "orca_auto.flow.contracts.crest",
+    "orca_auto.flow.contracts.orca",
+    "orca_auto.flow.contracts.workflow",
+    "orca_auto.flow.contracts.xtb",
+    "orca_auto.flow.engine_options",
+    "orca_auto.flow.orca_stage_validation",
+    "orca_auto.flow.restart.mutation",
+    "orca_auto.flow.restart.settings",
+    "orca_auto.flow.restart.stage_ops",
     "orca_auto.flow.workflow.report_collection",
     "orca_auto.flow.workflow.report_rendering",
+    "orca_auto.flow.workflow.store",
+    "orca_auto.orca.input_references",
+    "orca_auto.orca.retry_policy",
+    "orca_auto.orca.state_machine",
+    "orca_auto.systemd_plan",
 ]
 check_untyped_defs = true
 disallow_any_generics = true
 disallow_incomplete_defs = true
+disallow_untyped_calls = true
 disallow_untyped_defs = true
 no_implicit_optional = true
 strict_equality = true
@@ -180,6 +203,93 @@ source_modules = [
     "orca_auto.flow.workflow.si.collection",
 ]
 forbidden_modules = ["orca_auto.flow.workflow.report_rendering"]
+
+[[tool.importlinter.contracts]]
+name = "Read-only systemd status never imports restart mutation"
+type = "forbidden"
+source_modules = ["orca_auto.cli_systemd_status"]
+forbidden_modules = ["orca_auto.cli_systemd_restart"]
+
+[[tool.importlinter.contracts]]
+name = "Systemd restart never imports status or freshness assembly"
+type = "forbidden"
+source_modules = ["orca_auto.cli_systemd_restart"]
+forbidden_modules = [
+    "orca_auto.cli_systemd_freshness",
+    "orca_auto.cli_systemd_status",
+]
+
+[[tool.importlinter.contracts]]
+name = "Systemd evidence substrate stays below command owners"
+type = "forbidden"
+source_modules = [
+    "orca_auto.cli_systemd_freshness",
+    "orca_auto.cli_systemd_units",
+]
+forbidden_modules = [
+    "orca_auto.cli_systemd_restart",
+    "orca_auto.cli_systemd_status",
+]
+
+[[tool.importlinter.contracts]]
+name = "Systemd unit substrate never imports freshness evidence"
+type = "forbidden"
+source_modules = ["orca_auto.cli_systemd_units"]
+forbidden_modules = ["orca_auto.cli_systemd_freshness"]
+
+[[tool.importlinter.contracts]]
+name = "ORCA stage validation never imports materialization"
+type = "forbidden"
+source_modules = ["orca_auto.flow.orca_stage_validation"]
+forbidden_modules = ["orca_auto.flow._orca_stage_materialization"]
+
+[[tool.importlinter.contracts]]
+name = "Bounded YAML substrate never imports config policy"
+type = "forbidden"
+source_modules = ["orca_auto.core.config.bounded_yaml"]
+forbidden_modules = ["orca_auto.core.config.files"]
+
+[[tool.importlinter.contracts]]
+name = "Worker process supervision stays below CLI assembly"
+type = "forbidden"
+source_modules = ["orca_auto.cli_worker_supervision"]
+forbidden_modules = ["orca_auto.cli_workers"]
+
+[[tool.importlinter.contracts]]
+name = "Restart settings stay mutation-free"
+type = "forbidden"
+source_modules = ["orca_auto.flow.restart.settings"]
+forbidden_modules = [
+    "orca_auto.flow.restart.mutation",
+    "orca_auto.flow.restart.orca_input",
+    "orca_auto.flow.restart.stage_ops",
+]
+
+[[tool.importlinter.contracts]]
+name = "Restart stage mutation never imports settings resolution"
+type = "forbidden"
+source_modules = ["orca_auto.flow.restart.stage_ops"]
+forbidden_modules = [
+    "orca_auto.flow.restart.mutation",
+    "orca_auto.flow.restart.settings",
+]
+
+[[tool.importlinter.contracts]]
+name = "ORCA input syntax never imports reference scanning"
+type = "forbidden"
+source_modules = ["orca_auto.orca.input_blocks"]
+forbidden_modules = ["orca_auto.orca.input_references"]
+
+[[tool.importlinter.contracts]]
+name = "ORCA input reference scanning stays below runtime consumers"
+type = "forbidden"
+source_modules = ["orca_auto.orca.input_references"]
+forbidden_modules = [
+    "orca_auto.flow.conformer_selection",
+    "orca_auto.flow.restart.orca_input",
+    "orca_auto.orca.execution_binding",
+    "orca_auto.orca.scratch",
+]
 
 [tool.coverage.run]
 source = ["src/orca_auto"]

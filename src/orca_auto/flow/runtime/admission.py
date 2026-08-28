@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.admission import AdmissionStoreCorruptError, active_slot_count
+from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.config.files import (
-    YAML_CONFIG_LOAD_EXCEPTIONS,
     engine_config_mapping,
     load_shared_config_mapping,
     mapping_section,

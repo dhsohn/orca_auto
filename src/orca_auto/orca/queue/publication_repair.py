@@ -104,7 +104,7 @@ def _fence_invalid_orca_publication(
             expected_entry=entry,
             expected_task_id=entry.task_id,
         )
-    except Exception:  # noqa: BLE001 - retain the row unclaimable on persistence failure
+    except Exception:  # Retain the row unclaimable on persistence failure.
         logger.exception(
             "Failed to fence ORCA publication with changed job path: queue_id=%s issue=%s",
             entry.queue_id,
@@ -191,7 +191,7 @@ def repair_queue_publications(worker: EngineQueueWorker) -> bool:
     for queue_root in ENGINE_RUNTIME.queue_roots(worker.cfg):
         try:
             entries = list_queue(queue_root)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed to inspect ORCA publication repairs: %s", queue_root)
             repaired_all = False
             continue

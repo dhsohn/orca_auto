@@ -25,6 +25,7 @@ from orca_auto.core.engine_runner import executable_identity
 from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.orca import input_references
 from orca_auto.orca.input_blocks import (
     BLOCK_START_RE,
     GEOM_HEADER_RE,
@@ -38,7 +39,6 @@ from orca_auto.orca.input_blocks import (
     orca_line_tokens,
     orca_route_line,
     orca_route_tokens,
-    scan_orca_file_references,
 )
 from orca_auto.orca.report.rmsd import (
     RmsdCandidate,
@@ -145,7 +145,7 @@ def bound_orca_selected_input_science_identity(
             label="ORCA selected input science identity",
             max_bytes=MAX_INPUT_SNAPSHOT_BYTES,
         ).splitlines()
-        references = scan_orca_file_references(lines)
+        references = input_references.scan_orca_file_references(lines)
         verified_references = _verified_materialized_references(
             resolved_generation,
             selected,

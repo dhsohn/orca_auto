@@ -309,7 +309,9 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   tmpfs checkpoint를 잃을 수 있으며, 이때 기존 durable recovery가
   이미 게시된 근거부터 재개합니다.
   scratch workspace와 journal 구현의 단일 소유자는 `core.engine_scratch`이고 ORCA는
-  flat input dependency parser만 제공합니다. workflow xTB/CREST도 같은 private
+  `orca.input_references`가 정본으로 소유하는 flat input dependency scanner만 제공합니다.
+  ORCA 입력 tokenization, 공용 참조 model과 편집 연산은 계속 `orca.input_blocks`가
+  소유합니다. workflow xTB/CREST도 같은 private
   workspace와 transaction을 사용하며, 그 입력 snapshot은 durable 절대 경로로 유지합니다. xTB는 job
   type별 canonical 결과와 log를, CREST는 named retained
   ensemble과 log를 게시하며 큰 엔진 work tree는 commit 뒤 제거합니다. CREST 자체의
@@ -389,14 +391,19 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 단독 ORCA 실행과 같은 배치입니다. `scaffold`는 시작용 `flow.yaml`과 표준 XYZ
 파일명을 작성합니다.
 
-구체화 전에 manifest admission을 제한합니다. 공용 loader는 작업 manifest 하나를 1 MiB,
-YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고 순환/재귀 graph를
-거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, xTB/ORCA Hessian 생성 작업
-1,000원자입니다.
+구체화 전에 manifest admission을 제한합니다. `core/config/bounded_yaml.py`가 bounded stable
+regular-file manifest 읽기, 중복 없는 key loader, YAML 제한과 공용 오류 분류의 정규 direct
+owner입니다. Manifest reader는 bounded loader를 직접 import하고, config 정책과 config 오류
+소비자는 필요한 symbol만 직접 재사용하며 forwarding facade를 두지 않습니다. Loader는 작업
+manifest 하나를 1 MiB, YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고
+순환/재귀 graph를 거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, xTB/ORCA Hessian
+생성 작업 1,000원자입니다.
 
 Workflow ORCA task 역할은 생성, restart, 제출 직전 실제 입력 선택, 완료 결과 수락 때
 materialized input과 다시 대조합니다. Relaxed scan은 각 dynamic stage에서 닫힌 scan
-coordinate 하나를 선택 geometry에 추가로 바인딩합니다. Submitter는 서로 같은 두 durable
+coordinate 하나를 선택 geometry에 추가로 바인딩합니다.
+`flow/orca_stage_validation.py`가 이 검사의 정규 owner이며 materialization과 모든
+lifecycle 소비자는 forwarding facade 없이 이 모듈에 직접 의존합니다. Submitter는 서로 같은 두 durable
 경로 사본을 실제 선택과 묶고 execution snapshot이 바로 그 바이트를 기록·식별하기 전에 최종
 rewrite된 바이트를 검증합니다. 후보 상대 에너지와 interaction RMSD 대표 선택은 authoritative
 selected input과 final output이 route, resource가 아닌 active directive, atom-label 순서,
@@ -405,6 +412,14 @@ identity-bound 비-geometry dependency content, electronic state, ORCA version p
 경로명은 canonicalize됩니다. HTML과 SI도 같은 과학 정체성을 사용하며 resource control은
 정체성에 영향을 주지 않습니다. `flow/orca_stage_evidence.py`는 report, SI, interaction
 materialization이 함께 쓰는 authoritative report/state/input/output reader입니다.
+
+Workflow restart에는 세 명시적 owner가 있습니다. `flow/restart/settings.py`는 manifest와
+durable workflow state를 해석하면서 과학 불변성을 검사하고,
+`flow/restart/stage_ops.py`는 해석된 control을 개별 stage에 적용해 engine input을
+재구체화하며, `flow/restart/mutation.py`는 이 stage operation을 restart-directory rollback과
+durable workflow commit에 적용합니다. Package entry point가 독립적으로 해석한 settings를
+전달합니다. Settings 해석과 stage별 mutation은 서로 독립된 sibling이며 forwarding facade로
+노출하지 않습니다.
 
 ### Supporting Information 소유권
 
@@ -590,6 +605,11 @@ unit parsing이 달라질 경로는 거부합니다. WSL에서는 `/etc/wsl.conf
 유휴 상태의 전체 상태 조정은 1분에 한 번으로 제한하고 가벼운 큐/상태 poll은 기존
 주기를 유지합니다. 서비스는 실패 후 30초 뒤 재시도하며 5분 동안 unit 시작을 최대
 세 번만 허용하고, 감독자가 정상 종료되면 재시작하지 않습니다.
+
+`cli_workers.py`는 선택된 worker command를 계획하고 기존 ORCA worker 충돌을 검사합니다.
+`cli_worker_supervision.py`는 그 계획을 실행하는 process model, session, signal, 종료
+escalation과 restart circuit을 직접 소유하며 command 모듈은 이 private 동작을 재export하지
+않습니다.
 
 Worker는 시작할 때 resolve한 package source를 자기 process environment에 바인딩합니다.
 Status는 PID/start-tick race를 검사하며 그 provenance를 읽은 뒤 worker별로 새 HEAD/reflog와

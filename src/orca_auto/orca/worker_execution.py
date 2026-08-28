@@ -83,7 +83,7 @@ WORKER_JOB_MODULE = WORKER_CHILD_MODULE
 
 
 class WorkerShutdownRequested(RuntimeError):
-    def __init__(self, context: Any):
+    def __init__(self, context: Any) -> None:
         super().__init__("worker_shutdown")
         self.context = context
 

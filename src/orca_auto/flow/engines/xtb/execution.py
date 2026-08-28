@@ -105,7 +105,7 @@ build_worker_child_command = build_worker_child_command_for_engine("xtb")
 
 
 class WorkerShutdownRequested(RuntimeError):
-    def __init__(self, context: Any):
+    def __init__(self, context: Any) -> None:
         super().__init__("worker_shutdown")
         self.context = context
 
@@ -579,7 +579,7 @@ def _run_xtb_job_for_entry(
             )
             _raise_if_shutdown_requested(context, shutdown_requested)
         return result
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         if isinstance(exc, (WorkerShutdownRequested, _engine_execution.ProcessCleanupError)):
             raise
         return _failed_result_from_exception(context, exc, dependencies=dependencies)

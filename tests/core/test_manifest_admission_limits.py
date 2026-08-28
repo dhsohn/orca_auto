@@ -4,9 +4,10 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 
 from orca_auto.core.commands.run_dir import load_yaml_job_manifest
-from orca_auto.core.config.files import (
+from orca_auto.core.config.bounded_yaml import (
     MAX_JOB_MANIFEST_ALIASES,
     MAX_JOB_MANIFEST_BYTES,
     MAX_JOB_MANIFEST_DEPTH,
@@ -40,6 +41,67 @@ def test_bounded_manifest_loader_accepts_normal_mapping(tmp_path: Path, kind: st
         "workflow_type": "conformer_screening",
         "resources": {"max_cores": 4},
     }
+
+
+@pytest.mark.parametrize("kind", ["flow", "job"])
+def test_bounded_manifest_loader_rejects_non_utf8_text(tmp_path: Path, kind: str) -> None:
+    _manifest_path(tmp_path, kind).write_bytes(b"value: \xff\n")
+
+    with pytest.raises(ValueError, match="must be UTF-8 text"):
+        _load_manifest(tmp_path, kind)
+
+
+@pytest.mark.parametrize("kind", ["flow", "job"])
+def test_bounded_manifest_loader_rejects_duplicate_keys(tmp_path: Path, kind: str) -> None:
+    _manifest_path(tmp_path, kind).write_text(
+        "outer:\n  value: 1\n  value: 2\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate mapping key"):
+        _load_manifest(tmp_path, kind)
+
+
+@pytest.mark.parametrize("kind", ["flow", "job"])
+def test_bounded_manifest_loader_rejects_unhashable_mapping_keys(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    _manifest_path(tmp_path, kind).write_text(
+        "? [alpha, beta]\n: value\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="mapping keys must be hashable scalars"):
+        _load_manifest(tmp_path, kind)
+
+
+@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("payload", ["", "null\n"])
+def test_bounded_manifest_loader_treats_empty_and_null_documents_as_empty_mappings(
+    tmp_path: Path,
+    kind: str,
+    payload: str,
+) -> None:
+    _manifest_path(tmp_path, kind).write_text(payload, encoding="utf-8")
+
+    assert _load_manifest(tmp_path, kind) == {}
+
+
+@pytest.mark.parametrize("kind", ["flow", "job"])
+def test_bounded_manifest_loader_preserves_malformed_yaml_errors(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    _manifest_path(tmp_path, kind).write_text("outer: [1,\n", encoding="utf-8")
+
+    if kind == "flow":
+        with pytest.raises(ValueError, match="Invalid Workflow manifest"):
+            _load_manifest(tmp_path, kind)
+        return
+
+    with pytest.raises(yaml.parser.ParserError, match="while parsing a flow node"):
+        _load_manifest(tmp_path, kind)
 
 
 @pytest.mark.parametrize("kind", ["flow", "job"])

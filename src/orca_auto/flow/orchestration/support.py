@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts import XtbDownstreamPolicy
 from orca_auto.flow.contracts.workflow import workflow_stage_metadata

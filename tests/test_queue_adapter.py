@@ -21,12 +21,14 @@ from orca_auto.orca.queue.adapter import (
     get_active_entry_for_reaction_dir,
     get_cancel_requested,
     list_queue,
+    mark_cancelled,
     mark_completed,
     mark_failed,
     queue_entry_force,
     queue_entry_reaction_dir,
     queue_entry_run_id,
     reconcile_orphaned_running_entries,
+    requeue_running_entry,
     update_metadata,
 )
 from orca_auto.orca.state import finalize_state, load_state, new_state, report_json_path
@@ -722,3 +724,37 @@ class TestQueueStore(unittest.TestCase):
         dequeued = dequeue_next(self.root)
         assert dequeued is not None
         self.assertEqual(dequeued.queue_id, e1.queue_id)
+
+
+class TestQueueStoreWorkerTransitions(unittest.TestCase):
+    def test_mark_cancelled_updates_running_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reaction_dir = root / "mol_cancelled"
+            reaction_dir.mkdir()
+            entry = enqueue(root, str(reaction_dir))
+            dequeue_next(root)
+
+            updated = mark_cancelled(root, entry.queue_id)
+
+            self.assertTrue(updated)
+            queue_entries = list_queue(root)
+            self.assertEqual(queue_entries[0].status.value, "cancelled")
+            self.assertFalse(queue_entries[0].cancel_requested)
+            self.assertIsNotNone(queue_entries[0].finished_at)
+
+    def test_requeue_running_entry_returns_job_to_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reaction_dir = root / "mol_pending_again"
+            reaction_dir.mkdir()
+            entry = enqueue(root, str(reaction_dir))
+            dequeue_next(root)
+
+            updated = requeue_running_entry(root, entry.queue_id)
+
+            self.assertTrue(updated)
+            queue_entries = list_queue(root)
+            self.assertEqual(queue_entries[0].status.value, "pending")
+            self.assertEqual(queue_entries[0].started_at, "")
+            self.assertFalse(queue_entries[0].cancel_requested)

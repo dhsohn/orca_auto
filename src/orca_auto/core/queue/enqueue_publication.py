@@ -145,7 +145,7 @@ def _run_compensated_cleanup(spec: EnqueuePublicationSpec) -> None:
         return
     try:
         spec.on_compensated_failure()
-    except BaseException:  # noqa: BLE001 - never mask the enqueue-origin failure
+    except BaseException:  # Never mask the enqueue-origin failure.
         logger.exception(
             "%s: failed to clean the compensated submission snapshot; retaining it",
             spec.label,
@@ -191,7 +191,7 @@ def _fence_uncompensated_enqueue(
             expected_entry=entry,
             expected_task_id=spec.task_id,
         )
-    except BaseException:  # noqa: BLE001 - preserve the guard-origin failure path
+    except BaseException:  # Preserve the guard-origin failure path.
         logger.exception(
             "%s: failed to terminally fence the provisional row: queue_id=%s",
             spec.label,
@@ -485,7 +485,7 @@ def _publish_owned_record(
                     warnings=(_OWNERSHIP_RECONCILE_WARNING,),
                 )
             return EnqueuePublicationOutcome(entry=completed, published=True)
-    except BaseException as exc:  # noqa: BLE001
+    except BaseException as exc:
         # Even a failed publish or CAS may have half-committed; park the lease
         # (token-gated, so a row this publisher no longer owns is untouched)
         # and let the worker repair pass republish before the row can run.
@@ -551,7 +551,7 @@ def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationO
     except BaseException as exc:
         try:
             recovered = _recover_committed_enqueue(spec, enqueue_metadata=metadata)
-        except BaseException as recovery_exc:  # noqa: BLE001
+        except BaseException as recovery_exc:
             if isinstance(recovery_exc, EnqueuePublicationOutcomeUnknown):
                 raise
             if not isinstance(recovery_exc, Exception):
@@ -724,7 +724,7 @@ def repair_enqueue_publication_outcome(
             assert current is not None
             publish(current)
             completed = mutate_entries(queue_root, complete)
-    except BaseException as exc:  # noqa: BLE001
+    except BaseException as exc:
         # Even a failed claim may have committed before its durability barrier
         # reported failure; park the lease so the row cannot strand in
         # REPAIRING (the park CAS is token-gated, so it never touches a row

@@ -765,7 +765,7 @@ def _drop_superseded_terminal_replays(
         # the pending map forever.
         try:
             _clear_terminal_replay_marker(item)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception(
                 "Failed to clear superseded ORCA terminal replay marker: %s",
                 item.queue_id,
@@ -967,7 +967,7 @@ def _replay_current_terminal_entries(
                         item.queue_id,
                     )
             _run_terminal_replay_side_effects(worker, item)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception(
                 "Failed to replay terminal side effects for reconciled ORCA job %s",
                 queue_id,
@@ -978,7 +978,7 @@ def _replay_current_terminal_entries(
         else:
             try:
                 _clear_terminal_replay_marker(item)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception(
                     "Failed to clear completed ORCA terminal replay marker: %s",
                     item.queue_id,
@@ -1022,7 +1022,7 @@ def _retry_terminal_replays_without_queue_entries(
                 item = _prepare_terminal_replay_work_item(item)
                 pending_replays[key] = item
             _run_terminal_replay_side_effects(worker, item)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception(
                 "Failed to retry terminal side effects after queue entry disappeared: %s",
                 item.queue_id,

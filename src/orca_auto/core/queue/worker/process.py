@@ -450,7 +450,7 @@ class HookedPidFileChildProcessQueueWorker(PidFileChildProcessQueueWorker):
                 removed = reconcile_orphaned_snapshot_generations(
                     snapshot_runtime_roots_for_cfg(self.cfg)
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.exception("Snapshot orphan reconciliation failed; retaining all candidates")
             else:
                 if removed:

@@ -11,11 +11,9 @@ from orca_auto.core.engine_process import atomic_write_confined_bytes
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils import atomic_write_json, normalize_text
 from orca_auto.core.utils.persistence import load_json_mapping_file
-from orca_auto.flow._orca_stage_materialization import (
-    ensure_route_line,
-    validate_workflow_orca_input,
-)
+from orca_auto.flow.orca_stage_validation import ensure_route_line, validate_workflow_orca_input
 from orca_auto.flow.orchestration.stage_views import WorkflowStageView
+from orca_auto.orca import input_references
 from orca_auto.orca.input_artifacts import derive_selected_input_xyz
 from orca_auto.orca.input_blocks import (
     GEOM_HEADER_RE,
@@ -24,7 +22,6 @@ from orca_auto.orca.input_blocks import (
     is_safe_unquoted_orca_path,
     quote_orca_path,
     route_line_indices,
-    scan_orca_file_references,
     set_block_key_value,
     unquoted_orca_path,
 )
@@ -147,7 +144,10 @@ def _auxiliary_copy_plan(
     # so only the auxiliary/NEB references are copied here — but they come from
     # the same scanner execution binding uses, so a reference accepted at
     # submission can never be silently dropped on restart.
-    for reference in scan_orca_file_references(lines, include_geometry=False):
+    for reference in input_references.scan_orca_file_references(
+        lines,
+        include_geometry=False,
+    ):
         raw_path = Path(reference.value).expanduser()
         source_path = (raw_path if raw_path.is_absolute() else source_base / raw_path).resolve()
         try:
