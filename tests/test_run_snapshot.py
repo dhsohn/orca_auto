@@ -7,7 +7,8 @@ from typing import Any
 
 from orca_auto.core.utils import parse_iso_utc
 from orca_auto.orca.run_snapshot import collect_run_snapshots
-from orca_auto.orca.state import save_state, state_path
+from orca_auto.orca.state import save_state
+from orca_auto.orca.state_reading import state_path
 
 
 def test_parse_iso_utc_handles_invalid_z_naive_and_offset_values() -> None:

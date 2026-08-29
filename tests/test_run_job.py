@@ -19,7 +19,8 @@ from orca_auto.orca.execution_binding import (
 )
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
-from orca_auto.orca.state import load_state, new_state, save_state
+from orca_auto.orca.state import new_state, save_state
+from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.worker_execution import execute_run_job
 
 

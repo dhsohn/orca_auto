@@ -37,14 +37,31 @@ dependency direction:
 
 Workflow HTML reporting also uses direct owners rather than a facade:
 
-- `report_collection.py` reads confined, validated workflow/engine evidence and
-  derives the immutable report data consumed by HTML and machine observations.
+- `report_diagnostics.py` owns failed-stage status gating, canonical verified
+  state/report resolution, reason precedence, bounded log tails, and safe
+  details links.
+- `report_collection.py` imports that diagnostic owner and derives the immutable
+  report data consumed by HTML and machine observations. ORCA energy and science
+  evidence policy remains in collection and its dedicated evidence owners.
 - `report_rendering.py` imports collection, renders the page, and atomically
-  publishes `workflow_report.html`. Collection never imports rendering.
+  publishes `workflow_report.html`. Diagnostics never imports collection or
+  rendering, and collection never imports rendering.
 - `stage_summary.py` owns workflow task-kind reads, concatenated-XYZ frame
   counting, and CREST/xTB stage details shared by report collection, workflow
   SI, and phase notifications. Those consumers import the owner directly;
   `report_collection.py` does not re-export stage-summary helpers.
+
+ORCA durable-state access has separate read and publication owners:
+
+- `orca/state_reading.py` owns artifact names and paths, normalized state
+  interpretation, bounded reads, verified generation binding, and public machine
+  observation validation.
+- `orca/state.py` owns state mutation and artifact publication and depends one
+  way on the read owner for the shared generation and lifecycle gates.
+
+Callers import the concrete owner directly. `state.py` does not re-export read
+helpers as a compatibility facade, and `state_reading.py` must not import state
+mutation or report-publication modules.
 
 ORCA external file-reference discovery has one direct owner:
 

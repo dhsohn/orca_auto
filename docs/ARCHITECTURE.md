@@ -373,8 +373,10 @@ logic. Notable pieces:
   existing top-level or `%scf` orbital-input declaration is recognized
   semantically, so recovery never injects a second source. Resumed inputs are
   written as `*.resume.inp` so user input is never mutated.
-- **State & reports:** `state.py`/`state_machine.py` persist private
-  `job_state.json`; completion publishes the common `machine.json` last. Opt,
+- **State & reports:** `state_reading.py` owns bounded private-state reads,
+  verified generation binding, and public-machine validation; `state.py` owns
+  state mutation and artifact publication, while `state_machine.py` applies
+  transitions. Completion publishes the common `machine.json` last. Opt,
   OptTS, NEB-TS,
   ScanTS, IRC, and relaxed-scan jobs also get `job_report.html` (`report/`), a
   self-contained visual report assembled by `report/composer.py` from common
@@ -452,9 +454,12 @@ frames, and derives CREST/xTB stage details. Report collection, workflow SI,
 and phase notifications import it directly, so none depends on another
 consumer's private helpers. ORCA energy and provenance evidence remains in
 `report_collection.py` and `flow/orca_stage_evidence.py`; the summary owner is
-not a second evidence source. Workflow HTML rendering depends one way on the
-immutable data from `report_collection.py`, and collection never imports the
-renderer.
+not a second evidence source. `flow/workflow/report_diagnostics.py` separately
+owns failed-stage status gating, canonical state/report resolution, bounded log
+diagnostics, and safe details links. Report collection imports both direct
+owners, while diagnostics imports neither collection nor rendering. Workflow
+HTML rendering depends one way on the immutable data from
+`report_collection.py`, and collection never imports the renderer.
 
 Workflow restart has three explicit owners. `flow/restart/settings.py` resolves
 the manifest and durable workflow state while enforcing scientific invariants;

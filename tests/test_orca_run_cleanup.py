@@ -12,7 +12,8 @@ from orca_auto.orca import run_cleanup, run_snapshot
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.run_snapshot import RunSnapshot
-from orca_auto.orca.state import load_state, save_state, state_path
+from orca_auto.orca.state import save_state
+from orca_auto.orca.state_reading import load_state, state_path
 
 
 def _snapshot(

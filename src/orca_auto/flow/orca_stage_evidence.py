@@ -24,7 +24,7 @@ from orca_auto.flow.conformer_selection import (
 from orca_auto.flow.contracts.workflow import is_supported_orca_stage_contract
 from orca_auto.flow.orca_stage_validation import validate_workflow_orca_input
 from orca_auto.orca.report.si import SiBlock, SiBlockError, collect_si_block
-from orca_auto.orca.state import load_generation_state, load_report_json
+from orca_auto.orca.state_reading import load_generation_state, load_report_json
 
 
 def _text(value: Any) -> str:

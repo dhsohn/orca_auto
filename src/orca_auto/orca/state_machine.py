@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .retry_policy import retry_input_path
-from .state import load_state, new_state, save_state
+from .state import new_state, save_state
+from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
 from .types import RunState
 

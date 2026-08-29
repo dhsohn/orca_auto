@@ -14,7 +14,7 @@ from orca_auto.core.utils.persistence import now_utc_iso
 from orca_auto.core.utils.process_tracking import read_pid_file, run_lock_is_held
 
 from ..job_locations._generation import payload_matches_queue_generation
-from ..state import load_state
+from ..state_reading import load_state
 from ..statuses import RunStatus
 from .entries import (
     WORKER_PID_FILE_NAME,

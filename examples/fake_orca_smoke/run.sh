@@ -28,7 +28,7 @@ from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
 from orca_auto.orca.queue.worker import QueueWorker
-from orca_auto.orca.state import load_report_json, load_state
+from orca_auto.orca.state_reading import load_report_json, load_state
 
 repo_root = Path(sys.argv[1]).resolve()
 workdir = Path(sys.argv[2]).resolve()

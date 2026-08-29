@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ..state import load_state, state_path, state_payload_job_id
+from ..state_reading import load_state, state_path, state_payload_job_id
 from ..types import RunState
 from .entries import (
     TERMINAL_STATUSES,

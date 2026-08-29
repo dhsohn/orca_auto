@@ -15,7 +15,8 @@ from orca_auto.orca.scants import (
     prepare_scants_scan_retry_input,
     scan_profile_interior_barrier_kcal,
 )
-from orca_auto.orca.state import load_state, new_state, save_state
+from orca_auto.orca.state import new_state, save_state
+from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.types import RunState
 
 

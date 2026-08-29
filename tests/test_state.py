@@ -13,17 +13,17 @@ from orca_auto.core.engine_runner import executable_identity
 from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
 from orca_auto.orca import run_lock
 from orca_auto.orca import state as state_module
+from orca_auto.orca import state_reading as state_reading_module
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import (
     atomic_write_text,
-    load_report_json,
-    load_state,
     new_state,
     save_state,
     write_report_files,
     write_report_json,
     write_state,
 )
+from orca_auto.orca.state_reading import load_report_json, load_state
 from orca_auto.orca.types import RunFinalResult
 
 
@@ -67,8 +67,8 @@ class TestState(unittest.TestCase):
             generation.mkdir()
             (generation / "job_state.json").write_text("{}" * 8, encoding="utf-8")
 
-            with patch.object(state_module, "MAX_RUN_ARTIFACT_JSON_BYTES", 8):
-                self.assertIsNone(state_module.load_generation_state(generation))
+            with patch.object(state_reading_module, "MAX_RUN_ARTIFACT_JSON_BYTES", 8):
+                self.assertIsNone(state_reading_module.load_generation_state(generation))
 
     def test_generation_report_read_is_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -80,7 +80,7 @@ class TestState(unittest.TestCase):
             assert report_path is not None
 
             with patch.object(
-                state_module,
+                state_reading_module,
                 "MAX_RUN_ARTIFACT_JSON_BYTES",
                 report_path.stat().st_size - 1,
             ):
@@ -94,7 +94,7 @@ class TestState(unittest.TestCase):
             state["execution_provenance"] = provenance
             report_path = write_report_json(reaction, dict(state))
             assert report_path is not None
-            original_target = state_module._visible_generation_artifact_dir
+            original_target = state_reading_module.verified_generation_artifact_target
 
             def replace_after_read(
                 reaction_dir: Path,
@@ -108,8 +108,8 @@ class TestState(unittest.TestCase):
                 return target
 
             with patch.object(
-                state_module,
-                "_visible_generation_artifact_dir",
+                state_reading_module,
+                "verified_generation_artifact_target",
                 side_effect=replace_after_read,
             ):
                 self.assertIsNone(load_report_json(generation))
@@ -180,7 +180,7 @@ class TestState(unittest.TestCase):
             self.assertIsInstance(loaded, dict)
 
             write_report_files(reaction, state)
-            self.assertTrue(state_module.report_json_path(generation).exists())
+            self.assertTrue(state_reading_module.report_json_path(generation).exists())
             self.assertFalse((reaction / "job_report.json").exists())
 
             self.assertEqual(list(reaction.glob("*.tmp.*")), [])
@@ -337,14 +337,14 @@ class TestState(unittest.TestCase):
                 "generation_owner_token": owner_token,
                 "bound_selected_identity": executable_identity(inp),
             }
-            state_module.report_json_path(reaction).write_text("{}", encoding="utf-8")
+            state_reading_module.report_json_path(reaction).write_text("{}", encoding="utf-8")
 
             write_report_files(reaction, state)
 
             # Unbound root files are left untouched; the writer publishes only
             # into the verified generation.
-            self.assertTrue(state_module.report_json_path(reaction).exists())
-            self.assertTrue(state_module.report_json_path(generation).is_file())
+            self.assertTrue(state_reading_module.report_json_path(reaction).exists())
+            self.assertTrue(state_reading_module.report_json_path(generation).is_file())
 
     def test_replaced_visible_generation_never_receives_state_or_report(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -395,8 +395,8 @@ class TestState(unittest.TestCase):
             state["execution_provenance"] = provenance
 
             saved_path = write_state(reaction, state)
-            self.assertEqual(saved_path, state_module.state_path(reaction))
-            self.assertIsNotNone(state_module.load_state(reaction))
+            self.assertEqual(saved_path, state_reading_module.state_path(reaction))
+            self.assertIsNotNone(state_reading_module.load_state(reaction))
 
             report_payload = {
                 "run_id": state["run_id"],
@@ -413,13 +413,17 @@ class TestState(unittest.TestCase):
             }
             self.assertEqual(
                 write_report_json(reaction, report_payload),
-                state_module.report_json_path(generation),
+                state_reading_module.report_json_path(generation),
             )
             written_report = load_report_json(generation)
             assert written_report is not None
             self.assertEqual(written_report["engine"], "orca")
             self.assertEqual(written_report["engine_payload"]["run_id"], state["run_id"])
             self.assertEqual(written_report["status"]["state"], "created")
+
+    def test_state_module_does_not_forward_read_owner(self) -> None:
+        for name in state_reading_module.__all__:
+            self.assertFalse(hasattr(state_module, name), name)
 
     def test_write_report_files_json_fields(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -542,7 +546,7 @@ class TestState(unittest.TestCase):
                 foreign_machine = reaction / "foreign-machine.json"
                 if target_exists:
                     foreign_machine.write_text("{}", encoding="utf-8")
-                machine_path = state_module.report_json_path(generation)
+                machine_path = state_reading_module.report_json_path(generation)
                 if link_kind == "hardlink":
                     os.link(foreign_machine, machine_path)
                 else:
@@ -624,7 +628,7 @@ class TestState(unittest.TestCase):
             reaction = Path(td)
             self.assertIsNone(load_report_json(reaction))
 
-            report_path = state_module.report_json_path(reaction)
+            report_path = state_reading_module.report_json_path(reaction)
             report_path.write_text("not valid json!!!", encoding="utf-8")
             self.assertIsNone(load_report_json(reaction))
 
@@ -639,7 +643,9 @@ class TestState(unittest.TestCase):
     def test_load_state_returns_none_for_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
-            state_module.state_path(reaction).write_text("not valid json!!!", encoding="utf-8")
+            state_reading_module.state_path(reaction).write_text(
+                "not valid json!!!", encoding="utf-8"
+            )
             self.assertIsNone(load_state(reaction))
 
     def test_lock_released_after_context_exit(self) -> None:

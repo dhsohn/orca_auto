@@ -38,15 +38,29 @@ workflow SI는 `collection.py`·`publication.py`·`rendering.py` 세 모듈의 �
 
 워크플로우 HTML 리포트도 facade 대신 직접 owner를 사용합니다.
 
-- `report_collection.py`는 confined·검증된 workflow/engine 근거를 읽고 HTML, machine
-  observation이 소비하는 불변 리포트 데이터를 도출합니다.
+- `report_diagnostics.py`는 실패 stage status gate, 정규 검증 state/report 해석,
+  reason 우선순위, bounded log tail, 안전한 details link를 소유합니다.
+- `report_collection.py`는 이 진단 owner를 import해 HTML과 machine observation이
+  소비하는 불변 리포트 데이터를 도출합니다. ORCA energy·science 근거 정책은 계속
+  collection과 전용 evidence owner에 남습니다.
 - `report_rendering.py`는 collection을 임포트해 페이지를 렌더링하고
-  `workflow_report.html`을 원자적으로 발행합니다. collection은 rendering을 임포트하지
-  않습니다.
+  `workflow_report.html`을 원자적으로 발행합니다. diagnostics는 collection이나
+  rendering을 임포트하지 않고, collection도 rendering을 임포트하지 않습니다.
 - `stage_summary.py`는 workflow task-kind 조회, 연결 XYZ frame 계수, report
   collection·workflow SI·phase notification이 공유하는 CREST/xTB stage 상세를
   소유합니다. 소비자는 이 owner를 직접 import하며 `report_collection.py`는
   stage-summary helper를 재export하지 않습니다.
+
+ORCA 내구성 상태 접근은 read owner와 publication owner를 분리합니다.
+
+- `orca/state_reading.py`는 artifact 이름·경로, normalized state 해석, bounded read,
+  검증된 generation binding, public machine observation 검증을 소유합니다.
+- `orca/state.py`는 state mutation과 artifact publication을 소유하며, 공용 generation과
+  lifecycle gate를 위해 read owner에 단방향으로 의존합니다.
+
+호출자는 실제 owner를 직접 import합니다. `state.py`는 호환 facade로 read helper를
+재export하지 않으며, `state_reading.py`는 state mutation이나 report publication 모듈을
+import하면 안 됩니다.
 
 ORCA 외부 파일 참조 탐색도 하나의 직접 owner를 사용합니다.
 

@@ -47,12 +47,10 @@ from orca_auto.orca.queue.worker_tracking import (
 )
 from orca_auto.orca.state import (
     finalize_state,
-    load_state,
     new_state,
-    report_json_path,
     save_state,
-    state_path,
 )
+from orca_auto.orca.state_reading import load_state, report_json_path, state_path
 from tests.engine_artifact_helpers import orca_artifact_payload
 from tests.queue_worker_helpers import reconcile_statuses as _reconcile_statuses
 from tests.queue_worker_helpers import run_terminal_replay as _run_terminal_replay

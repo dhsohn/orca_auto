@@ -21,7 +21,7 @@ from ..execution_binding import (
     orca_execution_provenance,
     orca_execution_snapshot_generation_dir,
 )
-from ..state import load_report_json, load_state
+from ..state_reading import load_report_json, load_state
 from ._artifacts import first_artifact_context, job_artifact_context
 from ._generation import payload_matches_queue_generation
 from ._models import JobRuntimeContext

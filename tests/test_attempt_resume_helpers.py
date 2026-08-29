@@ -5,7 +5,8 @@ from typing import cast
 from unittest.mock import patch
 
 from orca_auto.orca.attempt import resume as attempt_resume
-from orca_auto.orca.state import new_state, state_path
+from orca_auto.orca.state import new_state
+from orca_auto.orca.state_reading import state_path
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 from orca_auto.orca.types import AttemptRecord, RunFinishedNotification, RunState
 

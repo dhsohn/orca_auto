@@ -34,7 +34,12 @@ from orca_auto.orca.job_locations import (
     upsert_job_record,
 )
 from orca_auto.orca.job_locations._generation import payload_matches_queue_generation
-from orca_auto.orca.state import REPORT_JSON_NAME, STATE_FILE_NAME, report_json_path, state_path
+from orca_auto.orca.state_reading import (
+    REPORT_JSON_NAME,
+    STATE_FILE_NAME,
+    report_json_path,
+    state_path,
+)
 from tests.engine_artifact_helpers import orca_artifact_payload
 
 

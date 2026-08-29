@@ -11,7 +11,7 @@ from orca_auto.orca.queue.adapter import (
     queue_entry_force,
     queue_entry_reaction_dir,
 )
-from orca_auto.orca.state import state_path
+from orca_auto.orca.state_reading import state_path
 
 
 def _run_main(argv: list[str]) -> int:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..state import load_state
+from ..state_reading import load_state
 from ._records import list_job_location_records, resolve_record_job_dir
 from ._utils import normalize_text
 

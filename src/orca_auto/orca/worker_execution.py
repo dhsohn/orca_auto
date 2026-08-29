@@ -72,7 +72,8 @@ from .queue.adapter import (
 )
 from .resource_directives import prepare_submission_resource_request
 from .run_lock import acquire_run_lock
-from .state import finalize_state, load_state
+from .state import finalize_state
+from .state_reading import load_state
 from .statuses import AnalyzerStatus
 from .submission import mark_orca_snapshot_owned
 
