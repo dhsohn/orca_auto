@@ -118,15 +118,12 @@ module = [
     "orca_auto.core.utils.persistence",
     "orca_auto.core.utils.process",
     "orca_auto.flow.cli.worker_options",
-    "orca_auto.flow.contracts.crest",
-    "orca_auto.flow.contracts.orca",
-    "orca_auto.flow.contracts.workflow",
-    "orca_auto.flow.contracts.xtb",
+    "orca_auto.flow.contracts",
+    "orca_auto.flow.contracts.*",
     "orca_auto.flow.engine_options",
     "orca_auto.flow.orca_stage_validation",
-    "orca_auto.flow.restart.mutation",
-    "orca_auto.flow.restart.settings",
-    "orca_auto.flow.restart.stage_ops",
+    "orca_auto.flow.restart",
+    "orca_auto.flow.restart.*",
     "orca_auto.flow.workflow.report_collection",
     "orca_auto.flow.workflow.report_rendering",
     "orca_auto.flow.workflow.store",
@@ -205,37 +202,14 @@ source_modules = [
 forbidden_modules = ["orca_auto.flow.workflow.report_rendering"]
 
 [[tool.importlinter.contracts]]
-name = "Read-only systemd status never imports restart mutation"
-type = "forbidden"
-source_modules = ["orca_auto.cli_systemd_status"]
-forbidden_modules = ["orca_auto.cli_systemd_restart"]
-
-[[tool.importlinter.contracts]]
-name = "Systemd restart never imports status or freshness assembly"
-type = "forbidden"
-source_modules = ["orca_auto.cli_systemd_restart"]
-forbidden_modules = [
-    "orca_auto.cli_systemd_freshness",
-    "orca_auto.cli_systemd_status",
-]
-
-[[tool.importlinter.contracts]]
-name = "Systemd evidence substrate stays below command owners"
-type = "forbidden"
-source_modules = [
+name = "Systemd CLI layers: independent command owners over freshness over units over plan"
+type = "layers"
+layers = [
+    "orca_auto.cli_systemd_apply | orca_auto.cli_systemd_restart | orca_auto.cli_systemd_status",
     "orca_auto.cli_systemd_freshness",
     "orca_auto.cli_systemd_units",
+    "orca_auto.systemd_plan",
 ]
-forbidden_modules = [
-    "orca_auto.cli_systemd_restart",
-    "orca_auto.cli_systemd_status",
-]
-
-[[tool.importlinter.contracts]]
-name = "Systemd unit substrate never imports freshness evidence"
-type = "forbidden"
-source_modules = ["orca_auto.cli_systemd_units"]
-forbidden_modules = ["orca_auto.cli_systemd_freshness"]
 
 [[tool.importlinter.contracts]]
 name = "ORCA stage validation never imports materialization"
@@ -266,13 +240,23 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "Restart stage mutation never imports settings resolution"
-type = "forbidden"
-source_modules = ["orca_auto.flow.restart.stage_ops"]
-forbidden_modules = [
+name = "Restart mutation layers: mutation over stage ops over ORCA input"
+type = "layers"
+layers = [
     "orca_auto.flow.restart.mutation",
-    "orca_auto.flow.restart.settings",
+    "orca_auto.flow.restart.stage_ops",
+    "orca_auto.flow.restart.orca_input",
 ]
+
+[[tool.importlinter.contracts]]
+name = "Restart settings resolve independently of the mutation owners"
+type = "forbidden"
+source_modules = [
+    "orca_auto.flow.restart.mutation",
+    "orca_auto.flow.restart.orca_input",
+    "orca_auto.flow.restart.stage_ops",
+]
+forbidden_modules = ["orca_auto.flow.restart.settings"]
 
 [[tool.importlinter.contracts]]
 name = "ORCA input syntax never imports reference scanning"
