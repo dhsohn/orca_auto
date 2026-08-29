@@ -276,10 +276,10 @@ class QueueStore:
 
     def mutate_entries(
         self,
-        mutator: Callable[[list[Any]], tuple[Any, bool]],
+        mutator: Callable[[list[Any]], tuple[_MutationResultT, bool]],
         *,
         after_commit_fn: Callable[[], Any] | None = None,
-    ) -> Any:
+    ) -> _MutationResultT:
         with queue_lock(self.root):
             entries = self.load_entries_fn(self.root)
             original_entries = list(entries)
@@ -354,12 +354,12 @@ def list_queue(
 
 def mutate_entries(
     root: str | Path,
-    mutator: Callable[[list[Any]], tuple[Any, bool]],
+    mutator: Callable[[list[Any]], tuple[_MutationResultT, bool]],
     *,
     load_entries_fn: Callable[[Path], list[Any]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[Any]], Any] | None = None,
     after_commit_fn: Callable[[], Any] | None = None,
-) -> Any:
+) -> _MutationResultT:
     return QueueStore.for_root(
         root,
         load_entries_fn=load_entries_fn,
