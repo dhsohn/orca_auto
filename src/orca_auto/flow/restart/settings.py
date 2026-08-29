@@ -10,6 +10,9 @@ from orca_auto.core.utils import (
 from orca_auto.core.utils import (
     normalize_text as _normalize_text,
 )
+from orca_auto.core.utils import (
+    set_mapping_field as _set_mapping_field,
+)
 from orca_auto.flow.conformer_selection import orca_science_route_identity
 from orca_auto.flow.contracts.workflow import (
     is_orca_stage_kind,
@@ -145,13 +148,6 @@ def _crest_manifest_with_defaults(
         _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS if template_name == "reaction_ts_search" else {}
     )
     return _merge_manifest_defaults(defaults, crest_manifest)
-
-
-def _set_mapping_field(parent: dict[str, Any], key: str, value: dict[str, Any]) -> None:
-    if value:
-        parent[key] = dict(value)
-    else:
-        parent.pop(key, None)
 
 
 def _request_parameters(payload: dict[str, Any]) -> dict[str, Any]:

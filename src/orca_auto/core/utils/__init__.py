@@ -8,6 +8,7 @@ from .coercion import (
     normalize_text,
     safe_float,
     safe_int,
+    set_mapping_field,
 )
 from .lock import file_lock
 from .persistence import (
@@ -43,5 +44,6 @@ __all__ = [
     "parse_iso_utc",
     "safe_float",
     "safe_int",
+    "set_mapping_field",
     "timestamped_token",
 ]
