@@ -6,6 +6,7 @@ from typing import Any
 from orca_auto.core.queue.publication import QUEUE_SUBMISSION_INTENT_KEY
 from orca_auto.core.utils import mapping_or_empty as _coerce_mapping
 from orca_auto.core.utils import normalize_text as _normalize_text
+from orca_auto.core.utils import set_mapping_field
 from orca_auto.flow.contracts.workflow import (
     INTERACTION_COMPLEX_SP_ROLE,
     INTERACTION_CONFIG_FINGERPRINT_KEY,
@@ -107,10 +108,7 @@ def _set_stage_manifest_overrides(stage: dict[str, Any], overrides: dict[str, An
     task = _stage_task(stage)
     containers = (_task_payload(task), _task_metadata(task), _stage_metadata(stage))
     for container in containers:
-        if overrides:
-            container["job_manifest_overrides"] = dict(overrides)
-        else:
-            container.pop("job_manifest_overrides", None)
+        set_mapping_field(container, "job_manifest_overrides", overrides)
 
 
 def _apply_resource_request(task: dict[str, Any], resources: dict[str, int]) -> None:

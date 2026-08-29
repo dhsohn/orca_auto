@@ -19,6 +19,14 @@ def mapping_or_empty(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def set_mapping_field(parent: dict[str, Any], key: str, value: dict[str, Any]) -> None:
+    """Copy a non-empty mapping into ``parent[key]``; an empty one removes the key."""
+    if value:
+        parent[key] = dict(value)
+    else:
+        parent.pop(key, None)
+
+
 def coerce_list(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
 
