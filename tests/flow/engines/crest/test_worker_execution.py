@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE
+from orca_auto.core.queue.engine.worker_execution import WorkerShutdownRequested
 from orca_auto.flow.engines.crest import execution as worker_execution
 from orca_auto.flow.engines.crest import terminal as crest_terminal
 from orca_auto.flow.engines.crest.runner import CrestRunResult
@@ -1004,7 +1005,7 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_before_start(
         start_crest_job=lambda *args, **kwargs: pytest.fail("job should not start"),
     )
 
-    with pytest.raises(worker_execution.WorkerShutdownRequested) as exc_info:
+    with pytest.raises(WorkerShutdownRequested) as exc_info:
         worker_execution.process_dequeued_entry(
             cfg,
             entry,
@@ -1057,7 +1058,7 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_after_start(
     )
 
     shutdown_checks = iter([False, False, True])
-    with pytest.raises(worker_execution.WorkerShutdownRequested):
+    with pytest.raises(WorkerShutdownRequested):
         worker_execution.process_dequeued_entry(
             cfg,
             entry,

@@ -22,8 +22,7 @@ def _job_type_from_record(record: JobLocationRecord | None, fallback: str) -> st
     if record is None:
         return fallback
     value = _adapter_helpers.normalize_text(record.job_type)
-    if value.startswith("xtb_"):
-        value = value[4:]
+    value = value.removeprefix("xtb_")
     return value or fallback
 
 

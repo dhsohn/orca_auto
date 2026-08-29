@@ -19,6 +19,9 @@ from .schema import (
     explicit_positive_int,
     messenger_config_from_mapping,
 )
+from .schema import (
+    reject_unknown_config_fields as _reject_unknown_config_fields,
+)
 from .scratch import scratch_config_from_runtime_mapping
 
 DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
@@ -138,19 +141,6 @@ def _configured_mapping_section(
         field = field_name or key
         raise ValueError(f"{field} section must be a mapping when configured.")
     return dict(section)
-
-
-def _reject_unknown_config_fields(
-    raw: Mapping[Any, Any],
-    *,
-    allowed: frozenset[str],
-    section: str,
-) -> None:
-    if any(key not in allowed for key in raw):
-        # A malformed mapping key can itself be a misplaced credential. Keep
-        # validation errors safe for CLI and journal output by naming only the
-        # public section, never the raw key.
-        raise ValueError(f"Unknown {section} config fields are not supported.")
 
 
 def _validate_optional_text_field(

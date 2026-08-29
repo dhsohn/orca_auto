@@ -22,6 +22,12 @@ SleepFn = Callable[[float], None]
 StartJob = Callable[[], Any]
 
 
+class WorkerShutdownRequested(RuntimeError):
+    def __init__(self, context: Any) -> None:
+        super().__init__("worker_shutdown")
+        self.context = context
+
+
 class CancellableJobFinalizer(Protocol):
     def __call__(
         self,
@@ -128,30 +134,24 @@ class EngineWorkerExecutionSpec:
     mark_running: EngineMarkRunning
     run_job: EngineJobRunner
     finalize_entry: EngineEntryFinalizer
-    shutdown_exception_type: type[BaseException]
     build_outcome: EngineOutcomeBuilder = lambda _context, _result, finalized: finalized
 
 
 def raise_if_shutdown_requested(
     context: Any,
     options: EngineWorkerOptions,
-    *,
-    shutdown_exception_type: type[BaseException],
 ) -> None:
     if options.shutdown_requested is not None and options.shutdown_requested():
-        raise shutdown_exception_type(context)
+        raise WorkerShutdownRequested(context)
 
 
 def raise_if_shutdown_callback_requested(
     context: Any,
     shutdown_requested: Callable[[], bool] | None,
-    *,
-    shutdown_exception_type: type[BaseException],
 ) -> None:
     raise_if_shutdown_requested(
         context,
         EngineWorkerOptions(shutdown_requested=shutdown_requested),
-        shutdown_exception_type=shutdown_exception_type,
     )
 
 
@@ -194,7 +194,6 @@ def run_engine_worker_entry_with_spec(
             check_shutdown=lambda context: raise_if_shutdown_requested(
                 context,
                 active_options,
-                shutdown_exception_type=spec.shutdown_exception_type,
             ),
             mark_running=lambda cfg_obj, context: spec.mark_running(
                 cfg_obj,
@@ -253,7 +252,6 @@ def run_engine_worker_process_job(
     *,
     options: EngineWorkerOptions,
     process_deps: EngineWorkerProcessDependencies,
-    shutdown_exception_type: type[BaseException],
     start_job: StartJob,
     finalize_job: CancellableJobFinalizer,
     build_failure_result: FailureResultBuilder,
@@ -261,7 +259,7 @@ def run_engine_worker_process_job(
     should_reraise_exception: Callable[[Exception], bool] | None = None,
 ) -> Any:
     def raise_shutdown(_running: Any) -> None:
-        raise shutdown_exception_type(context)
+        raise WorkerShutdownRequested(context)
 
     return run_cancellable_engine_process(
         prepare_running_job=options.prepare_running_job,
@@ -278,7 +276,7 @@ def run_engine_worker_process_job(
         check_cancel_before_poll=check_cancel_before_poll,
         register_running_job=options.register_running_job,
         should_reraise_exception=should_reraise_exception
-        or (lambda exc: isinstance(exc, shutdown_exception_type)),
+        or (lambda exc: isinstance(exc, WorkerShutdownRequested)),
     )
 
 
@@ -289,6 +287,7 @@ __all__ = [
     "EngineWorkerQueueDependencies",
     "EngineWorkerTimingDependencies",
     "EngineWorkerOptions",
+    "WorkerShutdownRequested",
     "build_engine_worker_process_default_factories",
     "build_engine_worker_process_dependencies",
     "queue_cancel_callback",

@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Self, TypeVar
 
 from ..utils import process as process_utils
 from ..utils.lock import file_lock
@@ -330,7 +330,7 @@ class AdmissionStore:
         *,
         load_slots_fn: Callable[[Path], list[AdmissionSlot]] | None = None,
         save_slots_fn: Callable[[Path, list[AdmissionSlot]], Any] | None = None,
-    ) -> AdmissionStore:
+    ) -> Self:
         return cls(
             root=resolve_root_path(root),
             load_slots_fn=load_slots_fn or _load_slots,

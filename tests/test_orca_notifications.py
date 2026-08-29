@@ -6,7 +6,7 @@ exercised through a fake :class:`MessageChannel`, plus a Discord end-to-end.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Self
 
 from orca_auto.core.messaging import Message, SendResult
 from orca_auto.orca.notifications import (
@@ -157,7 +157,7 @@ def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:  # type: 
         def read(self) -> bytes:
             return b'{"id":"999"}'
 
-        def __enter__(self) -> _Resp:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *exc: object) -> Literal[False]:

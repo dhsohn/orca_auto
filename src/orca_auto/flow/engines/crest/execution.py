@@ -102,14 +102,7 @@ write_state = _queue_artifacts.write_state
 build_worker_child_command = build_worker_child_command_for_engine("crest")
 
 
-class WorkerShutdownRequested(RuntimeError):
-    def __init__(self, context: Any) -> None:
-        super().__init__("worker_shutdown")
-        self.context = context
-
-
 _WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
-    shutdown_exception_type=WorkerShutdownRequested,
     entry_ready_fn=lambda entry: (
         entry_status_is_running(entry) and entry_matches_engine_identity(entry, "crest")
     ),
@@ -457,7 +450,6 @@ def _raise_if_shutdown_requested(
 ) -> None:
     _engine_execution.raise_if_shutdown_callback_requested(
         context,
-        shutdown_exception_type=WorkerShutdownRequested,
         shutdown_requested=shutdown_requested,
     )
 
@@ -532,7 +524,6 @@ def _run_crest_job_for_entry(
             register_running_job=register_running_job,
         ),
         process_deps=runner_deps,
-        shutdown_exception_type=WorkerShutdownRequested,
         start_job=start_job,
         finalize_job=runner_deps.finalize_crest_job,
         build_failure_result=lambda exc: _failed_result_from_exception(
@@ -630,7 +621,6 @@ def _worker_execution_spec(
             dependencies=dependencies,
             molecule_key_resolver=molecule_key_resolver,
         ),
-        shutdown_exception_type=WorkerShutdownRequested,
         mark_running=lambda cfg_obj, context, _options: _mark_job_running(
             cfg_obj,
             context,

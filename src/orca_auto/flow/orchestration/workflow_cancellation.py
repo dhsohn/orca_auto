@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.statuses import (
@@ -37,15 +37,15 @@ class _StageCancelOutcome:
     mode: str = ""
 
     @classmethod
-    def skipped(cls, reason: str) -> _StageCancelOutcome:
+    def skipped(cls, reason: str) -> Self:
         return cls(status="skipped", reason=reason)
 
     @classmethod
-    def failed(cls, reason: str) -> _StageCancelOutcome:
+    def failed(cls, reason: str) -> Self:
         return cls(status=STATUS_FAILED, reason=reason)
 
     @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> _StageCancelOutcome:
+    def from_payload(cls, payload: dict[str, Any]) -> Self:
         return cls(
             status=str(payload.get("status", "") or ""),
             reason=str(payload.get("reason", "") or ""),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from .patterns import (
     _BASIS_KEYWORDS,
     _CALC_TYPE_KEYWORDS,
@@ -59,7 +61,7 @@ def calc_type_from_tokens(tokens: list[str]) -> str:
     return calc_types[0]
 
 
-def first_known_token(tokens: list[str], known_tokens: list[str]) -> str:
+def first_known_token(tokens: list[str], known_tokens: Sequence[str]) -> str:
     token_set = {token.upper() for token in tokens}
     for known in known_tokens:
         if known.upper() in token_set:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from typing import Any, TypedDict, cast
+from typing import Any, Self, TypedDict, cast
 
 from orca_auto.core.utils.coercion import (
     coerce_mapping,
@@ -179,7 +179,7 @@ class WorkflowTask:
         submission_result: dict[str, Any] | None = None,
         depends_on: list[str] | tuple[str, ...] | None = None,
         metadata: dict[str, Any] | None = None,
-    ) -> WorkflowTask:
+    ) -> Self:
         request = resource_request or {}
         return cls(
             task_id=normalize_text(task_id, none="None"),

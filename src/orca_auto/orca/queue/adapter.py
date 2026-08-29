@@ -105,10 +105,6 @@ __all__ = [
 ]
 
 
-def _now_iso() -> str:
-    return now_utc_iso()
-
-
 def worker_log_path(allowed_root: Path, queue_id: str) -> Path:
     if (
         queue_id in {".", ".."}
@@ -295,7 +291,7 @@ def enqueue(
             engine=QUEUE_ENGINE,
             status=QueueStatus.PENDING,
             priority=normalized_priority,
-            enqueued_at=_now_iso(),
+            enqueued_at=now_utc_iso(),
             metadata=queue_metadata,
         )
         _reject_duplicate_reaction_dir(entries, entry)
@@ -776,7 +772,7 @@ def update_terminal(
         entry = replace(
             current,
             status=QueueStatus(target_status),
-            finished_at=_now_iso(),
+            finished_at=now_utc_iso(),
             error=error if error is not None else current.error,
             metadata=metadata,
         )

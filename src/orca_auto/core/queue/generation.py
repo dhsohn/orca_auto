@@ -65,17 +65,19 @@ def new_visible_generation_name() -> str:
 
 # Metadata is generation identity by default. Only server-owned lifecycle/result
 # fields may opt out, so unknown or newly added submission fields fail closed.
-_MUTABLE_LIFECYCLE_METADATA_KEYS = {
-    "attempt",
-    "candidate_count",
-    "execution_dir",
-    "orca_terminal_replay",
-    "orca_terminal_replay_fence_only",
-    "retained_conformer_count",
-    "run_id",
-    "terminal_artifacts",
-    "terminal_repair_blocked_reason",
-}
+_MUTABLE_LIFECYCLE_METADATA_KEYS = frozenset(
+    {
+        "attempt",
+        "candidate_count",
+        "execution_dir",
+        "orca_terminal_replay",
+        "orca_terminal_replay_fence_only",
+        "retained_conformer_count",
+        "run_id",
+        "terminal_artifacts",
+        "terminal_repair_blocked_reason",
+    }
+)
 
 
 def immutable_generation_metadata(metadata: dict[str, Any]) -> dict[str, Any]:

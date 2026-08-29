@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.indexing import JobLocationRecord
+from orca_auto.core.utils import copy_dict_or_empty as _mapping
 
 
 @dataclass(frozen=True)
@@ -279,10 +280,6 @@ def flatten_engine_artifact_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "resource_actual", resources.get("actual") if isinstance(resources, dict) else {}
     )
     return flattened
-
-
-def _mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def validate_record_app(

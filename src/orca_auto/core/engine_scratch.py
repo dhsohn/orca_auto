@@ -11,7 +11,7 @@ import stat
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from orca_auto.core.artifacts import (
     RUN_REPORT_HTML_FILE,
@@ -183,7 +183,7 @@ class EngineScratchWorkspace:
         *,
         durable_output_dir: Path | None = None,
         expected_durable_dir_identity: tuple[int, int] | None = None,
-    ) -> EngineScratchWorkspace:
+    ) -> Self:
         durable = require_confined_regular_file(
             durable_input.parent,
             durable_input,

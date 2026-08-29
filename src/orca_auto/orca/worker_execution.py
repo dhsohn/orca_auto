@@ -35,6 +35,9 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_TOKEN_KEY,
     transition_snapshot_intent,
 )
+from orca_auto.core.queue.engine.worker_execution import (
+    WorkerShutdownRequested as _WorkerShutdownRequested,
+)
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.lifecycle import entry_status_is_running
 from orca_auto.core.queue.worker import (
@@ -82,12 +85,6 @@ BackgroundRunJobProcess = subprocess.Popen
 WORKER_JOB_MODULE = WORKER_CHILD_MODULE
 
 
-class WorkerShutdownRequested(RuntimeError):
-    def __init__(self, context: Any) -> None:
-        super().__init__("worker_shutdown")
-        self.context = context
-
-
 @dataclass(frozen=True)
 class OrcaWorkerExecutionContext:
     entry: Any
@@ -121,7 +118,6 @@ build_worker_child_command = build_worker_child_command_for_engine("orca")
 
 
 _WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
-    shutdown_exception_type=WorkerShutdownRequested,
     entry_ready_fn=lambda entry: (
         entry_status_is_running(entry) and entry_matches_engine_identity(entry, "orca")
     ),
@@ -371,7 +367,7 @@ def _run_orca_job_for_entry(
                     status="cancelled",
                     final_result=cancelled_result,
                 )
-        raise WorkerShutdownRequested(context) from exc
+        raise _WorkerShutdownRequested(context) from exc
 
 
 def _maybe_rebind_recovery_generation(
@@ -559,7 +555,6 @@ def _worker_execution_spec(
             worker_config_path=worker_config_path,
             admission_token=admission_token,
         ),
-        shutdown_exception_type=WorkerShutdownRequested,
         mark_running=lambda _cfg, _context, _options: None,
         run_job=_run_orca_job_for_entry,
         finalize_entry=lambda _cfg, _context, result, _queue_root, _options: result,
@@ -683,7 +678,6 @@ __all__ = [
     "OrcaWorkerExecutionContext",
     "OrcaWorkerExecutionOutcome",
     "WORKER_JOB_MODULE",
-    "WorkerShutdownRequested",
     "build_worker_child_command",
     "execute_run_job",
     "process_dequeued_entry",

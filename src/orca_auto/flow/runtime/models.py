@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Self, TypedDict
 
 from ..engine_options import WorkflowEngineOptions
 
@@ -98,7 +98,7 @@ class WorkflowRegistryAdvanceRequest:
         worker_session_id: str = "",
         interval_seconds: float | None = None,
         lease_seconds: float = 60.0,
-    ) -> WorkflowRegistryAdvanceRequest:
+    ) -> Self:
         return cls(
             workflow_root=workflow_root,
             options=WorkflowEngineOptions.from_values(

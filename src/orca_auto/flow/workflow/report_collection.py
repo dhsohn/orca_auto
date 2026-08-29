@@ -45,6 +45,8 @@ from orca_auto.orca.parser.patterns import (
 from orca_auto.orca.report.attempts import duration_text
 from orca_auto.orca.report.si import SiBlock
 
+from .stage_summary import crest_stage_detail, stage_task_kind, xtb_stage_detail
+
 # Preserve the established category while the implementation moves behind direct owners.
 logger = logging.getLogger("orca_auto.flow.workflow.report")
 
@@ -132,41 +134,6 @@ def _stage_has_diagnostic_status(stage: Mapping[str, Any]) -> bool:
     )
 
 
-def _task_kind(stage: Mapping[str, Any]) -> str:
-    task = stage.get("task")
-    if not isinstance(task, dict):
-        return ""
-    return _text(task.get("task_kind"))
-
-
-def _stage_artifacts(stage: Mapping[str, Any], kind: str) -> list[dict[str, Any]]:
-    artifacts = stage.get("output_artifacts")
-    if not isinstance(artifacts, list):
-        return []
-    return [
-        artifact
-        for artifact in artifacts
-        if isinstance(artifact, dict) and _text(artifact.get("kind")) == kind
-    ]
-
-
-def count_xyz_frames(path: Path) -> int | None:
-    """Frames in a concatenated-XYZ file; ``None`` when unreadable/malformed."""
-    try:
-        with path.open("r", encoding="utf-8", errors="ignore") as handle:
-            first = handle.readline().strip()
-            if not first.isdigit():
-                return None
-            atoms = int(first)
-            if atoms <= 0:
-                return None
-            total_lines = 1 + sum(1 for _ in handle)
-    except OSError:
-        return None
-    frame_lines = atoms + 2
-    return total_lines // frame_lines if total_lines >= frame_lines else None
-
-
 def latest_engrad_energy(directory: Path) -> float | None:
     """Total energy (Eh) from the most recent ``*.engrad`` in ``directory``."""
     try:
@@ -212,41 +179,6 @@ def latest_engrad_energy(directory: Path) -> float | None:
             # not reach the report or the machine observation.
             return parsed if math.isfinite(parsed) else None
     return None
-
-
-def _crest_stage_detail(stage: Mapping[str, Any]) -> tuple[str, int | None]:
-    metadata = _stage_metadata(stage)
-    conformers_path = None
-    for artifact in _stage_artifacts(stage, "crest_conformer"):
-        path_text = _text(artifact.get("path"))
-        if path_text.endswith("crest_conformers.xyz"):
-            conformers_path = Path(path_text)
-            break
-    frames = count_xyz_frames(conformers_path) if conformers_path is not None else None
-    parts = []
-    role = _text(metadata.get("input_role"))
-    if role:
-        parts.append(role)
-    mode = _text(metadata.get("mode"))
-    if mode:
-        parts.append(f"mode {mode}")
-    if frames is not None:
-        parts.append(f"{frames} conformers")
-    return " · ".join(parts), frames
-
-
-def _xtb_stage_detail(stage: Mapping[str, Any]) -> tuple[str, int]:
-    metadata = _stage_metadata(stage)
-    candidates = _stage_artifacts(stage, "xtb_candidate")
-    kinds = [_text((artifact.get("metadata") or {}).get("kind")) for artifact in candidates]
-    parts = []
-    reaction_key = _text(metadata.get("reaction_key"))
-    if reaction_key:
-        parts.append(reaction_key)
-    if candidates:
-        kind_text = ", ".join(kind for kind in kinds if kind)
-        parts.append(f"{len(candidates)} candidates" + (f" ({kind_text})" if kind_text else ""))
-    return " · ".join(parts), len(candidates)
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -756,15 +688,15 @@ def collect_workflow_report_data(
         )
         detail = ""
         if stage_kind == "crest_stage":
-            detail, frames = _crest_stage_detail(stage)
+            detail, frames = crest_stage_detail(stage)
             if frames is not None:
                 crest_total = (crest_total or 0) + frames
         elif stage_kind == "xtb_stage":
-            detail, candidates = _xtb_stage_detail(stage)
+            detail, candidates = xtb_stage_detail(stage)
             xtb_total = (xtb_total or 0) + candidates
         elif is_orca_stage_kind(stage):
             if is_supported_orca_stage_contract(stage):
-                task_kind = _task_kind(stage)
+                task_kind = stage_task_kind(stage)
                 candidate_task = task_kind in {"opt", "optts_freq"}
                 authoritative_evidence = None
                 evidence_reason = ""
@@ -856,6 +788,5 @@ __all__ = [
     "WorkflowReportData",
     "WorkflowStageRow",
     "collect_workflow_report_data",
-    "count_xyz_frames",
     "latest_engrad_energy",
 ]

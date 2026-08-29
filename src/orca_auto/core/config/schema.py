@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Set
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -240,7 +240,7 @@ class DiscordConfig:
 
 def discord_config_from_mapping(raw: object) -> DiscordConfig:
     discord_raw = raw if isinstance(raw, Mapping) else {}
-    _reject_unknown_config_fields(
+    reject_unknown_config_fields(
         discord_raw,
         allowed={
             "bot_token",
@@ -325,7 +325,7 @@ def messenger_config_from_mapping(raw: object) -> MessengerConfig:
         messenger_raw = raw
     else:
         raise ValueError("messenger config must be a mapping when configured.")
-    _reject_unknown_config_fields(
+    reject_unknown_config_fields(
         messenger_raw,
         allowed={"discord", "provider"},
         section="messenger",
@@ -349,11 +349,14 @@ def messenger_config_from_mapping(raw: object) -> MessengerConfig:
     return config
 
 
-def _reject_unknown_config_fields(
+def reject_unknown_config_fields(
     raw: Mapping[Any, Any],
     *,
-    allowed: set[str],
+    allowed: Set[str],
     section: str,
 ) -> None:
     if any(key not in allowed for key in raw):
+        # A malformed mapping key can itself be a misplaced credential. Keep
+        # validation errors safe for CLI and journal output by naming only the
+        # public section, never the raw key.
         raise ValueError(f"Unknown {section} config fields are not supported.")

@@ -34,10 +34,6 @@ from .terminal_replay import (
 logger = logging.getLogger(__name__)
 
 
-def _now_iso() -> str:
-    return now_utc_iso()
-
-
 def read_worker_pid(allowed_root: Path) -> int | None:
     return read_pid_file(allowed_root / WORKER_PID_FILE_NAME)
 
@@ -62,7 +58,7 @@ def apply_terminal_reconciliation(
     updated = replace(
         entry,
         status=QueueStatus(status),
-        finished_at=finished_at or entry.finished_at or _now_iso(),
+        finished_at=finished_at or entry.finished_at or now_utc_iso(),
         error=updated_error,
         metadata=metadata,
     )

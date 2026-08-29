@@ -15,7 +15,7 @@ MAXCORE_DIRECTIVE_RE = re.compile(r"^\s*%maxcore\b", re.IGNORECASE)
 NPROCS_DIRECTIVE_RE = re.compile(r"\bnprocs\s+\d+\b", re.IGNORECASE)
 PAL_ROUTE_TOKEN_RE = re.compile(r"\APAL\d+\Z", re.IGNORECASE)
 _SAFE_UNQUOTED_ORCA_PATH_RE = re.compile(r"^[A-Za-z0-9._/+\-]+$")
-NESTED_BLOCK_NAMES = {"scan", "constraints"}
+NESTED_BLOCK_NAMES = frozenset({"scan", "constraints"})
 
 
 @dataclass(frozen=True)

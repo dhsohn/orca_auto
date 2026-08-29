@@ -29,8 +29,8 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 
 workflow SI는 `collection.py`·`publication.py`·`rendering.py` 세 모듈의 평평한
 패키지입니다. 직접 임포트하세요. `flow.workflow.si.__init__`은 아무것도 export하지
-않으며 facade가 아닙니다. 이 패키지에 대한 import-linter 계약은 없으므로, 아래는
-빌드가 아니라 리뷰어가 강제하는 관례입니다.
+않으며 facade가 아닙니다. import-linter layers 계약이 다음 의존 방향을
+강제합니다.
 
 - 의존성은 publication → rendering → collection 순서입니다 — publication이 두 형제를
   임포트하고, rendering이 collection을 임포트하며, collection은 어느 쪽도 임포트하지
@@ -39,10 +39,14 @@ workflow SI는 `collection.py`·`publication.py`·`rendering.py` 세 모듈의 �
 워크플로우 HTML 리포트도 facade 대신 직접 owner를 사용합니다.
 
 - `report_collection.py`는 confined·검증된 workflow/engine 근거를 읽고 HTML, machine
-  observation, notification, workflow SI가 소비하는 불변 리포트 데이터를 도출합니다.
+  observation이 소비하는 불변 리포트 데이터를 도출합니다.
 - `report_rendering.py`는 collection을 임포트해 페이지를 렌더링하고
   `workflow_report.html`을 원자적으로 발행합니다. collection은 rendering을 임포트하지
   않습니다.
+- `stage_summary.py`는 workflow task-kind 조회, 연결 XYZ frame 계수, report
+  collection·workflow SI·phase notification이 공유하는 CREST/xTB stage 상세를
+  소유합니다. 소비자는 이 owner를 직접 import하며 `report_collection.py`는
+  stage-summary helper를 재export하지 않습니다.
 
 ORCA 외부 파일 참조 탐색도 하나의 직접 owner를 사용합니다.
 
@@ -211,9 +215,8 @@ bash scripts/clean_artifacts.sh
 - 최상위 별칭 패키지, 콘솔 스크립트 별칭, 대체 런타임 리더는 코드베이스에서 배제하세요.
 - `orca_auto.orca.commands`는 adapter 계층으로 유지하세요. 도메인 실행·제출·worker-child·
   queue 모듈은 이 패키지를 임포트하면 안 됩니다.
-- SI collection/rendering은 publication을 import하지 않게 유지하세요. 이를 강제하는
-  import-linter 계약은 없으며(위 workflow SI 절 참조) 리뷰어가 지키는 관례이니,
-  전달용 module로 우회하지 마세요.
+- SI collection/rendering은 publication을 import하지 않게 유지하세요. Workflow SI
+  layers 계약이 이 방향을 강제하므로 전달용 module로 우회하지 마세요.
 
 ## 엔진 워커
 

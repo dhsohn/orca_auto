@@ -323,6 +323,15 @@ def test_messenger_adapter_config_rejects_unknown_fields(
         parser(raw)
 
 
+def test_messenger_unknown_field_error_does_not_echo_raw_key() -> None:
+    secret_key = "private-secret-key"
+
+    with pytest.raises(ValueError) as raised:
+        messenger_config_from_mapping({secret_key: {}})
+
+    assert secret_key not in str(raised.value)
+
+
 @pytest.mark.parametrize(
     ("parser", "raw"),
     [

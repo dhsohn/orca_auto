@@ -37,6 +37,9 @@ from orca_auto.core.queue.engine.child import (
     run_engine_worker_child_job,
 )
 from orca_auto.core.queue.engine.input_snapshot import verify_input_snapshots
+from orca_auto.core.queue.engine.worker_execution import (
+    WorkerShutdownRequested as _WorkerShutdownRequested,
+)
 from orca_auto.core.queue.lifecycle import entry_status_is_running
 from orca_auto.core.queue.worker import execution_dependencies as _worker_dependencies
 from orca_auto.core.queue.worker import (
@@ -104,14 +107,7 @@ CANCEL_CHECK_INTERVAL_SECONDS = 1
 build_worker_child_command = build_worker_child_command_for_engine("xtb")
 
 
-class WorkerShutdownRequested(RuntimeError):
-    def __init__(self, context: Any) -> None:
-        super().__init__("worker_shutdown")
-        self.context = context
-
-
 _WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
-    shutdown_exception_type=WorkerShutdownRequested,
     entry_ready_fn=lambda entry: (
         entry_status_is_running(entry) and entry_matches_engine_identity(entry, "xtb")
     ),
@@ -413,7 +409,6 @@ def _raise_if_shutdown_requested(
 ) -> None:
     _engine_execution.raise_if_shutdown_callback_requested(
         context,
-        shutdown_exception_type=WorkerShutdownRequested,
         shutdown_requested=shutdown_requested,
     )
 
@@ -556,7 +551,6 @@ def _run_xtb_job_for_entry(
             context,
             options=options,
             process_deps=runner_deps,
-            shutdown_exception_type=WorkerShutdownRequested,
             start_job=start_job,
             finalize_job=runner_deps.finalize_xtb_job,
             build_failure_result=lambda exc: _failed_result_from_exception(
@@ -580,7 +574,7 @@ def _run_xtb_job_for_entry(
             _raise_if_shutdown_requested(context, shutdown_requested)
         return result
     except Exception as exc:
-        if isinstance(exc, (WorkerShutdownRequested, _engine_execution.ProcessCleanupError)):
+        if isinstance(exc, (_WorkerShutdownRequested, _engine_execution.ProcessCleanupError)):
             raise
         return _failed_result_from_exception(context, exc, dependencies=dependencies)
 
@@ -771,7 +765,6 @@ def _worker_execution_spec(
             worker_job_pid=options.worker_job_pid,
             dependencies=dependencies,
         ),
-        shutdown_exception_type=WorkerShutdownRequested,
         run_job=lambda cfg_obj, context, active_queue_root, options: _run_xtb_job_for_entry(
             cfg_obj,
             context,
@@ -935,6 +928,5 @@ __all__ = [
     "execute_queue_entry",
     "process_dequeued_entry",
     "run_worker_job",
-    "WorkerShutdownRequested",
     "WORKER_JOB_MODULE",
 ]

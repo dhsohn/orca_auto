@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType, SimpleNamespace, TracebackType
-from typing import Any
+from typing import Any, Self
 
 from orca_auto.core.engine_process import (
     atomic_write_confined_bytes,
@@ -71,7 +71,7 @@ class ShutdownSignalGuard:
         self._installed_signals: list[int] = []
         self.received_signal: int | None = None
 
-    def __enter__(self) -> ShutdownSignalGuard:
+    def __enter__(self) -> Self:
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, self._MANAGED_SIGNALS)
         try:
             try:

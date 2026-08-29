@@ -28,8 +28,8 @@ internal operation.
 
 Workflow SI is a flat package of three modules — `collection.py`, `publication.py`,
 and `rendering.py`. Import them directly; `flow.workflow.si.__init__` exports
-nothing and is not a facade. There is no import-linter contract for this package,
-so the following is a convention the reviewer enforces, not the build:
+nothing and is not a facade. An import-linter layers contract enforces the
+dependency direction:
 
 - Dependencies run publication → rendering → collection: publication imports
   both siblings, rendering imports collection, collection imports neither.
@@ -38,10 +38,13 @@ so the following is a convention the reviewer enforces, not the build:
 Workflow HTML reporting also uses direct owners rather than a facade:
 
 - `report_collection.py` reads confined, validated workflow/engine evidence and
-  derives the immutable report data consumed by HTML, machine observations,
-  notifications, and workflow SI.
+  derives the immutable report data consumed by HTML and machine observations.
 - `report_rendering.py` imports collection, renders the page, and atomically
   publishes `workflow_report.html`. Collection never imports rendering.
+- `stage_summary.py` owns workflow task-kind reads, concatenated-XYZ frame
+  counting, and CREST/xTB stage details shared by report collection, workflow
+  SI, and phase notifications. Those consumers import the owner directly;
+  `report_collection.py` does not re-export stage-summary helpers.
 
 ORCA external file-reference discovery has one direct owner:
 
@@ -217,9 +220,9 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
   readers out of the codebase
 - Keep `orca_auto.orca.commands` as an adapter layer. Domain execution,
   submission, worker-child, and queue modules must not import it.
-- Keep SI collection/rendering free of publication imports. No import-linter
-  contract enforces this (see the Workflow SI note above); it is a
-  reviewer-enforced convention — do not bypass it with a forwarding module.
+- Keep SI collection/rendering free of publication imports. The Workflow SI
+  layers contract enforces this direction; do not bypass it with a forwarding
+  module.
 
 ## Engine Workers
 

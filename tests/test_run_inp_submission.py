@@ -7,7 +7,7 @@ from dataclasses import replace
 from http.client import IncompleteRead
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 import pytest
 
@@ -189,7 +189,7 @@ def test_truncated_discord_response_does_not_park_queue_publication(
         def read(self) -> bytes:
             raise IncompleteRead(b'{"id":')
 
-        def __enter__(self) -> _TruncatedResponse:
+        def __enter__(self) -> Self:
             return self
 
         def __exit__(self, *_args: object) -> Literal[False]:
