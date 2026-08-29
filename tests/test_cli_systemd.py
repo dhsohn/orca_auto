@@ -1434,7 +1434,7 @@ def test_run_command_uses_shared_systemd_argv_and_display(
 
     command = ("systemctl", "daemon-reload")
 
-    assert cli_systemd_apply._run_command(command, use_sudo=True, run=fake_run) == 0
+    assert cli_systemd_units._run_command(command, use_sudo=True, run=fake_run) == 0
 
     assert commands == [("sudo", "systemctl", "daemon-reload")]
     assert capsys.readouterr().out == (

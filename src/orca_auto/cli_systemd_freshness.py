@@ -21,13 +21,7 @@ def _unit_main_pid(
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> int:
     try:
-        completed = run(
-            ["systemctl", "show", "--property=MainPID", "--value", unit],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        completed = cli_systemd_units._show_unit_property(unit, "MainPID", run=run)
     except OSError:
         return 0
     try:
@@ -52,19 +46,11 @@ def _unit_start_epoch(
     genuinely stale worker (observed live: +32 min).
     """
     try:
-        completed = run(
-            [
-                "systemctl",
-                "show",
-                "--property=ExecMainStartTimestamp",
-                "--value",
-                "--timestamp=utc",
-                unit,
-            ],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
+        completed = cli_systemd_units._show_unit_property(
+            unit,
+            "ExecMainStartTimestamp",
+            run=run,
+            extra_args=("--timestamp=utc",),
         )
     except OSError as exc:
         raise ValueError(f"systemctl show failed: {exc}") from exc
@@ -325,12 +311,16 @@ def _process_identity_race_detail(
     unit: str,
     *,
     pid: int,
-    process_start_ticks: int,
+    process_start_ticks: int | None,
     run: Callable[..., subprocess.CompletedProcess[Any]],
     read_process_file: Callable[[str], bytes],
 ) -> str:
     if _unit_main_pid(unit, run=run) != pid:
         return "main PID changed during freshness inspection"
+    # Without import evidence there are no start ticks to recheck; the PID
+    # comparison above is the whole race check for that caller.
+    if process_start_ticks is None:
+        return ""
     try:
         observed_ticks = _read_process_start_ticks(pid, read_process_file=read_process_file)
     except ValueError as exc:
@@ -443,10 +433,12 @@ def collect_worker_staleness(
         observed_root: Path | None
         if override_root is not None:
             observed_root = override_root
-            race_detail = (
-                "main PID changed during freshness inspection"
-                if _unit_main_pid(status.unit, run=run) != pid_before
-                else ""
+            race_detail = _process_identity_race_detail(
+                status.unit,
+                pid=pid_before,
+                process_start_ticks=None,
+                run=run,
+                read_process_file=read_process_file,
             )
         else:
             try:
@@ -519,20 +511,14 @@ def collect_worker_staleness(
                 }
             )
             continue
-        race_detail = (
-            _process_identity_race_detail(
-                status.unit,
-                pid=pid_before,
-                process_start_ticks=import_evidence.process_start_ticks,
-                run=run,
-                read_process_file=read_process_file,
-            )
-            if import_evidence is not None
-            else (
-                "main PID changed during freshness inspection"
-                if _unit_main_pid(status.unit, run=run) != pid_before
-                else ""
-            )
+        race_detail = _process_identity_race_detail(
+            status.unit,
+            pid=pid_before,
+            process_start_ticks=(
+                None if import_evidence is None else import_evidence.process_start_ticks
+            ),
+            run=run,
+            read_process_file=read_process_file,
         )
         if race_detail:
             undetermined.append(
@@ -585,20 +571,14 @@ def collect_worker_staleness(
             )
             continue
 
-        race_detail = (
-            _process_identity_race_detail(
-                status.unit,
-                pid=pid_before,
-                process_start_ticks=import_evidence.process_start_ticks,
-                run=run,
-                read_process_file=read_process_file,
-            )
-            if import_evidence is not None
-            else (
-                "main PID changed during freshness inspection"
-                if _unit_main_pid(status.unit, run=run) != pid_before
-                else ""
-            )
+        race_detail = _process_identity_race_detail(
+            status.unit,
+            pid=pid_before,
+            process_start_ticks=(
+                None if import_evidence is None else import_evidence.process_start_ticks
+            ),
+            run=run,
+            read_process_file=read_process_file,
         )
         if race_detail:
             undetermined.append(

@@ -69,13 +69,15 @@ Workflow ORCA stage 검증도 하나의 직접 owner를 사용합니다.
 systemd CLI도 단방향 의존 그래프의 직접 owner를 사용합니다.
 
 - `systemd_plan.py`는 정규 unit 이름 formatting과 install planning을 소유합니다.
-- `cli_systemd_units.py`는 unit role 순서, systemctl 조회, 공용 unit status 모델을 소유하며
-  정규 이름 formatter를 재사용합니다.
+- `cli_systemd_units.py`는 unit role 순서, systemctl 호출, 공용 command runner,
+  target-user 해석, boot-selection mode cascade, 공용 unit status 모델을 소유하며 정규
+  이름 formatter를 재사용합니다. 이 계열의 모든 systemctl 호출은 이 모듈의 runner를
+  거치고, 오류 정책은 각 호출자가 유지합니다.
 - `cli_systemd_freshness.py`는 읽기 전용 worker/checkout freshness 근거를 소유하며 unit
   substrate에만 의존합니다.
-- `cli_systemd_status.py`는 status 조립·렌더링을, `cli_systemd_restart.py`는 restart 변경을
-  소유합니다. 두 command owner는 서로 임포트하지 않으며, 하위 evidence 모듈은 어느
-  command owner도 임포트하지 않습니다.
+- `cli_systemd_status.py`는 status 조립·렌더링을, `cli_systemd_restart.py`는 restart 변경을,
+  `cli_systemd_apply.py`는 install plan 적용을 소유합니다. command owner는 서로
+  임포트하지 않으며, 하위 evidence 모듈은 어느 command owner도 임포트하지 않습니다.
 
 코드와 테스트는 이 owner를 직접 임포트하세요. status facade를 추가하거나 freshness,
 unit, restart 동작을 형제 모듈을 통해 재export하지 마세요.
