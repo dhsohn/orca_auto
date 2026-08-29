@@ -10,7 +10,8 @@ from orca_auto.orca.attempt.resume import (
     resolve_execution_input,
     resume_terminal_decision,
 )
-from orca_auto.orca.state import new_state, state_path
+from orca_auto.orca.state import new_state
+from orca_auto.orca.state_reading import state_path
 from orca_auto.orca.types import RunState
 
 

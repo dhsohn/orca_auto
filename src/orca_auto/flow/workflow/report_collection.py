@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
@@ -13,9 +12,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, RUN_REPORT_JSON_FILE
 from orca_auto.core.engine_process import read_confined_text
-from orca_auto.core.statuses import FAILED_STATUSES, STATUS_CANCELLED
+from orca_auto.core.statuses import FAILED_STATUSES
 from orca_auto.core.utils import mapping_or_empty as _mapping
 from orca_auto.flow.conformer_selection import OrcaSelectedInputScienceIdentity
 from orca_auto.flow.contracts.workflow import (
@@ -25,11 +23,6 @@ from orca_auto.flow.contracts.workflow import (
 )
 from orca_auto.flow.orca_stage_evidence import (
     collect_verified_orca_stage_evidence,
-    resolve_verified_orca_stage_report,
-    stage_report_identity_matches,
-)
-from orca_auto.flow.orca_stage_evidence import (
-    stage_job_dirs as _stage_job_dirs,
 )
 from orca_auto.flow.orca_stage_evidence import (
     stage_metadata as _stage_metadata,
@@ -45,6 +38,7 @@ from orca_auto.orca.parser.patterns import (
 from orca_auto.orca.report.attempts import duration_text
 from orca_auto.orca.report.si import SiBlock
 
+from . import report_diagnostics
 from .stage_summary import crest_stage_detail, stage_task_kind, xtb_stage_detail
 
 # Preserve the established category while the implementation moves behind direct owners.
@@ -62,11 +56,6 @@ _ORCA_ENERGY_SCAN_OVERLAP_BYTES = 4 * 1024
 assert _ORCA_ENERGY_SCAN_WINDOW_BYTES > _ORCA_ENERGY_SCAN_OVERLAP_BYTES
 _MAX_ORCA_ENERGY_CANDIDATES = 8
 _ORCA_ENERGY_READ_CHUNK_BYTES = 64 * 1024
-_DIAGNOSTIC_STAGE_STATUSES = frozenset({*FAILED_STATUSES, STATUS_CANCELLED})
-_INTERNAL_STAGE_ENGINES = {
-    "crest_stage": "crest",
-    "xtb_stage": "xtb",
-}
 
 
 @dataclass(frozen=True)
@@ -123,17 +112,6 @@ class WorkflowReportData:
     consumed_orca_machine_paths: tuple[Path, ...] = ()
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
-def _stage_has_diagnostic_status(stage: Mapping[str, Any]) -> bool:
-    return (
-        _text(stage.get("status")).lower() in _DIAGNOSTIC_STAGE_STATUSES
-        or _text(_stage_task(stage).get("status")).lower() in _DIAGNOSTIC_STAGE_STATUSES
-    )
-
-
 def latest_engrad_energy(directory: Path) -> float | None:
     """Total energy (Eh) from the most recent ``*.engrad`` in ``directory``."""
     try:
@@ -179,162 +157,6 @@ def latest_engrad_energy(directory: Path) -> float | None:
             # not reach the report or the machine observation.
             return parsed if math.isfinite(parsed) else None
     return None
-
-
-def _load_json(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
-    except (OSError, ValueError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _stage_job_report(stage: Mapping[str, Any]) -> tuple[Path | None, dict[str, Any] | None]:
-    """Resolve the canonical verified report for one workflow stage."""
-    task_engine = _text(_stage_task(stage).get("engine")).lower()
-    internal_engine = _INTERNAL_STAGE_ENGINES.get(_text(stage.get("stage_kind")).lower())
-    if internal_engine is not None:
-        if task_engine != internal_engine:
-            return None, None
-        for job_dir in _stage_job_dirs(stage):
-            state_path = job_dir / "job_state.json"
-            state = _load_json(state_path)
-            if (
-                state is not None
-                and _text(state.get("engine")).lower() == internal_engine
-                and stage_report_identity_matches(
-                    stage,
-                    state,
-                    require_job_and_run=False,
-                )
-            ):
-                return state_path, state
-        return None, None
-    if task_engine in _INTERNAL_STAGE_ENGINES.values():
-        return None, None
-    return resolve_verified_orca_stage_report(stage)
-
-
-def _stage_status_reason(stage: Mapping[str, Any], report: Mapping[str, Any] | None) -> str:
-    metadata = _stage_metadata(stage)
-    task = _stage_task(stage)
-    report_status = _mapping(report.get("status")) if report is not None else {}
-    for value in (
-        metadata.get("reaction_handoff_reason"),
-        metadata.get("reason"),
-        report_status.get("reason"),
-        _mapping(task.get("cancel_result")).get("reason"),
-        _mapping(task.get("submission_result")).get("reason"),
-        metadata.get("submission_deferred_reason"),
-    ):
-        reason = _text(value)
-        if reason:
-            return reason
-    return ""
-
-
-_LOG_TAIL_LIMIT_BYTES = 256 * 1024
-
-
-def _read_log_tail(path: Path) -> str:
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            size = handle.tell()
-            handle.seek(max(0, size - _LOG_TAIL_LIMIT_BYTES))
-            return handle.read().decode("utf-8", errors="ignore")
-    except OSError:
-        return ""
-
-
-def _crest_topology_change_explanation(stdout_text: str) -> str:
-    lowered = stdout_text.lower()
-    if (
-        "change in topology detected" not in lowered
-        and "a topology change was seen in the initial geometry optimization" not in lowered
-    ):
-        return ""
-    affected_atoms = ""
-    lines = stdout_text.splitlines()
-    for index, line in enumerate(lines):
-        if "topology change compared to the input affects atoms:" not in line.lower():
-            continue
-        for candidate in lines[index + 1 :]:
-            candidate = candidate.strip()
-            if candidate:
-                affected_atoms = candidate
-                break
-        break
-    explanation = (
-        "CREST stopped because the initial geometry optimization changed molecular topology."
-    )
-    if affected_atoms:
-        explanation += f" Affected atoms: {affected_atoms}."
-    return (
-        f"{explanation} Check the input geometry; if the change is intentional, "
-        "set crest.noreftopo: true before restarting, noting that this can retain artifacts."
-    )
-
-
-def _relative_href(path: Path, workspace_dir: Path) -> str:
-    try:
-        return os.path.relpath(path, workspace_dir)
-    except ValueError:
-        return str(path)
-
-
-def _direct_single_link_file(path: Path, generation_dir: Path) -> Path | None:
-    try:
-        details = path.stat(follow_symlinks=False)
-        resolved = path.resolve(strict=True)
-    except (OSError, RuntimeError):
-        return None
-    if (
-        path.parent != generation_dir
-        or resolved != path
-        or not stat.S_ISREG(details.st_mode)
-        or details.st_nlink != 1
-    ):
-        return None
-    return path
-
-
-def _stage_diagnostic(
-    stage: Mapping[str, Any], workspace_dir: Path, *, include_job_artifacts: bool
-) -> tuple[str, str, str | None]:
-    if not include_job_artifacts:
-        report_path, report = None, None
-    else:
-        report_path, report = _stage_job_report(stage)
-    reason = _stage_status_reason(stage, report)
-    if reason == "completed":
-        reason = ""
-    explanation = _text(_stage_metadata(stage).get("reaction_handoff_message"))
-    if not include_job_artifacts:
-        return reason, explanation, None
-    job_dir = report_path.parent if report_path is not None else None
-    details_path: Path | None = None
-    engine = _text(_stage_task(stage).get("engine")).lower()
-    if engine == "crest" and job_dir is not None:
-        stdout_path = job_dir / "crest.stdout.log"
-        explanation = _crest_topology_change_explanation(_read_log_tail(stdout_path))
-        if explanation:
-            details_path = stdout_path
-    if engine == "orca" and job_dir is not None and report is not None:
-        details_path = _direct_single_link_file(job_dir / RUN_REPORT_HTML_FILE, job_dir)
-        if details_path is None:
-            details_path = report_path
-    if details_path is None and job_dir is not None:
-        artifact_names = (
-            ("job_state.json",) if engine in {"xtb", "crest"} else (RUN_REPORT_JSON_FILE,)
-        )
-        for name in artifact_names:
-            candidate = job_dir / name
-            if candidate.exists():
-                details_path = candidate
-                break
-    details_href = _relative_href(details_path, workspace_dir) if details_path is not None else None
-    return reason, explanation, details_href
 
 
 def _pread_exact(descriptor: int, offset: int, size: int) -> bytes | None:
@@ -486,13 +308,13 @@ def _orca_report_output_energy_state(
 
     engine_payload = _mapping(report_payload.get("engine_payload"))
     final_result = _mapping(engine_payload.get("final_result"))
-    final_out_path = _text(final_result.get("last_out_path"))
+    final_out_path = report_diagnostics.normalized_text(final_result.get("last_out_path"))
     candidates = [final_out_path]
     attempts = engine_payload.get("attempts")
     if isinstance(attempts, list):
         for attempt in reversed(attempts[-(_MAX_ORCA_ENERGY_CANDIDATES - 1) :]):
             if isinstance(attempt, Mapping):
-                candidates.append(_text(attempt.get("out_path")))
+                candidates.append(report_diagnostics.normalized_text(attempt.get("out_path")))
 
     seen: set[str] = set()
     for position, raw_path in enumerate(candidates):
@@ -531,19 +353,19 @@ def _orca_stage_result(
     | None = None,
 ) -> OrcaStageResult:
     metadata = _stage_metadata(stage)
-    stage_id = _text(stage.get("stage_id"))
-    label = _text(metadata.get("selected_input_label")) or stage_id
+    stage_id = report_diagnostics.normalized_text(stage.get("stage_id"))
+    label = report_diagnostics.normalized_text(metadata.get("selected_input_label")) or stage_id
 
     reason = ""
     attempt_count = 0
     imaginary_count: int | None = None
-    report_json_path, report_payload = _stage_job_report(stage)
+    report_json_path, report_payload = report_diagnostics.resolve_stage_job_report(stage)
     if report_payload is not None:
         engine_payload = report_payload.get("engine_payload")
         engine_payload = engine_payload if isinstance(engine_payload, dict) else {}
         final_result = engine_payload.get("final_result")
         final_result = final_result if isinstance(final_result, dict) else {}
-        reason = _text(final_result.get("reason"))
+        reason = report_diagnostics.normalized_text(final_result.get("reason"))
         attempts = engine_payload.get("attempts")
         attempts = attempts if isinstance(attempts, list) else []
         attempt_count = len(attempts)
@@ -561,7 +383,7 @@ def _orca_stage_result(
         energy = block.result.energy_hartree
         imaginary_count = block.imaginary_count
     elif (
-        _text(stage.get("status")).lower() != "completed"
+        report_diagnostics.normalized_text(stage.get("status")).lower() != "completed"
         and report_json_path is not None
         and report_payload is not None
     ):
@@ -585,12 +407,7 @@ def _orca_stage_result(
     report_href: str | None = None
     if report_json_path is not None:
         # The HTML report is co-located with the generation-local report JSON.
-        job_report_html = report_json_path.parent / RUN_REPORT_HTML_FILE
-        if _direct_single_link_file(job_report_html, report_json_path.parent) is not None:
-            try:
-                report_href = os.path.relpath(job_report_html, workspace_dir)
-            except ValueError:
-                report_href = str(job_report_html)
+        report_href = report_diagnostics.report_html_href(report_json_path, workspace_dir)
 
     science_identity = None
     if authoritative_evidence is not None:
@@ -606,7 +423,7 @@ def _orca_stage_result(
     return OrcaStageResult(
         stage_id=stage_id,
         label=label,
-        status=_text(stage.get("status")),
+        status=report_diagnostics.normalized_text(stage.get("status")),
         reason=reason,
         energy=energy,
         rel_kcal=None,
@@ -665,8 +482,8 @@ def collect_workflow_report_data(
 ) -> WorkflowReportData:
     metadata = payload.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
-    requested_at = _text(payload.get("requested_at"))
-    last_advanced_at = _text(metadata.get("last_advanced_at"))
+    requested_at = report_diagnostics.normalized_text(payload.get("requested_at"))
+    last_advanced_at = report_diagnostics.normalized_text(metadata.get("last_advanced_at"))
 
     stage_rows: list[WorkflowStageRow] = []
     failure_rows: list[WorkflowFailureRow] = []
@@ -675,16 +492,16 @@ def collect_workflow_report_data(
     crest_total: int | None = None
     xtb_total: int | None = None
     for stage in workflow_stage_dicts(payload):
-        stage_kind = _text(stage.get("stage_kind"))
-        stage_status = _text(stage.get("status")).lower()
+        stage_kind = report_diagnostics.normalized_text(stage.get("stage_kind"))
+        stage_status = report_diagnostics.normalized_text(stage.get("status")).lower()
         task = _stage_task(stage)
-        task_status = _text(task.get("status")).lower()
-        engine = _text(task.get("engine")).lower() or stage_kind.removesuffix("_stage")
-        include_job_artifacts = _stage_has_diagnostic_status(stage)
-        reason, explanation, details_href = _stage_diagnostic(
+        task_status = report_diagnostics.normalized_text(task.get("status")).lower()
+        engine = report_diagnostics.normalized_text(
+            task.get("engine")
+        ).lower() or stage_kind.removesuffix("_stage")
+        reason, explanation, details_href = report_diagnostics.collect_stage_diagnostic(
             stage,
             workspace_dir,
-            include_job_artifacts=include_job_artifacts,
         )
         detail = ""
         if stage_kind == "crest_stage":
@@ -742,7 +559,7 @@ def collect_workflow_report_data(
         if stage_status in FAILED_STATUSES or task_status in FAILED_STATUSES:
             failure_rows.append(
                 WorkflowFailureRow(
-                    stage_id=_text(stage.get("stage_id")),
+                    stage_id=report_diagnostics.normalized_text(stage.get("stage_id")),
                     engine=engine,
                     status=(stage_status if stage_status in FAILED_STATUSES else task_status),
                     reason=reason,
@@ -752,7 +569,7 @@ def collect_workflow_report_data(
             )
         stage_rows.append(
             WorkflowStageRow(
-                stage_id=_text(stage.get("stage_id")),
+                stage_id=report_diagnostics.normalized_text(stage.get("stage_id")),
                 stage_kind=stage_kind,
                 status=stage_status,
                 detail=detail,
@@ -762,19 +579,19 @@ def collect_workflow_report_data(
     workflow_error = _mapping(metadata.get("workflow_error"))
 
     return WorkflowReportData(
-        workflow_id=_text(payload.get("workflow_id")),
-        template_name=_text(payload.get("template_name")),
-        status=_text(payload.get("status")),
-        reaction_key=_text(payload.get("reaction_key")),
+        workflow_id=report_diagnostics.normalized_text(payload.get("workflow_id")),
+        template_name=report_diagnostics.normalized_text(payload.get("template_name")),
+        status=report_diagnostics.normalized_text(payload.get("status")),
+        reaction_key=report_diagnostics.normalized_text(payload.get("reaction_key")),
         requested_at=requested_at,
         last_advanced_at=last_advanced_at,
         total_duration_text=duration_text(requested_at, last_advanced_at),
         stage_rows=tuple(stage_rows),
         failure_rows=tuple(failure_rows),
-        workflow_error_reason=_text(workflow_error.get("reason")),
-        workflow_error_message=_text(workflow_error.get("message")),
-        workflow_error_scope=_text(workflow_error.get("scope")),
-        workflow_error_stage_id=_text(workflow_error.get("stage_id")),
+        workflow_error_reason=report_diagnostics.normalized_text(workflow_error.get("reason")),
+        workflow_error_message=report_diagnostics.normalized_text(workflow_error.get("message")),
+        workflow_error_scope=report_diagnostics.normalized_text(workflow_error.get("scope")),
+        workflow_error_stage_id=report_diagnostics.normalized_text(workflow_error.get("stage_id")),
         orca_results=_with_relative_energies(orca_results),
         crest_conformer_total=crest_total,
         xtb_candidate_total=xtb_total,

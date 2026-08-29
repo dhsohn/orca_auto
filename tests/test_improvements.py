@@ -13,12 +13,13 @@ from orca_auto.orca.completion_rules import CompletionMode
 from orca_auto.orca.execution import execute_orca_run
 from orca_auto.orca.orca_runner import RunResult
 from orca_auto.orca.out_analyzer import analyze_output
-from orca_auto.orca.state import load_state, save_state
+from orca_auto.orca.state import save_state
 from orca_auto.orca.state_machine import (
     RESUMABLE_FAILED_REASONS,
     decide_attempt_outcome,
     is_resumable_state,
 )
+from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.statuses import AnalyzerStatus
 from orca_auto.orca.types import RunState
 

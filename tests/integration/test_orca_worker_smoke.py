@@ -23,7 +23,7 @@ from orca_auto.orca.engine import ENGINE_DEFINITION
 from orca_auto.orca.parser import parse_orca_output
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
 from orca_auto.orca.queue.worker import QueueWorker
-from orca_auto.orca.state import (
+from orca_auto.orca.state_reading import (
     load_report_json,
     load_state,
     report_json_path,

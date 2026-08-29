@@ -16,7 +16,8 @@ from orca_auto.orca.retry_policy import (
     effective_max_retries,
     retry_policy_for_input,
 )
-from orca_auto.orca.state import load_state, new_state
+from orca_auto.orca.state import new_state
+from orca_auto.orca.state_reading import load_state
 
 
 class _InterruptRunner:

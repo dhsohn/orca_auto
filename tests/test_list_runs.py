@@ -16,7 +16,8 @@ from orca_auto.orca.queue.adapter import (
     update_metadata,
 )
 from orca_auto.orca.run_lock import acquire_run_lock
-from orca_auto.orca.state import report_json_path, save_state, state_path
+from orca_auto.orca.state import save_state
+from orca_auto.orca.state_reading import report_json_path, state_path
 from tests.engine_artifact_helpers import orca_artifact_payload
 
 

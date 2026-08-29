@@ -28,7 +28,7 @@ from ..job_locations import (
     upsert_job_record,
 )
 from ..notifications import notify_run_finished_event
-from ..state import load_state, state_payload_job_id
+from ..state_reading import load_state, state_payload_job_id
 from .entries import queue_entry_metadata, queue_entry_reaction_dir, queue_entry_task_id
 
 logger = logging.getLogger(__name__)

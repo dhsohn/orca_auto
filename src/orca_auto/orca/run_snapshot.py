@@ -16,7 +16,7 @@ from orca_auto.core.paths import (
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from .job_locations import list_job_location_records, resolve_record_job_dir
-from .state import STATE_FILE_NAME, _state_from_normalized_payload
+from .state_reading import STATE_FILE_NAME, state_from_normalized_payload
 
 StateFileIdentity = tuple[int, int, int, int]
 
@@ -271,7 +271,7 @@ def collect_run_snapshots(allowed_root: Path) -> list[RunSnapshot]:
             if loaded_state is None:
                 continue
             state_payload, state_file_identity = loaded_state
-            state = _state_from_normalized_payload(state_payload)
+            state = state_from_normalized_payload(state_payload)
             if state is None:
                 continue
             state_run_identity, state_generation_identity = _state_publication_identity(

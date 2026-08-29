@@ -347,8 +347,10 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 기존 top-level 또는 `%scf`
   orbital-input 선언을 semantic하게 인식하므로 recovery가 두 번째 source를 주입하지
   않습니다. 재개된 입력은 `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
-- **상태 & 리포트:** `state.py`/`state_machine.py`가 private `job_state.json`을
-  영속화하고, 완료 시 공통 `machine.json`을 마지막에 발행합니다. Opt,
+- **상태 & 리포트:** `state_reading.py`가 bounded private state read, 검증된
+  generation binding, public machine 검증을 소유하고, `state.py`는 state mutation과
+  artifact publication을, `state_machine.py`는 transition 적용을 소유합니다. 완료 시
+  공통 `machine.json`을 마지막에 발행합니다. Opt,
   OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업은 추가로
   `job_report.html`(`report/`)을 생성합니다 — `report/composer.py`가 공통
   페이지 틀과 계산 component를 조합해 만드는 단일 파일 시각 리포트입니다. 여기에는
@@ -419,9 +421,11 @@ CREST/xTB stage 상세를 도출합니다. Report collection, workflow SI, phase
 notification은 이 owner를 직접 import하므로 다른 소비자의 private helper에
 의존하지 않습니다. ORCA energy·provenance 근거는 계속
 `report_collection.py`와 `flow/orca_stage_evidence.py`가 소유하며 summary owner는 두
-번째 근거 원본이 아닙니다. Workflow HTML rendering은 `report_collection.py`의
-불변 데이터에 한 방향으로 의존하고 collection은 renderer를 import하지
-않습니다.
+번째 근거 원본이 아닙니다. `flow/workflow/report_diagnostics.py`는 별도로 실패 stage
+status gate, 정규 state/report 해석, bounded log 진단, 안전한 details link를
+소유합니다. Report collection은 두 direct owner를 import하고 diagnostics는 collection이나
+rendering을 import하지 않습니다. Workflow HTML rendering은 `report_collection.py`의
+불변 데이터에 한 방향으로 의존하고 collection은 renderer를 import하지 않습니다.
 
 Workflow restart에는 세 명시적 owner가 있습니다. `flow/restart/settings.py`는 manifest와
 durable workflow state를 해석하면서 과학 불변성을 검사하고,

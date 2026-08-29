@@ -34,8 +34,9 @@ from .retry_policy import retry_input_path
 from .run_context import RunExecutionContext, resolve_execution_context
 from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy
-from .state import load_state, save_state
+from .state import save_state
 from .state_machine import RESUMABLE_RUN_STATUSES, load_or_create_state
+from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
 
 RETRY_INP_RE = re.compile(r"\.retry\d+$", re.IGNORECASE)

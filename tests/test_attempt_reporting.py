@@ -13,7 +13,8 @@ from orca_auto.orca.attempt.reporting import (
     finished_notification_already_sent,
     last_out_path_from_state,
 )
-from orca_auto.orca.state import load_state, new_state
+from orca_auto.orca.state import new_state
+from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 from orca_auto.orca.types import RunFinishedNotification
 

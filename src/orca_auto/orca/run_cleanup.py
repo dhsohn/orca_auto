@@ -31,7 +31,8 @@ from .run_snapshot import (
     _state_publication_identity,
     collect_run_snapshots,
 )
-from .state import STATE_FILE_NAME, STATE_MUTATION_LOCK_FILE_NAME
+from .state import STATE_MUTATION_LOCK_FILE_NAME
+from .state_reading import STATE_FILE_NAME
 from .statuses import RunStatus
 
 logger = logging.getLogger(__name__)

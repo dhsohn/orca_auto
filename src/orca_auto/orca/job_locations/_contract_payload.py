@@ -15,7 +15,7 @@ from orca_auto.core.queue.engine.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KE
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.metadata import mapping_metadata_value as queue_entry_metadata_value
 
-from ..state import REPORT_JSON_NAME, STATE_FILE_NAME, load_report_json
+from ..state_reading import REPORT_JSON_NAME, STATE_FILE_NAME, load_report_json
 from ._generation import (
     current_generation_payloads,
     payload_generation_provenance,

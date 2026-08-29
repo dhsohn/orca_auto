@@ -30,7 +30,8 @@ from orca_auto.orca.execution import (
 )
 from orca_auto.orca.orca_runner import RunResult, WorkerShutdownInterrupt
 from orca_auto.orca.run_lock import acquire_run_lock
-from orca_auto.orca.state import load_state, save_state, state_path
+from orca_auto.orca.state import save_state
+from orca_auto.orca.state_reading import load_state, state_path
 from orca_auto.orca.types import RunFinalResult, RunState
 
 build_parser = unified_cli.build_parser

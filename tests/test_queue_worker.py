@@ -54,11 +54,10 @@ from orca_auto.orca.queue.worker_tracking import (
 )
 from orca_auto.orca.state import (
     finalize_state,
-    load_state,
     new_state,
-    report_json_path,
     save_state,
 )
+from orca_auto.orca.state_reading import load_state, report_json_path
 from tests.engine_artifact_helpers import orca_artifact_payload
 from tests.process_helpers import patch_missing_process_group, preserved_signal_handlers
 from tests.queue_worker_helpers import (

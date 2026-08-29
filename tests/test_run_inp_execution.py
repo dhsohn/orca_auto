@@ -8,7 +8,8 @@ import pytest
 
 from orca_auto.orca import execution as run_inp_execution
 from orca_auto.orca.run_context import RunExecutionContext
-from orca_auto.orca.state import load_state, save_state
+from orca_auto.orca.state import save_state
+from orca_auto.orca.state_reading import load_state
 
 
 def _write_running_state(reaction_dir: Path) -> None:

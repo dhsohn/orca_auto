@@ -5,7 +5,7 @@ from typing import Any
 
 from orca_auto.core.indexing import JobLocationRecord, resolve_job_location
 
-from ..state import load_state
+from ..state_reading import load_state
 from ._models import JobArtifactContext
 from ._records import list_job_location_records
 from ._tracking import matching_tracked_job_dirs
