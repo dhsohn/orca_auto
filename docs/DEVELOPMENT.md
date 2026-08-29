@@ -40,9 +40,15 @@ Workflow HTML reporting also uses direct owners rather than a facade:
 - `report_diagnostics.py` owns failed-stage status gating, canonical verified
   state/report resolution, reason precedence, bounded log tails, and safe
   details links.
-- `report_collection.py` imports that diagnostic owner and derives the immutable
-  report data consumed by HTML and machine observations. ORCA energy and science
-  evidence policy remains in collection and its dedicated evidence owners.
+- `report_energy_evidence.py` owns size-bounded `.engrad` reads and confined,
+  backward-windowed ORCA output-chain scans, including recorded-final authority
+  over earlier attempts and annotation detection within that chain. It stays
+  below collection and does not decide candidate admission, cross-channel
+  `.engrad`-versus-output precedence, or relative-energy comparability.
+- `report_collection.py` imports both evidence owners and derives the immutable
+  report data consumed by HTML and machine observations. Completed evidence
+  acceptance, cross-channel energy-source policy and its annotated-output veto,
+  science identity, and ranking remain in collection.
 - `report_rendering.py` imports collection, renders the page, and atomically
   publishes `workflow_report.html`. Diagnostics never imports collection or
   rendering, and collection never imports rendering.

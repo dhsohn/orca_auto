@@ -40,9 +40,14 @@ workflow SI는 `collection.py`·`publication.py`·`rendering.py` 세 모듈의 �
 
 - `report_diagnostics.py`는 실패 stage status gate, 정규 검증 state/report 해석,
   reason 우선순위, bounded log tail, 안전한 details link를 소유합니다.
-- `report_collection.py`는 이 진단 owner를 import해 HTML과 machine observation이
-  소비하는 불변 리포트 데이터를 도출합니다. ORCA energy·science 근거 정책은 계속
-  collection과 전용 evidence owner에 남습니다.
+- `report_energy_evidence.py`는 size-bounded `.engrad` 읽기와 confined
+  backward-window ORCA output-chain scan, 그 chain 내부에서 이전 attempt보다 recorded
+  final을 우선하는 권위와 annotation 검출을 소유합니다. Collection 아래에 머물며 후보
+  admission, `.engrad`-vs-output 교차 채널 우선순위, 상대 에너지 비교 가능성은 판정하지
+  않습니다.
+- `report_collection.py`는 두 evidence owner를 import해 HTML과 machine observation이
+  소비하는 불변 리포트 데이터를 도출합니다. 완료 근거 수락, 교차 채널 에너지 source
+  정책과 annotated-output veto, science identity, ranking은 collection에 남습니다.
 - `report_rendering.py`는 collection을 임포트해 페이지를 렌더링하고
   `workflow_report.html`을 원자적으로 발행합니다. diagnostics는 collection이나
   rendering을 임포트하지 않고, collection도 rendering을 임포트하지 않습니다.
