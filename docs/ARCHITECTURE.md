@@ -452,14 +452,19 @@ Workflow funnel summaries have a neutral direct owner:
 `flow/workflow/stage_summary.py` reads task kinds, counts concatenated-XYZ
 frames, and derives CREST/xTB stage details. Report collection, workflow SI,
 and phase notifications import it directly, so none depends on another
-consumer's private helpers. ORCA energy and provenance evidence remains in
-`report_collection.py` and `flow/orca_stage_evidence.py`; the summary owner is
-not a second evidence source. `flow/workflow/report_diagnostics.py` separately
-owns failed-stage status gating, canonical state/report resolution, bounded log
-diagnostics, and safe details links. Report collection imports both direct
-owners, while diagnostics imports neither collection nor rendering. Workflow
-HTML rendering depends one way on the immutable data from
-`report_collection.py`, and collection never imports the renderer.
+consumer's private helpers. The summary owner is not a second ORCA evidence
+source. `flow/orca_stage_evidence.py` owns authoritative completed-stage
+provenance, while `flow/workflow/report_energy_evidence.py` owns
+generation-confined raw `.engrad` reads plus final-versus-attempt authority and
+annotation detection within the output chain used for non-completed report
+rows. Report collection retains completed-evidence acceptance, cross-channel
+`.engrad`-versus-output precedence, the annotated-output veto of `.engrad`,
+science identity, candidate admission, and relative energy ranking. Separately,
+`flow/workflow/report_diagnostics.py` owns failed-stage status gating, canonical
+state/report resolution, bounded log diagnostics, and safe details links.
+Collection imports the direct evidence owners and never imports rendering; the
+evidence readers cannot import collection or rendering. Workflow HTML rendering
+depends one way on immutable data from `report_collection.py`.
 
 Workflow restart has three explicit owners. `flow/restart/settings.py` resolves
 the manifest and durable workflow state while enforcing scientific invariants;

@@ -419,13 +419,17 @@ Workflow funnel summary에는 중립적인 direct owner가 있습니다.
 `flow/workflow/stage_summary.py`는 task kind를 읽고, 연결 XYZ frame을 계수하며,
 CREST/xTB stage 상세를 도출합니다. Report collection, workflow SI, phase
 notification은 이 owner를 직접 import하므로 다른 소비자의 private helper에
-의존하지 않습니다. ORCA energy·provenance 근거는 계속
-`report_collection.py`와 `flow/orca_stage_evidence.py`가 소유하며 summary owner는 두
-번째 근거 원본이 아닙니다. `flow/workflow/report_diagnostics.py`는 별도로 실패 stage
-status gate, 정규 state/report 해석, bounded log 진단, 안전한 details link를
-소유합니다. Report collection은 두 direct owner를 import하고 diagnostics는 collection이나
-rendering을 import하지 않습니다. Workflow HTML rendering은 `report_collection.py`의
-불변 데이터에 한 방향으로 의존하고 collection은 renderer를 import하지 않습니다.
+의존하지 않습니다. Summary owner는 두 번째 ORCA 근거 원본이 아닙니다.
+`flow/orca_stage_evidence.py`가 완료 stage의 authoritative provenance를 소유하고,
+`flow/workflow/report_energy_evidence.py`가 비완료 report row에 쓰는
+generation-confined raw `.engrad` 읽기와 output chain 내부의 final-vs-attempt 권위 및
+annotation 검출을 소유합니다. Report collection은 완료 근거 수락, `.engrad`-vs-output
+교차 채널 우선순위, annotated output의 `.engrad` 거부, science identity, 후보 admission,
+상대 에너지 ranking을 계속 소유합니다. `flow/workflow/report_diagnostics.py`는
+별도로 실패 stage status gate, 정규 state/report 해석, bounded log 진단, 안전한 details
+link를 소유합니다. Collection은 direct evidence owner를 import하고 rendering을 import하지
+않으며, evidence reader는 collection이나 rendering을 import할 수 없습니다. Workflow HTML
+rendering은 `report_collection.py`의 불변 데이터에 한 방향으로 의존합니다.
 
 Workflow restart에는 세 명시적 owner가 있습니다. `flow/restart/settings.py`는 manifest와
 durable workflow state를 해석하면서 과학 불변성을 검사하고,

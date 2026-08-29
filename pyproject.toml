@@ -155,6 +155,7 @@ module = [
     "orca_auto.flow.submitters.*",
     "orca_auto.flow.workflow.report_collection",
     "orca_auto.flow.workflow.report_diagnostics",
+    "orca_auto.flow.workflow.report_energy_evidence",
     "orca_auto.flow.workflow.report_rendering",
     "orca_auto.flow.workflow.si",
     "orca_auto.flow.workflow.si.*",
@@ -250,6 +251,7 @@ type = "forbidden"
 source_modules = [
     "orca_auto.flow.workflow.report_collection",
     "orca_auto.flow.workflow.report_diagnostics",
+    "orca_auto.flow.workflow.report_energy_evidence",
     "orca_auto.flow.workflow.machine",
     "orca_auto.flow.workflow.notifications",
     "orca_auto.flow.workflow.si.collection",
@@ -257,10 +259,11 @@ source_modules = [
 forbidden_modules = ["orca_auto.flow.workflow.report_rendering"]
 
 [[tool.importlinter.contracts]]
-name = "Workflow report collection stays above diagnostics"
+name = "Workflow report collection stays above evidence readers"
 type = "layers"
 layers = [
     "orca_auto.flow.workflow.report_collection",
+    "orca_auto.flow.workflow.report_energy_evidence",
     "orca_auto.flow.workflow.report_diagnostics",
 ]
 
