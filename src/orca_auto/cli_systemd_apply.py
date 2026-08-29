@@ -5,34 +5,21 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orca_auto.cli_errors import emit_error
+from orca_auto.cli_systemd_units import _run_command
 from orca_auto.systemd_plan import (
     DEFAULT_SYSTEMD_UNIT_DIR,
     SystemdInstallPlan,
-    _format_command,
     _is_root,
     _print_plan,
     _print_warnings,
-    _systemd_command_argv,
     build_systemd_install_plan,
 )
-
-
-def _run_command(
-    command: Sequence[str],
-    *,
-    use_sudo: bool,
-    run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
-) -> int:
-    argv = _systemd_command_argv(command, use_sudo=use_sudo)
-    print(f"$ {_format_command(command, use_sudo=use_sudo)}")
-    completed = run(argv, check=False)
-    return int(completed.returncode)
 
 
 def _write_unit_files(

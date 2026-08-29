@@ -69,13 +69,17 @@ materializer must not re-export validation functions as a compatibility facade.
 The systemd CLI also uses direct owners with a one-way dependency graph:
 
 - `systemd_plan.py` owns canonical unit-name formatting and install planning.
-- `cli_systemd_units.py` owns unit-role ordering, systemctl queries, and the
-  shared unit status model; it reuses the canonical name formatters.
+- `cli_systemd_units.py` owns unit-role ordering, systemctl invocation, the
+  shared command runner, target-user resolution, the boot-selection mode
+  cascade, and the shared unit status model; it reuses the canonical name
+  formatters. Every systemctl invocation in the family goes through its
+  runners, while each caller keeps its own error policy.
 - `cli_systemd_freshness.py` owns read-only worker/checkout freshness evidence
   and depends only on the unit substrate.
 - `cli_systemd_status.py` assembles and renders status; `cli_systemd_restart.py`
-  owns restart mutation. The command owners do not import each other, and the
-  lower evidence modules never import either command owner.
+  owns restart mutation; `cli_systemd_apply.py` owns install-plan application.
+  The command owners do not import each other, and the lower evidence modules
+  never import any command owner.
 
 Import these owners directly in code and tests. Do not add a status facade or
 re-export freshness, unit, or restart operations through a sibling module.

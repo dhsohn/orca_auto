@@ -9,7 +9,6 @@ from typing import Any
 
 from orca_auto import cli_systemd_units, systemd_plan
 from orca_auto.cli_errors import emit_error
-from orca_auto.cli_systemd_apply import _run_command
 from orca_auto.core.utils.coercion import normalize_text
 
 
@@ -42,13 +41,7 @@ def _query_workflow_worker_state(
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> str:
     try:
-        completed = run(
-            ["systemctl", "is-active", unit],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        completed = cli_systemd_units._run_systemctl("is-active", unit, run=run)
     except OSError as exc:
         raise ValueError(f"systemctl failed: {exc}") from exc
     stdout = normalize_text(completed.stdout)
@@ -74,8 +67,9 @@ def _restartable_worker_units(
     would report success over a worker still running pre-deploy code.
     """
 
-    units = [systemd_plan._worker_unit_for_user(target_user)]
-    workflow_unit = systemd_plan._workflow_worker_unit_for_user(target_user)
+    units_by_role = dict(cli_systemd_units._service_units_for_user(target_user))
+    units = [units_by_role["worker"]]
+    workflow_unit = units_by_role["workflow"]
     try:
         state = _query_workflow_worker_state(workflow_unit, run=run)
     except ValueError as exc:
@@ -98,7 +92,7 @@ def _require_current_restart_units(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> None:
-    required_units = (systemd_plan._engine_workers_unit_for_user(target_user),)
+    required_units = (dict(cli_systemd_units._service_units_for_user(target_user))["engines"],)
     missing = tuple(
         unit
         for unit in required_units
@@ -119,26 +113,19 @@ def _restart_unit_for_user(
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> str:
     _require_current_restart_units(target_user, run=run)
-    runtime_unit = systemd_plan._runtime_unit_for_user(target_user)
-    engines_unit = systemd_plan._engine_workers_unit_for_user(target_user)
-    worker_unit = systemd_plan._worker_unit_for_user(target_user)
-    runtime_enabled = cli_systemd_units._query_systemctl("is-enabled", runtime_unit, run=run)
-    if runtime_enabled in cli_systemd_units._ENABLED_UNIT_FILE_STATES:
-        return runtime_unit
-    engines_enabled = cli_systemd_units._query_systemctl("is-enabled", engines_unit, run=run)
-    if engines_enabled in cli_systemd_units._ENABLED_UNIT_FILE_STATES:
-        return engines_unit
-    worker_enabled = cli_systemd_units._query_systemctl("is-enabled", worker_unit, run=run)
-    if worker_enabled in cli_systemd_units._ENABLED_UNIT_FILE_STATES:
-        return engines_unit
-    if not all(
-        state in cli_systemd_units._READABLE_UNIT_FILE_STATES
-        for state in (runtime_enabled, engines_enabled, worker_enabled)
-    ):
-        runtime_active = cli_systemd_units._query_systemctl("is-active", runtime_unit, run=run)
-        if runtime_active == "active":
-            return runtime_unit
-    return engines_unit
+    units_by_role = dict(cli_systemd_units._service_units_for_user(target_user))
+
+    def enabled_state(label: str) -> str | None:
+        return cli_systemd_units._query_systemctl("is-enabled", units_by_role[label], run=run)
+
+    mode = cli_systemd_units._select_service_mode(
+        enabled_state=enabled_state,
+        runtime_active=lambda: (
+            cli_systemd_units._query_systemctl("is-active", units_by_role["runtime"], run=run)
+            == "active"
+        ),
+    )
+    return units_by_role["runtime"] if mode == "full" else units_by_role["engines"]
 
 
 @dataclass(frozen=True)
@@ -150,11 +137,6 @@ class ServiceRestartDeps:
     is_root: Callable[[], bool] | None = None
     default_service_user: Callable[[], str] | None = None
     restart_unit_for_user: Callable[..., str] | None = None
-
-
-def _service_target_user(args: argparse.Namespace, deps: ServiceRestartDeps) -> str:
-    default_user = deps.default_service_user or cli_systemd_units._default_service_user
-    return normalize_text(getattr(args, "target_user", None)) or normalize_text(default_user())
 
 
 def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | None = None) -> int:
@@ -172,7 +154,9 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
         emit_error("sudo is required to restart system services; rerun as root")
         return 1
 
-    target_user = _service_target_user(args, deps)
+    target_user = cli_systemd_units._service_target_user(
+        args, default_service_user=deps.default_service_user
+    )
     try:
         unit = restart_unit_for_user(target_user, run=run)
         worker_units = _restartable_worker_units(target_user, run=run)
@@ -182,7 +166,7 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
 
     for reset_unit in worker_units:
         print(f"Resetting service failure state for {reset_unit}")
-        rc = _run_command(
+        rc = cli_systemd_units._run_command(
             ("systemctl", "reset-failed", reset_unit),
             use_sudo=use_sudo,
             run=run,
@@ -191,7 +175,7 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
             return rc
 
     print(f"Restarting {unit}")
-    rc = _run_command(("systemctl", "restart", unit), use_sudo=use_sudo, run=run)
+    rc = cli_systemd_units._run_command(("systemctl", "restart", unit), use_sudo=use_sudo, run=run)
     if rc != 0:
         return rc
 
@@ -204,7 +188,9 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
     # which is what `service status` promises when it reports a stale worker.
     for worker_unit in worker_units:
         print(f"Restarting {worker_unit}")
-        rc = _run_command(("systemctl", "restart", worker_unit), use_sudo=use_sudo, run=run)
+        rc = cli_systemd_units._run_command(
+            ("systemctl", "restart", worker_unit), use_sudo=use_sudo, run=run
+        )
         if rc != 0:
             return rc
 

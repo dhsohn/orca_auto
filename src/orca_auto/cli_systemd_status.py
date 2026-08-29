@@ -83,30 +83,15 @@ def _service_status_payload(
 def _selected_service_mode(statuses: Sequence[cli_systemd_units.ServiceUnitStatus]) -> str:
     by_label = {status.label: status for status in statuses}
     runtime = by_label.get("runtime")
-    engines = by_label.get("engines")
-    worker = by_label.get("worker")
-    if runtime is not None and runtime.enabled in cli_systemd_units._ENABLED_UNIT_FILE_STATES:
-        return "full"
-    if engines is not None and engines.enabled in cli_systemd_units._ENABLED_UNIT_FILE_STATES:
-        return "worker-only"
-    # Recognize the previous direct worker boot selection as worker-only, but
-    # health remains false until the new engine-worker target is installed.
-    if worker is not None and worker.enabled in cli_systemd_units._ENABLED_UNIT_FILE_STATES:
-        return "worker-only"
-    enabled_states = tuple(
-        status.enabled for status in (runtime, engines, worker) if status is not None
+
+    def enabled_state(label: str) -> str | None:
+        status = by_label.get(label)
+        return None if status is None else status.enabled
+
+    return cli_systemd_units._select_service_mode(
+        enabled_state=enabled_state,
+        runtime_active=lambda: runtime is not None and runtime.active == "active",
     )
-    # Fall back to the live graph only when the boot selection cannot be read.
-    if (
-        enabled_states
-        and not all(
-            state in cli_systemd_units._READABLE_UNIT_FILE_STATES for state in enabled_states
-        )
-        and runtime is not None
-        and runtime.active == "active"
-    ):
-        return "full"
-    return "worker-only"
 
 
 def _required_service_labels(mode: str) -> frozenset[str]:
@@ -142,11 +127,6 @@ class ServiceStatusDeps:
     collect_worker_staleness: Callable[..., dict[str, Any] | None] | None = None
 
 
-def _service_target_user(args: argparse.Namespace, deps: ServiceStatusDeps) -> str:
-    default_user = deps.default_service_user or cli_systemd_units._default_service_user
-    return normalize_text(getattr(args, "target_user", None)) or normalize_text(default_user())
-
-
 def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | None = None) -> int:
     deps = deps or ServiceStatusDeps()
     which = deps.which or shutil.which
@@ -155,7 +135,9 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
         emit_error("systemctl is not available in this environment")
         return 1
 
-    target_user = _service_target_user(args, deps)
+    target_user = cli_systemd_units._service_target_user(
+        args, default_service_user=deps.default_service_user
+    )
     try:
         statuses = collect_status(target_user, run=deps.run or subprocess.run)
     except ValueError as exc:
