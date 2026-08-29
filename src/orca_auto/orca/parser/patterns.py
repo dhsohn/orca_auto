@@ -131,7 +131,7 @@ _CALC_TYPE_KEYWORDS: dict[str, str] = {
 }
 
 # Known method keywords
-_METHOD_KEYWORDS: list[str] = [
+_METHOD_KEYWORDS: tuple[str, ...] = (
     "CCSD(T)",
     "CCSD",
     "MP2",
@@ -170,10 +170,10 @@ _METHOD_KEYWORDS: list[str] = [
     "B97-3c",
     "r2SCAN-3c",
     "PBEh-3c",
-]
+)
 
 # Known basis set keywords
-_BASIS_KEYWORDS: list[str] = [
+_BASIS_KEYWORDS: tuple[str, ...] = (
     "def2-QZVPP",
     "def2-QZVP",
     "def2-TZVPP",
@@ -204,4 +204,4 @@ _BASIS_KEYWORDS: list[str] = [
     "6-31G*",
     "6-31G**",
     "STO-3G",
-]
+)

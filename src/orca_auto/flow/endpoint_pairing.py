@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from math import dist, isfinite, sqrt
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from orca_auto.core.utils.coercion import (
     coerce_mapping as _coerce_mapping,
@@ -186,7 +186,7 @@ class EndpointPairingPolicy:
         value: Any,
         *,
         default_max_pairs: int = 0,
-    ) -> EndpointPairingPolicy:
+    ) -> Self:
         default_limit = require_int(
             default_max_pairs,
             field="endpoint_pairing.default_max_pairs",

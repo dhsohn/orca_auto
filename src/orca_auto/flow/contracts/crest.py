@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 from orca_auto.core.utils.coercion import normalize_text
 
@@ -54,7 +54,7 @@ class CrestDownstreamPolicy:
     max_candidates: int = 3
 
     @classmethod
-    def build(cls, *, max_candidates: int = 3) -> CrestDownstreamPolicy:
+    def build(cls, *, max_candidates: int = 3) -> Self:
         return cls(max_candidates=require_int(max_candidates, field="max_candidates", minimum=1))
 
 

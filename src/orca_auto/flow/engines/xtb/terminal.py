@@ -8,6 +8,7 @@ from typing import Any
 
 from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.engine import execution as _engine_execution
+from orca_auto.core.utils import copy_dict_or_empty as _mapping
 from orca_auto.flow.engines.xtb.runner import XtbRunResult
 
 
@@ -114,10 +115,6 @@ def _flatten_engine_payload(payload: dict[str, Any]) -> dict[str, Any]:
     flattened.setdefault("status", str(status.get("state", "")).strip())
     flattened.setdefault("reason", str(status.get("reason", "")).strip())
     return flattened
-
-
-def _mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def load_terminal_summary(

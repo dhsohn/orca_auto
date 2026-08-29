@@ -65,7 +65,20 @@ line-length = 100
 # Layout (including line length) is owned by `ruff format`, which
 # `scripts/check.sh` enforces via `ruff format --check`. `E501` is intentionally
 # omitted so the formatter stays the single source of truth for line wrapping.
-select = ["E4", "E7", "E9", "F", "I", "B", "BLE", "UP", "RUF100"]
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "I",
+    "B",
+    "BLE",
+    "FURB162",
+    "FURB188",
+    "PYI034",
+    "UP",
+    "RUF100",
+]
 # UP042 (str-Enum -> StrEnum) changes `str()`/format semantics of status enums
 # that are serialized and compared as plain strings; keep the str mixin.
 ignore = ["UP042"]
@@ -90,22 +103,29 @@ module = [
     "orca_auto.cli_systemd_units",
     "orca_auto.cli_worker_supervision",
     "orca_auto.cli_workers",
-    "orca_auto.core.app_ids",
     "orca_auto.core.activity_icons",
-    "orca_auto.core.admission.persistence",
-    "orca_auto.core.admission.records",
+    "orca_auto.core.admission",
+    "orca_auto.core.admission.*",
+    "orca_auto.core.app_ids",
     "orca_auto.core.artifacts",
-    "orca_auto.core.config.bounded_yaml",
-    "orca_auto.core.config.files",
-    "orca_auto.core.config.schema",
+    "orca_auto.core.config",
+    "orca_auto.core.config.*",
     "orca_auto.core.engines.artifacts",
     "orca_auto.core.indexing.engine_records",
     "orca_auto.core.indexing.engines",
     "orca_auto.core.indexing.location",
+    "orca_auto.core.messaging",
+    "orca_auto.core.messaging.*",
     "orca_auto.core.notifications.engines",
     "orca_auto.core.paths",
     "orca_auto.core.paths.*",
     "orca_auto.core.queue.cancellable",
+    "orca_auto.core.queue.child",
+    "orca_auto.core.queue.child.*",
+    "orca_auto.core.queue.engine",
+    "orca_auto.core.queue.engine.*",
+    "orca_auto.core.queue.lifecycle",
+    "orca_auto.core.queue.lifecycle.*",
     "orca_auto.core.queue.metadata",
     "orca_auto.core.queue.persistence",
     "orca_auto.core.queue.processes",
@@ -117,17 +137,39 @@ module = [
     "orca_auto.core.utils.lock",
     "orca_auto.core.utils.persistence",
     "orca_auto.core.utils.process",
-    "orca_auto.flow.cli.worker_options",
+    "orca_auto.flow.activity",
+    "orca_auto.flow.activity.*",
+    "orca_auto.flow.cli",
+    "orca_auto.flow.cli.*",
     "orca_auto.flow.contracts",
     "orca_auto.flow.contracts.*",
     "orca_auto.flow.engine_options",
     "orca_auto.flow.orca_stage_validation",
+    "orca_auto.flow.registry",
+    "orca_auto.flow.registry.*",
     "orca_auto.flow.restart",
     "orca_auto.flow.restart.*",
+    "orca_auto.flow.runtime",
+    "orca_auto.flow.runtime.*",
+    "orca_auto.flow.submitters",
+    "orca_auto.flow.submitters.*",
     "orca_auto.flow.workflow.report_collection",
     "orca_auto.flow.workflow.report_rendering",
+    "orca_auto.flow.workflow.si",
+    "orca_auto.flow.workflow.si.*",
+    "orca_auto.flow.workflow.stage_summary",
     "orca_auto.flow.workflow.store",
+    "orca_auto.orca.attempt",
+    "orca_auto.orca.attempt.*",
+    "orca_auto.orca.commands",
+    "orca_auto.orca.commands.*",
     "orca_auto.orca.input_references",
+    "orca_auto.orca.job_locations",
+    "orca_auto.orca.job_locations.*",
+    "orca_auto.orca.parser",
+    "orca_auto.orca.parser.*",
+    "orca_auto.orca.report",
+    "orca_auto.orca.report.*",
     "orca_auto.orca.retry_policy",
     "orca_auto.orca.state_machine",
     "orca_auto.systemd_plan",
@@ -200,6 +242,15 @@ source_modules = [
     "orca_auto.flow.workflow.si.collection",
 ]
 forbidden_modules = ["orca_auto.flow.workflow.report_rendering"]
+
+[[tool.importlinter.contracts]]
+name = "Workflow SI layers: publication over rendering over collection"
+type = "layers"
+layers = [
+    "orca_auto.flow.workflow.si.publication",
+    "orca_auto.flow.workflow.si.rendering",
+    "orca_auto.flow.workflow.si.collection",
+]
 
 [[tool.importlinter.contracts]]
 name = "Systemd CLI layers: independent command owners over freshness over units over plan"

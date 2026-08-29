@@ -413,6 +413,16 @@ identity-bound 비-geometry dependency content, electronic state, ORCA version p
 정체성에 영향을 주지 않습니다. `flow/orca_stage_evidence.py`는 report, SI, interaction
 materialization이 함께 쓰는 authoritative report/state/input/output reader입니다.
 
+Workflow funnel summary에는 중립적인 direct owner가 있습니다.
+`flow/workflow/stage_summary.py`는 task kind를 읽고, 연결 XYZ frame을 계수하며,
+CREST/xTB stage 상세를 도출합니다. Report collection, workflow SI, phase
+notification은 이 owner를 직접 import하므로 다른 소비자의 private helper에
+의존하지 않습니다. ORCA energy·provenance 근거는 계속
+`report_collection.py`와 `flow/orca_stage_evidence.py`가 소유하며 summary owner는 두
+번째 근거 원본이 아닙니다. Workflow HTML rendering은 `report_collection.py`의
+불변 데이터에 한 방향으로 의존하고 collection은 renderer를 import하지
+않습니다.
+
 Workflow restart에는 세 명시적 owner가 있습니다. `flow/restart/settings.py`는 manifest와
 durable workflow state를 해석하면서 과학 불변성을 검사하고,
 `flow/restart/stage_ops.py`는 해석된 control을 개별 stage에 적용해 engine input을
@@ -430,9 +440,9 @@ durable workflow commit에 적용합니다. Package entry point가 독립적으�
 소유합니다. advance 루프가 writer 호출 전 publication을 checkpoint하고 게시 중단
 뒤의 내구성 재시도를 소유합니다. 별도의 수치·artifact 원본을 만들지 않으므로
 `workflow_si.md` 계약은 그대로 유지됩니다. package `__init__`은 아무것도 export하지
-않는 비-facade이고, 이 package를 다루는 import-linter 계약은 없습니다 — collection·
-rendering이 publication을 import하지 않는 방향성은 리뷰어가 지키는 관례입니다
-(`docs/DEVELOPMENT.md` 참조).
+않는 비-facade입니다. import-linter layers 계약이 publication → rendering →
+collection을 강제하므로 collection은 두 상위 owner를 import할 수 없고 rendering은
+publication을 import할 수 없습니다(`docs/DEVELOPMENT.md` 참조).
 
 ### advance 루프
 

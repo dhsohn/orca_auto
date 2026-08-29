@@ -4,16 +4,13 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.indexing import JobLocationRecord, resolve_job_location
+from orca_auto.core.utils.coercion import copy_dict_or_empty as _dict_payload
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca.job_locations import (
     load_job_runtime_context,
     load_orca_contract_payload,
     resolve_record_job_dir,
 )
-
-
-def _dict_payload(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def tracked_artifact_context_impl(

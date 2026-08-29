@@ -446,6 +446,16 @@ resource controls do not affect it. `flow/orca_stage_evidence.py` is the shared
 authoritative report/state/input/output reader used by report, SI, and
 interaction materialization.
 
+Workflow funnel summaries have a neutral direct owner:
+`flow/workflow/stage_summary.py` reads task kinds, counts concatenated-XYZ
+frames, and derives CREST/xTB stage details. Report collection, workflow SI,
+and phase notifications import it directly, so none depends on another
+consumer's private helpers. ORCA energy and provenance evidence remains in
+`report_collection.py` and `flow/orca_stage_evidence.py`; the summary owner is
+not a second evidence source. Workflow HTML rendering depends one way on the
+immutable data from `report_collection.py`, and collection never imports the
+renderer.
+
 Workflow restart has three explicit owners. `flow/restart/settings.py` resolves
 the manifest and durable workflow state while enforcing scientific invariants;
 `flow/restart/stage_ops.py` applies the resolved controls to individual stages
@@ -466,9 +476,9 @@ The advance loop checkpoints publication before
 calling the writer and owns durable retry after an interrupted publication.
 The modules do not introduce a second numerical or artifact source of
 truth; `workflow_si.md` retains its existing contract. The package `__init__`
-exports nothing and is not a facade, and no import-linter contract covers the
-package — keeping collection and rendering free of publication imports is a
-reviewer-enforced convention (see `docs/DEVELOPMENT.md`).
+exports nothing and is not a facade. An import-linter layers contract enforces
+publication → rendering → collection; collection cannot import either upper
+owner, and rendering cannot import publication (see `docs/DEVELOPMENT.md`).
 
 ### The advance loop
 

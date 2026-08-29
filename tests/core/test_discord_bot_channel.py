@@ -6,7 +6,7 @@ import json
 from email.message import Message as EmailMessage
 from http.client import IncompleteRead
 from io import BytesIO
-from typing import Literal
+from typing import Literal, Self
 from urllib.error import HTTPError
 
 import pytest
@@ -32,7 +32,7 @@ class _FakeResponse:
     def read(self) -> bytes:
         return self.body
 
-    def __enter__(self) -> _FakeResponse:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc: object) -> Literal[False]:

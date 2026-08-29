@@ -8,8 +8,8 @@ from .input_blocks import file_route_lines
 
 _ROUTE_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?")
 _RETRY_STEM_RE = re.compile(r"\.retry\d+$", re.IGNORECASE)
-_TS_TOKENS = {"OPTTS", "NEB-TS"}
-_FREQ_TOKENS = {"FREQ", "NUMFREQ", "ANFREQ"}
+_TS_TOKENS = frozenset({"OPTTS", "NEB-TS"})
+_FREQ_TOKENS = frozenset({"FREQ", "NUMFREQ", "ANFREQ"})
 
 
 @dataclass(frozen=True)

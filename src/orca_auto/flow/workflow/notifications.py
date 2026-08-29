@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from orca_auto.core.messaging import (
@@ -36,7 +35,7 @@ from orca_auto.core.utils import (
 )
 
 from ._phases import phase_snapshot
-from .report_collection import count_xyz_frames
+from .stage_summary import crest_stage_detail
 
 LOGGER = logging.getLogger(__name__)
 
@@ -56,8 +55,9 @@ def _phase_notification_state(payload: dict[str, Any]) -> dict[str, Any]:
     state = metadata.get("phase_notifications")
     if isinstance(state, dict):
         return state
-    metadata["phase_notifications"] = {}
-    return metadata["phase_notifications"]
+    state = {}
+    metadata["phase_notifications"] = state
+    return state
 
 
 def _raw_stages_by_id(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -84,15 +84,7 @@ def _crest_conformer_count(stage: dict[str, Any]) -> int | None:
     validation, which is capped at four by the engine's candidate list — it is
     not a conformer count. The ensemble file itself carries the real number.
     """
-    for artifact in _coerce_sequence(stage.get("output_artifacts")):
-        if not isinstance(artifact, dict):
-            continue
-        if _normalize_text(artifact.get("kind")) != "crest_conformer":
-            continue
-        path_text = _normalize_text(artifact.get("path"))
-        if path_text.endswith("crest_conformers.xyz"):
-            return count_xyz_frames(Path(path_text))
-    return None
+    return crest_stage_detail(stage)[1]
 
 
 def _xtb_candidate_count(stage: dict[str, Any]) -> int:

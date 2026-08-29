@@ -282,7 +282,7 @@ def matching_terminal_state_for_entry(
         if not isinstance(value, str) or not value.strip():
             return None
         try:
-            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value.strip())
         except (TypeError, ValueError):
             return None
         if parsed.tzinfo is None or parsed.utcoffset() is None:

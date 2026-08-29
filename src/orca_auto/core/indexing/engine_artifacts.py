@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
+
+from orca_auto.core.utils import copy_dict_or_empty as _mapping
 
 from .location import JobLocationRecord
 from .store import normalize_index_text as normalize_text
@@ -58,10 +60,6 @@ def normalized_artifact_view(source: dict[str, Any]) -> dict[str, Any]:
     view.setdefault("resource_request", resources.get("request"))
     view.setdefault("resource_actual", resources.get("actual"))
     return view
-
-
-def _mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def first_artifact_text(sources: tuple[dict[str, Any], ...], *keys: str) -> str:
@@ -189,7 +187,7 @@ class EngineArtifactSnapshot:
     resource_actual: dict[str, int]
 
     @classmethod
-    def empty(cls) -> EngineArtifactSnapshot:
+    def empty(cls) -> Self:
         return cls(
             job_id="",
             status="",
@@ -202,7 +200,7 @@ class EngineArtifactSnapshot:
         )
 
     @classmethod
-    def from_request(cls, request: EngineArtifactSnapshotRequest) -> EngineArtifactSnapshot:
+    def from_request(cls, request: EngineArtifactSnapshotRequest) -> Self:
         existing_record = _existing_artifact_record(
             request.existing,
             use_existing_fallback=request.use_existing_fallback,

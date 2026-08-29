@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from orca_auto.core.queue.engine import execution as engine_execution
+from orca_auto.core.queue.engine.worker_execution import WorkerShutdownRequested
 
 
 def test_object_attribute_fields_extracts_named_context_values() -> None:
@@ -147,11 +148,6 @@ def test_run_engine_worker_lifecycle_stops_on_shutdown_after_mark_running(
 def test_run_engine_worker_entry_with_spec_raises_shutdown_with_context(
     tmp_path: Path,
 ) -> None:
-    class ShutdownRequested(RuntimeError):
-        def __init__(self, context: Any) -> None:
-            super().__init__("shutdown")
-            self.context = context
-
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
     entry = SimpleNamespace(queue_id="q-1")
     context = SimpleNamespace(entry=entry)
@@ -160,7 +156,6 @@ def test_run_engine_worker_entry_with_spec_raises_shutdown_with_context(
         mark_running=lambda *_args: None,
         run_job=lambda *_args: "result",
         finalize_entry=lambda *_args: "finalized",
-        shutdown_exception_type=ShutdownRequested,
     )
 
     try:
@@ -173,8 +168,9 @@ def test_run_engine_worker_entry_with_spec_raises_shutdown_with_context(
                 shutdown_requested=lambda: True,
             ),
         )
-    except ShutdownRequested as exc:
+    except WorkerShutdownRequested as exc:
         assert exc.context is context
+        assert str(exc) == "worker_shutdown"
     else:
         raise AssertionError("expected shutdown")
 
@@ -216,7 +212,6 @@ def test_run_engine_worker_entry_with_spec_runs_lifecycle(tmp_path: Path) -> Non
         run_job=run_job,
         finalize_entry=finalize_entry,
         build_outcome=build_outcome,
-        shutdown_exception_type=RuntimeError,
     )
 
     outcome = engine_execution.run_engine_worker_entry_with_spec(
@@ -270,7 +265,6 @@ def test_run_engine_worker_entry_with_spec_factory_options_builds_options(
             **result,
             "emit_output": options.emit_output,
         },
-        shutdown_exception_type=RuntimeError,
     )
 
     outcome = engine_execution.run_engine_worker_entry_with_spec_factory_options(
@@ -307,7 +301,6 @@ def test_run_engine_worker_entry_with_spec_factory_options_builds_once(
             mark_running=lambda *_args: calls.append("mark"),
             run_job=lambda *_args: "result",
             finalize_entry=lambda *_args: "finalized",
-            shutdown_exception_type=RuntimeError,
         )
 
     outcome = engine_execution.run_engine_worker_entry_with_spec_factory_options(
@@ -323,38 +316,26 @@ def test_run_engine_worker_entry_with_spec_factory_options_builds_once(
 
 
 def test_raise_if_shutdown_requested_uses_engine_context() -> None:
-    class ShutdownRequested(RuntimeError):
-        def __init__(self, context: Any) -> None:
-            super().__init__("shutdown")
-            self.context = context
-
     context = SimpleNamespace(job_dir="/tmp/job")
 
     try:
         engine_execution.raise_if_shutdown_requested(
             context,
             engine_execution.EngineWorkerOptions(shutdown_requested=lambda: True),
-            shutdown_exception_type=ShutdownRequested,
         )
-    except ShutdownRequested as exc:
+    except WorkerShutdownRequested as exc:
         assert exc.context is context
     else:
         raise AssertionError("expected shutdown")
 
 
 def test_raise_if_shutdown_callback_requested_uses_engine_context() -> None:
-    class ShutdownRequested(RuntimeError):
-        def __init__(self, context: Any) -> None:
-            super().__init__("shutdown")
-            self.context = context
-
     context = SimpleNamespace(job_dir="/tmp/job")
 
-    with pytest.raises(ShutdownRequested) as exc_info:
+    with pytest.raises(WorkerShutdownRequested) as exc_info:
         engine_execution.raise_if_shutdown_callback_requested(
             context,
             lambda: True,
-            shutdown_exception_type=ShutdownRequested,
         )
 
     assert exc_info.value.context is context
@@ -681,7 +662,6 @@ def test_run_engine_worker_process_job_uses_process_dependency_group() -> None:
             register_running_job=registered.append,
         ),
         process_deps=process_deps,
-        shutdown_exception_type=RuntimeError,
         start_job=lambda: running,
         finalize_job=lambda *_args, **_kwargs: "finalized",
         build_failure_result=lambda exc: f"failed:{exc}",

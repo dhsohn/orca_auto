@@ -4,7 +4,7 @@ from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal, Self, TypeVar
 
 from ..utils.lock import file_lock
 from ..utils.persistence import (
@@ -259,7 +259,7 @@ class QueueStore:
         *,
         load_entries_fn: Callable[[Path], list[Any]] | None = None,
         save_entries_fn: Callable[[Path, Sequence[Any]], Any] | None = None,
-    ) -> QueueStore:
+    ) -> Self:
         return cls(
             root=resolve_root_path(root),
             load_entries_fn=load_entries_fn or load_entries,

@@ -51,29 +51,31 @@ notify_job_queued = _notification_engines.notify_xtb_job_queued
 upsert_job_record = _job_locations.upsert_job_record
 write_state = _state.write_state
 
-_XCONTROL_PATH_KEYS = {"nrun", "npoint", "anopt", "kpush", "kpull", "ppull", "alp"}
-_XTB_MANIFEST_KEYS = {
-    "job_type",
-    "reaction_key",
-    "molecule_key",
-    "input_xyz",
-    "reactant_xyz",
-    "product_xyz",
-    "candidates_dir",
-    "top_n",
-    "max_ranking_evaluations",
-    "allow_high_cost_ranking",
-    "resources",
-    "gfn",
-    "charge",
-    "uhf",
-    "solvent_model",
-    "solvent",
-    "opt_level",
-    "xcontrol",
-    "dry_run",
-    "ts_guess_validation",
-}
+_XCONTROL_PATH_KEYS = frozenset({"nrun", "npoint", "anopt", "kpush", "kpull", "ppull", "alp"})
+_XTB_MANIFEST_KEYS = frozenset(
+    {
+        "job_type",
+        "reaction_key",
+        "molecule_key",
+        "input_xyz",
+        "reactant_xyz",
+        "product_xyz",
+        "candidates_dir",
+        "top_n",
+        "max_ranking_evaluations",
+        "allow_high_cost_ranking",
+        "resources",
+        "gfn",
+        "charge",
+        "uhf",
+        "solvent_model",
+        "solvent",
+        "opt_level",
+        "xcontrol",
+        "dry_run",
+        "ts_guess_validation",
+    }
+)
 
 
 def _validate_canonical_xcontrol(path: Path) -> None:

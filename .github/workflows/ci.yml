@@ -80,5 +80,5 @@ jobs:
           .venv/bin/python -m pip install -r .machine-contracts/requirements.txt
           .venv/bin/python -m pytest -q \
             tests/test_workflow_machine.py::test_completed_workflow_publishes_one_ready_machine_observation \
-            tests/test_workflow_report.py::test_relaxed_scan_without_html_is_preserved_in_workflow_lineage \
+            tests/flow/workflow/test_report_collection.py::test_relaxed_scan_without_html_is_preserved_in_workflow_lineage \
             tests/test_state.py::TestState::test_write_report_files_json_fields

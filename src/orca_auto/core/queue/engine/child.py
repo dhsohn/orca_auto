@@ -16,6 +16,7 @@ from orca_auto.core.admission import (
 from ..child import execution as _child_execution
 from ..child.execution import ChildWorkerEntrypointJob, ChildWorkerShutdownController
 from ..child.process import requeue_result_is_cancelled
+from .worker_execution import WorkerShutdownRequested
 
 
 def await_parent_admission_handoff(
@@ -39,14 +40,8 @@ def await_parent_admission_handoff(
         sleep_fn(0.01)
 
 
-def _shutdown_exception_context(exc: BaseException) -> Any:
-    context_attr = "context"
-    return getattr(exc, context_attr)
-
-
 @dataclass(frozen=True)
 class WorkerChildRunSpec:
-    shutdown_exception_type: type[BaseException]
     entry_ready_fn: Callable[[Any], bool] | None = None
     outcome_exit_code_fn: Callable[[Any], int] | None = None
 
@@ -66,7 +61,7 @@ class _EngineChildJobRunner:
     def run(self, job: ChildWorkerEntrypointJob) -> int:
         try:
             outcome = self._process(job)
-        except self.spec.shutdown_exception_type as exc:
+        except WorkerShutdownRequested as exc:
             return self._handle_shutdown(job, exc)
         return self._exit_code(outcome)
 
@@ -110,7 +105,7 @@ class _EngineChildJobRunner:
             return 0
         return int(self.spec.outcome_exit_code_fn(outcome))
 
-    def _handle_shutdown(self, job: ChildWorkerEntrypointJob, exc: BaseException) -> int:
+    def _handle_shutdown(self, job: ChildWorkerEntrypointJob, exc: WorkerShutdownRequested) -> int:
         task_id = str(getattr(job.entry, "task_id", "") or "").strip()
         generation_kwargs = {"expected_entry": job.entry}
         if task_id:
@@ -123,7 +118,7 @@ class _EngineChildJobRunner:
         if updated is not None and not requeue_result_is_cancelled(updated):
             self.mark_recovery_pending_context_fn(
                 job.cfg,
-                _shutdown_exception_context(exc),
+                exc.context,
                 reason="worker_shutdown",
             )
         return 0

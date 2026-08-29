@@ -8,6 +8,7 @@ import yaml
 from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.engine_process import atomic_write_confined_bytes, ensure_confined_directory
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
+from orca_auto.core.utils import copy_dict_or_empty as _stage_input_mapping
 from orca_auto.core.utils import normalize_text, safe_int
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     _manifest_override_mapping,
@@ -87,10 +88,6 @@ def _materialize_xtb_override_xcontrol(
         return target_name
 
     return ""
-
-
-def _stage_input_mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def _stage_input_rank(source: dict[str, Any]) -> int:

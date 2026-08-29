@@ -10,17 +10,12 @@ from orca_auto.core.engines import worker_child
 from orca_auto.core.queue.engine import child as engine_child
 from orca_auto.core.queue.engine import execution as engine_execution
 from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
+from orca_auto.core.queue.engine.worker_execution import WorkerShutdownRequested
 
 
 def _append_and_return(items: Any, value: Any, result: Any) -> Any:
     items.append(value)
     return result
-
-
-class _WorkerShutdownRequested(RuntimeError):
-    def __init__(self, context: Any):
-        super().__init__("worker_shutdown")
-        self.context = context
 
 
 def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
@@ -35,7 +30,6 @@ def test_run_engine_worker_child_job_processes_entry_with_extra_kwargs(
 
     rc = engine_child.run_engine_worker_child_job(
         spec=engine_child.WorkerChildRunSpec(
-            shutdown_exception_type=_WorkerShutdownRequested,
             entry_ready_fn=lambda loaded_entry: loaded_entry.status == "running",
         ),
         config_path="/tmp/orca_auto.yaml",
@@ -71,7 +65,6 @@ def test_run_engine_worker_child_job_can_map_outcome_to_exit_code(tmp_path: Path
 
     rc = engine_child.run_engine_worker_child_job(
         spec=engine_child.WorkerChildRunSpec(
-            shutdown_exception_type=_WorkerShutdownRequested,
             entry_ready_fn=lambda loaded_entry: loaded_entry.status == "running",
             outcome_exit_code_fn=lambda outcome: outcome.exit_code,
         ),
@@ -134,7 +127,6 @@ def test_cleanup_failure_keeps_child_and_parent_admission_until_engine_exit(
     with pytest.raises(engine_execution.ProcessCleanupError):
         engine_child.run_engine_worker_child_job(
             spec=engine_child.WorkerChildRunSpec(
-                shutdown_exception_type=_WorkerShutdownRequested,
                 entry_ready_fn=lambda loaded_entry: loaded_entry.status.value == "running",
             ),
             config_path="/tmp/orca_auto.yaml",
@@ -195,11 +187,10 @@ def test_run_engine_worker_child_job_requeues_and_marks_recovery_on_shutdown(
     recovery: list[tuple[Any, Any, str]] = []
 
     def raise_shutdown(*_args: Any, **_kwargs: Any) -> None:
-        raise _WorkerShutdownRequested(context)
+        raise WorkerShutdownRequested(context)
 
     rc = engine_child.run_engine_worker_child_job(
         spec=engine_child.WorkerChildRunSpec(
-            shutdown_exception_type=_WorkerShutdownRequested,
             entry_ready_fn=lambda loaded_entry: loaded_entry.status == "running",
         ),
         config_path="/tmp/orca_auto.yaml",
@@ -238,7 +229,7 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
     recovery: list[tuple[Any, Any, str]] = []
 
     def raise_shutdown(*_args: Any, **_kwargs: Any) -> None:
-        raise _WorkerShutdownRequested(context)
+        raise WorkerShutdownRequested(context)
 
     def requeue(root: Path, queue_id: str, **_kwargs: object) -> SimpleNamespace:
         requeued.append((root, queue_id))
@@ -246,7 +237,6 @@ def test_run_engine_worker_child_job_skips_recovery_when_requeue_cancels(
 
     rc = engine_child.run_engine_worker_child_job(
         spec=engine_child.WorkerChildRunSpec(
-            shutdown_exception_type=_WorkerShutdownRequested,
             entry_ready_fn=lambda loaded_entry: loaded_entry.status == "running",
         ),
         config_path="/tmp/orca_auto.yaml",

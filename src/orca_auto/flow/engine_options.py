@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Self
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,7 @@ class WorkflowEngineOptions:
         xtb_config: str | None = None,
         orca_config: str | None = None,
         orca_repo_root: str | None = None,
-    ) -> WorkflowEngineOptions:
+    ) -> Self:
         shared_config = shared_config or None
         return cls(
             crest=EngineConfigOptions(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Self
 
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
@@ -144,7 +144,7 @@ class WorkflowStageView(
     raw: dict[str, Any]
 
     @classmethod
-    def from_raw(cls, value: Any) -> WorkflowStageView | None:
+    def from_raw(cls, value: Any) -> Self | None:
         return cls(value) if isinstance(value, dict) else None
 
     @property

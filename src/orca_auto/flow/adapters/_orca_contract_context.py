@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.utils.coercion import copy_dict_or_empty as _mapping
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca.job_locations._generation import current_generation_payloads
 
@@ -155,10 +156,6 @@ def _flatten_orca_engine_payload(payload: dict[str, Any]) -> dict[str, Any]:
         final_result.setdefault("last_out_path", str(artifacts.get("last_out_path", "")).strip())
         final_result.setdefault("completed_at", str(timestamps.get("finished_at", "")).strip())
     return flattened
-
-
-def _mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 __all__ = [

@@ -182,6 +182,15 @@ def test_shared_config_validation_rejects_unknown_fields(
         validate_shared_config_sections(raw)
 
 
+def test_shared_config_unknown_field_error_does_not_echo_raw_key() -> None:
+    secret_key = "private-secret-key"
+
+    with pytest.raises(ValueError) as raised:
+        validate_shared_config_sections({secret_key: {}})
+
+    assert secret_key not in str(raised.value)
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [

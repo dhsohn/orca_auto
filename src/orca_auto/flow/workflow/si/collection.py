@@ -56,14 +56,17 @@ from ...manifest import (
     require_int,
     validate_conformer_postprocessing_template,
 )
-from ..report_collection import (
-    _crest_stage_detail,
-    _task_kind,
-    _text,
-    _xtb_stage_detail,
+from ..stage_summary import (
+    crest_stage_detail,
+    stage_task_kind,
+    xtb_stage_detail,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -931,12 +934,12 @@ def collect_workflow_si_data(
     for stage in stages:
         stage_kind = _text(stage.get("stage_kind"))
         if stage_kind == "crest_stage":
-            _, frames = _crest_stage_detail(stage)
+            _, frames = crest_stage_detail(stage)
             if frames is not None:
                 crest_total = (crest_total or 0) + frames
             continue
         if stage_kind == "xtb_stage":
-            _, candidates = _xtb_stage_detail(stage)
+            _, candidates = xtb_stage_detail(stage)
             xtb_total = (xtb_total or 0) + candidates
             continue
         if not is_orca_stage_kind(stage):
@@ -965,7 +968,7 @@ def collect_workflow_si_data(
         stage_id = _text(stage.get("stage_id"))
         label = _stage_label(stage)
         status = _text(stage.get("status"))
-        if _task_kind(stage) == "relaxed_scan":
+        if stage_task_kind(stage) == "relaxed_scan":
             excluded.append(
                 ExcludedStage(
                     stage_id, label, "relaxed scan (prerequisite, not a stationary point)"
@@ -986,7 +989,7 @@ def collect_workflow_si_data(
         if (
             template_name == "conformer_screening"
             and block.kind != "min"
-            and (_task_kind(stage) == "opt" or block.kind == "ts")
+            and (stage_task_kind(stage) == "opt" or block.kind == "ts")
         ):
             incomplete_population_stages.append(label or stage_id or "unknown")
         entry = WorkflowSiEntry(

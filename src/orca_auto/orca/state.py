@@ -45,6 +45,7 @@ from orca_auto.core.machine_observation import (
 )
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.persistence import (
     atomic_write_text as _atomic_write_text,
@@ -95,10 +96,6 @@ def state_payload_job_id(payload: Any) -> str:
 
 def _load_json_dict(path: Path) -> dict[str, Any] | None:
     return load_json_mapping_file(path)
-
-
-def _dict(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def _text(value: Any) -> str:
