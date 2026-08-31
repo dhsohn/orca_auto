@@ -14,8 +14,8 @@ from orca_auto.flow.engines.crest import execution as _worker_execution
 
 @dataclass(frozen=True)
 class CrestQueueRuntimeWorkerExecutionCallbacks:
-    terminate_process: Callable[..., Any]
-    wait_for_cancellable_process: Callable[..., Any]
+    terminate_process: Callable[..., bool]
+    wait_for_cancellable_process: Callable[..., _worker_execution.CrestRunResult]
     sleep: Callable[..., Any]
     now_utc_iso: Callable[..., Any]
     get_cancel_requested: Callable[..., Any]
@@ -23,7 +23,7 @@ class CrestQueueRuntimeWorkerExecutionCallbacks:
     mark_cancelled: Callable[..., Any]
     mark_failed: Callable[..., Any]
     start_crest_job: Callable[..., Any]
-    finalize_crest_job: Callable[..., Any]
+    finalize_crest_job: Callable[..., _worker_execution.CrestRunResult]
     write_running_state: Callable[..., Any]
     write_execution_artifacts: Callable[..., Any]
     upsert_job_record: Callable[..., Any]
@@ -31,7 +31,9 @@ class CrestQueueRuntimeWorkerExecutionCallbacks:
     notify_job_finished: Callable[..., Any]
 
     @property
-    def process_callbacks(self) -> WorkerProcessDependencyCallbacks:
+    def process_callbacks(
+        self,
+    ) -> WorkerProcessDependencyCallbacks[_worker_execution.CrestRunResult]:
         return worker_process_dependency_callbacks_from_attrs(
             self,
             engine_runner_dependency_names=("start_crest_job", "finalize_crest_job"),

@@ -1,17 +1,76 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
-from typing import Any
+from pathlib import Path
+from typing import Any, Protocol
+
+from orca_auto.flow.contracts.workflow import WorkflowStagePayload
 
 AnyCallable = Callable[..., Any]
+
+
+class MaterializedWorkflowStage(Protocol):
+    def to_dict(self) -> WorkflowStagePayload: ...
+
+
+class XtbCandidateArtifactView(Protocol):
+    @property
+    def rank(self) -> int: ...
+
+    @property
+    def kind(self) -> str: ...
+
+    @property
+    def path(self) -> str: ...
+
+    @property
+    def selected(self) -> bool: ...
+
+    @property
+    def score(self) -> float | None: ...
+
+    @property
+    def metadata(self) -> dict[str, Any]: ...
+
+
+class XtbArtifactContractView(Protocol):
+    @property
+    def job_id(self) -> str: ...
+
+    @property
+    def job_type(self) -> str: ...
+
+    @property
+    def status(self) -> str: ...
+
+    @property
+    def reason(self) -> str: ...
+
+    @property
+    def latest_known_path(self) -> str: ...
+
+    @property
+    def reaction_key(self) -> str: ...
+
+    @property
+    def selected_input_xyz(self) -> str: ...
+
+    @property
+    def selected_candidate_paths(self) -> Sequence[str]: ...
+
+    @property
+    def candidate_details(self) -> Sequence[XtbCandidateArtifactView]: ...
+
+    @property
+    def analysis_summary(self) -> Mapping[str, Any]: ...
 
 
 @dataclass(frozen=True)
 class WorkflowPersistenceServices:
     acquire_workflow_lock: AnyCallable
-    load_workflow_payload: AnyCallable
+    load_workflow_payload: Callable[..., dict[str, Any]]
     resolve_workflow_workspace: AnyCallable
     sync_workflow_registry: AnyCallable
     write_workflow_payload: AnyCallable
@@ -19,22 +78,22 @@ class WorkflowPersistenceServices:
 
 @dataclass(frozen=True)
 class WorkflowEngineGateway:
-    build_materialized_orca_stage: AnyCallable
+    build_materialized_orca_stage: Callable[..., MaterializedWorkflowStage]
     choose_orca_geometry_frame: AnyCallable
-    crest_cancel_target: AnyCallable
-    engine_runtime_paths: AnyCallable
+    crest_cancel_target: Callable[..., dict[str, Any]]
+    engine_runtime_paths: Callable[..., dict[str, Path]]
     load_crest_artifact_contract: AnyCallable
     load_orca_artifact_contract: AnyCallable
-    load_xtb_artifact_contract: AnyCallable
-    orca_cancel_target: AnyCallable
+    load_xtb_artifact_contract: Callable[..., XtbArtifactContractView]
+    orca_cancel_target: Callable[..., dict[str, Any]]
     safe_name: AnyCallable
     select_crest_downstream_inputs: AnyCallable
     select_endpoint_pairs: AnyCallable
     select_xtb_downstream_inputs: AnyCallable
     submit_crest_job_dir: AnyCallable
     submit_reaction_dir: AnyCallable
-    submit_xtb_job_dir: AnyCallable
-    xtb_cancel_target: AnyCallable
+    submit_xtb_job_dir: Callable[..., dict[str, Any]]
+    xtb_cancel_target: Callable[..., dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -141,11 +200,14 @@ def resolve_orchestration_services(
 
 
 __all__ = [
+    "MaterializedWorkflowStage",
     "OrchestrationServices",
     "WorkflowClock",
     "WorkflowEngineGateway",
     "WorkflowEvents",
     "WorkflowPersistenceServices",
+    "XtbArtifactContractView",
+    "XtbCandidateArtifactView",
     "default_orchestration_services",
     "resolve_orchestration_services",
 ]

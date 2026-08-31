@@ -116,7 +116,11 @@ WorkerQueueDependencies = _engine_execution.EngineWorkerQueueDependencies
 
 
 @dataclass(frozen=True)
-class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies):
+class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies[CrestRunResult]):
+    terminate_process: Callable[[Any], bool]
+    wait_for_cancellable_process: Callable[..., CrestRunResult]
+    sleep: Callable[[float], None]
+    cancel_check_interval_seconds: float
     start_crest_job: Callable[..., Any]
     finalize_crest_job: Callable[..., CrestRunResult]
 
@@ -172,23 +176,28 @@ def build_worker_execution_dependencies_from_groups(
     context: WorkerContextDependencies | None = None,
     execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> WorkerExecutionDependencies:
-    return _worker_dependencies.build_worker_execution_dependencies_from_groups(
-        WorkerExecutionDependencies,
-        {
-            "timing": timing,
-            "queue": queue,
-            "runner": runner,
-            "artifacts": artifacts,
-            "tracking": tracking,
-            "config": config,
-            "admission": admission,
-            "context": context,
-        },
-        execute_queue_entry_fn=execute_queue_entry_fn,
+    dependencies: WorkerExecutionDependencies = (
+        _worker_dependencies.build_worker_execution_dependencies_from_groups(
+            WorkerExecutionDependencies,
+            {
+                "timing": timing,
+                "queue": queue,
+                "runner": runner,
+                "artifacts": artifacts,
+                "tracking": tracking,
+                "config": config,
+                "admission": admission,
+                "context": context,
+            },
+            execute_queue_entry_fn=execute_queue_entry_fn,
+        )
     )
+    return dependencies
 
 
-def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDependencyCallbacks:
+def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDependencyCallbacks[
+    CrestRunResult
+]:
     return _worker_dependencies.WorkerProcessDependencyCallbacks(
         terminate_process=_terminate_process,
         wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
@@ -284,21 +293,24 @@ def build_worker_execution_dependencies(
     tracking: WorkerTrackingDependencies | None = None,
     execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> WorkerExecutionDependencies:
-    return _worker_dependencies.build_worker_execution_dependency_container(
-        build_worker_execution_dependencies_from_groups,
-        {
-            "config": config,
-            "admission": admission,
-            "timing": timing,
-            "queue": queue,
-            "context": context,
-            "runner": runner,
-            "artifacts": artifacts,
-            "tracking": tracking,
-        },
-        _worker_execution_default_factories(),
-        execute_queue_entry_fn=execute_queue_entry_fn,
+    dependencies: WorkerExecutionDependencies = (
+        _worker_dependencies.build_worker_execution_dependency_container(
+            build_worker_execution_dependencies_from_groups,
+            {
+                "config": config,
+                "admission": admission,
+                "timing": timing,
+                "queue": queue,
+                "context": context,
+                "runner": runner,
+                "artifacts": artifacts,
+                "tracking": tracking,
+            },
+            _worker_execution_default_factories(),
+            execute_queue_entry_fn=execute_queue_entry_fn,
+        )
     )
+    return dependencies
 
 
 def default_worker_execution_dependencies() -> WorkerExecutionDependencies:
@@ -613,7 +625,7 @@ def _worker_execution_spec(
     *,
     molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
-) -> _engine_execution.EngineWorkerExecutionSpec:
+) -> _engine_execution.EngineWorkerExecutionSpec[Path | None, WorkerExecutionOutcome]:
     return _engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,

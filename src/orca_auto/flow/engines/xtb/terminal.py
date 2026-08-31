@@ -4,12 +4,14 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.engine import execution as _engine_execution
 from orca_auto.core.utils import copy_dict_or_empty as _mapping
 from orca_auto.flow.engines.xtb.runner import XtbRunResult
+
+OutcomeT = TypeVar("OutcomeT")
 
 
 @dataclass(frozen=True)
@@ -34,13 +36,13 @@ class XtbTerminalDependencies:
 
 
 @dataclass(frozen=True)
-class XtbTerminalFinalizationRequest:
+class XtbTerminalFinalizationRequest(Generic[OutcomeT]):
     cfg: Any
     queue_root: Path
     entry: Any
     result: XtbRunResult
     emit_output: bool
-    outcome_cls: type
+    outcome_cls: Callable[..., OutcomeT]
     previous_state: dict[str, Any] | None = None
     resumed: bool = False
 
@@ -172,7 +174,7 @@ def ensure_terminal_queue_status(
 
 
 def _terminal_paths(
-    request: XtbTerminalFinalizationRequest,
+    request: XtbTerminalFinalizationRequest[Any],
     dependencies: XtbTerminalDependencies,
 ) -> _XtbTerminalPaths:
     job_dir = dependencies.job_dir(request.entry)
@@ -192,7 +194,7 @@ def _terminal_metadata(result: XtbRunResult) -> dict[str, Any]:
 
 
 def _mark_queue_terminal(
-    request: XtbTerminalFinalizationRequest,
+    request: XtbTerminalFinalizationRequest[Any],
     dependencies: XtbTerminalDependencies,
     before_update_fn: Callable[[], Any] | None = None,
     require_cancel_requested: bool = False,
@@ -214,7 +216,7 @@ def _mark_queue_terminal(
 
 
 def _sync_job_record(
-    request: XtbTerminalFinalizationRequest,
+    request: XtbTerminalFinalizationRequest[Any],
     paths: _XtbTerminalPaths,
     dependencies: XtbTerminalDependencies,
 ) -> str:
@@ -235,10 +237,10 @@ def _sync_job_record(
 
 
 def _notify_terminal_finished(
-    request: XtbTerminalFinalizationRequest,
+    request: XtbTerminalFinalizationRequest[Any],
     paths: _XtbTerminalPaths,
     dependencies: XtbTerminalDependencies,
-    sync_result: str,
+    sync_result: str | None,
 ) -> None:
     result = request.result
     entry = request.entry
@@ -258,7 +260,10 @@ def _notify_terminal_finished(
     )
 
 
-def _emit_terminal_summary(request: XtbTerminalFinalizationRequest, sync_result: str) -> None:
+def _emit_terminal_summary(
+    request: XtbTerminalFinalizationRequest[Any],
+    sync_result: str | None,
+) -> None:
     result = request.result
     entry = request.entry
     print_terminal_summary(
@@ -272,14 +277,14 @@ def _emit_terminal_summary(request: XtbTerminalFinalizationRequest, sync_result:
 
 
 def _terminal_sync_actions(
-    request: XtbTerminalFinalizationRequest,
+    request: XtbTerminalFinalizationRequest[OutcomeT],
     paths: _XtbTerminalPaths,
     dependencies: XtbTerminalDependencies,
-) -> _engine_execution.TerminalSyncActions:
-    handle_uncommitted_terminal: Callable[[], Any] | None = None
+) -> _engine_execution.TerminalSyncActions[str, OutcomeT]:
+    handle_uncommitted_terminal: Callable[[], OutcomeT] | None = None
     if request.result.status != "cancelled":
 
-        def handle_uncommitted_terminal() -> Any:
+        def handle_uncommitted_terminal() -> OutcomeT:
             cancelled_request = replace(
                 request,
                 result=replace(
@@ -323,12 +328,12 @@ def _terminal_sync_actions(
 
 
 def finalize_terminal_result(
-    request: XtbTerminalFinalizationRequest,
+    request: XtbTerminalFinalizationRequest[OutcomeT],
     *,
     dependencies: XtbTerminalDependencies,
     require_cancel_requested: bool = False,
     uncommitted_result: XtbRunResult | None = None,
-) -> Any:
+) -> OutcomeT:
     paths = _terminal_paths(request, dependencies)
     actions = _terminal_sync_actions(request, paths, dependencies)
     if require_cancel_requested:
@@ -361,7 +366,7 @@ def finalize_execution_result(
     emit_output: bool,
     previous_state: dict[str, Any] | None = None,
     resumed: bool = False,
-    outcome_cls: type,
+    outcome_cls: Callable[..., OutcomeT],
     write_execution_artifacts_fn: Callable[..., Any],
     selected_xyz_fn: Callable[[Any], Path],
     job_dir_fn: Callable[[Any], Path],
@@ -370,7 +375,7 @@ def finalize_execution_result(
     mark_failed_fn: Callable[..., Any],
     upsert_job_record_fn: Callable[..., Any],
     notify_job_finished_fn: Callable[..., Any],
-) -> Any:
+) -> OutcomeT:
     return finalize_terminal_result(
         XtbTerminalFinalizationRequest(
             cfg=cfg,

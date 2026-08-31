@@ -3,10 +3,12 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, NoReturn
+from typing import Any, Generic, NoReturn, TypeVar
 
 from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.processes import managed_process_group_has_exited
+
+ProcessResultT = TypeVar("ProcessResultT")
 
 
 class ProcessCleanupError(RuntimeError):
@@ -48,16 +50,18 @@ def retain_process_ownership_until_exit(
 
 
 @dataclass(frozen=True)
-class CancellableProcessExecution:
+class CancellableProcessExecution(Generic[ProcessResultT]):
     start_job: Callable[[], Any]
-    finalize_job: Callable[..., Any]
+    finalize_job: Callable[..., ProcessResultT]
     terminate_process: Callable[[Any], bool]
-    build_failure_result: Callable[[Exception], Any]
+    build_failure_result: Callable[[Exception], ProcessResultT]
     prepare_running_job: Callable[[], None] | None = None
-    wait_for_cancellable_process: Callable[..., Any] = _queue_execution.wait_for_cancellable_process
+    wait_for_cancellable_process: Callable[..., ProcessResultT] = (
+        _queue_execution.wait_for_cancellable_process
+    )
     should_cancel: Callable[[], bool] | None = None
     shutdown_requested: Callable[[], bool] | None = None
-    on_shutdown: Callable[[Any], Any] | None = None
+    on_shutdown: Callable[[Any], ProcessResultT] | None = None
     sleep: Callable[[float], None] | None = None
     poll_interval_seconds: float = 1.0
     check_cancel_before_poll: bool = False
@@ -67,7 +71,9 @@ class CancellableProcessExecution:
     cleanup_poll_interval_seconds: float | None = None
 
 
-def run_cancellable_process_execution(actions: CancellableProcessExecution) -> Any:
+def run_cancellable_process_execution(
+    actions: CancellableProcessExecution[ProcessResultT],
+) -> ProcessResultT:
     running: Any | None = None
     running_registered = False
     preparation_completed = False
@@ -109,7 +115,7 @@ def run_cancellable_process_execution(actions: CancellableProcessExecution) -> A
             raise cleanup_error
         return True
 
-    def finalize_after_process_exit(*args: Any, **kwargs: Any) -> Any:
+    def finalize_after_process_exit(*args: Any, **kwargs: Any) -> ProcessResultT:
         # The waiter invokes its finalizer only after the process group has
         # exited (naturally or through terminate_running_process). Mark that
         # fact before user finalization, because a slow/raising finalizer must
@@ -215,13 +221,13 @@ def run_cancellable_engine_process(
     *,
     prepare_running_job: Callable[[], None] | None = None,
     start_job: Callable[[], Any],
-    finalize_job: Callable[..., Any],
+    finalize_job: Callable[..., ProcessResultT],
     terminate_process: Callable[[Any], bool],
-    build_failure_result: Callable[[Exception], Any],
-    wait_for_cancellable_process: Callable[..., Any] | None = None,
+    build_failure_result: Callable[[Exception], ProcessResultT],
+    wait_for_cancellable_process: Callable[..., ProcessResultT] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
-    on_shutdown: Callable[[Any], Any] | None = None,
+    on_shutdown: Callable[[Any], ProcessResultT] | None = None,
     sleep: Callable[[float], None] | None = None,
     poll_interval_seconds: float = 1.0,
     check_cancel_before_poll: bool = False,
@@ -229,30 +235,29 @@ def run_cancellable_engine_process(
     should_reraise_exception: Callable[[Exception], bool] | None = None,
     cleanup_retry_attempts: int = 2,
     cleanup_poll_interval_seconds: float | None = None,
-) -> Any:
-    kwargs: dict[str, Any] = {}
+) -> ProcessResultT:
+    execution_kwargs: dict[str, Any] = {}
     if wait_for_cancellable_process is not None:
-        kwargs["wait_for_cancellable_process"] = wait_for_cancellable_process
-    return run_cancellable_process_execution(
-        CancellableProcessExecution(
-            prepare_running_job=prepare_running_job,
-            start_job=start_job,
-            finalize_job=finalize_job,
-            terminate_process=terminate_process,
-            build_failure_result=build_failure_result,
-            should_cancel=should_cancel,
-            shutdown_requested=shutdown_requested,
-            on_shutdown=on_shutdown,
-            sleep=sleep,
-            poll_interval_seconds=poll_interval_seconds,
-            check_cancel_before_poll=check_cancel_before_poll,
-            register_running_job=register_running_job,
-            should_reraise_exception=should_reraise_exception,
-            cleanup_retry_attempts=cleanup_retry_attempts,
-            cleanup_poll_interval_seconds=cleanup_poll_interval_seconds,
-            **kwargs,
-        )
+        execution_kwargs["wait_for_cancellable_process"] = wait_for_cancellable_process
+    actions: CancellableProcessExecution[ProcessResultT] = CancellableProcessExecution(
+        prepare_running_job=prepare_running_job,
+        start_job=start_job,
+        finalize_job=finalize_job,
+        terminate_process=terminate_process,
+        build_failure_result=build_failure_result,
+        should_cancel=should_cancel,
+        shutdown_requested=shutdown_requested,
+        on_shutdown=on_shutdown,
+        sleep=sleep,
+        poll_interval_seconds=poll_interval_seconds,
+        check_cancel_before_poll=check_cancel_before_poll,
+        register_running_job=register_running_job,
+        should_reraise_exception=should_reraise_exception,
+        cleanup_retry_attempts=cleanup_retry_attempts,
+        cleanup_poll_interval_seconds=cleanup_poll_interval_seconds,
+        **execution_kwargs,
     )
+    return run_cancellable_process_execution(actions)
 
 
 __all__ = [

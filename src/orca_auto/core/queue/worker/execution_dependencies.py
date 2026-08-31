@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic, Protocol, TypeVar
 
 from ..engine.worker_execution import (
+    EngineWorkerProcessDependencyFactory,
     EngineWorkerQueueDependencies,
     EngineWorkerTimingDependencies,
     build_engine_worker_process_default_factories,
@@ -13,6 +14,8 @@ from ..engine.worker_execution import (
 )
 
 DependencyFactory = Callable[[], Any]
+ProcessResultT = TypeVar("ProcessResultT")
+ProcessResultT_co = TypeVar("ProcessResultT_co", covariant=True)
 
 
 @dataclass(frozen=True)
@@ -28,9 +31,9 @@ class WorkerAdmissionDependencies:
 
 
 @dataclass(frozen=True)
-class WorkerProcessDependencyCallbacks:
+class WorkerProcessDependencyCallbacks(Generic[ProcessResultT]):
     terminate_process: Callable[..., bool]
-    wait_for_cancellable_process: Callable[..., Any]
+    wait_for_cancellable_process: Callable[..., ProcessResultT]
     sleep: Callable[..., Any]
     now_utc_iso: Callable[..., Any]
     get_cancel_requested: Callable[..., Any]
@@ -40,11 +43,37 @@ class WorkerProcessDependencyCallbacks:
     engine_runner_dependencies: Mapping[str, Any]
 
 
+class WorkerProcessDependencyCallbackSource(Protocol[ProcessResultT_co]):
+    @property
+    def terminate_process(self) -> Callable[..., bool]: ...
+
+    @property
+    def wait_for_cancellable_process(self) -> Callable[..., ProcessResultT_co]: ...
+
+    @property
+    def sleep(self) -> Callable[..., Any]: ...
+
+    @property
+    def now_utc_iso(self) -> Callable[..., Any]: ...
+
+    @property
+    def get_cancel_requested(self) -> Callable[..., Any]: ...
+
+    @property
+    def mark_completed(self) -> Callable[..., Any]: ...
+
+    @property
+    def mark_cancelled(self) -> Callable[..., Any]: ...
+
+    @property
+    def mark_failed(self) -> Callable[..., Any]: ...
+
+
 def worker_process_dependency_callbacks_from_attrs(
-    source: Any,
+    source: WorkerProcessDependencyCallbackSource[ProcessResultT],
     *,
     engine_runner_dependency_names: tuple[str, ...],
-) -> WorkerProcessDependencyCallbacks:
+) -> WorkerProcessDependencyCallbacks[ProcessResultT]:
     return WorkerProcessDependencyCallbacks(
         terminate_process=source.terminate_process,
         wait_for_cancellable_process=source.wait_for_cancellable_process,
@@ -99,9 +128,9 @@ def build_worker_process_default_factories(
     *,
     config_factory: DependencyFactory,
     admission_factory: DependencyFactory,
-    runner_dependencies_type: Callable[..., Any],
+    runner_dependencies_type: EngineWorkerProcessDependencyFactory[ProcessResultT],
     terminate_process: Callable[..., bool],
-    wait_for_cancellable_process: Callable[..., Any],
+    wait_for_cancellable_process: Callable[..., ProcessResultT],
     sleep: Callable[..., Any],
     cancel_check_interval_seconds: float,
     now_utc_iso: Callable[..., Any],
@@ -131,11 +160,11 @@ def build_worker_process_default_factories(
 
 
 def build_worker_process_default_factories_from_callbacks(
-    callbacks: WorkerProcessDependencyCallbacks,
+    callbacks: WorkerProcessDependencyCallbacks[ProcessResultT],
     *,
     config_factory: DependencyFactory,
     admission_factory: DependencyFactory,
-    runner_dependencies_type: Callable[..., Any],
+    runner_dependencies_type: EngineWorkerProcessDependencyFactory[ProcessResultT],
     cancel_check_interval_seconds: float,
 ) -> dict[str, DependencyFactory]:
     return build_worker_process_default_factories(
@@ -156,9 +185,9 @@ def build_worker_process_default_factories_from_callbacks(
 
 
 def build_worker_process_dependency_groups(
-    callbacks: WorkerProcessDependencyCallbacks,
+    callbacks: WorkerProcessDependencyCallbacks[ProcessResultT],
     *,
-    runner_dependencies_type: Callable[..., Any],
+    runner_dependencies_type: EngineWorkerProcessDependencyFactory[ProcessResultT],
     cancel_check_interval_seconds: float,
 ) -> dict[str, Any]:
     return {

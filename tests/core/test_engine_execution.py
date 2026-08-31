@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -8,6 +9,11 @@ import pytest
 
 from orca_auto.core.queue.engine import execution as engine_execution
 from orca_auto.core.queue.engine.worker_execution import WorkerShutdownRequested
+
+
+@dataclass(frozen=True)
+class _EngineTaggedProcessDependencies(engine_execution.EngineWorkerProcessDependencies[str]):
+    engine: str
 
 
 def test_object_attribute_fields_extracts_named_context_values() -> None:
@@ -676,7 +682,7 @@ def test_run_engine_worker_process_job_uses_process_dependency_group() -> None:
 
 def test_build_engine_worker_dependency_factories_preserve_extra_fields() -> None:
     factories = engine_execution.build_engine_worker_process_default_factories(
-        runner_dependencies_type=SimpleNamespace,
+        runner_dependencies_type=_EngineTaggedProcessDependencies,
         terminate_process=lambda _proc: True,
         wait_for_cancellable_process=lambda *_args, **_kwargs: "done",
         sleep=lambda _seconds: None,

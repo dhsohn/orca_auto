@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +18,7 @@ from orca_auto.core.engines.definitions import (
     EngineRunnerCallbacks,
 )
 from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
+from orca_auto.core.queue.engine.worker_execution import EngineWorkerProcessDependencies
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -26,6 +29,11 @@ from orca_auto.core.queue.worker.execution_dependencies import (
     build_worker_process_dependency_groups,
     worker_process_dependency_callbacks_from_attrs,
 )
+
+
+@dataclass(frozen=True)
+class _DemoRunnerDependencies(EngineWorkerProcessDependencies[Any]):
+    run_demo_job: Callable[..., Any]
 
 
 def _runtime(
@@ -356,7 +364,7 @@ def test_worker_process_dependency_groups_maps_callback_groups() -> None:
 
     groups = build_worker_process_dependency_groups(
         callbacks,
-        runner_dependencies_type=SimpleNamespace,
+        runner_dependencies_type=_DemoRunnerDependencies,
         cancel_check_interval_seconds=6,
     )
 
@@ -392,7 +400,7 @@ def test_worker_process_default_factories_from_callbacks_maps_common_groups() ->
         callbacks,
         config_factory=lambda: "config",
         admission_factory=lambda: "admission",
-        runner_dependencies_type=SimpleNamespace,
+        runner_dependencies_type=_DemoRunnerDependencies,
         cancel_check_interval_seconds=8,
     )
 

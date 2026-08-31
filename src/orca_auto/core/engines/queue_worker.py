@@ -11,6 +11,7 @@ QUEUE_WORKER_MODULE = "orca_auto.core.engines.queue_worker"
 
 
 WorkerCallback = Callable[..., Any]
+ReserveGateCallback = Callable[[Any], tuple[str, Any | None] | None]
 
 
 class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
@@ -37,7 +38,7 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         finalize_child_exit: WorkerCallback | None = None,
         reconcile_orphaned_running: WorkerCallback | None = None,
         check_cancel_requests: WorkerCallback | None = None,
-        reserve_gate: WorkerCallback | None = None,
+        reserve_gate: ReserveGateCallback | None = None,
     ) -> None:
         self.engine = engine
         self.admission_limit: int | None = None
@@ -166,7 +167,7 @@ def build_runtime_engine_queue_worker(
     finalize_child_exit: WorkerCallback | None = None,
     reconcile_orphaned_running: WorkerCallback | None = None,
     check_cancel_requests: WorkerCallback | None = None,
-    reserve_gate: WorkerCallback | None = None,
+    reserve_gate: ReserveGateCallback | None = None,
 ) -> EngineQueueWorker:
     resolved_config_path = str(config_path or "").strip() or default_config_path()
     return EngineQueueWorker(

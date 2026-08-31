@@ -144,7 +144,7 @@ def finalize_processed_entry(
     artifact_deps = dependencies.artifacts
     tracking_deps = dependencies.tracking
 
-    def notify_finished(sync_result: Any) -> None:
+    def notify_finished(sync_result: Path | None) -> None:
         tracking_deps.notify_job_finished(
             cfg,
             job_id=context.entry.task_id,
@@ -159,10 +159,10 @@ def finalize_processed_entry(
             resource_actual=result.resource_actual,
         )
 
-    handle_uncommitted_terminal: Callable[[], Any] | None = None
+    handle_uncommitted_terminal: Callable[[], Path | None] | None = None
     if result.status != "cancelled":
 
-        def handle_uncommitted_terminal() -> Any:
+        def handle_uncommitted_terminal() -> Path | None:
             return finalize_processed_entry(
                 cfg,
                 context,
@@ -172,7 +172,7 @@ def finalize_processed_entry(
                 require_cancel_requested=True,
             )
 
-    return _engine_execution.sync_terminal_result(
+    actions: _engine_execution.TerminalSyncActions[Path | None, Path | None] = (
         _engine_execution.TerminalSyncActions(
             write_artifacts=lambda: artifact_deps.write_execution_artifacts(
                 context.entry,
@@ -195,8 +195,9 @@ def finalize_processed_entry(
             notify_finished=notify_finished,
             build_outcome=lambda sync_result: sync_result,
             handle_uncommitted_terminal=handle_uncommitted_terminal,
-        ),
+        )
     )
+    return _engine_execution.sync_terminal_result(actions)
 
 
 __all__ = [

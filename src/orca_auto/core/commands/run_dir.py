@@ -257,8 +257,10 @@ def resolve_engine_job_dir(
     *,
     engine: str,
     workflow_error_message: str,
-    validate_job_dir_fn: Any = validate_job_dir,
-    workflow_paths_from_path_fn: Any = workflow_workspace_internal_engine_paths_from_path,
+    validate_job_dir_fn: Callable[..., Path] = validate_job_dir,
+    workflow_paths_from_path_fn: Callable[..., dict[str, Path] | None] = (
+        workflow_workspace_internal_engine_paths_from_path
+    ),
 ) -> Path:
     candidate = Path(raw_job_dir).expanduser().resolve()
     workflow_root = str(getattr(cfg, "workflow_root", "")).strip()

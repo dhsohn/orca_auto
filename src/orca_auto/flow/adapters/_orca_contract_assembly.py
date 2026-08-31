@@ -66,7 +66,7 @@ def load_orca_artifact_contract_impl(
     queue_id: str,
     run_id: str,
     reaction_dir: str,
-) -> Any:
+) -> OrcaArtifactContract:
     request = _contract_context.LoadRequest(
         target=target, queue_id=queue_id, run_id=run_id, reaction_dir=reaction_dir
     )
@@ -82,7 +82,7 @@ def contract_from_orca_payload_impl(
     queue_id: str,
     run_id: str,
     reaction_dir: str,
-) -> Any:
+) -> OrcaArtifactContract:
     request = _contract_context.LoadRequest(
         target=target, queue_id=queue_id, run_id=run_id, reaction_dir=reaction_dir
     )
@@ -92,7 +92,7 @@ def contract_from_orca_payload_impl(
 def _contract_from_payload(
     payload: ContractPayload,
     request: _contract_context.LoadRequest,
-) -> Any:
+) -> OrcaArtifactContract:
     # The payload producers already normalize every key they emit. Only the
     # three request fallbacks below take raw caller input, so they keep their
     # normalization; the rest pass straight through.
@@ -137,7 +137,7 @@ def _load_contract_context(
 def _contract_from_context(
     request: _contract_context.LoadRequest,
     context: _contract_context.LoaderContext,
-) -> Any:
+) -> OrcaArtifactContract:
     return _contract_from_payload(
         _payload_from_context(request, context),
         request,

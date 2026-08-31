@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from orca_auto.core.engines.artifacts import (
     EngineArtifactInput as NormalizedArtifactInput,
@@ -23,6 +23,8 @@ from orca_auto.core.queue import execution as _queue_execution
 from orca_auto.core.queue.generation import queue_entry_generation_token
 
 from ..types import QueueEntry
+
+TerminalResultT = TypeVar("TerminalResultT")
 
 
 @dataclass(frozen=True)
@@ -590,7 +592,7 @@ def write_terminal_engine_artifacts(
 
 
 def build_terminal_result(
-    result_cls: type,
+    result_cls: Callable[..., TerminalResultT],
     entry: QueueEntry,
     *,
     job_dir: Path,
@@ -605,7 +607,7 @@ def build_terminal_result(
     exit_code: int = 1,
     engine_fields: dict[str, Any] | None = None,
     detail_fields: dict[str, Any] | None = None,
-) -> Any:
+) -> TerminalResultT:
     terminal_time = now_utc_iso_fn()
     manifest_path = (job_dir / manifest_filename).resolve()
     return result_cls(
@@ -627,7 +629,7 @@ def build_terminal_result(
 
 
 def build_terminal_result_from_context(
-    build_terminal_result_fn: Callable[..., Any],
+    build_terminal_result_fn: Callable[..., TerminalResultT],
     context: Any,
     *,
     identity_fields: Mapping[str, Any],
@@ -635,7 +637,7 @@ def build_terminal_result_from_context(
     reason: str,
     exit_code: int = 1,
     now_utc_iso: str | None = None,
-) -> Any:
+) -> TerminalResultT:
     kwargs: dict[str, Any] = {
         "job_dir": context.job_dir,
         "selected_xyz": context.selected_xyz,

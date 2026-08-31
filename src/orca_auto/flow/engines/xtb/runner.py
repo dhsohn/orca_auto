@@ -7,7 +7,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, NoReturn, TextIO
 
 import yaml
 
@@ -338,11 +338,14 @@ def _run_candidate_sp_job(
             **launch_kwargs,
         )
 
-    result = _engine_execution.run_cancellable_engine_process(
+    def reraise_process_failure(exc: Exception) -> NoReturn:
+        raise exc
+
+    result: XtbRunResult = _engine_execution.run_cancellable_engine_process(
         start_job=start_candidate,
         finalize_job=finalize_xtb_job,
         terminate_process=terminate_process or terminate_process_group,
-        build_failure_result=lambda exc: exc,
+        build_failure_result=reraise_process_failure,
         should_cancel=should_cancel,
         check_cancel_before_poll=True,
         register_running_job=on_running_job,
@@ -644,7 +647,7 @@ def run_xtb_ranking_job(
             "input_summary": dict(execution_snapshot.get("input_summary") or {}),
             "manifest_path": str(execution_snapshot.get("manifest_path") or ""),
         }
-    result = _runner_ranking.run_ranking_job(
+    result: XtbRunResult = _runner_ranking.run_ranking_job(
         cfg,
         job_dir=job_dir,
         manifest=manifest,

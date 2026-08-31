@@ -51,6 +51,7 @@ from orca_auto.core.utils import now_utc_iso
 from orca_auto.flow.engines.xtb import artifacts as _queue_artifacts
 from orca_auto.flow.engines.xtb.job_locations import upsert_job_record
 from orca_auto.flow.engines.xtb.runner import (
+    XtbRunResult,
     finalize_xtb_job,
     run_path_search_ts_hessian_followup,
     run_xtb_ranking_job,
@@ -134,9 +135,9 @@ class WorkerContextDependencies:
 
 @dataclass(frozen=True)
 class WorkerArtifactDependencies:
-    write_running_state: Callable[..., Any]
-    build_terminal_result: Callable[..., Any]
-    finalize_execution_result: Callable[..., Any]
+    write_running_state: Callable[..., None]
+    build_terminal_result: Callable[..., XtbRunResult]
+    finalize_execution_result: Callable[..., WorkerExecutionOutcome]
 
 
 @dataclass(frozen=True)
@@ -146,11 +147,15 @@ class WorkerTrackingDependencies:
 
 
 @dataclass(frozen=True)
-class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies):
-    run_xtb_ranking_job: Callable[..., Any]
+class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies[XtbRunResult]):
+    terminate_process: Callable[[Any], bool]
+    wait_for_cancellable_process: Callable[..., XtbRunResult]
+    sleep: Callable[[float], None]
+    cancel_check_interval_seconds: float
+    run_xtb_ranking_job: Callable[..., XtbRunResult]
     start_xtb_job: Callable[..., Any]
-    finalize_xtb_job: Callable[..., Any]
-    run_path_search_ts_hessian_followup: Callable[..., Any]
+    finalize_xtb_job: Callable[..., XtbRunResult]
+    run_path_search_ts_hessian_followup: Callable[..., XtbRunResult]
 
 
 @dataclass(frozen=True)
@@ -178,23 +183,28 @@ def build_worker_execution_dependencies_from_groups(
     runner: WorkerRunnerDependencies,
     execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> WorkerExecutionDependencies:
-    return _worker_dependencies.build_worker_execution_dependencies_from_groups(
-        WorkerExecutionDependencies,
-        {
-            "config": config,
-            "admission": admission,
-            "timing": timing,
-            "queue": queue,
-            "context": context,
-            "artifacts": artifacts,
-            "tracking": tracking,
-            "runner": runner,
-        },
-        execute_queue_entry_fn=execute_queue_entry_fn,
+    dependencies: WorkerExecutionDependencies = (
+        _worker_dependencies.build_worker_execution_dependencies_from_groups(
+            WorkerExecutionDependencies,
+            {
+                "config": config,
+                "admission": admission,
+                "timing": timing,
+                "queue": queue,
+                "context": context,
+                "artifacts": artifacts,
+                "tracking": tracking,
+                "runner": runner,
+            },
+            execute_queue_entry_fn=execute_queue_entry_fn,
+        )
     )
+    return dependencies
 
 
-def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDependencyCallbacks:
+def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDependencyCallbacks[
+    XtbRunResult
+]:
     return _worker_dependencies.WorkerProcessDependencyCallbacks(
         terminate_process=terminate_process_group,
         wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
@@ -287,21 +297,24 @@ def build_worker_execution_dependencies(
     runner: WorkerRunnerDependencies | None = None,
     execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> WorkerExecutionDependencies:
-    return _worker_dependencies.build_worker_execution_dependency_container(
-        build_worker_execution_dependencies_from_groups,
-        {
-            "config": config,
-            "admission": admission,
-            "timing": timing,
-            "queue": queue,
-            "context": context,
-            "artifacts": artifacts,
-            "tracking": tracking,
-            "runner": runner,
-        },
-        _worker_execution_default_factories(),
-        execute_queue_entry_fn=execute_queue_entry_fn,
+    dependencies: WorkerExecutionDependencies = (
+        _worker_dependencies.build_worker_execution_dependency_container(
+            build_worker_execution_dependencies_from_groups,
+            {
+                "config": config,
+                "admission": admission,
+                "timing": timing,
+                "queue": queue,
+                "context": context,
+                "artifacts": artifacts,
+                "tracking": tracking,
+                "runner": runner,
+            },
+            _worker_execution_default_factories(),
+            execute_queue_entry_fn=execute_queue_entry_fn,
+        )
     )
+    return dependencies
 
 
 def default_worker_execution_dependencies() -> WorkerExecutionDependencies:
@@ -456,7 +469,7 @@ def _cancelled_before_start_result(
     context: _XtbExecutionContext,
     *,
     dependencies: WorkerExecutionDependencies,
-) -> Any:
+) -> XtbRunResult:
     return _engine_execution.build_terminal_result_from_context(
         dependencies.artifacts.build_terminal_result,
         context,
@@ -477,7 +490,7 @@ def _failed_result_from_exception(
     exc: Exception,
     *,
     dependencies: WorkerExecutionDependencies,
-) -> Any:
+) -> XtbRunResult:
     return _engine_execution.build_terminal_result_from_context(
         dependencies.artifacts.build_terminal_result,
         context,
@@ -503,7 +516,7 @@ def _run_xtb_job_for_entry(
     shutdown_requested: Callable[[], bool] | None = None,
     prepare_running_job: Callable[[], None] | None,
     register_running_job: Callable[[Any | None], None] | None,
-) -> Any:
+) -> XtbRunResult:
     runner_deps = dependencies.runner
     options = _engine_execution.EngineWorkerOptions(
         should_cancel=should_cancel,
@@ -582,12 +595,12 @@ def _run_xtb_job_for_entry(
 def _finalize_processed_entry(
     cfg: Any,
     context: _XtbExecutionContext,
-    result: Any,
+    result: XtbRunResult,
     queue_root: Path,
     *,
     emit_output: bool,
     dependencies: WorkerExecutionDependencies,
-) -> Any:
+) -> WorkerExecutionOutcome:
     output_identity_matches = True
     expected_output_identities = dict(getattr(result, "output_identities", {}))
     if dataclasses.is_dataclass(result):
@@ -675,7 +688,7 @@ def _finalize_processed_entry(
                     continue
                 if output_identities.get(str(evidence.get("path") or "")) != evidence:
                     output_identity_matches = False
-        result = dataclasses.replace(  # type: ignore[type-var]
+        result = dataclasses.replace(
             result,
             candidate_details=candidate_details,
             output_identities=output_identities,
@@ -723,7 +736,7 @@ def _finalize_processed_entry(
         )
     )
     if not identity_matches and dataclasses.is_dataclass(result):
-        result = dataclasses.replace(  # type: ignore[type-var]
+        result = dataclasses.replace(
             result,
             status="failed",
             reason="terminal_identity_mismatch",
@@ -752,7 +765,7 @@ def _worker_execution_spec(
         [Path, _XtbExecutionContext],
         Callable[[], bool] | None,
     ],
-) -> _engine_execution.EngineWorkerExecutionSpec:
+) -> _engine_execution.EngineWorkerExecutionSpec[WorkerExecutionOutcome, WorkerExecutionOutcome]:
     return _engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,
@@ -803,7 +816,7 @@ def _run_worker_entry_lifecycle(
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
     emit_output: bool = False,
-) -> Any:
+) -> WorkerExecutionOutcome:
     return _engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
         entry,
@@ -832,7 +845,7 @@ def execute_queue_entry(
     worker_job_pid: int | None = None,
     emit_output: bool = False,
     dependencies: WorkerExecutionDependencies | None = None,
-) -> Any:
+) -> WorkerExecutionOutcome:
     deps = dependencies or default_worker_execution_dependencies()
     return _run_worker_entry_lifecycle(
         cfg,

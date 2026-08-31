@@ -28,16 +28,16 @@ class XtbQueueRuntimeWorkerExecutionCallbacks:
     is_recovery_pending: Callable[..., Any]
     write_running_state: Callable[..., Any]
     build_terminal_result: Callable[..., Any]
-    finalize_execution_result: Callable[..., Any]
+    finalize_execution_result: Callable[..., _worker_execution.WorkerExecutionOutcome]
     upsert_job_record: Callable[..., Any]
     notify_job_started: Callable[..., Any]
     execute_queue_entry: Callable[..., Any]
-    run_xtb_ranking_job: Callable[..., Any]
+    run_xtb_ranking_job: Callable[..., _worker_execution.XtbRunResult]
     start_xtb_job: Callable[..., Any]
-    finalize_xtb_job: Callable[..., Any]
-    run_path_search_ts_hessian_followup: Callable[..., Any]
-    terminate_process: Callable[..., Any]
-    wait_for_cancellable_process: Callable[..., Any]
+    finalize_xtb_job: Callable[..., _worker_execution.XtbRunResult]
+    run_path_search_ts_hessian_followup: Callable[..., _worker_execution.XtbRunResult]
+    terminate_process: Callable[..., bool]
+    wait_for_cancellable_process: Callable[..., _worker_execution.XtbRunResult]
     sleep: Callable[..., Any]
     now_utc_iso: Callable[..., Any]
     get_cancel_requested: Callable[..., Any]
@@ -46,7 +46,9 @@ class XtbQueueRuntimeWorkerExecutionCallbacks:
     mark_failed: Callable[..., Any]
 
     @property
-    def process_callbacks(self) -> WorkerProcessDependencyCallbacks:
+    def process_callbacks(
+        self,
+    ) -> WorkerProcessDependencyCallbacks[_worker_execution.XtbRunResult]:
         return worker_process_dependency_callbacks_from_attrs(
             self,
             engine_runner_dependency_names=(

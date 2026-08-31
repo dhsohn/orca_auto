@@ -7,6 +7,7 @@ from typing import Any, Self
 
 from orca_auto.core.utils import copy_dict_or_empty as _mapping
 
+from .engine_records import EngineLocationSpec
 from .location import JobLocationRecord
 from .store import normalize_index_text as normalize_text
 
@@ -114,7 +115,7 @@ def _snapshot_status(
 def _snapshot_payload_kind(
     sources: tuple[dict[str, Any], ...],
     *,
-    spec: Any,
+    spec: EngineLocationSpec,
     default: str,
 ) -> str:
     return normalize_text(_first_value(sources, spec.payload_kind_key) or default) or default
@@ -146,7 +147,7 @@ def _snapshot_original_run_dir(
 def _snapshot_molecule_key(
     sources: tuple[dict[str, Any], ...],
     *,
-    spec: Any,
+    spec: EngineLocationSpec,
     existing: JobLocationRecord | None,
     original_run_dir: str,
     selected_input_xyz: str,
@@ -164,7 +165,7 @@ def _snapshot_molecule_key(
 
 @dataclass(frozen=True)
 class EngineArtifactSnapshotRequest:
-    spec: Any
+    spec: EngineLocationSpec
     job_dir: Path
     state: dict[str, Any]
     report: dict[str, Any]
@@ -281,7 +282,7 @@ def artifact_resources(
 
 def engine_record_from_artifacts(
     *,
-    spec: Any,
+    spec: EngineLocationSpec,
     build_record_fn: Callable[..., JobLocationRecord],
     job_dir: Path,
     state: dict[str, Any] | None,

@@ -4,7 +4,11 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
+
+
+class _QueueWorkerCommand(Protocol):
+    def run(self) -> int: ...
 
 
 def display_status(entry: Any) -> str:
@@ -103,7 +107,7 @@ def run_queue_worker_command(
     *,
     load_config_fn: Callable[[Any], Any],
     config_path_fn: Callable[[Any], str],
-    worker_factory: Callable[..., Any],
+    worker_factory: Callable[..., _QueueWorkerCommand],
     existing_pid_fn: Callable[[Any], int | None] | None = None,
     existing_pid_report_fn: Callable[[int], Any] | None = None,
     max_concurrent_fn: Callable[[Any], int] | None = None,
@@ -151,7 +155,7 @@ def run_pidfile_queue_worker_command(
     *,
     load_config_fn: Callable[[Any], Any],
     config_path_fn: Callable[[Any], str],
-    worker_factory: Callable[..., Any],
+    worker_factory: Callable[..., _QueueWorkerCommand],
     read_worker_pid_fn: Callable[[Path], int | None],
     existing_pid_report_fn: Callable[[int], Any] | None = None,
     max_concurrent_fn: Callable[[Any], int] | None = None,

@@ -174,7 +174,7 @@ class WorkflowStageXtbMutationMixin:
         attempt_number: int,
         fields: dict[str, Any],
     ) -> dict[str, Any]:
-        record = self.xtb_attempt_record(attempt_number)
+        record: dict[str, Any] = self.xtb_attempt_record(attempt_number)
         record.update(fields)
         return record
 
@@ -206,22 +206,23 @@ class WorkflowStageXtbMutationMixin:
         self.update_metadata(fields)
 
     def xtb_attempt_rows(self: Any) -> list[dict[str, Any]]:
-        metadata = self.metadata()
+        metadata: dict[str, Any] = self.metadata()
         attempts = metadata.get("xtb_attempts")
         if isinstance(attempts, list):
             filtered = [item for item in attempts if isinstance(item, dict)]
             metadata["xtb_attempts"] = filtered
             return filtered
         metadata["xtb_attempts"] = []
-        return metadata["xtb_attempts"]
+        stored_attempts: list[dict[str, Any]] = metadata["xtb_attempts"]
+        return stored_attempts
 
     def xtb_attempt_record(self: Any, attempt_number: int) -> dict[str, Any]:
-        rows = self.xtb_attempt_rows()
+        rows: list[dict[str, Any]] = self.xtb_attempt_rows()
         target_number = int(attempt_number)
         for row in rows:
             if safe_int(row.get("attempt_number"), default=-1) == target_number:
                 return row
-        record = {"attempt_number": target_number}
+        record: dict[str, Any] = {"attempt_number": target_number}
         rows.append(record)
         rows.sort(key=lambda item: safe_int(item.get("attempt_number"), default=0))
         return record
