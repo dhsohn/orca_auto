@@ -294,7 +294,7 @@ def install_publication_repair_gate(
     engine: str,
     repair_fn: Callable[[Any], bool],
 ) -> None:
-    reserve_next_entry = worker._reserve_next_entry
+    reserve_next_entry: Callable[[], tuple[str, Any | None]] = worker._reserve_next_entry
 
     def reserve_next_after_publication_repair() -> tuple[str, Any | None]:
         if not repair_fn(worker):

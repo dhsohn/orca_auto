@@ -3,34 +3,37 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic, TypeVar
+
+SyncResultT = TypeVar("SyncResultT")
+OutcomeT = TypeVar("OutcomeT")
 
 
 @dataclass(frozen=True)
-class TerminalSyncActions:
+class TerminalSyncActions(Generic[SyncResultT, OutcomeT]):
     write_artifacts: Callable[[], Any]
-    mark_queue_terminal: Callable[[Callable[[], Any]], Any]
-    sync_job_record: Callable[[], Any]
-    notify_finished: Callable[[Any], Any]
-    build_outcome: Callable[[Any], Any]
-    emit_output: Callable[[Any], Any] | None = None
-    handle_uncommitted_terminal: Callable[[], Any] | None = None
+    mark_queue_terminal: Callable[[Callable[[], SyncResultT]], Any]
+    sync_job_record: Callable[[], SyncResultT]
+    notify_finished: Callable[[SyncResultT | None], Any]
+    build_outcome: Callable[[SyncResultT | None], OutcomeT]
+    emit_output: Callable[[SyncResultT | None], Any] | None = None
+    handle_uncommitted_terminal: Callable[[], OutcomeT] | None = None
 
 
 def sync_terminal_result(
-    actions: TerminalSyncActions,
+    actions: TerminalSyncActions[SyncResultT, OutcomeT],
     *,
     emit_output: bool = False,
-) -> Any:
+) -> OutcomeT:
     # Keep the queue entry replayable until both the terminal artifacts and
     # idempotent terminal index are durable. The queue mutation invokes these
     # writes while holding its generation/cancellation CAS lock, so a stale
     # generation cannot overwrite another job's artifacts and a racing
     # cancellation either wins before any terminal write or waits until the
     # terminal transition is durable.
-    sync_results: list[Any] = []
+    sync_results: list[SyncResultT] = []
 
-    def sync_before_queue_update() -> Any:
+    def sync_before_queue_update() -> SyncResultT:
         actions.write_artifacts()
         result = actions.sync_job_record()
         sync_results.append(result)

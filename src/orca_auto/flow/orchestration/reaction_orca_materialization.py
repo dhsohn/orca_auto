@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.statuses import is_failed_status, is_queue_active_status
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.contracts.workflow import (
+    WorkflowStagePayload,
     required_route_line,
     workflow_request_parameters,
     workflow_stage_metadata,
@@ -22,6 +23,7 @@ from orca_auto.flow.orchestration.scan_orca_materialization import (
 )
 from orca_auto.flow.orchestration.services import (
     OrchestrationServices,
+    XtbArtifactContractView,
     resolve_orchestration_services,
 )
 from orca_auto.flow.orchestration.stage_views import (
@@ -41,9 +43,6 @@ from orca_auto.flow.orchestration.support import (
 )
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.flow.workflow._phases import phase_finished
-
-if TYPE_CHECKING:
-    from orca_auto.flow.contracts.xtb import XtbArtifactContract
 
 
 @dataclass(frozen=True)
@@ -77,7 +76,7 @@ def _load_xtb_contract_for_stage(
     xtb_stage: dict[str, Any],
     *,
     xtb_allowed_root: Path,
-) -> XtbArtifactContract | None:
+) -> XtbArtifactContractView | None:
     view = WorkflowStageView.from_raw(xtb_stage)
     if view is None or not view.task.raw:
         return None
@@ -97,7 +96,7 @@ def _load_xtb_contract_for_stage(
 def _record_xtb_handoff_error(
     services: OrchestrationServices,
     xtb_stage: dict[str, Any],
-    contract: XtbArtifactContract,
+    contract: XtbArtifactContractView,
 ) -> dict[str, str]:
     stage_metadata = workflow_stage_metadata(xtb_stage)
     error = reaction_ts_guess_error_impl(contract, services=services)
@@ -121,7 +120,7 @@ def _mark_xtb_handoff_ready(xtb_stage: dict[str, Any]) -> None:
 
 def _reaction_orca_candidate_pool_rows(
     xtb_stage: dict[str, Any],
-    contract: XtbArtifactContract,
+    contract: XtbArtifactContractView,
     inputs: list[Any],
     stage_order: int,
 ) -> list[tuple[int, int, str, Any]]:
@@ -392,7 +391,7 @@ def _build_reaction_orca_stage(
     *,
     candidate: Any,
     next_index: int,
-) -> dict[str, Any]:
+) -> WorkflowStagePayload:
     return services.engines.build_materialized_orca_stage(
         workflow_id=str(payload.get("workflow_id", "")),
         template_name="reaction_ts_search",
@@ -419,7 +418,7 @@ def _build_reaction_orca_stage(
 
 
 def _annotate_reaction_orca_stage(
-    stage: dict[str, Any],
+    stage: WorkflowStagePayload,
     plan: _ReactionOrcaStagePlan,
     *,
     next_index: int,

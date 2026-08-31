@@ -6,7 +6,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, TextIO
 
 from orca_auto.core.engine_process import start_logged_process
 from orca_auto.core.engine_runner import scratch_engine_runtime_environment
@@ -19,6 +19,12 @@ from orca_auto.core.engine_scratch import (
 from orca_auto.core.queue.engine.input_snapshot import verify_input_snapshots
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils import process as process_utils
+
+
+class _ClosableEngineProcess(Protocol):
+    process: subprocess.Popen[str]
+    stdout_handle: TextIO
+    stderr_handle: TextIO
 
 
 def create_engine_scratch_workspace(
@@ -144,7 +150,7 @@ def launch_engine_process(
     )
 
 
-def close_and_wait(running: Any) -> int:
+def close_and_wait(running: _ClosableEngineProcess) -> int:
     """Flush and close the log handles, then wait for the engine process."""
 
     try:

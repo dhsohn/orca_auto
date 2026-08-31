@@ -31,6 +31,7 @@ from .layout import (
     STANDARD_CONFORMER_INPUT_FILENAME,
     STANDARD_REACTION_PRODUCT_FILENAME,
     STANDARD_REACTION_REACTANT_FILENAME,
+    WorkflowRunDirLayout,
     inspect_workflow_run_dir,
 )
 from .options import RunDirManifestSections, RunDirWorkflowConfig
@@ -78,7 +79,7 @@ def _resolve_run_dir_path(
 
 
 def _resolve_run_dir_workflow_type(
-    args: Any, manifest: dict[str, Any], workflow_layout: Any
+    args: Any, manifest: dict[str, Any], workflow_layout: WorkflowRunDirLayout
 ) -> str:
     workflow_type_text = normalize_text(getattr(args, "workflow_type", None))
     if not workflow_type_text:

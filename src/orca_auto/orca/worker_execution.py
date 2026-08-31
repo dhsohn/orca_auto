@@ -548,7 +548,7 @@ def _worker_execution_spec(
     *,
     worker_config_path: str,
     admission_token: str | None,
-) -> _engine_execution.EngineWorkerExecutionSpec:
+) -> _engine_execution.EngineWorkerExecutionSpec[int, OrcaWorkerExecutionOutcome]:
     return _engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
             cfg_obj,

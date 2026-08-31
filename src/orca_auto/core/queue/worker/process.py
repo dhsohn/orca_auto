@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from orca_auto.core.queue.engine.snapshot_intent import (
     finalize_queued_snapshot_intent,
@@ -27,6 +27,14 @@ from .models import BackgroundRunningJob
 logger = logging.getLogger(__name__)
 _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
 _WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
+
+
+class _PollableProcess(Protocol):
+    def poll(self) -> int | None: ...
+
+
+class _ProcessBackedJob(Protocol):
+    process: _PollableProcess
 
 
 @dataclass(frozen=True)
@@ -74,8 +82,8 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
         )
         self.cfg = cfg
         self.config_path = config_path
-        self.admission_root = deps.admission_root(cfg)
-        self.deps = deps
+        self.admission_root: str | Path = deps.admission_root(cfg)
+        self.deps: Any = deps
 
     def _before_run(self) -> None:
         self._reconcile_worker_state_now()
@@ -121,13 +129,14 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
 
     def _reserve_next_entry(self) -> tuple[str, Any | None]:
         deps = self.deps
-        return deps.reserve_dequeued_entry(
+        reserved: tuple[str, Any | None] = deps.reserve_dequeued_entry(
             self.cfg,
             admission_root=self.admission_root,
             reserve_slot_fn=deps.try_reserve_admission_slot,
             dequeue_next_fn=deps.dequeue_next_entry,
             release_slot_fn=deps.release_slot,
         )
+        return reserved
 
     def _start_reserved(self, reserved: Any) -> bool:
         try:
@@ -246,11 +255,12 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
             admission_token=admission_token,
         )
 
-    def _poll_job(self, job: Any) -> int | None:
+    def _poll_job(self, job: _ProcessBackedJob) -> int | None:
         return job.process.poll()
 
     def _release_admission_slot(self, admission_token: str) -> object:
-        return self.deps.release_slot(self.admission_root, admission_token)
+        released: object = self.deps.release_slot(self.admission_root, admission_token)
+        return released
 
     def _mark_entry_failed_and_release(
         self,

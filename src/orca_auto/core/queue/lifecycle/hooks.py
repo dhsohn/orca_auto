@@ -30,7 +30,7 @@ class EngineQueueProcessLifecycleHooks:
     queue_entry_app_name_fn: Callable[[Any], str]
     queue_entry_task_id_fn: Callable[[Any], str | None]
     update_slot_metadata_fn: Callable[..., Any]
-    terminate_process_fn: Callable[[Any], Any]
+    terminate_process_fn: Callable[[Any], bool]
     mark_failed_fn: Callable[..., Any]
     upsert_running_job_record_fn: Callable[[Any, Any], Any]
     get_run_id_from_state_fn: Callable[..., str | None]

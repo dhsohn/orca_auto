@@ -207,7 +207,7 @@ class OrcaRunner:
                 workspace.path,
             )
 
-    def _terminate_subprocess_tree(self, proc: subprocess.Popen) -> bool:
+    def _terminate_subprocess_tree(self, proc: subprocess.Popen[str]) -> bool:
         """Terminate the ORCA process group; True only when it is confirmed gone."""
         logger.warning("Terminating ORCA process tree (pid=%d)", proc.pid)
         return terminate_process_group(
@@ -226,7 +226,7 @@ class OrcaRunner:
             ),
         )
 
-    def _retain_until_subprocess_tree_exits(self, proc: subprocess.Popen) -> None:
+    def _retain_until_subprocess_tree_exits(self, proc: subprocess.Popen[str]) -> None:
         try:
             if self._terminate_subprocess_tree(proc):
                 return
@@ -371,7 +371,7 @@ class OrcaRunner:
                     if self._shutdown_requested is not None and self._shutdown_requested():
                         raise WorkerShutdownInterrupt
 
-                proc: subprocess.Popen | None = None
+                proc: subprocess.Popen[str] | None = None
                 admission_registered = False
                 process_start_attempted = False
                 try:

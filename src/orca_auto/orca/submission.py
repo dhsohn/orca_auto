@@ -271,7 +271,9 @@ def _workflow_bound_selected_validator(
 ) -> Callable[[Path, bytes], None] | None:
     task_kind_raw = getattr(args, "workflow_task_kind", None) if args is not None else None
     expected_raw = getattr(args, "expected_selected_inp", None) if args is not None else None
-    validator = getattr(args, "bound_selected_validator", None) if args is not None else None
+    validator: Callable[[Path, bytes], None] | None = (
+        getattr(args, "bound_selected_validator", None) if args is not None else None
+    )
     task_kind = task_kind_raw.strip().lower() if isinstance(task_kind_raw, str) else ""
     expected_text = expected_raw.strip() if isinstance(expected_raw, str) else ""
     if not task_kind and not expected_text and validator is None:

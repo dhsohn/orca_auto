@@ -3,16 +3,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic, TypeVar
+
+FinalizedT = TypeVar("FinalizedT")
+OutcomeT = TypeVar("OutcomeT")
 
 
 @dataclass(frozen=True)
-class EngineWorkerLifecycle:
+class EngineWorkerLifecycle(Generic[FinalizedT, OutcomeT]):
     build_context: Callable[[Any, Any], Any]
     mark_running: Callable[[Any, Any], None]
     run_job: Callable[[Any, Any, Path], Any]
-    finalize_entry: Callable[[Any, Any, Any, Path], Any]
-    build_outcome: Callable[[Any, Any, Any], Any]
+    finalize_entry: Callable[[Any, Any, Any, Path], FinalizedT]
+    build_outcome: Callable[[Any, Any, FinalizedT], OutcomeT]
     check_shutdown: Callable[[Any], None] | None = None
 
 
@@ -21,8 +24,8 @@ def run_engine_worker_lifecycle(
     entry: Any,
     *,
     queue_root: Path | None,
-    lifecycle: EngineWorkerLifecycle,
-) -> Any:
+    lifecycle: EngineWorkerLifecycle[FinalizedT, OutcomeT],
+) -> OutcomeT:
     active_queue_root = queue_root or Path(str(cfg.runtime.allowed_root)).expanduser().resolve()
     context = lifecycle.build_context(cfg, entry)
     if lifecycle.check_shutdown is not None:

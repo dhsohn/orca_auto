@@ -3,18 +3,19 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, NoReturn, Protocol, TypeVar, overload
 
 from ..cancellable import run_cancellable_engine_process
 from .lifecycle import EngineWorkerLifecycle, run_engine_worker_lifecycle
 
-DependencyT = TypeVar("DependencyT", covariant=True)
+OutcomeT = TypeVar("OutcomeT")
+FinalizedT = TypeVar("FinalizedT")
+ProcessResultT = TypeVar("ProcessResultT", covariant=True)
 
 CancelRequested = Callable[..., bool]
-CancellableProcessWaiter = Callable[..., Any]
-DependencyBuilder = Callable[..., DependencyT]
+CancellableProcessWaiter = Callable[..., ProcessResultT]
 DependencyFactory = Callable[[], Any]
-FailureResultBuilder = Callable[[Exception], Any]
+FailureResultBuilder = Callable[[Exception], ProcessResultT]
 NowUtcIso = Callable[[], str]
 ProcessTerminator = Callable[[Any], bool]
 QueueStatusMarker = Callable[..., Any]
@@ -28,14 +29,14 @@ class WorkerShutdownRequested(RuntimeError):
         self.context = context
 
 
-class CancellableJobFinalizer(Protocol):
+class CancellableJobFinalizer(Protocol[ProcessResultT]):
     def __call__(
         self,
         running: Any,
         *,
         forced_status: str | None = None,
         forced_reason: str | None = None,
-    ) -> Any: ...
+    ) -> ProcessResultT: ...
 
 
 @dataclass(frozen=True)
@@ -52,22 +53,30 @@ class EngineWorkerQueueDependencies:
 
 
 @dataclass(frozen=True)
-class EngineWorkerProcessDependencies:
+class EngineWorkerProcessDependencies(Generic[ProcessResultT]):
     terminate_process: ProcessTerminator
-    wait_for_cancellable_process: CancellableProcessWaiter
+    wait_for_cancellable_process: CancellableProcessWaiter[ProcessResultT]
     sleep: SleepFn
     cancel_check_interval_seconds: float
 
 
+class EngineWorkerProcessDependencyFactory(Protocol[ProcessResultT]):
+    def __call__(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> EngineWorkerProcessDependencies[ProcessResultT]: ...
+
+
 def build_engine_worker_process_dependencies(
-    dependencies_type: DependencyBuilder[DependencyT],
+    dependencies_type: EngineWorkerProcessDependencyFactory[ProcessResultT],
     *,
     terminate_process: ProcessTerminator,
-    wait_for_cancellable_process: CancellableProcessWaiter,
+    wait_for_cancellable_process: CancellableProcessWaiter[ProcessResultT],
     sleep: SleepFn,
     cancel_check_interval_seconds: float,
     **extra_fields: Any,
-) -> DependencyT:
+) -> EngineWorkerProcessDependencies[ProcessResultT]:
     return dependencies_type(
         terminate_process=terminate_process,
         wait_for_cancellable_process=wait_for_cancellable_process,
@@ -79,9 +88,9 @@ def build_engine_worker_process_dependencies(
 
 def build_engine_worker_process_default_factories(
     *,
-    runner_dependencies_type: DependencyBuilder[Any],
+    runner_dependencies_type: EngineWorkerProcessDependencyFactory[ProcessResultT],
     terminate_process: ProcessTerminator,
-    wait_for_cancellable_process: CancellableProcessWaiter,
+    wait_for_cancellable_process: CancellableProcessWaiter[ProcessResultT],
     sleep: SleepFn,
     cancel_check_interval_seconds: float,
     now_utc_iso: NowUtcIso,
@@ -123,18 +132,59 @@ class EngineWorkerOptions:
 EngineContextBuilder = Callable[[Any, Any], Any]
 EngineMarkRunning = Callable[[Any, Any, EngineWorkerOptions], None]
 EngineJobRunner = Callable[[Any, Any, Path, EngineWorkerOptions], Any]
-EngineEntryFinalizer = Callable[[Any, Any, Any, Path, EngineWorkerOptions], Any]
-EngineOutcomeBuilder = Callable[[Any, Any, Any], Any]
-EngineWorkerExecutionSpecFactory = Callable[[], "EngineWorkerExecutionSpec"]
+EngineEntryFinalizer = Callable[[Any, Any, Any, Path, EngineWorkerOptions], FinalizedT]
+EngineOutcomeBuilder = Callable[[Any, Any, FinalizedT], OutcomeT]
 
 
 @dataclass(frozen=True)
-class EngineWorkerExecutionSpec:
+class EngineWorkerExecutionSpec(Generic[FinalizedT, OutcomeT]):
     build_context: EngineContextBuilder
     mark_running: EngineMarkRunning
     run_job: EngineJobRunner
-    finalize_entry: EngineEntryFinalizer
-    build_outcome: EngineOutcomeBuilder = lambda _context, _result, finalized: finalized
+
+    if TYPE_CHECKING:
+        finalize_entry: EngineEntryFinalizer[FinalizedT]
+        build_outcome: EngineOutcomeBuilder[FinalizedT, OutcomeT]
+    else:
+        finalize_entry: EngineEntryFinalizer[Any]
+        build_outcome: EngineOutcomeBuilder[Any, Any] = lambda _context, _result, finalized: (
+            finalized
+        )
+
+    if TYPE_CHECKING:
+
+        @overload
+        def __init__(
+            self: EngineWorkerExecutionSpec[OutcomeT, OutcomeT],
+            build_context: EngineContextBuilder,
+            mark_running: EngineMarkRunning,
+            run_job: EngineJobRunner,
+            finalize_entry: EngineEntryFinalizer[OutcomeT],
+        ) -> None: ...
+
+        @overload
+        def __init__(
+            self: EngineWorkerExecutionSpec[FinalizedT, OutcomeT],
+            build_context: EngineContextBuilder,
+            mark_running: EngineMarkRunning,
+            run_job: EngineJobRunner,
+            finalize_entry: EngineEntryFinalizer[FinalizedT],
+            build_outcome: EngineOutcomeBuilder[FinalizedT, OutcomeT],
+        ) -> None: ...
+
+        def __init__(
+            self: EngineWorkerExecutionSpec[Any, Any],
+            build_context: EngineContextBuilder,
+            mark_running: EngineMarkRunning,
+            run_job: EngineJobRunner,
+            finalize_entry: EngineEntryFinalizer[Any],
+            build_outcome: EngineOutcomeBuilder[Any, Any] = (
+                lambda _context, _result, finalized: finalized
+            ),
+        ) -> None: ...
+
+
+EngineWorkerExecutionSpecFactory = Callable[[], EngineWorkerExecutionSpec[FinalizedT, OutcomeT]]
 
 
 def raise_if_shutdown_requested(
@@ -181,9 +231,9 @@ def run_engine_worker_entry_with_spec(
     entry: Any,
     *,
     queue_root: Path | None,
-    spec: EngineWorkerExecutionSpec,
+    spec: EngineWorkerExecutionSpec[FinalizedT, OutcomeT],
     options: EngineWorkerOptions | None = None,
-) -> Any:
+) -> OutcomeT:
     active_options = options or EngineWorkerOptions()
     return run_engine_worker_lifecycle(
         cfg,
@@ -223,14 +273,14 @@ def run_engine_worker_entry_with_spec_factory_options(
     entry: Any,
     *,
     queue_root: Path | None,
-    spec_factory: EngineWorkerExecutionSpecFactory,
+    spec_factory: EngineWorkerExecutionSpecFactory[FinalizedT, OutcomeT],
     should_cancel: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
     prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
     emit_output: bool = False,
-) -> Any:
+) -> OutcomeT:
     return run_engine_worker_entry_with_spec(
         cfg,
         entry,
@@ -251,17 +301,17 @@ def run_engine_worker_process_job(
     context: Any,
     *,
     options: EngineWorkerOptions,
-    process_deps: EngineWorkerProcessDependencies,
+    process_deps: EngineWorkerProcessDependencies[ProcessResultT],
     start_job: StartJob,
-    finalize_job: CancellableJobFinalizer,
-    build_failure_result: FailureResultBuilder,
+    finalize_job: CancellableJobFinalizer[ProcessResultT],
+    build_failure_result: FailureResultBuilder[ProcessResultT],
     check_cancel_before_poll: bool = False,
     should_reraise_exception: Callable[[Exception], bool] | None = None,
-) -> Any:
-    def raise_shutdown(_running: Any) -> None:
+) -> ProcessResultT:
+    def raise_shutdown(_running: Any) -> NoReturn:
         raise WorkerShutdownRequested(context)
 
-    return run_cancellable_engine_process(
+    result: ProcessResultT = run_cancellable_engine_process(
         prepare_running_job=options.prepare_running_job,
         start_job=start_job,
         finalize_job=finalize_job,
@@ -278,6 +328,7 @@ def run_engine_worker_process_job(
         should_reraise_exception=should_reraise_exception
         or (lambda exc: isinstance(exc, WorkerShutdownRequested)),
     )
+    return result
 
 
 __all__ = [

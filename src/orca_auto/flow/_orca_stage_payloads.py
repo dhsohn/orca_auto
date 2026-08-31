@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
+
+_WorkflowStageT = TypeVar("_WorkflowStageT")
 
 
 def candidate_source_payload(candidate: Any) -> dict[str, Any]:
@@ -87,9 +90,9 @@ def workflow_stage(
     ctx: Any,
     materialized: Any,
     task: Any,
-    workflow_stage_cls: Any,
+    workflow_stage_cls: Callable[..., _WorkflowStageT],
     artifact_ref_cls: Any,
-) -> Any:
+) -> _WorkflowStageT:
     return workflow_stage_cls(
         stage_id=ctx.stage_id,
         stage_kind="orca_stage",

@@ -3,11 +3,13 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from orca_auto.core.utils import mapping_or_empty
 
 from .processes import managed_process_group_has_exited
+
+ProcessResultT = TypeVar("ProcessResultT")
 
 
 def coerce_mapping(value: Any) -> dict[str, Any]:
@@ -138,18 +140,18 @@ def mark_terminal_repair_blocked(
 def wait_for_cancellable_process(
     running: Any,
     *,
-    finalize_fn: Callable[..., Any],
+    finalize_fn: Callable[..., ProcessResultT],
     terminate_process_fn: Callable[[Any], Any],
     should_cancel: Callable[[], bool] | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
-    on_shutdown: Callable[[Any], Any] | None = None,
+    on_shutdown: Callable[[Any], ProcessResultT] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     poll_interval_seconds: float = 1.0,
     check_cancel_before_poll: bool = False,
-) -> Any:
+) -> ProcessResultT:
     process = running.process
 
-    def finish_cancelled() -> Any:
+    def finish_cancelled() -> ProcessResultT:
         terminate_process_fn(process)
         return finalize_fn(
             running,

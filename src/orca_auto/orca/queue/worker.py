@@ -118,7 +118,7 @@ def _start_background_job_process(
     queue_root: Path,
     entry: QueueEntry,
     admission_token: str,
-) -> BackgroundRunJobProcess:
+) -> BackgroundRunJobProcess[str]:
     log_path = str(worker_log_path(queue_root, queue_entry_id(entry)))
     return start_background_process(
         build_worker_child_command(

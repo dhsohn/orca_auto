@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.utils import normalize_text
@@ -10,11 +10,9 @@ from orca_auto.flow.contracts.workflow import workflow_stage_metadata
 from orca_auto.flow.contracts.xtb import geometry_validation_passed
 from orca_auto.flow.orchestration.services import (
     OrchestrationServices,
+    XtbArtifactContractView,
     resolve_orchestration_services,
 )
-
-if TYPE_CHECKING:
-    from orca_auto.flow.contracts.xtb import XtbArtifactContract
 
 
 def _runtime_paths_for_engine(
@@ -79,7 +77,7 @@ def required_stage_budget(params: dict[str, Any], key: str) -> Any:
 
 def select_valid_ts_guess_inputs(
     services: OrchestrationServices,
-    contract: XtbArtifactContract,
+    contract: XtbArtifactContractView,
 ) -> list[Any]:
     """Return the ts_guess candidates whose geometry validation did not reject them.
 
@@ -106,7 +104,7 @@ def select_valid_ts_guess_inputs(
 
 
 def reaction_ts_guess_error_impl(
-    contract: XtbArtifactContract,
+    contract: XtbArtifactContractView,
     *,
     services: OrchestrationServices | None = None,
 ) -> dict[str, str]:

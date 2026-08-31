@@ -314,7 +314,7 @@ def on_worker_process_started(
     worker: Any,
     queue_root: Path,
     entry: Any,
-    process: BackgroundRunJobProcess,
+    process: BackgroundRunJobProcess[str],
     admission_token: str,
 ) -> bool:
     return attach_started_process_metadata(

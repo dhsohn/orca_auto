@@ -94,7 +94,9 @@ def workflow_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
-def workflow_stage_metadata(stage: dict[str, Any]) -> dict[str, Any]:
+def workflow_stage_metadata(
+    stage: dict[str, Any] | WorkflowStagePayload,
+) -> dict[str, Any]:
     metadata = stage.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
