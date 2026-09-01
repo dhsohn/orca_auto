@@ -672,12 +672,14 @@ def get_cancel_requested(
     *,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
+    lock_timeout_seconds: float = 10.0,
 ) -> bool:
     """Check if a running entry has a cancel request."""
     return _queue_store.get_cancel_requested(
         allowed_root,
         queue_id,
         load_entries_fn=_load_entries,
+        lock_timeout_seconds=lock_timeout_seconds,
         accept_entry_fn=lambda current: (
             is_orca_queue_entry(current)
             and (
@@ -712,6 +714,7 @@ def update_metadata(
     metadata_update: dict[str, Any],
     *,
     expected_entry: QueueEntry | None = None,
+    require_running_without_cancel_requested: bool = False,
 ) -> bool:
     return (
         _queue_store.update_metadata(
@@ -725,6 +728,10 @@ def update_metadata(
                 and (
                     expected_entry is None
                     or queue_entries_same_publication_generation(current, expected_entry)
+                )
+                and (
+                    not require_running_without_cancel_requested
+                    or (current.status == QueueStatus.RUNNING and not current.cancel_requested)
                 )
             ),
         )

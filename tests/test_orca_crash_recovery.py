@@ -944,6 +944,462 @@ def test_rebind_consumes_budget_before_building(
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
 
 
+def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    real_build = worker_job.build_orca_execution_snapshot
+    build_count = 0
+
+    def crash_first_build(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal build_count
+        build_count += 1
+        if build_count == 1:
+            raise RuntimeError("simulated crash after budget claim")
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(worker_job, "build_orca_execution_snapshot", crash_first_build)
+
+    with pytest.raises(RuntimeError, match="simulated crash after budget claim"):
+        worker_job._maybe_rebind_recovery_generation(
+            running,
+            queue_root=queue_root,
+            cfg_factory=lambda: cfg,
+        )
+
+    (claimed,) = list_queue(queue_root)
+    assert claimed.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    durable_claim = claimed.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY]
+    assert durable_claim["ordinal"] == 1
+    assert durable_claim["source_generation_name"] == snapshot["generation_name"]
+    intent_token = durable_claim["intent_token"]
+    target_generation_name = durable_claim["target_generation_name"]
+    assert intent_token
+    assert is_visible_generation_name(target_generation_name)
+
+    result = worker_job._maybe_rebind_recovery_generation(
+        claimed,
+        queue_root=queue_root,
+        cfg_factory=lambda: cfg,
+    )
+
+    assert build_count == 2
+    assert result.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert result.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY] is None
+    replacement = result.metadata["execution_snapshot"]
+    assert replacement[SNAPSHOT_INTENT_TOKEN_KEY] == intent_token
+    assert replacement["generation_name"] == target_generation_name
+    assert replacement["generation_name"] != snapshot["generation_name"]
+    assert sorted(
+        child.name
+        for child in Path(result.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ) == sorted([old_generation.name, replacement["generation_name"]])
+
+
+def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    from orca_auto.orca.queue.adapter import update_metadata
+
+    assert update_metadata(
+        queue_root,
+        str(running.queue_id),
+        {worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: (worker_job.RECOVERY_REBIND_LIMIT - 1)},
+        expected_entry=running,
+    )
+    (penultimate,) = list_queue(queue_root)
+    real_build = worker_job.build_orca_execution_snapshot
+    build_count = 0
+
+    def crash_first_build(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal build_count
+        build_count += 1
+        if build_count == 1:
+            raise RuntimeError("simulated crash after final budget claim")
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(worker_job, "build_orca_execution_snapshot", crash_first_build)
+
+    with pytest.raises(RuntimeError, match="simulated crash after final budget claim"):
+        worker_job._maybe_rebind_recovery_generation(
+            penultimate,
+            queue_root=queue_root,
+            cfg_factory=lambda: cfg,
+        )
+
+    (claimed,) = list_queue(queue_root)
+    assert (
+        claimed.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY]
+        == worker_job.RECOVERY_REBIND_LIMIT
+    )
+    durable_claim = claimed.metadata.get("recovery_rebind_claim")
+    intent_token = (
+        str(durable_claim.get("intent_token") or "") if isinstance(durable_claim, dict) else ""
+    )
+
+    result = worker_job._maybe_rebind_recovery_generation(
+        claimed,
+        queue_root=queue_root,
+        cfg_factory=lambda: cfg,
+    )
+
+    assert build_count == 2
+    assert (
+        result.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY]
+        == worker_job.RECOVERY_REBIND_LIMIT
+    )
+    assert result.metadata["execution_snapshot"][SNAPSHOT_INTENT_TOKEN_KEY] == intent_token
+
+
+def test_rebind_rejects_a_mismatched_durable_claim_without_consuming_budget(
+    tmp_path: Path,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    from orca_auto.orca.queue.adapter import update_metadata
+
+    assert update_metadata(
+        queue_root,
+        str(running.queue_id),
+        {
+            worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: 1,
+            "recovery_rebind_claim": {
+                "ordinal": 1,
+                "source_generation_name": "20000101-000000-deadbeef",
+                "intent_token": "snapshot_intent-forged-0123456789abcdef",
+                "target_generation_name": "20000101-000001-cafebabe",
+            },
+        },
+        expected_entry=running,
+    )
+    (claimed,) = list_queue(queue_root)
+
+    with pytest.raises(ValueError, match="durable rebind claim does not match"):
+        worker_job._maybe_rebind_recovery_generation(
+            claimed,
+            queue_root=queue_root,
+            cfg_factory=lambda: cfg,
+        )
+
+    (row,) = list_queue(queue_root)
+    assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
+    assert [
+        child
+        for child in Path(row.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
+
+
+def test_rebind_rejects_boolean_count_with_pending_claim_without_mutation(
+    tmp_path: Path,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    from orca_auto.orca.queue.adapter import update_metadata
+
+    durable_claim = {
+        "ordinal": worker_job.RECOVERY_REBIND_LIMIT,
+        "source_generation_name": snapshot["generation_name"],
+        "intent_token": "snapshot_intent-boolean-count-0123456789abcdef",
+        "target_generation_name": "20000101-000001-cafebabe",
+    }
+    assert update_metadata(
+        queue_root,
+        str(running.queue_id),
+        {
+            worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: True,
+            worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
+        },
+        expected_entry=running,
+    )
+    (claimed,) = list_queue(queue_root)
+
+    with pytest.raises(ValueError, match="invalid durable rebind count"):
+        worker_job._maybe_rebind_recovery_generation(
+            claimed,
+            queue_root=queue_root,
+            cfg_factory=lambda: cfg,
+        )
+
+    (row,) = list_queue(queue_root)
+    assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] is True
+    assert row.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY] == durable_claim
+    assert row.metadata["execution_snapshot"] == snapshot
+    assert [
+        child
+        for child in Path(row.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
+
+
+@pytest.mark.parametrize(
+    "invalid_intent_token",
+    [
+        1234567890123456,
+        True,
+        " snapshot_intent_20260901_212345_0123456789abcdef0123456789abcdef ",
+        "snapshot_intent-forged-0123456789abcdef",
+        {"token": "snapshot_intent_20260901_212345_0123456789abcdef0123456789abcdef"},
+    ],
+    ids=["integer", "boolean", "whitespace", "nonproducer-format", "mapping"],
+)
+@pytest.mark.parametrize(
+    "cancellation_committed",
+    [False, True],
+    ids=["without-cancellation", "with-cancellation"],
+)
+def test_rebind_rejects_noncanonical_intent_token_without_mutation(
+    tmp_path: Path,
+    invalid_intent_token: Any,
+    cancellation_committed: bool,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    from orca_auto.orca.queue.adapter import cancel, update_metadata
+
+    durable_claim = {
+        "ordinal": 1,
+        "source_generation_name": snapshot["generation_name"],
+        "intent_token": invalid_intent_token,
+        "target_generation_name": "20000101-000001-cafebabe",
+    }
+    assert update_metadata(
+        queue_root,
+        str(running.queue_id),
+        {
+            worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: 1,
+            worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
+        },
+        expected_entry=running,
+    )
+    if cancellation_committed:
+        cancelled = cancel(queue_root, str(running.queue_id))
+        assert cancelled is not None and cancelled.cancel_requested
+    (claimed,) = list_queue(queue_root)
+    queue_path = queue_root / "queue.json"
+    before = queue_path.read_bytes()
+    intent_dir = queue_root / ".orca_auto_snapshot_intents"
+    intent_dir_existed = intent_dir.exists()
+    intent_payloads_before = (
+        {path.name: path.read_bytes() for path in intent_dir.glob("*.json")}
+        if intent_dir.is_dir()
+        else {}
+    )
+
+    with pytest.raises(ValueError, match="durable rebind claim does not match"):
+        worker_job._maybe_rebind_recovery_generation(
+            claimed,
+            queue_root=queue_root,
+            cfg_factory=lambda: cfg,
+        )
+
+    assert queue_path.read_bytes() == before
+    assert [
+        child
+        for child in Path(claimed.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
+    assert intent_dir.exists() is intent_dir_existed
+    assert (
+        {path.name: path.read_bytes() for path in intent_dir.glob("*.json")}
+        if intent_dir.is_dir()
+        else {}
+    ) == intent_payloads_before
+
+
+def test_rebind_does_not_publish_after_cancellation_commits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    from orca_auto.orca.queue.adapter import cancel
+
+    real_update = worker_job.update_metadata
+    cancellation_committed = False
+
+    def cancel_before_publication(
+        root: Path,
+        queue_id: str,
+        metadata_update: dict[str, Any],
+        **kwargs: Any,
+    ) -> bool:
+        nonlocal cancellation_committed
+        expected_entry = kwargs.get("expected_entry")
+        if "execution_snapshot" in metadata_update and not cancellation_committed:
+            cancelled = cancel(root, queue_id, expected_entry=expected_entry)
+            assert cancelled is not None and cancelled.cancel_requested
+            cancellation_committed = True
+        return real_update(root, queue_id, metadata_update, **kwargs)
+
+    monkeypatch.setattr(worker_job, "update_metadata", cancel_before_publication)
+
+    with pytest.raises(ValueError, match="could not publish its replacement generation"):
+        worker_job._maybe_rebind_recovery_generation(
+            running,
+            queue_root=queue_root,
+            cfg_factory=lambda: cfg,
+        )
+
+    assert cancellation_committed
+    (row,) = list_queue(queue_root)
+    assert row.cancel_requested
+    assert row.metadata["execution_snapshot"] == snapshot
+    durable_claim = row.metadata.get(worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY)
+    assert isinstance(durable_claim, dict) and durable_claim["ordinal"] == 1
+    assert [
+        child
+        for child in Path(row.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
+
+
+def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growth(
+    tmp_path: Path,
+) -> None:
+    import os
+
+    from orca_auto.core.queue.engine.snapshot_intent import (
+        reconcile_orphaned_snapshot_generations,
+    )
+
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    reaction_dir = Path(running.metadata["reaction_dir"])
+
+    for iteration in range(worker_job.RECOVERY_REBIND_LIMIT + 1):
+        child_pid = os.fork()
+        if child_pid == 0:
+
+            def exit_before_identity_bind(*_args: Any, **_kwargs: Any) -> None:
+                os._exit(73)
+
+            binding_mod.bind_snapshot_intent_generation_identities = exit_before_identity_bind
+            try:
+                current = list_queue(queue_root)[0]
+                worker_job._maybe_rebind_recovery_generation(
+                    current,
+                    queue_root=queue_root,
+                    cfg_factory=lambda: cfg,
+                )
+            except FileExistsError:
+                os._exit(74)
+            os._exit(75)
+
+        waited_pid, wait_status = os.waitpid(child_pid, 0)
+        assert waited_pid == child_pid
+        exit_code = os.waitstatus_to_exitcode(wait_status)
+        assert exit_code == (73 if iteration == 0 else 74)
+        reconcile_orphaned_snapshot_generations([queue_root])
+        visible_generations = sorted(
+            child.name
+            for child in reaction_dir.iterdir()
+            if child.is_dir() and is_visible_generation_name(child.name)
+        )
+        assert len(visible_generations) == 2
+        assert old_generation.name in visible_generations
+
+    (claimed,) = list_queue(queue_root)
+    assert claimed.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    durable_claim = claimed.metadata.get(worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY)
+    assert isinstance(durable_claim, dict)
+    target_generation_name = durable_claim.get("target_generation_name")
+    assert isinstance(target_generation_name, str) and is_visible_generation_name(
+        target_generation_name
+    )
+    assert target_generation_name != old_generation.name
+    assert (reaction_dir / target_generation_name).is_dir()
+
+
+def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
+    tmp_path: Path,
+) -> None:
+    import os
+
+    from orca_auto.core.queue.engine.snapshot_intent import (
+        reconcile_orphaned_snapshot_generations,
+    )
+
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+
+    child_pid = os.fork()
+    if child_pid == 0:
+
+        def exit_after_snapshot_build(*_args: Any, **_kwargs: Any) -> None:
+            os._exit(73)
+
+        worker_job.transition_snapshot_intent = exit_after_snapshot_build
+        worker_job._maybe_rebind_recovery_generation(
+            running,
+            queue_root=queue_root,
+            cfg_factory=lambda: cfg,
+        )
+        os._exit(74)
+
+    waited_pid, wait_status = os.waitpid(child_pid, 0)
+    assert waited_pid == child_pid
+    assert os.waitstatus_to_exitcode(wait_status) == 73
+
+    (claimed,) = list_queue(queue_root)
+    assert claimed.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    durable_claim = claimed.metadata.get("recovery_rebind_claim")
+    intent_token = (
+        str(durable_claim.get("intent_token") or "") if isinstance(durable_claim, dict) else ""
+    )
+    intent_dir = queue_root / ".orca_auto_snapshot_intents"
+    assert intent_dir.is_dir() and any(intent_dir.glob("*.json"))
+    assert (
+        len(
+            [
+                child
+                for child in Path(claimed.metadata["reaction_dir"]).iterdir()
+                if child.is_dir() and is_visible_generation_name(child.name)
+            ]
+        )
+        == 2
+    )
+
+    assert reconcile_orphaned_snapshot_generations([queue_root]) == 1
+    assert not intent_dir.exists() or not any(intent_dir.glob("*.json"))
+    assert [
+        child
+        for child in Path(claimed.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
+
+    result = worker_job._maybe_rebind_recovery_generation(
+        claimed,
+        queue_root=queue_root,
+        cfg_factory=lambda: cfg,
+    )
+
+    assert result.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert result.metadata.get("recovery_rebind_claim") is None
+    replacement = result.metadata["execution_snapshot"]
+    assert replacement[SNAPSHOT_INTENT_TOKEN_KEY] == intent_token
+    assert sorted(
+        child.name
+        for child in Path(result.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ) == sorted([old_generation.name, replacement["generation_name"]])
+
+
 @pytest.mark.parametrize("mismatch_kind", ["path", "sha256", "size"])
 def test_rebind_rejects_executable_mismatch_before_consuming_budget(
     tmp_path: Path,

@@ -12,6 +12,7 @@ from orca_auto.core.app_ids import (
     ORCA_AUTO_ORCA_SOURCE,
     ORCA_AUTO_REPO_ROOT_ENV_VAR,
 )
+from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.flow import activity
 from orca_auto.flow.activity import _cancel as _activity_cancel
@@ -423,6 +424,60 @@ def test_runtime_path_and_engine_root_edges(
     ) == (runtime_a, runtime_b)
 
 
+@pytest.mark.parametrize(
+    ("run_lock_held", "expected_status"),
+    [(False, "pending"), (True, "running")],
+)
+def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_lock_held: bool,
+    expected_status: str,
+) -> None:
+    allowed = tmp_path / "orca"
+    allowed.mkdir()
+    reaction_dir = allowed / "rxn-read-only"
+    reaction_dir.mkdir()
+    entry = QueueEntry(
+        queue_id="q-read-only",
+        app_name="orca_auto_orca",
+        task_id="task-read-only",
+        task_kind="orca_run_inp",
+        engine="orca",
+        status=QueueStatus.RUNNING,
+        priority=1,
+        enqueued_at="2026-04-26T00:00:00+00:00",
+        started_at="2026-04-26T00:01:00+00:00",
+        metadata={"reaction_dir": str(reaction_dir)},
+    )
+    queue_store.save_entries(allowed, [entry])
+    queue_path = allowed / queue_store.QUEUE_FILE_NAME
+    before = queue_path.read_bytes()
+
+    from orca_auto.orca import run_snapshot
+
+    monkeypatch.setattr(
+        _activity_orca,
+        "engine_runtime_paths",
+        lambda config_path, *, engine: {"allowed_root": allowed},
+    )
+    monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root: [])
+    monkeypatch.setattr(
+        _activity_orca,
+        "run_lock_is_held",
+        lambda *args, **kwargs: run_lock_held,
+    )
+
+    rows = _activity_orca.orca_records(config_path="/tmp/cfg.yaml")
+
+    assert queue_path.read_bytes() == before
+    (persisted,) = queue_store.load_entries(allowed)
+    assert persisted.status == QueueStatus.RUNNING
+    assert len(rows) == 1
+    assert rows[0].activity_id == entry.queue_id
+    assert rows[0].status == expected_status
+
+
 def test_orca_records_merge_queue_entries_and_snapshots(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -524,7 +579,7 @@ def test_orca_records_merge_queue_entries_and_snapshots(
         config_path="/tmp/cfg.yaml",
     )
 
-    assert reconciled == [allowed]
+    assert reconciled == []
     by_id = {row.activity_id: row for row in rows}
     assert "xtb-foreign" not in by_id
     assert by_id["q-1"].status == "completed"

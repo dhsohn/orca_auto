@@ -496,11 +496,16 @@ def _reserve_execution_generation(
     *,
     queue_root: Path,
     intent_token: str,
+    target_generation_name: str | None = None,
 ) -> tuple[str, Path, tuple[int, int]]:
+    if target_generation_name is not None and not is_visible_generation_name(
+        target_generation_name
+    ):
+        raise ValueError("ORCA execution snapshot target generation name is invalid")
     job_status = job_dir.stat()
     job_identity = (int(job_status.st_dev), int(job_status.st_ino))
-    for _attempt in range(32):
-        generation_name = new_visible_generation_name()
+    for _attempt in range(1 if target_generation_name is not None else 32):
+        generation_name = target_generation_name or new_visible_generation_name()
         execution_dir = job_dir / generation_name
         try:
             create_snapshot_intent(
@@ -1226,6 +1231,7 @@ def build_orca_execution_snapshot(
     orca_executable: str | Path,
     queue_root: str | Path | None = None,
     snapshot_intent_token: str | None = None,
+    target_generation_name: str | None = None,
     normalized_selected_payload: bytes | None = None,
     source_selected_sha256: str | None = None,
     bound_selected_validator: Callable[[Path, bytes], None] | None = None,
@@ -1287,6 +1293,7 @@ def build_orca_execution_snapshot(
         resolved_job_dir,
         queue_root=resolved_queue_root,
         intent_token=resolved_intent_token,
+        target_generation_name=target_generation_name,
     )
     try:
         selected = _load_selected_snapshot_input(

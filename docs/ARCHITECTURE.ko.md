@@ -294,8 +294,12 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   input byte는 용량 admission 전에 한 번만 capture하고 root/workspace directory descriptor는
   실행과 게시가 끝날 때까지 고정합니다. ORCA는 pathname을 다시 여는 대신 고정 descriptor를 통해
   workspace에 진입합니다.
-  scratch-root lock은 workspace를 정확히 하나만 허용하고, 해석할 수 없거나 stale인 workspace는
-  운영자가 검사하거나 tmpfs를 초기화할 때까지 보존하면서 새 시작을 막습니다. 공유 admission
+  scratch-root lock은 live managed workspace를 정확히 하나만 허용합니다. 엄격히 검증한
+  dead-owner workspace가 directory identity상 다른 durable generation에 속하면 보존하되 새
+  attempt를 막지 않습니다. live owner, 같은 generation, malformed·duplicate manifest,
+  읽을 수 없는 상태, 또는 모호한 identity는 계속 fail-closed합니다. 이 root는 private
+  runtime state이며 orca_auto 외부 process의 실행 중 동시 변경 표면으로 지원하지 않습니다.
+  공유 admission
   process record는 scratch 밖에서 durable하며 queue, run state, lock도 durable storage에
   유지합니다. process tree가 종료되면 남은 일반 파일을 staging한 다음 inode로 고정한
   generation에 저널 기반 단일 file-set transaction으로

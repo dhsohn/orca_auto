@@ -234,7 +234,11 @@ class EngineScratchWorkspace:
                         output_dir,
                         durable_dir_identity,
                     )
-                    _assert_scratch_root_available(root, root_fd)
+                    _assert_scratch_root_available(
+                        root,
+                        root_fd,
+                        durable_dir_identity=durable_dir_identity,
+                    )
                     captured_inputs = _capture_input_closure(
                         input_dir_fd,
                         durable.parent,
@@ -438,8 +442,9 @@ def publish_engine_scratch_workspace(
         workspace.cleanup()
     except BaseException:
         logger.exception(
-            "Published engine scratch workspace could not be removed; future scratch runs "
-            "will remain fail-closed until it is inspected: %s",
+            "Published engine scratch workspace could not be removed; all scratch runs remain "
+            "fail-closed while its recorded owner is live, and after owner death only the same "
+            "durable generation remains blocked until inspection: %s",
             workspace.path,
         )
     finally:
@@ -653,6 +658,52 @@ def _write_workspace_manifest(
     )
 
 
+def _reject_duplicate_manifest_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"Duplicate engine scratch manifest key: {key}")
+        payload[key] = value
+    return payload
+
+
+def _load_workspace_manifest(raw_payload: bytes) -> tuple[dict[str, Any], Path] | None:
+    try:
+        parsed = json.loads(
+            raw_payload.decode("utf-8", errors="strict"),
+            object_pairs_hook=_reject_duplicate_manifest_keys,
+        )
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or set(parsed) != {
+        "schema_version",
+        "owner_pid",
+        "owner_process_start_ticks",
+        "owner_boot_id",
+        "durable_dir",
+    }:
+        return None
+    if type(parsed["schema_version"]) is not int or parsed["schema_version"] != 1:
+        return None
+    if type(parsed["owner_pid"]) is not int or parsed["owner_pid"] <= 0:
+        return None
+    if (
+        type(parsed["owner_process_start_ticks"]) is not int
+        or parsed["owner_process_start_ticks"] <= 0
+    ):
+        return None
+    owner_boot_id = parsed["owner_boot_id"]
+    if not isinstance(owner_boot_id, str) or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        owner_boot_id,
+    ):
+        return None
+    manifest_durable_dir = _manifest_durable_dir(parsed)
+    if manifest_durable_dir is None:
+        return None
+    return parsed, manifest_durable_dir
+
+
 def _manifest_owner_is_live(payload: dict[str, Any]) -> bool:
     owner_pid = payload.get("owner_pid")
     owner_ticks = payload.get("owner_process_start_ticks")
@@ -674,7 +725,40 @@ def _manifest_owner_is_live(payload: dict[str, Any]) -> bool:
     return observed_ticks == owner_ticks
 
 
-def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
+def _manifest_durable_dir(payload: dict[str, Any]) -> Path | None:
+    raw_durable_dir = payload.get("durable_dir")
+    if not isinstance(raw_durable_dir, str) or not raw_durable_dir:
+        return None
+    candidate = Path(raw_durable_dir)
+    if not candidate.is_absolute():
+        return None
+    try:
+        resolved = candidate.resolve(strict=False)
+    except OSError:
+        return None
+    return resolved if str(resolved) == raw_durable_dir else None
+
+
+def _manifest_durable_dir_identity(path: Path) -> tuple[int, int] | None:
+    try:
+        descriptor, identity = _open_pinned_directory(
+            path,
+            label="engine scratch manifest durable generation",
+        )
+    except (EngineScratchError, OSError):
+        return None
+    try:
+        return identity
+    finally:
+        os.close(descriptor)
+
+
+def _assert_scratch_root_available(
+    root: Path,
+    root_fd: int,
+    *,
+    durable_dir_identity: tuple[int, int],
+) -> None:
     for name in os.listdir(root_fd):
         if _CLEANUP_TOMBSTONE_NAME_RE.fullmatch(name):
             # A tombstone is a workspace renamed for deletion whose rmtree was
@@ -694,7 +778,7 @@ def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
         info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
         if not stat.S_ISDIR(info.st_mode):
             raise EngineScratchError(f"engine scratch root contains an unsafe entry: {candidate}")
-        workspace_fd, _workspace_identity = _open_pinned_directory_at(
+        workspace_fd, workspace_identity = _open_pinned_directory_at(
             root_fd,
             name,
             display_path=candidate,
@@ -708,18 +792,30 @@ def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
                     display_path=candidate / SCRATCH_MANIFEST_FILE_NAME,
                     max_bytes=64 * 1024,
                 )
-                parsed = json.loads(raw_payload.decode("utf-8", errors="strict"))
-                payload = parsed if isinstance(parsed, dict) else None
+                manifest = _load_workspace_manifest(raw_payload)
             except (OSError, ValueError):
-                payload = None
+                manifest = None
         finally:
             os.close(workspace_fd)
-        if payload is None or payload.get("schema_version") != 1:
+        if manifest is None:
             raise EngineScratchError(
                 f"engine scratch contains an unresolved workspace without valid ownership: {candidate}"
             )
+        payload, manifest_durable_dir = manifest
         if _manifest_owner_is_live(payload):
             raise EngineScratchError(f"Another engine scratch attempt is active: {candidate}")
+        manifest_durable_identity = _manifest_durable_dir_identity(manifest_durable_dir)
+        if manifest_durable_identity is None:
+            raise EngineScratchError(
+                f"engine scratch contains an unresolved workspace without valid ownership: {candidate}"
+            )
+        if manifest_durable_identity != durable_dir_identity:
+            current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            if (int(current.st_dev), int(current.st_ino)) != workspace_identity:
+                raise EngineScratchError(
+                    f"engine scratch workspace changed while inspected: {candidate}"
+                )
+            continue
         raise EngineScratchError(
             "engine scratch contains a stale workspace with uncertain child ownership; "
             f"preserving it for inspection: {candidate}"

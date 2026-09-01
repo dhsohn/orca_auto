@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 
@@ -71,6 +72,31 @@ def test_publish_name_omitted_directory_contributes_no_dirent_bytes(
     assert {path.name for path in publication.paths} == {"sp.out"}
     assert set(publication.omitted_transient_files) == {"work.bin", "workdir"}
     assert publication.omitted_transient_bytes == 1024
+
+
+def test_cleanup_failure_reports_generation_scoped_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    selected = _durable_input(tmp_path)
+    workspace = EngineScratchWorkspace.create(policy, selected)
+    (workspace.path / "sp.out").write_text("done\n", encoding="utf-8")
+
+    def fail_cleanup(_workspace: EngineScratchWorkspace) -> None:
+        raise OSError("simulated cleanup failure")
+
+    monkeypatch.setattr(EngineScratchWorkspace, "cleanup", fail_cleanup)
+    with caplog.at_level(logging.ERROR, logger="test.scratch.cleanup"):
+        publication = scratch_mod.publish_engine_scratch_workspace(
+            workspace,
+            logger=logging.getLogger("test.scratch.cleanup"),
+        )
+
+    assert {path.name for path in publication.paths} == {"sp.out"}
+    assert "all scratch runs remain fail-closed while its recorded owner is live" in caplog.text
+    assert "after owner death only the same durable generation remains blocked" in caplog.text
 
 
 def test_scratch_create_sweeps_interrupted_cleanup_tombstones(
@@ -281,7 +307,7 @@ def test_stale_workspace_is_preserved_and_blocks_new_attempt(
                 "schema_version": 1,
                 "owner_pid": 999999,
                 "owner_process_start_ticks": 1,
-                "owner_boot_id": "old-boot",
+                "owner_boot_id": "00000000-0000-0000-0000-000000000000",
                 "durable_dir": str(selected.parent),
             }
         )
@@ -291,6 +317,326 @@ def test_stale_workspace_is_preserved_and_blocks_new_attempt(
         EngineScratchWorkspace.create(policy, selected)
 
     assert stale.exists()
+
+
+def test_unrelated_stale_workspace_is_preserved_without_blocking_new_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    unrelated_durable = tmp_path / "unrelated-durable"
+    unrelated_durable.mkdir()
+    stale = root / "attempt-unrelated-stale"
+    stale.mkdir()
+    manifest = stale / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "owner_pid": 999999,
+                "owner_process_start_ticks": 1,
+                "owner_boot_id": "00000000-0000-0000-0000-000000000000",
+                "durable_dir": str(unrelated_durable.resolve()),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    sentinel = stale / "partial.out"
+    sentinel.write_bytes(b"preserve-unrelated-stale-evidence\n")
+    manifest_before = manifest.read_bytes()
+    sentinel_before = sentinel.read_bytes()
+
+    workspace = EngineScratchWorkspace.create(policy, selected)
+    try:
+        assert workspace.path != stale
+        assert manifest.read_bytes() == manifest_before
+        assert sentinel.read_bytes() == sentinel_before
+    finally:
+        workspace.close()
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "owner_pid", "owner_process_start_ticks", "owner_boot_id"),
+    [
+        (True, 999999, 1, "00000000-0000-0000-0000-000000000000"),
+        (1.0, 999999, 1, "00000000-0000-0000-0000-000000000000"),
+        (1, True, 1, "00000000-0000-0000-0000-000000000000"),
+        (1, 999999.0, 1, "00000000-0000-0000-0000-000000000000"),
+        (1, 999999, True, "00000000-0000-0000-0000-000000000000"),
+        (1, 999999, 1.0, "00000000-0000-0000-0000-000000000000"),
+        (1, 999999, 1, ""),
+        (1, 999999, 1, " "),
+        (1, 999999, 1, "old-boot"),
+    ],
+)
+def test_unrelated_stale_workspace_requires_strict_manifest_scalars(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    schema_version: object,
+    owner_pid: object,
+    owner_process_start_ticks: object,
+    owner_boot_id: str,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    unrelated_durable = tmp_path / "unrelated-invalid-durable"
+    unrelated_durable.mkdir()
+    stale = root / "attempt-unrelated-invalid-scalars"
+    stale.mkdir()
+    manifest = stale / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": schema_version,
+                "owner_pid": owner_pid,
+                "owner_process_start_ticks": owner_process_start_ticks,
+                "owner_boot_id": owner_boot_id,
+                "durable_dir": str(unrelated_durable.resolve()),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest_before = manifest.read_bytes()
+    workspace = None
+    try:
+        with pytest.raises(EngineScratchError, match="without valid ownership"):
+            workspace = EngineScratchWorkspace.create(policy, selected)
+    finally:
+        if workspace is not None:
+            workspace.close()
+    assert manifest.read_bytes() == manifest_before
+
+
+def test_unrelated_stale_workspace_rejects_duplicate_manifest_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    unrelated_durable = tmp_path / "unrelated-duplicate-durable"
+    unrelated_durable.mkdir()
+    stale = root / "attempt-unrelated-duplicate-keys"
+    stale.mkdir()
+    manifest = stale / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+    manifest.write_text(
+        "{\n"
+        '  "schema_version": false,\n'
+        '  "schema_version": 1,\n'
+        '  "owner_pid": 999999,\n'
+        '  "owner_process_start_ticks": 1,\n'
+        '  "owner_boot_id": "00000000-0000-0000-0000-000000000000",\n'
+        f'  "durable_dir": {json.dumps(str(unrelated_durable.resolve()))}\n'
+        "}\n",
+        encoding="utf-8",
+    )
+    manifest_before = manifest.read_bytes()
+    workspace = None
+    try:
+        with pytest.raises(EngineScratchError, match="without valid ownership"):
+            workspace = EngineScratchWorkspace.create(policy, selected)
+    finally:
+        if workspace is not None:
+            workspace.close()
+    assert manifest.read_bytes() == manifest_before
+
+
+def test_same_generation_stale_workspace_uses_pinned_durable_directory_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    original_durable = selected.parent
+    moved_durable = tmp_path / "durable-generation-moved"
+    stale = root / "attempt-same-pinned-generation"
+    stale.mkdir()
+    manifest = stale / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+    manifest.write_text("placeholder\n", encoding="utf-8")
+    manifest_after_swap: list[bytes] = []
+
+    def replace_generation_path_after_bind(*_args: object, **_kwargs: object) -> None:
+        original_durable.rename(moved_durable)
+        original_durable.mkdir()
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "owner_pid": 999999,
+                    "owner_process_start_ticks": 1,
+                    "owner_boot_id": "00000000-0000-0000-0000-000000000000",
+                    "durable_dir": str(moved_durable.resolve()),
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        manifest_after_swap.append(manifest.read_bytes())
+
+    monkeypatch.setattr(
+        scratch_mod,
+        "_recover_incomplete_publication",
+        replace_generation_path_after_bind,
+    )
+    workspace = None
+    try:
+        with pytest.raises(EngineScratchError, match="stale workspace"):
+            workspace = EngineScratchWorkspace.create(policy, selected)
+    finally:
+        if workspace is not None:
+            workspace.close()
+    assert manifest_after_swap
+    assert manifest.read_bytes() == manifest_after_swap[0]
+    assert _scratch_attempts(root) == [stale]
+
+
+@pytest.mark.parametrize("durable_path_kind", ["relative", "noncanonical", "symlink"])
+def test_unrelated_stale_workspace_rejects_noncanonical_durable_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    durable_path_kind: str,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    unrelated_durable = tmp_path / "unrelated-path-durable"
+    unrelated_durable.mkdir()
+    if durable_path_kind == "relative":
+        durable_path = "unrelated-path-durable"
+    elif durable_path_kind == "noncanonical":
+        durable_path = f"{unrelated_durable.parent}/../{unrelated_durable.parent.name}/{unrelated_durable.name}"
+    else:
+        alias = tmp_path / "unrelated-path-alias"
+        alias.symlink_to(unrelated_durable, target_is_directory=True)
+        durable_path = str(alias)
+    stale = root / f"attempt-unrelated-{durable_path_kind}"
+    stale.mkdir()
+    manifest = stale / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "owner_pid": 999999,
+                "owner_process_start_ticks": 1,
+                "owner_boot_id": "00000000-0000-0000-0000-000000000000",
+                "durable_dir": durable_path,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest_before = manifest.read_bytes()
+
+    with pytest.raises(EngineScratchError, match="without valid ownership"):
+        EngineScratchWorkspace.create(policy, selected)
+
+    assert manifest.read_bytes() == manifest_before
+
+
+@pytest.mark.parametrize("live_first", [False, True])
+def test_live_workspace_blocks_with_unrelated_stale_in_any_enumeration_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    live_first: bool,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    unrelated_durable = tmp_path / "unrelated-order-durable"
+    unrelated_durable.mkdir()
+    owner_ticks = scratch_mod.process_utils.current_process_start_ticks()
+    owner_boot = scratch_mod.process_utils.linux_boot_id(proc_root=Path("/proc"))
+    assert owner_ticks is not None
+    assert owner_boot
+    specs = [
+        (
+            "live",
+            {
+                "schema_version": 1,
+                "owner_pid": os.getpid(),
+                "owner_process_start_ticks": owner_ticks,
+                "owner_boot_id": owner_boot,
+                "durable_dir": str(unrelated_durable.resolve()),
+            },
+        ),
+        (
+            "stale",
+            {
+                "schema_version": 1,
+                "owner_pid": 999999,
+                "owner_process_start_ticks": 1,
+                "owner_boot_id": "00000000-0000-0000-0000-000000000000",
+                "durable_dir": str(unrelated_durable.resolve()),
+            },
+        ),
+    ]
+    if not live_first:
+        specs.reverse()
+    evidence: dict[str, bytes] = {}
+    for kind, payload in specs:
+        workspace = root / f"attempt-order-{kind}"
+        workspace.mkdir()
+        manifest = workspace / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+        manifest.write_text(
+            json.dumps(payload, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        evidence[kind] = manifest.read_bytes()
+
+    with pytest.raises(EngineScratchError, match="attempt is active"):
+        EngineScratchWorkspace.create(policy, selected)
+
+    for kind, _payload in specs:
+        manifest = root / f"attempt-order-{kind}" / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+        assert manifest.read_bytes() == evidence[kind]
+
+
+def test_unrelated_live_workspace_still_blocks_shared_root_and_is_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    unrelated_durable = tmp_path / "unrelated-live-durable"
+    unrelated_durable.mkdir()
+    live = root / "attempt-unrelated-live"
+    live.mkdir()
+    owner_ticks = scratch_mod.process_utils.current_process_start_ticks()
+    owner_boot = scratch_mod.process_utils.linux_boot_id(proc_root=Path("/proc"))
+    assert owner_ticks is not None
+    assert owner_boot
+    manifest = live / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "owner_pid": os.getpid(),
+                "owner_process_start_ticks": owner_ticks,
+                "owner_boot_id": owner_boot,
+                "durable_dir": str(unrelated_durable.resolve()),
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    manifest_before = manifest.read_bytes()
+
+    with pytest.raises(EngineScratchError, match="attempt is active"):
+        EngineScratchWorkspace.create(policy, selected)
+
+    assert manifest.read_bytes() == manifest_before
 
 
 def test_alive_owner_with_unreadable_start_ticks_is_preserved(
