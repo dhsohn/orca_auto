@@ -151,8 +151,13 @@
   실행하고 `*.tmp`/`*.tmp.*`를 제외한 남은 일반 파일을 inode로 고정한 durable visible
   generation에 저널 기반 transaction으로 게시합니다. runtime state artifact 이름은 게시할 수
   없습니다. staging dependency는 basename-relative이고 byte-identical 상태를 유지해야 하며,
-  선택 working copy에는 누락된 마지막 줄바꿈만 추가할 수 있습니다. 해석할 수 없는 scratch
-  workspace가 있으면 fail-closed합니다. 현재 host 가용 메모리가 설정된 task memory 상한, tmpfs
+  선택 working copy에는 누락된 마지막 줄바꿈만 추가할 수 있습니다. private scratch-root
+  lock은 live managed workspace를 정확히 하나만 허용합니다. 엄격히 검증한 dead-owner
+  workspace가 어느 durable generation의 directory identity에 결속돼 있어도, 다른 durable
+  generation을 요청한 새 attempt는 막지 않고 근거를 보존합니다. live owner, 요청한 attempt와
+  같은 durable generation, malformed·duplicate manifest, 읽을 수 없는 directory, 또는 모호한
+  identity는 계속 fail-closed합니다. 전용 private root는 orca_auto 외부 process가 실행 중 동시에
+  변경해서는 안 됩니다. 현재 host 가용 메모리가 설정된 task memory 상한, tmpfs
   여유 공간, `scratch_min_free_gb` host reserve 합계를 감당해야 시작합니다. 완료 attempt의 게시
   메타데이터는 `scratch_provenance`에, commit 뒤 중단/exception 경로의 게시 근거는
   `scratch_publications`에 기록하며 고정 execution-snapshot provenance에는 넣지 않습니다.

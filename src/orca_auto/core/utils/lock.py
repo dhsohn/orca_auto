@@ -13,6 +13,10 @@ from .persistence import now_utc_iso
 _MAX_LOCK_PAYLOAD_BYTES = 16 * 1024
 
 
+class FileLockTimeoutError(TimeoutError):
+    """Raised only when a file lock remains contended through its deadline."""
+
+
 @contextmanager
 def file_lock_at(
     directory_fd: int,
@@ -43,7 +47,7 @@ def file_lock_at(
                 break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(f"Timed out acquiring lock: {shown_path}") from None
+                    raise FileLockTimeoutError(f"Timed out acquiring lock: {shown_path}") from None
                 time.sleep(0.1)
 
         handle.seek(0)

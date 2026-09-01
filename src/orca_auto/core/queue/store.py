@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Self, TypeVar
 
-from ..utils.lock import file_lock
+from ..utils.lock import FileLockTimeoutError, file_lock
 from ..utils.persistence import (
     now_utc_iso,
     resolve_root_path,
@@ -52,6 +52,10 @@ class DuplicateQueueEntryError(RuntimeError):
 
 class QueueStoreCorruptError(_queue_persistence.QueueStoreCorruptError):
     """Raised when the queue file exists but cannot be safely loaded."""
+
+
+class QueueLockTimeoutError(TimeoutError):
+    """Raised only when acquiring the queue lock reaches its deadline."""
 
 
 QueueCompensationOutcome = Literal["restored", "not_restored", "unknown"]
@@ -218,7 +222,12 @@ def reject_active_task_duplicate(
 @contextmanager
 def queue_lock(root: str | Path, *, timeout_seconds: float = 10.0) -> Iterator[None]:
     resolved_root = resolve_root_path(root)
-    with file_lock(_lock_path(resolved_root), timeout_seconds=timeout_seconds):
+    lock_path = _lock_path(resolved_root)
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(file_lock(lock_path, timeout_seconds=timeout_seconds))
+        except FileLockTimeoutError as exc:
+            raise QueueLockTimeoutError(str(exc)) from exc
         yield
 
 
@@ -270,8 +279,8 @@ class QueueStore:
     def path(self) -> Path:
         return _queue_path(self.root)
 
-    def list_entries(self) -> list[Any]:
-        with queue_lock(self.root):
+    def list_entries(self, *, timeout_seconds: float = 10.0) -> list[Any]:
+        with queue_lock(self.root, timeout_seconds=timeout_seconds):
             return self.load_entries_fn(self.root)
 
     def mutate_entries(
@@ -662,8 +671,11 @@ def get_cancel_requested(
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
+    lock_timeout_seconds: float = 10.0,
 ) -> bool:
-    entries = QueueStore.for_root(root, load_entries_fn=load_entries_fn).list_entries()
+    entries = QueueStore.for_root(root, load_entries_fn=load_entries_fn).list_entries(
+        timeout_seconds=lock_timeout_seconds
+    )
     for entry in entries:
         if (
             entry.queue_id == queue_id

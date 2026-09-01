@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 import subprocess
 from argparse import Namespace
 from collections.abc import Callable
@@ -38,8 +39,13 @@ from orca_auto.core.queue.engine.snapshot_intent import (
 from orca_auto.core.queue.engine.worker_execution import (
     WorkerShutdownRequested as _WorkerShutdownRequested,
 )
-from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.generation import (
+    is_visible_generation_name,
+    new_visible_generation_name,
+    queue_entry_generation_token,
+)
 from orca_auto.core.queue.lifecycle import entry_status_is_running
+from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
     resolve_admission_root,
@@ -81,6 +87,8 @@ logger = logging.getLogger(__name__)
 
 RECOVERY_REBIND_LIMIT = 3
 RECOVERY_REBIND_COUNT_METADATA_KEY = "recovery_rebind_count"
+RECOVERY_REBIND_CLAIM_METADATA_KEY = "recovery_rebind_claim"
+_RECOVERY_REBIND_INTENT_TOKEN_RE = re.compile(r"snapshot_intent_[0-9]{8}_[0-9]{6}_[0-9a-f]{32}")
 
 BackgroundRunJobProcess = subprocess.Popen
 WORKER_JOB_MODULE = WORKER_CHILD_MODULE
@@ -413,11 +421,58 @@ def _maybe_rebind_recovery_generation(
             # generation: the ordinary claim path adopts the completed output
             # instead of re-running the whole calculation in a rebind.
             return entry
+    raw_count = metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY, 0)
+    if (
+        isinstance(raw_count, bool)
+        or not isinstance(raw_count, int)
+        or raw_count < 0
+        or raw_count > RECOVERY_REBIND_LIMIT
+    ):
+        raise ValueError("ORCA crash recovery found an invalid durable rebind count")
+    count = raw_count
+    raw_claim = metadata.get(RECOVERY_REBIND_CLAIM_METADATA_KEY)
+    pending_claim: dict[str, Any] | None = None
+    if raw_claim is not None:
+        if not isinstance(raw_claim, dict) or set(raw_claim) != {
+            "ordinal",
+            "source_generation_name",
+            "intent_token",
+            "target_generation_name",
+        }:
+            raise ValueError("ORCA crash recovery found an invalid durable rebind claim")
+        ordinal = raw_claim.get("ordinal")
+        raw_source_generation_name = raw_claim.get("source_generation_name")
+        raw_intent_token = raw_claim.get("intent_token")
+        raw_target_generation_name = raw_claim.get("target_generation_name")
+        source_generation_name = (
+            raw_source_generation_name if type(raw_source_generation_name) is str else ""
+        )
+        intent_token = raw_intent_token if type(raw_intent_token) is str else ""
+        target_generation_name = (
+            raw_target_generation_name if type(raw_target_generation_name) is str else ""
+        )
+        if (
+            isinstance(ordinal, bool)
+            or not isinstance(ordinal, int)
+            or ordinal <= 0
+            or ordinal > RECOVERY_REBIND_LIMIT
+            or ordinal != count
+            or type(raw_source_generation_name) is not str
+            or source_generation_name != str(snapshot.get("generation_name") or "")
+            or type(raw_intent_token) is not str
+            or _RECOVERY_REBIND_INTENT_TOKEN_RE.fullmatch(intent_token) is None
+            or type(raw_target_generation_name) is not str
+            or not is_visible_generation_name(target_generation_name)
+            or target_generation_name == source_generation_name
+        ):
+            raise ValueError(
+                "ORCA crash recovery durable rebind claim does not match the queue row"
+            )
+        pending_claim = dict(raw_claim)
     if get_cancel_requested(queue_root, str(entry.queue_id), expected_entry=entry):
-        # Honor the pending cancellation through the requeue chokepoint (which
-        # turns a cancel-requested running row terminal) instead of letting the
-        # strict claim-time verification misreport the crashed generation as a
-        # corrupt failure.
+        # Validate durable recovery metadata before terminalizing so corruption
+        # cannot be masked by a queue mutation. A valid cancellation still uses
+        # the requeue chokepoint before configuration load or generation work.
         requeue_running_entry(
             queue_root,
             str(entry.queue_id),
@@ -425,13 +480,7 @@ def _maybe_rebind_recovery_generation(
         )
         refreshed = _queue_entry_by_id(queue_root, str(entry.queue_id))
         return refreshed if refreshed is not None else entry
-    raw_count = metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY, 0)
-    count = (
-        raw_count
-        if isinstance(raw_count, int) and not isinstance(raw_count, bool) and raw_count >= 0
-        else RECOVERY_REBIND_LIMIT
-    )
-    if count >= RECOVERY_REBIND_LIMIT:
+    if raw_claim is None and count >= RECOVERY_REBIND_LIMIT:
         raise ValueError(
             "ORCA crash recovery limit reached for this submission "
             f"({count}/{RECOVERY_REBIND_LIMIT}); resubmit the job to continue"
@@ -441,21 +490,41 @@ def _maybe_rebind_recovery_generation(
         snapshot,
         expected_executable=cfg.paths.orca_executable,
     )
-    if not update_metadata(
-        queue_root,
-        str(entry.queue_id),
-        {RECOVERY_REBIND_COUNT_METADATA_KEY: count + 1},
-        expected_entry=entry,
-    ):
-        raise ValueError("ORCA crash recovery could not reserve its rebind budget on the queue row")
-    claimed = _queue_entry_by_id(queue_root, str(entry.queue_id))
-    claimed_metadata = getattr(claimed, "metadata", None)
-    if (
-        claimed is None
-        or not isinstance(claimed_metadata, dict)
-        or claimed_metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY) != count + 1
-    ):
-        raise ValueError("ORCA crash recovery lost its rebind budget reservation")
+    if pending_claim is None:
+        rebind_count = count + 1
+        intent_token = timestamped_token("snapshot_intent", token_bytes=16)
+        target_generation_name = new_visible_generation_name()
+        pending_claim = {
+            "ordinal": rebind_count,
+            "source_generation_name": str(snapshot.get("generation_name") or ""),
+            "intent_token": intent_token,
+            "target_generation_name": target_generation_name,
+        }
+        if not update_metadata(
+            queue_root,
+            str(entry.queue_id),
+            {
+                RECOVERY_REBIND_COUNT_METADATA_KEY: rebind_count,
+                RECOVERY_REBIND_CLAIM_METADATA_KEY: pending_claim,
+            },
+            expected_entry=entry,
+        ):
+            raise ValueError(
+                "ORCA crash recovery could not reserve its durable rebind claim on the queue row"
+            )
+        claimed = _queue_entry_by_id(queue_root, str(entry.queue_id))
+        claimed_metadata = getattr(claimed, "metadata", None)
+        if (
+            claimed is None
+            or not isinstance(claimed_metadata, dict)
+            or claimed_metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY) != rebind_count
+            or claimed_metadata.get(RECOVERY_REBIND_CLAIM_METADATA_KEY) != pending_claim
+        ):
+            raise ValueError("ORCA crash recovery lost its durable rebind claim")
+    else:
+        rebind_count = count
+        intent_token = str(pending_claim["intent_token"])
+        claimed = entry
 
     source_selected = str(metadata.get("source_selected_inp") or "").strip()
     if not source_selected:
@@ -483,7 +552,8 @@ def _maybe_rebind_recovery_generation(
             max_retries=max_retries,
             orca_executable=recovery_executable,
             queue_root=queue_root,
-            snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
+            snapshot_intent_token=intent_token,
+            target_generation_name=target_generation_name,
             normalized_selected_payload=prepared.normalized_payload,
             source_selected_sha256=prepared.source_sha256,
             recovery_from=snapshot,
@@ -502,8 +572,10 @@ def _maybe_rebind_recovery_generation(
             {
                 "execution_snapshot": new_snapshot,
                 "selected_inp": str(new_snapshot.get("selected_inp") or ""),
+                RECOVERY_REBIND_CLAIM_METADATA_KEY: None,
             },
             expected_entry=claimed,
+            require_running_without_cancel_requested=True,
         ):
             raise ValueError("ORCA crash recovery could not publish its replacement generation")
     except BaseException:
@@ -523,7 +595,7 @@ def _maybe_rebind_recovery_generation(
         "Recovered crashed ORCA job %s into replacement generation %s (rebind %d/%d)%s",
         str(entry.queue_id),
         str(new_snapshot.get("generation_name") or ""),
-        count + 1,
+        rebind_count,
         RECOVERY_REBIND_LIMIT,
         f"; {marker_warning}" if marker_warning else "",
     )
@@ -567,6 +639,18 @@ def _worker_execution_spec(
     )
 
 
+def _cancellation_requested(queue_root: Path, entry: Any) -> bool:
+    try:
+        return get_cancel_requested(
+            queue_root,
+            str(entry.queue_id),
+            expected_entry=entry,
+            lock_timeout_seconds=0.0,
+        )
+    except QueueLockTimeoutError:
+        return False
+
+
 def process_dequeued_entry(
     cfg: Any,
     entry: Any,
@@ -593,11 +677,7 @@ def process_dequeued_entry(
             admission_token=admission_token,
         ),
         shutdown_requested=shutdown_requested,
-        should_cancel=lambda: get_cancel_requested(
-            queue_root,
-            str(entry.queue_id),
-            expected_entry=entry,
-        ),
+        should_cancel=lambda: _cancellation_requested(queue_root, entry),
     )
 
 

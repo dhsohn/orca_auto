@@ -86,10 +86,15 @@ def queue_entry_status(queue_adapter: Any, entry: Any, snapshot: RunSnapshot | N
     status = normalize_text(queue_adapter.queue_entry_status(entry)) or "unknown"
     if bool(getattr(entry, "cancel_requested", False)) and status == "running":
         return "cancel_requested"
-    if snapshot is None or status != "running":
+    if status != "running":
         return status
-    snapshot_status = normalize_text(snapshot.status)
-    return snapshot_status if snapshot_status and snapshot_status != "running" else status
+    snapshot_status = normalize_text(snapshot.status) if snapshot is not None else ""
+    if snapshot_status and snapshot_status not in _STALE_SNAPSHOT_STATUSES:
+        return snapshot_status
+    reaction_dir = normalize_text(queue_adapter.queue_entry_reaction_dir(entry))
+    if reaction_dir and not run_lock_is_held(Path(reaction_dir), logger=_LOGGER):
+        return STATUS_PENDING
+    return snapshot_status or status
 
 
 def queue_record(
@@ -272,7 +277,6 @@ def orca_records(
 
     runtime_paths = engine_runtime_paths(config_path, engine="orca")
     allowed_root = runtime_paths["allowed_root"]
-    queue_adapter.reconcile_orphaned_running_entries(allowed_root)
 
     queue_entries = [
         entry
