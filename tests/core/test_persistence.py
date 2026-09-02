@@ -40,6 +40,21 @@ def test_timestamped_token_uses_timestamp_and_token_hex(monkeypatch: pytest.Monk
     assert requested_bytes == [16]
 
 
+def test_timestamped_token_pattern_matches_only_tokens_the_producer_mints() -> None:
+    token = persistence.timestamped_token("snapshot_intent", token_bytes=16)
+    pattern = persistence.timestamped_token_pattern("snapshot_intent", token_bytes=16)
+
+    assert pattern.fullmatch(token) is not None
+    assert pattern.fullmatch(f" {token} ") is None
+    assert pattern.fullmatch(token.replace("snapshot_intent", "snapshot-intent")) is None
+    assert pattern.fullmatch(token[:-1]) is None
+    assert persistence.timestamped_token_pattern("snapshot.intent").fullmatch(token) is None
+    assert (
+        persistence.timestamped_token_pattern("snapshot_intent", token_bytes=8).fullmatch(token)
+        is None
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "default", "expected"),
     [

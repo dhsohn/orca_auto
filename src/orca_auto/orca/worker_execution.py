@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import logging
-import re
 import subprocess
 from argparse import Namespace
 from collections.abc import Callable
@@ -50,7 +49,7 @@ from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
     resolve_admission_root,
 )
-from orca_auto.core.utils.persistence import timestamped_token
+from orca_auto.core.utils.persistence import timestamped_token, timestamped_token_pattern
 
 from .attempt.reporting import build_final_result, last_out_path_from_state
 from .config import load_config
@@ -68,6 +67,7 @@ from .orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from .queue.adapter import (
     get_cancel_requested,
     list_queue,
+    mark_failed,
     queue_entry_app_name,
     queue_entry_force,
     queue_entry_id,
@@ -88,7 +88,14 @@ logger = logging.getLogger(__name__)
 RECOVERY_REBIND_LIMIT = 3
 RECOVERY_REBIND_COUNT_METADATA_KEY = "recovery_rebind_count"
 RECOVERY_REBIND_CLAIM_METADATA_KEY = "recovery_rebind_claim"
-_RECOVERY_REBIND_INTENT_TOKEN_RE = re.compile(r"snapshot_intent_[0-9]{8}_[0-9]{6}_[0-9a-f]{32}")
+# The durable claim replays only tokens this module minted; the validator is
+# derived from the producer so the two cannot drift apart.
+_RECOVERY_INTENT_TOKEN_PREFIX = "snapshot_intent"
+_RECOVERY_INTENT_TOKEN_BYTES = 16
+_RECOVERY_REBIND_INTENT_TOKEN_RE = timestamped_token_pattern(
+    _RECOVERY_INTENT_TOKEN_PREFIX,
+    token_bytes=_RECOVERY_INTENT_TOKEN_BYTES,
+)
 
 BackgroundRunJobProcess = subprocess.Popen
 WORKER_JOB_MODULE = WORKER_CHILD_MODULE
@@ -491,7 +498,10 @@ def _maybe_rebind_recovery_generation(
     )
     if pending_claim is None:
         rebind_count = count + 1
-        intent_token = timestamped_token("snapshot_intent", token_bytes=16)
+        intent_token = timestamped_token(
+            _RECOVERY_INTENT_TOKEN_PREFIX,
+            token_bytes=_RECOVERY_INTENT_TOKEN_BYTES,
+        )
         target_generation_name = new_visible_generation_name()
         pending_claim = {
             "ordinal": rebind_count,
@@ -601,16 +611,51 @@ def _maybe_rebind_recovery_generation(
     return updated
 
 
+def _record_recovery_rejection(queue_root: Path, entry: Any, exc: BaseException) -> None:
+    """Leave a fail-closed recovery rejection on the queue row before the child exits.
+
+    The rejection ends the child before any engine runs, so without this the
+    parent would only record ``exit_code=1``; the reason itself would survive in
+    the journal alone. The rebind may already have written its durable claim
+    onto the row, so the fence is the row as it stands now, accepted only while
+    it is still the running dequeue this child was handed: a requeue clears
+    ``started_at`` and every re-dequeue re-stamps it, while the rebind never
+    touches it. ``mark_failed`` refuses a row whose cancellation has already
+    been requested, so a racing cancellation still wins.
+    """
+
+    queue_id = str(entry.queue_id)
+    reason = f"crash recovery rejected: {exc}"
+    current = _queue_entry_by_id(queue_root, queue_id)
+    recorded = (
+        current is not None
+        and entry_status_is_running(current)
+        and current.task_id == entry.task_id
+        and current.started_at == entry.started_at
+        and mark_failed(queue_root, queue_id, error=reason, expected_entry=current)
+    )
+    if not recorded:
+        logger.info(
+            "Crash recovery rejection for %s left to the parent finalizer: %s",
+            queue_id,
+            reason,
+        )
+
+
 def _recovering_queue_entry_by_id(config_path: str) -> Callable[[Path, str], Any | None]:
     def find(queue_root: Path, queue_id: str) -> Any | None:
         entry = _queue_entry_by_id(queue_root, queue_id)
         if entry is None or not entry_matches_engine_identity(entry, "orca"):
             return entry
-        return _maybe_rebind_recovery_generation(
-            entry,
-            queue_root=Path(queue_root),
-            cfg_factory=lambda: load_config(config_path),
-        )
+        try:
+            return _maybe_rebind_recovery_generation(
+                entry,
+                queue_root=queue_root,
+                cfg_factory=lambda: load_config(config_path),
+            )
+        except (ValueError, FileExistsError) as exc:
+            _record_recovery_rejection(queue_root, entry, exc)
+            raise
 
     return find
 
