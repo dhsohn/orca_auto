@@ -6,6 +6,30 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [Unreleased]
+
+### Fixed
+
+- Queue-lock contention no longer turns a temporary claim conflict into active
+  child cancellation, and queue/activity listing remains projection-only rather
+  than mutating durable queue state.
+- Crash recovery reuses one strict claim and target generation across replay,
+  preserves generation fences, and lets an already committed cancellation
+  terminalize before recovery-only metadata validation or replacement work.
+- ORCA scratch admission remains conservative: every unresolved, live-owner, or
+  stale `attempt-*` workspace is preserved and blocks new admission; only an
+  interrupted cleanup tombstone is removed. PR #257 briefly allowed a strictly
+  validated dead-owner workspace for another durable generation to remain
+  without blocking; PR #258 withdrew that behavior before this changelog entry.
+- Process ownership remains on the existing `process_group`/`killpg()` path; no
+  cgroup migration was made.
+
+### Validation limitation
+
+- No real-ORCA or ORCA/OpenMPI compatibility acceptance is claimed for these
+  queue, recovery, or scratch changes. The merged PR records identify the
+  verification that ran and state that real-engine re-validation was not run.
+
 ## [3.0.3] - 2026-08-26
 
 Mostly internal consolidation, with one crash fix in CREST terminal repair.
