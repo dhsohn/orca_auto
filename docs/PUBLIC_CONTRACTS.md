@@ -160,14 +160,7 @@ Behavior:
   inode-pinned durable visible generation. Runtime state artifact names cannot
   be published. Dependencies must be basename-relative and remain
   byte-identical; the selected working copy may receive only a missing final
-  newline. The private scratch-root lock admits exactly one live managed
-  workspace. A strictly validated dead-owner workspace bound by directory
-  identity to one durable generation is preserved but does not block a next
-  attempt for a different durable generation. A live owner, the same durable
-  generation as the requested attempt, malformed or duplicate manifest data,
-  an unreadable directory, or ambiguous identity remains fail-closed. The
-  dedicated private root must not be mutated concurrently by processes outside
-  orca_auto. Launch requires current
+  newline. Unresolved scratch workspaces fail closed. Launch requires current
   host available memory to cover the configured task-memory cap, free tmpfs,
   and `scratch_min_free_gb` host reserve. Completed-attempt metadata is recorded
   in `scratch_provenance`; committed output from an interrupted/exception path

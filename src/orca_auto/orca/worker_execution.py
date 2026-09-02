@@ -421,6 +421,16 @@ def _maybe_rebind_recovery_generation(
             # generation: the ordinary claim path adopts the completed output
             # instead of re-running the whole calculation in a rebind.
             return entry
+    if get_cancel_requested(queue_root, str(entry.queue_id), expected_entry=entry):
+        # Cancellation is a generation-fenced monotonic user decision. Honor it
+        # before inspecting recovery-only metadata or creating replacement state.
+        requeue_running_entry(
+            queue_root,
+            str(entry.queue_id),
+            expected_entry=entry,
+        )
+        refreshed = _queue_entry_by_id(queue_root, str(entry.queue_id))
+        return refreshed if refreshed is not None else entry
     raw_count = metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY, 0)
     if (
         isinstance(raw_count, bool)
@@ -469,17 +479,6 @@ def _maybe_rebind_recovery_generation(
                 "ORCA crash recovery durable rebind claim does not match the queue row"
             )
         pending_claim = dict(raw_claim)
-    if get_cancel_requested(queue_root, str(entry.queue_id), expected_entry=entry):
-        # Validate durable recovery metadata before terminalizing so corruption
-        # cannot be masked by a queue mutation. A valid cancellation still uses
-        # the requeue chokepoint before configuration load or generation work.
-        requeue_running_entry(
-            queue_root,
-            str(entry.queue_id),
-            expected_entry=entry,
-        )
-        refreshed = _queue_entry_by_id(queue_root, str(entry.queue_id))
-        return refreshed if refreshed is not None else entry
     if raw_claim is None and count >= RECOVERY_REBIND_LIMIT:
         raise ValueError(
             "ORCA crash recovery limit reached for this submission "

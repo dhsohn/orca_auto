@@ -309,13 +309,9 @@ logic. Notable pieces:
   directory descriptors remain pinned through execution and publication; ORCA
   enters the workspace through the pinned descriptor rather than reopening its
   pathname.
-  A scratch-root lock admits exactly one live managed workspace. A strictly
-  validated dead-owner workspace bound by directory identity to another durable
-  generation is preserved but does not block a new attempt; a live owner, the
-  same generation, malformed or duplicate manifest data, unreadable state, or
-  ambiguous identity remains fail-closed. The root is private runtime state and
-  is not a supported concurrent mutation surface for processes outside
-  orca_auto. The shared admission process record stays
+  A scratch-root lock admits exactly one workspace, and unresolved or stale
+  workspaces are preserved and block new launches until an operator inspects
+  them or the tmpfs is reset. The shared admission process record stays
   durable outside scratch; queue, run state, and locks remain in durable
   storage. After the process tree exits, surviving regular files are staged
   and committed back to the inode-pinned generation as one journaled file-set
