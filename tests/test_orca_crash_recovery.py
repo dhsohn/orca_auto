@@ -16,6 +16,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     transition_snapshot_intent,
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import execution_binding as binding_mod
 from orca_auto.orca import worker_execution as worker_job
 from orca_auto.orca.execution_binding import (
@@ -1175,12 +1176,161 @@ def test_rebind_rejects_boolean_count_with_pending_claim_without_mutation(
     (row,) = list_queue(queue_root)
     assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] is True
     assert row.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY] == durable_claim
+    assert row.status is not QueueStatus.FAILED
+    assert row.error == ""
     assert row.metadata["execution_snapshot"] == snapshot
     assert [
         child
         for child in Path(row.metadata["reaction_dir"]).iterdir()
         if child.is_dir() and is_visible_generation_name(child.name)
     ] == [old_generation]
+
+
+def test_recovering_finder_records_the_rejection_on_the_failed_queue_row(
+    tmp_path: Path,
+) -> None:
+    queue_root, running, snapshot, _executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    from orca_auto.orca.queue.adapter import update_metadata
+    from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+
+    assert update_metadata(
+        queue_root,
+        str(running.queue_id),
+        {worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: True},
+        expected_entry=running,
+    )
+    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+
+    with pytest.raises(ValueError, match="invalid durable rebind count"):
+        find(queue_root, str(running.queue_id))
+
+    (row,) = list_queue(queue_root)
+    assert row.status is QueueStatus.FAILED
+    assert "invalid durable rebind count" in row.error
+    assert terminal_replay_marker_from_entry(row) is not None
+    assert row.metadata["execution_snapshot"] == snapshot
+    assert [
+        child
+        for child in Path(row.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
+
+
+def test_recovering_finder_records_a_rejection_raised_after_the_claim_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
+    old_generation = _crash_generation(snapshot)
+    cfg = _worker_cfg(queue_root, executable)
+    from orca_auto.orca.queue.adapter import update_metadata
+
+    # The retry budget is validated only after the durable claim was reserved,
+    # so the row the finder was handed is already stale when the rejection fires.
+    assert update_metadata(
+        queue_root,
+        str(running.queue_id),
+        {"max_retries": -1},
+        expected_entry=running,
+    )
+    monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
+    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+
+    with pytest.raises(ValueError, match="invalid retry budget"):
+        find(queue_root, str(running.queue_id))
+
+    (row,) = list_queue(queue_root)
+    assert row.status is QueueStatus.FAILED
+    assert "invalid retry budget" in row.error
+    assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert isinstance(row.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY], dict)
+    assert row.metadata["execution_snapshot"] == snapshot
+    assert [
+        child
+        for child in Path(row.metadata["reaction_dir"]).iterdir()
+        if child.is_dir() and is_visible_generation_name(child.name)
+    ] == [old_generation]
+
+
+@pytest.mark.parametrize("redequeued", [False, True], ids=["requeued", "redequeued"])
+def test_recovering_finder_leaves_a_requeued_row_alone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    redequeued: bool,
+) -> None:
+    queue_root, running, _snapshot, _executable = _claimed_mutable_entry(tmp_path)
+    from orca_auto.orca.queue.adapter import requeue_running_entry
+
+    def requeue_then_reject(entry: Any, *, queue_root: Path, cfg_factory: Any) -> Any:
+        assert requeue_running_entry(queue_root, str(entry.queue_id), expected_entry=entry)
+        if redequeued:
+            # Another worker picked the row up again: same identity, new dequeue.
+            next_running = dequeue_next(queue_root)
+            assert next_running is not None
+            assert next_running.queue_id == entry.queue_id
+            assert next_running.started_at != entry.started_at
+        raise ValueError("ORCA crash recovery found an invalid durable rebind count")
+
+    monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", requeue_then_reject)
+    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+
+    with pytest.raises(ValueError, match="invalid durable rebind count"):
+        find(queue_root, str(running.queue_id))
+
+    (row,) = list_queue(queue_root)
+    assert row.status is (QueueStatus.RUNNING if redequeued else QueueStatus.PENDING)
+    assert row.error == ""
+
+
+def test_recovering_finder_does_not_overwrite_a_racing_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root, running, _snapshot, _executable = _claimed_mutable_entry(tmp_path)
+    from orca_auto.orca.queue.adapter import cancel
+
+    def cancel_then_reject(entry: Any, *, queue_root: Path, cfg_factory: Any) -> Any:
+        cancelled = cancel(queue_root, str(entry.queue_id), expected_entry=entry)
+        assert cancelled is not None and cancelled.cancel_requested
+        raise ValueError("ORCA crash recovery found an invalid durable rebind count")
+
+    monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", cancel_then_reject)
+    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+
+    with pytest.raises(ValueError, match="invalid durable rebind count"):
+        find(queue_root, str(running.queue_id))
+
+    (row,) = list_queue(queue_root)
+    assert row.status is QueueStatus.RUNNING
+    assert row.cancel_requested
+    assert row.error == ""
+
+
+def test_recovery_target_reservation_names_the_existing_generation(tmp_path: Path) -> None:
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir()
+    job_dir, selected, executable = _mutable_job(queue_root, job_name="rxn")
+    target_generation_name = "20000101-000001-cafebabe"
+    existing_target = job_dir / target_generation_name
+    existing_target.mkdir()
+    (existing_target / "owner.txt").write_text("owner\n", encoding="utf-8")
+    intent_dir = queue_root / ".orca_auto_snapshot_intents"
+
+    with pytest.raises(FileExistsError, match="target generation already exists"):
+        _build(
+            job_dir,
+            selected,
+            executable,
+            queue_root=queue_root,
+            snapshot_intent_token=(
+                "snapshot_intent_20260901_212345_0123456789abcdef0123456789abcdef"
+            ),
+            target_generation_name=target_generation_name,
+        )
+
+    assert (existing_target / "owner.txt").read_text(encoding="utf-8") == "owner\n"
+    assert not intent_dir.is_dir() or not any(intent_dir.glob("*.json"))
 
 
 @pytest.mark.parametrize(

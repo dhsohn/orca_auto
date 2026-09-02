@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -36,6 +37,11 @@ def parse_iso_utc(value: Any) -> datetime | None:
 def timestamped_token(prefix: str, *, token_bytes: int = 16) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     return f"{prefix}_{stamp}_{token_hex(token_bytes)}"
+
+
+def timestamped_token_pattern(prefix: str, *, token_bytes: int = 16) -> re.Pattern[str]:
+    """Pattern whose ``fullmatch`` accepts exactly what ``timestamped_token`` mints."""
+    return re.compile(rf"{re.escape(prefix)}_[0-9]{{8}}_[0-9]{{6}}_[0-9a-f]{{{2 * token_bytes}}}")
 
 
 def coerce_int(value: Any, *, default: int = 0) -> int:

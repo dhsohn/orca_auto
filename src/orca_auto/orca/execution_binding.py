@@ -544,6 +544,12 @@ def _reserve_execution_generation(
                 discard_snapshot_intent_if_generations_absent(queue_root, intent_token)
             raise
         return generation_name, reserved, generation_identity
+    if target_generation_name is not None:
+        raise FileExistsError(
+            "ORCA crash recovery target generation already exists: "
+            f"{job_dir / target_generation_name}; inspect and remove it before "
+            "resubmitting the job"
+        )
     raise FileExistsError("Could not reserve a unique visible ORCA generation directory")
 
 

@@ -21,8 +21,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   interrupted cleanup tombstone is removed. PR #257 briefly allowed a strictly
   validated dead-owner workspace for another durable generation to remain
   without blocking; PR #258 withdrew that behavior before this changelog entry.
-- Process ownership remains on the existing `process_group`/`killpg()` path; no
-  cgroup migration was made.
+- A crash-recovery rejection (invalid durable claim, exhausted rebind budget,
+  diverged submission inputs, or an already existing replacement generation)
+  now leaves its reason in the failed queue row's `error` instead of
+  `exit_code=1`, and the existing-generation case names the directory to
+  inspect. The terminal notification keeps reporting `crashed_recovery` when
+  the run state was already repaired before the rejection.
 
 ### Validation limitation
 
