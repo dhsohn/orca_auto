@@ -617,22 +617,23 @@ def _record_recovery_rejection(queue_root: Path, entry: Any, exc: BaseException)
     The rejection ends the child before any engine runs, so without this the
     parent would only record ``exit_code=1``; the reason itself would survive in
     the journal alone. The rebind may already have written its durable claim
-    onto the row, so the fence is the row as it stands now, accepted only while
-    it is still the running dequeue this child was handed: a requeue clears
-    ``started_at`` and every re-dequeue re-stamps it, while the rebind never
-    touches it. ``mark_failed`` refuses a row whose cancellation has already
-    been requested, so a racing cancellation still wins.
+    onto the row, so the publication fence is the row as it stands now, and the
+    mark is additionally fenced under the queue lock to the dequeue this child
+    was handed: ``started_at`` is cleared by a requeue and re-stamped by every
+    re-dequeue, while the rebind never touches it. ``mark_failed`` also refuses
+    a row whose cancellation has already been requested, so a racing
+    cancellation still wins.
     """
 
     queue_id = str(entry.queue_id)
     reason = f"crash recovery rejected: {exc}"
     current = _queue_entry_by_id(queue_root, queue_id)
-    recorded = (
-        current is not None
-        and entry_status_is_running(current)
-        and current.task_id == entry.task_id
-        and current.started_at == entry.started_at
-        and mark_failed(queue_root, queue_id, error=reason, expected_entry=current)
+    recorded = current is not None and mark_failed(
+        queue_root,
+        queue_id,
+        error=reason,
+        expected_entry=current,
+        require_running_started_at=str(entry.started_at),
     )
     if not recorded:
         logger.info(
