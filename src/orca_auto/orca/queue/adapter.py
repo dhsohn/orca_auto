@@ -481,8 +481,14 @@ def mark_failed(
     publish_terminal_side_effects: bool = True,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
+    require_running_started_at: str | None = None,
 ) -> bool:
-    """Mark a queue entry as failed."""
+    """Mark a queue entry as failed.
+
+    ``require_running_started_at`` fences the mark to one dequeue attempt: under
+    the queue lock the row must still be RUNNING with exactly that
+    ``started_at``, which a requeue clears and every re-dequeue re-stamps.
+    """
     normalized_error = error or ""
     merged_metadata = dict(metadata_update or {})
     if not publish_terminal_side_effects:
@@ -519,6 +525,13 @@ def mark_failed(
                 and (
                     expected_task_id is None
                     or normalize_text(current.task_id) == normalize_text(expected_task_id)
+                )
+                and (
+                    require_running_started_at is None
+                    or (
+                        current.status == QueueStatus.RUNNING
+                        and current.started_at == require_running_started_at
+                    )
                 )
             ),
         )

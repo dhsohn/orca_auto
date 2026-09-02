@@ -1283,6 +1283,45 @@ def test_recovering_finder_leaves_a_requeued_row_alone(
     assert row.error == ""
 
 
+def test_recovering_finder_fences_the_failure_write_to_its_own_dequeue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue_root, running, _snapshot, _executable = _claimed_mutable_entry(tmp_path)
+    from orca_auto.orca.queue.adapter import requeue_running_entry
+
+    real_lookup = worker_job._queue_entry_by_id
+    lookups = 0
+
+    def reject(entry: Any, *, queue_root: Path, cfg_factory: Any) -> Any:
+        raise ValueError("ORCA crash recovery found an invalid durable rebind count")
+
+    def lookup_then_lose_the_row(queue_root: Path, queue_id: str) -> Any:
+        nonlocal lookups
+        lookups += 1
+        snapshot = real_lookup(queue_root, queue_id)
+        if lookups == 2:
+            # The child's pre-mark read still sees its own dequeue; before its
+            # mark takes the queue lock the row is requeued and picked up again.
+            assert requeue_running_entry(queue_root, queue_id, expected_entry=snapshot)
+            redequeued = dequeue_next(queue_root)
+            assert redequeued is not None and redequeued.started_at != running.started_at
+        return snapshot
+
+    monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", reject)
+    monkeypatch.setattr(worker_job, "_queue_entry_by_id", lookup_then_lose_the_row)
+    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+
+    with pytest.raises(ValueError, match="invalid durable rebind count"):
+        find(queue_root, str(running.queue_id))
+
+    assert lookups == 2
+    (row,) = list_queue(queue_root)
+    assert row.status is QueueStatus.RUNNING
+    assert row.started_at != running.started_at
+    assert row.error == ""
+
+
 def test_recovering_finder_does_not_overwrite_a_racing_cancellation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
