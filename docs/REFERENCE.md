@@ -583,7 +583,9 @@ released plain table.
   `service status` rather than reading the version back.
 - `orca_auto service status` also gates the age of each running worker against
   a per-worker snapshot of the latest matching HEAD-reflog update in the
-  checkout recorded from that worker's actual imported module. The provenance
+  checkout recorded from that worker's actual imported module (a `checkout:`
+  entry that re-selected the commit already checked out folds into the entry
+  before it; a same-commit `reset` and a move through another commit count). The provenance
   is bound to the process PID and start ticks; it does not use cwd, commit
   timestamp, or the command's own checkout. An imported package tree with
   uncommitted source changes is undetermined. Stale or undetermined git-backed workers are reported

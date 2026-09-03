@@ -123,7 +123,7 @@ def _checkout_head_evidence(
         root,
         "reflog",
         "--date=unix",
-        "--format=%H%x00%gd",
+        "--format=%H%x00%gd%x00%gs",
         run=run,
         all_lines=True,
     )
@@ -151,10 +151,16 @@ def _checkout_head_evidence(
     )
 
 
-def _parse_reflog_entry(entry: str) -> tuple[str, int]:
-    reflog_sha, separator, selector = entry.partition("\0")
+def _parse_reflog_entry(entry: str) -> tuple[str, int, str]:
+    reflog_sha, separator, remainder = entry.partition("\0")
+    selector, subject_separator, subject = remainder.partition("\0")
     selector_prefix = "HEAD@{"
-    if not separator or not selector.startswith(selector_prefix) or not selector.endswith("}"):
+    if (
+        not separator
+        or not subject_separator
+        or not selector.startswith(selector_prefix)
+        or not selector.endswith("}")
+    ):
         raise ValueError(f"invalid HEAD reflog entry: {entry!r}")
     try:
         epoch = int(selector[len(selector_prefix) : -1])
@@ -162,30 +168,45 @@ def _parse_reflog_entry(entry: str) -> tuple[str, int]:
         raise ValueError(f"invalid HEAD reflog timestamp: {selector!r}") from exc
     if epoch < 0:
         raise ValueError(f"invalid HEAD reflog timestamp: {selector!r}")
-    return reflog_sha, epoch
+    return reflog_sha, epoch, subject.strip()
+
+
+def _reflog_entry_is_noop_checkout(subject: str) -> bool:
+    """A ``checkout:`` entry that re-selected the commit HEAD already named.
+
+    Only a checkout can move HEAD to the same commit without touching the
+    files. ``git reset --hard HEAD`` also records the current commit, but it
+    restores the working tree, so a worker that imported edited source before
+    it is running code the checkout no longer has; that entry counts as an
+    update.
+    """
+    return subject.startswith("checkout:")
 
 
 def _head_update_epoch_from_reflog(reflog_text: str, *, head_sha: str) -> int:
-    """The time this checkout first moved to its current HEAD commit.
+    """The time this checkout last changed its files to the current HEAD commit.
 
-    The newest reflog entry must name HEAD. Newer entries that re-select the
-    same commit (``git checkout main`` while on main, ``git reset --hard HEAD``,
-    a ``git switch -`` round trip) are not deploys: a worker that imported this
-    commit before them is still fresh, so the update time is taken from the
-    oldest entry of the newest run of entries that all name HEAD.
+    The newest reflog entry must name HEAD. A ``checkout:`` entry that
+    re-selected the commit the previous entry already named (``git checkout
+    main`` while on main) changed no file, so it folds into the entry before
+    it. Any other same-commit entry (a ``reset --hard HEAD`` that restored
+    edited files) and any move through a different commit (a ``git switch -``
+    round trip) counts as an update: the files changed, and a worker started
+    before it may be running code the checkout no longer has.
     """
     entries = [line for line in reflog_text.splitlines() if line.strip()]
     if not entries:
         raise ValueError("checkout has no HEAD reflog entry")
-    newest_sha, newest_epoch = _parse_reflog_entry(entries[0])
+    newest_sha, newest_epoch, newer_subject = _parse_reflog_entry(entries[0])
     if newest_sha != head_sha:
         raise ValueError("latest HEAD reflog entry does not match the checkout's current HEAD")
     update_epoch = newest_epoch
     for entry in entries[1:]:
-        entry_sha, entry_epoch = _parse_reflog_entry(entry)
-        if entry_sha != head_sha:
+        entry_sha, entry_epoch, entry_subject = _parse_reflog_entry(entry)
+        if entry_sha != head_sha or not _reflog_entry_is_noop_checkout(newer_subject):
             break
         update_epoch = min(update_epoch, entry_epoch)
+        newer_subject = entry_subject
     return update_epoch
 
 

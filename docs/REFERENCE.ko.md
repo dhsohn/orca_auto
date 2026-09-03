@@ -546,7 +546,8 @@ orca_auto queue list --limit 20
   대신 `service status`로 확인해야 합니다.
 - `orca_auto service status`는 실행 중인 각 워커의 main process에서 관측한 체크아웃의
   현재 HEAD와 일치하는 최신 HEAD reflog 갱신 시각을 worker별로 새로 잡아 워커 나이를
-  게이트합니다.
+  게이트합니다(이미 체크아웃된 커밋을 다시 고른 `checkout:` 항목은 직전 항목에 접히고,
+  같은 커밋으로의 `reset`과 다른 커밋을 거친 이동은 갱신으로 셉니다).
   체크아웃은 워커가 실제 import한 module에서 기록하며 process PID와 start ticks에
   바인딩합니다. cwd, 커밋 시각, status 명령 자체의 체크아웃은 기준으로 쓰지 않습니다.
   Import한 package tree에 commit하지 않은 source 변경이 있으면 `undetermined`입니다. stale 또는

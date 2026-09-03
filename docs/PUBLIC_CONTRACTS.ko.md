@@ -806,7 +806,9 @@ stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 �
 - 각 워커는 시작할 때 resolve한 `orca_auto` module source를 자기 process environment에
   기록합니다. `service status`는 active main process에서 그 import provenance를 읽고 같은
   PID/start ticks에 바인딩한 뒤, worker별로 독립해 잡은 체크아웃의 현재 HEAD와 일치하는
-  최신 HEAD reflog 갱신 시각과 unit 시작 시각을 대조합니다. 커밋 객체 시각, status 명령
+  최신 HEAD reflog 갱신 시각과 unit 시작 시각을 대조합니다. 이미 체크아웃된 커밋을 다시
+  고른 `checkout:` reflog 항목은 파일을 바꾸지 않으므로 직전 항목에 접히고, 같은 커밋으로의
+  `reset`과 다른 커밋을 거친 이동은 갱신으로 셉니다. 커밋 객체 시각, status 명령
   자체의 체크아웃, worker current directory는 freshness 기준이 아닙니다. Import한 package tree에
   commit하지 않은 source 변경이 있으면 fresh로 보지 않고 `undetermined`로 보고합니다. 유닛은
   체크아웃을 라이브로 import하지만 리로드하지 않으므로 워커 시작 뒤 HEAD를 이동한 배포는
