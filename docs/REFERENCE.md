@@ -34,7 +34,11 @@ surfaces that are treated as public contracts, see
 Current intended semantics:
 
 - Public `run-dir` enqueues new work durably
-- If an already-completed output is detected, `run-dir` returns completion without relaunching ORCA
+- `run-dir` does not inspect existing outputs: a reaction directory whose queue
+  row is still active is refused as a submission conflict, and one whose row is
+  terminal is enqueued again as a new generation (unless that row still owns a
+  pending terminal replay, which is refused until it completes). Re-running a
+  closed directory therefore relaunches ORCA as a new generation.
 - Successful queue submission returns `status: queued`
 - Public `run-dir` does not launch ORCA directly for new work
 - Background execution is managed by externally supervised queue workers
