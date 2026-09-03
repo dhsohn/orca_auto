@@ -18,8 +18,18 @@ from orca_auto.core.utils.coercion import safe_int
 FINITE_NUMBER_PATTERN = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?"
 _NUMBER_END = r"(?![A-Za-z0-9_.])"
 _ENERGY_PATTERNS = (
+    # xTB: "energy: -34.1 gnorm: 0.001 xtb: 6.7.1"
     re.compile(rf"energy:\s*({FINITE_NUMBER_PATTERN}){_NUMBER_END}", re.IGNORECASE),
+    # ORCA: "Coordinates from ORCA-job input E -100.5"
     re.compile(rf"\bE\s+({FINITE_NUMBER_PATTERN}){_NUMBER_END}", re.IGNORECASE),
+    # CREST `crest_conformers.xyz` / `crest_best.xyz`: the comment line is the
+    # bare total energy in Eh. A decimal point is required so a bare integer
+    # label on a user-supplied frame is not read as an energy.
+    re.compile(r"^\s*([-+]?\d+\.\d+(?:[Ee][-+]?\d+)?)\s*$"),
+    # CREST `crest_rotamers.xyz`: energy, then a weight, then `!`.
+    re.compile(
+        r"^\s*([-+]?\d+\.\d+(?:[Ee][-+]?\d+)?)\s+[-+]?\d+(?:\.\d*)?(?:[Ee][-+]?\d+)?\s*!\s*$"
+    ),
 )
 MAX_OUTPUT_XYZ_MATERIALIZATION_BYTES = 512 * 1024 * 1024
 _ELEMENT_SYMBOLS = (

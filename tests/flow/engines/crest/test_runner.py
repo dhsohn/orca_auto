@@ -919,3 +919,89 @@ def test_finalize_crest_job_can_force_cancelled_result(tmp_path: Path) -> None:
     assert result.reason == "cancel_requested"
     assert result.exit_code == -15
     assert result.mode == "nci"
+
+
+def test_finalize_crest_job_records_a_refused_retained_ensemble(tmp_path: Path) -> None:
+    # One malformed frame in crest_conformers.xyz used to drop the whole file
+    # from the handoff with nothing recorded; crest_best.xyz alone was handed
+    # off as if that were the full result.
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    stdout_path = job_dir / "crest.stdout.log"
+    stderr_path = job_dir / "crest.stderr.log"
+    stdout_handle = stdout_path.open("w", encoding="utf-8")
+    stderr_handle = stderr_path.open("w", encoding="utf-8")
+    _write_xyz(job_dir / "input.xyz", ("input",))
+    _write_xyz(job_dir / "crest_best.xyz", ("best",))
+    (job_dir / "crest_conformers.xyz").write_text(
+        "1\nconf_a\nH 0.0 0.0 0.0\n1\nconf_b\nH 1.x 0.0 0.0\n1\nconf_c\nH 0.5 0.0 0.0\n",
+        encoding="utf-8",
+    )
+
+    process = MagicMock()
+    process.poll.return_value = 0
+    running = CrestRunningJob(
+        process=process,
+        command=("crest", "input.xyz"),
+        started_at="2026-04-19T00:00:00+00:00",
+        stdout_log=str(stdout_path.resolve()),
+        stderr_log=str(stderr_path.resolve()),
+        stdout_handle=stdout_handle,
+        stderr_handle=stderr_handle,
+        selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+        mode="standard",
+        manifest_path=str((job_dir / CREST_JOB_MANIFEST_FILE).resolve()),
+        resource_request={"max_cores": 4, "max_memory_gb": 8},
+        resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
+        job_dir=str(job_dir.resolve()),
+    )
+
+    result = finalize_crest_job(running)
+
+    assert result.status == "completed"
+    assert result.retained_conformer_paths == (str((job_dir / "crest_best.xyz").resolve()),)
+    assert result.rejected_retained_outputs == (
+        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"},
+    )
+    from orca_auto.flow.engines.crest import artifacts as crest_artifacts
+
+    assert crest_artifacts._detail_fields(result)["rejected_retained_outputs"] == [
+        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"}
+    ]
+
+
+def test_finalize_crest_job_records_an_atom_sequence_mismatch(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    stdout_path = job_dir / "crest.stdout.log"
+    stderr_path = job_dir / "crest.stderr.log"
+    stdout_handle = stdout_path.open("w", encoding="utf-8")
+    stderr_handle = stderr_path.open("w", encoding="utf-8")
+    _write_xyz(job_dir / "input.xyz", ("input",))
+    _write_xyz(job_dir / "crest_conformers.xyz", ("conf_a",))
+    (job_dir / "crest_rotamers.xyz").write_text("1\nrot\nHe 0.0 0.0 0.0\n", encoding="utf-8")
+
+    process = MagicMock()
+    process.poll.return_value = 0
+    running = CrestRunningJob(
+        process=process,
+        command=("crest", "input.xyz"),
+        started_at="2026-04-19T00:00:00+00:00",
+        stdout_log=str(stdout_path.resolve()),
+        stderr_log=str(stderr_path.resolve()),
+        stdout_handle=stdout_handle,
+        stderr_handle=stderr_handle,
+        selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+        mode="standard",
+        manifest_path=str((job_dir / CREST_JOB_MANIFEST_FILE).resolve()),
+        resource_request={"max_cores": 4, "max_memory_gb": 8},
+        resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
+        job_dir=str(job_dir.resolve()),
+    )
+
+    result = finalize_crest_job(running)
+
+    assert result.retained_conformer_paths == (str((job_dir / "crest_conformers.xyz").resolve()),)
+    assert result.rejected_retained_outputs == (
+        {"name": "crest_rotamers.xyz", "reason": "atom_sequence_mismatch"},
+    )

@@ -90,6 +90,9 @@ class CrestRunResult:
     resource_actual: dict[str, int]
     output_identities: dict[str, dict[str, Any]] = field(default_factory=dict)
     scratch_provenance: dict[str, Any] = field(default_factory=dict)
+    # Named ensemble files that existed but were refused for the handoff,
+    # each as {"name", "reason"}; empty when every present file was retained.
+    rejected_retained_outputs: tuple[dict[str, str], ...] = ()
 
 
 @dataclass
@@ -496,6 +499,7 @@ def _retained_outputs(
     *,
     selected_input_xyz: str | Path,
     output_identities: dict[str, dict[str, Any]] | None = None,
+    rejected_outputs: list[dict[str, str]] | None = None,
 ) -> tuple[int, tuple[str, ...]]:
     # CREST's named retained files overlap (``crest_best.xyz`` is commonly a
     # member of ``crest_conformers.xyz``), but later files can also contain
@@ -507,6 +511,14 @@ def _retained_outputs(
         return 0, ()
     expected_atoms = _frame_atom_sequence(input_frames[0])
 
+    def reject(name: str, reason: str) -> None:
+        # A named ensemble file that exists but cannot be handed off changes
+        # the candidate set; record it so the omission is visible in the
+        # result instead of only as a missing path.
+        LOGGER.warning("CREST retained output %s refused: %s", job_dir / name, reason)
+        if rejected_outputs is not None:
+            rejected_outputs.append({"name": name, "reason": reason})
+
     retained_paths: list[str] = []
     seen_geometries: set[tuple[tuple[str, float, float, float], ...]] = set()
     retained_count = 0
@@ -516,19 +528,28 @@ def _retained_outputs(
             continue
         resolved_path = path.expanduser().resolve()
         if not resolved_path.is_relative_to(job_dir.expanduser().resolve()):
+            reject(name, "outside_job_dir")
             continue
         try:
             identity_before = _engine_runner.confined_output_identity(job_dir, resolved_path)
         except (OSError, RuntimeError, TypeError, ValueError):
+            reject(name, "identity_unreadable")
             continue
         frames = load_output_xyz_frames(resolved_path)
         try:
             identity_after = _engine_runner.confined_output_identity(job_dir, resolved_path)
         except (OSError, RuntimeError, TypeError, ValueError):
+            reject(name, "identity_unreadable")
             continue
         if identity_before != identity_after:
+            reject(name, "identity_changed_during_read")
             continue
-        if not frames or any(_frame_atom_sequence(frame) != expected_atoms for frame in frames):
+        if not frames:
+            # A malformed frame rejects the whole file: the reader is all-or-nothing.
+            reject(name, "no_valid_frames")
+            continue
+        if any(_frame_atom_sequence(frame) != expected_atoms for frame in frames):
+            reject(name, "atom_sequence_mismatch")
             continue
         if output_identities is not None:
             output_identities[str(resolved_path)] = identity_after
@@ -675,11 +696,13 @@ def finalize_crest_job(
 
     snapshot_valid = finalize_snapshot_is_valid(running, display_name="CREST")
     output_identities: dict[str, dict[str, Any]] = {}
+    rejected_outputs: list[dict[str, str]] = []
     if snapshot_valid:
         retained_count, retained_paths = _retained_outputs(
             Path(running.job_dir),
             selected_input_xyz=running.selected_input_xyz,
             output_identities=output_identities,
+            rejected_outputs=rejected_outputs,
         )
     else:
         retained_count, retained_paths = 0, ()
@@ -727,4 +750,5 @@ def finalize_crest_job(
         resource_actual=running.resource_actual,
         output_identities=output_identities,
         scratch_provenance=scratch_provenance,
+        rejected_retained_outputs=tuple(rejected_outputs),
     )

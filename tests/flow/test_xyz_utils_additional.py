@@ -287,3 +287,44 @@ def test_write_fragment_xyz_rejects_multiline_or_control_comments(
             comment=comment,
         )
     assert not target.exists()
+
+
+def test_load_xyz_frames_reads_a_bare_crest_comment_line_energy(tmp_path: Path) -> None:
+    # CREST writes the total energy alone on the comment line; it used to
+    # parse as no energy, so no CREST frame ever carried a source energy.
+    xyz_path = tmp_path / "crest_conformers.xyz"
+    xyz_path.write_text(
+        "\n".join(
+            [
+                "2",
+                "      -34.11563902",
+                "H 0 0 0",
+                "H 0 0 0.74",
+                "2",
+                "  -34.11400000  ",
+                "H 0.1 0 0",
+                "H 0.1 0 0.74",
+                "2",
+                "conformer 3 -34.1 kcal",
+                "H 0.2 0 0",
+                "H 0.2 0 0.74",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    frames = xyz_utils.load_xyz_frames(xyz_path)
+
+    assert [frame.energy for frame in frames] == [-34.11563902, -34.114, None]
+    assert xyz_utils._parse_energy("   -34.11563902") == -34.11563902
+    assert xyz_utils._parse_energy("-34.1 extra") is None
+    assert xyz_utils._parse_energy("1e400") is None
+    # A bare integer is a label, not an energy; a rotamer line carries a weight and "!".
+    assert xyz_utils._parse_energy(" 1") is None
+    assert xyz_utils._parse_energy("+3") is None
+    assert (
+        xyz_utils._parse_energy("  -9.0181777600000004        4.5199530959583512E-002 !")
+        == -9.0181777600000004
+    )
+    assert xyz_utils._parse_energy("  -9.01817776   0.5") is None
