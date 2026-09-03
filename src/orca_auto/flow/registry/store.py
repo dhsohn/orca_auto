@@ -494,6 +494,9 @@ def clear_terminal_workflow_registry(
                     metadata.get("si_publish_pending")
                     or metadata.get("si_publish_blocked")
                     or metadata.get("final_child_sync_pending")
+                    # Cancel transitions the worker has not journaled yet: the
+                    # drain runs from this row, so clearing it would lose them.
+                    or metadata.get("cancellation_status_transitions")
                 ):
                     return False
 

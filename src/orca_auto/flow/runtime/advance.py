@@ -155,6 +155,7 @@ def _drain_cancellation_transitions(
             deps.drain_cancellation_transitions_fn(
                 cycle.root,
                 workspace_dir,
+                resolve_workflow_workspace_fn=deps.resolve_workflow_workspace_fn,
                 acquire_workflow_lock_fn=deps.acquire_workflow_lock_fn,
                 load_workflow_payload_fn=deps.load_workflow_payload_fn,
                 write_workflow_payload_fn=deps.write_workflow_payload_fn,

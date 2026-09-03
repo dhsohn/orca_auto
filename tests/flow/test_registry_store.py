@@ -945,3 +945,49 @@ def test_list_workflow_registry_reindexes_when_missing_and_reindex_skips_bad_wor
         ).workflow_id
         == "wf_good"
     )
+
+
+def test_clear_terminal_keeps_a_record_with_undrained_cancel_transitions(tmp_path: Path) -> None:
+    # A cancel command that crashed before journaling leaves transitions on
+    # the payload; the worker drains them from this registry row, so the row
+    # must survive a terminal clear until then.
+    from orca_auto.flow.state import write_workflow_payload
+
+    workspace = tmp_path / "wf-cancelled"
+    workspace.mkdir()
+    transition = {
+        "event_id": "wf_evt_1",
+        "occurred_at": "2026-08-11T05:20:00+00:00",
+        "previous_status": "running",
+        "status": "cancelled",
+    }
+    payload = {
+        "workflow_id": "wf-cancelled",
+        "template_name": "reaction_ts_search",
+        "status": "cancelled",
+        "stages": [],
+        "metadata": {"cancellation_status_transitions": [transition]},
+    }
+    write_workflow_payload(workspace, payload)
+    registry_store._save_records(
+        tmp_path,
+        [
+            registry.WorkflowRegistryRecord(
+                workflow_id="wf-cancelled",
+                template_name="reaction_ts_search",
+                status="cancelled",
+                source_job_id="job-3",
+                source_job_type="reaction_ts_search",
+                reaction_key="rxn-3",
+                requested_at="2026-04-19T00:02:00+00:00",
+                workspace_dir=str(workspace),
+                workflow_file=str(workspace / "workflow.json"),
+            )
+        ],
+    )
+
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 0
+
+    payload["metadata"] = {"cancellation_status_transitions": []}
+    write_workflow_payload(workspace, payload)
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 1
