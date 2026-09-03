@@ -601,7 +601,12 @@ float text, so valid precision is not silently rounded to eight decimal places.
 
 Restart may change non-scientific controls, but once a primary ORCA stage has
 completed it cannot change the durable route, charge, or multiplicity used by
-that stage. Report aggregation verifies the selected inputs and omits relative
+that stage, and once a CREST or xTB stage has completed it cannot change the
+workflow charge or multiplicity away from the electronic state that stage's
+job manifest carried. An accepted electronic-state change is recorded in the
+restart summary, the restart journal event and the command response; its
+`previous` values are null when the workflow never recorded them. Report
+aggregation verifies the selected inputs and omits relative
 energy comparisons and numeric rankings if route, non-resource active input
 directives, electronic-state, or ORCA version provenance is missing or mixed
 across completed candidates. The selected inline or confined XYZ also must

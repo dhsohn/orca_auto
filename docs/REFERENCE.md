@@ -322,9 +322,14 @@ Workflow notes:
   ignored. Submission requires equal durable `reaction_dir`/`selected_inp`
   copies, resolves the same actual input as the direct submitter, and validates
   the final rewritten bytes at the snapshot boundary before binding those same
-  bytes. After a
-  primary ORCA stage completes, restart cannot change its route, charge, or
-  multiplicity, and reports omit energy comparisons across missing or mixed
+  bytes. After a primary ORCA stage completes, restart cannot change its route,
+  charge, or multiplicity; after a CREST or xTB stage completes, restart cannot
+  change the workflow charge or multiplicity either, because those conformers
+  were screened on the electronic state their job manifest carried. An
+  accepted electronic-state change is recorded in the restart summary, the
+  restart journal and the command response (a `previous` value is null when
+  the workflow never recorded it). Reports omit energy comparisons across
+  missing or mixed
   route, non-resource active input directives, electronic-state, ORCA-version,
   or identity-bound non-geometry dependency content provenance, or when the
   selected geometries do not share one ordered atom-label sequence. Geometry

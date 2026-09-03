@@ -112,6 +112,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   back to an active status, and the cancel pass re-applies a cancellation the
   engine already acknowledged for that same row instead of asking the engine
   for a row it no longer has.
+- A workflow restart can no longer change the charge or multiplicity while a
+  completed CREST or xTB stage retains its conformers. Those conformers were
+  screened on the original electronic state, and the restart rewrote only the
+  ORCA stage input, so ORCA would have run on another surface with nothing
+  recording the mismatch. The restart now refuses such a change, as it already
+  did for completed primary ORCA stages. The comparison uses the state each
+  completed stage's job manifest carried, so restating the state of an older
+  workflow that never recorded charge/multiplicity is accepted. An accepted
+  electronic-state change is recorded in the workflow's restart summary, the
+  restart journal and the command response (`previous` is null when the
+  workflow never recorded it).
 
 ### Validation limitation
 

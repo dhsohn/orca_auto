@@ -594,3 +594,302 @@ def test_restart_failed_workflow_rejects_non_mapping_flow_yaml(tmp_path: Path) -
 
     with pytest.raises(ValueError, match="Workflow manifest must contain a mapping"):
         restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+
+def _electronic_state_payload(*, crest_status: str) -> dict[str, Any]:
+    return {
+        "template_name": "conformer_screening",
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "orca_route_line": "! Opt HF",
+                    "charge": 0,
+                    "multiplicity": 1,
+                }
+            }
+        },
+        "stages": [
+            {
+                "stage_id": "crest_reactant_01",
+                "status": crest_status,
+                "task": {"engine": "crest", "status": crest_status},
+                "metadata": {},
+            },
+            {
+                "stage_id": "orca_candidate_01",
+                "stage_kind": "orca_stage",
+                "status": "failed",
+                "task": {"engine": "orca", "task_kind": "opt", "status": "failed"},
+                "metadata": {},
+            },
+        ],
+    }
+
+
+def test_restart_refuses_electronic_state_change_over_completed_crest_stage(
+    tmp_path: Path,
+) -> None:
+    # The completed CREST stage screened conformers as a neutral singlet; only
+    # the failed ORCA stage would be re-run, on a different surface, with no
+    # record of the mismatch. Refuse, as for completed primary ORCA stages.
+    payload = _electronic_state_payload(crest_status="completed")
+    original = json.loads(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="electronic state cannot change") as excinfo:
+        restart_settings._flow_restart_settings_from_manifest(
+            tmp_path,
+            payload,
+            {"orca": {"charge": 1, "multiplicity": 2}},
+        )
+
+    assert "crest_reactant_01" in str(excinfo.value)
+    assert payload == original
+
+
+def test_restart_records_electronic_state_change_without_completed_engine_stages(
+    tmp_path: Path,
+) -> None:
+    payload = _electronic_state_payload(crest_status="failed")
+
+    settings = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        payload,
+        {"orca": {"charge": 1}},
+    )
+
+    assert settings["electronic_state_change"] == {
+        "previous": {"charge": 0, "multiplicity": 1},
+        "current": {"charge": 1, "multiplicity": 1},
+        "fields": ["charge"],
+    }
+    assert settings["charge"] == 1 and settings["multiplicity"] == 1
+    assert payload["metadata"]["request"]["parameters"]["charge"] == 1
+
+    unchanged = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        _electronic_state_payload(crest_status="failed"),
+        {"orca": {"charge": 0, "multiplicity": 1}},
+    )
+    assert unchanged["electronic_state_change"] is None
+
+
+def test_restart_summary_and_journal_record_electronic_state_change(tmp_path: Path) -> None:
+    from orca_auto.flow.restart import mutation as restart_mutation
+
+    change = {
+        "previous": {"charge": 0, "multiplicity": 1},
+        "current": {"charge": 1, "multiplicity": 2},
+        "fields": ["charge", "multiplicity"],
+    }
+    payload: dict[str, Any] = {"metadata": {}, "stages": []}
+    restart_mutation._apply_restart_summary(
+        payload,
+        previous_status="failed",
+        restarted_at="2026-09-03T00:00:00+00:00",
+        restarted_stages=[],
+        flow_settings={"applied": True, "electronic_state_change": change},
+    )
+    assert payload["metadata"]["restart_summary"]["electronic_state_change"] == change
+
+    mutation = restart_mutation.WorkflowRestartMutation(
+        root=tmp_path,
+        workspace=tmp_path / "wf",
+        payload=payload,
+        previous_status="failed",
+        restarted_at="2026-09-03T00:00:00+00:00",
+        restarted_stages=[],
+        flow_manifest_applied=True,
+        summary={},
+        electronic_state_change=change,
+    )
+    assert mutation.journal_metadata()["electronic_state_change"] == change
+    assert mutation.response_payload()["electronic_state_change"] == change
+
+    plain = restart_mutation.WorkflowRestartMutation(
+        root=tmp_path,
+        workspace=tmp_path / "wf",
+        payload=payload,
+        previous_status="failed",
+        restarted_at="2026-09-03T00:00:00+00:00",
+        restarted_stages=[],
+        flow_manifest_applied=True,
+        summary={},
+    )
+    assert "electronic_state_change" not in plain.journal_metadata()
+    assert "electronic_state_change" not in plain.response_payload()
+
+
+def _legacy_payload_without_parameters(
+    *, crest_status: str, overrides: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    task: dict[str, Any] = {"engine": "crest", "status": crest_status, "payload": {}}
+    if overrides is not None:
+        task["payload"]["job_manifest_overrides"] = dict(overrides)
+    return {
+        "template_name": "reaction_ts_search",
+        "metadata": {},
+        "stages": [
+            {"stage_id": "crest_reactant_01", "status": crest_status, "task": task, "metadata": {}},
+            {
+                "stage_id": "orca_candidate_01",
+                "stage_kind": "orca_stage",
+                "status": "failed",
+                "task": {"engine": "orca", "task_kind": "optts_freq", "status": "failed"},
+                "metadata": {},
+            },
+        ],
+    }
+
+
+def test_restart_accepts_a_manifest_that_restates_the_state_an_old_payload_never_recorded(
+    tmp_path: Path,
+) -> None:
+    # No metadata.request.parameters (pre-May workflow.json): the completed
+    # CREST stage ran as a neutral singlet (no charge/uhf overrides), and the
+    # manifest states exactly that. Nothing changed for the conformers.
+    payload = _legacy_payload_without_parameters(crest_status="completed")
+
+    settings = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        payload,
+        {"charge": 0, "orca": {"multiplicity": 1}},
+    )
+
+    assert settings["electronic_state_change"] == {
+        "previous": {"charge": None, "multiplicity": None},
+        "current": {"charge": 0, "multiplicity": 1},
+        "fields": ["charge", "multiplicity"],
+    }
+
+
+def test_restart_refuses_a_new_state_over_a_completed_stage_of_an_old_payload(
+    tmp_path: Path,
+) -> None:
+    payload = _legacy_payload_without_parameters(crest_status="completed")
+
+    with pytest.raises(ValueError, match="electronic state cannot change") as excinfo:
+        restart_settings._flow_restart_settings_from_manifest(
+            tmp_path,
+            payload,
+            {"charge": -1, "orca": {"multiplicity": 2}},
+        )
+
+    assert "crest_reactant_01(charge=0)" in str(excinfo.value)
+
+
+def test_restart_refuses_a_multiplicity_only_change_over_a_completed_stage(
+    tmp_path: Path,
+) -> None:
+    payload = _electronic_state_payload(crest_status="completed")
+
+    with pytest.raises(ValueError, match="electronic state cannot change") as excinfo:
+        restart_settings._flow_restart_settings_from_manifest(
+            tmp_path,
+            payload,
+            {"orca": {"multiplicity": 3}},
+        )
+
+    assert "crest_reactant_01(multiplicity=1)" in str(excinfo.value)
+    assert "requested=(charge=0, multiplicity=3)" in str(excinfo.value)
+
+
+def test_restart_accepts_the_state_a_completed_stage_actually_ran_on(tmp_path: Path) -> None:
+    # The stage's own manifest carried charge -1 / uhf 1 while the request
+    # parameters were never recorded: the manifest agrees with the stage.
+    payload = _legacy_payload_without_parameters(
+        crest_status="completed",
+        overrides={"charge": -1, "uhf": 1, "gfn": 1},
+    )
+
+    settings = restart_settings._flow_restart_settings_from_manifest(
+        tmp_path,
+        payload,
+        {"charge": -1, "orca": {"multiplicity": 2}},
+    )
+
+    assert settings["electronic_state_change"]["current"] == {"charge": -1, "multiplicity": 2}
+
+
+def test_restart_end_to_end_records_the_electronic_state_change(tmp_path: Path) -> None:
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_state_change"
+    (workspace / "old_xtb").mkdir(parents=True)
+    (workspace / "flow.yaml").write_text(
+        "workflow_type: reaction_ts_search\ncharge: -1\norca:\n  multiplicity: 2\n",
+        encoding="utf-8",
+    )
+    _write_workflow(
+        workspace,
+        {
+            "workflow_id": "wf_state_change",
+            "template_name": "reaction_ts_search",
+            "status": "failed",
+            "requested_at": "2026-04-27T00:00:00+00:00",
+            "stages": [
+                {
+                    "stage_id": "xtb_path_01",
+                    "status": "failed",
+                    "task": {
+                        "engine": "xtb",
+                        "status": "failed",
+                        "payload": {
+                            "job_dir": str(workspace / "old_xtb"),
+                            "job_manifest_overrides": {"gfn": 1},
+                        },
+                        "metadata": {"job_manifest_overrides": {"gfn": 1}},
+                        "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                    },
+                    "metadata": {"job_manifest_overrides": {"gfn": 1}},
+                },
+            ],
+            "metadata": {},
+        },
+    )
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    expected = {
+        "previous": {"charge": None, "multiplicity": None},
+        "current": {"charge": -1, "multiplicity": 2},
+        "fields": ["charge", "multiplicity"],
+    }
+    assert result["electronic_state_change"] == expected
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert saved["metadata"]["restart_summary"]["electronic_state_change"] == expected
+
+
+def test_restart_refuses_a_partial_manifest_whose_effective_state_differs(
+    tmp_path: Path,
+) -> None:
+    # Old payload without recorded parameters; the completed CREST stage ran
+    # at charge -1. A manifest stating only multiplicity 2 would restart the
+    # remaining stages at the neutral default charge 0: refuse on the pair the
+    # restart would actually run on, not only on the stated field.
+    payload = _legacy_payload_without_parameters(
+        crest_status="completed",
+        overrides={"charge": -1, "uhf": 0},
+    )
+
+    with pytest.raises(ValueError, match="electronic state cannot change") as excinfo:
+        restart_settings._flow_restart_settings_from_manifest(
+            tmp_path,
+            payload,
+            {"orca": {"multiplicity": 2}},
+        )
+
+    assert "requested=(charge=0, multiplicity=2)" in str(excinfo.value)
+    assert "crest_reactant_01(charge=-1)" in str(excinfo.value)
+
+
+def test_restart_record_rejects_a_corrupt_recorded_charge_with_a_labelled_error(
+    tmp_path: Path,
+) -> None:
+    payload = _electronic_state_payload(crest_status="failed")
+    payload["metadata"]["request"]["parameters"]["charge"] = "x"
+
+    with pytest.raises(ValueError, match="charge must be an integer"):
+        restart_settings._flow_restart_settings_from_manifest(
+            tmp_path,
+            payload,
+            {"orca": {"multiplicity": 2}},
+        )
