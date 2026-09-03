@@ -37,8 +37,9 @@ Current intended semantics:
 - `run-dir` does not inspect existing outputs: a reaction directory whose queue
   row is still active is refused as a submission conflict, and one whose row is
   terminal is enqueued again as a new generation (unless that row still owns a
-  pending terminal replay, which is refused until it completes). Re-running a
-  closed directory therefore relaunches ORCA as a new generation.
+  pending terminal replay or a terminal fence marker, either of which is
+  refused until it clears). Re-running a closed directory therefore relaunches
+  ORCA as a new generation.
 - Successful queue submission returns `status: queued`
 - Public `run-dir` does not launch ORCA directly for new work
 - Background execution is managed by externally supervised queue workers

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import yaml
@@ -9,6 +10,7 @@ import yaml
 from orca_auto.core.artifacts import XTB_JOB_MANIFEST_FILE
 from orca_auto.core.queue.engine.input_snapshot import SNAPSHOT_DIR_NAME
 from orca_auto.flow.engines.xtb import job_inputs as _helpers
+from orca_auto.flow.engines.xtb import runner as xtb_runner
 from orca_auto.flow.engines.xtb import submission as xtb_submission
 from tests.engine_artifact_helpers import (
     engine_payload as _engine_payload,
@@ -277,3 +279,47 @@ def test_queued_state_payload_copies_candidate_and_resource_metadata(tmp_path: P
     assert engine_payload["input_summary"]["top_n"] == 2
     assert _resources(payload)["request"] == {"max_cores": 6, "max_memory_gb": 24}
     assert _resources(payload)["actual"] == {"max_cores": 6, "max_memory_gb": 24}
+
+
+def test_ranking_submission_builds_and_validates_the_candidate_single_point_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A ranking job runs one single point per candidate; submission used to
+    # validate it as a single "ranking" xTB command, which the runner rejects,
+    # so no ranking job could ever be submitted.
+    allowed_root = tmp_path / "allowed"
+    job_dir = allowed_root / "rank_job"
+    candidates = job_dir / "candidates"
+    candidates.mkdir(parents=True)
+    (candidates / "a.xyz").write_text("2\na\nH 0 0 0\nH 0.74 0 0\n", encoding="utf-8")
+    (candidates / "b.xyz").write_text("2\nb\nH 0 0 0\nH 0.80 0 0\n", encoding="utf-8")
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    xtb_executable = executable_dir / "xtb"
+    xtb_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    xtb_executable.chmod(0o700)
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(allowed_root=str(allowed_root)),
+        resources=SimpleNamespace(max_cores_per_task=4, max_memory_gb_per_task=8),
+        paths=SimpleNamespace(xtb_executable=str(xtb_executable)),
+    )
+    monkeypatch.setattr(xtb_submission, "new_job_id", lambda: "xtb-ranking-submit")
+    validated: list[str] = []
+    real_build_command = xtb_runner._build_command
+
+    def build_command(*args: Any, **kwargs: Any) -> list[str]:
+        validated.append(str(kwargs.get("job_type")))
+        return real_build_command(*args, **kwargs)
+
+    monkeypatch.setattr(xtb_runner, "_build_command", build_command)
+
+    submission = xtb_submission._build_submission(
+        cfg,
+        job_dir,
+        {"job_type": "ranking", "top_n": 1},
+        SimpleNamespace(priority=0, config="cfg.yaml"),
+    )
+
+    assert submission.task_kind == "xtb_ranking"
+    assert validated == ["sp"]

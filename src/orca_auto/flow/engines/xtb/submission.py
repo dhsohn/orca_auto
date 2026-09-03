@@ -323,12 +323,17 @@ def _build_submission_impl(
 
     from .runner import _build_command
 
+    # Validate the xTB command the worker will run. A ranking job runs one
+    # single-point per candidate, so its command shape is the candidate
+    # single point; the runner's single-job option builder has no ranking
+    # branch and used to make every ranking submission fail here.
+    validated_job_type = "sp" if str(job["job_type"]) == "ranking" else str(job["job_type"])
     _build_command(
         cfg,
         manifest=manifest_snapshot,
         selected_input_xyz=selected_input_xyz,
         secondary_input_xyz=secondary_input_xyz,
-        job_type=str(job["job_type"]),
+        job_type=validated_job_type,
         resource_request=resource_request,
     )
 
