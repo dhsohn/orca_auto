@@ -250,6 +250,26 @@ def test_discord_bot_channel_redacts_request_construction_errors(
     assert secret not in caplog.text
 
 
+def test_discord_bot_channel_reports_unserializable_payload_as_request_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A lone surrogate is what os.fsdecode leaves in a path with a non-UTF-8
+    # byte; the JSON body cannot be encoded and nothing must be posted.
+    def refuse_post(_self: DiscordBotChannel, _data: bytes) -> SendResult:
+        pytest.fail("an unserializable payload must not reach the transport")
+
+    monkeypatch.setattr(DiscordBotChannel, "_post_once", refuse_post)
+
+    with caplog.at_level("WARNING"):
+        result = DiscordBotChannel(_bot_config()).send(Message(title="run \udcff finished"))
+
+    assert not result.sent
+    assert result.error == "discord_request_error"
+    assert "discord_bot_send_failed: discord_request_error" in caplog.text
+    assert "\udcff" not in caplog.text
+
+
 def test_registry_always_builds_discord_bot_channel() -> None:
     complete = MessengerConfig(provider="discord", discord=_bot_config())
     assert isinstance(build_channel(complete), DiscordBotChannel)

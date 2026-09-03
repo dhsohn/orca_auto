@@ -632,12 +632,20 @@ def _run_terminal_replay_side_effects(
     # admission until the messenger recovered, and left the row unclearable.
     # The notifier records a delivered send in the run state, so a delivered
     # message is not resent and a failed delivery is one missed message, not
-    # a loop.
-    worker_tracking.notify_terminal_job_from_state(
-        worker.cfg,
-        item.reaction_dir,
-        expected_job_id=item.task_id,
-    )
+    # a loop.  An exception out of the notifier is the same missed message:
+    # only the record upsert above and the marker may retain the replay.
+    try:
+        worker_tracking.notify_terminal_job_from_state(
+            worker.cfg,
+            item.reaction_dir,
+            expected_job_id=item.task_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - advisory boundary
+        logger.warning(
+            "Terminal notification raised and is not retried: reaction_dir=%s error=%s",
+            item.reaction_dir,
+            type(exc).__name__,
+        )
 
 
 def _clear_terminal_replay_marker_or_confirm_absent(item: TerminalReplayWorkItem) -> None:
