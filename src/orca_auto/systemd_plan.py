@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import stat
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -160,14 +161,18 @@ def _require_explicit_admission_directory(
 ) -> None:
     if "admission_root" not in scheduler or admission_root is None:
         return
+    # Inspect with stat() so a permission error stays visible: Path.is_dir()
+    # reports every OSError as "not a directory" on newer Pythons.
     try:
-        exists = admission_root.is_dir()
+        details = admission_root.stat()
     except PermissionError:
         # The installer may run as an administrator who cannot traverse the
         # service account's private tree; a directory the caller cannot see
         # is not a missing directory. Leave the check to the service.
         return
-    if exists:
+    except (FileNotFoundError, NotADirectoryError):
+        details = None
+    if details is not None and stat.S_ISDIR(details.st_mode):
         return
     raise ValueError(
         "scheduler.admission_root must exist as a directory before systemd installation: "
