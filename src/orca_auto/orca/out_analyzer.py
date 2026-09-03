@@ -56,6 +56,12 @@ class OutMarkers(TypedDict):
     geom_not_converged: bool
     last_opt_converged: bool | None
     total_run_time_seen: bool
+    # True when ``imaginary_frequency_count`` is a verdict on the final
+    # geometry: it was counted in a frequency section not followed by another
+    # final single point energy and the analyzer reached the TS criteria.
+    # False for a superseded-only output, for the legacy whole-file count,
+    # for non-TS modes, and for runs that ended in a geometry or SCF failure.
+    final_frequency_section: bool
 
 
 _OPT_CONVERGED_NEEDLES = ("THE OPTIMIZATION HAS CONVERGED", "OPTIMIZATION RUN DONE")
@@ -111,6 +117,7 @@ def _default_markers(out_path: Path) -> OutMarkers:
         "geom_not_converged": False,
         "last_opt_converged": None,
         "total_run_time_seen": False,
+        "final_frequency_section": False,
     }
 
 
@@ -226,7 +233,7 @@ def _read_head(out_path: Path, encoding: str, nbytes: int) -> str:
     return raw.decode(encoding, errors="ignore")
 
 
-def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
+def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool]:
     """Imaginary modes of the frequency section that verifies the final geometry.
 
     ORCA prints a ``VIBRATIONAL FREQUENCIES`` section for every Hessian it
@@ -235,6 +242,10 @@ def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
     earlier geometry and verifies nothing; only a section after the last final
     energy counts. An output whose sections were all superseded reports zero
     modes, and an output without any section keeps the legacy whole-file count.
+
+    Returns ``(imaginary_count, irc_found, final_section)`` where
+    ``final_section`` is True only when the count came from a section after
+    the last final energy.
     """
     total_negative_count = 0
     last_vib_section_negative_count = 0
@@ -266,18 +277,18 @@ def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
             last_vib_section_negative_count += neg_count
 
     if saw_vib_section:
-        return last_vib_section_negative_count, irc_found
+        return last_vib_section_negative_count, irc_found, True
     if superseded_vib_section:
-        return 0, irc_found
-    return total_negative_count, irc_found
+        return 0, irc_found, False
+    return total_negative_count, irc_found, False
 
 
-def _scan_ts_full_for_imag_count(out_path: Path, encoding: str) -> tuple[int, bool]:
+def _scan_ts_full_for_imag_count(out_path: Path, encoding: str) -> tuple[int, bool, bool]:
     with out_path.open("r", encoding=encoding, errors="ignore") as handle:
         return _scan_ts_lines_for_imag_count(handle)
 
 
-def _scan_ts_text_for_imag_count(text: str) -> tuple[int, bool]:
+def _scan_ts_text_for_imag_count(text: str) -> tuple[int, bool, bool]:
     return _scan_ts_lines_for_imag_count(text.splitlines())
 
 
@@ -316,10 +327,13 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
         # TS mode needs exact imaginary frequency count from the final vibration block.
         if mode.kind == "ts" and markers["terminated_normally"]:
             if full_text is None:
-                imag_count, irc_found = _scan_ts_full_for_imag_count(out_path, encoding)
+                imag_count, irc_found, final_section = _scan_ts_full_for_imag_count(
+                    out_path, encoding
+                )
             else:
-                imag_count, irc_found = _scan_ts_text_for_imag_count(full_text)
+                imag_count, irc_found, final_section = _scan_ts_text_for_imag_count(full_text)
             markers["imaginary_frequency_count"] = imag_count
+            markers["final_frequency_section"] = final_section
             if irc_found:
                 markers["irc_marker_found"] = True
 
@@ -328,4 +342,11 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
             status=AnalyzerStatus.INCOMPLETE, reason="output_read_error", markers=markers
         )
 
-    return _interpret_markers(markers, mode)
+    analysis = _interpret_markers(markers, mode)
+    if analysis.reason not in ("ts_criteria_met", "ts_criteria_failed"):
+        # The count is a verdict on the final geometry only when the analyzer
+        # reached the TS criteria. A normally terminated run whose geometry
+        # did not converge or whose SCF failed keeps its count for diagnostics
+        # but does not characterize a stationary point.
+        markers["final_frequency_section"] = False
+    return analysis

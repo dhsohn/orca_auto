@@ -47,9 +47,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   from a superseded Hessian. When every section was superseded the analyzer
   counts zero imaginary modes and the reports show no frequency analysis; an
   output that never prints a section keeps the legacy whole-file count. The
-  workflow report's stage table no longer shows a `Nimag` for a stage that did
-  not complete, since the analyzer count of an unfinished run is not a
-  characterization of its final geometry.
+  analyzer records whether its count is a verdict on the final geometry
+  (`final_frequency_section`: counted in a final-stage section and the TS
+  criteria were reached), and the workflow report's stage table and
+  `machine.json` `orca_results` show a `Nimag` for a stage that did not
+  complete only in that case, so a normally terminated candidate rejected for
+  0 or 2 imaginary modes keeps the count that explains the rejection while an
+  unfinished run, a geometry or SCF failure, or a record written before the
+  marker existed shows none.
 
 ### Validation limitation
 
