@@ -411,3 +411,55 @@ def test_sync_crest_stage_propagates_corrupt_contract_lookup_errors(
             workspace_dir=tmp_path / "workspace" / "wf_04",
             services=deps,
         )
+
+
+def test_sync_crest_stage_keeps_cancelled_stage_when_contract_lags(tmp_path: Path) -> None:
+    # Cancelling a pending CREST row removes the row but leaves the job's
+    # job_state.json at queued. The next sync loads that stale contract; it
+    # must not move the cancelled stage back to queued (that kept a live
+    # workflow at cancel_requested with nothing left to cancel).
+    job_dir = tmp_path / "crest_allowed" / "job"
+    contract = SimpleNamespace(
+        status="queued",
+        job_id="crest_old",
+        latest_known_path=str(job_dir),
+        selected_input_xyz=str(job_dir / "input.xyz"),
+        retained_conformer_paths=(),
+        mode="standard",
+    )
+    stage: dict[str, Any] = {
+        "stage_id": "crest_product_01",
+        "status": "cancelled",
+        "metadata": {"queue_id": "q_old"},
+        "task": {
+            "engine": "crest",
+            "status": "cancelled",
+            "cancel_result": {"status": "cancelled"},
+            "payload": {
+                "job_dir": str(job_dir),
+                "selected_input_xyz": str(job_dir / "input.xyz"),
+            },
+            "enqueue_payload": {"priority": 8},
+        },
+    }
+    deps = orchestration_services(
+        overrides={
+            "submit_crest_job_dir": lambda **_kwargs: pytest.fail(
+                "a cancelled stage is not resubmitted"
+            ),
+            "load_crest_artifact_contract": lambda **_kwargs: contract,
+        }
+    )
+
+    sync_crest_stage_impl(
+        stage,
+        crest_config="/tmp/crest.yaml",
+        submit_ready=True,
+        workflow_id="wf_cancel_lag",
+        workspace_dir=tmp_path / "workspace",
+        services=deps,
+    )
+
+    assert stage["status"] == "cancelled"
+    assert stage["task"]["status"] == "cancelled"
+    assert stage["metadata"]["child_job_id"] == "crest_old"

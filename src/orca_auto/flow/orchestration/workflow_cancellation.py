@@ -206,6 +206,20 @@ def _cancel_stage_activity(
     ).to_payload()
 
 
+def _cancel_result_binds_target(prior_result: dict[str, Any], cancel_target: str) -> bool:
+    """Whether an acknowledged cancel result belongs to the stage's current row.
+
+    A result that names a queue id must name the row the stage points at now;
+    a resubmission that forgot to clear ``cancel_result`` must still reach the
+    engine. A result without a queue id (or a stage without a target) cannot
+    be bound and is trusted as written.
+    """
+    result_queue_id = normalize_text(prior_result.get("queue_id"))
+    if not result_queue_id or not cancel_target:
+        return True
+    return result_queue_id == cancel_target
+
+
 def _cancel_stage_activity_outcome(
     stage: dict[str, Any],
     *,
@@ -227,6 +241,20 @@ def _cancel_stage_activity_outcome(
 
     engine = stage_view.task_engine()
     cancel_target = submission_target_impl(stage)
+    prior_result = stage_view.task.raw.get("cancel_result")
+    if (
+        isinstance(prior_result, dict)
+        and normalize_text(prior_result.get("status")).lower() == STATUS_CANCELLED
+        and _cancel_result_binds_target(prior_result, cancel_target)
+    ):
+        # The engine already acknowledged the cancellation of this very row,
+        # which has since been cleared; the stage was moved back to an active
+        # status by a stale artifact contract afterwards. Re-apply the
+        # acknowledged cancellation instead of asking the engine for a row it
+        # no longer has.
+        stage_view.set_status_pair(stage_status=STATUS_CANCELLED, task_status=STATUS_CANCELLED)
+        return _StageCancelOutcome(status=STATUS_CANCELLED, mode="acknowledged")
+
     if not cancel_target:
         stage_view.set_status_pair(stage_status=STATUS_CANCELLED, task_status=STATUS_CANCELLED)
         return _StageCancelOutcome(status=STATUS_CANCELLED, mode="local")

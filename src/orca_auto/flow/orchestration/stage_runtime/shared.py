@@ -14,6 +14,8 @@ from orca_auto.core.statuses import (
     STATUS_UNKNOWN,
     STATUS_WAITING_FOR_SLOT,
     SUBMISSION_DEFERRED_STATUSES,
+    TERMINAL_STATUSES,
+    status_in,
 )
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_task_payload_dict
@@ -215,8 +217,29 @@ def _apply_submission_result(
 
 def _apply_contract_status(stage: dict[str, Any], task: dict[str, Any], status: str) -> None:
     del task
-    if status != STATUS_UNKNOWN:
-        WorkflowStageView(stage).set_status_pair(stage_status=status, task_status=status)
+    if status == STATUS_UNKNOWN:
+        return
+    stage_view = WorkflowStageView(stage)
+    if status_in(stage_view.status(), TERMINAL_STATUSES) and not status_in(
+        status, TERMINAL_STATUSES
+    ):
+        # An engine artifact contract can lag the stage: a row cancelled while
+        # pending, before the engine published a terminal job state for it
+        # (rows cancelled before that publication existed, or an engine whose
+        # pending cancel leaves no terminal state), keeps a job_state.json that
+        # still says queued, and a later sync used to move the cancelled stage
+        # back to queued, which kept the workflow at cancel_requested forever.
+        # A completed, failed or cancelled stage only changes to another of
+        # those statuses; submission_failed and cancel_failed keep following
+        # the contract so a live job under the same directory can re-attach.
+        _LOGGER.info(
+            "Ignoring non-terminal contract status %r for terminal stage %r (status=%r)",
+            status,
+            _stage_id_for_log(stage),
+            stage_view.status(),
+        )
+        return
+    stage_view.set_status_pair(stage_status=status, task_status=status)
 
 
 def _engine_job_dir_contract_lookup(

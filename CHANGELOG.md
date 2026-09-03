@@ -100,6 +100,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   to overwrite that with `completed` and `candidate_count: 0`, closing a
   generation that had not run. The parent now marks only a row that is still
   running, as the CREST worker already did.
+- A workflow no longer gets stuck at `cancel_requested` after a pending
+  engine row was cancelled without a terminal job state: rows cancelled before
+  the pending-cancel publication of 3.0.0 existed (the live workflow from
+  2026-08-11), or an engine whose pending cancel leaves no terminal state. The
+  cancelled row is cleared later, but the job's `job_state.json` still says
+  `queued`; the next stage sync loaded that stale contract and moved the
+  already cancelled stage back to `queued`, so the workflow saw an active
+  child forever and a repeated cancel found no row to cancel. An engine
+  artifact contract now never moves a completed, failed or cancelled stage
+  back to an active status, and the cancel pass re-applies a cancellation the
+  engine already acknowledged for that same row instead of asking the engine
+  for a row it no longer has.
 
 ### Validation limitation
 

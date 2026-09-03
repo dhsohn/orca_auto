@@ -8,6 +8,7 @@ import pytest
 from orca_auto.flow.contracts import WorkflowStageInput
 from orca_auto.flow.contracts.workflow import workflow_stage_metadata
 from orca_auto.flow.contracts.xtb import XtbArtifactContract, XtbCandidateArtifact
+from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.lifecycle import (
     effective_stage_status_impl,
     recompute_workflow_status_impl,
@@ -22,6 +23,7 @@ from orca_auto.flow.orchestration.stage_runtime.crest import (
     completed_crest_stage_impl as _completed_crest_stage,
 )
 from orca_auto.flow.orchestration.stage_runtime.shared import (
+    _apply_contract_status,
     _load_contract_or_none,
 )
 from orca_auto.flow.orchestration.stage_runtime.shared import (
@@ -42,6 +44,7 @@ from orca_auto.flow.orchestration.support import (
 from orca_auto.flow.orchestration.support import (
     submission_target_impl as _submission_target,
 )
+from orca_auto.flow.orchestration.workflow_cancellation import _cancel_stage_activity
 from tests.flow.orchestration_services import orchestration_services
 
 
@@ -540,3 +543,109 @@ def test_recompute_workflow_status_treats_child_failures_by_engine_role() -> Non
         )
         == "completed"
     )
+
+
+def test_apply_contract_status_never_regresses_a_terminal_stage() -> None:
+    for terminal in ("cancelled", "completed", "failed"):
+        stage: dict[str, Any] = {
+            "stage_id": "stage",
+            "status": terminal,
+            "task": {"engine": "crest", "status": terminal},
+        }
+        _apply_contract_status(stage, stage["task"], "queued")
+        assert stage["status"] == terminal
+        assert stage["task"]["status"] == terminal
+
+    running: dict[str, Any] = {
+        "stage_id": "stage",
+        "status": "queued",
+        "task": {"engine": "crest", "status": "queued"},
+    }
+    _apply_contract_status(running, running["task"], "running")
+    assert running["status"] == "running"
+    assert running["task"]["status"] == "running"
+
+    cancelled_then_completed: dict[str, Any] = {
+        "stage_id": "stage",
+        "status": "cancelled",
+        "task": {"engine": "crest", "status": "cancelled"},
+    }
+    _apply_contract_status(cancelled_then_completed, cancelled_then_completed["task"], "completed")
+    assert cancelled_then_completed["status"] == "completed"
+
+    # submission_failed / cancel_failed are not closed history: a live job
+    # under the same directory may still re-attach through the contract.
+    for reopenable in ("submission_failed", "cancel_failed"):
+        stage = {
+            "stage_id": "stage",
+            "status": reopenable,
+            "task": {"engine": "crest", "status": reopenable},
+        }
+        _apply_contract_status(stage, stage["task"], "running")
+        assert stage["status"] == "running"
+
+
+def test_cancel_stage_reapplies_an_acknowledged_cancellation_without_the_engine() -> None:
+    # The engine already cancelled this task's row; a stale contract later
+    # moved the stage back to queued. The cancel pass must not ask the engine
+    # for a row it no longer has (that returned "queue target not found" and
+    # left the workflow at cancel_requested for good).
+    stage: dict[str, Any] = {
+        "stage_id": "crest_product_01",
+        "status": "queued",
+        "metadata": {"queue_id": "q_old"},
+        "task": {
+            "engine": "crest",
+            "status": "queued",
+            "cancel_result": {"status": "cancelled", "queue_id": "q_old"},
+            "payload": {"job_dir": "/tmp/crest_allowed/job"},
+        },
+    }
+    deps = orchestration_services(
+        overrides={
+            "crest_cancel_target": lambda **_kwargs: pytest.fail("the engine must not be asked"),
+        }
+    )
+
+    outcome = _cancel_stage_activity(
+        stage,
+        config=WorkflowEngineOptions.from_values(crest_config="/tmp/crest.yaml"),
+        services=deps,
+    )
+
+    assert outcome == {"status": "cancelled", "mode": "acknowledged"}
+    assert stage["status"] == "cancelled"
+    assert stage["task"]["status"] == "cancelled"
+
+
+def test_cancel_stage_asks_the_engine_when_the_acknowledged_result_names_another_row() -> None:
+    # A cancel_result left over from an earlier row must not short-circuit the
+    # cancellation of the row the stage points at now.
+    stage: dict[str, Any] = {
+        "stage_id": "crest_product_01",
+        "status": "queued",
+        "metadata": {"queue_id": "q_new"},
+        "task": {
+            "engine": "crest",
+            "status": "queued",
+            "cancel_result": {"status": "cancelled", "queue_id": "q_old"},
+            "payload": {"job_dir": "/tmp/crest_allowed/job"},
+        },
+    }
+    asked: list[str] = []
+
+    def cancel_target(*, target: str, config_path: str) -> dict[str, Any]:
+        asked.append(target)
+        return {"status": "cancel_requested", "queue_id": target}
+
+    deps = orchestration_services(overrides={"crest_cancel_target": cancel_target})
+
+    outcome = _cancel_stage_activity(
+        stage,
+        config=WorkflowEngineOptions.from_values(crest_config="/tmp/crest.yaml"),
+        services=deps,
+    )
+
+    assert asked == ["q_new"]
+    assert outcome["status"] == "cancel_requested"
+    assert stage["status"] == "cancel_requested"
