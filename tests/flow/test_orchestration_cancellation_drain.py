@@ -23,6 +23,7 @@ from orca_auto.flow.runtime.models import _WorkflowCycle
 from orca_auto.flow.state import (
     acquire_workflow_lock,
     load_workflow_payload,
+    resolve_workflow_workspace,
     write_workflow_payload,
 )
 
@@ -55,6 +56,7 @@ def _real_drain(root: Path, workspace: Path, append: Any = append_workflow_journ
     return drain_cancellation_transitions(
         root,
         workspace,
+        resolve_workflow_workspace_fn=resolve_workflow_workspace,
         acquire_workflow_lock_fn=acquire_workflow_lock,
         load_workflow_payload_fn=load_workflow_payload,
         write_workflow_payload_fn=write_workflow_payload,
@@ -155,6 +157,7 @@ def test_drain_holds_the_workspace_lock_around_load_and_write(tmp_path: Path) ->
     drained = drain_cancellation_transitions(
         root,
         workspace,
+        resolve_workflow_workspace_fn=resolve_workflow_workspace,
         acquire_workflow_lock_fn=_Lock,
         load_workflow_payload_fn=load,
         write_workflow_payload_fn=write,
@@ -164,6 +167,45 @@ def test_drain_holds_the_workspace_lock_around_load_and_write(tmp_path: Path) ->
     assert drained == 1
     # The first load is the lockless pre-read; the locked one is authoritative.
     assert order == ["load", "lock", "load", "append", "write", "unlock"]
+
+
+def test_drain_refuses_a_workspace_outside_the_workflow_root(tmp_path: Path) -> None:
+    # A registry row can carry a raw workspace string that resolves nowhere
+    # under this root; the drain must not lock, read or write it, nor drain
+    # an in-root workspace that merely shares its basename.
+    root, _ = _workspace(tmp_path, [_TRANSITION])
+    twin = root / "wf-1"
+    twin.mkdir()
+    write_workflow_payload(
+        twin,
+        {"workflow_id": "wf-1", "metadata": {_CANCELLATION_TRANSITIONS_KEY: [_TRANSITION]}},
+    )
+    twin_before = (twin / "workflow.json").read_bytes()
+    outside = tmp_path / "elsewhere" / "wf-1"
+    outside.mkdir(parents=True)
+    write_workflow_payload(
+        outside,
+        {"workflow_id": "wf-1", "metadata": {_CANCELLATION_TRANSITIONS_KEY: [_TRANSITION]}},
+    )
+    before = (outside / "workflow.json").read_bytes()
+
+    assert _real_drain(root, outside) == 0
+
+    assert (outside / "workflow.json").read_bytes() == before
+    assert not (outside / "workflow.lock").exists()
+    assert (twin / "workflow.json").read_bytes() == twin_before
+    assert list_workflow_journal(root) == []
+
+
+def test_drain_empties_a_stored_list_with_no_valid_transition(tmp_path: Path) -> None:
+    # A list that holds only invalid entries journals nothing, but leaving it
+    # in place would hold the record out of every terminal clear forever.
+    root, workspace = _workspace(tmp_path, [{"event_id": "", "status": "cancelled"}])
+
+    assert _real_drain(root, workspace) == 0
+
+    assert load_workflow_payload(workspace)["metadata"][_CANCELLATION_TRANSITIONS_KEY] == []
+    assert list_workflow_journal(root) == []
 
 
 def test_drain_does_not_recreate_a_removed_workspace(tmp_path: Path) -> None:

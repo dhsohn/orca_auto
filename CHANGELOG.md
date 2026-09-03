@@ -10,6 +10,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The cancel-transition drain only locks, reads or writes a workspace that
+  resolves under the workflow root; a registry row whose raw workspace string
+  resolves elsewhere is left alone.
+- `workflow clear` keeps a terminal record whose payload still stores cancel
+  transitions the worker has not journaled, as it already keeps records with
+  a pending SI publication or child sync.
 - The scan endpoint geometry handed to a continuation or reverse scan is the
   `.NNN.xyz` of the last retained surface row's step number; counting retained
   rows picked an earlier step whenever the surface parser refused a row.

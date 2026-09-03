@@ -199,6 +199,7 @@ def drain_cancellation_transitions(
     workflow_root: str | Path,
     workspace_dir: str | Path,
     *,
+    resolve_workflow_workspace_fn: Callable[..., Path],
     acquire_workflow_lock_fn: Callable[..., Any],
     load_workflow_payload_fn: Callable[[Any], dict[str, Any]],
     write_workflow_payload_fn: Callable[[Any, dict[str, Any]], Any],
@@ -216,7 +217,16 @@ def drain_cancellation_transitions(
     transitions removed. Nothing is written when there is nothing to drain.
     """
     workflow_root_path = Path(workflow_root)
-    workspace_path = Path(workspace_dir)
+    # The runtime may hand over the registry row's raw workspace string when
+    # neither resolution matched; only a workspace that resolves under this
+    # workflow root is locked, read or written.
+    try:
+        workspace_path = resolve_workflow_workspace_fn(
+            target=str(workspace_dir),
+            workflow_root=workflow_root_path,
+        )
+    except (OSError, ValueError):
+        return 0
     # Lockless pre-read: the common case stores nothing, and taking the lock
     # first would write and fsync a lock file for every cancelled record each
     # cycle and recreate a workspace directory an operator removed.
@@ -225,8 +235,8 @@ def drain_cancellation_transitions(
     except (OSError, ValueError):
         return 0
     preview_metadata = preview.get("metadata")
-    if not isinstance(preview_metadata, dict) or not _stored_cancellation_transitions(
-        preview_metadata
+    if not isinstance(preview_metadata, dict) or not preview_metadata.get(
+        _CANCELLATION_TRANSITIONS_KEY
     ):
         return 0
     with acquire_workflow_lock_fn(workspace_path, timeout_seconds=5.0):
@@ -236,6 +246,12 @@ def drain_cancellation_transitions(
             return 0
         transitions = _stored_cancellation_transitions(metadata)
         if not transitions:
+            # A stored value with no valid transition (a hand edit, an entry
+            # whose status is no longer a cancel status) has nothing to journal;
+            # it is rewritten empty so a terminal clear stops holding the row.
+            if metadata.get(_CANCELLATION_TRANSITIONS_KEY):
+                metadata[_CANCELLATION_TRANSITIONS_KEY] = []
+                write_workflow_payload_fn(workspace_path, payload)
             return 0
         try:
             validate_workflow_workspace_identity(workspace_path, payload.get("workflow_id"))
