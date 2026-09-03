@@ -347,8 +347,9 @@ logic. Notable pieces:
   and decides whether to retry.
 - **Output analysis** (`parser/`, `out_analyzer.py`,
   `output_status.py`, `completion_rules.py`): determines completion by mode —
-  TS mode (`OptTS`/`NEB-TS`, requires exactly one imaginary frequency, plus an
-  IRC marker when the route has `IRC`) vs Opt mode (normal termination).
+  TS mode (`OptTS`/`NEB-TS`, requires exactly one imaginary frequency in the
+  frequency section after the last final single point energy, plus an IRC
+  marker when the route has `IRC`) vs Opt mode (normal termination).
 - **Calculation-type retry policy** (`retry_policy.py`):
   retry counts and rewrites are fixed by ORCA route type, not by the raw user
   retry count. Generic `TightSCF`/`SlowConv` escalation is not applied. Generic

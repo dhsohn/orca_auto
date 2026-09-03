@@ -639,7 +639,9 @@ workflow root가 설정돼 있어도 workflow나 내부 엔진 워커를 암묵�
 TS 모드 완료:
 
 - `****ORCA TERMINATED NORMALLY****`가 존재
-- 정확히 1개의 허수 진동수(imaginary frequency)가 존재
+- 마지막 final single point energy 뒤에 출력된 진동수 섹션에 정확히 1개의 허수
+  진동수(imaginary frequency)가 존재 (그 뒤에 다른 final energy가 이어지는 섹션은
+  이전 geometry의 것이라 검증에 쓰이지 않음)
 - 라우트에 `IRC`가 있으면 IRC 마커도 필요
 
 Opt 모드 완료:

@@ -36,9 +36,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   whose final stage has no thermochemistry block, such as an `OptTS` without
   `Freq`, or whose final energy is missing or unparseable, now publishes no
   thermochemistry instead of an earlier geometry's, as an output whose final
-  SCF is annotated as unconverged already did. Imaginary-mode and frequency
-  selection (parser, reports and TS-completion analysis) still use the last
-  frequency block in the file and are unchanged.
+  SCF is annotated as unconverged already did. The parser's imaginary-mode
+  fields still use the last frequency block in the file.
+- Transition-state verification and reported frequencies are bound to the
+  same final stage. A `VIBRATIONAL FREQUENCIES` section followed by another
+  final single point energy belongs to an earlier geometry, so an `OptTS`
+  with `Calc_Hess` but without `Freq` no longer completes as
+  `ts_criteria_met` on its initial Hessian's imaginary mode, and the SI block,
+  the SP/Opt/NEB/IRC/ScanTS reports and their `Nimag` no longer show modes
+  from a superseded Hessian. When every section was superseded the analyzer
+  counts zero imaginary modes and the reports show no frequency analysis; an
+  output that never prints a section keeps the legacy whole-file count. The
+  workflow report's stage table no longer shows a `Nimag` for a stage that did
+  not complete, since the analyzer count of an unfinished run is not a
+  characterization of its final geometry.
 
 ### Validation limitation
 

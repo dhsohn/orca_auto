@@ -103,6 +103,7 @@ def _orca_stage_result(
     reason = ""
     attempt_count = 0
     imaginary_count: int | None = None
+    stage_completed = report_diagnostics.normalized_text(stage.get("status")).lower() == "completed"
     report_json_path, report_payload = report_diagnostics.resolve_stage_job_report(stage)
     if report_payload is not None:
         engine_payload = report_payload.get("engine_payload")
@@ -111,26 +112,18 @@ def _orca_stage_result(
         final_result = final_result if isinstance(final_result, dict) else {}
         reason = report_diagnostics.normalized_text(final_result.get("reason"))
         attempts = engine_payload.get("attempts")
-        attempts = attempts if isinstance(attempts, list) else []
-        attempt_count = len(attempts)
-        if attempts and isinstance(attempts[-1], dict):
-            markers = attempts[-1].get("markers")
-            if isinstance(markers, dict) and "imaginary_frequency_count" in markers:
-                try:
-                    imaginary_count = int(markers["imaginary_frequency_count"])
-                except (TypeError, ValueError):
-                    imaginary_count = None
+        attempt_count = len(attempts) if isinstance(attempts, list) else 0
+        # The analyzer's imaginary-mode marker is not a Nimag: for a run that
+        # stopped short it only says that no frequency section verified the
+        # final geometry, and a completed stage reports its verified block
+        # below. The table therefore never displays the marker.
 
     energy = None
     if authoritative_evidence is not None:
         block, _selected_input_identity = authoritative_evidence
         energy = block.result.energy_hartree
         imaginary_count = block.imaginary_count
-    elif (
-        report_diagnostics.normalized_text(stage.get("status")).lower() != "completed"
-        and report_json_path is not None
-        and report_payload is not None
-    ):
+    elif not stage_completed and report_json_path is not None and report_payload is not None:
         # A reusable job root can retain pre-generation ``*.engrad`` files.
         # Both energy sources must therefore be confined to the generation
         # whose report provenance and workflow-stage identity were verified.

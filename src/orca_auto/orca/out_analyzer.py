@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 NEG_FREQ_RE = re.compile(r"(^|\s)(-\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
 VIB_FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
+FINAL_ENERGY_HEADER = "FINAL SINGLE POINT ENERGY"
 
 _DEFAULT_TAIL_BYTES = 64 * 1024
 _TS_TAIL_BYTES = 256 * 1024
@@ -226,9 +227,19 @@ def _read_head(out_path: Path, encoding: str, nbytes: int) -> str:
 
 
 def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
+    """Imaginary modes of the frequency section that verifies the final geometry.
+
+    ORCA prints a ``VIBRATIONAL FREQUENCIES`` section for every Hessian it
+    computes, including the initial and recalculated Hessians of an ``OptTS``
+    run. A section followed by another final single point energy belongs to an
+    earlier geometry and verifies nothing; only a section after the last final
+    energy counts. An output whose sections were all superseded reports zero
+    modes, and an output without any section keeps the legacy whole-file count.
+    """
     total_negative_count = 0
     last_vib_section_negative_count = 0
     saw_vib_section = False
+    superseded_vib_section = False
     irc_found = False
 
     for line in lines:
@@ -237,6 +248,11 @@ def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
             irc_found = True
         if VIB_FREQ_HEADER in upper:
             saw_vib_section = True
+            last_vib_section_negative_count = 0
+            continue
+        if saw_vib_section and upper.lstrip().startswith(FINAL_ENERGY_HEADER):
+            saw_vib_section = False
+            superseded_vib_section = True
             last_vib_section_negative_count = 0
             continue
 
@@ -251,6 +267,8 @@ def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
 
     if saw_vib_section:
         return last_vib_section_negative_count, irc_found
+    if superseded_vib_section:
+        return 0, irc_found
     return total_negative_count, irc_found
 
 
