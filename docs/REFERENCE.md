@@ -540,8 +540,9 @@ workflow or job intent such as `ts_search(nci)`, `IRC`, or `NEB`. CREST, xTB,
 and ORCA child jobs are all expanded beneath workflow parents in the default
 combined text view, so every queued workflow simulation and its current status
 are visible together. The `--engine ... --kind job` filters and `--json` expose
-the same jobs, and `--limit N` caps the listing to the newest `N` activities
-after filtering. Top-level ORCA jobs remain top-level entries. The
+the same jobs, and a non-negative `--limit N` caps the listing to the newest
+`N` activities after filtering (`0` leaves it uncapped). Top-level ORCA jobs
+remain top-level entries. The
 `active_simulations` line counts only the currently running
 simulations that consume the shared `scheduler.max_active_simulations` slots.
 
@@ -658,6 +659,13 @@ The installer renders these paths into every unit; pass explicit `--repo` and
 engine-worker target as the boot target instead of the full runtime target;
 literal `%` path characters are escaped, while quotes, backslashes, and dollar
 signs are rejected before unit files are written.
+Templates always come from the required `<repo>/systemd` directory, even when
+the installer command itself came from a wheel. The default nested
+`<runs_root>/.admission` need not exist yet because the rendered writable
+`runs_root` parent lets the worker create it. A separately configured
+`scheduler.admission_root` must be created as a directory with suitable
+service-user ownership before installation; a missing explicit root fails the
+install before unit files or systemd state are changed.
 `service status` reports such an install as `worker-only`. The runtime target
 currently pulls in only the engine-worker target, so both modes start the same
 unit set today — the flag fixes the boot selection, and a worker-only install

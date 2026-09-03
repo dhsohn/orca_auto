@@ -14,6 +14,7 @@ import pytest
 
 from orca_auto import (
     _process_evidence,
+    cli_common,
     cli_systemd_apply,
     cli_systemd_freshness,
     cli_systemd_status,
@@ -37,6 +38,7 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     orca_executable.chmod(0o755)
     python_path.write_text("#!/usr/bin/env python\n", encoding="utf-8")
     python_path.chmod(0o755)
+    shutil.copytree(Path(__file__).resolve().parents[1] / "systemd", repo / "systemd")
     config_path.write_text(
         "\n".join(
             [
@@ -223,14 +225,16 @@ def test_systemd_renderer_escapes_literal_percent_only_in_rendered_paths(tmp_pat
         assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
+def test_systemd_default_nested_admission_uses_writable_runs_root(
     tmp_path: Path,
 ) -> None:
     repo, config_path = _make_repo(tmp_path)
+    runs_root = repo / "workflow_runs"
+    runs_root.mkdir()
     config_path.write_text(
         "\n".join(
             [
-                f"runs_root: {repo / 'workflow_runs'}",
+                f"runs_root: {runs_root}",
                 "messenger:",
                 "  discord:",
                 "    bot_token: token",
@@ -252,11 +256,68 @@ def test_systemd_read_write_paths_include_default_admission_for_workflow_config(
 
     unit_by_name = {unit.name: unit for unit in plan.units}
     worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
-    assert (
-        "ReadWritePaths="
-        f"{repo.resolve(strict=False) / 'workflow_runs' / '.admission'} "
-        f"{repo.resolve(strict=False) / 'workflow_runs'}"
-    ) in worker_content
+    admission_root = runs_root / ".admission"
+    assert not admission_root.exists()
+    assert f"ReadWritePaths={runs_root.resolve(strict=False)}" in worker_content
+    assert str(admission_root.resolve(strict=False)) not in worker_content
+
+
+def test_systemd_rejects_a_repo_without_unit_templates(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    shutil.rmtree(repo / "systemd")
+
+    with pytest.raises(ValueError, match=r"--repo must name a checkout that contains a systemd/"):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            no_enable=True,
+            is_root=lambda: True,
+        )
+
+
+def test_systemd_rejects_missing_explicit_admission_root(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    admission_root = repo / "admission"
+    admission_root.rmdir()
+
+    with pytest.raises(
+        ValueError,
+        match=r"scheduler\.admission_root must exist as a directory before systemd installation",
+    ):
+        systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            no_enable=True,
+            is_root=lambda: True,
+        )
+
+
+def test_systemd_templates_are_loaded_from_required_repo_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    wheel_module = tmp_path / "wheel" / "site-packages" / "orca_auto" / "cli_common.py"
+    monkeypatch.setattr(
+        cli_common,
+        "__file__",
+        str(wheel_module),
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        no_enable=True,
+        is_root=lambda: True,
+    )
+
+    assert {unit.name for unit in plan.units} == set(systemd_plan.SYSTEMD_UNIT_NAMES)
 
 
 def test_systemd_rejects_orca_scoped_admission_override(

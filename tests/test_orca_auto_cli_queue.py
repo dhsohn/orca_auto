@@ -1016,6 +1016,37 @@ def test_cmd_queue_list_clear_rejects_filters(
     )
 
 
+def test_cmd_queue_list_clear_rejects_negative_limit_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        unified_cli,
+        "clear_activities",
+        lambda **kwargs: pytest.fail("clear_activities should not run"),
+    )
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action="clear",
+            workflow_root=None,
+            orca_auto_config="/tmp/orca_auto.yaml",
+            limit=-1,
+            refresh=False,
+            engine=None,
+            status=None,
+            kind=None,
+            json=False,
+        )
+    )
+
+    assert result == 1
+    assert (
+        capsys.readouterr().err
+        == "error: `orca_auto queue list clear` does not support --engine/--status/--kind/--limit filters.\n"
+    )
+
+
 @pytest.mark.parametrize(
     ("action", "failure"),
     [

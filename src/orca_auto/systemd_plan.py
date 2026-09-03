@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.cli_common import _repo_root
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.config.files import (
@@ -63,7 +62,6 @@ class SystemdInstallOptions:
     no_enable: bool = False
     no_start: bool = False
     no_sudo: bool = False
-    repo_root: Path | None = None
     is_root: Callable[[], bool] = _is_root
 
 
@@ -146,6 +144,30 @@ def _dedupe_paths(paths: Sequence[Path]) -> tuple[Path, ...]:
     return tuple(deduped)
 
 
+def _minimal_writable_roots(paths: Sequence[Path]) -> tuple[Path, ...]:
+    """Drop writable paths already covered by another configured root."""
+
+    deduped = _dedupe_paths(paths)
+    return tuple(
+        path
+        for path in deduped
+        if not any(path != parent and path.is_relative_to(parent) for parent in deduped)
+    )
+
+
+def _require_explicit_admission_directory(
+    scheduler: dict[str, Any], admission_root: Path | None
+) -> None:
+    if "admission_root" not in scheduler or admission_root is None:
+        return
+    if admission_root.is_dir():
+        return
+    raise ValueError(
+        "scheduler.admission_root must exist as a directory before systemd installation: "
+        f"{admission_root}. Create it with ownership for the service user or update the config."
+    )
+
+
 def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     if not config.exists():
         return ()
@@ -161,6 +183,7 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
         scheduler_raw,
         default_runs_root=runs_root or None,
     )
+    _require_explicit_admission_directory(scheduler_raw, admission_root)
     if admission_root is not None:
         paths.append(admission_root)
 
@@ -175,12 +198,17 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
         orca_scheduler_raw,
         default_runs_root=runs_root or None,
     )
+    _require_explicit_admission_directory(orca_scheduler_raw, orca_admission_root)
     if orca_admission_root is not None:
         paths.append(orca_admission_root)
 
     _append_absolute_path(paths, runs_root)
 
-    return _dedupe_paths(paths)
+    # The default admission root is <runs_root>/.admission. Granting the parent
+    # runs root is sufficient for the worker to create that directory, while
+    # naming the not-yet-created child as a mandatory systemd path prevents the
+    # service namespace from starting at all.
+    return _minimal_writable_roots(paths)
 
 
 def _render_read_write_paths(config: Path) -> str:
@@ -337,7 +365,15 @@ def _collect_warnings(
 
 
 def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstallPlan:
-    template_root = _template_dir(options.repo_root or _repo_root())
+    # ``--repo`` is a required public argument and names the checkout whose
+    # service code will run. Its versioned unit files are therefore the sole
+    # template source, including when this installer itself came from a wheel.
+    template_root = _template_dir(options.repo)
+    if not template_root.is_dir():
+        raise ValueError(
+            "--repo must name a checkout that contains a systemd/ template directory: "
+            f"{options.repo}"
+        )
     units = tuple(
         RenderedUnit(
             name=name,
@@ -396,7 +432,6 @@ def build_systemd_install_plan(
     no_enable: bool = False,
     no_start: bool = False,
     no_sudo: bool = False,
-    repo_root: Path | None = None,
     is_root: Callable[[], bool] = _is_root,
 ) -> SystemdInstallPlan:
     user_text = normalize_text(target_user)
@@ -418,7 +453,6 @@ def build_systemd_install_plan(
         no_enable=no_enable,
         no_start=no_start,
         no_sudo=no_sudo,
-        repo_root=repo_root,
         is_root=is_root,
     )
     return _build_systemd_install_plan(options)
