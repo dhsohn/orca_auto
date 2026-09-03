@@ -943,6 +943,57 @@ class TestQueueWorkerMethods(unittest.TestCase):
         assert final_result is not None
         self.assertIn("finished_notification_sent_at", final_result)
 
+    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
+    @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=False)
+    def test_finalize_finished_job_releases_slot_when_terminal_notification_fails(
+        self,
+        mock_notify: MagicMock,
+        mock_upsert_terminal: MagicMock,
+    ) -> None:
+        cfg = AppConfig(
+            runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
+            messenger=MessengerConfig(
+                discord=DiscordConfig(bot_token="token", default_channel_id="123")
+            ),
+        )
+        worker = QueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
+        rxn = self.root / "mol_terminal_notify_failed"
+        rxn.mkdir()
+        _write_completed_run_state(rxn)
+        entry = enqueue(self.root, str(rxn), task_id="task_terminal_123")
+        dequeue_next(self.root)
+        token = reserve_slot(
+            self.root,
+            worker.max_concurrent,
+            work_dir=str(rxn),
+            queue_id=entry.queue_id,
+            source="queue_worker",
+            state="reserved",
+        )
+        self.assertIsNotNone(token)
+        job = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=MagicMock(),
+            admission_token=token or "",
+            task_id=entry.task_id,
+        )
+
+        worker._finalize_finished_job(entry.queue_id, job, rc=0)
+
+        mock_upsert_terminal.assert_called_once()
+        mock_notify.assert_called_once()
+        [completed] = list_queue(self.root)
+        self.assertEqual(completed.status, QueueStatus.COMPLETED)
+        self.assertIsNone(completed.metadata.get("orca_terminal_replay"))
+        self.assertEqual(active_slot_count(self.root), 0)
+        self.assertNotIn(entry.queue_id, worker._running)
+        saved = load_state(rxn)
+        assert saved is not None
+        final_result = saved["final_result"]
+        assert final_result is not None
+        self.assertNotIn("finished_notification_sent_at", final_result)
+
     @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=True)
     def test_terminal_notification_skips_when_state_already_marked(
         self,
@@ -2041,7 +2092,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             ),
             patch(
                 "orca_auto.orca.queue.replay.finalize_completed_job",
-                side_effect=RuntimeError("terminal notification was not durably recorded"),
+                side_effect=RuntimeError("finalize failed"),
             ),
             patch.object(self.worker, "_check_completed_jobs"),
         ):

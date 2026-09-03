@@ -73,6 +73,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   still fails before its child was asked to stop, the worker attempts to stop
   that child's process group as a last resort and logs when it could not
   confirm the stop.
+- A failed terminal notification no longer stalls the ORCA queue. The replay
+  of a finished job's side effects retained itself until the messenger had
+  durably recorded the finished notification, which pinned that job's
+  admission slot, blocked every new ORCA admission in every root until the
+  messenger recovered, and made the row impossible to clear. The notification
+  is now advisory at terminal replay as it already was at submission: a
+  delivery failure is logged with the redacted reason, the replay completes
+  and releases the slot, and the failed message is not retried later. State
+  and report replay and the once-only replay marker are unchanged.
 
 ### Validation limitation
 

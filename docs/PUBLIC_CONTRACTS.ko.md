@@ -179,6 +179,10 @@
   않습니다. 요청 생성, HTTP 상태 처리, response body 읽기 모두 이 규칙을 따릅니다.
   성공 응답이나 rate-limit 응답의 body를 읽지 못해도 bounded 전송 실패일 뿐 queue
   publication 실패가 아닙니다.
+- 완료된 작업의 side effect를 replay하면서 보내는 종료 알림에도 같은 규칙이
+  적용됩니다. 전송 실패는 비밀을 제거한 이유와 함께 로그로 남기고, replay는 그대로
+  완료되어 그 작업의 admission slot을 해제하며, 실패한 메시지를 나중에 다시 보내지
+  않습니다. adapter의 bounded 시도를 넘어서면 종료 알림은 best-effort입니다.
 - Discord adapter는 유한한 전송 timeout을 0.1~120초, 정수 총 시도 횟수를 1~10회,
   유한한 retry backoff를 0~120초로 제한합니다. 생략하면 문서화된 기본값을 사용하고
   범위를 벗어난 유한값은 clamp하지만, 명시한 boolean·숫자가 아닌 값·분수 시도 횟수·
