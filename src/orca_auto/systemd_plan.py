@@ -160,7 +160,14 @@ def _require_explicit_admission_directory(
 ) -> None:
     if "admission_root" not in scheduler or admission_root is None:
         return
-    if admission_root.is_dir():
+    try:
+        exists = admission_root.is_dir()
+    except PermissionError:
+        # The installer may run as an administrator who cannot traverse the
+        # service account's private tree; a directory the caller cannot see
+        # is not a missing directory. Leave the check to the service.
+        return
+    if exists:
         return
     raise ValueError(
         "scheduler.admission_root must exist as a directory before systemd installation: "

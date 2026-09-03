@@ -277,6 +277,36 @@ def test_systemd_rejects_a_repo_without_unit_templates(tmp_path: Path) -> None:
         )
 
 
+def test_systemd_tolerates_an_explicit_admission_root_the_installer_cannot_inspect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A non-root administrator installing for another account may be unable
+    # to traverse that account's private tree; the directory is not missing.
+    repo, config_path = _make_repo(tmp_path)
+    admission_root = (repo / "admission").resolve()
+    real_is_dir = Path.is_dir
+
+    def is_dir(self: Path) -> bool:
+        if self == admission_root:
+            raise PermissionError("traversal denied")
+        return real_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", is_dir)
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        no_enable=True,
+        is_root=lambda: True,
+    )
+
+    unit_by_name = {unit.name: unit for unit in plan.units}
+    assert str(admission_root) in unit_by_name["orca_auto-queue-worker@.service"].content
+
+
 def test_systemd_rejects_missing_explicit_admission_root(tmp_path: Path) -> None:
     repo, config_path = _make_repo(tmp_path)
     admission_root = repo / "admission"
