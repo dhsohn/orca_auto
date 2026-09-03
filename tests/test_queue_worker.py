@@ -2000,6 +2000,18 @@ class TestQueueWorkerMethods(unittest.TestCase):
         dequeue_next(self.root)
         dequeue_next(self.root)
 
+        # The finished child left a terminal run state, so it is eligible for
+        # the completion path; that path is then made to fail.
+        state = new_state(rxn_done, rxn_done / "job.inp", max_retries=3)
+        state["job_id"] = done_entry.task_id
+        state["status"] = "completed"
+        state["final_result"] = {
+            "status": "completed",
+            "reason": "normal_termination",
+            "analyzer_status": "completed",
+        }
+        save_state(rxn_done, state)
+
         done_proc = MagicMock()
         done_proc.poll.return_value = 0
         live_proc = MagicMock()
@@ -2080,18 +2092,279 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process.poll.return_value = -15
             return True
 
+        last_resort: list[MagicMock] = []
+
+        def last_resort_terminate(process: MagicMock) -> bool:
+            last_resort.append(process)
+            return True
+
         with (
             patch(
                 "orca_auto.orca.queue.replay.terminate_process",
                 side_effect=terminate_process,
+            ),
+            patch(
+                "orca_auto.core.queue.worker.process.terminate_process_group",
+                side_effect=last_resort_terminate,
             ),
             patch.object(self.worker, "_check_completed_jobs"),
         ):
             self.worker._shutdown_all()
 
         self.assertEqual(len(self.worker._running), 0)
+        # The core last resort stopped the child whose engine-level shutdown
+        # raised, and the next job was still shut down normally.
+        self.assertEqual(last_resort, [broken_proc])
         mock_requeue.assert_called_once()
         self.assertEqual(mock_requeue.call_args.args, (self.root, live_entry.queue_id))
+
+    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    def test_shutdown_requeues_a_child_that_died_handling_the_stop(
+        self, mock_requeue: MagicMock
+    ) -> None:
+        # The child caught the stop but its own requeue write raised, so it
+        # exited 1 with the row still running and a non-terminal run state.
+        # That is an interrupted calculation, not a failed one.
+        rxn = self.root / "mol_shut_interrupted"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn))
+        dequeue_next(self.root)
+
+        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        state["job_id"] = entry.task_id
+        state["status"] = "running"
+        save_state(rxn, state)
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        self.worker._running[entry.queue_id] = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=mock_proc,
+            admission_token="slot_shut_interrupted",
+        )
+
+        def terminate_process(process: MagicMock) -> bool:
+            process.poll.return_value = 1
+            return True
+
+        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
+            self.worker._shutdown_all()
+
+        mock_requeue.assert_called_once()
+        self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
+        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
+        self.assertEqual(queue_entries[entry.queue_id].status.value, "running")
+
+    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    def test_shutdown_tolerates_a_failed_cancel_read_and_still_stops_the_child(
+        self, mock_requeue: MagicMock
+    ) -> None:
+        # The queue read that precedes termination raised; the child must still
+        # be stopped and requeued through the ordinary path (the store-level
+        # requeue honors a pending cancel on its own), and the next job is
+        # still shut down.
+        rxn_broken = self.root / "mol_shut_pre_raise"
+        rxn_broken.mkdir()
+        rxn_live = self.root / "mol_shut_live_3"
+        rxn_live.mkdir()
+        broken_entry = enqueue(self.root, str(rxn_broken))
+        live_entry = enqueue(self.root, str(rxn_live))
+        dequeue_next(self.root)
+        dequeue_next(self.root)
+
+        broken_proc = MagicMock()
+        broken_proc.poll.return_value = None
+        live_proc = MagicMock()
+        live_proc.poll.return_value = None
+        self.worker._running[broken_entry.queue_id] = _RunningJob(
+            queue_id=broken_entry.queue_id,
+            reaction_dir=str(rxn_broken),
+            process=broken_proc,
+            admission_token="slot_pre_raise",
+        )
+        self.worker._running[live_entry.queue_id] = _RunningJob(
+            queue_id=live_entry.queue_id,
+            reaction_dir=str(rxn_live),
+            process=live_proc,
+            admission_token="slot_live_3",
+        )
+        real_get_cancel_requested = queue_worker_mod.get_cancel_requested
+
+        def get_cancel_requested(queue_root: Path, queue_id: str, **kwargs: Any) -> bool:
+            if queue_id == broken_entry.queue_id:
+                raise RuntimeError("simulated queue read failure")
+            return real_get_cancel_requested(queue_root, queue_id, **kwargs)
+
+        def terminate_process(process: MagicMock) -> bool:
+            process.poll.return_value = -15
+            return True
+
+        last_resort: list[MagicMock] = []
+
+        def last_resort_terminate(process: MagicMock) -> bool:
+            last_resort.append(process)
+            return True
+
+        with (
+            patch.object(
+                queue_worker_mod, "get_cancel_requested", side_effect=get_cancel_requested
+            ),
+            patch(
+                "orca_auto.orca.queue.replay.terminate_process",
+                side_effect=terminate_process,
+            ),
+            patch(
+                "orca_auto.core.queue.worker.process.terminate_process_group",
+                side_effect=last_resort_terminate,
+            ),
+            patch.object(self.worker, "_check_completed_jobs"),
+        ):
+            self.worker._shutdown_all()
+
+        self.assertEqual(len(self.worker._running), 0)
+        # Handled at the engine layer: the ordinary termination path ran for
+        # both jobs and the core last resort was not needed.
+        self.assertEqual(last_resort, [])
+        self.assertEqual(broken_proc.poll.return_value, -15)
+        self.assertEqual(mock_requeue.call_count, 2)
+        self.assertEqual(
+            sorted(call.args[1] for call in mock_requeue.call_args_list),
+            sorted([broken_entry.queue_id, live_entry.queue_id]),
+        )
+
+    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    def test_shutdown_finalizes_a_child_whose_row_is_already_terminal(
+        self, mock_requeue: MagicMock
+    ) -> None:
+        # The child recorded its own rejection on the row (crash recovery) and
+        # exited 1 without writing a run state; the row is terminal, so the
+        # completion path (a no-op mark plus slot release) applies, not requeue.
+        rxn = self.root / "mol_shut_row_terminal"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn))
+        dequeue_next(self.root)
+        self.assertTrue(
+            replay_mod.mark_failed(
+                self.root,
+                entry.queue_id,
+                error="crash recovery rejected: simulated",
+                expected_task_id=entry.task_id,
+            )
+        )
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        self.worker._running[entry.queue_id] = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=mock_proc,
+            admission_token="slot_row_terminal",
+        )
+
+        def terminate_process(process: MagicMock) -> bool:
+            process.poll.return_value = 1
+            return True
+
+        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
+            self.worker._shutdown_all()
+
+        mock_requeue.assert_not_called()
+        self.assertNotIn(entry.queue_id, self.worker._running)
+        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
+        self.assertEqual(queue_entries[entry.queue_id].status.value, "failed")
+        # The completion path really ran: the replay marker was consumed and
+        # the failed run state was written for the row's task.
+        from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+
+        self.assertIsNone(terminal_replay_marker_from_entry(queue_entries[entry.queue_id]))
+        written = load_state(rxn)
+        assert written is not None
+        self.assertEqual(written["status"], "failed")
+        self.assertEqual(written["job_id"], entry.task_id)
+
+    def test_shutdown_tolerated_cancel_read_still_honors_a_pending_cancel(self) -> None:
+        # The claim the tolerance rests on: with the cancel flag unreadable,
+        # the ordinary requeue still turns a cancel-requested row into
+        # cancelled (with its replay marker) rather than pending.
+        rxn = self.root / "mol_shut_pre_raise_cancel"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn))
+        dequeue_next(self.root)
+        cancel(self.root, entry.queue_id)
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        self.worker._running[entry.queue_id] = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=mock_proc,
+            admission_token="slot_pre_raise_cancel",
+        )
+
+        def terminate_process(process: MagicMock) -> bool:
+            process.poll.return_value = -15
+            return True
+
+        released: list[str] = []
+        with (
+            patch.object(
+                queue_worker_mod,
+                "get_cancel_requested",
+                side_effect=RuntimeError("simulated queue read failure"),
+            ),
+            patch(
+                "orca_auto.orca.queue.replay.terminate_process",
+                side_effect=terminate_process,
+            ),
+            patch.object(self.worker, "_release_admission_slot", side_effect=released.append),
+        ):
+            self.worker._shutdown_all()
+
+        from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+
+        self.assertNotIn(entry.queue_id, self.worker._running)
+        self.assertEqual(released, ["slot_pre_raise_cancel"])
+        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
+        self.assertEqual(queue_entries[entry.queue_id].status.value, "cancelled")
+        self.assertFalse(queue_entries[entry.queue_id].cancel_requested)
+        self.assertIsNotNone(terminal_replay_marker_from_entry(queue_entries[entry.queue_id]))
+
+    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    def test_shutdown_ignores_a_terminal_state_left_by_an_earlier_task(
+        self, mock_requeue: MagicMock
+    ) -> None:
+        # A completed state from a previous submission in the same directory
+        # does not conclude the current child's run.
+        rxn = self.root / "mol_shut_stale_state"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn))
+        dequeue_next(self.root)
+
+        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        state["job_id"] = "task-from-an-earlier-submission"
+        state["status"] = "completed"
+        state["final_result"] = {"status": "completed", "reason": "normal_termination"}
+        save_state(rxn, state)
+
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        self.worker._running[entry.queue_id] = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=mock_proc,
+            admission_token="slot_stale_state",
+        )
+
+        def terminate_process(process: MagicMock) -> bool:
+            process.poll.return_value = 0
+            return True
+
+        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
+            self.worker._shutdown_all()
+
+        mock_requeue.assert_called_once()
+        self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
 
     @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
     def test_shutdown_requeues_a_child_killed_mid_run(self, mock_requeue: MagicMock) -> None:

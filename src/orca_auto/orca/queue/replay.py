@@ -285,7 +285,34 @@ def shutdown_running_job(
             terminate_process_fn=terminate_process_fn,
             requeue_running_entry_fn=_requeue_running_expected,
             finalize_completed_fn=finalize_completed_job,
+            child_concluded_fn=child_run_concluded,
         ),
+    )
+
+
+def child_run_concluded(worker: Any, queue_id: str, job: Any) -> bool:
+    """True when the child's row is no longer running or its run state is terminal.
+
+    A child that exits non-negatively with a still-running row and a
+    non-terminal run state (for example one whose self-requeue write raised
+    while it handled the stop) did not conclude; it keeps the resume path.
+    """
+    current = queue_entry_by_id(job_queue_root(worker, job), queue_id)
+    if current is None or normalized_entry_status(current) != STATUS_RUNNING:
+        return True
+    reaction_dir = str(getattr(job, "reaction_dir", "") or "").strip()
+    if not reaction_dir:
+        return False
+    state = load_state(Path(reaction_dir).expanduser().resolve())
+    expected_job_id = (
+        str(getattr(job, "task_id", "") or "").strip() or queue_entry_task_id(current) or None
+    )
+    if not state or not worker_tracking.payload_matches_expected_job_id(state, expected_job_id):
+        return False
+    return str(state.get("status") or "").strip().lower() in (
+        STATUS_COMPLETED,
+        STATUS_FAILED,
+        STATUS_CANCELLED,
     )
 
 

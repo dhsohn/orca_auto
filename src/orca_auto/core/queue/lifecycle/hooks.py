@@ -62,6 +62,12 @@ class EngineQueueProcessShutdownHooks:
     # requeueing it would re-execute finished work. Engines that leave it None
     # keep the unconditional requeue.
     finalize_completed_fn: Callable[[Any, str, Any, int], None] | None = None
+    # Optional ``(worker, queue_id, job) -> bool`` guard for the completion
+    # path: True when the child's run reached a terminal conclusion or its row
+    # is no longer running. A non-negative exit with a still-running row and a
+    # non-terminal run state (a child that crashed while handling the stop)
+    # keeps the requeue/resume path instead of being recorded as a failure.
+    child_concluded_fn: Callable[[Any, str, Any], bool] | None = None
 
 
 __all__ = [
