@@ -636,3 +636,88 @@ def test_invalid_admission_store_fails_closed(
         store.reserve_slot(tmp_path, 1, source="fresh-source")
 
     assert (tmp_path / store.ADMISSION_FILE_NAME).read_text(encoding="utf-8") == bad_payload
+
+
+def test_list_slots_does_not_rewrite_an_unchanged_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch, live_pids={4242})
+    store._save_slots(
+        tmp_path,
+        [
+            store.AdmissionSlot(
+                token="live",
+                owner_pid=4242,
+                process_start_ticks=12345,
+                owner_boot_id="test-boot-id",
+                source="queue",
+                acquired_at="2026-04-19T00:00:00+00:00",
+            )
+        ],
+    )
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    before = path.stat()
+
+    assert [slot.token for slot in store.list_slots(tmp_path)] == ["live"]
+
+    after = path.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+
+
+def test_list_slots_still_drops_a_dead_owner_from_the_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch, live_pids={4242})
+    store._save_slots(
+        tmp_path,
+        [
+            store.AdmissionSlot(
+                token="live",
+                owner_pid=4242,
+                process_start_ticks=12345,
+                owner_boot_id="test-boot-id",
+                source="queue",
+                acquired_at="2026-04-19T00:00:00+00:00",
+            ),
+            store.AdmissionSlot(
+                token="dead",
+                owner_pid=2222,
+                process_start_ticks=222,
+                owner_boot_id="test-boot-id",
+                source="queue",
+                acquired_at="2026-04-19T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    assert [slot.token for slot in store.list_slots(tmp_path)] == ["live"]
+    assert [slot.token for slot in store._load_slots(tmp_path)] == ["live"]
+
+
+def test_reserve_slot_at_capacity_does_not_rewrite_the_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_deterministic_liveness(monkeypatch, live_pids={4242})
+    store._save_slots(
+        tmp_path,
+        [
+            store.AdmissionSlot(
+                token="live",
+                owner_pid=4242,
+                process_start_ticks=12345,
+                owner_boot_id="test-boot-id",
+                source="queue",
+                acquired_at="2026-04-19T00:00:00+00:00",
+            )
+        ],
+    )
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    before = path.stat()
+
+    assert store.reserve_slot(tmp_path, 1, source="queue", owner_pid=4242) is None
+
+    after = path.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)

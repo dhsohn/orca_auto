@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
+from orca_auto.core.statuses import STATUS_CANCEL_FAILED, STATUS_CANCELLED, STATUS_FAILED
 from orca_auto.core.utils.coercion import normalize_text
 
 from ..engine_options import WorkflowEngineOptions
@@ -14,6 +16,13 @@ from . import models as runtime_models
 WorkflowAdvanceResult = runtime_models.WorkflowAdvanceResult
 _WorkflowCycle = runtime_models._WorkflowCycle
 _WorkflowCycleProgress = runtime_models._WorkflowCycleProgress
+
+
+_LOGGER = logging.getLogger(__name__)
+# Terminal statuses a cancel command can leave behind together with stored
+# transitions: `failed` is the outcome of cancelling a workspace whose
+# identity does not validate.
+_CANCEL_OUTCOME_STATUSES = frozenset({STATUS_CANCELLED, STATUS_CANCEL_FAILED, STATUS_FAILED})
 
 
 @dataclass(frozen=True)
@@ -30,6 +39,9 @@ class WorkflowAdvanceDeps:
     workflow_skipped_terminal_result_fn: Callable[..., WorkflowAdvanceResult]
     workflow_advance_failed_result_fn: Callable[..., WorkflowAdvanceResult]
     workflow_advanced_result_fn: Callable[..., WorkflowAdvanceResult]
+    drain_cancellation_transitions_fn: Callable[..., int] | None = None
+    acquire_workflow_lock_fn: Callable[..., Any] | None = None
+    write_workflow_payload_fn: Callable[[Any, dict[str, Any]], Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +138,37 @@ def _workflow_record_location(
     )
 
 
+def _drain_cancellation_transitions(
+    *,
+    cycle: _WorkflowCycle,
+    workspace_dir: str,
+    deps: WorkflowAdvanceDeps,
+) -> int:
+    if (
+        deps.drain_cancellation_transitions_fn is None
+        or deps.acquire_workflow_lock_fn is None
+        or deps.write_workflow_payload_fn is None
+    ):
+        return 0
+    try:
+        return int(
+            deps.drain_cancellation_transitions_fn(
+                cycle.root,
+                workspace_dir,
+                acquire_workflow_lock_fn=deps.acquire_workflow_lock_fn,
+                load_workflow_payload_fn=deps.load_workflow_payload_fn,
+                write_workflow_payload_fn=deps.write_workflow_payload_fn,
+                append_workflow_journal_event_fn=deps.append_workflow_journal_event_fn,
+            )
+        )
+    except (OSError, TimeoutError, ValueError) as exc:
+        # The drain is a repair of a crashed cancel's bookkeeping, not part
+        # of the advance; a lock timeout or an unreadable payload here must
+        # not fail the cycle. The transitions stay stored for the next one.
+        _LOGGER.warning("cancel transition drain skipped for %s: %s", workspace_dir, exc)
+        return 0
+
+
 def skipped_terminal_workflow_outcome(
     record: Any,
     *,
@@ -181,6 +224,9 @@ def advanced_workflow_outcome(
     status = normalize_text(payload.get("status")).lower()
     current_summary = deps.safe_workflow_summary_fn(workspace_dir, payload=payload)
     reason = "terminal_child_sync" if terminal_sync else ""
+    # Older cancel transitions go into the journal before this cycle's own
+    # events so the journal order follows the recorded times.
+    _drain_cancellation_transitions(cycle=cycle, workspace_dir=workspace_dir, deps=deps)
     deps.append_workflow_advanced_events_fn(
         cycle.root,
         record,
@@ -219,6 +265,12 @@ def advance_workflow_record_outcome(
         workspace_dir=location.workspace_dir,
     )
     if deps.workflow_is_terminal_status_fn(previous_status) and not terminal_sync:
+        # A cancel that resolved straight to a terminal status is never
+        # advanced again, so its unjournaled transitions are drained here.
+        if previous_status in _CANCEL_OUTCOME_STATUSES:
+            _drain_cancellation_transitions(
+                cycle=cycle, workspace_dir=location.workspace_dir, deps=deps
+            )
         return skipped_terminal_workflow_outcome(
             record,
             previous_status=previous_status,

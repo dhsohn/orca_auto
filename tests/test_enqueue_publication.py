@@ -24,7 +24,12 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_TOKEN_KEY,
     queue_record_sync_metadata,
 )
-from orca_auto.core.queue.store import enqueue, list_queue
+from orca_auto.core.queue.store import (
+    QueueLockTimeoutError,
+    QueueStoreCorruptError,
+    enqueue,
+    list_queue,
+)
 from orca_auto.core.queue.types import QueueStatus
 
 
@@ -258,3 +263,43 @@ def test_publication_keyboard_interrupt_parks_then_propagates(tmp_path: Path) ->
     [row] = list_queue(tmp_path)
     assert row.status == QueueStatus.PENDING
     assert row.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+
+
+def test_pre_commit_lock_timeout_is_reported_as_itself_and_compensated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The queue lock is taken before any write: a timeout there means nothing
+    # was enqueued. It used to be re-scanned under the same lock, fail again,
+    # and surface as "outcome unknown" with the submission snapshot retained.
+    def busy_enqueue(*_args: Any, **_kwargs: Any) -> Any:
+        raise QueueLockTimeoutError("queue.lock is held by another process")
+
+    def broken_scan(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("no recovery scan for a failure that committed nothing")
+
+    compensations: list[str] = []
+    monkeypatch.setattr(driver, "enqueue", busy_enqueue)
+    monkeypatch.setattr(driver, "mutate_entries", broken_scan)
+
+    with pytest.raises(QueueLockTimeoutError, match="held by another process"):
+        run_enqueue_publication(
+            _spec(tmp_path, on_compensated_failure=lambda: compensations.append("cleaned"))
+        )
+
+    assert compensations == ["cleaned"]
+    assert not (tmp_path / "queue.json").exists()
+
+
+def test_pre_commit_corrupt_store_is_reported_as_itself(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def corrupt_enqueue(*_args: Any, **_kwargs: Any) -> Any:
+        raise QueueStoreCorruptError("queue.json is not a list")
+
+    monkeypatch.setattr(driver, "enqueue", corrupt_enqueue)
+    monkeypatch.setattr(driver, "mutate_entries", lambda *_a, **_k: pytest.fail("no recovery scan"))
+
+    with pytest.raises(QueueStoreCorruptError):
+        run_enqueue_publication(_spec(tmp_path))

@@ -10,6 +10,7 @@ from orca_auto.core.utils.coercion import normalize_text
 
 from ..engine_options import WorkflowEngineOptions
 from ..orchestration import advance_workflow
+from ..orchestration.workflow_cancellation import drain_cancellation_transitions
 from ..registry import (
     append_workflow_journal_event,
     list_workflow_registry,
@@ -20,10 +21,12 @@ from ..stage_transition_events import (
     append_workflow_advanced_events,
 )
 from ..state import (
+    acquire_workflow_lock,
     load_workflow_payload,
     resolve_workflow_workspace,
     workflow_has_active_downstream,
     workflow_summary,
+    write_workflow_payload,
 )
 from . import admission as runtime_admission
 from . import advance as runtime_advance
@@ -267,6 +270,9 @@ def _workflow_advance_deps() -> WorkflowAdvanceDeps:
         workflow_skipped_terminal_result_fn=workflow_skipped_terminal_result,
         workflow_advance_failed_result_fn=workflow_advance_failed_result,
         workflow_advanced_result_fn=workflow_advanced_result,
+        drain_cancellation_transitions_fn=drain_cancellation_transitions,
+        acquire_workflow_lock_fn=acquire_workflow_lock,
+        write_workflow_payload_fn=write_workflow_payload,
     )
 
 

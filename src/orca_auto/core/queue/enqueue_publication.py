@@ -48,6 +48,8 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.store import (
     QueueAfterCommitError,
+    QueueLockTimeoutError,
+    QueueStoreCorruptError,
     enqueue,
     mark_failed,
     mutate_entries,
@@ -509,6 +511,12 @@ def _publish_owned_record(
         )
 
 
+_PRE_COMMIT_ENQUEUE_ERRORS: tuple[type[BaseException], ...] = (
+    QueueLockTimeoutError,
+    QueueStoreCorruptError,
+)
+
+
 def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationOutcome:
     """Durably enqueue one row and publish its queued record exactly once."""
 
@@ -549,6 +557,13 @@ def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationO
             f"{exc.__class__.__name__}: {exc}"
         ) from exc
     except BaseException as exc:
+        if isinstance(exc, _PRE_COMMIT_ENQUEUE_ERRORS):
+            # The queue lock is taken before any write and a corrupt store is
+            # refused before any mutation, so nothing committed. A recovery
+            # scan would fail the same way and turn a certain "not enqueued"
+            # into "outcome unknown" while leaving the snapshot uncompensated.
+            _run_compensated_cleanup(spec)
+            raise
         try:
             recovered = _recover_committed_enqueue(spec, enqueue_metadata=metadata)
         except BaseException as recovery_exc:
