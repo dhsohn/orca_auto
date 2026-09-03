@@ -69,8 +69,8 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
                 value = str(source_root)
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
-                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
+                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}\0merge origin/main: Fast-forward"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
                 value = str(head_commit_epoch)
@@ -161,8 +161,8 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
                 value = str(source_root)
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
-                value = f"{head_sha}\0HEAD@{{{update_epoch}}}"
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
+                value = f"{head_sha}\0HEAD@{{{update_epoch}}}\0merge origin/main: Fast-forward"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
                 value = str(update_epoch - 86_400)
@@ -252,8 +252,8 @@ def test_collect_worker_staleness_observes_the_active_process_checkout(tmp_path:
                 value = ""
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
-                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
+                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}\0merge origin/main: Fast-forward"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
                 value = str(head_commit_epoch)
@@ -343,8 +343,8 @@ def test_collect_worker_staleness_refuses_dirty_import_package(tmp_path: Path) -
                 value = " M src/orca_auto/cli.py"
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
-                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
+                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}\0merge origin/main: Fast-forward"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
                 value = str(head_update_epoch - 86_400)
@@ -656,8 +656,8 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
                 value = ""
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
-                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
+                value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}\0merge origin/main: Fast-forward"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
                 value = str(head_commit_epoch)
@@ -726,7 +726,7 @@ def test_collect_worker_staleness_fails_closed_without_checkout_update_evidence(
                 assert git_args == [
                     "reflog",
                     "--date=unix",
-                    "--format=%H%x00%gd",
+                    "--format=%H%x00%gd%x00%gs",
                 ]
                 return subprocess.CompletedProcess(
                     argv,
@@ -865,9 +865,9 @@ def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: P
 
 def test_collect_worker_staleness_ignores_a_same_sha_reflog_move(tmp_path: Path) -> None:
     # `git checkout main` while already on main writes a new HEAD reflog entry
-    # for the same commit. That is not a deploy: a worker that imported this
-    # commit before the move is fresh, so the update time is the oldest entry
-    # of the newest same-commit run.
+    # for the same commit without touching any file. That is not a deploy: a
+    # worker that imported this commit before the move is fresh, so the update
+    # time is the entry the no-op checkout folds into.
     first_deploy_epoch = 1_785_747_750
     same_sha_move_epoch = first_deploy_epoch + 7_200
     head_commit_epoch = first_deploy_epoch - 86_400
@@ -894,12 +894,12 @@ def test_collect_worker_staleness_ignores_a_same_sha_reflog_move(tmp_path: Path)
                 value = str(source_root)
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
                 value = "\n".join(
                     [
-                        f"{head_sha}\0HEAD@{{{same_sha_move_epoch}}}",
-                        f"{head_sha}\0HEAD@{{{first_deploy_epoch}}}",
-                        f"{older_sha}\0HEAD@{{{first_deploy_epoch - 3_600}}}",
+                        f"{head_sha}\0HEAD@{{{same_sha_move_epoch}}}\0checkout: moving from main to main",
+                        f"{head_sha}\0HEAD@{{{first_deploy_epoch}}}\0merge origin/main: Fast-forward",
+                        f"{older_sha}\0HEAD@{{{first_deploy_epoch - 3_600}}}\0checkout: moving from feature to main",
                     ]
                 )
             else:
@@ -934,10 +934,47 @@ def test_collect_worker_staleness_ignores_a_same_sha_reflog_move(tmp_path: Path)
     assert verdict["undetermined"] == []
 
 
+def test_head_update_epoch_counts_a_same_sha_reset_as_an_update() -> None:
+    # `git reset --hard HEAD` names the current commit again but restores the
+    # working tree: a worker that imported edited source before it runs code
+    # the checkout no longer has, so the reset dates the checkout.
+    head_sha = "b" * 40
+    reflog = "\n".join(
+        [
+            f"{head_sha}\0HEAD@{{1785754950}}\0reset: moving to HEAD",
+            f"{head_sha}\0HEAD@{{1785747750}}\0merge origin/main: Fast-forward",
+        ]
+    )
+
+    assert (
+        cli_systemd_freshness._head_update_epoch_from_reflog(reflog, head_sha=head_sha)
+        == 1785754950
+    )
+
+
+def test_head_update_epoch_counts_a_round_trip_through_another_commit() -> None:
+    # A `git switch -` round trip changed the files twice; the return to the
+    # current commit is the update, not the first arrival.
+    head_sha = "b" * 40
+    other_sha = "c" * 40
+    reflog = "\n".join(
+        [
+            f"{head_sha}\0HEAD@{{1785754950}}\0checkout: moving from feature to main",
+            f"{other_sha}\0HEAD@{{1785751350}}\0checkout: moving from main to feature",
+            f"{head_sha}\0HEAD@{{1785747750}}\0merge origin/main: Fast-forward",
+        ]
+    )
+
+    assert (
+        cli_systemd_freshness._head_update_epoch_from_reflog(reflog, head_sha=head_sha)
+        == 1785754950
+    )
+
+
 def test_head_update_epoch_rejects_a_reflog_that_does_not_name_head() -> None:
     with pytest.raises(ValueError, match="does not match"):
         cli_systemd_freshness._head_update_epoch_from_reflog(
-            "c" * 40 + "\0HEAD@{1785747750}", head_sha="b" * 40
+            "c" * 40 + "\0HEAD@{1785747750}\0checkout: moving from main to main", head_sha="b" * 40
         )
     with pytest.raises(ValueError, match="no HEAD reflog entry"):
         cli_systemd_freshness._head_update_epoch_from_reflog("", head_sha="b" * 40)
