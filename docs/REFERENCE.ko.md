@@ -509,7 +509,7 @@ orca_auto queue list --limit 20
 `IRC`, `NEB` 같은 워크플로우/작업 의도를 드러냅니다. CREST, xTB, ORCA 자식 작업은
 기본 통합 텍스트 뷰에서 모두 부모 아래에 펼쳐지므로 각 상세 잡의 진행 상태를 한 번에
 확인할 수 있습니다. `--engine ... --kind job` 필터와 `--json`도 같은 잡들을 제공하며,
-`--limit N`은 필터 적용 후 최신 N개 활동만 표시합니다.
+음수가 아닌 `--limit N`은 필터 적용 후 최신 N개 활동만 표시합니다(`0`은 제한 없음).
 최상위 ORCA 작업은 최상위 항목으로 남습니다. `active_simulations` 줄은 공유
 `scheduler.max_active_simulations` 슬롯을 소비하는 현재 실행 중 시뮬레이션만 셉니다.
 
@@ -625,6 +625,12 @@ backslash, dollar sign은 unit 파일을 쓰기 전에 거부합니다. 그런 �
 `worker-only`로 보고합니다. 현재 runtime target은 engine-worker target만 끌어오므로
 오늘은 두 모드가 같은 unit 집합을 시작합니다 — 플래그는 boot 선택을 고정하며,
 runtime target이 나중에 커져도 worker-only 설치는 worker-only로 남습니다.
+
+template은 installer 자체가 wheel에서 실행되더라도 항상 필수 `<repo>/systemd`
+디렉터리에서 읽습니다. 기본 중첩 `<runs_root>/.admission`은 아직 없어도 렌더링된
+writable `runs_root` 상위 경로를 통해 worker가 만들 수 있습니다. 별도로 설정한
+`scheduler.admission_root`는 설치 전에 service user가 사용할 수 있는 디렉터리로
+만들어야 하며, 없으면 unit 파일이나 systemd 상태를 변경하기 전에 실패합니다.
 
 기본 engine-worker target은 ORCA 서비스를 시작합니다.
 workflow root가 설정돼 있어도 workflow나 내부 엔진 워커를 암묵적으로 시작하지

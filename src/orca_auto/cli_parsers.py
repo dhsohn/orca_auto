@@ -89,6 +89,16 @@ def add_json_argument(
     parser.add_argument("--json", action="store_true", help=help_text)
 
 
+def _non_negative_limit(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--limit must be a non-negative integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("--limit must be a non-negative integer")
+    return parsed
+
+
 def add_resource_override_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--max-cores",
@@ -199,7 +209,10 @@ def _add_queue_list_parser(
         help="Path to shared orca_auto.yaml",
     )
     list_parser.add_argument(
-        "--limit", type=int, default=0, help="Optional maximum number of activities to print"
+        "--limit",
+        type=_non_negative_limit,
+        default=0,
+        help="Optional non-negative maximum number of activities to print",
     )
     list_parser.add_argument(
         "--refresh", action="store_true", help="Refresh workflow registry before listing"

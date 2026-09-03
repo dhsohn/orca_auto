@@ -402,7 +402,7 @@ def cmd_queue_list(args: Any) -> int:
     if normalize_text(getattr(args, "action", None)).lower() == "clear":
         if (
             any(getattr(args, field, None) for field in ("engine", "status", "kind"))
-            or request.limit > 0
+            or request.limit != 0
         ):
             emit_error(
                 "`orca_auto queue list clear` does not support "

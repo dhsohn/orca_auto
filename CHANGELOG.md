@@ -123,6 +123,24 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   electronic-state change is recorded in the workflow's restart summary, the
   restart journal and the command response (`previous` is null when the
   workflow never recorded it).
+- `scripts/check.sh` no longer removes an arbitrary `ORCA_AUTO_VENV` target
+  when it is not a usable virtual environment. Automatic repair is limited to
+  the owned, non-symlinked repository `.venv` that carries an owned
+  `pyvenv.cfg` marker; any other unusable target (an external directory, a
+  symlinked repository venv, a path that normalizes onto the repository, a
+  venv bound to the base interpreter) is refused with an explanation instead
+  of being deleted, and the script tests pin each case.
+- `queue list --limit` accepts only non-negative integers, and
+  `queue list clear` rejects a negative `--limit` like any other listing
+  filter instead of treating it as "no filter" and clearing everything.
+- `service install` loads its unit templates from the required `--repo`
+  checkout's `systemd` directory even when the installing `orca_auto` command
+  is wheel-installed, instead of the installed package's location.
+- `service install` no longer names the not-yet-created default
+  `<runs_root>/.admission` directory as a mandatory `ReadWritePaths` entry,
+  which made the worker unit fail to start on a fresh install; the writable
+  `runs_root` parent lets the worker create it. An explicitly configured
+  `scheduler.admission_root` must exist as a directory before installation.
 - Crash recovery and retry/resume inputs no longer seed `MORead` from a torn
   `.gbw` checkpoint. A crash while ORCA writes its checkpoint can leave a file
   of the right size whose unflushed blocks read back as zeros; it used to be

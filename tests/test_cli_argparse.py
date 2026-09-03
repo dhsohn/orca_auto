@@ -30,3 +30,17 @@ def test_parser_error_suggests_subcommand(capsys: pytest.CaptureFixture[str]) ->
     stderr = capsys.readouterr().err
     assert "error:" in stderr
     assert "did you mean `queue`?" in stderr
+
+
+def test_queue_list_parser_rejects_negative_limit(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    parser = unified_cli.build_parser()
+
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["queue", "list", "--limit", "-1"])
+
+    assert exc.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "error:" in stderr
+    assert "--limit must be a non-negative integer" in stderr

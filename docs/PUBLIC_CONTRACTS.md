@@ -91,6 +91,9 @@ Behavior:
   traceback or partial JSON on stdout. A downstream pipe closing during output
   is handled as an output condition after any durable clear/cancel action; it
   is not diagnosed as damaged configuration or state.
+- `queue list --limit N` accepts only non-negative integers. `0` leaves the
+  listing uncapped. `queue list clear` rejects every listing filter, including
+  any non-zero `--limit`, before it mutates durable state.
 
 Non-contract CLI surfaces:
 
@@ -848,6 +851,13 @@ Supported operator commands:
 
 Behavior:
 
+- Unit templates are loaded from the required `<repo>/systemd` directory named
+  by `--repo`, including when the invoking `orca_auto` command is wheel-installed.
+- The default `<runs_root>/.admission` directory may be absent at installation:
+  the rendered unit grants its existing `runs_root` parent so the worker can
+  create the nested directory. A separately configured
+  `scheduler.admission_root` must already exist as a directory; otherwise
+  installation fails before any unit is written or systemd command is run.
 - Literal `%` characters in configured repository, configuration, admission,
   or runs paths are escaped when unit files are rendered; template-owned
   instance specifiers such as `%i` remain active. Paths containing quotes,
