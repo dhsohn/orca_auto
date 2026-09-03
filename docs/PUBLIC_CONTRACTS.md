@@ -907,9 +907,9 @@ Behavior:
   the unit start time with an independently captured, per-worker snapshot of
   that checkout's latest matching HEAD-reflog update, not the commit object's
   timestamp or the status command's checkout or the worker's current directory.
-  A `checkout:` reflog entry that re-selected the commit already checked out
-  changes no file and folds into the entry before it; a same-commit `reset`
-  and a move through another commit count as updates.
+  Every HEAD reflog entry that names the current commit counts, including a
+  same-commit checkout or reset: a forced checkout writes the same subject as
+  a no-op one but restores the files, so the verdict errs toward stale.
   The imported package tree must also be clean relative to Git; uncommitted
   source changes make the verdict `undetermined`. The units import a
   checkout live but never reload, so

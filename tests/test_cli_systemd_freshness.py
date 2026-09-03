@@ -863,11 +863,11 @@ def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: P
     assert "fatal: bad revision" in verdict["undetermined"][0]["detail"]
 
 
-def test_collect_worker_staleness_ignores_a_same_sha_reflog_move(tmp_path: Path) -> None:
-    # `git checkout main` while already on main writes a new HEAD reflog entry
-    # for the same commit without touching any file. That is not a deploy: a
-    # worker that imported this commit before the move is fresh, so the update
-    # time is the entry the no-op checkout folds into.
+def test_collect_worker_staleness_counts_a_same_sha_checkout_as_an_update(tmp_path: Path) -> None:
+    # `git checkout main` while already on main writes a HEAD reflog entry for
+    # the same commit. A forced checkout writes the identical subject and
+    # restores the files, so the reflog cannot tell them apart: the entry
+    # dates the checkout and a worker started before it is reported stale.
     first_deploy_epoch = 1_785_747_750
     same_sha_move_epoch = first_deploy_epoch + 7_200
     head_commit_epoch = first_deploy_epoch - 86_400
@@ -929,8 +929,10 @@ def test_collect_worker_staleness_ignores_a_same_sha_reflog_move(tmp_path: Path)
     )
 
     assert verdict is not None
-    assert verdict["head_update_epoch"] == first_deploy_epoch
-    assert verdict["stale"] == []
+    assert verdict["head_update_epoch"] == same_sha_move_epoch
+    assert [worker["unit"] for worker in verdict["stale"]] == [
+        "orca_auto-queue-worker@alice.service"
+    ]
     assert verdict["undetermined"] == []
 
 
@@ -938,6 +940,18 @@ def test_head_update_epoch_counts_a_same_sha_reset_as_an_update() -> None:
     # `git reset --hard HEAD` names the current commit again but restores the
     # working tree: a worker that imported edited source before it runs code
     # the checkout no longer has, so the reset dates the checkout.
+    head_sha = "b" * 40
+    forced = "\n".join(
+        [
+            f"{head_sha}\0HEAD@{{1785754950}}\0checkout: moving from main to main",
+            f"{head_sha}\0HEAD@{{1785747750}}\0merge origin/main: Fast-forward",
+        ]
+    )
+    # A forced checkout carries the same subject as a no-op one; it counts too.
+    assert (
+        cli_systemd_freshness._head_update_epoch_from_reflog(forced, head_sha=head_sha)
+        == 1785754950
+    )
     head_sha = "b" * 40
     reflog = "\n".join(
         [

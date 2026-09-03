@@ -215,12 +215,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   publication it finds under a published observation the same way. An
   unreadable or unsafe `machine.json` now refuses such a restart, as it
   already refused every advance.
-- `service status` no longer reports a worker as stale after a `checkout:`
-  reflog entry that re-selected the commit already checked out (`git checkout
-  main` while on main), which changes no file. Every other HEAD move still
-  dates the checkout: a `git reset --hard HEAD` restores edited files, and a
-  `git switch -` round trip changes them twice, so a worker started before
-  either is reported stale.
+- `service status` dates a checkout from its newest HEAD reflog entry that
+  names the current commit, including one that re-selected the commit
+  already checked out. A forced checkout (`git checkout -f main` while on
+  main) and `git reset --hard HEAD` write the same reflog subjects as their
+  no-op forms but restore the working tree, and the reflog cannot tell them
+  apart, so the verdict errs toward stale: a plain `git checkout main` while
+  on main also asks for a restart. (The fold of same-commit `checkout:`
+  entries introduced earlier in this release is withdrawn.)
 - `queue list` reports a configured `runs_root` that does not exist as an
   error instead of listing an empty queue with exit code 0.
 - Crash recovery and retry/resume inputs no longer seed `MORead` from a torn
