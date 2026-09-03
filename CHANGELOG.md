@@ -123,6 +123,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   electronic-state change is recorded in the workflow's restart summary, the
   restart journal and the command response (`previous` is null when the
   workflow never recorded it).
+- Crash recovery and retry/resume inputs no longer seed `MORead` from a torn
+  `.gbw` checkpoint. A crash while ORCA writes its checkpoint can leave a file
+  of the right size whose unflushed blocks read back as zeros; it used to be
+  copied as the orbital guess, so the restarted run failed on a corrupt guess
+  instead of restarting from geometry. A checkpoint whose leading bytes are all
+  zero is now skipped (recovery falls back to an older intact attempt or to a
+  geometry-only restart).
 
 ### Validation limitation
 

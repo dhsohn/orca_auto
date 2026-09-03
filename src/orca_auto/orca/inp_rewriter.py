@@ -8,7 +8,7 @@ from .input_blocks import (
     BLOCK_START_RE,
     GEOM_HEADER_RE,
     MOINP_RE,
-    nonempty_file,
+    checkpoint_file_looks_intact,
 )
 from .input_blocks import (
     ensure_route_keywords as _ensure_route_keywords,
@@ -122,7 +122,7 @@ def _apply_checkpoint_restart(
 
 def _matching_checkpoint_gbw(source_inp: Path) -> Path | None:
     candidate = source_inp.with_suffix(".gbw")
-    return candidate if nonempty_file(candidate) else None
+    return candidate if checkpoint_file_looks_intact(candidate) else None
 
 
 def _apply_geometry_restart(
