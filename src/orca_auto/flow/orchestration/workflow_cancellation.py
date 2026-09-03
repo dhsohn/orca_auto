@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,17 +127,8 @@ _CANCELLATION_EVENT_STATUSES = frozenset(
 )
 
 
-def _record_cancellation_status_transition(
-    payload: dict[str, Any],
-    *,
-    previous_status: str,
-    status: str,
-    occurred_at: str,
-) -> list[dict[str, str]]:
-    metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-        payload["metadata"] = metadata
+def _stored_cancellation_transitions(metadata: dict[str, Any]) -> list[dict[str, str]]:
+    """Valid, de-duplicated transitions still recorded on the payload."""
     raw_transitions = metadata.get(_CANCELLATION_TRANSITIONS_KEY)
     transitions: list[dict[str, str]] = []
     if isinstance(raw_transitions, list):
@@ -163,6 +155,21 @@ def _record_cancellation_status_transition(
             }
             if transition not in transitions:
                 transitions.append(transition)
+    return transitions
+
+
+def _record_cancellation_status_transition(
+    payload: dict[str, Any],
+    *,
+    previous_status: str,
+    status: str,
+    occurred_at: str,
+) -> list[dict[str, str]]:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        payload["metadata"] = metadata
+    transitions = _stored_cancellation_transitions(metadata)
     candidate = {
         "event_id": timestamped_token("wf_evt"),
         "occurred_at": occurred_at,
@@ -178,6 +185,116 @@ def _record_cancellation_status_transition(
         transitions.append(candidate)
     metadata[_CANCELLATION_TRANSITIONS_KEY] = transitions
     return transitions
+
+
+# The cancel command appends its transitions with this session id; the drain
+# must append byte-identical rows so the journal's caller-owned dedupe accepts
+# a row the crashed command already wrote instead of refusing it as a
+# conflicting event with the same id.
+_CANCEL_EVENT_WORKER_SESSION_ID = "workflow_cancel"
+_LOGGER = logging.getLogger(__name__)
+
+
+def drain_cancellation_transitions(
+    workflow_root: str | Path,
+    workspace_dir: str | Path,
+    *,
+    acquire_workflow_lock_fn: Callable[..., Any],
+    load_workflow_payload_fn: Callable[[Any], dict[str, Any]],
+    write_workflow_payload_fn: Callable[[Any, dict[str, Any]], Any],
+    append_workflow_journal_event_fn: Callable[..., Any],
+) -> int:
+    """Journal cancel transitions that a crashed cancel command left behind.
+
+    The cancel command persists the payload before it appends its
+    ``workflow_status_changed`` events, so a crash between the two leaves the
+    transitions in ``cancellation_status_transitions`` with no journal row.
+    Under the workspace lock, the current payload is reloaded, each stored
+    transition is appended exactly as the cancel command would have appended
+    it (same event id, content and session id, so a row the command did
+    manage to write dedupes), and the payload is rewritten with the drained
+    transitions removed. Nothing is written when there is nothing to drain.
+    """
+    workflow_root_path = Path(workflow_root)
+    workspace_path = Path(workspace_dir)
+    # Lockless pre-read: the common case stores nothing, and taking the lock
+    # first would write and fsync a lock file for every cancelled record each
+    # cycle and recreate a workspace directory an operator removed.
+    try:
+        preview = load_workflow_payload_fn(workspace_path)
+    except (OSError, ValueError):
+        return 0
+    preview_metadata = preview.get("metadata")
+    if not isinstance(preview_metadata, dict) or not _stored_cancellation_transitions(
+        preview_metadata
+    ):
+        return 0
+    with acquire_workflow_lock_fn(workspace_path, timeout_seconds=5.0):
+        payload = load_workflow_payload_fn(workspace_path)
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return 0
+        transitions = _stored_cancellation_transitions(metadata)
+        if not transitions:
+            return 0
+        try:
+            validate_workflow_workspace_identity(workspace_path, payload.get("workflow_id"))
+        except ValueError:
+            event_workflow_id = workspace_path.name
+        else:
+            event_workflow_id = str(payload.get("workflow_id") or workspace_path.name)
+        template_name = str(payload.get("template_name") or "")
+        drained = 0
+        try:
+            for transition in list(transitions):
+                try:
+                    _append_cancel_transition_event(
+                        append_workflow_journal_event_fn,
+                        workflow_root_path,
+                        transition,
+                        workflow_id=event_workflow_id,
+                        template_name=template_name,
+                    )
+                except ValueError as exc:
+                    # A same-id row with different content: leave this and
+                    # the later transitions stored for an operator, and do
+                    # not take the worker down over a journal conflict.
+                    _LOGGER.warning(
+                        "cancel transition %s for workflow %s not journaled: %s",
+                        transition["event_id"],
+                        event_workflow_id,
+                        exc,
+                    )
+                    break
+                transitions.remove(transition)
+                drained += 1
+        finally:
+            if drained:
+                metadata[_CANCELLATION_TRANSITIONS_KEY] = transitions
+                write_workflow_payload_fn(workspace_path, payload)
+        return drained
+
+
+def _append_cancel_transition_event(
+    append_workflow_journal_event_fn: Callable[..., Any],
+    workflow_root: Path,
+    transition: dict[str, str],
+    *,
+    workflow_id: str,
+    template_name: str,
+) -> None:
+    append_workflow_journal_event_fn(
+        workflow_root,
+        event_id=transition["event_id"],
+        occurred_at=transition["occurred_at"],
+        event_type="workflow_status_changed",
+        workflow_id=workflow_id,
+        template_name=template_name,
+        previous_status=transition["previous_status"],
+        status=transition["status"],
+        reason="cancel_requested",
+        worker_session_id=_CANCEL_EVENT_WORKER_SESSION_ID,
+    )
 
 
 def _cancel_engine_target(
@@ -409,17 +526,15 @@ def cancel_materialized_workflow(
                 payload,
             )
             for transition in list(pending_transitions):
-                resolved.events.append_workflow_journal_event(
+                # The worker's drain re-appends these rows after a crash and
+                # the journal refuses a same-id row with different content,
+                # so both go through the one helper.
+                _append_cancel_transition_event(
+                    resolved.events.append_workflow_journal_event,
                     workflow_root_path,
-                    event_id=transition["event_id"],
-                    occurred_at=transition["occurred_at"],
-                    event_type="workflow_status_changed",
+                    transition,
                     workflow_id=event_workflow_id,
                     template_name=str(payload.get("template_name") or ""),
-                    previous_status=transition["previous_status"],
-                    status=transition["status"],
-                    reason="cancel_requested",
-                    worker_session_id="workflow_cancel",
                 )
                 pending_transitions.remove(transition)
             resolved.persistence.write_workflow_payload(workspace_dir, payload)
@@ -443,6 +558,7 @@ def cancel_materialized_workflow(
 
 __all__ = [
     "_StageCancelOutcome",
+    "drain_cancellation_transitions",
     "_cancel_active_workflow_stages",
     "_cancel_engine_target",
     "_cancel_stage_activity",

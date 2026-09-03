@@ -355,8 +355,12 @@ class AdmissionStore:
 
     def list_slots(self, *, normalize_file: bool = False) -> list[AdmissionSlot]:
         with admission_lock(self.root):
-            slots = self._load_live_slots()
-            if normalize_file and self.path.exists():
+            recorded = self.load_slots_fn(self.root)
+            slots = [slot for slot in recorded if _slot_owner_alive(slot)]
+            # Rewrite only when a dead owner is being dropped; every worker
+            # poll and reconcile reads this file, and an unchanged rewrite is
+            # an fsync for nothing.
+            if normalize_file and self.path.exists() and slots != recorded:
                 self.save_slots_fn(self.root, slots)
             return slots
 
@@ -485,7 +489,8 @@ def reserve_slot_from_request(
 
     def reserve(slots: list[AdmissionSlot]) -> tuple[str | None, bool]:
         if _reservation_limit_reached(slots, request):
-            return None, True
+            # Nothing changed; do not rewrite the file for a refused reservation.
+            return None, False
         occupied_tokens = {slot.token for slot in slots}
         token = ""
         for _attempt in range(_TOKEN_COLLISION_RETRY_LIMIT):

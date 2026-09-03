@@ -10,6 +10,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- An enqueue whose queue lock timed out, or that found `queue.json` corrupt,
+  is reported as that failure with the submission snapshot compensated. Both
+  are raised before anything is committed, so the recovery scan that turned
+  them into an outcome-unknown result (and left the snapshot in place) no
+  longer runs for them.
+- The admission slot file is rewritten only when a dead owner is dropped; a
+  worker poll that finds every slot live, or a reservation refused at the
+  capacity limit, no longer fsyncs an unchanged file.
+- The workflow worker journals cancellation status transitions that a cancel
+  command persisted but could not append before it crashed: on the next
+  advance of a workflow still cancelling, or on the next cycle for one that
+  resolved to `cancelled`, `cancel_failed` or `failed`, each stored transition is
+  appended exactly as the cancel command would have appended it (a row the
+  command did write dedupes) and removed from the payload under the workspace
+  lock.
 - Queue-lock contention no longer turns a temporary claim conflict into active
   child cancellation, and queue/activity listing remains projection-only rather
   than mutating durable queue state.
