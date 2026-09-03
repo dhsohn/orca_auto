@@ -152,14 +152,24 @@ def ensure_terminal_queue_status(
     mark_completed_fn: Callable[..., Any],
     mark_cancelled_fn: Callable[..., Any],
     mark_failed_fn: Callable[..., Any],
-) -> None:
+) -> bool:
+    """Mark a still-running row with the child's terminal outcome.
+
+    Returns whether the row is terminal afterwards.  A row that is no longer
+    running is left alone: a child that requeued itself for recovery (worker
+    shutdown) exits 0 with the row back at ``pending`` and the run state
+    marked recovery-pending, and marking that row completed would close a
+    generation that has not run.  CREST already leaves such a row pending.
+    """
     refreshed = queue_entry_by_id_fn(queue_root, entry.queue_id)
     current_status = str(getattr(getattr(refreshed, "status", None), "value", "")).strip().lower()
     if current_status in {"completed", "failed", "cancelled"}:
-        return
+        return True
+    if current_status != "running":
+        return False
 
     metadata_update = summary.metadata_update or None
-    _queue_execution.mark_terminal_status(
+    marked = _queue_execution.mark_terminal_status(
         queue_root,
         entry.queue_id,
         status=summary.status,
@@ -171,6 +181,9 @@ def ensure_terminal_queue_status(
         expected_entry=entry,
         expected_task_id=str(getattr(entry, "task_id", "") or "") or None,
     )
+    # The store refuses a mark for another generation or for a row whose
+    # cancel request outranks this outcome; that row is not terminal yet.
+    return marked is not None
 
 
 def _terminal_paths(

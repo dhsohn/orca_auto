@@ -94,6 +94,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   pending record whose owner is dead, and the finalizer marks the row and
   releases the slot; a pending record under a live owner or without a launch
   gate is still retained.
+- The xTB worker no longer marks a row completed when its child requeued the
+  row for recovery and exited 0 (a shutdown request during the run). The child
+  leaves the row `pending` with the run state recovery-pending; the parent used
+  to overwrite that with `completed` and `candidate_count: 0`, closing a
+  generation that had not run. The parent now marks only a row that is still
+  running, as the CREST worker already did.
 
 ### Validation limitation
 
