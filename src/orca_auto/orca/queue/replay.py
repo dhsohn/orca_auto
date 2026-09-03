@@ -626,22 +626,18 @@ def _run_terminal_replay_side_effects(
     )
     if not record_upserted:
         raise RuntimeError("terminal job record artifacts are not ready")
+    # The notification is advisory, as it is at submission: a delivery failure
+    # is logged (redacted) by the notifier and does not retain the replay.
+    # Retaining it pinned the finished job's slot and blocked every ORCA
+    # admission until the messenger recovered, and left the row unclearable.
+    # The notifier records a delivered send in the run state, so a delivered
+    # message is not resent and a failed delivery is one missed message, not
+    # a loop.
     worker_tracking.notify_terminal_job_from_state(
         worker.cfg,
         item.reaction_dir,
         expected_job_id=item.task_id,
     )
-    if worker.cfg.messenger.enabled:
-        replayed_state = load_state(Path(item.reaction_dir).expanduser().resolve())
-        if (
-            not replayed_state
-            or not worker_tracking.payload_matches_expected_job_id(
-                replayed_state,
-                item.task_id,
-            )
-            or not worker_tracking.finished_notification_already_sent(replayed_state)
-        ):
-            raise RuntimeError("terminal notification was not durably recorded")
 
 
 def _clear_terminal_replay_marker_or_confirm_absent(item: TerminalReplayWorkItem) -> None:
@@ -1022,8 +1018,8 @@ def _retry_terminal_replays_without_queue_entries(
     current_generation_keys: set[tuple[str, str]],
     latest_generation_by_reaction: Mapping[str, tuple[str, str]],
 ) -> None:
-    # A queue clear can remove the entry after state synthesis but before an
-    # upsert/notification succeeds.  Retry from the immutable snapshot, including
+    # A queue clear can remove the entry after state synthesis but before the
+    # record upsert succeeds.  Retry from the immutable snapshot, including
     # a preparation that failed before the entry disappeared, but only after the
     # current owner and artifact generation are revalidated on every attempt.
     for key, item in list(pending_replays.items()):

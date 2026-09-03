@@ -191,6 +191,11 @@ Behavior:
   queue publication. Request construction, HTTP status handling, and response
   body reads all follow this rule; an unreadable success or rate-limit response
   is a bounded delivery failure, not a queue-publication failure.
+- The terminal notification sent when a finished job's side effects are replayed
+  follows the same rule: a delivery failure is logged with the redacted reason,
+  the replay still completes and releases the job's admission slot, and the
+  failed message is not retried later. Beyond the adapter's bounded attempts,
+  terminal notification is best-effort.
 - The Discord adapter bounds finite delivery timeouts to 0.1–120 seconds, integer
   total attempts to 1–10, and finite retry backoff to 0–120 seconds. Omission uses
   the documented defaults and finite values outside those ranges are clamped;

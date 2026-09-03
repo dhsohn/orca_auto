@@ -557,9 +557,10 @@ def test_terminal_replay_with_empty_reaction_dir_never_resolves_workspace() -> N
     assert replay_mod._pending_replay_state_is_superseded(item)
 
 
-def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
-    tmp_path: Path,
-) -> None:
+def test_terminal_replay_completes_when_the_notification_fails(tmp_path: Path) -> None:
+    # A messenger outage must cost one message, not the queue: the replay
+    # completes with nothing pending, and nothing resends the notification
+    # later. The slot release is pinned by the worker-level finalize test.
     (tmp_path / "rxn").mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
     cfg = AppConfig(
@@ -587,49 +588,13 @@ def test_terminal_replay_retries_failed_notification_until_marker_is_durable(
             entry,
             previous_status=STATUS_RUNNING,
         )
+        assert notify.call_count == 1
+        key = (str(tmp_path.resolve()), entry.queue_id)
+        assert _reconcile_statuses(worker)[key] == "completed"
+        assert replay_mod.get_replay_state(worker).pending_replays == {}
         _run_terminal_replay(worker, tmp_path, entry)
 
-    assert notify.call_count == 2
-    key = (str(tmp_path.resolve()), entry.queue_id)
-    assert _reconcile_statuses(worker)[key] == "running"
-
-
-def test_terminal_replay_uses_selected_discord_provider_for_durability(
-    tmp_path: Path,
-) -> None:
-    (tmp_path / "rxn").mkdir()
-    entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
-    cfg = AppConfig(
-        runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
-        messenger=MessengerConfig(
-            provider="discord",
-            discord=DiscordConfig(bot_token="secret-token", default_channel_id="123"),
-        ),
-    )
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    state = {
-        "job_id": entry.task_id,
-        "final_result": {"status": "completed"},
-    }
-
-    with (
-        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
-        patch.object(
-            worker_tracking_mod, "notify_terminal_job_from_state", return_value=False
-        ) as notify,
-        patch.object(replay_mod, "load_state", return_value=state),
-    ):
-        _run_terminal_replay(
-            worker,
-            tmp_path,
-            entry,
-            previous_status=STATUS_RUNNING,
-        )
-        _run_terminal_replay(worker, tmp_path, entry)
-
-    assert notify.call_count == 2
-    key = (str(tmp_path.resolve()), entry.queue_id)
-    assert _reconcile_statuses(worker)[key] == "running"
+    assert notify.call_count == 1
 
 
 def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
