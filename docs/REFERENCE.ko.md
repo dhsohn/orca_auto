@@ -696,6 +696,15 @@ collapse를 포함합니다).
 - 원본 `.inp`는 보존됩니다.
 - 재시도 입력은 `<name>.retryNN.inp`로 생성됩니다.
 
+워커 재시작과 crash recovery (문서화된 제한):
+
+- 워커 stop/restart로 중단된 실행 중 ORCA 작업은 requeue된 뒤 실제 crash와 같은
+  crash-recovery 경로로 재개됩니다. 이런 재개는 그 제출의 recovery rebind 3회 중 1회를
+  소모하고, 제출된 source 입력과 설정된 resource request를 큐 행과 다시 대조합니다.
+  제출 후 편집한 source `.inp`나 바뀐 `resources.max_cores_per_task`는 재개 대신 행을
+  실패시킵니다. 워커 재시작은 유휴 창(실행 중인 시뮬레이션 없음)에서만 하고, 큐에 있거나
+  실행 중인 작업의 입력·resource 설정은 편집하지 마세요.
+
 ## 11) 출력 파일
 
 제출한 ORCA 작업 디렉터리에는 사용자가 작성한 입력, `run.lock`, 제출당 하나의

@@ -306,9 +306,12 @@ def _systemctl_transition_commands(
         # Clear bounded service start-limit counters so they cannot block this
         # operator-requested recovery inside their five-minute windows.
         commands.append(("systemctl", "reset-failed", _worker_unit_for_user(target_user)))
-        # `restart` also starts an inactive unit. Unlike `enable --now`, it
-        # reliably reloads code and reapplies the runtime target's Wants= graph
-        # when the requested mode was already active.
+        # `restart` also starts an inactive unit and reapplies the runtime
+        # target's Wants= graph when the requested mode was already active. It
+        # does not restart member services that are already running (observed
+        # on the deploy host: the queue worker kept its start timestamp), so a
+        # deploy to running workers needs `orca_auto service restart`, which
+        # restarts the worker services explicitly.
         commands.append(("systemctl", "restart", enabled_unit))
         desired_units = [
             _worker_unit_for_user(target_user),

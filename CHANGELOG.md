@@ -171,6 +171,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Documentation
 
+- The reference documents that a worker stop or restart of a running ORCA job
+  resumes it through crash recovery: it consumes one of the three recovery
+  rebinds and re-validates the submitted input and resource request, so
+  workers should be restarted only in an idle window. The public contract
+  states the systemd 247 floor that `service status` relies on, and says how a
+  non-executable queue row is actually removed (a pending row is cancelled, a
+  terminal row cleared, then resubmitted). The systemd README asks for a
+  private `config` directory (`chmod 700`) beside the 0600 file and says that
+  the installer's target restart does not restart running workers. A stale
+  in-tree comment that claimed the opposite is corrected.
 - The reference no longer claims that `run-dir` detects an already completed
   output and returns completion without relaunching ORCA. No such check
   exists: an active queue row is a submission conflict, a terminal row is

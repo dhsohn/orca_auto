@@ -32,6 +32,9 @@ Supported runtime assumptions:
 
 - Python 3.11 or newer.
 - Native Linux or WSL2.
+- systemd 247 or newer on hosts that run the systemd units: `service status`
+  reads unit start times with `systemctl show --timestamp=utc`, and an older
+  systemd reports every git-backed worker as `undetermined`.
 - Linux/POSIX paths for configured roots and executables.
 - ORCA, xTB, and CREST executables, when configured, must be absolute Linux
   executable paths.
@@ -300,7 +303,9 @@ overrides such as `%base` and NEB restart-GBW basename controls fail closed.
 
 Only rows carrying the current execution snapshot, publication marker, and
 identity fields are executable. Rows that do not satisfy that contract fail
-closed and must be cleared or resubmitted.
+closed: a pending row must be cancelled with `queue cancel` (the queue pauses
+admission while it exists), a terminal row is removed by `queue list clear`,
+and the work is resubmitted.
 Workflow-internal xTB/CREST snapshots use a unique namespace that is exclusively
 reserved for the submission, rather than using the public task id alone as
 snapshot ownership.

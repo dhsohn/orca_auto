@@ -29,7 +29,9 @@
 
 런타임 타깃을 활성화하기 전에:
 
-- `chmod 600 config/orca_auto.yaml`로 로컬 설정 권한을 제한하세요.
+- `chmod 600 config/orca_auto.yaml`과 `chmod 700 config`로 로컬 설정 권한을 제한하세요
+  (누구나 쓸 수 있는 디렉터리는 다른 로컬 계정이 파일을, 그리고 설정된 엔진 실행 파일을
+  바꿔치기할 수 있게 합니다).
 
 런타임 타깃 설치:
 
@@ -47,6 +49,9 @@ checkout을 업데이트했거나 이 디렉터리의 유닛 템플릿을 수정
 `--repo` 값으로 설치 프로그램을 다시 실행하세요. 설치된 유닛은
 `/etc/systemd/system` 아래에 렌더링된 복사본으로 존재하므로,
 `systemctl daemon-reload`만으로는 템플릿 변경이나 새 유닛이 복사되지 않습니다.
+설치 프로그램의 target 재시작은 이미 실행 중인 워커를 재시작하지 않으므로, 그 뒤 유휴
+창에서 `orca_auto service restart`를 실행해 워커가 갱신된 checkout을 import하게 하세요
+(그 전까지 `orca_auto service status`는 워커를 stale로 보고합니다).
 
 ### 실패한 설치
 
