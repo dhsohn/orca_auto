@@ -39,8 +39,9 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
 - 공개 `run-dir`는 새 작업을 내구성 있게 큐에 넣습니다.
 - `run-dir`는 기존 출력을 검사하지 않습니다. 큐 행이 아직 활성인 reaction 디렉터리는
   제출 충돌로 거부하고, 행이 terminal이면 새 generation으로 다시 큐에 넣습니다(그 행이
-  아직 pending terminal replay를 소유하고 있으면 완료될 때까지 거부합니다). 따라서
-  닫힌 디렉터리를 다시 실행하면 새 generation으로 ORCA가 다시 실행됩니다.
+  아직 pending terminal replay나 terminal fence marker를 소유하고 있으면 그것이 해소될
+  때까지 거부합니다). 따라서 닫힌 디렉터리를 다시 실행하면 새 generation으로 ORCA가
+  다시 실행됩니다.
 - 큐 제출이 성공하면 `status: queued`를 반환합니다.
 - 공개 `run-dir`는 새 작업에 대해 ORCA를 직접 실행하지 않습니다.
 - 백그라운드 실행은 외부에서 감독되는 큐 워커가 관리합니다.

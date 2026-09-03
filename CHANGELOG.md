@@ -142,13 +142,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `runs_root` parent lets the worker create it. An explicitly configured
   `scheduler.admission_root` must exist as a directory before installation.
 
-### Documentation
-
-- The reference no longer claims that `run-dir` detects an already completed
-  output and returns completion without relaunching ORCA. No such check
-  exists: an active queue row is a submission conflict, a terminal row is
-  enqueued again as a new generation, and only a row that still owns a pending
-  terminal replay is refused.
+- xTB `ranking` jobs can be submitted again. Submission validated the job by
+  building a single xTB command for job type `ranking`, which the runner's
+  option builder does not know (a ranking job runs one single point per
+  candidate), so every ranking submission failed with "Unsupported xtb
+  job_type: ranking". The command is now validated as the candidate single
+  point the worker actually runs.
 - Crash recovery and retry/resume inputs no longer seed `MORead` from a torn
   `.gbw` checkpoint. A crash while ORCA writes its checkpoint can leave a file
   of the right size whose unflushed blocks read back as zeros; it used to be
@@ -156,6 +155,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   instead of restarting from geometry. A checkpoint whose leading bytes are all
   zero is now skipped (recovery falls back to an older intact attempt or to a
   geometry-only restart).
+
+### Documentation
+
+- The reference no longer claims that `run-dir` detects an already completed
+  output and returns completion without relaunching ORCA. No such check
+  exists: an active queue row is a submission conflict, a terminal row is
+  enqueued again as a new generation, and only a row that still owns a pending
+  terminal replay or a terminal fence marker is refused.
 
 ### Validation limitation
 
