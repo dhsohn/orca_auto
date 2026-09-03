@@ -208,6 +208,30 @@ def nonempty_file(path: Path) -> bool:
         return False
 
 
+CHECKPOINT_HEAD_BYTES = 16
+
+
+def checkpoint_file_looks_intact(path: Path) -> bool:
+    """Whether a ``.gbw`` checkpoint is worth seeding orbitals from.
+
+    A crash while ORCA writes its checkpoint can leave a file of the right
+    size whose blocks were never flushed: the filesystem then reads them back
+    as zeros. ORCA's checkpoint starts with a non-zero header, so a leading
+    window without a single non-zero byte is a torn file, not orbitals;
+    seeding it with ``MORead`` would make the restarted run fail on a corrupt
+    guess instead of degrading to a geometry-only restart. Only the leading
+    bytes are inspected; a short non-zero file still counts as a checkpoint.
+    """
+    if not nonempty_file(path):
+        return False
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(CHECKPOINT_HEAD_BYTES)
+    except OSError:
+        return False
+    return any(head)
+
+
 def active_orca_line_text(line: str) -> str:
     """Return active ORCA tokens with closed ``# ... #`` comments removed."""
 

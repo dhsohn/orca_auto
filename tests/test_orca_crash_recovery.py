@@ -1934,3 +1934,76 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
         expected_max_retries=3,
     )
+
+
+def test_recovery_checkpoint_skipped_when_zero_filled(tmp_path: Path) -> None:
+    # A crash while ORCA writes its checkpoint leaves a file whose blocks
+    # were never flushed; the filesystem reads them back as zeros. Seeding
+    # that with MORead would fail the restarted run on a corrupt guess.
+    job_dir, selected, executable = _mutable_job(tmp_path)
+    crashed = _build(job_dir, selected, executable)
+    generation = _crash_generation(crashed)
+    (generation / "h2.gbw").write_bytes(b"\x00" * 4096)
+
+    replacement = _build(job_dir, selected, executable, recovery_from=crashed)
+
+    assert replacement["recovery"]["checkpoint_role"] == ""
+    bound_text = Path(replacement["selected_inp"]).read_text(encoding="utf-8")
+    assert "MORead" not in bound_text
+    assert "%moinp" not in bound_text
+    _verify(job_dir, replacement)
+
+
+def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_one(
+    tmp_path: Path,
+) -> None:
+    import os
+
+    job_dir = tmp_path / "scants_job"
+    job_dir.mkdir()
+    (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
+    selected = job_dir / "ts.inp"
+    selected.write_text("! HF STO-3G ScanTS\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
+    executable = _write_executable(tmp_path / "scants-orca")
+    crashed = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        max_retries=3,
+        orca_executable=executable,
+    )
+    generation = Path(crashed["execution_dir"])
+    (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
+    (generation / "ts.gbw").write_bytes(b"\xff" * 16 + b"attempt-base")
+    (generation / "ts.retry01.gbw").write_bytes(b"\x00" * 4096)
+    base_ns = 1_700_000_000_000_000_000
+    os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
+    os.utime(generation / "ts.retry01.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
+
+    replacement = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        max_retries=3,
+        orca_executable=executable,
+        recovery_from=crashed,
+    )
+
+    checkpoint_role = replacement["recovery"]["checkpoint_role"]
+    assert checkpoint_role
+    private = Path(str(replacement["materialized_inputs"][checkpoint_role]["path"]))
+    assert private.read_bytes() == b"\xff" * 16 + b"attempt-base"
+    assert replacement["source_inputs"][checkpoint_role]["source_path"] == str(
+        generation / "ts.gbw"
+    )
+    verify_orca_execution_snapshot(
+        job_dir,
+        replacement,
+        expected_selected_inp=replacement["selected_inp"],
+        expected_source_selected_inp=replacement["source_selected_inp"],
+        expected_selected_input_xyz="",
+        expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
+        expected_max_retries=3,
+    )

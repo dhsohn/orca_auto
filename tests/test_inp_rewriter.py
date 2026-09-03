@@ -138,6 +138,26 @@ class TestInpRewriter(unittest.TestCase):
         self.assertIn('%moinp "rxn.gbw"', out)
         self.assertIn("* xyzfile 0 1 rxn.xyz", out)
 
+    def test_prepare_checkpoint_restart_skips_a_zero_filled_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "rxn.inp"
+            dst = root / "rxn.resume.inp"
+            src.write_text(BASE_INP, encoding="utf-8")
+            # A crash mid-write leaves the checkpoint's blocks unflushed and
+            # read back as zeros; seeding it would fail the restarted run.
+            (root / "rxn.gbw").write_bytes(b"\x00" * 4096)
+            (root / "rxn.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.75\n", encoding="utf-8")
+
+            prepared, actions = prepare_checkpoint_restart_input(src, dst, root)
+            target_written = dst.exists()
+
+        # A torn checkpoint is treated like an absent one: no checkpoint
+        # restart input is prepared, so nothing seeds MORead from zeros.
+        self.assertIsNone(prepared)
+        self.assertEqual(actions, [])
+        self.assertFalse(target_written)
+
     def test_prepare_checkpoint_restart_falls_back_to_latest_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

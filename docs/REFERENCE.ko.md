@@ -254,7 +254,9 @@ ORCA 고유 노트:
   자원 reader는 모든 활성값 중 최댓값을 사용하므로 뒤쪽 중복값으로 더 큰 요청을
   숨길 수 없습니다.
 - 재시도 입력과 재개된 워커-종료 입력은, 원본 입력에 일치하는 비어 있지 않은 `.gbw`
-  체크포인트가 있을 때 `MORead`와 `%moinp`를 추가합니다. Top-level과 `%scf`
+  체크포인트가 있고 그 앞부분 바이트가 모두 0이 아닐 때 `MORead`와 `%moinp`를
+  추가합니다(crash로 찢어진 체크포인트는 0으로 읽히므로 crash recovery와 같이
+  건너뜁니다). Top-level과 `%scf`
   orbital-input 형식은 함께 해석하며 중복 주입하지 않습니다. Recovery는 최초 snapshot의
   executable을 검증하고 유효한 frozen runtime-geometry seed가 있으면 삭제된 source file을
   다시 열지 않고 사용할 수 있습니다. 그 seed는 atom label/order를 보존하고 선언한 atom마다

@@ -256,7 +256,9 @@ ORCA-specific notes:
   the largest active value before normalization so a later duplicate cannot
   hide a larger request.
 - Retry inputs and resumed worker-shutdown inputs add `MORead` plus `%moinp`
-  when the source input has a matching non-empty `.gbw` checkpoint. Top-level
+  when the source input has a matching non-empty `.gbw` checkpoint whose
+  leading bytes are not all zero (a checkpoint torn by a crash reads back as
+  zeros and is skipped, as it is for crash recovery). Top-level
   and `%scf` orbital-input forms are interpreted together and never duplicated.
   Recovery verifies the originally snapshotted executable and can use a valid
   frozen runtime-geometry seed without reopening its deleted source file. Such

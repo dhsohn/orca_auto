@@ -42,6 +42,7 @@ from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from .input_blocks import (
     GEOM_HEADER_RE,
     OrcaFileReference,
+    checkpoint_file_looks_intact,
     ensure_route_keywords,
     orca_input_requests_moread,
     orca_moinp_references,
@@ -789,11 +790,11 @@ def _validated_recovery_checkpoint(
     """Return the frozen runtime checkpoint to seed from, or None to skip.
 
     Considers every attempt stem (base, retries, resumes) and picks the
-    newest-written intact candidate. Skipping (absent, empty, over the
-    snapshot byte budgets, or a basename collision with a scanned dependency)
-    degrades to geometry-only recovery; it never fails the rebind. A
-    symlinked or otherwise non-regular candidate still fails closed via the
-    confinement check.
+    newest-written intact candidate. Skipping (absent, empty, torn with a
+    zero-filled head, over the snapshot byte budgets, or a basename collision
+    with a scanned dependency) degrades to geometry-only recovery; it never
+    fails the rebind. A symlinked or otherwise non-regular candidate still
+    fails closed via the confinement check.
     """
 
     best: tuple[int, int, Path] | None = None
@@ -812,6 +813,8 @@ def _validated_recovery_checkpoint(
         )
         size = checkpoint.stat().st_size
         if size == 0 or size > MAX_INPUT_SNAPSHOT_BYTES:
+            continue
+        if not checkpoint_file_looks_intact(checkpoint):
             continue
         if estimated_source_bytes + size > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
             continue
