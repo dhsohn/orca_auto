@@ -279,29 +279,39 @@ def test_systemd_rejects_a_repo_without_unit_templates(tmp_path: Path) -> None:
 
 def test_systemd_tolerates_an_explicit_admission_root_the_installer_cannot_inspect(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # A non-root administrator installing for another account may be unable
     # to traverse that account's private tree; the directory is not missing.
+    # Exercised with a real permission error: the explicit root sits under a
+    # mode-0 parent, so stat() raises EACCES for this account.
+    if os.geteuid() == 0:
+        pytest.skip("root can traverse any directory")
     repo, config_path = _make_repo(tmp_path)
-    admission_root = (repo / "admission").resolve()
-    real_is_dir = Path.is_dir
-
-    def is_dir(self: Path) -> bool:
-        if self == admission_root:
-            raise PermissionError("traversal denied")
-        return real_is_dir(self)
-
-    monkeypatch.setattr(Path, "is_dir", is_dir)
-
-    plan = systemd_plan.build_systemd_install_plan(
-        target_user="alice",
-        repo=repo,
-        config=config_path,
-        unit_dir=tmp_path / "units",
-        no_enable=True,
-        is_root=lambda: True,
+    private_parent = tmp_path / "private"
+    private_parent.mkdir()
+    hidden_root = private_parent / "admission"
+    hidden_root.mkdir()
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            f"admission_root: {repo / 'admission'}", f"admission_root: {hidden_root}"
+        ),
+        encoding="utf-8",
     )
+    admission_root = hidden_root.resolve()
+    private_parent.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            admission_root.stat()
+        plan = systemd_plan.build_systemd_install_plan(
+            target_user="alice",
+            repo=repo,
+            config=config_path,
+            unit_dir=tmp_path / "units",
+            no_enable=True,
+            is_root=lambda: True,
+        )
+    finally:
+        private_parent.chmod(0o700)
 
     unit_by_name = {unit.name: unit for unit in plan.units}
     assert str(admission_root) in unit_by_name["orca_auto-queue-worker@.service"].content

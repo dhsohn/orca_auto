@@ -769,7 +769,8 @@ stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 �
 - 기본 `<runs_root>/.admission` 디렉터리는 설치 시 없어도 됩니다. 렌더링된 unit이 이미
   존재하는 상위 `runs_root`에 쓰기 권한을 주므로 worker가 중첩 디렉터리를 만들 수
   있습니다. 별도로 설정한 `scheduler.admission_root`는 기존 디렉터리여야 하며, 없으면
-  unit 작성이나 systemd 명령 실행 전에 설치가 실패합니다.
+  unit 작성이나 systemd 명령 실행 전에 설치가 실패합니다. 설치하는 계정이 권한 오류로
+  검사할 수 없는 root는 없는 것으로 취급하지 않고 service에 맡깁니다.
 - 설정한 저장소·설정·admission·runs 경로의 literal `%`는 unit 파일 렌더링 때 escape하고,
   template이 소유한 `%i` 같은 instance specifier는 그대로 동작합니다. Quote, backslash,
   dollar sign이 든 경로는 systemd tokenization이나 expansion을 바꿀 수 있으므로 unit을 쓰기

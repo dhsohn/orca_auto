@@ -861,7 +861,9 @@ Behavior:
   the rendered unit grants its existing `runs_root` parent so the worker can
   create the nested directory. A separately configured
   `scheduler.admission_root` must already exist as a directory; otherwise
-  installation fails before any unit is written or systemd command is run.
+  installation fails before any unit is written or systemd command is run. A
+  root the installing account cannot inspect (a permission error) is left to
+  the service rather than treated as missing.
 - Literal `%` characters in configured repository, configuration, admission,
   or runs paths are escaped when unit files are rendered; template-owned
   instance specifiers such as `%i` remain active. Paths containing quotes,
