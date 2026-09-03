@@ -319,6 +319,10 @@ ORCA 고유 노트:
   실제 입력을 선택한 뒤, snapshot 경계에서 최종 rewrite된 바이트를 검증하고 같은 바이트를
   identity에 바인딩합니다.
   Primary ORCA stage가 완료된 뒤에는 restart로 route·charge·multiplicity를 바꿀 수 없고,
+  CREST 또는 xTB stage가 완료된 뒤에는 그 conformer가 screening된 electronic state(job
+  manifest의 charge·uhf)와 다른 workflow charge·multiplicity로 restart할 수 없습니다.
+  받아들여진 electronic-state 변경은 restart summary·restart journal·명령 응답에 기록되며,
+  workflow가 이전 값을 기록한 적이 없으면 `previous`는 null입니다.
   report는 route·resource가 아닌 active input directive·electronic-state·ORCA-version·
   identity-bound 비-geometry dependency content provenance가 없거나 섞였거나 선택 geometry의
   atom-label 순서가 다르면 energy 비교를 생략합니다. Geometry 좌표 자체는 후보별 값으로

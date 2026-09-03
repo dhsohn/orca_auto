@@ -59,6 +59,7 @@ class WorkflowRestartMutation:
     restarted_stages: list[dict[str, str]]
     flow_manifest_applied: bool
     summary: dict[str, Any]
+    electronic_state_change: dict[str, Any] | None = None
 
     @property
     def workflow_id(self) -> str:
@@ -69,12 +70,15 @@ class WorkflowRestartMutation:
         return _normalize_text(self.payload.get("template_name"))
 
     def journal_metadata(self) -> dict[str, Any]:
-        return {
+        metadata = {
             "workspace_dir": str(self.workspace),
             "restarted_count": len(self.restarted_stages),
             "flow_manifest_applied": self.flow_manifest_applied,
             "stages": self.restarted_stages,
         }
+        if self.electronic_state_change is not None:
+            metadata["electronic_state_change"] = self.electronic_state_change
+        return metadata
 
     def response_payload(self) -> dict[str, Any]:
         return {
@@ -88,6 +92,11 @@ class WorkflowRestartMutation:
             "restarted_count": len(self.restarted_stages),
             "restarted_stages": self.restarted_stages,
             "summary": self.summary,
+            **(
+                {"electronic_state_change": self.electronic_state_change}
+                if self.electronic_state_change is not None
+                else {}
+            ),
         }
 
 
@@ -254,7 +263,7 @@ def _apply_restart_summary(
     metadata["final_child_sync_pending"] = False
     metadata["final_child_sync_completed_at"] = ""
     metadata["last_restarted_at"] = restarted_at
-    metadata["restart_summary"] = {
+    restart_summary: dict[str, Any] = {
         "status": "restarted",
         "previous_status": previous_status,
         "restarted_at": restarted_at,
@@ -262,6 +271,10 @@ def _apply_restart_summary(
         "flow_manifest_applied": bool(flow_settings.get("applied")),
         "stages": restarted_stages,
     }
+    electronic_state_change = flow_settings.get("electronic_state_change")
+    if isinstance(electronic_state_change, dict):
+        restart_summary["electronic_state_change"] = electronic_state_change
+    metadata["restart_summary"] = restart_summary
 
 
 def _build_restart_mutation(
@@ -310,4 +323,9 @@ def _build_restart_mutation(
         restarted_stages=restarted_stages,
         flow_manifest_applied=bool(flow_settings.get("applied")),
         summary=workflow_summary(workspace, payload),
+        electronic_state_change=(
+            flow_settings["electronic_state_change"]
+            if isinstance(flow_settings.get("electronic_state_change"), dict)
+            else None
+        ),
     )

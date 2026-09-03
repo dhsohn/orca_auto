@@ -325,6 +325,74 @@ def _durable_interaction_config_fingerprint(payload: dict[str, Any]) -> str:
     )
 
 
+_ELECTRONIC_STATE_ENGINES = ("crest", "xtb")
+
+
+def _stage_manifest_overrides(raw_stage: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+    """The job manifest overrides a stage ran with (payload first, then metadata)."""
+    for container in (task.get("payload"), task.get("metadata"), raw_stage.get("metadata")):
+        if isinstance(container, dict):
+            overrides = container.get("job_manifest_overrides")
+            if isinstance(overrides, dict):
+                return overrides
+    return {}
+
+
+def _completed_engine_stages_on_other_state(
+    payload: dict[str, Any],
+    *,
+    charge: int | None,
+    multiplicity: int | None,
+) -> list[str]:
+    """Completed CREST/xTB stages that ran on another electronic state.
+
+    The state a stage actually screened on is the ``charge``/``uhf`` pair in
+    its job manifest overrides (absent keys mean the neutral singlet), not the
+    request parameters, which an older or hand-edited workflow.json may lack.
+    """
+    if charge is None and multiplicity is None:
+        return []
+    mismatched: list[str] = []
+    for raw_stage in payload.get("stages", []):
+        if not isinstance(raw_stage, dict):
+            continue
+        task = raw_stage.get("task")
+        task = task if isinstance(task, dict) else {}
+        if _normalize_text(task.get("engine")).lower() not in _ELECTRONIC_STATE_ENGINES:
+            continue
+        if "completed" not in {
+            _normalize_text(raw_stage.get("status")).lower(),
+            _normalize_text(task.get("status")).lower(),
+        }:
+            continue
+        stage_id = _normalize_text(raw_stage.get("stage_id")) or "<unknown>"
+        overrides = _stage_manifest_overrides(raw_stage, task)
+        try:
+            stage_charge = strict_int(overrides.get("charge", 0) or 0, field="stage charge")
+            stage_uhf = strict_int(overrides.get("uhf", 0) or 0, field="stage uhf", minimum=0)
+        except ValueError:
+            mismatched.append(f"{stage_id}(state unreadable)")
+            continue
+        if charge is not None and stage_charge != charge:
+            mismatched.append(f"{stage_id}(charge={stage_charge})")
+        elif multiplicity is not None and stage_uhf != multiplicity - 1:
+            mismatched.append(f"{stage_id}(multiplicity={stage_uhf + 1})")
+    return mismatched
+
+
+def _recorded_electronic_state(payload: dict[str, Any]) -> dict[str, int | None]:
+    """The charge/multiplicity the request parameters record; None when absent."""
+    params = workflow_request_parameters(payload)
+    recorded: dict[str, int | None] = {}
+    for key, minimum in (("charge", None), ("multiplicity", 1)):
+        raw = params.get(key)
+        try:
+            recorded[key] = None if raw is None else strict_int(raw, field=key, minimum=minimum)
+        except ValueError:
+            recorded[key] = None
+    return recorded
+
+
 def _completed_primary_orca_stage_ids(
     payload: dict[str, Any],
     *,
@@ -535,6 +603,49 @@ def _flow_restart_settings_from_manifest(
             f"original settings. fields={changed_science!r}, "
             f"completed_stages={completed_primary_orca!r}"
         )
+    # A completed CREST/xTB stage screened conformers on the electronic state
+    # its job manifest carried; restarting only the ORCA stages on another
+    # charge or multiplicity would feed conformers from one potential-energy
+    # surface into ORCA on another, and nothing downstream could tell. Refuse,
+    # as for completed ORCA stages. The comparison uses the stage's own
+    # manifest state, so a manifest that restates the state an older payload
+    # never recorded is accepted.
+    previous_electronic_state = _recorded_electronic_state(payload)
+    if manifest_charge is not None or manifest_multiplicity is not None:
+        # Compare the pair the restart will actually run on: a stated field,
+        # else the recorded one, else the neutral-singlet default the request
+        # parameters fall back to below. A manifest stating only one field
+        # must not slip the other past a completed stage.
+        effective_charge = (
+            manifest_charge
+            if manifest_charge is not None
+            else previous_electronic_state["charge"]
+            if previous_electronic_state["charge"] is not None
+            else 0
+        )
+        effective_multiplicity = (
+            manifest_multiplicity
+            if manifest_multiplicity is not None
+            else previous_electronic_state["multiplicity"]
+            if previous_electronic_state["multiplicity"] is not None
+            else 1
+        )
+    else:
+        effective_charge = None
+        effective_multiplicity = None
+    mismatched_engine_stages = _completed_engine_stages_on_other_state(
+        payload,
+        charge=effective_charge,
+        multiplicity=effective_multiplicity,
+    )
+    if mismatched_engine_stages:
+        raise ValueError(
+            "workflow electronic state cannot change while completed CREST/xTB stages "
+            "retain prior results; start a new workflow or restore the original "
+            f"charge/multiplicity. requested=(charge={effective_charge!r}, "
+            f"multiplicity={effective_multiplicity!r}), "
+            f"completed_stages={mismatched_engine_stages!r}"
+        )
     crest_present, crest_manifest = _resolve_engine_manifest(workspace, manifest, "crest")
     xtb_present, xtb_manifest = _resolve_engine_manifest(workspace, manifest, "xtb")
     endpoint_pairing = _resolve_endpoint_pairing_manifest(manifest, xtb_manifest)
@@ -581,6 +692,24 @@ def _flow_restart_settings_from_manifest(
     charge = params.get("charge", manifest_charge if manifest_charge is not None else 0)
     multiplicity = params.get(
         "multiplicity", manifest_multiplicity if manifest_multiplicity is not None else 1
+    )
+    changed_electronic_fields = [
+        key
+        for key, stated in (("charge", manifest_charge), ("multiplicity", manifest_multiplicity))
+        if stated is not None and previous_electronic_state[key] != stated
+    ]
+    electronic_state_change = (
+        {
+            # A previous value is None when the workflow never recorded it.
+            "previous": dict(previous_electronic_state),
+            "current": {
+                "charge": strict_int(charge, field="charge"),
+                "multiplicity": strict_int(multiplicity, field="multiplicity", minimum=1),
+            },
+            "fields": changed_electronic_fields,
+        }
+        if changed_electronic_fields
+        else None
     )
     interaction_cfg = params.get("interaction_energy")
     interaction_cfg = interaction_cfg if isinstance(interaction_cfg, dict) else None
@@ -658,6 +787,10 @@ def _flow_restart_settings_from_manifest(
         "electronic_state_present": (
             manifest_charge is not None or manifest_multiplicity is not None
         ),
+        # Recorded in the restart summary, journal and response when the
+        # manifest states a charge/multiplicity the request parameters did
+        # not already record (previous is None when never recorded).
+        "electronic_state_change": electronic_state_change,
         "charge": charge,
         "multiplicity": multiplicity,
         "interaction_energy": interaction_cfg,

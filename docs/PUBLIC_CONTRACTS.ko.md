@@ -548,7 +548,11 @@ dynamic scan extension, 제출, 완료 결과 수락이 이 계약을 함께 사
 round-trip float text로 canonicalize하므로 유효한 정밀도를 소수점 여덟 자리로 반올림하지 않습니다.
 
 Restart는 비과학적 control을 바꿀 수 있지만, primary ORCA stage 하나라도 완료된 뒤에는 그
-stage가 사용한 durable route, charge, multiplicity를 바꿀 수 없습니다. Report aggregation은
+stage가 사용한 durable route, charge, multiplicity를 바꿀 수 없고, CREST 또는 xTB stage가
+완료된 뒤에는 그 stage의 job manifest가 담은 electronic state와 다른 workflow charge·
+multiplicity로 바꿀 수 없습니다. 받아들여진 electronic-state 변경은 restart summary·restart
+journal event·명령 응답에 기록되며, workflow가 이전 값을 기록한 적이 없으면 `previous`는
+null입니다. Report aggregation은
 selected input을 검증하고 완료 후보 사이의 route·resource가 아닌 active input directive·
 electronic-state·ORCA version provenance가 없거나 섞였으면 relative energy 비교와 숫자 후보
 순위를 생략합니다. 선택한 inline 또는 confined XYZ도 같은 atom-label 순서를 입증해야 하며
