@@ -10,6 +10,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- A CREST ensemble file that exists but cannot be handed off (a malformed
+  frame, an atom sequence that differs from the input, an identity that
+  changed during the read) is recorded on the result and in the detail
+  artifact as `rejected_retained_outputs` with a reason, and logged, instead
+  of vanishing from `retained_conformer_paths` with nothing recorded.
+- CREST ensemble frames carry their comment-line energy: the bare number of
+  `crest_conformers.xyz` and `crest_best.xyz`, and the energy of a
+  `crest_rotamers.xyz` line (energy, weight, `!`), are read as the frame
+  energy, so `source_frame_energy` is recorded for CREST candidates as it
+  already was for xTB and ORCA frames. A bare integer is not an energy.
 - ORCA's `!!!` error banners are no longer read as the executed route: a route
   line starts with exactly one `!`.
 - The ScanTS surface parser ends the actual-energy table at the SCF-energy

@@ -27,6 +27,7 @@ def _detail_fields(result: CrestRunResult) -> dict[str, Any]:
     return {
         "retained_conformer_count": result.retained_conformer_count,
         "retained_conformer_paths": list(result.retained_conformer_paths),
+        "rejected_retained_outputs": [dict(item) for item in result.rejected_retained_outputs],
         "output_identities": dict(result.output_identities),
         "scratch_provenance": dict(result.scratch_provenance),
     }
