@@ -1,10 +1,13 @@
 """Frequency, normal-mode, and geometry parsing plus vibrational summaries.
 
 The parser streams an ORCA output once and keeps the LAST ``VIBRATIONAL
-FREQUENCIES`` / ``NORMAL MODES`` / ``CARTESIAN COORDINATES`` blocks, so
-multi-job outputs report the final frequency calculation. Summaries condense a
-mode into its dominant atom displacements and, when a bond pair is given, its
-alignment with that coordinate.
+FREQUENCIES`` / ``NORMAL MODES`` / ``CARTESIAN COORDINATES`` blocks. A
+frequency or mode block that is followed by another ``FINAL SINGLE POINT
+ENERGY`` line belongs to an earlier geometry (the initial or a recalculated
+Hessian of an optimization) and is discarded, so only a frequency calculation
+at the final geometry is reported. Summaries condense a mode into its dominant
+atom displacements and, when a bond pair is given, its alignment with that
+coordinate.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ FREQ_EPS_CM = IMAGINARY_FREQ_THRESHOLD_CM1
 _TOP_ATOM_COUNT = 5
 
 _FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
+_FINAL_ENERGY_HEADER = "FINAL SINGLE POINT ENERGY"
 _MODES_HEADER = "NORMAL MODES"
 _COORDS_HEADER = "CARTESIAN COORDINATES (ANGSTROEM)"
 _FREQ_LINE_RE = re.compile(r"^\s*(\d+):\s*(-?\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
@@ -101,6 +105,14 @@ def parse_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
     for line in text.splitlines():
         stripped = line.strip()
         upper = stripped.upper()
+        if upper.startswith(_FINAL_ENERGY_HEADER):
+            # A later final energy supersedes every frequency block before it;
+            # the final geometry's coordinates are printed before this line and
+            # are kept.
+            close_section()
+            freqs = None
+            modes = None
+            continue
         if upper == _FREQ_HEADER:
             close_section()
             section, current_freqs = "freq", []
@@ -299,8 +311,8 @@ def mode_section_html(
                 "be shown.</p>"
             )
         return (
-            '<p class="muted">No frequency calculation found in any attempt output, '
-            "so no vibrational summary is available.</p>"
+            '<p class="muted">No frequency calculation found at the final geometry in any '
+            "attempt output, so no vibrational summary is available.</p>"
         )
     blocks = []
     for summary in summaries:

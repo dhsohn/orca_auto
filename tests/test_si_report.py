@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from orca_auto.orca.report.attempts import final_out_path
+from orca_auto.orca.report.frequencies import parse_frequency_analysis
 from orca_auto.orca.report.si import (
     SiBlockError,
     collect_si_block,
@@ -19,6 +20,81 @@ from orca_auto.orca.report.si import (
     write_si_block,
 )
 from tests.engine_artifact_helpers import report_generation_target
+
+
+def _frequency_section(freqs: tuple[float, ...]) -> list[str]:
+    return [
+        "-----------------------",
+        "VIBRATIONAL FREQUENCIES",
+        "-----------------------",
+        *(f"{index:4d}:   {freq:10.2f} cm**-1" for index, freq in enumerate(freqs)),
+        "",
+    ]
+
+
+def test_frequency_block_before_the_final_energy_is_not_reported(tmp_path: Path) -> None:
+    # OptTS with Calc_Hess and no Freq: the initial Hessian's block precedes
+    # the optimization, so the final geometry has no frequency calculation.
+    out = tmp_path / "optts_no_freq.out"
+    out.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP OptTS",
+                *_frequency_section((-650.0, 120.0)),
+                "FINAL SINGLE POINT ENERGY      -100.100000000000",
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                "  C      0.000000    0.000000    0.000000",
+                "",
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert parse_frequency_analysis(out) is None
+
+
+def test_frequency_block_after_the_last_final_energy_is_reported(tmp_path: Path) -> None:
+    # OptTS Freq with Recalc_Hess: mid-optimization Hessian blocks are
+    # superseded by later final energies; the final Freq block is kept.
+    out = tmp_path / "optts_freq.out"
+    out.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP OptTS Freq",
+                *_frequency_section((-650.0, -120.0)),
+                "------------",
+                "NORMAL MODES",
+                "------------",
+                "                  0          1",
+                "      0       0.100000   0.200000",
+                "      1       0.300000   0.400000",
+                "      2       0.500000   0.600000",
+                "",
+                "FINAL SINGLE POINT ENERGY      -100.100000000000",
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                "  C      0.000000    0.000000    0.000000",
+                "",
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                *_frequency_section((-420.0, 120.0)),
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = parse_frequency_analysis(out)
+
+    assert analysis is not None
+    assert analysis.frequencies == (-420.0, 120.0)
+    assert analysis.imaginary_count() == 1
+    assert analysis.atoms == (("C", 0.0, 0.0, 0.0),)
+    # The superseded Hessian's displacement vectors must not be paired with
+    # the final frequencies.
+    assert analysis.mode_matrix == {}
 
 
 def _out_text(

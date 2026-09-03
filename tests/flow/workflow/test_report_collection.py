@@ -672,6 +672,35 @@ def test_completed_candidate_uses_verified_block_imaginary_count(
     assert data.orca_results[0].imaginary_count is None
 
 
+@pytest.mark.parametrize("marker_count", [0, 1])
+def test_uncompleted_stage_publishes_no_marker_imaginary_count(
+    tmp_path: Path,
+    marker_count: int,
+) -> None:
+    # A run that stopped short may have printed several Hessians, none of
+    # which characterizes its final geometry; the analyzer's count for such a
+    # run is not a Nimag and the stage table must not display it as one.
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_unfinished",
+        energy=-1.1,
+        reason="geometry_not_converged",
+    )
+    stage = _orca_stage(
+        "orca_unfinished",
+        generation,
+        status="failed",
+        label="unfinished",
+    )
+    state = json.loads((generation / RUN_STATE_FILE).read_text(encoding="utf-8"))
+    state["engine_payload"]["attempts"][-1]["markers"]["imaginary_frequency_count"] = marker_count
+    _publish_orca_machine(generation, state)
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results[0].imaginary_count is None
+
+
 @pytest.mark.parametrize(
     ("stage_job_id", "stage_run_id", "report_job_id", "report_run_id"),
     (

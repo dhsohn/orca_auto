@@ -325,8 +325,8 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
 - **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
   `completion_rules.py`): 모드별로 완료를 판정합니다 — TS 모드(`OptTS`/`NEB-TS`,
-  허수 진동수 정확히 1개 필요, 경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt
-  모드(정상 종료).
+  마지막 final single point energy 뒤의 진동수 섹션에 허수 진동수 정확히 1개 필요,
+  경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt 모드(정상 종료).
 - **계산 종류별 재시도 정책**(`retry_policy.py`): 재시도
   횟수와 rewrite는 사용자가 입력한 숫자를 그대로 따르지 않고 ORCA route 종류별
   고정 정책을 따릅니다. 일반 `TightSCF`/`SlowConv` 에스컬레이션은 적용하지

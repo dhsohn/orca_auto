@@ -97,6 +97,59 @@ class TestOutAnalyzer(unittest.TestCase):
         self.assertEqual(result.status, "completed")
         self.assertEqual(result.markers["imaginary_frequency_count"], 1)
 
+    def test_ts_frequency_section_before_the_final_energy_verifies_nothing(self) -> None:
+        # OptTS with Calc_Hess but without Freq: the only frequency section is
+        # the initial Hessian's, printed before the optimization ran.
+        payload = "\n".join(
+            [
+                "VIBRATIONAL FREQUENCIES",
+                "  1   -650.00 cm**-1",
+                "  2    120.00 cm**-1",
+                "FINAL SINGLE POINT ENERGY      -100.100000000000",
+                "                    ***        THE OPTIMIZATION HAS CONVERGED      ***",
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.TS_NOT_FOUND)
+        self.assertEqual(result.reason, "ts_criteria_failed")
+        self.assertEqual(result.markers["imaginary_frequency_count"], 0)
+
+    def test_ts_counts_only_the_frequency_section_after_the_last_final_energy(self) -> None:
+        # OptTS Freq with Recalc_Hess: recalculated Hessians print sections
+        # mid-optimization; the final Freq follows the last final energy.
+        payload = "\n".join(
+            [
+                "VIBRATIONAL FREQUENCIES",
+                "  1   -650.00 cm**-1",
+                "  2   -120.00 cm**-1",
+                "FINAL SINGLE POINT ENERGY      -100.100000000000",
+                "VIBRATIONAL FREQUENCIES",
+                "  1   -600.00 cm**-1",
+                "  2   -110.00 cm**-1",
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                "VIBRATIONAL FREQUENCIES",
+                "  1   -420.00 cm**-1",
+                "  2    120.00 cm**-1",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS Freq")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.COMPLETED)
+        self.assertEqual(result.reason, "ts_criteria_met")
+        self.assertEqual(result.markers["imaginary_frequency_count"], 1)
+
     def test_ts_ignores_tiny_negative_modes(self) -> None:
         payload = "\n".join(
             [

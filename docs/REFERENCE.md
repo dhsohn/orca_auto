@@ -678,7 +678,9 @@ The mode is determined from the input route line (`! ...`).
 TS mode completion:
 
 - `****ORCA TERMINATED NORMALLY****` exists
-- Exactly 1 imaginary frequency is present
+- Exactly 1 imaginary frequency is present in the frequency section printed
+  after the last final single point energy (a section printed before a later
+  final energy belongs to an earlier geometry and verifies nothing)
 - If the route contains `IRC`, the IRC marker is also required
 
 Opt mode completion:
