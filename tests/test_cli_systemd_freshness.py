@@ -69,7 +69,7 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
                 value = str(source_root)
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
                 value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
@@ -161,7 +161,7 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
                 value = str(source_root)
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
                 value = f"{head_sha}\0HEAD@{{{update_epoch}}}"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
@@ -252,7 +252,7 @@ def test_collect_worker_staleness_observes_the_active_process_checkout(tmp_path:
                 value = ""
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
                 value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
@@ -343,7 +343,7 @@ def test_collect_worker_staleness_refuses_dirty_import_package(tmp_path: Path) -
                 value = " M src/orca_auto/cli.py"
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
                 value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
@@ -656,7 +656,7 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
                 value = ""
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
-            elif git_args == ["reflog", "-1", "--date=unix", "--format=%H%x00%gd"]:
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
                 value = f"{head_sha}\0HEAD@{{{head_update_epoch}}}"
             else:
                 assert git_args == ["show", "-s", "--format=%ct", head_sha]
@@ -725,7 +725,6 @@ def test_collect_worker_staleness_fails_closed_without_checkout_update_evidence(
             else:
                 assert git_args == [
                     "reflog",
-                    "-1",
                     "--date=unix",
                     "--format=%H%x00%gd",
                 ]
@@ -862,3 +861,83 @@ def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: P
     assert verdict["stale"] == []
     assert "cannot read checkout HEAD" in verdict["undetermined"][0]["detail"]
     assert "fatal: bad revision" in verdict["undetermined"][0]["detail"]
+
+
+def test_collect_worker_staleness_ignores_a_same_sha_reflog_move(tmp_path: Path) -> None:
+    # `git checkout main` while already on main writes a new HEAD reflog entry
+    # for the same commit. That is not a deploy: a worker that imported this
+    # commit before the move is fresh, so the update time is the oldest entry
+    # of the newest same-commit run.
+    first_deploy_epoch = 1_785_747_750
+    same_sha_move_epoch = first_deploy_epoch + 7_200
+    head_commit_epoch = first_deploy_epoch - 86_400
+    head_sha = "b" * 40
+    older_sha = "c" * 40
+    source_root = tmp_path / "checkout"
+    _make_fake_git_checkout(source_root)
+    # The worker started an hour after the first deploy (09:02:30 UTC) and an
+    # hour before the same-SHA move (11:02:30 UTC).
+    start_stamps = {"orca_auto-queue-worker@alice.service": "Mon 2026-08-03 10:02:30 UTC"}
+    main_pids = {"orca_auto-queue-worker@alice.service": "41"}
+
+    def _fake_run(
+        argv: list[str],
+        check: bool = False,
+        stdout: Any = None,
+        stderr: Any = None,
+        text: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del check, stdout, stderr, text
+        if argv[0] == "git":
+            git_args = argv[3:]
+            if git_args == ["rev-parse", "--show-toplevel"]:
+                value = str(source_root)
+            elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
+                value = head_sha
+            elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd"]:
+                value = "\n".join(
+                    [
+                        f"{head_sha}\0HEAD@{{{same_sha_move_epoch}}}",
+                        f"{head_sha}\0HEAD@{{{first_deploy_epoch}}}",
+                        f"{older_sha}\0HEAD@{{{first_deploy_epoch - 3_600}}}",
+                    ]
+                )
+            else:
+                assert git_args == ["show", "-s", "--format=%ct", head_sha]
+                value = str(head_commit_epoch)
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
+        if argv[:4] == ["systemctl", "show", "--property=ExecMainStartTimestamp", "--value"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=f"{start_stamps[argv[5]]}\n", stderr=""
+            )
+        assert argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{main_pids[argv[4]]}\n", stderr="")
+
+    statuses = (
+        cli_systemd_units.ServiceUnitStatus(
+            label="worker",
+            unit="orca_auto-queue-worker@alice.service",
+            active="active",
+            enabled="enabled",
+        ),
+    )
+
+    verdict = cli_systemd_freshness.collect_worker_staleness(
+        statuses,
+        run=_fake_run,
+        source_root=source_root,
+    )
+
+    assert verdict is not None
+    assert verdict["head_update_epoch"] == first_deploy_epoch
+    assert verdict["stale"] == []
+    assert verdict["undetermined"] == []
+
+
+def test_head_update_epoch_rejects_a_reflog_that_does_not_name_head() -> None:
+    with pytest.raises(ValueError, match="does not match"):
+        cli_systemd_freshness._head_update_epoch_from_reflog(
+            "c" * 40 + "\0HEAD@{1785747750}", head_sha="b" * 40
+        )
+    with pytest.raises(ValueError, match="no HEAD reflog entry"):
+        cli_systemd_freshness._head_update_epoch_from_reflog("", head_sha="b" * 40)

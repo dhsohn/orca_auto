@@ -303,9 +303,12 @@ overrides such as `%base` and NEB restart-GBW basename controls fail closed.
 
 Only rows carrying the current execution snapshot, publication marker, and
 identity fields are executable. Rows that do not satisfy that contract fail
-closed: a pending row must be cancelled with `queue cancel` (the queue pauses
-admission while it exists), a terminal row is removed by `queue list clear`,
-and the work is resubmitted.
+closed. A pending row whose execution snapshot or job-directory identity is
+invalid is fenced to `failed` by the worker's publication repair before
+admission continues; a pending row that keeps an unrepairable publication
+marker stays pending, pauses admission while it exists, and must be cancelled
+with `queue cancel`. A terminal row is removed by `queue list clear`, and the
+work is resubmitted.
 Workflow-internal xTB/CREST snapshots use a unique namespace that is exclusively
 reserved for the submission, rather than using the public task id alone as
 snapshot ownership.

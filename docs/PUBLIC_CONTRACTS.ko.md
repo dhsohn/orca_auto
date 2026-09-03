@@ -283,9 +283,11 @@ basename으로 쓰면 제출 단계에서 거부합니다. `%base`와 NEB restar
 제어 같은 출력 base override도 fail-closed합니다.
 
 현재 execution snapshot, publication marker, identity 필드를 모두 가진 행만 실행할 수
-있습니다. 이 계약을 만족하지 않는 행은 fail-closed합니다. pending 행은 `queue cancel`로
-취소해야 하고(그 행이 있는 동안 큐는 admission을 멈춥니다), terminal 행은
-`queue list clear`가 제거하며, 작업은 다시 제출합니다.
+있습니다. 이 계약을 만족하지 않는 행은 fail-closed합니다. execution snapshot이나
+job-directory identity가 잘못된 pending 행은 worker의 publication repair가 admission을
+이어가기 전에 `failed`로 fence하고, 복구할 수 없는 publication marker를 가진 pending 행은
+pending으로 남아 그 행이 있는 동안 admission을 멈추므로 `queue cancel`로 취소해야 합니다.
+terminal 행은 `queue list clear`가 제거하며, 작업은 다시 제출합니다.
 워크플로우 내부 xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다
 배타적으로 예약한 고유 namespace를 사용합니다.
 Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable intent를 기록합니다.
