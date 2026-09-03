@@ -664,7 +664,9 @@ def test_completed_candidate_uses_verified_block_imaginary_count(
         label="forged marker",
     )
     state = json.loads((generation / RUN_STATE_FILE).read_text(encoding="utf-8"))
-    state["engine_payload"]["attempts"][-1]["markers"]["imaginary_frequency_count"] = 7
+    markers = state["engine_payload"]["attempts"][-1]["markers"]
+    markers["imaginary_frequency_count"] = 7
+    markers["final_frequency_section"] = True
     _publish_orca_machine(generation, state)
 
     data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
@@ -672,14 +674,20 @@ def test_completed_candidate_uses_verified_block_imaginary_count(
     assert data.orca_results[0].imaginary_count is None
 
 
-@pytest.mark.parametrize("marker_count", [0, 1])
-def test_uncompleted_stage_publishes_no_marker_imaginary_count(
+@pytest.mark.parametrize(
+    ("marker_count", "final_section"),
+    [(0, False), (1, False), (0, None), (1, None)],
+    ids=["superseded-0", "superseded-1", "legacy-0", "legacy-1"],
+)
+def test_uncompleted_stage_publishes_no_unverified_marker_imaginary_count(
     tmp_path: Path,
     marker_count: int,
+    final_section: bool | None,
 ) -> None:
     # A run that stopped short may have printed several Hessians, none of
     # which characterizes its final geometry; the analyzer's count for such a
-    # run is not a Nimag and the stage table must not display it as one.
+    # run (and for a record written before the final-section marker existed)
+    # is not a Nimag and the stage table must not display it as one.
     generation = _orca_stage_dir(
         tmp_path,
         "orca_unfinished",
@@ -693,12 +701,48 @@ def test_uncompleted_stage_publishes_no_marker_imaginary_count(
         label="unfinished",
     )
     state = json.loads((generation / RUN_STATE_FILE).read_text(encoding="utf-8"))
-    state["engine_payload"]["attempts"][-1]["markers"]["imaginary_frequency_count"] = marker_count
+    markers = state["engine_payload"]["attempts"][-1]["markers"]
+    markers["imaginary_frequency_count"] = marker_count
+    if final_section is None:
+        markers.pop("final_frequency_section", None)
+    else:
+        markers["final_frequency_section"] = final_section
     _publish_orca_machine(generation, state)
 
     data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
 
     assert data.orca_results[0].imaginary_count is None
+
+
+@pytest.mark.parametrize("marker_count", [0, 2])
+def test_rejected_candidate_keeps_its_final_section_imaginary_count(
+    tmp_path: Path,
+    marker_count: int,
+) -> None:
+    # A normally terminated OptTS Freq candidate whose final frequency section
+    # has 0 or 2 imaginary modes is rejected (ts_criteria_failed); that count
+    # characterizes the final geometry and explains the rejection.
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_rejected_ts",
+        energy=-1.1,
+        reason="ts_criteria_failed",
+    )
+    stage = _orca_stage(
+        "orca_rejected_ts",
+        generation,
+        status="failed",
+        label="rejected ts",
+    )
+    state = json.loads((generation / RUN_STATE_FILE).read_text(encoding="utf-8"))
+    markers = state["engine_payload"]["attempts"][-1]["markers"]
+    markers["imaginary_frequency_count"] = marker_count
+    markers["final_frequency_section"] = True
+    _publish_orca_machine(generation, state)
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results[0].imaginary_count == marker_count
 
 
 @pytest.mark.parametrize(

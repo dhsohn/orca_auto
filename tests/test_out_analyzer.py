@@ -120,6 +120,7 @@ class TestOutAnalyzer(unittest.TestCase):
         self.assertEqual(result.status, AnalyzerStatus.TS_NOT_FOUND)
         self.assertEqual(result.reason, "ts_criteria_failed")
         self.assertEqual(result.markers["imaginary_frequency_count"], 0)
+        self.assertFalse(result.markers["final_frequency_section"])
 
     def test_ts_counts_only_the_frequency_section_after_the_last_final_energy(self) -> None:
         # OptTS Freq with Recalc_Hess: recalculated Hessians print sections
@@ -149,6 +150,71 @@ class TestOutAnalyzer(unittest.TestCase):
         self.assertEqual(result.status, AnalyzerStatus.COMPLETED)
         self.assertEqual(result.reason, "ts_criteria_met")
         self.assertEqual(result.markers["imaginary_frequency_count"], 1)
+        self.assertTrue(result.markers["final_frequency_section"])
+
+    def test_ts_rejected_for_two_modes_keeps_the_final_section_count(self) -> None:
+        payload = "\n".join(
+            [
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                "VIBRATIONAL FREQUENCIES",
+                "  1   -420.00 cm**-1",
+                "  2   -120.00 cm**-1",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS Freq")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.TS_NOT_FOUND)
+        self.assertEqual(result.markers["imaginary_frequency_count"], 2)
+        self.assertTrue(result.markers["final_frequency_section"])
+
+    def test_ts_final_section_is_not_a_verdict_when_the_run_failed(self) -> None:
+        # ORCA can continue to the Freq step after MaxIter and terminate
+        # normally; the section then describes a non-stationary geometry.
+        for failure_line, expected_status in (
+            ("THE OPTIMIZATION DID NOT CONVERGE", AnalyzerStatus.GEOM_NOT_CONVERGED),
+            ("SCF NOT CONVERGED", AnalyzerStatus.ERROR_SCF),
+        ):
+            payload = "\n".join(
+                [
+                    failure_line,
+                    "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                    "VIBRATIONAL FREQUENCIES",
+                    "  1   -420.00 cm**-1",
+                    "****ORCA TERMINATED NORMALLY****",
+                ]
+            )
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "a.out"
+                out.write_text(payload, encoding="utf-8")
+                result = analyze_output(
+                    out, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS Freq")
+                )
+            self.assertEqual(result.status, expected_status)
+            self.assertEqual(result.markers["imaginary_frequency_count"], 1)
+            self.assertFalse(result.markers["final_frequency_section"])
+
+    def test_ts_legacy_headerless_count_is_not_a_final_section(self) -> None:
+        payload = "\n".join(
+            [
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                "some line   -420.00 cm**-1",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS Freq")
+            )
+        self.assertEqual(result.status, AnalyzerStatus.COMPLETED)
+        self.assertEqual(result.markers["imaginary_frequency_count"], 1)
+        self.assertFalse(result.markers["final_frequency_section"])
 
     def test_ts_ignores_tiny_negative_modes(self) -> None:
         payload = "\n".join(

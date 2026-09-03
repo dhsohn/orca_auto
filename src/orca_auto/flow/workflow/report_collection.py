@@ -112,11 +112,26 @@ def _orca_stage_result(
         final_result = final_result if isinstance(final_result, dict) else {}
         reason = report_diagnostics.normalized_text(final_result.get("reason"))
         attempts = engine_payload.get("attempts")
-        attempt_count = len(attempts) if isinstance(attempts, list) else 0
-        # The analyzer's imaginary-mode marker is not a Nimag: for a run that
-        # stopped short it only says that no frequency section verified the
-        # final geometry, and a completed stage reports its verified block
-        # below. The table therefore never displays the marker.
+        attempts = attempts if isinstance(attempts, list) else []
+        attempt_count = len(attempts)
+        # The analyzer's imaginary-mode count is a Nimag only when the
+        # analyzer marked it as a verdict on the final geometry: counted in the
+        # frequency section after the last final energy and the TS criteria
+        # were reached (a normally terminated candidate rejected for 0 or 2
+        # modes). For a run that stopped short or failed, or a record written
+        # before the marker existed, the count says nothing about the final
+        # geometry and stays unknown.
+        if attempts and isinstance(attempts[-1], dict):
+            markers = attempts[-1].get("markers")
+            if (
+                isinstance(markers, dict)
+                and markers.get("final_frequency_section") is True
+                and "imaginary_frequency_count" in markers
+            ):
+                try:
+                    imaginary_count = int(markers["imaginary_frequency_count"])
+                except (TypeError, ValueError):
+                    imaginary_count = None
 
     energy = None
     if authoritative_evidence is not None:
