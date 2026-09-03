@@ -284,6 +284,7 @@ def shutdown_running_job(
         hooks=EngineQueueProcessShutdownHooks(
             terminate_process_fn=terminate_process_fn,
             requeue_running_entry_fn=_requeue_running_expected,
+            finalize_completed_fn=finalize_completed_job,
         ),
     )
 

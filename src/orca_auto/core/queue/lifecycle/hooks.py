@@ -56,6 +56,12 @@ class EngineQueueProcessReconcileHooks:
 class EngineQueueProcessShutdownHooks:
     terminate_process_fn: Callable[[Any], Any]
     requeue_running_entry_fn: Callable[..., Any]
+    # Optional ``(worker, queue_id, job, rc)`` completion path for a child that
+    # exited with a non-negative code by the time termination returned: it had
+    # reached its own conclusion (completed, failed, or requeued itself), so
+    # requeueing it would re-execute finished work. Engines that leave it None
+    # keep the unconditional requeue.
+    finalize_completed_fn: Callable[[Any, str, Any, int], None] | None = None
 
 
 __all__ = [

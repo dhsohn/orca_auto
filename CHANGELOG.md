@@ -55,6 +55,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   0 or 2 imaginary modes keeps the count that explains the rejection while an
   unfinished run, a geometry or SCF failure, or a record written before the
   marker existed shows none.
+- Graceful shutdown of the ORCA queue worker no longer requeues a child that
+  had reached its own conclusion by the time termination returned. A child
+  that had finished ORCA (completed or failed) and was writing its state and
+  report exits with a non-negative code; requeueing it re-executed or failed
+  force rows and gave plain rows a new run id that unbound their published
+  report and repeated the terminal notification. Such a child, and one that
+  stopped mid-run and requeued itself (which also exits 0), now takes the
+  normal completion path, which marks the row only while it is still running
+  and leaves a self-requeued pending row untouched. A child killed by a signal
+  exits negative and keeps the resume path. If finalizing during shutdown
+  fails, the row and its durable replay marker are left for the next worker
+  start and the remaining jobs are still shut down.
 
 ### Validation limitation
 

@@ -91,6 +91,27 @@ def shutdown_running_process_job(
             getattr(job, "admission_token", ""),
         )
         return
+    exit_code = job.process.poll()
+    if hooks.finalize_completed_fn is not None and exit_code is not None and exit_code >= 0:
+        # The child reached its own conclusion before or while being asked to
+        # stop: a completed or failed run (its state and report are written),
+        # or a self-requeue after a mid-run stop. A signal death is negative
+        # and keeps the resume path below. The completion path marks the row
+        # only while it is still running and releases the slot itself; if it
+        # fails here there is no supervised retry, so leave the row and its
+        # durable replay marker for the next worker start rather than requeue
+        # finished work or skip the remaining jobs' shutdown.
+        try:
+            hooks.finalize_completed_fn(worker, queue_id, job, exit_code)
+        except Exception:
+            logger.exception(
+                "Finalizing job %s (exit code %d) during shutdown failed; leaving its "
+                "queue entry and admission slot %s for the next worker start",
+                queue_id,
+                exit_code,
+                getattr(job, "admission_token", ""),
+            )
+        return
     try:
         generation_kwargs = {}
         if getattr(job, "task_id", None):
