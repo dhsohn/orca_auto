@@ -76,6 +76,7 @@ def _git_checkout_output(
     source_root: Path,
     *git_args: str,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
+    all_lines: bool = False,
 ) -> str:
     try:
         completed = run(
@@ -97,6 +98,8 @@ def _git_checkout_output(
     value = normalize_text(completed.stdout)
     if not value:
         raise ValueError(f"git {' '.join(git_args)} returned no output")
+    if all_lines:
+        return "\n".join(line.strip() for line in value.splitlines() if line.strip())
     return value.splitlines()[0]
 
 
@@ -116,29 +119,18 @@ def _checkout_head_evidence(
     root_text = _git_checkout_output(observed_root, "rev-parse", "--show-toplevel", run=run)
     root = Path(root_text).expanduser().resolve(strict=True)
     head_before = _git_checkout_output(root, "rev-parse", "--verify", "HEAD^{commit}", run=run)
-    reflog_entry = _git_checkout_output(
+    reflog_text = _git_checkout_output(
         root,
         "reflog",
-        "-1",
         "--date=unix",
         "--format=%H%x00%gd",
         run=run,
+        all_lines=True,
     )
     head_after = _git_checkout_output(root, "rev-parse", "--verify", "HEAD^{commit}", run=run)
     if head_before != head_after:
         raise ValueError("checkout HEAD changed during freshness inspection")
-    reflog_sha, separator, selector = reflog_entry.partition("\0")
-    selector_prefix = "HEAD@{"
-    if not separator or not selector.startswith(selector_prefix) or not selector.endswith("}"):
-        raise ValueError(f"invalid HEAD reflog entry: {reflog_entry!r}")
-    try:
-        head_update_epoch = int(selector[len(selector_prefix) : -1])
-    except ValueError as exc:
-        raise ValueError(f"invalid HEAD reflog timestamp: {selector!r}") from exc
-    if head_update_epoch < 0:
-        raise ValueError(f"invalid HEAD reflog timestamp: {selector!r}")
-    if reflog_sha != head_after:
-        raise ValueError("latest HEAD reflog entry does not match the checkout's current HEAD")
+    head_update_epoch = _head_update_epoch_from_reflog(reflog_text, head_sha=head_after)
     commit_epoch_text = _git_checkout_output(
         root,
         "show",
@@ -157,6 +149,44 @@ def _checkout_head_evidence(
         head_commit_epoch=commit_epoch,
         head_update_epoch=float(head_update_epoch),
     )
+
+
+def _parse_reflog_entry(entry: str) -> tuple[str, int]:
+    reflog_sha, separator, selector = entry.partition("\0")
+    selector_prefix = "HEAD@{"
+    if not separator or not selector.startswith(selector_prefix) or not selector.endswith("}"):
+        raise ValueError(f"invalid HEAD reflog entry: {entry!r}")
+    try:
+        epoch = int(selector[len(selector_prefix) : -1])
+    except ValueError as exc:
+        raise ValueError(f"invalid HEAD reflog timestamp: {selector!r}") from exc
+    if epoch < 0:
+        raise ValueError(f"invalid HEAD reflog timestamp: {selector!r}")
+    return reflog_sha, epoch
+
+
+def _head_update_epoch_from_reflog(reflog_text: str, *, head_sha: str) -> int:
+    """The time this checkout first moved to its current HEAD commit.
+
+    The newest reflog entry must name HEAD. Newer entries that re-select the
+    same commit (``git checkout main`` while on main, ``git reset --hard HEAD``,
+    a ``git switch -`` round trip) are not deploys: a worker that imported this
+    commit before them is still fresh, so the update time is taken from the
+    oldest entry of the newest run of entries that all name HEAD.
+    """
+    entries = [line for line in reflog_text.splitlines() if line.strip()]
+    if not entries:
+        raise ValueError("checkout has no HEAD reflog entry")
+    newest_sha, newest_epoch = _parse_reflog_entry(entries[0])
+    if newest_sha != head_sha:
+        raise ValueError("latest HEAD reflog entry does not match the checkout's current HEAD")
+    update_epoch = newest_epoch
+    for entry in entries[1:]:
+        entry_sha, entry_epoch = _parse_reflog_entry(entry)
+        if entry_sha != head_sha:
+            break
+        update_epoch = min(update_epoch, entry_epoch)
+    return update_epoch
 
 
 def _read_process_file(path: str) -> bytes:

@@ -1328,3 +1328,40 @@ def test_cmd_queue_cancel_json_output(
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "cancel_requested"
     assert payload["engine"] == "crest"
+
+
+def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        unified_cli,
+        "_workflow_root_for_args",
+        lambda args, config_path=None: str(tmp_path / "does_not_exist_root"),
+    )
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **kwargs: pytest.fail("a missing runs_root must not be listed"),
+    )
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=None,
+            workflow_root=None,
+            orca_auto_config="/tmp/orca_auto.yaml",
+            limit=0,
+            refresh=False,
+            engine=None,
+            status=None,
+            kind=None,
+            json=True,
+        )
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "runs_root does not exist" in captured.err
+    assert "does_not_exist_root" in captured.err

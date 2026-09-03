@@ -161,6 +161,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   publication it finds under a published observation the same way. An
   unreadable or unsafe `machine.json` now refuses such a restart, as it
   already refused every advance.
+- `service status` no longer reports a worker as stale after a checkout move
+  that re-selected the same commit (`git checkout main` while on main,
+  `git reset --hard HEAD`, a `git switch -` round trip). The freshness check
+  now dates the checkout from the oldest entry of the newest run of HEAD
+  reflog entries that name the current commit, so only a real move to a
+  different commit makes running workers stale.
+- `queue list` reports a configured `runs_root` that does not exist as an
+  error instead of listing an empty queue with exit code 0.
 - Crash recovery and retry/resume inputs no longer seed `MORead` from a torn
   `.gbw` checkpoint. A crash while ORCA writes its checkpoint can leave a file
   of the right size whose unflushed blocks read back as zeros; it used to be
@@ -171,6 +179,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Documentation
 
+- The reference says that the `queue list` text view shows a listed child job
+  beneath its parent workflow row as context and that the context row does
+  not count toward `--limit N` (`--json` returns exactly `N`).
 - The reference documents that a worker stop or restart of a running ORCA job
   resumes it through crash recovery: it consumes one of the three recovery
   rebinds and re-validates the submitted input and resource request, so

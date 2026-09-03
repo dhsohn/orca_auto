@@ -546,7 +546,9 @@ and ORCA child jobs are all expanded beneath workflow parents in the default
 combined text view, so every queued workflow simulation and its current status
 are visible together. The `--engine ... --kind job` filters and `--json` expose
 the same jobs, and a non-negative `--limit N` caps the listing to the newest
-`N` activities after filtering (`0` leaves it uncapped). Top-level ORCA jobs
+`N` activities after filtering (`0` leaves it uncapped); in the text view a
+listed child job is shown beneath its parent workflow row, and that context row
+does not count toward `N` (`--json` returns exactly `N`). Top-level ORCA jobs
 remain top-level entries. The
 `active_simulations` line counts only the currently running
 simulations that consume the shared `scheduler.max_active_simulations` slots.
@@ -751,8 +753,10 @@ Worker restarts and crash recovery (documented limitation):
   Each such resume consumes one of the three recovery rebinds of that
   submission, and the resume re-validates the submitted source input and the
   configured resource request against the queued row: a source `.inp` edited
-  after submission, or a changed `resources.max_cores_per_task`, fails the
-  row instead of resuming it. Restart workers only in an idle window (no
+  after submission fails the row instead of resuming it, and so does a
+  configuration change that alters the recomputed resource request (an input
+  that pins its own `%pal`/`%maxcore` is not affected by
+  `resources.max_cores_per_task`). Restart workers only in an idle window (no
   running simulation), and do not edit a submitted input or the resource
   configuration while its job is queued or running.
 

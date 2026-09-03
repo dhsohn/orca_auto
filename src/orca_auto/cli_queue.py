@@ -5,6 +5,7 @@ import sys
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from orca_auto import activity_labels, cli_common, cli_style, terminal_table
@@ -261,6 +262,14 @@ def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int
     return 0
 
 
+def _missing_workflow_root(args: Any, request: _QueueListRequest) -> str | None:
+    """The configured runs root when it is not a directory, else None."""
+    root = _workflow_root_for_args(args, config_path=request.shared_config)
+    if not root:
+        return None
+    return None if Path(root).is_dir() else str(root)
+
+
 def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
     return list_activities(
         workflow_root=_workflow_root_for_args(args, config_path=request.shared_config),
@@ -422,6 +431,13 @@ def cmd_queue_list(args: Any) -> int:
         except BrokenPipeError:
             return 0
 
+    missing_root = _missing_workflow_root(args, request)
+    if missing_root is not None:
+        emit_error(
+            f"runs_root does not exist: {missing_root}",
+            hint="Check runs_root in the config; a typo here would otherwise list as an empty queue.",
+        )
+        return 1
     try:
         payload = _queue_list_payload(args, request)
         filtered_payload, filtered_activities = _filtered_queue_payload(payload, request)
