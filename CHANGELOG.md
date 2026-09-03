@@ -10,6 +10,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The scan endpoint geometry handed to a continuation or reverse scan is the
+  `.NNN.xyz` of the last retained surface row's step number; counting retained
+  rows picked an earlier step whenever the surface parser refused a row.
 - A CREST ensemble file that exists but cannot be handed off (a malformed
   frame, an atom sequence that differs from the input, an identity that
   changed during the read) is recorded on the result and in the detail

@@ -200,12 +200,21 @@ def _scan_surface(scan_stage: dict[str, Any]) -> list[ScanTSSurfacePoint]:
 
 
 def _scan_endpoint_xyz(scan_stage: dict[str, Any]) -> Path | None:
-    """The last numbered scan-point geometry of a completed scan stage."""
+    """The geometry of the last retained surface row of a completed scan stage.
+
+    A refused last row (a non-energy value) hands on the step before it, as it
+    always did; ``highest_numbered_scan_xyz`` is the last file on disk.
+    """
     selected_inp = _scan_selected_inp(scan_stage)
     if selected_inp is None:
         return None
-    point_count = len(_scan_surface(scan_stage))
-    if point_count == 0:
+    points = _scan_surface(scan_stage)
+    if points:
+        # ORCA numbers the per-step geometries by scan step; a surface row the
+        # parser refused still consumed its step number, so the endpoint is the
+        # last retained row's index, not the count of retained rows.
+        point_count = points[-1].index
+    else:
         spec = _scan_spec(scan_stage)
         if spec is None:
             return None
