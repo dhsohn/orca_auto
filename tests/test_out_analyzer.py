@@ -404,3 +404,28 @@ class TestOutAnalyzer(unittest.TestCase):
             )
         self.assertEqual(result.status, AnalyzerStatus.GEOM_NOT_CONVERGED)
         self.assertEqual(result.reason, "geometry_not_converged")
+
+
+def test_not_converged_marker_before_the_tail_window_is_still_a_verdict(tmp_path):
+    # The parser scans the whole file; the analyzer used to read only the last
+    # 64 KiB, so a not-converged marker followed by a long normal-modes matrix
+    # and a normal termination was reported COMPLETED.
+    from orca_auto.orca import out_analyzer
+
+    out_path = tmp_path / "rxn.out"
+    filler = "\n".join(f"{i:6d}   0.000000   0.000000   0.000000" for i in range(4000))
+    out_path.write_text(
+        "! Opt Freq B3LYP def2-SVP\n"
+        "THE OPTIMIZATION DID NOT CONVERGE\n"
+        "NORMAL MODES\n" + filler + "\n"
+        "****ORCA TERMINATED NORMALLY****\n",
+        encoding="utf-8",
+    )
+    assert out_path.stat().st_size > out_analyzer._DEFAULT_TAIL_BYTES
+
+    analysis = analyze_output(
+        out_path, CompletionMode(kind="opt", require_irc=False, route_line="! Opt Freq")
+    )
+
+    assert analysis.status is AnalyzerStatus.GEOM_NOT_CONVERGED
+    assert analysis.markers["last_opt_converged"] is False

@@ -144,6 +144,7 @@ class SiBlock:
     analysis: FrequencyAnalysis | None
     imaginary_count: int | None
     warnings: tuple[str, ...]
+    last_out_name: str = ""
 
 
 def collect_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> SiBlock | None:
@@ -183,6 +184,7 @@ def collect_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> SiBlock | 
         analysis=analysis,
         imaginary_count=imaginary_count,
         warnings=_lint_warnings(kind, result, imaginary_count),
+        last_out_name=out_path.name,
     )
 
 
@@ -232,6 +234,11 @@ def render_si_block_md(block: SiBlock) -> str:
         lines.append(nimag_line)
 
     lines.extend(f"⚠ {warning}" for warning in block.warnings)
+
+    # Multi-attempt runs keep several outputs (`tsopt.out`, `.retry01`, ...):
+    # name the one these numbers came from, as the IRC block does.
+    if block.last_out_name:
+        lines.append(f"Last output: {block.last_out_name}")
 
     lines.extend(
         f"{element:<2}  {x:12.6f} {y:12.6f} {z:12.6f}" for element, x, y, z in result.coordinates

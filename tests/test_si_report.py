@@ -234,6 +234,13 @@ def test_ts_block_renders_thermochemistry_mode_and_coordinates(tmp_path: Path) -
     assert "C1" in rendered
     assert "C       0.000000     1.234567    -0.987654" in rendered
     assert "⚠" not in rendered
+    # The block names the output it was read from, before the coordinates.
+    final_out = final_out_path(state)
+    assert final_out is not None
+    assert block.last_out_name == final_out.name
+    assert rendered.index(f"Last output: {block.last_out_name}") < rendered.index(
+        "C       0.000000"
+    )
 
 
 def test_minimum_with_imaginary_mode_gets_warning(tmp_path: Path) -> None:

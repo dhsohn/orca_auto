@@ -609,3 +609,39 @@ def test_final_energy_pattern_is_line_anchored_and_parses_d_exponent() -> None:
 
     with pytest.raises(ValueError, match="non-finite"):
         final_single_point_energy_value("1E999")
+
+
+def test_error_banner_is_not_parsed_as_a_route_line(tmp_path: Path) -> None:
+    # ORCA prints "!!!" rules around a fatal error; the route line is the one
+    # that starts with a single "!".
+    out_path = tmp_path / "rxn.out"
+    out_path.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP OptTS Freq",
+                "|  2> * xyzfile 0 1 input.xyz",
+                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+                "!!!                        FATAL ERROR ENCOUNTERED               !!!",
+                "!!!                        -----------------------               !!!",
+                "!!!            I/O OPERATION FAILED                              !!!",
+                "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_path))
+
+    assert result.input_line == "B3LYP def2-SVP OptTS Freq"
+    assert result.calc_type == "ts+freq"
+    assert "FATAL" not in result.input_line
+
+
+def test_route_line_without_a_prompt_is_still_parsed(tmp_path: Path) -> None:
+    out_path = tmp_path / "rxn.out"
+    out_path.write_text("! Opt B3LYP def2-SVP\n!Freq\n", encoding="utf-8")
+
+    result = parse_orca_output(str(out_path))
+
+    assert result.input_line == "Opt B3LYP def2-SVP Freq"

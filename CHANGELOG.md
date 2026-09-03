@@ -10,6 +10,26 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- ORCA's `!!!` error banners are no longer read as the executed route: a route
+  line starts with exactly one `!`.
+- The ScanTS surface parser ends the actual-energy table at the SCF-energy
+  table or the first later section marker (timings, total run time, final
+  energy, optimization done, termination) and accepts only rows of the first
+  row's width with a finite negative energy, so timing lines are no longer
+  read as scan points when the SCF table is absent.
+- The output analyzer scans the whole file for the optimization verdict when
+  the tail window holds none, so a not-converged marker followed by a long
+  normal-modes matrix is `GEOM_NOT_CONVERGED` for the analyzer as it already
+  was for the parser.
+- The Opt/OptTS report card characterizes from the final output first, as the
+  SI block does; a count taken from an earlier attempt's frequency block says
+  so on the card.
+
+### Added
+
+- The stationary SI block prints `Last output: <name>` before the
+  coordinates, naming the output file its values were read from.
+
 - An enqueue whose queue lock timed out, or that found `queue.json` corrupt,
   is reported as that failure with the submission snapshot compensated. Both
   are raised before anything is committed, so the recovery scan that turned

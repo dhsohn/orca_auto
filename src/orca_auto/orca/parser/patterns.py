@@ -5,8 +5,11 @@ from __future__ import annotations
 import math
 import re
 
-# Input line: "! B3LYP def2-TZVP Opt Freq ..." or "|  1> ! B3LYP ..."
-_INPUT_LINE_RE = re.compile(r"^(?:\s*\|\s*\d+>\s*)?!\s*(.+)$", re.MULTILINE)
+# Input line: "! B3LYP def2-TZVP Opt Freq ..." or "|  1> ! B3LYP ...". A route
+# line starts with exactly one "!": ORCA's error banners ("!!!!!!!!" rules and
+# "!!! FATAL ERROR ENCOUNTERED !!!") start with two or more and must not be
+# read as a route.
+_INPUT_LINE_RE = re.compile(r"^(?:\s*\|\s*\d+>\s*)?!(?!!)\s*(.+)$", re.MULTILINE)
 
 # Energy. ORCA prints the total energy on its own line; near-converged SCF
 # runs append a parenthesized annotation such as "(SCF not fully converged!)"
