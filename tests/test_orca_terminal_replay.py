@@ -597,6 +597,47 @@ def test_terminal_replay_completes_when_the_notification_fails(tmp_path: Path) -
     assert notify.call_count == 1
 
 
+def test_terminal_replay_completes_when_the_notifier_raises(tmp_path: Path) -> None:
+    # A notifier exception is the same missed message as a failed send: the
+    # replay must not stay pending on it, and it is not retried.
+    (tmp_path / "rxn").mkdir()
+    entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
+    cfg = AppConfig(
+        runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
+        messenger=MessengerConfig(
+            discord=DiscordConfig(bot_token="token", default_channel_id="123")
+        ),
+    )
+    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    state = {
+        "job_id": entry.task_id,
+        "final_result": {"status": "completed"},
+    }
+
+    with (
+        patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
+        patch.object(
+            worker_tracking_mod,
+            "notify_terminal_job_from_state",
+            side_effect=UnicodeEncodeError("utf-8", "\udcff", 0, 1, "surrogates not allowed"),
+        ) as notify,
+        patch.object(replay_mod, "load_state", return_value=state),
+    ):
+        _run_terminal_replay(
+            worker,
+            tmp_path,
+            entry,
+            previous_status=STATUS_RUNNING,
+        )
+        assert notify.call_count == 1
+        key = (str(tmp_path.resolve()), entry.queue_id)
+        assert _reconcile_statuses(worker)[key] == "completed"
+        assert replay_mod.get_replay_state(worker).pending_replays == {}
+        _run_terminal_replay(worker, tmp_path, entry)
+
+    assert notify.call_count == 1
+
+
 def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
     tmp_path: Path,
 ) -> None:

@@ -116,11 +116,20 @@ class DiscordBotChannel:
         if not self.enabled:
             return SendResult(sent=False, skipped=True, error="discord_bot_disabled")
 
-        data = json.dumps(
-            self._payload(message),
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        try:
+            data = json.dumps(
+                self._payload(message),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError):
+            # Request construction is advisory like transport: a payload that
+            # cannot be serialized (a lone surrogate from a non-UTF-8 path,
+            # for instance) is a failed send, not an exception for the caller.
+            # The message may carry path text, so log only the stable code.
+            result = SendResult(sent=False, error="discord_request_error")
+            (self.logger or _LOGGER).warning("discord_bot_send_failed: %s", result.error)
+            return result
         attempts = _bounded_attempts(self.config.max_attempts)
         total_delay = 0.0
         result = SendResult(sent=False, error="discord_not_attempted")

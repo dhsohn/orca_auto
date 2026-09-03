@@ -80,8 +80,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   messenger recovered, and made the row impossible to clear. The notification
   is now advisory at terminal replay as it already was at submission: a
   delivery failure is logged with the redacted reason, the replay completes
-  and releases the slot, and the failed message is not retried later. State
-  and report replay and the once-only replay marker are unchanged.
+  and releases the slot, and the failed message is not retried later. A
+  notifier that raises instead of reporting a failed send is treated the same
+  way, and the Discord adapter now reports a payload it cannot serialize (for
+  example a lone surrogate from a non-UTF-8 path) as a redacted request error
+  instead of raising. State and report replay and the once-only replay marker
+  are unchanged.
 
 ### Validation limitation
 
