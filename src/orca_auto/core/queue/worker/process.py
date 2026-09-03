@@ -303,7 +303,13 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
             return
         self._before_shutdown_all(len(jobs_to_shutdown))
         for queue_id, job in jobs_to_shutdown:
-            self._shutdown_running_job(queue_id, job)
+            try:
+                self._shutdown_running_job(queue_id, job)
+            except Exception:
+                # One job's shutdown failing must not leave the remaining
+                # children running unsupervised; its own row and slot are
+                # reconciled on the next worker start.
+                logger.exception("Shutting down running job %s failed", queue_id)
             self._discard_running_job(queue_id)
 
     def _before_shutdown_all(self, running_count: int) -> None:
