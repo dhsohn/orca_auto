@@ -29,6 +29,8 @@ It pulls in:
 Before enabling the runtime target:
 
 - Restrict local config permissions with `chmod 600 config/orca_auto.yaml`
+  and `chmod 700 config` (a world-writable directory lets any local account
+  replace the file, and with it the configured engine executables)
 
 Install the runtime target:
 
@@ -46,7 +48,11 @@ dollar signs are rejected before any unit is written.
 After updating the checkout or editing any unit template in this directory,
 rerun the installer with the same `--user` and `--repo` values. The installed
 units are rendered copies under `/etc/systemd/system`; `systemctl daemon-reload`
-alone does not copy template changes or install newly added units.
+alone does not copy template changes or install newly added units. The
+installer's target restart does not restart workers that are already running;
+run `orca_auto service restart` in an idle window afterwards so they import
+the updated checkout (`orca_auto service status` reports them as stale until
+then).
 
 ### Failed installs
 

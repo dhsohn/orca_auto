@@ -32,6 +32,9 @@
 
 - Python 3.11 이상.
 - 네이티브 Linux 또는 WSL2.
+- systemd unit을 쓰는 호스트에서는 systemd 247 이상. `service status`는
+  `systemctl show --timestamp=utc`로 unit 시작 시각을 읽으며, 더 오래된 systemd에서는
+  모든 git-backed 워커를 `undetermined`로 보고합니다.
 - 설정된 루트와 실행 파일에는 Linux/POSIX 경로 사용.
 - ORCA, xTB, CREST 실행 파일을 설정할 경우 절대 Linux 실행 경로 사용.
 - 계산 엔진을 실행하는 계정은 작업이 끝날 때까지 작업 디렉터리와 실행 파일 배포본을
@@ -280,7 +283,9 @@ basename으로 쓰면 제출 단계에서 거부합니다. `%base`와 NEB restar
 제어 같은 출력 base override도 fail-closed합니다.
 
 현재 execution snapshot, publication marker, identity 필드를 모두 가진 행만 실행할 수
-있습니다. 이 계약을 만족하지 않는 행은 fail-closed하며 clear하거나 다시 제출해야 합니다.
+있습니다. 이 계약을 만족하지 않는 행은 fail-closed합니다. pending 행은 `queue cancel`로
+취소해야 하고(그 행이 있는 동안 큐는 admission을 멈춥니다), terminal 행은
+`queue list clear`가 제거하며, 작업은 다시 제출합니다.
 워크플로우 내부 xTB/CREST snapshot은 공개 task id만으로 소유권을 정하지 않고 제출마다
 배타적으로 예약한 고유 namespace를 사용합니다.
 Generation 디렉터리를 만들기 전에 소유 queue root에 내부 durable intent를 기록합니다.

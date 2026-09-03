@@ -744,6 +744,18 @@ Principles:
 - Original `.inp` is preserved
 - Retry inputs are generated as `<name>.retryNN.inp`
 
+Worker restarts and crash recovery (documented limitation):
+
+- A running ORCA job that is interrupted by a worker stop or restart is
+  requeued and resumed through the same crash-recovery path as a genuine crash.
+  Each such resume consumes one of the three recovery rebinds of that
+  submission, and the resume re-validates the submitted source input and the
+  configured resource request against the queued row: a source `.inp` edited
+  after submission, or a changed `resources.max_cores_per_task`, fails the
+  row instead of resuming it. Restart workers only in an idle window (no
+  running simulation), and do not edit a submitted input or the resource
+  configuration while its job is queued or running.
+
 ## 11) Output Files
 
 The submitted ORCA job directory keeps the user-authored inputs, `run.lock`,
