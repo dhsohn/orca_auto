@@ -117,6 +117,52 @@ def test_readvance_of_published_terminal_workflow_leaves_pinned_artifacts_untouc
     assert "si_publish_pending" not in payload["metadata"]
 
 
+def test_readvance_retires_a_pending_si_publication_under_the_terminal_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_si_stale_pending",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "reaction_key": "R01-P01",
+        "requested_at": "2026-08-09T12:00:00+00:00",
+        "stages": [],
+        "metadata": {"last_advanced_at": "2026-08-09T12:30:00+00:00"},
+    }
+    workspace = tmp_path / "wf_si_stale_pending"
+    workspace.mkdir()
+    (workspace / "workflow_report.html").write_text("<html>done</html>\n", encoding="utf-8")
+    machine_path = write_workflow_machine_observation(workspace, payload)
+    assert machine_path is not None
+    machine_bytes = machine_path.read_bytes()
+    # An older restart re-armed the publication after the observation was
+    # published; the pending flag alone kept terminal sync due forever.
+    payload["metadata"]["si_publish_pending"] = True
+    payload["metadata"]["si_publish_generation"] = "2026-08-09T12:30:00+00:00"
+    writer_calls = 0
+
+    def unexpected_writer(*args: Any, **kwargs: Any) -> None:
+        nonlocal writer_calls
+        writer_calls += 1
+
+    monkeypatch.setattr(advance_module, "write_workflow_si", unexpected_writer)
+    deps = _si_publication_test_deps(monkeypatch, tmp_path, payload)
+
+    orchestration.advance_workflow(
+        target="wf_si_stale_pending", workflow_root=tmp_path, services=deps
+    )
+
+    assert writer_calls == 0
+    assert payload["metadata"]["si_publish_pending"] is False
+    assert payload["metadata"]["si_publish_blocked"] is True
+    assert payload["metadata"]["si_publish_error"] == (
+        advance_module.SI_PINNED_BY_TERMINAL_OBSERVATION
+    )
+    assert machine_path.read_bytes() == machine_bytes
+    assert not (workspace / "workflow_si.md").exists()
+
+
 def test_readvance_fails_closed_on_a_corrupt_machine_observation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

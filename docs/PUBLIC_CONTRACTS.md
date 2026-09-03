@@ -776,7 +776,11 @@ Workflow runtime artifacts:
   keeps its observed durable ID as evidence while the registry keys the single row
   by the trusted workspace name and records the observed ID in metadata. After fixing
   the cause, an operator can re-arm a blocked publication with
-  `orca_auto run-dir <workflow_dir> --force`.
+  `orca_auto run-dir <workflow_dir> --force`, unless the workflow has already
+  published its terminal observation: that observation pins `workflow_si.md`,
+  so the publication stays blocked, the restart records it as pinned by the
+  terminal observation, and a re-advance retires any pending flag it finds
+  under a published observation the same way.
 - The population temperature is the parsed thermochemistry temperature. The
   optional `boltzmann_temperature_k` manifest key is a finite, strictly positive
   pin validated at admission and stored in the durable workflow request; it must

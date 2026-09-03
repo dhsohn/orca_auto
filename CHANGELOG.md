@@ -148,6 +148,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   candidate), so every ranking submission failed with "Unsupported xtb
   job_type: ranking". The command is now validated as the candidate single
   point the worker actually runs.
+- A workflow whose terminal `machine.json` is already published no longer
+  loops forever after its SI publication is re-armed. The observation pins
+  `workflow_si.md`, so the re-armed publication could never run, yet the
+  pending flag kept every worker cycle re-advancing the workflow. A restart
+  now leaves such a publication blocked and records the reason
+  (`si_publication_pinned_by_terminal_observation`) instead of re-arming it;
+  a forced restart with nothing else to restart is refused with that reason
+  and leaves the workflow untouched. A re-advance retires a pending
+  publication it finds under a published observation the same way. An
+  unreadable or unsafe `machine.json` now refuses such a restart, as it
+  already refused every advance.
 - Crash recovery and retry/resume inputs no longer seed `MORead` from a torn
   `.gbw` checkpoint. A crash while ORCA writes its checkpoint can leave a file
   of the right size whose unflushed blocks read back as zeros; it used to be

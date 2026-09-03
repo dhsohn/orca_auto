@@ -691,6 +691,10 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
   증거로 보존하고, registry의 단일 row는 신뢰할 수 있는 workspace 이름으로 key를 지정하면서
   관측 ID를 metadata에 기록합니다. 원인을 고친 뒤 운영자는
   `orca_auto run-dir <workflow_dir> --force`로 blocked publication을 다시 arm할 수 있습니다.
+  단, workflow가 이미 terminal observation을 게시했다면 그 observation이 `workflow_si.md`를
+  고정하므로 publication은 blocked로 남고, restart는 이를 terminal observation에 pinned된
+  것으로 기록하며, 게시된 observation 아래에서 pending flag를 발견한 re-advance도 같은
+  방식으로 retire합니다.
 - Population 온도는 파싱된 thermochemistry 온도입니다. 선택적
   `boltzmann_temperature_k` 매니페스트 키는 admission에서 유한한 양수인지 검증해 내구성
   워크플로우 요청에 저장하는 pin입니다. 모든 주파수 작업의 파싱 온도와 0.01 K 이내로
