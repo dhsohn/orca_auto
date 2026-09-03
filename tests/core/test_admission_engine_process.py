@@ -872,3 +872,111 @@ def test_registrar_clear_failure_retains_active_identity(
     ) == ("active", 202, 202, 2002)
     with pytest.raises(RuntimeError, match="launch may be active"):
         admission.release_slot(tmp_path, token)
+
+
+def test_recover_slot_clears_launch_gated_pending_left_by_dead_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch, engine_launch_gated=True)
+    pending = admission.prepare_slot_engine_process(tmp_path, token)
+    assert pending is not None and pending.owner_boot_id
+
+    recovered = engine_process.recover_slot_engine_process(
+        tmp_path,
+        token,
+        deps=engine_process.EngineProcessRecoveryDeps(
+            kill=lambda *_args: (_ for _ in ()).throw(ProcessLookupError),
+            killpg=lambda *_args: pytest.fail("gated pending slots have no group to signal"),
+            boot_id=lambda: pending.owner_boot_id,
+        ),
+    )
+
+    assert recovered is False
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None
+    assert slot.engine_process_state == "idle"
+    assert admission.release_slot(tmp_path, token) is True
+
+
+def test_recover_slot_retains_gated_pending_launch_when_the_clear_is_refused(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A compare-and-swap refusal (the record changed under the recovery) must
+    # surface as the pending error, never as a "cleared" return.
+    token = _reserve_managed(tmp_path, monkeypatch, engine_launch_gated=True)
+    pending = admission.prepare_slot_engine_process(tmp_path, token)
+    assert pending is not None and pending.owner_boot_id
+    monkeypatch.setattr(
+        engine_process,
+        "complete_slot_engine_process",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(
+        engine_process.EngineProcessRecordPendingError,
+        match="changed while clearing",
+    ):
+        engine_process.recover_slot_engine_process(
+            tmp_path,
+            token,
+            deps=engine_process.EngineProcessRecoveryDeps(
+                kill=lambda *_args: (_ for _ in ()).throw(ProcessLookupError),
+                boot_id=lambda: pending.owner_boot_id,
+            ),
+        )
+
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None
+    assert slot.engine_process_state == "pending"
+
+
+def test_recover_slot_retains_pending_launch_under_live_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch, owner_ticks=1001, engine_launch_gated=True)
+    pending = admission.prepare_slot_engine_process(tmp_path, token)
+    assert pending is not None and pending.owner_boot_id
+
+    with pytest.raises(engine_process.EngineProcessRecordPendingError, match="live owner"):
+        engine_process.recover_slot_engine_process(
+            tmp_path,
+            token,
+            deps=engine_process.EngineProcessRecoveryDeps(
+                kill=lambda *_args: None,
+                process_start_ticks=lambda _pid: 1001,
+                boot_id=lambda: pending.owner_boot_id,
+            ),
+        )
+
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None
+    assert slot.engine_process_state == "pending"
+
+
+def test_recover_slot_retains_ungated_pending_launch_left_by_dead_owner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    pending = admission.prepare_slot_engine_process(tmp_path, token)
+    assert pending is not None and pending.owner_boot_id
+
+    with pytest.raises(
+        engine_process.EngineProcessRecordPendingError,
+        match="Dead slot owner left a pending engine launch",
+    ):
+        engine_process.recover_slot_engine_process(
+            tmp_path,
+            token,
+            deps=engine_process.EngineProcessRecoveryDeps(
+                kill=lambda *_args: (_ for _ in ()).throw(ProcessLookupError),
+                boot_id=lambda: pending.owner_boot_id,
+            ),
+        )
+
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None
+    assert slot.engine_process_state == "pending"
