@@ -140,7 +140,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `<runs_root>/.admission` directory as a mandatory `ReadWritePaths` entry,
   which made the worker unit fail to start on a fresh install; the writable
   `runs_root` parent lets the worker create it. An explicitly configured
-  `scheduler.admission_root` must exist as a directory before installation.
+  `scheduler.admission_root` must exist as a directory before installation;
+  a directory the installing account cannot traverse is not treated as
+  missing.
 
 - xTB `ranking` jobs can be submitted again. Submission validated the job by
   building a single xTB command for job type `ranking`, which the runner's
