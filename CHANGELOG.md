@@ -27,6 +27,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `exit_code=1`, and the existing-generation case names the directory to
   inspect. The terminal notification keeps reporting `crashed_recovery` when
   the run state was already repaired before the rejection.
+- Parsed thermochemistry (ZPE, H, G, G-E(el), temperature) is bound to the
+  output printed after the last final single point energy. Optimizations with
+  `Calc_Hess`/`Recalc_Hess` print a thermochemistry block for every Hessian
+  they compute, and the parser previously published the first one, so SI
+  blocks, SP reports and composite G carried the initial-guess geometry's
+  values (15 and 49 kcal/mol off in G on two completed TS outputs). An output
+  whose final stage has no thermochemistry block, such as an `OptTS` without
+  `Freq`, or whose final energy is missing or unparseable, now publishes no
+  thermochemistry instead of an earlier geometry's, as an output whose final
+  SCF is annotated as unconverged already did. Imaginary-mode and frequency
+  selection (parser, reports and TS-completion analysis) still use the last
+  frequency block in the file and are unchanged.
 
 ### Validation limitation
 

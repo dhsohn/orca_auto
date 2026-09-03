@@ -152,7 +152,10 @@ def parse_orca_output(file_path: str) -> OrcaResult:
     _populate_energy(result, final_energy)
     _populate_convergence(result, text)
     _populate_frequencies(result, text)
-    _populate_thermodynamics(result, text, final_energy)
+    _populate_thermodynamics(
+        result,
+        _final_stage_text(text, final_energy, published_energy=result.energy_hartree),
+    )
     result.wall_time_seconds = _parse_wall_time(text)
     result.status = _parse_status(text, result)
 
@@ -220,29 +223,54 @@ def _populate_convergence(result: OrcaResult, text: str) -> None:
         result.opt_converged = False
 
 
+def _final_stage_text(
+    text: str,
+    final_energy: re.Match[str] | None,
+    *,
+    published_energy: float | None,
+) -> str | None:
+    """Return the output printed after the published final energy, or None.
+
+    ``published_energy`` is the value ``_populate_energy`` derived from
+    ``final_energy``; it is None when that line was absent, unparseable or
+    annotated, which is what makes the stage unpublishable.
+
+    ORCA prints a full frequency/thermochemistry block for every Hessian it
+    computes, so an optimization with ``Calc_Hess``/``Recalc_Hess`` carries
+    several blocks and only the one after the last final single point energy
+    describes the final geometry. Thermochemistry is read from that stage
+    alone: earlier blocks are never published, and an output whose final stage
+    has no block (an ``OptTS`` without ``Freq``) publishes none rather than an
+    earlier geometry's values. Without a published final energy (none printed,
+    unparseable, or annotated as an unconverged SCF) there is no stage to bind
+    to and nothing is published. The imaginary-mode fields keep their
+    whole-file last-block selection so that a failed run without a published
+    final energy still reports its last frequency block.
+    """
+    if final_energy is None or published_energy is None:
+        return None
+    return text[final_energy.end() :]
+
+
 def _populate_frequencies(result: OrcaResult, text: str) -> None:
     has_imag, lowest = _parse_frequencies(text)
     result.has_imaginary_freq = has_imag
     result.lowest_freq_cm1 = lowest
 
 
-def _populate_thermodynamics(
-    result: OrcaResult, text: str, final_energy: re.Match[str] | None
-) -> None:
-    if _final_energy_line_annotated(final_energy):
-        # Thermochemistry printed after an unconverged final SCF derives from
-        # the same tainted energy; publish none of it.
+def _populate_thermodynamics(result: OrcaResult, stage_text: str | None) -> None:
+    if stage_text is None:
         return
-    enthalpy_match = _ENTHALPY_RE.search(text)
+    enthalpy_match = _ENTHALPY_RE.search(stage_text)
     if enthalpy_match:
         result.enthalpy = float(enthalpy_match.group(1))
-    gibbs_match = _GIBBS_RE.search(text)
+    gibbs_match = _GIBBS_RE.search(stage_text)
     if gibbs_match:
         result.gibbs_energy = float(gibbs_match.group(1))
-    zpe_match = _ZPE_RE.search(text)
+    zpe_match = _ZPE_RE.search(stage_text)
     if zpe_match:
         result.zpe_correction = float(zpe_match.group(1))
-    correction_match = _GIBBS_CORRECTION_RE.search(text)
+    correction_match = _GIBBS_CORRECTION_RE.search(stage_text)
     if correction_match:
         result.gibbs_correction = float(correction_match.group(1))
     elif result.gibbs_energy is not None and result.energy_hartree is not None:
@@ -251,7 +279,7 @@ def _populate_thermodynamics(
         # IS G - E(el). Without this fallback an SP//opt workflow would
         # silently omit its composite G.
         result.gibbs_correction = result.gibbs_energy - result.energy_hartree
-    temperature_match = _THERMO_TEMPERATURE_RE.search(text)
+    temperature_match = _THERMO_TEMPERATURE_RE.search(stage_text)
     if temperature_match:
         result.thermo_temperature_k = float(temperature_match.group(1))
 

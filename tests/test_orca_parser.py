@@ -426,6 +426,148 @@ def test_parser_derives_gibbs_correction_when_line_absent(tmp_path: Path) -> Non
     assert result.gibbs_correction == pytest.approx(-100.38210988 - (-100.5))
 
 
+def _thermochemistry_block(
+    *,
+    temperature: str,
+    zpe: str,
+    enthalpy: str,
+    gibbs: str,
+    correction: str,
+    lowest_mode: str,
+) -> list[str]:
+    return [
+        "-----------------------",
+        "VIBRATIONAL FREQUENCIES",
+        "-----------------------",
+        "   0:         0.00 cm**-1",
+        f"   6:      {lowest_mode} cm**-1",
+        "--------------------------",
+        f"THERMOCHEMISTRY AT {temperature}K",
+        "--------------------------",
+        f"Zero point energy                ...      {zpe} Eh",
+        f"Total Enthalpy                   ...   {enthalpy} Eh",
+        f"Total enthalpy                   ...   {enthalpy} Eh",
+        f"Final Gibbs free energy          ...   {gibbs} Eh",
+        f"G-E(el)                          ...      {correction} Eh",
+    ]
+
+
+_INITIAL_HESSIAN_BLOCK = _thermochemistry_block(
+    temperature="298.15",
+    zpe="0.05000000",
+    enthalpy="-100.00000000",
+    gibbs="-100.05000000",
+    correction="0.05000000",
+    lowest_mode="-650.00",
+)
+_FINAL_FREQ_BLOCK = _thermochemistry_block(
+    temperature="350.00",
+    zpe="0.06000000",
+    enthalpy="-100.25000000",
+    gibbs="-100.30000000",
+    correction="-0.10000000",
+    lowest_mode="-420.00",
+)
+
+
+def test_parser_binds_thermochemistry_to_the_final_energy_stage(tmp_path: Path) -> None:
+    # Calc_Hess/Recalc_Hess print a full thermochemistry block for every
+    # Hessian computed during the optimization. Only the block after the last
+    # final single point energy describes the final geometry.
+    out_file = tmp_path / "recalc_hess.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP OptTS Freq",
+                "|  2> %geom Calc_Hess true Recalc_Hess 5 end",
+                "FINAL SINGLE POINT ENERGY      -100.100000000000",
+                *_INITIAL_HESSIAN_BLOCK,
+                "FINAL SINGLE POINT ENERGY      -100.150000000000",
+                "                    ***        THE OPTIMIZATION HAS CONVERGED      ***",
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                *_FINAL_FREQ_BLOCK,
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.energy_hartree == pytest.approx(-100.2)
+    assert result.zpe_correction == pytest.approx(0.06)
+    assert result.enthalpy == pytest.approx(-100.25)
+    assert result.gibbs_energy == pytest.approx(-100.30)
+    assert result.gibbs_correction == pytest.approx(-0.10)
+    assert result.thermo_temperature_k == pytest.approx(350.0)
+    assert result.has_imaginary_freq is True
+    assert result.lowest_freq_cm1 == pytest.approx(-420.0)
+
+
+def test_parser_publishes_no_thermochemistry_when_the_final_stage_has_none(
+    tmp_path: Path,
+) -> None:
+    # An OptTS without Freq still prints the initial Hessian's thermochemistry
+    # before the optimization; that block belongs to the guess geometry, so
+    # nothing may be attributed to the final one.
+    out_file = tmp_path / "optts_no_freq.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP OptTS",
+                "|  2> %geom Calc_Hess true end",
+                *_INITIAL_HESSIAN_BLOCK,
+                "FINAL SINGLE POINT ENERGY      -100.100000000000",
+                "                    ***        THE OPTIMIZATION HAS CONVERGED      ***",
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.energy_hartree == pytest.approx(-100.2)
+    assert result.zpe_correction is None
+    assert result.enthalpy is None
+    assert result.gibbs_energy is None
+    assert result.gibbs_correction is None
+    assert result.thermo_temperature_k is None
+
+
+@pytest.mark.parametrize(
+    "final_energy_line",
+    [None, "FINAL SINGLE POINT ENERGY      1.0D+400"],
+    ids=["absent", "non-finite"],
+)
+def test_parser_publishes_no_thermochemistry_without_a_published_final_energy(
+    tmp_path: Path,
+    final_energy_line: str | None,
+) -> None:
+    out_file = tmp_path / "no_final_energy.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "|  1> ! B3LYP def2-SVP Freq",
+                *([final_energy_line] if final_energy_line else []),
+                *_INITIAL_HESSIAN_BLOCK,
+                "                             ****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.energy_hartree is None
+    assert result.gibbs_energy is None
+    assert result.enthalpy is None
+    assert result.zpe_correction is None
+    assert result.gibbs_correction is None
+    assert result.thermo_temperature_k is None
+
+
 def test_final_energy_pattern_is_line_anchored_and_parses_d_exponent() -> None:
     from orca_auto.orca.parser.patterns import (
         FINAL_SINGLE_POINT_ENERGY_BYTES_RE,
