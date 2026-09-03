@@ -171,43 +171,24 @@ def _parse_reflog_entry(entry: str) -> tuple[str, int, str]:
     return reflog_sha, epoch, subject.strip()
 
 
-def _reflog_entry_is_noop_checkout(subject: str) -> bool:
-    """A ``checkout:`` entry that re-selected the commit HEAD already named.
-
-    Only a checkout can move HEAD to the same commit without touching the
-    files. ``git reset --hard HEAD`` also records the current commit, but it
-    restores the working tree, so a worker that imported edited source before
-    it is running code the checkout no longer has; that entry counts as an
-    update.
-    """
-    return subject.startswith("checkout:")
-
-
 def _head_update_epoch_from_reflog(reflog_text: str, *, head_sha: str) -> int:
-    """The time this checkout last changed its files to the current HEAD commit.
+    """The time of the newest HEAD reflog entry, which must name HEAD.
 
-    The newest reflog entry must name HEAD. A ``checkout:`` entry that
-    re-selected the commit the previous entry already named (``git checkout
-    main`` while on main) changed no file, so it folds into the entry before
-    it. Any other same-commit entry (a ``reset --hard HEAD`` that restored
-    edited files) and any move through a different commit (a ``git switch -``
-    round trip) counts as an update: the files changed, and a worker started
-    before it may be running code the checkout no longer has.
+    Every entry counts, including one that re-selected the commit already
+    checked out: ``git checkout -f main`` while on main and ``git reset --hard
+    HEAD`` write the same ``checkout:``/``reset:`` subjects as their no-op
+    forms but restore the working tree, and the reflog cannot tell the two
+    apart. A worker started before such an entry may be running code the
+    checkout no longer has, so the verdict errs toward stale: a plain
+    ``git checkout main`` while on main also asks for a restart.
     """
     entries = [line for line in reflog_text.splitlines() if line.strip()]
     if not entries:
         raise ValueError("checkout has no HEAD reflog entry")
-    newest_sha, newest_epoch, newer_subject = _parse_reflog_entry(entries[0])
+    newest_sha, newest_epoch, _subject = _parse_reflog_entry(entries[0])
     if newest_sha != head_sha:
         raise ValueError("latest HEAD reflog entry does not match the checkout's current HEAD")
-    update_epoch = newest_epoch
-    for entry in entries[1:]:
-        entry_sha, entry_epoch, entry_subject = _parse_reflog_entry(entry)
-        if entry_sha != head_sha or not _reflog_entry_is_noop_checkout(newer_subject):
-            break
-        update_epoch = min(update_epoch, entry_epoch)
-        newer_subject = entry_subject
-    return update_epoch
+    return newest_epoch
 
 
 def _read_process_file(path: str) -> bytes:
