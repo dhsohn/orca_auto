@@ -117,6 +117,43 @@ def _upstream_orca_observations(workspace_dir: Path, report_data: Any) -> list[d
     return upstream
 
 
+SI_PINNED_BY_TERMINAL_OBSERVATION = "SI publication is pinned by the published terminal observation"
+
+
+def terminal_observation_published(workspace_dir: Path) -> bool:
+    """True when this workspace already published its immutable ``machine.json``.
+
+    The terminal observation pins the exact bytes of ``workflow_report.html``
+    and ``workflow_si.md``; once it exists, no advance may regenerate a pinned
+    artifact. An unsafe or unparseable existing observation fails closed with
+    an error — before any pinned artifact could be rewritten — instead of
+    silently freezing report publication behind a junk file.
+    """
+    machine_path = workspace_dir / MACHINE_OBSERVATION_FILE
+    if machine_path.is_symlink():
+        raise ValueError(f"workflow machine observation is unsafe: {machine_path}")
+    if not machine_path.exists():
+        return False
+    try:
+        payload = json.loads(
+            read_confined_text(
+                workspace_dir,
+                machine_path,
+                label="workflow machine observation",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            )
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"existing workflow machine observation is invalid: {machine_path}"
+        ) from exc
+    lifecycle = payload.get("lifecycle") if isinstance(payload, dict) else None
+    phase = lifecycle.get("phase") if isinstance(lifecycle, dict) else None
+    if phase != "finished":
+        raise ValueError(f"existing workflow machine observation is not terminal: {machine_path}")
+    return True
+
+
 def build_workflow_machine_observation(
     workspace_dir: Path,
     payload: Mapping[str, Any],
@@ -266,6 +303,8 @@ def write_workflow_machine_observation(
 
 
 __all__ = [
+    "SI_PINNED_BY_TERMINAL_OBSERVATION",
     "build_workflow_machine_observation",
+    "terminal_observation_published",
     "write_workflow_machine_observation",
 ]

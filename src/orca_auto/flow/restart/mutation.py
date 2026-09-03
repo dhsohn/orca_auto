@@ -21,6 +21,7 @@ from ..contracts.workflow import (
 )
 from ..registry import sync_workflow_registry
 from ..state import load_workflow_payload, workflow_summary, write_workflow_payload
+from ..workflow.machine import SI_PINNED_BY_TERMINAL_OBSERVATION, terminal_observation_published
 
 _RESTARTABLE_WORKFLOW_STATUSES = frozenset({*WORKFLOW_FAILED_STATUSES, STATUS_CANCELLED})
 
@@ -229,6 +230,29 @@ def _reset_restartable_stages(
         )
     metadata = payload.get("metadata")
     if isinstance(metadata, dict) and bool(metadata.get("si_publish_blocked")):
+        if terminal_observation_published(restart_allowed_root):
+            # The published observation pins workflow_si.md, so a re-armed
+            # publication could never run; re-arming it only made every
+            # worker cycle re-advance the workflow forever. Leave it blocked
+            # and say why. A restart that would do nothing else is refused
+            # outright so the workflow is not flipped to planned for nothing.
+            if not restarted_stages:
+                raise ValueError(
+                    f"{SI_PINNED_BY_TERMINAL_OBSERVATION}; nothing else to restart in "
+                    f"{restart_allowed_root}"
+                )
+            metadata["si_publish_error"] = SI_PINNED_BY_TERMINAL_OBSERVATION
+            metadata.pop("si_publish_next_retry_at", None)
+            restarted_stages.append(
+                {
+                    "stage_id": "workflow_si",
+                    "previous_status": "blocked",
+                    "previous_task_status": "",
+                    "engine": "workflow",
+                    "action": "si_publication_pinned_by_terminal_observation",
+                }
+            )
+            return restarted_stages
         metadata["si_publish_pending"] = True
         metadata.pop("si_publish_blocked", None)
         metadata.pop("si_publish_attempts", None)

@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import MAX_RUN_ARTIFACT_JSON_BYTES
-from orca_auto.core.engine_process import read_confined_text
-from orca_auto.core.machine_observation import MACHINE_OBSERVATION_FILE
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts.workflow import workflow_metadata
@@ -28,47 +24,17 @@ from orca_auto.flow.orchestration.services import (
 from orca_auto.flow.orchestration.workflow_cancellation import (
     cancel_materialized_workflow,
 )
-from orca_auto.flow.workflow.machine import write_workflow_machine_observation
+from orca_auto.flow.workflow.machine import (
+    SI_PINNED_BY_TERMINAL_OBSERVATION,
+    terminal_observation_published,
+    write_workflow_machine_observation,
+)
 from orca_auto.flow.workflow.report_rendering import write_workflow_html_report
 from orca_auto.flow.workflow.si.publication import write_workflow_si
 
 logger = logging.getLogger(__name__)
 
 _SI_PUBLISH_MAX_ATTEMPTS = 5
-
-
-def _terminal_observation_published(workspace_dir: Path) -> bool:
-    """True when this workspace already published its immutable ``machine.json``.
-
-    The terminal observation pins the exact bytes of ``workflow_report.html``
-    and ``workflow_si.md``; once it exists, no advance may regenerate a pinned
-    artifact. An unsafe or unparseable existing observation fails closed with
-    an error — before any pinned artifact could be rewritten — instead of
-    silently freezing report publication behind a junk file.
-    """
-    machine_path = workspace_dir / MACHINE_OBSERVATION_FILE
-    if machine_path.is_symlink():
-        raise ValueError(f"workflow machine observation is unsafe: {machine_path}")
-    if not machine_path.exists():
-        return False
-    try:
-        payload = json.loads(
-            read_confined_text(
-                workspace_dir,
-                machine_path,
-                label="workflow machine observation",
-                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
-            )
-        )
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
-        raise ValueError(
-            f"existing workflow machine observation is invalid: {machine_path}"
-        ) from exc
-    lifecycle = payload.get("lifecycle") if isinstance(payload, dict) else None
-    phase = lifecycle.get("phase") if isinstance(lifecycle, dict) else None
-    if phase != "finished":
-        raise ValueError(f"existing workflow machine observation is not terminal: {machine_path}")
-    return True
 
 
 def _validate_or_quarantine_workflow_identity(
@@ -120,7 +86,7 @@ def _validate_or_quarantine_workflow_identity(
         services.persistence.write_workflow_payload(workspace_dir, payload)
         services.persistence.sync_workflow_registry(workflow_root_path, workspace_dir, payload)
         try:
-            observation_published = _terminal_observation_published(workspace_dir)
+            observation_published = terminal_observation_published(workspace_dir)
         except (OSError, RuntimeError, ValueError):
             # Quarantine must still persist; with the observation state unsafe
             # or unreadable, leave every possibly-pinned artifact untouched.
@@ -136,6 +102,30 @@ def _validate_or_quarantine_workflow_identity(
         # sync-only mode. This blocks new submissions while allowing the
         # normal finalization path to cancel and drain active children.
         return str(payload.get("workflow_id") or "").strip()
+
+
+def _pin_si_publication_under_terminal_observation(
+    payload: dict[str, Any], workspace_dir: Path
+) -> None:
+    """Retire a pending SI publication that a terminal observation forbids.
+
+    The observation pins ``workflow_si.md``; a publication re-armed after it
+    (an older restart re-armed a blocked one) could never run, yet the pending
+    flag kept every worker cycle re-advancing this workflow forever. Record
+    it as blocked with the reason so terminal sync stops.
+    """
+    metadata = workflow_metadata(payload)
+    if not bool(metadata.get("si_publish_pending")):
+        return
+    logger.warning(
+        "Retiring a pending SI publication under the published terminal observation for %s",
+        workspace_dir,
+    )
+    metadata["si_publish_pending"] = False
+    metadata["si_publish_blocked"] = True
+    metadata["si_publish_error"] = SI_PINNED_BY_TERMINAL_OBSERVATION
+    metadata.pop("si_publish_attempts", None)
+    metadata.pop("si_publish_next_retry_at", None)
 
 
 def advance_workflow(
@@ -184,11 +174,12 @@ def advance_workflow(
             _run_advance_phase(payload, context, phase)
 
         _finalize_advanced_workflow(payload, context, config)
-        if _terminal_observation_published(workspace_dir):
+        if terminal_observation_published(workspace_dir):
             # Re-advance of a published terminal workflow (crash/marker
             # reconciliation, manual CLI re-run) checkpoints private durable
             # state only; regenerating the HTML report here would invalidate
             # the immutable observation's receipt.
+            _pin_si_publication_under_terminal_observation(payload, workspace_dir)
             resolved.persistence.write_workflow_payload(workspace_dir, payload)
             resolved.persistence.sync_workflow_registry(
                 workflow_root_path,

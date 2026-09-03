@@ -345,6 +345,99 @@ def test_force_restart_rearms_blocked_si_publication_without_failed_stage(
     assert "si_publish_attempts" not in saved["metadata"]
 
 
+def test_force_restart_pins_blocked_si_publication_under_a_terminal_observation(
+    tmp_path: Path,
+) -> None:
+    # The published terminal machine.json pins workflow_si.md, so a re-armed
+    # publication could never run; re-arming it only kept the worker
+    # re-advancing the workflow forever.
+    from orca_auto.flow.workflow.machine import write_workflow_machine_observation
+
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_si_pinned"
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_si_pinned",
+        "template_name": "conformer_screening",
+        "status": "completed",
+        "reaction_key": "R01-P01",
+        "requested_at": "2026-08-09T12:00:00+00:00",
+        "stages": [],
+        "metadata": {
+            "last_advanced_at": "2026-08-09T12:30:00+00:00",
+            "si_publish_blocked": True,
+            "si_publish_attempts": 5,
+            "si_publish_error": "PermissionError: denied",
+        },
+    }
+    _write_workflow(workspace, payload)
+    (workspace / "workflow_report.html").write_text("<html>done</html>\n", encoding="utf-8")
+    machine_path = write_workflow_machine_observation(workspace, payload)
+    assert machine_path is not None
+    machine_bytes = machine_path.read_bytes()
+
+    original = (workspace / "workflow.json").read_bytes()
+
+    # Nothing else to restart: refuse instead of flipping the workflow to
+    # planned for a publication that can never run.
+    with pytest.raises(ValueError, match="pinned by the published terminal observation"):
+        restart_failed_workflow(workspace_dir=workspace, workflow_root=root, force=True)
+
+    assert (workspace / "workflow.json").read_bytes() == original
+    assert machine_path.read_bytes() == machine_bytes
+
+
+def test_restart_with_failed_stages_records_the_pinned_si_publication(tmp_path: Path) -> None:
+    from orca_auto.flow.workflow.machine import write_workflow_machine_observation
+
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_si_pinned_failed"
+    (workspace / "old_xtb").mkdir(parents=True)
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_si_pinned_failed",
+        "template_name": "reaction_ts_search",
+        "status": "failed",
+        "reaction_key": "R01-P01",
+        "requested_at": "2026-08-09T12:00:00+00:00",
+        "stages": [
+            {
+                "stage_id": "xtb_path_01",
+                "status": "failed",
+                "task": {
+                    "engine": "xtb",
+                    "status": "failed",
+                    "payload": {"job_dir": str(workspace / "old_xtb")},
+                    "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                },
+                "metadata": {},
+            },
+        ],
+        "metadata": {
+            "last_advanced_at": "2026-08-09T12:30:00+00:00",
+            "si_publish_blocked": True,
+            "si_publish_attempts": 5,
+            "si_publish_error": "PermissionError: denied",
+        },
+    }
+    _write_workflow(workspace, payload)
+    (workspace / "workflow_report.html").write_text("<html>done</html>\n", encoding="utf-8")
+    machine_path = write_workflow_machine_observation(workspace, payload)
+    assert machine_path is not None
+    machine_bytes = machine_path.read_bytes()
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    actions = [stage["action"] for stage in result["restarted_stages"] if "action" in stage]
+    assert actions == ["si_publication_pinned_by_terminal_observation"]
+    assert saved["status"] == "planned"
+    assert saved["metadata"]["si_publish_blocked"] is True
+    assert "si_publish_pending" not in saved["metadata"]
+    assert saved["metadata"]["si_publish_error"] == (
+        restart_mutation.SI_PINNED_BY_TERMINAL_OBSERVATION
+    )
+    assert machine_path.read_bytes() == machine_bytes
+
+
 def test_restart_failed_workflow_rejects_active_sibling_before_cancellation_finishes(
     tmp_path: Path,
 ) -> None:
