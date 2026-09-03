@@ -78,9 +78,35 @@ def input_uses_scants(inp_path: Path) -> bool:
     return bool(_first_scants_route_line(inp_path))
 
 
+# Lines that end the relaxed-surface tables when the SCF-energy table is
+# absent (a truncated or older-format output). Without them, any later line
+# holding two numbers (timings, the total run time) would be read as a point.
+_SURFACE_SECTION_END_MARKERS = (
+    "THE CALCULATED SURFACE USING THE SCF ENERGY",
+    "TIMINGS",
+    "TOTAL RUN TIME",
+    "FINAL SINGLE POINT ENERGY",
+    "OPTIMIZATION RUN DONE",
+    "ORCA TERMINATED NORMALLY",
+)
+
+
 def parse_scants_actual_surface(out_path: Path) -> list[ScanTSSurfacePoint]:
+    """Points of the relaxed-scan table computed with the actual energy.
+
+    A row is one or more scan coordinates followed by a total energy in Eh,
+    which is negative and finite for every real molecule. Every row must have
+    the same number of values as the first one; the table ends at the SCF
+    energy table or at the first later section marker. Anything else is a
+    non-row and is refused rather than read as a point.
+    """
     points: list[ScanTSSurfacePoint] = []
     in_actual_surface = False
+    row_width: int | None = None
+    # ORCA numbers the scan steps by table row (`<base>.NNN.xyz`); a refused
+    # row keeps its number so the points after it still address the right
+    # step geometry.
+    row_number = 0
     try:
         with out_path.open("r", encoding="utf-8", errors="ignore") as handle:
             for line in handle:
@@ -90,14 +116,25 @@ def parse_scants_actual_surface(out_path: Path) -> list[ScanTSSurfacePoint]:
                     continue
                 if not in_actual_surface:
                     continue
-                if "THE CALCULATED SURFACE USING THE SCF ENERGY" in upper:
+                if any(marker in upper for marker in _SURFACE_SECTION_END_MARKERS):
                     break
                 values = [float(match.group(0)) for match in _FLOAT_RE.finditer(line)]
                 if len(values) < 2:
                     continue
+                row_number += 1
+                if row_width is None:
+                    row_width = len(values)
+                energy = values[-1]
+                if (
+                    len(values) != row_width
+                    or not math.isfinite(energy)
+                    or energy >= 0.0
+                    or not all(math.isfinite(value) for value in values[:-1])
+                ):
+                    continue
                 points.append(
                     ScanTSSurfacePoint(
-                        index=len(points) + 1,
+                        index=row_number,
                         coordinates=tuple(values[:-1]),
                         energy=values[-1],
                     )

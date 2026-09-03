@@ -227,6 +227,24 @@ def _read_tail(out_path: Path, encoding: str, nbytes: int) -> str:
     return raw.decode(encoding, errors="ignore")
 
 
+def _scan_full_for_opt_convergence(out_path: Path, encoding: str) -> bool | None:
+    """Last optimization verdict anywhere in the file, ``None`` when absent.
+
+    Same rule as the whole-text scan of a small file: the last verdict line
+    wins, so a superseded early verdict followed by a cycle that never
+    reached one reads the same whether or not the file exceeds the window.
+    """
+    verdict: bool | None = None
+    with out_path.open("r", encoding=encoding, errors="ignore") as handle:
+        for line in handle:
+            upper = line.upper()
+            if any(needle in upper for needle in _OPT_CONVERGED_NEEDLES):
+                verdict = True
+            if any(needle in upper for needle in _OPT_NOT_CONVERGED_NEEDLES):
+                verdict = False
+    return verdict
+
+
 def _read_head(out_path: Path, encoding: str, nbytes: int) -> str:
     with out_path.open("rb") as fh:
         raw = fh.read(nbytes)
@@ -315,6 +333,14 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
             # Large file: tail-first strategy.
             tail_text = _read_tail(out_path, encoding, tail_bytes)
             _scan_text_for_markers(tail_text, markers)
+
+            # A small file is scanned whole and its last verdict wins; the
+            # tail window must not change that verdict for a large file (a
+            # not-converged marker followed by a long normal-modes matrix), so
+            # the whole file is scanned with the same last-verdict rule when
+            # the tail holds none. The parser reads the whole file as well.
+            if markers["last_opt_converged"] is None:
+                markers["last_opt_converged"] = _scan_full_for_opt_convergence(out_path, encoding)
 
             # Head scan: multiplicity_impossible typically appears near the top.
             if not markers["multiplicity_impossible"]:

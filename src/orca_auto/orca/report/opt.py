@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import html
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,9 +16,16 @@ from .attempts import (
     attempt_report_rows,
     attempts_table_html,
     duration_text,
+    final_out_path,
     terminal_actions_html,
 )
-from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
+from .frequencies import (
+    FrequencyAnalysis,
+    ModeSummary,
+    find_frequency_analysis,
+    mode_section_html,
+    mode_summaries,
+)
 from .render import (
     ReportComponent,
     job_meta_html,
@@ -26,6 +33,7 @@ from .render import (
     relative_energy_cycle_chart_svg,
     status_badges,
 )
+from .si import parsed_final_output
 
 
 @dataclass(frozen=True)
@@ -49,6 +57,7 @@ class OptReportData:
     imaginary_count: int | None
     mode_summaries: tuple[ModeSummary, ...]
     frequency_attempt_index: int | None
+    frequency_from_earlier_attempt: bool
     last_out_name: str
 
     def kind_label(self) -> str:
@@ -100,7 +109,23 @@ def collect_opt_report_data(
         if steps:
             final_energy = steps[-1][1]
 
-    analysis, frequency_attempt_index = find_frequency_analysis(attempts)
+    # Characterize from the final output first so the card agrees with the
+    # SI block, which reads only the final output; fall back to the attempt
+    # chain only when the final output has no frequency section, and say so.
+    analysis: FrequencyAnalysis | None = None
+    frequency_attempt_index: int | None = None
+    frequency_from_earlier_attempt = False
+    out_path = final_out_path(state)
+    if out_path is not None:
+        try:
+            _final_result, analysis = parsed_final_output(out_path)
+        except OSError:
+            analysis = None
+    if analysis is not None and out_path is not None:
+        frequency_attempt_index = _attempt_index_for_output(attempts, out_path)
+    else:
+        analysis, frequency_attempt_index = find_frequency_analysis(attempts)
+        frequency_from_earlier_attempt = analysis is not None
 
     final_result = state.get("final_result")
     final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
@@ -130,8 +155,27 @@ def collect_opt_report_data(
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         frequency_attempt_index=frequency_attempt_index,
+        frequency_from_earlier_attempt=frequency_from_earlier_attempt,
         last_out_name=Path(last_out).name if last_out else "",
     )
+
+
+def _attempt_index_for_output(attempts: Sequence[Mapping[str, Any]], out_path: Path) -> int | None:
+    # Attempt rows store the path as written; the final result path can be
+    # the resolved form of the same file. Compare resolved forms.
+    target = _resolved_or_self(out_path)
+    for position in range(len(attempts) - 1, -1, -1):
+        out_raw = str(attempts[position].get("out_path") or "").strip()
+        if out_raw and _resolved_or_self(Path(out_raw)) == target:
+            return int(attempts[position].get("index", position + 1) or (position + 1))
+    return None
+
+
+def _resolved_or_self(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
 
 
 def _imaginary_note(data: OptReportData) -> str:
@@ -140,8 +184,14 @@ def _imaginary_note(data: OptReportData) -> str:
     expected = 1 if data.kind == "ts" else 0
     kind_text = "TS" if data.kind == "ts" else "minimum"
     if data.imaginary_count == expected:
-        return f"as expected for a {kind_text}"
-    return f"expected {expected} for a {kind_text}"
+        note = f"as expected for a {kind_text}"
+    else:
+        note = f"expected {expected} for a {kind_text}"
+    if data.frequency_from_earlier_attempt and data.frequency_attempt_index is not None:
+        # The final output has no frequency section; the SI block will not
+        # carry this count, so the card says where it came from.
+        note += f"; from attempt {data.frequency_attempt_index}, not the final output"
+    return note
 
 
 def opt_report_badges(data: OptReportData) -> tuple[tuple[str, str], ...]:

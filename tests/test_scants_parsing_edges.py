@@ -21,6 +21,7 @@ from orca_auto.orca.scants import (
     apply_scants_failed_scan_retry_rewrite,
     apply_scants_optts_resume_rewrite,
     apply_scants_relaxed_scan_resume_rewrite,
+    highest_scants_surface_point,
     output_indicates_scants_optts_refinement,
     parse_scants_actual_surface,
     prepare_scants_optts_fallback_input,
@@ -389,3 +390,59 @@ def test_prepared_input_clamps_maxcore_to_budget(tmp_path: Path) -> None:
     assert prepared == target_inp
     assert "maxcore_clamped_to_budget" in actions
     assert "999999" not in target_inp.read_text(encoding="utf-8")
+
+
+def test_parse_scants_actual_surface_stops_at_the_timing_section(tmp_path: Path) -> None:
+    # An output without the SCF-energy table used to keep reading: the
+    # timing lines carry two numbers and became points 4 and 5.
+    out_path = tmp_path / "rxn.out"
+    out_path.write_text(
+        "\n".join(
+            [
+                "The Calculated Surface using the 'Actual Energy'",
+                "   1.86000000 -100.00000000",
+                "   1.91000000 -99.50000000",
+                "   1.96000000 -99.80000000",
+                "",
+                "Timings for individual modules:",
+                "Sum of individual times         ...    27530.368 sec (=  458.839 min)",
+                "TOTAL RUN TIME: 0 days 1 hours 2 minutes 3 seconds 4 msec",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    points = parse_scants_actual_surface(out_path)
+
+    assert [point.index for point in points] == [1, 2, 3]
+    assert max(point.energy for point in points) == pytest.approx(-99.5)
+
+
+def test_parse_scants_actual_surface_refuses_rows_that_are_not_energies(tmp_path: Path) -> None:
+    out_path = tmp_path / "rxn.out"
+    out_path.write_text(
+        "\n".join(
+            [
+                "The Calculated Surface using the 'Actual Energy'",
+                "   1.86000000 -100.00000000",
+                "   0 1 2 3 4.0",
+                "   1.91000000 458.839",
+                "   1.96000000 -99.80000000",
+                "The Calculated Surface using the SCF energy",
+                "   1.86000000 -101.00000000",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    points = parse_scants_actual_surface(out_path)
+
+    assert [(point.index, point.coordinates, point.energy) for point in points] == [
+        (1, (1.86,), -100.0),
+        (4, (1.96,), -99.8),
+    ]
+    # The step number of the refused rows is kept, so the highest point still
+    # names the geometry file ORCA wrote for that step.
+    assert highest_scants_surface_point(out_path) == points[1]
+    assert points[1].index == 4

@@ -274,3 +274,81 @@ def test_opt_report_flags_unexpected_imaginary_mode(tmp_path: Path) -> None:
     text = path.read_text(encoding="utf-8")
     assert "Opt report" in text
     assert "expected 0 for a minimum" in text
+
+
+def test_opt_card_prefers_the_final_output_and_labels_an_earlier_frequency(
+    tmp_path: Path,
+) -> None:
+    # The SI block reads only the final output. When that output has no
+    # frequency section but an earlier attempt does, the card used to show the
+    # earlier count with no label while the SI warned "no frequency
+    # calculation"; the card now says where the count came from.
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    _write_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
+    first_out = reaction_dir / "rxn.out"
+    final_out = reaction_dir / "rxn.retry01.out"
+    _write_opt_out(first_out, freq_block=_FREQ_TS_BLOCK)
+    _write_opt_out(final_out)
+    state = _state(reaction_dir, final_out, reason="completed")
+    state["attempts"].insert(
+        0,
+        {
+            **state["attempts"][0],
+            "index": 1,
+            "out_path": str(first_out),
+            "analyzer_status": "failed",
+        },
+    )
+    state["attempts"][1]["index"] = 2
+
+    data = collect_opt_report_data(reaction_dir, state, kind="opt")
+
+    assert data is not None
+    assert data.imaginary_count == 1
+    assert data.frequency_attempt_index == 1
+    assert data.frequency_from_earlier_attempt is True
+    assert "from attempt 1, not the final output" in _imaginary_note_for(data)
+
+
+def test_opt_card_final_output_frequency_is_not_labeled(tmp_path: Path) -> None:
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    _write_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
+    out_path = reaction_dir / "rxn.out"
+    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+    state = _state(reaction_dir, out_path, reason="completed")
+
+    data = collect_opt_report_data(reaction_dir, state, kind="opt")
+
+    assert data is not None
+    assert data.imaginary_count == 1
+    assert data.frequency_attempt_index == 1
+    assert data.frequency_from_earlier_attempt is False
+    assert "not the final output" not in _imaginary_note_for(data)
+
+
+def test_opt_card_matches_the_final_attempt_through_a_symlinked_path(tmp_path: Path) -> None:
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
+    _write_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
+    out_path = reaction_dir / "rxn.out"
+    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+    alias = tmp_path / "alias"
+    alias.symlink_to(reaction_dir, target_is_directory=True)
+    state = _state(reaction_dir, out_path, reason="completed")
+    # The attempt row keeps the alias path; the final result holds the resolved one.
+    state["attempts"][0]["out_path"] = str(alias / "rxn.out")
+
+    data = collect_opt_report_data(reaction_dir, state, kind="opt")
+
+    assert data is not None
+    assert data.imaginary_count == 1
+    assert data.frequency_attempt_index == 1
+    assert data.frequency_from_earlier_attempt is False
+
+
+def _imaginary_note_for(data: Any) -> str:
+    from orca_auto.orca.report.opt import _imaginary_note
+
+    return _imaginary_note(data)
