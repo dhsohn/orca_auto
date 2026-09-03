@@ -64,9 +64,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   stopped mid-run and requeued itself (which also exits 0), now takes the
   normal completion path, which marks the row only while it is still running
   and leaves a self-requeued pending row untouched. A child killed by a signal
-  exits negative and keeps the resume path. If finalizing during shutdown
-  fails, the row and its durable replay marker are left for the next worker
-  start and the remaining jobs are still shut down.
+  exits negative, and a child that exited non-negatively with its row still
+  running and a non-terminal run state (it died while handling the stop) is
+  an interrupted calculation; both keep the resume path. If finalizing during
+  shutdown fails, the row and its durable replay marker are left for the next
+  worker start and the remaining jobs are still shut down. A failed read of
+  the cancel flag no longer aborts a job's shutdown, and if a job's shutdown
+  still fails before its child was asked to stop, the worker attempts to stop
+  that child's process group as a last resort and logs when it could not
+  confirm the stop.
 
 ### Validation limitation
 

@@ -156,11 +156,24 @@ def _worker_config_with_effective_concurrency(
 
 
 def _shutdown_running_job(worker: Any, queue_id: str, job: Any) -> None:
-    if get_cancel_requested(
-        replay.job_queue_root(worker, job),
-        queue_id,
-        expected_task_id=job.task_id,
-    ):
+    try:
+        cancel_requested = get_cancel_requested(
+            replay.job_queue_root(worker, job),
+            queue_id,
+            expected_task_id=job.task_id,
+        )
+    except Exception:
+        # The child must still be stopped. The shared requeue chokepoint below
+        # honors a pending cancel on its own (it marks the row cancelled
+        # instead of requeueing); only the proactive side effects are skipped,
+        # and the durable marker replays them on the next start.
+        logger.exception(
+            "Reading the cancel flag of running job %s failed during shutdown; "
+            "stopping it through the ordinary requeue path",
+            queue_id,
+        )
+        cancel_requested = False
+    if cancel_requested:
         # A cancel landed before the worker loop could process it proactively. The
         # shared requeue chokepoint would still honor it (mark the entry cancelled
         # instead of requeuing for resume) but skip the terminal side effects --

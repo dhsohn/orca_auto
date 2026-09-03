@@ -18,6 +18,7 @@ from orca_auto.core.utils.lock import file_lock
 
 from ..processes import (
     remove_worker_pid_file,
+    terminate_process_group,
     worker_pid_file_path,
     write_worker_pid_file,
 )
@@ -307,10 +308,30 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
                 self._shutdown_running_job(queue_id, job)
             except Exception:
                 # One job's shutdown failing must not leave the remaining
-                # children running unsupervised; its own row and slot are
-                # reconciled on the next worker start.
+                # children running unsupervised, nor this one: the child runs
+                # in its own session and receives no signal aimed at the
+                # worker, so stop it here as a last resort. Its row and slot
+                # are reconciled on the next worker start.
                 logger.exception("Shutting down running job %s failed", queue_id)
+                self._stop_child_as_last_resort(queue_id, job)
             self._discard_running_job(queue_id)
+
+    def _stop_child_as_last_resort(self, queue_id: str, job: Any) -> None:
+        process = getattr(job, "process", None)
+        if process is None:
+            return
+        try:
+            stopped = terminate_process_group(process)
+        except Exception:
+            logger.exception("Stopping the child of job %s as a last resort failed", queue_id)
+            return
+        if stopped is not True:
+            logger.error(
+                "Child of job %s could not be confirmed stopped by the worker's last-resort "
+                "stop; inspect its process group before the next worker start, which "
+                "reconciles its queue row and admission slot",
+                queue_id,
+            )
 
     def _before_shutdown_all(self, running_count: int) -> None:
         del running_count
