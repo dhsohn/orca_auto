@@ -86,6 +86,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   example a lone surrogate from a non-UTF-8 path) as a redacted request error
   instead of raising. State and report replay and the once-only replay marker
   are unchanged.
+- A child that dies after fencing its ORCA launch but before publishing the
+  engine record no longer wedges the parent worker. The finalizer used to raise
+  on the pending record forever, and while it retried, the periodic orphan sweep
+  that could have cleared the record was paused, so the slot stayed reserved
+  until a restart. Slot recovery now clears a launch-gated (or cross-boot)
+  pending record whose owner is dead, and the finalizer marks the row and
+  releases the slot; a pending record under a live owner or without a launch
+  gate is still retained.
 
 ### Validation limitation
 

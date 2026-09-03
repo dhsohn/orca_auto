@@ -859,6 +859,53 @@ class TestQueueWorkerMethods(unittest.TestCase):
         release.assert_called_once_with(job.admission_token)
 
     @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
+    def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
+        self,
+        mock_upsert_terminal: MagicMock,
+    ) -> None:
+        # The child died after fencing its launch but before publishing the
+        # engine record. The gate wrapper never received its release byte, so
+        # no engine ran: the finalizer must clear the pending record and
+        # release the slot instead of retrying forever with reconcile paused.
+        rxn = self.root / "mol_pending_launch"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn), task_id="task-pending-launch")
+        dequeue_next(self.root)
+        child = subprocess.Popen(["sleep", "60"])
+        try:
+            token = reserve_slot(
+                self.root,
+                self.worker.max_concurrent,
+                work_dir=str(rxn),
+                queue_id=entry.queue_id,
+                source="queue_worker",
+                state="reserved",
+                owner_pid=child.pid,
+                engine_process_state="idle",
+                engine_launch_gated=True,
+            )
+            self.assertIsNotNone(token)
+            self.assertIsNotNone(prepare_slot_engine_process(self.root, token or ""))
+        finally:
+            child.kill()
+            child.wait()
+        job = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=MagicMock(),
+            admission_token=token or "",
+            task_id=entry.task_id,
+        )
+
+        self.worker._finalize_finished_job(entry.queue_id, job, rc=1)
+
+        mock_upsert_terminal.assert_called_once()
+        [failed] = list_queue(self.root)
+        self.assertEqual(failed.status, QueueStatus.FAILED)
+        self.assertEqual(active_slot_count(self.root), 0)
+        self.assertIsNone(get_slot(self.root, token or ""))
+
+    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
     def test_finalize_finished_job_marks_completed_and_releases_slot(
         self,
         mock_upsert_terminal: MagicMock,

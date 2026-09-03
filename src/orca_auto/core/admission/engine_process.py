@@ -30,7 +30,12 @@ class EngineProcessRecordError(RuntimeError):
 
 
 class EngineProcessRecordPendingError(EngineProcessRecordError):
-    """Raised when a dead child may have died between Popen and record publication."""
+    """Raised when a pending launch record cannot be resolved yet.
+
+    The owner may still be alive between Popen and record publication, the
+    owner may be dead with no launch gate to prove that no engine ran, or the
+    record may have changed under the recovery attempt.
+    """
 
 
 @dataclass(frozen=True)
@@ -335,6 +340,49 @@ def _wait_for_group_exit(
         deps.sleep(0.1)
 
 
+def _clear_dead_owner_pending_launch(
+    root: str | Path,
+    slot: AdmissionSlot,
+    *,
+    deps: EngineProcessRecoveryDeps,
+) -> str | None:
+    """Clear one pending launch whose owner is dead, or say why it must stay.
+
+    A launch-gated record proves no engine ran: the gate wrapper execs the
+    engine only after the child publishes the record and writes the release
+    byte, and a child that died first closed that pipe.  A cross-boot record
+    cannot describe a live engine either.  Any other pending record may hide an
+    unidentified engine and is retained.
+    """
+    current_boot_id = deps.boot_id()
+    cross_boot = (
+        slot.owner_boot_id is not None
+        and current_boot_id is not None
+        and slot.owner_boot_id != current_boot_id
+    )
+    if not cross_boot and not slot.engine_launch_gated:
+        return f"Dead slot owner left a pending engine launch: token={slot.token}"
+    recovery_kind = "cross-boot" if cross_boot else "launch-gated"
+    try:
+        completed = complete_slot_engine_process(
+            root,
+            slot.token,
+            expected_owner_pid=slot.owner_pid,
+            expected_owner_process_start_ticks=slot.process_start_ticks,
+            expected_owner_boot_id=slot.owner_boot_id,
+            expected_engine_launch_gated=slot.engine_launch_gated,
+            require_pending_without_engine_identity=True,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        return f"Cannot clear {recovery_kind} pending engine launch for token={slot.token}: {exc}"
+    if completed is None:
+        return (
+            f"{recovery_kind.capitalize()} pending engine record changed while clearing "
+            f"token={slot.token}"
+        )
+    return None
+
+
 def recover_slot_engine_process(
     root: str | Path,
     token: str,
@@ -349,9 +397,26 @@ def recover_slot_engine_process(
     if slot is None or slot.engine_process_state == "idle":
         return False
     if slot.engine_process_state == "pending":
-        raise EngineProcessRecordPendingError(
-            f"Admission slot {token} is pending without a recoverable engine identity"
+        if _process_identity_alive(
+            slot.owner_pid,
+            slot.process_start_ticks,
+            slot.owner_boot_id,
+            deps=active_deps,
+        ):
+            raise EngineProcessRecordPendingError(
+                f"Admission slot {token} is pending under a live owner"
+            )
+        # The owner died with its launch pending.  Resolving that here, and not
+        # only in the periodic orphan sweep, matters because a parent that
+        # retries this recovery for a finished child suspends that sweep.
+        error = _clear_dead_owner_pending_launch(root, slot, deps=active_deps)
+        if error is not None:
+            raise EngineProcessRecordPendingError(error)
+        active_deps.logger.warning(
+            "Cleared pending engine launch left by a dead slot owner: token=%s",
+            token,
         )
+        return False
     if slot.engine_pgid is None:
         raise EngineProcessRecordError(
             f"Admission slot {token} has no recorded engine process group"
@@ -424,40 +489,11 @@ def recover_orphaned_engine_slots(
             recovered += 1
     for slot in orphaned:
         if slot.engine_process_state == "pending":
-            current_boot_id = active_deps.boot_id()
-            cross_boot = (
-                slot.owner_boot_id is not None
-                and current_boot_id is not None
-                and slot.owner_boot_id != current_boot_id
-            )
-            if cross_boot or slot.engine_launch_gated:
-                recovery_kind = "cross-boot" if cross_boot else "launch-gated"
-                try:
-                    completed = complete_slot_engine_process(
-                        root,
-                        slot.token,
-                        expected_owner_pid=slot.owner_pid,
-                        expected_owner_process_start_ticks=slot.process_start_ticks,
-                        expected_owner_boot_id=slot.owner_boot_id,
-                        expected_engine_launch_gated=slot.engine_launch_gated,
-                        require_pending_without_engine_identity=True,
-                    )
-                except (OSError, TypeError, ValueError) as exc:
-                    errors.append(
-                        f"Cannot clear {recovery_kind} pending engine launch "
-                        f"for token={slot.token}: {exc}"
-                    )
-                else:
-                    if completed is None:
-                        errors.append(
-                            f"{recovery_kind.capitalize()} pending engine record "
-                            f"changed while clearing "
-                            f"token={slot.token}"
-                        )
-                    else:
-                        recovered += 1
-                continue
-            errors.append(f"Dead slot owner left a pending engine launch: token={slot.token}")
+            error = _clear_dead_owner_pending_launch(root, slot, deps=active_deps)
+            if error is not None:
+                errors.append(error)
+            else:
+                recovered += 1
     if errors:
         message = "; ".join(errors)
         if strict:
