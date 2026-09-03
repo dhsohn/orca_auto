@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -88,6 +89,8 @@ from .state import (
     write_state,
 )
 from .submission import _record_queued as _record_queued_submission
+
+LOGGER = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5
 CANCEL_CHECK_INTERVAL_SECONDS = 1
@@ -211,8 +214,8 @@ def _load_terminal_summary(
     )
 
 
-def _ensure_terminal_queue_status(queue_root: Path, entry: Any, summary: _TerminalSummary) -> None:
-    _queue_terminal.ensure_terminal_queue_status(
+def _ensure_terminal_queue_status(queue_root: Path, entry: Any, summary: _TerminalSummary) -> bool:
+    return _queue_terminal.ensure_terminal_queue_status(
         queue_root,
         entry,
         summary,
@@ -319,8 +322,21 @@ def _handle_worker_start_error(
 def _finalize_completed_job(worker: Any, _queue_id: str, job: Any, rc: int) -> None:
     _adopt_terminal_artifacts(worker.cfg, job.queue_root, job.entry)
     summary = _load_terminal_summary(job.queue_root, job.entry, rc=rc)
-    _ensure_terminal_queue_status(job.queue_root, job.entry, summary)
-    _print_terminal_summary(summary)
+    if _ensure_terminal_queue_status(job.queue_root, job.entry, summary):
+        _print_terminal_summary(summary)
+    else:
+        current = _queue_entry_by_id(job.queue_root, job.entry.queue_id)
+        observed = (
+            str(getattr(getattr(current, "status", None), "value", "") or "")
+            if current is not None
+            else "missing"
+        )
+        LOGGER.warning(
+            "Leaving xtb entry to its owner after child exit: queue_id=%s status=%s rc=%s",
+            job.entry.queue_id,
+            observed or "unknown",
+            rc,
+        )
     worker._release_admission_slot(job.admission_token)
 
 

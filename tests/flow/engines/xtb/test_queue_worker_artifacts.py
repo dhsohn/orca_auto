@@ -379,6 +379,62 @@ def test_terminal_summary_requires_explicit_dependencies(tmp_path: Path) -> None
         )
 
 
+def test_ensure_terminal_queue_status_leaves_requeued_pending_row_alone(
+    tmp_path: Path,
+) -> None:
+    entry = SimpleNamespace(queue_id="queue-1", task_id="job-1")
+    summary = terminal_mod.TerminalSummary(
+        queue_id="queue-1",
+        job_id="job-1",
+        status="completed",
+        reason="completed",
+        metadata_update={"candidate_count": 0},
+    )
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("a requeued pending row must not be marked terminal")
+
+    terminal = terminal_mod.ensure_terminal_queue_status(
+        tmp_path,
+        entry,
+        summary,
+        queue_entry_by_id_fn=lambda _root, _queue_id: SimpleNamespace(
+            status=SimpleNamespace(value="pending")
+        ),
+        mark_completed_fn=refuse,
+        mark_cancelled_fn=refuse,
+        mark_failed_fn=refuse,
+    )
+
+    assert terminal is False
+
+
+def test_ensure_terminal_queue_status_reports_refused_mark_as_not_terminal(
+    tmp_path: Path,
+) -> None:
+    entry = SimpleNamespace(queue_id="queue-1", task_id="job-1")
+    summary = terminal_mod.TerminalSummary(
+        queue_id="queue-1",
+        job_id="job-1",
+        status="failed",
+        reason="worker_exit_code_1",
+    )
+
+    terminal = terminal_mod.ensure_terminal_queue_status(
+        tmp_path,
+        entry,
+        summary,
+        queue_entry_by_id_fn=lambda _root, _queue_id: SimpleNamespace(
+            status=SimpleNamespace(value="running")
+        ),
+        mark_completed_fn=lambda *_args, **_kwargs: pytest.fail("should mark failed"),
+        mark_cancelled_fn=lambda *_args, **_kwargs: pytest.fail("should mark failed"),
+        mark_failed_fn=lambda *_args, **_kwargs: None,
+    )
+
+    assert terminal is False
+
+
 def test_ensure_terminal_queue_status_skips_terminal_and_marks_nonterminal(
     tmp_path: Path,
 ) -> None:

@@ -16,6 +16,7 @@ from orca_auto.core.queue import (
     mark_cancelled,
     mark_completed,
     request_cancel,
+    requeue_running_entry,
 )
 from orca_auto.core.queue.engine.artifacts import matching_terminal_state_for_entry
 from orca_auto.core.queue.generation import queue_entry_generation_token
@@ -26,6 +27,7 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
 )
 from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.state.engine import is_recovery_pending_state
 from orca_auto.flow.engines.xtb import queue_runtime as queue_cmd
 from orca_auto.flow.engines.xtb import state as state_mod
 from tests.engine_artifact_helpers import artifact_payload
@@ -1219,7 +1221,7 @@ def test_queue_worker_run_once_waits_for_child_completion_and_prints_summary(
         ),
     )
     monkeypatch.setattr(
-        queue_cmd, "_ensure_terminal_queue_status", lambda queue_root, entry, summary: None
+        queue_cmd, "_ensure_terminal_queue_status", lambda queue_root, entry, summary: True
     )
     monkeypatch.setattr(
         queue_cmd, "release_slot", lambda root, token: released.append((str(root), token))
@@ -1541,3 +1543,73 @@ def test_terminal_reconcile_finalizes_direct_pending_cancel(
     queue_cmd._sync_terminal_running_entries(worker)
 
     assert upserts == []
+
+
+def test_finalize_completed_job_leaves_self_requeued_entry_pending(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A child that receives a shutdown request requeues its row, marks the run
+    # state recovery-pending and exits 0.  The parent reaps rc 0 and must not
+    # mark that pending row completed with candidate_count 0: the generation
+    # has not run yet.  CREST already leaves such a row pending.
+    cfg = _make_cfg(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    job_dir = queue_root / "job-1"
+    job_dir.mkdir()
+    xyz = job_dir / "input.xyz"
+    xyz.write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    resources = {"max_cores": 4, "max_memory_gb": 8}
+    enqueue(
+        queue_root,
+        app_name="orca_auto_xtb",
+        task_id="job-1",
+        task_kind="xtb_opt",
+        engine="xtb",
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(xyz),
+            "job_type": "opt",
+            "reaction_key": "rxn",
+            "input_summary": {},
+            "resource_request": dict(resources),
+        },
+    )
+    running = dequeue_next(queue_root, accept_entry_fn=own_engine_accept_entry("xtb"))
+    assert running is not None
+    state_mod.mark_recovery_pending(
+        job_dir,
+        job_id="job-1",
+        selected_input_xyz=xyz,
+        job_type="opt",
+        reaction_key="rxn",
+        input_summary={},
+        resource_request=dict(resources),
+        resource_actual=dict(resources),
+        reason="worker_shutdown",
+    )
+    requeued = requeue_running_entry(
+        queue_root,
+        running.queue_id,
+        expected_entry=running,
+        expected_task_id="job-1",
+    )
+    assert requeued is not None and requeued.status.value == "pending"
+    released: list[str] = []
+    worker = SimpleNamespace(
+        cfg=cfg,
+        _shutdown_requested=False,
+        admission_root=None,
+        _release_admission_slot=released.append,
+    )
+    job = SimpleNamespace(queue_root=queue_root, entry=running, admission_token="slot-1")
+
+    queue_cmd._finalize_completed_job(worker, running.queue_id, job, 0)
+
+    assert capsys.readouterr().out == ""
+    [row] = list_queue(queue_root)
+    assert row.status.value == "pending"
+    assert "candidate_count" not in row.metadata
+    state = state_mod.load_state(job_dir) or {}
+    assert is_recovery_pending_state(state)
+    assert released == ["slot-1"]
