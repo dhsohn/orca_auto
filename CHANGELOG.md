@@ -10,6 +10,31 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The workflow report takes a non-completed ORCA stage's imaginary-mode count
+  from the ORCA output that stage's accepted `machine.json` binds, not from
+  the engine's private `job_state.json` markers. Nothing publishes or
+  re-verifies those markers, so an edited job state could dictate a published
+  `Nimag`. `load_report_json` recomputes the `orca-output` receipt from the
+  recorded terminal output and rejects the generation unless it equals the
+  stored one, so the count now rests on bytes whose size and SHA-256 were
+  re-checked when the generation was accepted. It is counted by the same
+  scanner the analyzer uses, only when the reason the observation pins is
+  `ts_criteria_met` or `ts_criteria_failed`, and only for a stage whose task
+  kind can enter the candidate table.
+- A generation whose markers predate `final_frequency_section` publishes its
+  imaginary-mode count again instead of nothing. No generation on this machine
+  carries that marker: of the 104 ORCA generations holding both a
+  `machine.json` and a `job_state.json`, 85 record only
+  `imaginary_frequency_count` and 19 record no markers at all, so the released
+  code publishes no `Nimag` for any non-completed ORCA stage here.
+- The output analyzer sections a small output by the same line rule as a large
+  one. `str.splitlines()` also breaks on a form feed, a vertical tab, the
+  file, group and record separators, NEL and the Unicode line and paragraph
+  separators, so an output carrying one of those inside a frequency section
+  could be counted one way when it fitted the 256 KB TS tail window and
+  another way when it did not. None of the 759 ORCA outputs on this machine
+  contains such a character, so no recorded count changes.
+
 - The cancel-transition drain only locks, reads or writes a workspace that
   resolves under the workflow root; a registry row whose raw workspace string
   resolves elsewhere is left alone.
@@ -259,6 +284,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - No real-ORCA or ORCA/OpenMPI compatibility acceptance is claimed for these
   queue, recovery, or scratch changes. The merged PR records identify the
   verification that ran and state that real-engine re-validation was not run.
+
+### Changed
+
+- A non-completed ORCA stage publishes an imaginary-mode count only when the
+  reason its machine observation pins is the analyzer's own TS verdict. A
+  stage whose analyzer reached that verdict but whose record the engine then
+  closed under a terminal reason of its own — the retry paths write
+  `retry_limit_reached`, `scants_recipes_exhausted` or `rewrite_failed` over
+  it and leave the last attempt's markers intact — now publishes no count,
+  because none of those reasons says which verdict produced the last output.
+  No live generation on this machine records one of them: the only job states
+  carrying `retry_limit_reached` are fake-ORCA smoke fixtures that have no
+  machine observation and so cannot reach the workflow report.
 
 ## [3.0.3] - 2026-08-26
 

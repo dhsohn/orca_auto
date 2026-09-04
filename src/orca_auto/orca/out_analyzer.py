@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import logging
 import re
 from collections.abc import Iterable
@@ -251,7 +252,7 @@ def _read_head(out_path: Path, encoding: str, nbytes: int) -> str:
     return raw.decode(encoding, errors="ignore")
 
 
-def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool]:
+def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool]:
     """Imaginary modes of the frequency section that verifies the final geometry.
 
     ORCA prints a ``VIBRATIONAL FREQUENCIES`` section for every Hessian it
@@ -264,6 +265,12 @@ def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool
     Returns ``(imaginary_count, irc_found, final_section)`` where
     ``final_section`` is True only when the count came from a section after
     the last final energy.
+
+    Public because the workflow report recounts a non-completed stage's Nimag
+    from the same output the stage's machine observation hash-pins, and both
+    sides must count it by exactly the same rule. Every caller therefore feeds
+    it the same universal-newline line stream, so the count does not depend on
+    whether the file was small enough to be read whole.
     """
     total_negative_count = 0
     last_vib_section_negative_count = 0
@@ -303,11 +310,18 @@ def _scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool
 
 def _scan_ts_full_for_imag_count(out_path: Path, encoding: str) -> tuple[int, bool, bool]:
     with out_path.open("r", encoding=encoding, errors="ignore") as handle:
-        return _scan_ts_lines_for_imag_count(handle)
+        return scan_ts_lines_for_imag_count(handle)
 
 
 def _scan_ts_text_for_imag_count(text: str) -> tuple[int, bool, bool]:
-    return _scan_ts_lines_for_imag_count(text.splitlines())
+    # ``StringIO(..., newline=None)`` splits exactly where reading the file
+    # would: on LF, CR and CRLF only. ``str.splitlines()`` also breaks on the
+    # vertical tab, the form feed, the file/group/record separators, NEL, and
+    # the Unicode line and paragraph separators, so a small output holding any
+    # of those would be sectioned differently from the same output read past
+    # the tail window, and differently again from the workflow report's
+    # recount.
+    return scan_ts_lines_for_imag_count(io.StringIO(text, newline=None))
 
 
 def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
