@@ -49,13 +49,19 @@ def _load_json(path: Path) -> dict[str, Any] | None:
 
 def resolve_stage_job_report(
     stage: Mapping[str, Any],
-) -> tuple[Path | None, dict[str, Any] | None]:
-    """Resolve the canonical verified report for one workflow stage."""
+) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """Resolve the canonical verified report for one workflow stage.
+
+    The third element is the ``orca-output`` receipt the ORCA load accepted for
+    this report, and ``None`` for an internal engine: CREST and xTB states
+    carry no artifact receipts, so nothing they name can be bound to observed
+    bytes.
+    """
     task_engine = normalized_text(stage_task(stage).get("engine")).lower()
     internal_engine = _INTERNAL_STAGE_ENGINES.get(normalized_text(stage.get("stage_kind")).lower())
     if internal_engine is not None:
         if task_engine != internal_engine:
-            return None, None
+            return None, None, None
         for job_dir in stage_job_dirs(stage):
             state_path = job_dir / "job_state.json"
             state = _load_json(state_path)
@@ -68,10 +74,10 @@ def resolve_stage_job_report(
                     require_job_and_run=False,
                 )
             ):
-                return state_path, state
-        return None, None
+                return state_path, state, None
+        return None, None, None
     if task_engine in _INTERNAL_STAGE_ENGINES.values():
-        return None, None
+        return None, None, None
     return resolve_verified_orca_stage_report(stage)
 
 
@@ -172,7 +178,7 @@ def collect_stage_diagnostic(
     if not include_job_artifacts:
         report_path, report = None, None
     else:
-        report_path, report = resolve_stage_job_report(stage)
+        report_path, report, _output_receipt = resolve_stage_job_report(stage)
     reason = _stage_status_reason(stage, report)
     if reason == "completed":
         reason = ""

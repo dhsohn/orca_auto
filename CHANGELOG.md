@@ -10,6 +10,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The workflow report publishes a non-completed ORCA stage's imaginary-mode
+  count only for bytes whose SHA-256 equals the `orca-output` receipt its
+  accepted `machine.json` records. The receipt was verified when the report
+  was loaded and the output was opened again afterwards, so an output replaced
+  between the two was observed by every check on the reading side — the
+  pre-open stat, the descriptor's inode, and the size/mtime stability check
+  all saw the replacement and agreed with it — and the count read from it
+  could be published as evidence the observation never bound. The receipt that
+  load accepted is now carried to the recount, which hashes exactly the bytes
+  it scans and compares them against it.
+- The recount fails closed on anything the receipt cannot bind: an
+  `orca-output` receipt that is absent, not `available`, recorded against
+  another name, or recording another size or digest publishes no count rather
+  than a possibly wrong one. The digest is accumulated in the pass that feeds
+  the scanner, so no output is read twice; it costs about 79 ms per 128 MB
+  against a scan of roughly 3.9 s.
+
 - A relaxed-surface row carrying a number ORCA could not print — a Fortran
   field overflowed to asterisks, `NaN`, `Inf` — now consumes its scan step
   number instead of being skipped entirely, so every later point still
