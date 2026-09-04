@@ -1,9 +1,10 @@
+import os
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
 from orca_auto.orca.inp_rewriter import (
+    _latest_geometry_file,
     ensure_submission_resource_request,
     prepare_checkpoint_restart_input,
     prepare_submission_resource_request,
@@ -165,9 +166,12 @@ class TestInpRewriter(unittest.TestCase):
             dst = root / "rxn.resume.inp"
             src.write_text(BASE_INP, encoding="utf-8")
             (root / "rxn.gbw").write_bytes(b"checkpoint")
-            (root / "older.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
-            time.sleep(0.01)
-            (root / "latest_trj.xyz").write_text("2\n\nH 0 0 0\nH 0 0 1.0\n", encoding="utf-8")
+            older = root / "older.xyz"
+            latest = root / "latest_trj.xyz"
+            older.write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
+            latest.write_text("2\n\nH 0 0 0\nH 0 0 1.0\n", encoding="utf-8")
+            os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(latest, ns=(2_000_000_000, 2_000_000_000))
 
             prepared, actions = prepare_checkpoint_restart_input(src, dst, root)
             out = dst.read_text(encoding="utf-8")
@@ -176,6 +180,36 @@ class TestInpRewriter(unittest.TestCase):
         self.assertIn("no_previous_xyz_file_found", actions)
         self.assertIn("geometry_restart_from_latest_trj.xyz", actions)
         self.assertIn("* xyzfile 0 1 latest_trj.xyz", out)
+
+    def test_latest_geometry_file_breaks_an_exact_mtime_tie_by_name(self) -> None:
+        # Every geometry carries the same nanosecond, so only the name rule can
+        # decide. Draining the directory one pick at a time turns a helper that
+        # returns a single path into an assertion about the whole ordering, so
+        # readdir order matching the name rule by accident would need all eight
+        # names to land in reverse-alphabetical order; both creation orders
+        # must agree.
+        stamp = (1_700_000_000_000_000_000, 1_700_000_000_000_000_000)
+        names = ["c.xyz", "h.xyz", "a.xyz", "m.xyz", "b.xyz", "z.xyz", "e.xyz", "q.xyz"]
+        for order in (names, list(reversed(names))):
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                for name in order:
+                    path = root / name
+                    path.write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
+                    os.utime(path, ns=stamp)
+
+                # Repeating the call on an unchanged directory must repeat the
+                # answer before anything is removed.
+                first = _latest_geometry_file(root)
+                self.assertIsNotNone(first)
+                self.assertEqual(first, _latest_geometry_file(root))
+
+                picks: list[str] = []
+                while (pick := _latest_geometry_file(root)) is not None:
+                    picks.append(pick.name)
+                    pick.unlink()
+
+                self.assertEqual(picks, sorted(names, reverse=True))
 
     def test_prepare_checkpoint_restart_marks_missing_geometry(self) -> None:
         with tempfile.TemporaryDirectory() as td:

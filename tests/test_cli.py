@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import tempfile
-import time
 import unittest
 from argparse import Namespace
 from collections.abc import Callable
@@ -124,19 +123,21 @@ class TestCli(unittest.TestCase):
             base = reaction / "rxn.inp"
             retry = reaction / "rxn.retry01.inp"
             base.write_text("! Opt\n", encoding="utf-8")
-            time.sleep(0.01)
             retry.write_text("! Opt\n", encoding="utf-8")
+            os.utime(base, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(retry, ns=(2_000_000_000, 2_000_000_000))
             selected = select_latest_inp(reaction)
         self.assertEqual(selected.name, "rxn.inp")
 
     def test_select_latest_inp_warns_when_multiple_base_inputs_exist(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
-            older = reaction / "a.inp"
-            newer = reaction / "b.inp"
+            older = reaction / "b.inp"
+            newer = reaction / "a.inp"
             older.write_text("! Opt\n", encoding="utf-8")
-            time.sleep(0.01)
             newer.write_text("! Opt\n", encoding="utf-8")
+            os.utime(older, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(newer, ns=(2_000_000_000, 2_000_000_000))
 
             with self.assertLogs(
                 "orca_auto.orca.execution",
@@ -144,7 +145,9 @@ class TestCli(unittest.TestCase):
             ) as logs:
                 selected = select_latest_inp(reaction)
 
-        self.assertEqual(selected.name, "b.inp")
+        # `a.inp` is the newer file here: stamped against the name order so the
+        # assertion cannot pass on the alphabetical tie-break alone.
+        self.assertEqual(selected.name, "a.inp")
         self.assertIn("Multiple ORCA .inp candidates", "\n".join(logs.output))
 
     def test_retry_inp_path_uses_canonical_base_stem(self) -> None:

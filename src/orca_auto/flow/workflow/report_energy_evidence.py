@@ -49,7 +49,10 @@ def latest_engrad_energy(directory: Path) -> float | None:
                 and details.st_size <= _MAX_ENGRAD_ENERGY_FILE_BYTES
             ):
                 candidates.append((int(details.st_mtime_ns), entry))
-        candidates.sort(key=lambda item: item[0], reverse=True)
+        # Name breaks an exact mtime tie. Two `.engrad` files written in the
+        # same nanosecond would otherwise be left in readdir order, so which
+        # energy becomes the report's evidence would depend on the filesystem.
+        candidates.sort(key=lambda item: (item[0], item[1].name.lower()), reverse=True)
     except (OSError, RuntimeError):
         return None
     for _mtime_ns, candidate in candidates:

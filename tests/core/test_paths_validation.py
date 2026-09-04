@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from orca_auto.core.paths.validation import (
     ensure_directory,
     is_rejected_windows_path,
     is_subpath,
+    recent_file_candidates,
     require_subpath,
     resolve_artifact_path,
     resolve_local_path,
@@ -221,3 +223,26 @@ def test_resolve_artifact_path_skips_oserror_and_finds_later_candidate(
     monkeypatch.setattr(Path, "resolve", fake_resolve, raising=True)
 
     assert resolve_artifact_path("runs/run-1/result.json", base_dir) == second_candidate.resolve()
+
+
+@pytest.mark.parametrize("reversed_creation", [False, True])
+def test_recent_file_candidates_break_an_exact_mtime_tie_by_name(
+    tmp_path: Path,
+    reversed_creation: bool,
+) -> None:
+    # All eight files share one nanosecond, so only the name rule can order
+    # them; readdir alone would return an order that depends on the filesystem
+    # and, before the tie-break, on nothing the caller can reason about.
+    stamp = (1_700_000_000_000_000_000, 1_700_000_000_000_000_000)
+    names = ["c.xyz", "h.xyz", "a.xyz", "m.xyz", "b.xyz", "z.xyz", "e.xyz", "q.xyz"]
+    for name in reversed(names) if reversed_creation else names:
+        path = tmp_path / name
+        path.write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
+        os.utime(path, ns=stamp)
+
+    expected = sorted(names, reverse=True)
+    first = [item.name for item in recent_file_candidates([tmp_path], suffix=".xyz")]
+    second = [item.name for item in recent_file_candidates([tmp_path], suffix=".xyz")]
+
+    assert first == expected
+    assert second == expected
