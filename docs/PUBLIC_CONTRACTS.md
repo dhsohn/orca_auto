@@ -270,8 +270,11 @@ an undrained cancel status transition is recorded on its workflow payload, and
 it names why that row refuses a stale clear. The payload is the authority the
 clear guard itself consults: once a worker drains the transitions the key is
 gone from the row, even though its registry entry can still cache a count that
-no reindex has refreshed. The cached count is reported only for a row whose
-payload could not be read at all. The plain
+no reindex has refreshed. The payload consulted is the one in the workspace the
+row names — payload summaries are matched to rows by workspace directory, never
+by the `workflow_id` a payload persists, which a second (identity-quarantined)
+workspace can also claim. The cached count is reported only for a row whose own
+workspace payload could not be read at all. The plain
 `queue list` table carries the same rows as a `cancel_pending:` note printed
 under it, not as a column.
 

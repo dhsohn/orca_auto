@@ -61,6 +61,9 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
         lambda workflow_root: [
             {
                 "workflow_id": "wf-2",
+                # Every real summary carries the workspace it was read from,
+                # and that is what pairs it with a registry row.
+                "workspace_dir": "/tmp/wf/wf-2",
                 "stage_summaries": [
                     {
                         "stage_id": "crest.reactant",
@@ -196,6 +199,7 @@ def test_list_activities_treats_submission_failed_stage_as_terminal_for_current_
         lambda workflow_root: [
             {
                 "workflow_id": "wf-3",
+                "workspace_dir": "/tmp/wf/wf-3",
                 "stage_summaries": [
                     {
                         "stage_id": "orca.submit",
@@ -1139,3 +1143,97 @@ def test_workflow_activity_record_falls_back_to_the_cache_without_a_payload_summ
     )
 
     assert record.metadata["cancel_transitions_pending"] == 2
+
+
+def _quarantined_twin_workflow_root(tmp_path: Path) -> tuple[Path, str, str]:
+    """A cancelled workflow plus a quarantined workspace persisting its id.
+
+    An operator copy of a workspace under a new directory name keeps the
+    original ``workflow_id`` in the copy's payload, which `advance` quarantines
+    (status `failed` plus the identity `workflow_error`) without rewriting the
+    durable id. The copy's directory sorts below the real one, so the reverse
+    name order `iter_workflow_workspaces` scans in visits it last.
+    """
+    from orca_auto.flow import registry
+    from orca_auto.flow.state import write_workflow_payload
+
+    workflow_root = tmp_path / "workflow_runs"
+    real_id = "wf-cancel-real"
+    twin_id = "wf-cancel-copy"
+
+    real_workspace = workflow_root / real_id
+    real_workspace.mkdir(parents=True)
+    real_payload: dict[str, Any] = {
+        "workflow_id": real_id,
+        "template_name": "reaction_ts_search",
+        "status": "cancelled",
+        "requested_at": "2026-08-11T05:00:00+00:00",
+        "stages": [],
+        "metadata": {
+            "cancellation_status_transitions": [
+                {
+                    "event_id": "wf_evt_1",
+                    "occurred_at": "2026-08-11T05:10:00+00:00",
+                    "previous_status": "running",
+                    "status": "cancelled",
+                }
+            ]
+        },
+    }
+    write_workflow_payload(real_workspace, real_payload)
+    registry.sync_workflow_registry(workflow_root, real_workspace, real_payload)
+
+    twin_workspace = workflow_root / twin_id
+    twin_workspace.mkdir(parents=True)
+    twin_payload: dict[str, Any] = {
+        "workflow_id": real_id,
+        "template_name": "reaction_ts_search",
+        "status": "failed",
+        "requested_at": "2026-08-11T05:00:00+00:00",
+        "stages": [],
+        "metadata": {
+            "cancellation_status_transitions": [],
+            "workflow_error": {
+                "status": "failed",
+                "scope": "workflow_identity_validation",
+                "reason": "workflow directory name does not match persisted workflow_id",
+            },
+        },
+    }
+    write_workflow_payload(twin_workspace, twin_payload)
+    registry.sync_workflow_registry(workflow_root, twin_workspace, twin_payload)
+    return workflow_root, real_id, twin_id
+
+
+def test_workflow_summaries_are_keyed_by_workspace_not_by_persisted_id(tmp_path: Path) -> None:
+    # Two workspaces persist one id; keyed by that id, one of them is dropped
+    # and the survivor answers for the other. Keyed by workspace, both stay.
+    workflow_root, real_id, twin_id = _quarantined_twin_workflow_root(tmp_path)
+
+    summaries = _activity_workflow_records._workflow_summary_by_workspace(workflow_root)
+
+    assert sorted(Path(key).name for key in summaries) == [twin_id, real_id]
+    assert {
+        Path(key).name: Path(summary["workspace_dir"]).name for key, summary in summaries.items()
+    } == {real_id: real_id, twin_id: twin_id}
+    assert {summary["workflow_id"] for summary in summaries.values()} == {real_id}
+
+
+def test_workflow_records_report_a_transition_a_quarantined_twin_would_hide(
+    tmp_path: Path,
+) -> None:
+    # The quarantined copy carries no stored transition of its own. Matched by
+    # id it would answer for the real row and convert its count to zero, while
+    # the clear guard still reads the real workspace and refuses to clear it.
+    workflow_root, real_id, twin_id = _quarantined_twin_workflow_root(tmp_path)
+
+    rows = {
+        record.activity_id: record
+        for record in _activity_workflow_records.workflow_records(
+            workflow_root=workflow_root, refresh=False
+        )
+    }
+
+    assert sorted(rows) == [twin_id, real_id]
+    assert rows[real_id].metadata["cancel_transitions_pending"] == 1
+    assert "cancel_transitions_pending" not in rows[twin_id].metadata
