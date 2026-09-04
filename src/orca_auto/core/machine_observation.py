@@ -6,7 +6,7 @@ import re
 import stat
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 # The external factory/machine-observation contract fixes this filename, and the
 # internal per-run report artifact happens to use the same one. They are two
@@ -64,6 +64,53 @@ def machine_json_bytes(payload: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
+class ReceiptDigest:
+    """One artifact receipt's ``bytes`` and ``byte_sha256``, accumulated over chunks.
+
+    Both directions of a receipt measure content here. ``artifact_receipt``
+    fills one in while writing a receipt, and a reader that must prove the
+    bytes it consumed are the ones an accepted receipt binds fills one in from
+    exactly the chunks it read and asks ``matches``. A second hashing routine
+    on the reading side could drift from this one — a different chunk size is
+    harmless, but a different algorithm or a size counted differently would
+    silently accept or reject the wrong bytes.
+    """
+
+    def __init__(self) -> None:
+        self._digest = hashlib.sha256()
+        self._size = 0
+
+    @property
+    def size(self) -> int:
+        return self._size
+
+    def update(self, chunk: bytes) -> None:
+        self._digest.update(chunk)
+        self._size += len(chunk)
+
+    def consume(self, stream: IO[bytes]) -> None:
+        """Accumulate everything left in one already-open binary stream."""
+        while chunk := stream.read(_HASH_CHUNK_BYTES):
+            self.update(chunk)
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
+
+    def matches(self, receipt: object) -> bool:
+        """Whether an ``available`` receipt binds exactly the accumulated bytes.
+
+        Anything else is a refusal: a receipt that is absent, malformed, or
+        recorded ``missing``/``invalid`` binds no content at all, so bytes can
+        never be shown to be the ones it covers.
+        """
+        return (
+            isinstance(receipt, Mapping)
+            and receipt.get("status") == "available"
+            and receipt.get("bytes") == self._size
+            and receipt.get("byte_sha256") == self.hexdigest()
+        )
+
+
 def _unavailable_receipt(
     *, required: bool, role: str, media_type: str, status: str
 ) -> dict[str, Any]:
@@ -101,12 +148,9 @@ def artifact_receipt(
         relative = resolved.relative_to(root)
         if raw_candidate != resolved or not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
             raise ValueError
-        digest = hashlib.sha256()
-        size = 0
+        content = ReceiptDigest()
         with resolved.open("rb") as stream:
-            while chunk := stream.read(_HASH_CHUNK_BYTES):
-                digest.update(chunk)
-                size += len(chunk)
+            content.consume(stream)
         after = resolved.stat()
         if (
             before.st_dev,
@@ -120,7 +164,7 @@ def artifact_receipt(
             after.st_size,
             after.st_mtime_ns,
             after.st_ctime_ns,
-        ) or size != before.st_size:
+        ) or content.size != before.st_size:
             raise ValueError
     except FileNotFoundError:
         return _unavailable_receipt(
@@ -142,8 +186,8 @@ def artifact_receipt(
         "role": role,
         "path": relative.as_posix(),
         "media_type": media_type,
-        "bytes": size,
-        "byte_sha256": digest.hexdigest(),
+        "bytes": content.size,
+        "byte_sha256": content.hexdigest(),
     }
 
 
@@ -242,6 +286,7 @@ __all__ = [
     "MACHINE_OBSERVATION_FILE",
     "RESULTS_PAYLOAD_CONTRACT_NAME",
     "RESULTS_PAYLOAD_CONTRACT_VERSION",
+    "ReceiptDigest",
     "artifact_receipt",
     "machine_code",
     "machine_json_bytes",

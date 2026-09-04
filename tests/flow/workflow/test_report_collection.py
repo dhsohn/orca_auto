@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,7 @@ from orca_auto.core.artifacts import (
 )
 from orca_auto.core.engine_runner import confined_output_identity
 from orca_auto.flow.workflow import report_collection as workflow_report_collection
-from orca_auto.flow.workflow import report_energy_evidence
+from orca_auto.flow.workflow import report_diagnostics, report_energy_evidence
 from orca_auto.flow.workflow.machine import write_workflow_machine_observation
 from orca_auto.flow.workflow.report_collection import collect_workflow_report_data
 from orca_auto.flow.workflow.report_rendering import write_workflow_html_report
@@ -1046,6 +1047,137 @@ def test_output_rewritten_under_the_scan_publishes_no_imaginary_count(
     data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
 
     assert data.orca_results[0].imaginary_count is None
+
+
+def test_output_replaced_after_verification_publishes_no_imaginary_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The receipt is verified by the load that resolves the stage report, and
+    # the recount opens the output afterwards. An output substituted in that
+    # window is observed by every check on the reading side — the pre-open
+    # stat, the descriptor's inode, and the size/mtime stability check all see
+    # the replacement and agree with it — so only the digest of the bytes
+    # actually read can show they are not the ones the observation bound.
+    # The replacement is byte-for-byte the same length as the accepted output,
+    # so its size alone tells nothing apart.
+    original = _ts_freq_output_text(imaginary=2)
+    replacement_text = original.replace("-500.00", " 500.00", 1)
+    assert len(replacement_text.encode("utf-8")) == len(original.encode("utf-8"))
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_replaced_output",
+        energy=-1.1,
+        reason="ts_criteria_failed",
+        status_state="failed",
+        route_line="! HF OptTS Freq",
+        output_text=original,
+    )
+    stage = _orca_stage(
+        "orca_replaced_output",
+        generation,
+        status="failed",
+        label="replaced output",
+        task_kind="optts_freq",
+    )
+    replacement = tmp_path / "replacement.out"
+    replacement.write_text(replacement_text, encoding="utf-8")
+    recount = workflow_report_collection._final_section_imaginary_count
+
+    # Forwarded positionally so the substitution is all this stub changes.
+    def _replace_then_recount(*args: Any, **kwargs: Any) -> int | None:
+        os.replace(replacement, generation / "orca.out")
+        return recount(*args, **kwargs)
+
+    monkeypatch.setattr(
+        workflow_report_collection,
+        "_final_section_imaginary_count",
+        _replace_then_recount,
+    )
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results[0].imaginary_count is None
+
+
+def test_recount_refuses_an_output_receipt_that_binds_nothing(tmp_path: Path) -> None:
+    # The recount publishes a count only for bytes an ``available`` receipt
+    # covers. A receipt that is absent, unavailable, taken for another file of
+    # the generation, or recording a different digest binds nothing about the
+    # output being read, and none of them may fall back to counting it anyway.
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_unbound_receipt",
+        energy=-1.1,
+        reason="ts_criteria_failed",
+        status_state="failed",
+        route_line="! HF OptTS Freq",
+        output_text=_ts_freq_output_text(imaginary=2),
+    )
+    stage = _orca_stage(
+        "orca_unbound_receipt",
+        generation,
+        status="failed",
+        label="unbound receipt",
+        task_kind="optts_freq",
+    )
+    _, payload, receipt = report_diagnostics.resolve_stage_job_report(stage)
+    assert payload is not None
+    assert receipt is not None
+    assert (
+        workflow_report_collection._final_section_imaginary_count(generation, payload, receipt) == 2
+    )
+
+    for variant in (
+        None,
+        {},
+        dict(receipt, status="missing"),
+        dict(receipt, status="invalid"),
+        dict(receipt, path="other.out"),
+        dict(receipt, byte_sha256="0" * 64),
+        dict(receipt, bytes=int(receipt["bytes"]) + 1),
+    ):
+        assert (
+            workflow_report_collection._final_section_imaginary_count(generation, payload, variant)
+            is None
+        )
+
+
+def test_recount_publishes_the_count_the_accepted_receipt_binds(tmp_path: Path) -> None:
+    # The ordinary case: the receipt carried out of the verified load is the
+    # one the machine observation records for this output, it hashes the bytes
+    # on disk, and the row publishes the count read from them.
+    generation = _orca_stage_dir(
+        tmp_path,
+        "orca_receipted_count",
+        energy=-1.1,
+        reason="ts_criteria_failed",
+        status_state="failed",
+        route_line="! HF OptTS Freq",
+        output_text=_ts_freq_output_text(imaginary=2),
+    )
+    stage = _orca_stage(
+        "orca_receipted_count",
+        generation,
+        status="failed",
+        label="receipted count",
+        task_kind="optts_freq",
+    )
+    _forge_markers(generation, imaginary_frequency_count=7, final_frequency_section=True)
+    observation = json.loads((generation / RUN_REPORT_JSON_FILE).read_text(encoding="utf-8"))
+    recorded = observation["artifacts"]["orca-output"]
+    assert recorded["status"] == "available"
+    assert (
+        recorded["byte_sha256"]
+        == hashlib.sha256((generation / "orca.out").read_bytes()).hexdigest()
+    )
+
+    _, _payload_ignored, carried = report_diagnostics.resolve_stage_job_report(stage)
+    assert carried == recorded
+
+    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
+
+    assert data.orca_results[0].imaginary_count == 2
 
 
 def test_non_candidate_stage_does_not_read_its_output_for_a_count(

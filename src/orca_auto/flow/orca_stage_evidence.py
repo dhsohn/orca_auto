@@ -24,7 +24,10 @@ from orca_auto.flow.conformer_selection import (
 from orca_auto.flow.contracts.workflow import is_supported_orca_stage_contract
 from orca_auto.flow.orca_stage_validation import validate_workflow_orca_input
 from orca_auto.orca.report.si import SiBlock, SiBlockError, collect_si_block
-from orca_auto.orca.state_reading import load_generation_state, load_report_json
+from orca_auto.orca.state_reading import (
+    load_generation_state,
+    load_report_json_with_output_receipt,
+)
 
 
 def _text(value: Any) -> str:
@@ -129,6 +132,16 @@ def verified_orca_stage_report(
 ) -> dict[str, Any] | None:
     """Load one canonical successful ORCA report bound to the durable stage."""
 
+    loaded = _verified_stage_report_with_output_receipt(stage, report_path)
+    return None if loaded is None else loaded[0]
+
+
+def _verified_stage_report_with_output_receipt(
+    stage: Mapping[str, Any],
+    report_path: Path | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
+    """The stage's verified report and the ``orca-output`` receipt that load accepted."""
+
     if (
         report_path is None
         or not report_path.is_absolute()
@@ -144,21 +157,29 @@ def verified_orca_stage_report(
             return None
     except OSError:
         return None
-    report = load_report_json(report_path.parent, require_consumable_success=True)
-    if report is None or not stage_report_identity_matches(stage, report):
+    loaded = load_report_json_with_output_receipt(
+        report_path.parent,
+        require_consumable_success=True,
+    )
+    if loaded is None or not stage_report_identity_matches(stage, loaded[0]):
         return None
-    return report
+    return loaded
 
 
 def resolve_verified_orca_stage_report(
     stage: Mapping[str, Any],
-) -> tuple[Path | None, dict[str, Any] | None]:
-    """Resolve the canonical verified report for one ORCA workflow stage."""
+) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None]:
+    """Resolve the canonical verified report for one ORCA workflow stage.
+
+    The third element is the ``orca-output`` receipt the same load accepted, so
+    a caller that reads that output afterwards can bind what it reads to the
+    observed bytes rather than to a path it re-opens.
+    """
 
     report_path = _stage_artifact_path(stage, "orca_report_json")
-    report = verified_orca_stage_report(stage, report_path)
-    if report is not None:
-        return report_path, report
+    loaded = _verified_stage_report_with_output_receipt(stage, report_path)
+    if loaded is not None:
+        return report_path, loaded[0], loaded[1]
     for job_dir in stage_job_dirs(stage):
         candidate_dirs = (
             (job_dir,)
@@ -167,10 +188,10 @@ def resolve_verified_orca_stage_report(
         )
         for candidate_dir in candidate_dirs:
             candidate_path = candidate_dir / RUN_REPORT_JSON_FILE
-            report = verified_orca_stage_report(stage, candidate_path)
-            if report is not None:
-                return candidate_path, report
-    return None, None
+            loaded = _verified_stage_report_with_output_receipt(stage, candidate_path)
+            if loaded is not None:
+                return candidate_path, loaded[0], loaded[1]
+    return None, None, None
 
 
 def _report_state_identity_matches(
@@ -406,7 +427,7 @@ def collect_verified_orca_stage_evidence(
     task_status = _text(stage_task(stage).get("status")).lower()
     if stage_status != "completed" or task_status not in {"", "completed"}:
         return None, "stage/task is not durably completed", None
-    report_path, report = resolve_verified_orca_stage_report(stage)
+    report_path, report, _output_receipt = resolve_verified_orca_stage_report(stage)
     if report is None or report_path is None:
         return None, "no verified report generation recorded", None
     generation_dir = report_path.parent

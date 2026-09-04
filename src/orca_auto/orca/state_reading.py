@@ -241,6 +241,29 @@ def load_report_json(
 ) -> dict[str, Any] | None:
     """Load one provenance-verified ORCA report from an exact visible generation."""
 
+    loaded = load_report_json_with_output_receipt(
+        generation_dir,
+        require_consumable_success=require_consumable_success,
+    )
+    return None if loaded is None else loaded[0]
+
+
+def load_report_json_with_output_receipt(
+    generation_dir: Path,
+    *,
+    require_consumable_success: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
+    """Load one verified report together with the ``orca-output`` receipt it accepted.
+
+    The second element is the receipt this load re-hashed from disk and found
+    equal to the one the machine observation records, so a reader that must
+    prove it read the observed bytes can compare its own digest against it
+    instead of re-deriving one from a file it opened later. It is ``None`` when
+    the generation records no terminal output, and carries a ``missing`` or
+    ``invalid`` status when the recorded output is not a file the observation
+    could bind — the caller decides what an unavailable receipt means for it.
+    """
+
     raw_generation_dir = generation_dir.expanduser()
     if (
         not raw_generation_dir.is_absolute()
@@ -332,6 +355,7 @@ def load_report_json(
         return None
     outcome = expected_outcome
     last_out_path = normalized_text(final_result.get("last_out_path"))
+    accepted_output_receipt: dict[str, Any] | None = None
     if last_out_path or outcome == "succeeded":
         expected_output = artifact_receipt(
             resolved_generation_dir,
@@ -342,6 +366,7 @@ def load_report_json(
         )
         if artifacts.get("orca-output") != expected_output:
             return None
+        accepted_output_receipt = expected_output
     if require_consumable_success and outcome == "succeeded":
         handoff = _dict(observation.get("handoff"))
         delivery = _dict(observation.get("delivery"))
@@ -398,7 +423,7 @@ def load_report_json(
         or target[1] != (int(generation_details.st_dev), int(generation_details.st_ino))
     ):
         return None
-    return payload
+    return payload, accepted_output_receipt
 
 
 __all__ = [
@@ -406,6 +431,7 @@ __all__ = [
     "STATE_FILE_NAME",
     "load_generation_state",
     "load_report_json",
+    "load_report_json_with_output_receipt",
     "load_state",
     "machine_lifecycle",
     "normalized_text",
