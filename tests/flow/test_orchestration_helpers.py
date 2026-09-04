@@ -584,6 +584,20 @@ def test_apply_contract_status_never_regresses_a_terminal_stage() -> None:
         _apply_contract_status(stage, stage["task"], "running")
         assert stage["status"] == "running"
 
+    # A terminal contract cannot prove that it belongs to the newly rejected
+    # submission. Keep its failure provenance until a live contract reattaches
+    # through a non-terminal status.
+    for stale_terminal in ("cancelled", "completed", "failed"):
+        stage = {
+            "stage_id": "stage",
+            "status": "submission_failed",
+            "task": {"engine": "crest", "status": "submission_failed"},
+        }
+        applied = _apply_contract_status(stage, stage["task"], stale_terminal)
+        assert applied is False
+        assert stage["status"] == "submission_failed"
+        assert stage["task"]["status"] == "submission_failed"
+
 
 def test_cancel_stage_reapplies_an_acknowledged_cancellation_without_the_engine() -> None:
     # The engine already cancelled this task's row; a stale contract later

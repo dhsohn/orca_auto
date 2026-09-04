@@ -385,11 +385,9 @@ def _recorded_electronic_state(payload: dict[str, Any]) -> dict[str, int | None]
     params = workflow_request_parameters(payload)
     recorded: dict[str, int | None] = {}
     for key, minimum in (("charge", None), ("multiplicity", 1)):
-        raw = params.get(key)
-        try:
-            recorded[key] = None if raw is None else strict_int(raw, field=key, minimum=minimum)
-        except ValueError:
-            recorded[key] = None
+        recorded[key] = (
+            strict_int(params[key], field=key, minimum=minimum) if key in params else None
+        )
     return recorded
 
 

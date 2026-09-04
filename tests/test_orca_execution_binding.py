@@ -358,15 +358,32 @@ def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
         ("! HF STO-3G SP", 0, "h2.resume.inp"),
         ("! HF STO-3G SP", 0, "h2.resume.out"),
         ("! HF STO-3G SP", 0, "h2.resume.gbw"),
+        ("! HF STO-3G EnGrad", 0, "h2.engrad"),
+        ("! HF STO-3G EnGrad", 0, "h2.resume.engrad"),
+        ("! HF STO-3G EnergyGrad", 0, "h2.engrad"),
+        ("! HF STO-3G Opt", 0, "h2.engrad"),
+        ("! HF STO-3G SloppyOpt", 0, "h2.engrad"),
+        ("! HF STO-3G CrudeOpt", 0, "h2.engrad"),
+        ("! HF STO-3G OptH", 0, "h2.engrad"),
+        ("! HF STO-3G L-OPT", 0, "h2.engrad"),
+        ("! HF STO-3G L-OPTH", 0, "h2.engrad"),
+        ("! HF STO-3G QMMMOpt", 0, "h2.engrad"),
+        ("! HF STO-3G CI-OPT", 0, "h2.engrad"),
+        ("! HF STO-3G OptTS", 0, "h2.engrad"),
+        ("! HF STO-3G ScanTS", 0, "h2.engrad"),
+        ("! HF STO-3G IRC", 0, "h2.engrad"),
+        ("! HF STO-3G NumGrad", 0, "h2.engrad"),
         ("! HF STO-3G Freq", 0, "h2.resume.hess"),
         ("! HF STO-3G Opt", 0, "h2.resume.xyz"),
         ("! HF STO-3G ScanTS", 1, "h2.retry01.inp"),
         ("! HF STO-3G ScanTS", 1, "h2.retry01.out"),
         ("! HF STO-3G ScanTS", 1, "h2.retry03.gbw"),
+        ("! HF STO-3G ScanTS", 1, "h2.retry03.engrad"),
         ("! HF STO-3G ScanTS", 1, "h2.retry03.xyz"),
         ("! HF STO-3G ScanTS Freq", 1, "h2.retry03.hess"),
         ("! HF STO-3G ScanTS", 1, "h2.retry02.resume.inp"),
         ("! HF STO-3G ScanTS", 1, "h2.retry02.resume.out"),
+        ("! HF STO-3G ScanTS", 1, "h2.retry02.resume.engrad"),
     ],
 )
 def test_orca_execution_snapshot_rejects_retry_and_resume_name_collisions(
@@ -396,6 +413,55 @@ def test_orca_execution_snapshot_rejects_retry_and_resume_name_collisions(
         )
 
     assert not _visible_generations(job_dir)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "! HF STO-3G SP",
+        "! HF STO-3G SP # EnGrad",
+        "! HF STO-3G NEB-TS",
+        "! HF STO-3G ZOOM-NEB-TS",
+        "! HF STO-3G InterpOpt",
+        "! HF STO-3G RigidBodyOpt",
+    ],
+)
+def test_orca_execution_snapshot_allows_same_stem_engrad_without_active_engrad_route(
+    tmp_path: Path,
+    route: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    dependency = job_dir / "h2.engrad"
+    dependency.write_text("external gradient data\n", encoding="utf-8")
+    selected = job_dir / "h2.inp"
+    selected.write_text(
+        f'{route}\n%pointcharges "h2.engrad"\n* xyz 0 1\nH 0 0 0\n*\n',
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        max_retries=0,
+        orca_executable=_write_executable(tmp_path / "orca"),
+    )
+
+    assert Path(snapshot["materialized_inputs"]["dependency_000000"]["path"]).name == (
+        dependency.name
+    )
+    verified_selected, _executable = verify_orca_execution_snapshot(
+        job_dir,
+        snapshot,
+        expected_selected_inp=snapshot["selected_inp"],
+        expected_source_selected_inp=snapshot["source_selected_inp"],
+        expected_selected_input_xyz="",
+        expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
+        expected_max_retries=0,
+    )
+    assert verified_selected == Path(snapshot["selected_inp"])
 
 
 def test_orca_execution_snapshot_allows_retry_name_outside_effective_budget(
@@ -1210,6 +1276,80 @@ def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
 
     with pytest.raises(ValueError, match="runtime/output file: job.resume.out"):
         _verify(job_dir, selected, snapshot, resources)
+
+
+@pytest.mark.parametrize(
+    "output_route",
+    [
+        "! HF STO-3G EnGrad",
+        "! HF STO-3G EnergyGrad",
+        "! HF STO-3G Opt",
+        "! HF STO-3G SloppyOpt",
+        "! HF STO-3G CrudeOpt",
+        "! HF STO-3G OptH",
+        "! HF STO-3G L-OPT",
+        "! HF STO-3G L-OPTH",
+        "! HF STO-3G QMMMOpt",
+        "! HF STO-3G CI-OPT",
+        "! HF STO-3G OptTS",
+        "! HF STO-3G ScanTS",
+        "! HF STO-3G IRC",
+        "! HF STO-3G NumGrad",
+    ],
+)
+def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
+    tmp_path: Path,
+    output_route: str,
+) -> None:
+    import orca_auto.orca.execution_binding as binding
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    dependency = job_dir / "external.pc"
+    dependency.write_text("0\n", encoding="utf-8")
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        '! HF STO-3G SP\n%pointcharges "external.pc"\n* xyz 0 1\nH 0 0 0\n*\n',
+        encoding="utf-8",
+    )
+    resources = {"max_cores": 1, "max_memory_gb": 1}
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request=resources,
+        max_retries=0,
+        orca_executable=_write_executable(tmp_path / "orca"),
+    )
+    role = "dependency_000000"
+    original_private = Path(snapshot["materialized_inputs"][role]["path"])
+    reserved_source = job_dir / "job.engrad"
+    reserved_private = Path(snapshot["execution_dir"]) / reserved_source.name
+    original_private.rename(reserved_private)
+    snapshot["dependency_paths"][0] = str(reserved_source.resolve())
+    snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
+    snapshot["materialized_inputs"][role] = binding._file_identity(reserved_private)
+    bound_selected = Path(snapshot["selected_inp"])
+    bound_selected.chmod(0o600)
+    bound_selected.write_text(
+        bound_selected.read_text(encoding="utf-8")
+        .replace("! HF STO-3G SP", output_route)
+        .replace(dependency.name, reserved_source.name),
+        encoding="utf-8",
+    )
+    bound_selected.chmod(0o400)
+    snapshot["bound_selected_identity"] = binding._file_identity(bound_selected)
+
+    with pytest.raises(ValueError, match="runtime/output file: job.engrad"):
+        verify_orca_execution_snapshot(
+            job_dir,
+            snapshot,
+            expected_selected_inp=snapshot["selected_inp"],
+            expected_source_selected_inp=snapshot["source_selected_inp"],
+            expected_selected_input_xyz="",
+            expected_resource_request=resources,
+            expected_max_retries=0,
+        )
 
 
 def test_verify_orca_execution_snapshot_rejects_distinct_sources_with_same_basename(

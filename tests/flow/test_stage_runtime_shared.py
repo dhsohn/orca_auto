@@ -90,7 +90,9 @@ def test_rejected_submission_detail_truncates_and_omits_when_blank() -> None:
     )
     assert len(stage_metadata["submission_error_detail"]) == 1000
 
-    blank_metadata: dict[str, Any] = {}
+    blank_metadata: dict[str, Any] = {
+        "submission_error_detail": "detail from the previous failed attempt"
+    }
     _apply(
         blank_metadata,
         {
@@ -129,15 +131,13 @@ def test_deferred_submission_leaves_failure_metadata_untouched() -> None:
     assert stage_metadata["submission_error_detail"] == "old failure detail"
 
 
-def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass(
+def test_orca_sync_defers_contract_pass_after_rejection_and_keeps_reason(
     tmp_path: Path,
 ) -> None:
-    """Integration regression: the same sync tick must not clobber the reason.
+    """A rejected submission owns its tick before an older contract can apply.
 
-    For an ORCA stage the contract loader never raises — a stage whose
-    submission was rejected gets an unknown contract with an empty reason on
-    the same tick and every later tick, and the contract metadata writer used
-    to overwrite the recorded rejection reason with that "".
+    A later sync may still use the contract to reattach a live job; only the
+    tick that persisted this new rejection must skip the stale lookup.
     """
     from unittest.mock import Mock
 
@@ -183,11 +183,11 @@ def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass(
         "stdout": "",
         "parsed_stdout": {},
     }
-    unknown_contract = OrcaArtifactContract(
-        run_id="",
-        status="unknown",
-        reason="",
-        state_status="",
+    stale_terminal_contract = OrcaArtifactContract(
+        run_id="run_from_previous_submission",
+        status="failed",
+        reason="old_run_failed",
+        state_status="failed",
         reaction_dir=str(reaction_dir),
         latest_known_path="",
         optimized_xyz_path="",
@@ -206,10 +206,11 @@ def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass(
         attempts=(),
         final_result={},
     )
+    contract_loader = Mock(return_value=stale_terminal_contract)
     deps = orchestration_services(
         overrides={
             "submit_reaction_dir": Mock(return_value=rejection),
-            "load_orca_artifact_contract": Mock(return_value=unknown_contract),
+            "load_orca_artifact_contract": contract_loader,
         }
     )
 
@@ -226,9 +227,11 @@ def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass(
     assert stage["status"] == "submission_failed"
     assert metadata["reason"] == "invalid_submission_input"
     assert "ts_guess.hess" in metadata["submission_error_detail"]
+    assert contract_loader.call_count == 0
 
-    # Later ticks keep reloading the unknown contract; the reason must survive
-    # those too.
+    # A terminal contract from an earlier submission can still be present on
+    # the next tick. It must not replace the new rejection or mix its reason
+    # with the new submission detail.
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca_auto.yaml",
@@ -236,7 +239,11 @@ def test_orca_sync_keeps_the_rejection_reason_across_the_contract_pass(
         submit_ready=True,
         services=deps,
     )
+    assert stage["status"] == "submission_failed"
+    assert stage["task"]["status"] == "submission_failed"
     assert metadata["reason"] == "invalid_submission_input"
+    assert "ts_guess.hess" in metadata["submission_error_detail"]
+    assert contract_loader.call_count == 1
 
 
 def test_successful_resubmission_clears_stale_failure_detail() -> None:

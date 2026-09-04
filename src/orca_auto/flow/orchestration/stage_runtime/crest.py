@@ -147,12 +147,14 @@ def _apply_crest_contract(
     stage: dict[str, Any],
     task: dict[str, Any],
     contract: Any,
-) -> None:
-    _apply_contract_status(stage, task, contract.status)
+) -> bool:
+    if not _apply_contract_status(stage, task, contract.status):
+        return False
     stage_view = WorkflowStageView(stage)
     stage_view.update_crest_contract_metadata(contract)
     WorkflowTaskView(task).update_crest_contract_payload(contract)
     stage_view.set_crest_conformer_artifacts(contract)
+    return True
 
 
 def sync_crest_stage_impl(
@@ -180,10 +182,9 @@ def sync_crest_stage_impl(
             workflow_id=workflow_id,
         )
         if not submission_applied:
-            # The job directory still belongs to an active cancellation.  Its
-            # old contract must not overwrite PLANNED in this same tick; the
-            # next sync retries submission and publishes a new identity once
-            # cancellation becomes terminal.
+            # A deferred or rejected submission owns this tick. Its old
+            # contract must not overwrite the new PLANNED/submission_failed
+            # state; a later sync may reattach a live job if one still exists.
             return
     contract = _load_crest_contract(
         resolved,

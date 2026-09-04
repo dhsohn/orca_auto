@@ -378,8 +378,14 @@ def _service_restart_with_workflow_state(
     return result, commands
 
 
-@pytest.mark.parametrize("workflow_state", ["failed", "activating", "reloading"])
-def test_cmd_service_restart_recovers_a_broken_workflow_worker(workflow_state: str) -> None:
+@pytest.mark.parametrize(
+    ("workflow_state", "workflow_returncode"),
+    [("failed", 3), ("activating", 0), ("activating", 3), ("reloading", 0)],
+)
+def test_cmd_service_restart_recovers_a_broken_workflow_worker(
+    workflow_state: str,
+    workflow_returncode: int,
+) -> None:
     """A crash loop is exactly where a bad deploy leaves the opt-in worker.
 
     `Restart=on-failure` with a start limit parks it in activating, then
@@ -388,7 +394,10 @@ def test_cmd_service_restart_recovers_a_broken_workflow_worker(workflow_state: s
     tripped start limit would never be cleared.
     """
 
-    result, commands = _service_restart_with_workflow_state(workflow_state)
+    result, commands = _service_restart_with_workflow_state(
+        workflow_state,
+        workflow_returncode=workflow_returncode,
+    )
 
     assert result == 0
     assert ("systemctl", "reset-failed", "orca_auto-workflow-worker@alice.service") in commands

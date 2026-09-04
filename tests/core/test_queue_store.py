@@ -1129,7 +1129,7 @@ def test_request_cancel_accepts_same_generation_after_publication_transition(
     assert cancelled.status == QueueStatus.CANCELLED
 
 
-def test_pending_cancel_callback_runs_before_queue_transition_under_both_locks(
+def test_pending_cancel_callback_runs_after_durable_fence_under_both_locks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1178,6 +1178,8 @@ def test_pending_cancel_callback_runs_before_queue_transition_under_both_locks(
         assert lock_state == {"publication": True, "queue": True}
         [durable] = store.load_entries(tmp_path)
         assert durable.status == QueueStatus.PENDING
+        assert durable.cancel_requested is True
+        assert durable.finished_at == ""
         assert candidate.status == QueueStatus.CANCELLED
         assert candidate.metadata["terminal_replay"] == {"status": "cancelled"}
         events.append(("callback", candidate.status))
@@ -1198,6 +1200,7 @@ def test_pending_cancel_callback_runs_before_queue_transition_under_both_locks(
 
     assert cancelled is not None and cancelled.status == QueueStatus.CANCELLED
     assert events == [
+        ("save", QueueStatus.PENDING),
         ("metadata", QueueStatus.CANCELLED),
         ("callback", QueueStatus.CANCELLED),
         ("save", QueueStatus.CANCELLED),
@@ -1205,7 +1208,7 @@ def test_pending_cancel_callback_runs_before_queue_transition_under_both_locks(
     assert lock_state == {"publication": False, "queue": False}
 
 
-def test_pending_cancel_callback_failure_leaves_queue_pending(
+def test_pending_cancel_callback_failure_leaves_queue_fenced_and_unclaimable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1229,10 +1232,73 @@ def test_pending_cancel_callback_failure_leaves_queue_pending(
             before_pending_cancel_fn=reject_cancel,
         )
 
-    [unchanged] = store.list_queue(tmp_path)
-    assert unchanged.status == QueueStatus.PENDING
-    assert unchanged.cancel_requested is False
-    assert unchanged.finished_at == ""
+    [fenced] = store.list_queue(tmp_path)
+    assert fenced.status == QueueStatus.PENDING
+    assert fenced.cancel_requested is True
+    assert fenced.finished_at == ""
+    assert store.dequeue_next(tmp_path) is None
+    with pytest.raises(store.DuplicateQueueEntryError):
+        store.enqueue(
+            tmp_path,
+            app_name="app",
+            task_id="pending-callback-failure",
+            task_kind="kind",
+            engine="engine",
+        )
+
+
+def test_pending_cancel_final_save_failure_keeps_fence_and_can_be_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    entry = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="pending-final-save-failure",
+        task_kind="kind",
+        engine="engine",
+    )
+    real_save_entries = store.save_entries
+    save_calls = 0
+    callback_calls = 0
+
+    def fail_terminal_save(root: Path, entries: Sequence[store.QueueEntry]) -> None:
+        nonlocal save_calls
+        save_calls += 1
+        if save_calls == 2:
+            raise OSError("terminal queue save failed")
+        real_save_entries(root, entries)
+
+    def publish_cancel(_candidate: store.QueueEntry) -> None:
+        nonlocal callback_calls
+        callback_calls += 1
+
+    with pytest.raises(OSError, match="terminal queue save failed"):
+        store.request_cancel(
+            tmp_path,
+            entry.queue_id,
+            expected_entry=entry,
+            before_pending_cancel_fn=publish_cancel,
+            save_entries_fn=fail_terminal_save,
+        )
+
+    [fenced] = store.list_queue(tmp_path)
+    assert fenced.status == QueueStatus.PENDING
+    assert fenced.cancel_requested is True
+    assert fenced.finished_at == ""
+    assert store.dequeue_next(tmp_path) is None
+
+    retried = store.request_cancel(
+        tmp_path,
+        entry.queue_id,
+        expected_entry=entry,
+        before_pending_cancel_fn=publish_cancel,
+    )
+
+    assert retried is not None
+    assert retried.status == QueueStatus.CANCELLED
+    assert callback_calls == 2
 
 
 def test_pending_cancel_metadata_callback_failure_aborts_queue_write(

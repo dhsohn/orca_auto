@@ -289,7 +289,8 @@ Basename이 다르고 ORCA가 그 이름을 출력으로
 route에서도 주 `* xyzfile` 의존성 하나만 그 exact 이름을 쓰는 경우는 허용합니다.
 바인딩 `.inp`에 그 좌표를 inline하고, 실행 뒤 ORCA가 visible XYZ를 갱신할 수 있습니다.
 같은 stem의 보조 NEB Product/TS 입력은 계속 지원하지 않습니다. 주파수 route는
-`<stem>.hess`를, 모든 route는 `<stem>.out`과 `<stem>.gbw`를 예약합니다. 선택 `.inp`
+`<stem>.hess`를, EnGrad/EnergyGrad·NumGrad·optimization·OptTS/ScanTS·IRC route는
+`<stem>.engrad`를, 모든 route는 `<stem>.out`과 `<stem>.gbw`를 예약합니다. 선택 `.inp`
 basename과 generation이 소유하는 `job_state.json`, `machine.json`도 의존성
 basename으로 쓰면 제출 단계에서 거부합니다. `%base`와 NEB restart-GBW basename
 제어 같은 출력 base override도 fail-closed합니다.

@@ -37,16 +37,15 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "func", None):
         parser.print_help()
         return 0
+    result = int(args.func(args))
     try:
-        result = int(args.func(args))
         # Text streams are block-buffered on a pipe. A short command can finish
         # rendering without observing the closed reader until interpreter
         # shutdown, which would otherwise replace a handled result with exit 120.
         sys.stdout.flush()
-        return result
     except BrokenPipeError:
         _silence_broken_stdout()
-        return 0
+    return result
 
 
 if __name__ == "__main__":

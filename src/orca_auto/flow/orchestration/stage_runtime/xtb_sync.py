@@ -5,7 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.queue.priority import normalize_queue_priority
-from orca_auto.core.statuses import STATUS_COMPLETED, STATUS_FAILED, status_in
+from orca_auto.core.statuses import (
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_PLANNED,
+    SUBMISSION_DEFERRED_STATUSES,
+    status_in,
+)
 from orca_auto.core.utils import normalize_text, safe_int
 from orca_auto.flow.orchestration.services import OrchestrationServices
 from orca_auto.flow.orchestration.stage_runtime.shared import (
@@ -75,10 +81,11 @@ def _apply_xtb_contract(
     stage_view: WorkflowStageView,
     task_view: WorkflowTaskView,
     contract: Any,
-) -> dict[str, str]:
+) -> dict[str, str] | None:
     stage = stage_view.raw
     task = task_view.raw
-    _apply_contract_status(stage, task, contract.status)
+    if not _apply_contract_status(stage, task, contract.status):
+        return None
     stage_view.update_xtb_contract_metadata(contract)
     task_view.set_selected_input_xyz(contract.selected_input_xyz)
 
@@ -163,6 +170,50 @@ def _xtb_handoff_retry_decision(
     )
 
 
+def _pending_xtb_handoff_retry_decision(
+    stage_view: WorkflowStageView,
+    task_view: WorkflowTaskView,
+) -> _XtbHandoffRetryDecision | None:
+    stage_metadata = stage_view.metadata()
+    if (
+        task_view.kind() != "path_search"
+        or task_view.status() != STATUS_PLANNED
+        or normalize_text(stage_metadata.get("reaction_handoff_status")) != "retrying"
+        or normalize_text(stage_metadata.get("xtb_handoff_status")) != "waiting_for_slot"
+    ):
+        return None
+    attempt_number = stage_view.xtb_current_attempt_number()
+    if attempt_number <= 0:
+        return None
+    attempt_record = xtb_attempt_record_impl(
+        stage_view.raw,
+        attempt_number=attempt_number,
+    )
+    materialized_job_dir = normalize_text(task_view.payload().get("job_dir"))
+    if (
+        not materialized_job_dir
+        or materialized_job_dir != normalize_text(attempt_record.get("job_dir"))
+        or not status_in(
+            attempt_record.get("submission_status"),
+            SUBMISSION_DEFERRED_STATUSES,
+        )
+    ):
+        return None
+    retries_used = safe_int(stage_metadata.get("xtb_handoff_retries_used"), default=0)
+    retry_limit = safe_int(
+        stage_metadata.get("xtb_handoff_retry_limit"),
+        default=xtb_path_retry_limit_impl(stage_view.raw),
+    )
+    if attempt_number != retries_used + 1 or attempt_number > retry_limit:
+        return None
+    return _XtbHandoffRetryDecision(
+        should_retry=True,
+        retries_used=retries_used,
+        retry_limit=retry_limit,
+        next_attempt=attempt_number,
+    )
+
+
 def _submit_xtb_handoff_retry(
     services: OrchestrationServices,
     stage_view: WorkflowStageView,
@@ -207,8 +258,8 @@ def _apply_xtb_handoff_retry_submission(
     stage_metadata: dict[str, Any],
     submission: dict[str, Any],
     decision: _XtbHandoffRetryDecision,
-) -> None:
-    _apply_xtb_submission_result(
+) -> bool:
+    submission_applied = _apply_xtb_submission_result(
         stage_view.raw,
         task_view.raw,
         stage_metadata,
@@ -220,17 +271,22 @@ def _apply_xtb_handoff_retry_submission(
     if job_dir:
         stage_metadata["latest_known_path"] = job_dir
     job_id = str(submission.get("job_id") or "").strip()
-    if job_id:
+    deferred = _submission_is_deferred(submission)
+    if job_id and (submission_applied or deferred):
         stage_metadata["child_job_id"] = job_id
     else:
         stage_metadata.pop("child_job_id", None)
-    if not _submission_is_deferred(submission):
+    if not submission_applied and not deferred:
+        stage_metadata["reaction_handoff_status"] = STATUS_FAILED
+        return False
+    if submission_applied:
         stage_view.set_xtb_handoff_retrying(
             retry_limit=decision.retry_limit,
             retries_used=decision.next_attempt,
         )
     else:
         stage_view.set_xtb_handoff_retrying(retry_limit=decision.retry_limit)
+    return submission_applied
 
 
 def _maybe_retry_xtb_handoff(
@@ -318,8 +374,8 @@ def _apply_xtb_submission_result(
     *,
     deferred_handoff_status: str,
     active_handoff_status: str,
-) -> None:
-    _apply_submission_result(
+) -> bool:
+    submission_applied = _apply_submission_result(
         stage=stage,
         task=task,
         stage_metadata=stage_metadata,
@@ -328,6 +384,9 @@ def _apply_xtb_submission_result(
         active_metadata={"xtb_handoff_status": active_handoff_status},
         metadata_fields=(("queue_id", "queue_id"),),
     )
+    if not submission_applied and not _submission_is_deferred(submission):
+        stage_metadata.pop("xtb_handoff_status", None)
+    return submission_applied
 
 
 def _submit_xtb_stage(
@@ -340,6 +399,9 @@ def _submit_xtb_stage(
     xtb_config: str | None,
     workflow_id: str,
 ) -> bool:
+    stage_view = WorkflowStageView(stage)
+    task_view = WorkflowTaskView(task)
+    pending_retry = _pending_xtb_handoff_retry_decision(stage_view, task_view)
     job_dir = ensure_xtb_job_dir_impl(
         stage,
         xtb_allowed_root=xtb_runtime_paths["allowed_root"],
@@ -351,11 +413,22 @@ def _submit_xtb_stage(
         config_path=str(xtb_config),
     )
     submission["submitted_at"] = services.clock.now_utc_iso()
-    WorkflowTaskView(task).set_submission_result(submission)
+    task_view.set_submission_result(submission)
     current_attempt = xtb_current_attempt_number_impl(stage)
-    _record_xtb_submission_attempt(stage, submission, attempt_number=current_attempt)
-    deferred = _submission_is_deferred(submission)
-    _apply_xtb_submission_result(
+    _record_xtb_submission_attempt(
+        stage,
+        submission,
+        attempt_number=current_attempt,
+    )
+    if pending_retry is not None:
+        return _apply_xtb_handoff_retry_submission(
+            stage_view,
+            task_view,
+            stage_metadata,
+            submission,
+            pending_retry,
+        )
+    submission_applied = _apply_xtb_submission_result(
         stage,
         task,
         stage_metadata,
@@ -363,9 +436,11 @@ def _submit_xtb_stage(
         deferred_handoff_status="waiting_for_slot",
         active_handoff_status="submitted",
     )
-    if not deferred:
+    if submission_applied:
         stage_metadata["child_job_id"] = submission.get("job_id", "")
-    return not deferred
+    elif not _submission_is_deferred(submission):
+        stage_metadata.pop("child_job_id", None)
+    return submission_applied
 
 
 def _submit_xtb_stage_if_needed(
@@ -410,6 +485,8 @@ def _load_and_apply_xtb_contract(
         context.task_view,
         contract,
     )
+    if handoff is None:
+        return None
     return contract, handoff
 
 
@@ -449,8 +526,8 @@ def sync_xtb_stage_impl(
         workflow_id=workflow_id,
     )
     if not submission_applied:
-        # As with CREST, applying the old active contract here would replace the
-        # deferred PLANNED state and prevent the next-tick retry.
+        # As with CREST, applying the old active contract here would replace
+        # the new deferred or rejected submission state in this same tick.
         return
     contract_result = _load_and_apply_xtb_contract(
         context,

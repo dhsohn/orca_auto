@@ -11,14 +11,17 @@ import pytest
 from orca_auto.core.queue import (
     QueueEntry,
     QueueStatus,
+    dequeue_next,
     enqueue,
     list_queue,
     mark_cancelled,
     request_cancel,
 )
 from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.flow.engines.crest import execution as crest_execution
 from orca_auto.flow.engines.crest import job_inputs as crest_job_inputs
 from orca_auto.flow.engines.crest import state as crest_state
+from orca_auto.flow.engines.xtb import execution as xtb_execution
 from orca_auto.flow.engines.xtb import job_inputs as xtb_job_inputs
 from orca_auto.flow.engines.xtb import state as xtb_state
 from orca_auto.flow.submitters import crest as crest_submitter
@@ -297,7 +300,121 @@ def test_pending_cancel_rejects_foreign_generation_artifact(
     assert state_path.read_bytes() == original_state
     [persisted] = list_queue(queue_root)
     assert persisted.status == QueueStatus.PENDING
-    assert not persisted.cancel_requested
+    assert persisted.cancel_requested
+
+
+@pytest.mark.parametrize(
+    ("module", "execution_module", "engine", "tracking_name"),
+    [
+        (crest_submitter, crest_execution, "crest", "_terminal_sync_job_tracking"),
+        (xtb_submitter, xtb_execution, "xtb", "upsert_job_record"),
+    ],
+)
+def test_pending_cancel_partial_publication_failure_leaves_retryable_dequeue_fence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    module: Any,
+    execution_module: Any,
+    engine: str,
+    tracking_name: str,
+) -> None:
+    runs_root = tmp_path / "runs"
+    job_dir = runs_root / f"{engine}-job"
+    job_dir.mkdir(parents=True)
+    selected_xyz = job_dir / "input.xyz"
+    selected_xyz.write_text("1\nH\nH 0 0 0\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+
+    identity_metadata: dict[str, Any]
+    if engine == "crest":
+        identity_metadata = {"mode": "nci", "molecule_key": "mol-1"}
+        queued_state = crest_job_inputs.queued_state_payload(
+            job_id="crest-partial-cancel",
+            job_dir=job_dir,
+            selected_xyz=selected_xyz,
+            mode="nci",
+            molecule_key="mol-1",
+        )
+        write_state = crest_state.write_state
+        load_state = crest_state.load_state
+    else:
+        identity_metadata = {
+            "job_type": "opt",
+            "reaction_key": "rxn-1",
+            "input_summary": {"input_xyz": str(selected_xyz)},
+        }
+        queued_state = xtb_job_inputs.queued_state_payload(
+            job_id="xtb-partial-cancel",
+            job_dir=job_dir,
+            selected_input_xyz=selected_xyz,
+            job_type="opt",
+            reaction_key="rxn-1",
+            input_summary=identity_metadata["input_summary"],
+        )
+        write_state = xtb_state.write_state
+        load_state = xtb_state.load_state
+    queue_root = runs_root / "queue"
+    entry = enqueue(
+        queue_root,
+        app_name=f"orca_auto_{engine}",
+        task_id=f"{engine}-partial-cancel",
+        task_kind=f"{engine}_test",
+        engine=engine,
+        metadata={
+            "job_dir": str(job_dir),
+            "selected_input_xyz": str(selected_xyz),
+            **identity_metadata,
+        },
+    )
+    queued_state["job"].update(
+        {
+            "queue_id": entry.queue_id,
+            "app_name": entry.app_name,
+            "task_id": entry.task_id,
+            "generation": queue_entry_generation_token(entry),
+        }
+    )
+    write_state(job_dir, queued_state)
+
+    def fail_tracking(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("job index publication failed")
+
+    monkeypatch.setattr(execution_module, tracking_name, fail_tracking)
+
+    with pytest.raises(OSError, match="job index publication failed"):
+        request_cancel(
+            queue_root,
+            entry.queue_id,
+            expected_entry=entry,
+            before_pending_cancel_fn=partial(
+                module._before_pending_cancel,
+                config_path=str(config_path),
+            ),
+        )
+
+    terminal = load_state(job_dir)
+    assert terminal is not None
+    assert terminal["status"]["state"] == "cancelled"
+    assert terminal["job"]["generation"] == queue_entry_generation_token(entry)
+    [fenced] = list_queue(queue_root)
+    assert fenced.status == QueueStatus.PENDING
+    assert fenced.cancel_requested is True
+    assert dequeue_next(queue_root) is None
+
+    monkeypatch.setattr(execution_module, tracking_name, lambda *_args, **_kwargs: None)
+    retried = request_cancel(
+        queue_root,
+        entry.queue_id,
+        expected_entry=entry,
+        before_pending_cancel_fn=partial(
+            module._before_pending_cancel,
+            config_path=str(config_path),
+        ),
+    )
+
+    assert retried is not None
+    assert retried.status == QueueStatus.CANCELLED
 
 
 @pytest.mark.parametrize("module", [xtb_submitter, crest_submitter])

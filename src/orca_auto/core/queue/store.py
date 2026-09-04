@@ -588,62 +588,68 @@ def request_cancel(
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> QueueEntry | None:
-    def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+    def accepts_cancel(entry: QueueEntry) -> bool:
         if accept_entry_fn is not None and not accept_entry_fn(entry):
-            return None, None
+            return False
         if expected_entry is not None and not queue_entries_same_generation(
             entry,
             expected_entry,
         ):
+            return False
+        return True
+
+    def pending_cancel_metadata(entry: QueueEntry, *, finished_at: str) -> dict[str, Any]:
+        metadata = dict(entry.metadata)
+        sync_state = str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
+        if sync_state in {
+            QUEUE_RECORD_SYNC_PREPARING,
+            QUEUE_RECORD_SYNC_REPAIR_PENDING,
+            QUEUE_RECORD_SYNC_REPAIRING,
+        }:
+            # Cancellation owns the per-entry publication lock here. Revoke
+            # the publisher's fencing token before releasing it so a
+            # publisher that had not started its side effects cannot resume.
+            # ABORTED is a forward fence, not a cross-store rollback: a
+            # process killed between state, index, and notification writes
+            # may have left an outcome-unknown partial record. Terminal
+            # reconciliation owns that artifact; cancellation guarantees
+            # only that no publisher can add a late write after this point.
+            metadata.update(
+                {
+                    QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_ABORTED,
+                    QUEUE_RECORD_SYNC_UPDATED_AT_KEY: finished_at,
+                    QUEUE_RECORD_SYNC_OWNER_PID_KEY: 0,
+                    QUEUE_RECORD_SYNC_OWNER_START_KEY: "",
+                    QUEUE_RECORD_SYNC_TOKEN_KEY: "",
+                }
+            )
+        return metadata
+
+    def cancelled_pending_entry(entry: QueueEntry, *, finished_at: str) -> QueueEntry:
+        candidate = replace(
+            entry,
+            status=QueueStatus.CANCELLED,
+            cancel_requested=True,
+            finished_at=finished_at,
+            metadata=pending_cancel_metadata(entry, finished_at=finished_at),
+        )
+        return replace(
+            candidate,
+            metadata=_merged_metadata(
+                candidate,
+                metadata_update_fn=pending_metadata_update_fn,
+            ),
+        )
+
+    def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+        if not accepts_cancel(entry):
             return None, None
         if entry.status == QueueStatus.PENDING:
             finished_at = now_utc_iso()
-            metadata = dict(entry.metadata)
-            sync_state = str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
-            if sync_state in {
-                QUEUE_RECORD_SYNC_PREPARING,
-                QUEUE_RECORD_SYNC_REPAIR_PENDING,
-                QUEUE_RECORD_SYNC_REPAIRING,
-            }:
-                # Cancellation owns the per-entry publication lock here. Revoke
-                # the publisher's fencing token before releasing it so a
-                # publisher that had not started its side effects cannot resume.
-                # ABORTED is a forward fence, not a cross-store rollback: a
-                # process killed between state, index, and notification writes
-                # may have left an outcome-unknown partial record. Terminal
-                # reconciliation owns that artifact; cancellation guarantees
-                # only that no publisher can add a late write after this point.
-                metadata.update(
-                    {
-                        QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_ABORTED,
-                        QUEUE_RECORD_SYNC_UPDATED_AT_KEY: finished_at,
-                        QUEUE_RECORD_SYNC_OWNER_PID_KEY: 0,
-                        QUEUE_RECORD_SYNC_OWNER_START_KEY: "",
-                        QUEUE_RECORD_SYNC_TOKEN_KEY: "",
-                    }
-                )
-            candidate = replace(
+            updated = cancelled_pending_entry(
                 entry,
-                status=QueueStatus.CANCELLED,
-                cancel_requested=True,
                 finished_at=finished_at,
-                metadata=metadata,
             )
-            updated = replace(
-                candidate,
-                metadata=_merged_metadata(
-                    candidate,
-                    metadata_update_fn=pending_metadata_update_fn,
-                ),
-            )
-            if before_pending_cancel_fn is not None:
-                # This runs while both the entry-scoped publication lock and
-                # queue mutation lock are held. Engine adapters can therefore
-                # publish generation-bound terminal artifacts before the
-                # durable queue transition makes a replacement submission
-                # eligible. An exception aborts the queue write and leaves the
-                # pending entry unchanged for explicit reconciliation.
-                before_pending_cancel_fn(updated)
         elif entry.status == QueueStatus.RUNNING:
             updated = replace(entry, cancel_requested=True)
         else:
@@ -660,6 +666,50 @@ def request_cancel(
     # either revokes ownership before any side effect or terminalizes only after
     # publication has fully completed.
     with queue_record_publication_lock(queue_store.root, queue_id):
+        if before_pending_cancel_fn is not None:
+            # Persist the dequeue fence before invoking the cross-store
+            # publication callback. Keep both locks through the final queue
+            # transition so no successor, worker claim, or metadata mutation
+            # can interleave. If publication or the final save fails, the
+            # pending row remains durably cancel-requested and a retry can
+            # idempotently finish the exact same generation.
+            with queue_lock(queue_store.root):
+                entries = queue_store.load_entries_fn(queue_store.root)
+                for index, entry in enumerate(entries):
+                    if not isinstance(entry, QueueEntry) or entry.queue_id != queue_id:
+                        continue
+                    if not accepts_cancel(entry):
+                        return None
+                    if entry.status == QueueStatus.RUNNING:
+                        updated = replace(entry, cancel_requested=True)
+                        entries[index] = updated
+                        queue_store.save_entries_fn(queue_store.root, entries)
+                        return updated
+                    if entry.status != QueueStatus.PENDING:
+                        return None
+
+                    finished_at = now_utc_iso()
+                    fenced = replace(
+                        entry,
+                        cancel_requested=True,
+                        metadata=pending_cancel_metadata(
+                            entry,
+                            finished_at=finished_at,
+                        ),
+                    )
+                    if fenced != entry:
+                        entries[index] = fenced
+                        queue_store.save_entries_fn(queue_store.root, entries)
+
+                    updated = cancelled_pending_entry(
+                        fenced,
+                        finished_at=finished_at,
+                    )
+                    before_pending_cancel_fn(updated)
+                    entries[index] = updated
+                    queue_store.save_entries_fn(queue_store.root, entries)
+                    return updated
+                return None
         return queue_store.mutate_entry_by_id(queue_id, update, missing_result=None)
 
 

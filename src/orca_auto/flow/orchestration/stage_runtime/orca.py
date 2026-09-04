@@ -51,7 +51,7 @@ def _submit_orca_stage(
     submission_binding: _OrcaSubmissionBinding,
     orca_config: str | None,
     orca_repo_root: str | None,
-) -> None:
+) -> bool:
     submission = services.engines.submit_reaction_dir(
         reaction_dir=reaction_dir,
         priority=normalize_queue_priority(enqueue_payload.get("priority")),
@@ -63,7 +63,7 @@ def _submit_orca_stage(
     )
     submission["submitted_at"] = services.clock.now_utc_iso()
     task_view.set_submission_result(submission)
-    _apply_submission_result(
+    return _apply_submission_result(
         stage=stage,
         task=task,
         stage_metadata=stage_metadata,
@@ -106,11 +106,13 @@ def _apply_orca_contract(
     stage_view: WorkflowStageView,
     task_view: WorkflowTaskView,
     contract: Any,
-) -> None:
-    _apply_contract_status(stage, task, contract.status)
+) -> bool:
+    if not _apply_contract_status(stage, task, contract.status):
+        return False
     task_view.update_orca_contract_payload(contract, normalize_text)
     stage_view.update_orca_contract_metadata(contract, normalize_text)
     stage_view.update_orca_attempt_metadata(contract, task_view, normalize_text)
+    return True
 
 
 def _validated_orca_contract(task_view: WorkflowTaskView, contract: Any) -> Any:
@@ -294,7 +296,7 @@ def sync_orca_stage_impl(
             context.stage_metadata["reason"] = str(exc)
             return
         reaction_dir_hint = submission_binding.reaction_dir
-        _submit_orca_stage(
+        submission_applied = _submit_orca_stage(
             resolved,
             stage,
             task,
@@ -306,6 +308,8 @@ def sync_orca_stage_impl(
             orca_config=orca_config,
             orca_repo_root=orca_repo_root,
         )
+        if not submission_applied:
+            return
     contract = _load_orca_contract(
         resolved,
         context.stage_metadata,
@@ -315,11 +319,12 @@ def sync_orca_stage_impl(
     if contract is None:
         return
     contract = _validated_orca_contract(context.task_view, contract)
-    _apply_orca_contract(
+    if not _apply_orca_contract(
         stage,
         task,
         context.stage_view,
         context.task_view,
         contract,
-    )
+    ):
+        return
     context.set_output_artifacts(_orca_output_artifacts(contract))

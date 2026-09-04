@@ -894,3 +894,32 @@ def test_restart_record_rejects_a_corrupt_recorded_charge_with_a_labelled_error(
             payload,
             {"orca": {"multiplicity": 2}},
         )
+
+
+def test_recorded_electronic_state_treats_only_absent_keys_as_unknown() -> None:
+    payload = {"metadata": {"request": {"parameters": {"orca_route_line": "! Opt HF"}}}}
+
+    assert restart_settings._recorded_electronic_state(payload) == {
+        "charge": None,
+        "multiplicity": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("charge", None, "charge must be an integer"),
+        ("charge", "invalid", "charge must be an integer"),
+        ("multiplicity", None, "multiplicity must be an integer"),
+        ("multiplicity", 0, "multiplicity must be >= 1"),
+    ],
+)
+def test_recorded_electronic_state_rejects_present_invalid_values(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    payload = {"metadata": {"request": {"parameters": {field: value}}}}
+
+    with pytest.raises(ValueError, match=message):
+        restart_settings._recorded_electronic_state(payload)
