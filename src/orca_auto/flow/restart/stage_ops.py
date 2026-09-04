@@ -42,6 +42,8 @@ _STALE_STAGE_METADATA_KEYS = frozenset(
         "cancel_requested",
         "child_job_id",
         "completed_at",
+        "crest_no_primary_ensemble_retained",
+        "crest_rejected_retained_outputs",
         "latest_known_path",
         "orca_attempts",
         "orca_current_attempt_number",

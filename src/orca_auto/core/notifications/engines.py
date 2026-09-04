@@ -116,6 +116,35 @@ def _optional_int_dict(
     return dict(value)
 
 
+def _refusal_line(values: Mapping[str, object], field_name: str) -> str:
+    """One ``field: name (reason), ...`` line, or "" when nothing was refused.
+
+    Rows are rendered defensively rather than validated: the notification is
+    the last step of an already-finished job, so a row that does not look like
+    a refusal is skipped instead of turning the send into a crash. A row counts
+    as well formed here on exactly the terms the contract loader applies in
+    ``flow.adapters.crest`` — both fields present, both strings, neither blank —
+    so a row cannot show up in this line and then be missing from the contract.
+    """
+    rows = values.get(field_name)
+    if not isinstance(rows, list | tuple):
+        return ""
+    rendered: list[str] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        name = row.get("name")
+        reason = row.get("reason")
+        if not isinstance(name, str) or not isinstance(reason, str):
+            continue
+        if not name.strip() or not reason.strip():
+            continue
+        rendered.append(f"{name} ({reason})")
+    if not rendered:
+        return ""
+    return f"{field_name}: {', '.join(rendered)}"
+
+
 @dataclass(frozen=True)
 class EngineJobNotifications:
     """Renders and sends the three job events (queued, started, finished)."""
@@ -126,6 +155,9 @@ class EngineJobNotifications:
     detail_field_names: tuple[str, ...]
     terminal_count_field: str
     send_fn: EngineLineSender
+    # Optional finished-event field holding {"name", "reason"} rows for outputs
+    # the engine refused. Empty for engines that never refuse one.
+    refusal_field_name: str = ""
 
     def _detail_fields(self, values: Mapping[str, object]) -> list[tuple[str, object]]:
         return [
@@ -183,6 +215,11 @@ class EngineJobNotifications:
             (self.terminal_count_field, _required_int(values, self.terminal_count_field)),
         ]
         extra_lines: list[str] = []
+        if self.refusal_field_name:
+            # Ahead of the resource rows: this one is about the result itself.
+            refusal_line = _refusal_line(values, self.refusal_field_name)
+            if refusal_line:
+                extra_lines.append(refusal_line)
         resource_request = _optional_int_dict(values, "resource_request")
         if resource_request is not None:
             extra_lines.append(f"resource_request: {resource_request}")
@@ -219,6 +256,7 @@ _CREST_JOB_NOTIFICATIONS = EngineJobNotifications(
     detail_field_names=("mode",),
     terminal_count_field="retained_conformer_count",
     send_fn=send_lines,
+    refusal_field_name="rejected_retained_outputs",
 )
 
 notify_crest_job_queued = _CREST_JOB_NOTIFICATIONS.notify_job_queued

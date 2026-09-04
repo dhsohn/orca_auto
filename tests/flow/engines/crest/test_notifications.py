@@ -263,6 +263,96 @@ def test_notify_job_finished_includes_optional_extra_lines(
     ]
 
 
+def test_notify_crest_job_finished_names_refused_ensembles(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The refused files are the only sign that the handoff lost anything: the
+    # retained count can stay high while the refused ensemble is exactly the
+    # one that carried the conformer diversity.
+    cfg = _cfg(tmp_path)
+    _, messages, _ = _patch_transport(monkeypatch, sent=True)
+    job_dir = tmp_path / "runs" / "job-refused"
+
+    result = notifications.notify_crest_job_finished(
+        cfg,
+        job_id="job-refused",
+        queue_id="queue-refused",
+        status="completed",
+        reason="completed",
+        mode="standard",
+        job_dir=job_dir,
+        selected_xyz=job_dir / "input.xyz",
+        retained_conformer_count=109,
+        rejected_retained_outputs=(
+            {"name": "crest_conformers.xyz", "reason": "no_valid_frames"},
+            {"name": "crest_best.xyz", "reason": "identity_unreadable"},
+        ),
+    )
+
+    assert result is True
+    assert messages == [
+        "\n".join(
+            [
+                "orca_auto\n[CREST] Job finished",
+                "job_id: job-refused",
+                "queue_id: queue-refused",
+                "status: completed",
+                "reason: completed",
+                "mode: standard",
+                "job_dir: job-refused",
+                "selected_xyz: input.xyz",
+                "retained_conformer_count: 109",
+                (
+                    "rejected_retained_outputs: crest_conformers.xyz (no_valid_frames), "
+                    "crest_best.xyz (identity_unreadable)"
+                ),
+            ]
+        )
+    ]
+
+
+# The last two rows are well formed for neither renderer nor loader: the line
+# drops a row on exactly the terms flow.adapters.crest drops it, so nothing can
+# be named in the notification and then be missing from the contract.
+@pytest.mark.parametrize(
+    "rejected",
+    (
+        (),
+        [],
+        None,
+        "crest_conformers.xyz",
+        [{"name": ""}],
+        [{"name": "crest_best.xyz", "reason": ""}],
+        [{"name": "crest_best.xyz", "reason": "   "}],
+    ),
+)
+def test_notify_crest_job_finished_omits_the_refusal_line_when_there_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    rejected: Any,
+) -> None:
+    cfg = _cfg(tmp_path)
+    _, messages, _ = _patch_transport(monkeypatch, sent=True)
+    job_dir = tmp_path / "runs" / "job-clean"
+
+    result = notifications.notify_crest_job_finished(
+        cfg,
+        job_id="job-clean",
+        queue_id="queue-clean",
+        status="completed",
+        reason="completed",
+        mode="standard",
+        job_dir=job_dir,
+        selected_xyz=job_dir / "input.xyz",
+        retained_conformer_count=4,
+        rejected_retained_outputs=rejected,
+    )
+
+    assert result is True
+    assert "rejected_retained_outputs" not in messages[-1]
+
+
 def test_workflow_child_notifications_are_suppressed(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -41,6 +41,40 @@ def test_count_xyz_frames(tmp_path: Path) -> None:
     assert count_xyz_frames(xyz) == 4
 
 
+def test_collect_names_a_refused_crest_ensemble_in_the_stage_detail(tmp_path: Path) -> None:
+    # The refused file leaves no output artifact and the conformer count is read
+    # off the file that did arrive, so without this the report shows a healthy
+    # stage and no trace of what CREST would not hand over.
+    crest_dir = tmp_path / "01_crest"
+    crest_dir.mkdir()
+    rotamers = crest_dir / "crest_rotamers.xyz"
+    _write_multi_xyz(rotamers, frames=3)
+
+    payload = _payload(
+        tmp_path,
+        [
+            {
+                "stage_id": "crest_conformer_01",
+                "stage_kind": "crest_stage",
+                "status": "completed",
+                "metadata": {
+                    "input_role": "reactant",
+                    "mode": "standard",
+                    "crest_rejected_retained_outputs": [
+                        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"}
+                    ],
+                    "crest_no_primary_ensemble_retained": True,
+                },
+                "output_artifacts": [{"kind": "crest_conformer", "path": str(rotamers)}],
+            }
+        ],
+    )
+
+    data = collect_workflow_report_data(tmp_path, payload)
+
+    assert data.stage_rows[0].detail == "reactant · mode standard · refused crest_conformers.xyz"
+
+
 def test_collect_ranks_orca_results_and_counts_funnel(tmp_path: Path) -> None:
     crest_dir = tmp_path / "01_crest"
     crest_dir.mkdir()

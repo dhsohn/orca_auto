@@ -103,7 +103,14 @@ def test_restart_failed_workflow_resets_failed_and_cancelled_stages(tmp_path: Pa
                         "payload": {"job_dir": "/tmp/crest"},
                         "enqueue_payload": {"job_dir": "/tmp/crest", "priority": 10},
                     },
-                    "metadata": {"queue_id": "q_cancelled", "child_job_id": "crest_old"},
+                    "metadata": {
+                        "queue_id": "q_cancelled",
+                        "child_job_id": "crest_old",
+                        "crest_rejected_retained_outputs": [
+                            {"name": "crest_conformers.xyz", "reason": "no_valid_frames"}
+                        ],
+                        "crest_no_primary_ensemble_retained": True,
+                    },
                 },
             ],
             "metadata": {
@@ -149,6 +156,11 @@ def test_restart_failed_workflow_resets_failed_and_cancelled_stages(tmp_path: Pa
     assert restarted_crest["task"]["status"] == "planned"
     assert "cancel_result" not in restarted_crest["task"]
     assert "child_job_id" not in restarted_crest["metadata"]
+    # The refusal names a job directory the restart just rematerialized, so it
+    # is cleared with the other contract-derived keys instead of describing the
+    # new attempt until a fresh contract happens to load.
+    assert "crest_rejected_retained_outputs" not in restarted_crest["metadata"]
+    assert "crest_no_primary_ensemble_retained" not in restarted_crest["metadata"]
     assert restarted_crest["task"]["payload"]["job_dir"] == "/tmp/crest"
     assert restarted_crest["task"]["enqueue_payload"]["job_dir"] == "/tmp/crest"
 

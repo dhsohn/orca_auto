@@ -35,7 +35,7 @@ from orca_auto.core.utils import (
 )
 
 from ._phases import phase_snapshot
-from .stage_summary import crest_stage_detail
+from .stage_summary import crest_refused_ensemble_names, crest_stage_detail
 
 LOGGER = logging.getLogger(__name__)
 
@@ -117,13 +117,20 @@ def _phase_stage_row(
     result = _normalize_text(snapshot_row.get("result")).lower() or STATUS_FAILED
     if phase_engine == "crest":
         conformers = _crest_conformer_count(raw_stage)
+        metrics: list[tuple[str, Any]] = [
+            ("Status", status),
+            ("Conformers", "-" if conformers is None else conformers),
+        ]
+        # A named ensemble file that existed but was refused leaves no artifact
+        # and need not move the conformer count, so without this row the loss is
+        # invisible in the phase summary.
+        refused = crest_refused_ensemble_names(raw_stage)
+        if refused:
+            metrics.append(("Refused", ", ".join(refused)))
         return _PhaseStageRow(
             stage_label=stage_label,
             result=result,
-            metrics=(
-                ("Status", status),
-                ("Conformers", "-" if conformers is None else conformers),
-            ),
+            metrics=tuple(metrics),
         )
     if phase_engine == "xtb":
         handoff_status = (

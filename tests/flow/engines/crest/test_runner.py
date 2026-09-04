@@ -1005,3 +1005,63 @@ def test_finalize_crest_job_records_an_atom_sequence_mismatch(tmp_path: Path) ->
     assert result.rejected_retained_outputs == (
         {"name": "crest_rotamers.xyz", "reason": "atom_sequence_mismatch"},
     )
+
+
+def test_finalize_crest_job_refuses_a_conformer_file_without_moving_the_count(
+    tmp_path: Path,
+) -> None:
+    # crest_conformers.xyz holds the deduplicated subset of what
+    # crest_rotamers.xyz holds, so refusing it costs the conformer handoff and
+    # no retained frame at all. The same fixture is finalized twice — once with
+    # that file malformed, once with it valid — and the count comes out equal
+    # both times, which is why the refusal row, and not the count, is what
+    # records the loss. The job legitimately stays completed either way.
+    rotamers_text = "1\nrot_a\nH 0.0 0.0 0.0\n1\nrot_b\nH 0.1 0.0 0.0\n1\nrot_c\nH 0.2 0.0 0.0\n"
+    valid_conformers = "1\nconf_a\nH 0.0 0.0 0.0\n1\nconf_b\nH 0.1 0.0 0.0\n"
+    malformed_conformers = "1\nconf_a\nH 0.0 0.0 0.0\n1\nconf_b\nH 0.1x 0.0 0.0\n"
+
+    def finalize(name: str, conformers_text: str) -> Any:
+        job_dir = tmp_path / name
+        job_dir.mkdir()
+        stdout_path = job_dir / "crest.stdout.log"
+        stderr_path = job_dir / "crest.stderr.log"
+        stdout_handle = stdout_path.open("w", encoding="utf-8")
+        stderr_handle = stderr_path.open("w", encoding="utf-8")
+        _write_xyz(job_dir / "input.xyz", ("input",))
+        (job_dir / "crest_conformers.xyz").write_text(conformers_text, encoding="utf-8")
+        (job_dir / "crest_rotamers.xyz").write_text(rotamers_text, encoding="utf-8")
+
+        process = MagicMock()
+        process.poll.return_value = 0
+        return finalize_crest_job(
+            CrestRunningJob(
+                process=process,
+                command=("crest", "input.xyz"),
+                started_at="2026-04-19T00:00:00+00:00",
+                stdout_log=str(stdout_path.resolve()),
+                stderr_log=str(stderr_path.resolve()),
+                stdout_handle=stdout_handle,
+                stderr_handle=stderr_handle,
+                selected_input_xyz=str((job_dir / "input.xyz").resolve()),
+                mode="standard",
+                manifest_path=str((job_dir / CREST_JOB_MANIFEST_FILE).resolve()),
+                resource_request={"max_cores": 4, "max_memory_gb": 8},
+                resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
+                job_dir=str(job_dir.resolve()),
+            )
+        )
+
+    intact = finalize("intact", valid_conformers)
+    refused = finalize("refused", malformed_conformers)
+
+    assert intact.retained_conformer_count == 3
+    assert intact.rejected_retained_outputs == ()
+    assert refused.status == "completed"
+    assert refused.reason == "completed"
+    assert refused.retained_conformer_count == intact.retained_conformer_count
+    assert refused.retained_conformer_paths == (
+        str((tmp_path / "refused" / "crest_rotamers.xyz").resolve()),
+    )
+    assert refused.rejected_retained_outputs == (
+        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"},
+    )
