@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -24,6 +26,7 @@ from orca_auto.flow.orca_stage_evidence import (
 from orca_auto.flow.orca_stage_evidence import (
     stage_task as _stage_task,
 )
+from orca_auto.orca.out_analyzer import scan_ts_lines_for_imag_count
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.attempts import duration_text
 from orca_auto.orca.report.si import SiBlock
@@ -86,10 +89,125 @@ class WorkflowReportData:
     consumed_orca_machine_paths: tuple[Path, ...] = ()
 
 
+# Only stationary-point task kinds enter the ranked candidate table, so only
+# they can publish a Nimag; both call sites say what that means for them.
+_CANDIDATE_TASK_KINDS = frozenset({"opt", "optts_freq"})
+
+# The analyzer counts imaginary modes only for a normally terminated TS route
+# and clears the verdict for every other outcome, and these two reasons are
+# exactly what it publishes in that case. They are also the only part of that
+# decision the machine observation carries: ``summary.reason`` is cross-checked
+# against ``final_result`` before a generation is accepted.
+#
+# A stage whose analyzer did reach a TS verdict can still be closed under a
+# reason of the engine's own, with the last attempt's markers left intact:
+# ``retry_limit_reached`` (state_machine), and ``scants_recipes_exhausted`` and
+# ``rewrite_failed`` (attempt.retry, attempt.resume). Those publish no Nimag —
+# each of those reasons is also produced by outcomes that characterized no
+# stationary point, so none of them says which verdict produced the last
+# output. No live generation here records one: the only job states carrying
+# ``retry_limit_reached`` are fake-ORCA smoke fixtures with no machine
+# observation, so none of them can reach this function.
+_TS_VERDICT_REASONS = frozenset({"ts_criteria_met", "ts_criteria_failed"})
+
+
+def _published_report_reason(report_payload: Mapping[str, Any]) -> str:
+    """The reason as the machine observation's ``summary.reason`` pins it."""
+    final_result = _mapping(_mapping(report_payload.get("engine_payload")).get("final_result"))
+    status = _mapping(report_payload.get("status"))
+    return report_diagnostics.normalized_text(final_result.get("reason") or status.get("reason"))
+
+
+def _final_section_imaginary_count(
+    generation_dir: Path,
+    report_payload: Mapping[str, Any],
+) -> int | None:
+    """Recount one non-completed stage's Nimag from its hash-pinned output.
+
+    The generation was accepted only after every artifact receipt was
+    re-hashed, including the ``orca-output`` one that binds this ``.out``'s
+    size and SHA-256, so the file is evidence the workflow report already
+    stands behind. The engine's ``markers`` are not: nothing publishes or
+    re-verifies them, so a hand-edited job state could dictate a Nimag.
+
+    ``None`` means the stage characterizes no stationary point: the analyzer
+    reached no TS verdict, the output is gone or is not a plain file of this
+    generation, or its only frequency section was superseded by a later
+    geometry.
+    """
+    if _published_report_reason(report_payload) not in _TS_VERDICT_REASONS:
+        return None
+    final_result = _mapping(_mapping(report_payload.get("engine_payload")).get("final_result"))
+    out_text = report_diagnostics.normalized_text(final_result.get("last_out_path"))
+    if not out_text:
+        return None
+    out_path = Path(out_text)
+    # ORCA writes a stage's terminal output as a direct child of its
+    # generation. Anything else is not this stage's output: a deeper path, a
+    # sibling generation's, or — for a name that is not absolute — whatever the
+    # report writer's working directory happens to hold under that name.
+    if out_path.parent != generation_dir:
+        return None
+    return _stable_final_section_count(out_path)
+
+
+def _stable_final_section_count(out_path: Path) -> int | None:
+    """Count one output's final section, refusing anything the receipt misses.
+
+    ``load_report_json`` recomputes the ``orca-output`` receipt from
+    ``last_out_path`` and rejects the whole generation unless it equals the
+    stored one, so an ``available`` receipt means these exact bytes were
+    re-hashed when the generation was accepted. An ``invalid`` receipt matches
+    on both sides while binding nothing, and a symlink, a hard link, a
+    non-regular file or a path that is not its own resolved form is exactly
+    what produces one — so those are refused here, together with a file
+    substituted between the check and the open and bytes that moved under the
+    scan. The checks live on the descriptor rather than on the path, which is
+    what closes the window between checking and reading; the sibling energy
+    reader in ``report_energy_evidence`` opens through a directory descriptor
+    as well because it accepts an output at any depth under the generation,
+    while this one has its parent pinned to the generation itself.
+    """
+    descriptor = -1
+    try:
+        # This stat exists only to pin an inode for the comparison below;
+        # rejecting a symlinked output is O_NOFOLLOW's job, and O_NONBLOCK
+        # keeps a path swapped for a FIFO from blocking the report writer
+        # indefinitely.
+        before = out_path.stat()
+        descriptor = os.open(out_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+        opened = os.fstat(descriptor)
+        # The descriptor pins one inode; comparing it against the pre-open
+        # stat rejects anything substituted between the two. A substitution
+        # that happened before that stat is not covered — both sides would
+        # then observe the substituted file and agree.
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_nlink != 1
+            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            return None
+        with open(descriptor, encoding="utf-8", errors="ignore", closefd=False) as handle:
+            count, _irc_found, final_section = scan_ts_lines_for_imag_count(handle)
+        # The receipt binds one (size, sha256). Bytes that moved under the scan
+        # are no longer those bytes, so the count they produced is not the
+        # evidence the observation stands behind.
+        after = os.fstat(descriptor)
+        if (opened.st_size, opened.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+            return None
+        return count if final_section else None
+    except (OSError, ValueError):
+        return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _orca_stage_result(
     stage: Mapping[str, Any],
     workspace_dir: Path,
     *,
+    candidate_task: bool,
     authoritative_evidence: tuple[
         SiBlock,
         OrcaSelectedInputScienceIdentity | None,
@@ -114,24 +232,6 @@ def _orca_stage_result(
         attempts = engine_payload.get("attempts")
         attempts = attempts if isinstance(attempts, list) else []
         attempt_count = len(attempts)
-        # The analyzer's imaginary-mode count is a Nimag only when the
-        # analyzer marked it as a verdict on the final geometry: counted in the
-        # frequency section after the last final energy and the TS criteria
-        # were reached (a normally terminated candidate rejected for 0 or 2
-        # modes). For a run that stopped short or failed, or a record written
-        # before the marker existed, the count says nothing about the final
-        # geometry and stays unknown.
-        if attempts and isinstance(attempts[-1], dict):
-            markers = attempts[-1].get("markers")
-            if (
-                isinstance(markers, dict)
-                and markers.get("final_frequency_section") is True
-                and "imaginary_frequency_count" in markers
-            ):
-                try:
-                    imaginary_count = int(markers["imaginary_frequency_count"])
-                except (TypeError, ValueError):
-                    imaginary_count = None
 
     energy = None
     if authoritative_evidence is not None:
@@ -139,10 +239,16 @@ def _orca_stage_result(
         energy = block.result.energy_hartree
         imaginary_count = block.imaginary_count
     elif not stage_completed and report_json_path is not None and report_payload is not None:
+        generation_dir = report_json_path.parent
+        if candidate_task:
+            # Only a candidate row carries a Nimag into the report, and the
+            # recount reads the stage's terminal output whole. A relaxed scan
+            # driven by ScanTS reaches a TS verdict too, so without this gate
+            # it would pay for a count no row publishes.
+            imaginary_count = _final_section_imaginary_count(generation_dir, report_payload)
         # A reusable job root can retain pre-generation ``*.engrad`` files.
         # Both energy sources must therefore be confined to the generation
         # whose report provenance and workflow-stage identity were verified.
-        generation_dir = report_json_path.parent
         annotated_final, output_energy = report_energy_evidence.orca_report_output_energy_state(
             generation_dir, report_payload
         )
@@ -266,7 +372,7 @@ def collect_workflow_report_data(
         elif is_orca_stage_kind(stage):
             if is_supported_orca_stage_contract(stage):
                 task_kind = stage_task_kind(stage)
-                candidate_task = task_kind in {"opt", "optts_freq"}
+                candidate_task = task_kind in _CANDIDATE_TASK_KINDS
                 authoritative_evidence = None
                 evidence_reason = ""
                 if candidate_task and stage_status == "completed":
@@ -278,6 +384,7 @@ def collect_workflow_report_data(
                 result = _orca_stage_result(
                     stage,
                     workspace_dir,
+                    candidate_task=candidate_task,
                     authoritative_evidence=authoritative_evidence,
                 )
                 if result.machine_path is not None and (

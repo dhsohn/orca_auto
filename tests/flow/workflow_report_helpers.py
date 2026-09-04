@@ -147,6 +147,37 @@ def _completed_opt_output_text(
     )
 
 
+def _ts_freq_output_text(
+    *,
+    imaginary: int,
+    energy: float = -1.1,
+    superseded: bool = False,
+    route_line: str = "! HF OptTS Freq",
+) -> str:
+    """A normally terminated output whose last Hessian has ``imaginary`` modes.
+
+    ``superseded`` prints one more final energy after the frequency section:
+    the shape of an OptTS run whose only Hessian belongs to an earlier
+    geometry and therefore characterizes nothing.
+    """
+    modes = [f"   {index}:      {-500.0 - index * 10:.2f} cm**-1" for index in range(imaginary)]
+    modes.append("   9:       412.55 cm**-1")
+    lines = [
+        "Program Version 6.0.1",
+        f"|  1> {route_line}",
+        f"FINAL SINGLE POINT ENERGY     {energy:.12f}",
+        "",
+        "VIBRATIONAL FREQUENCIES",
+        "-----------------------",
+        *modes,
+        "",
+    ]
+    if superseded:
+        lines.append(f"FINAL SINGLE POINT ENERGY     {energy:.12f}")
+    lines.extend(("****ORCA TERMINATED NORMALLY****", ""))
+    return "\n".join(lines)
+
+
 def _orca_stage_dir(
     root: Path,
     name: str,
@@ -160,6 +191,9 @@ def _orca_stage_dir(
     atom_label: str = "H",
     xyzfile: bool = False,
     version: str = "6.0.1",
+    output_text: str | None = None,
+    status_state: str = "completed",
+    last_out_name: str | None = "orca.out",
 ) -> Path:
     job_dir = root / name
     job_dir.mkdir(parents=True)
@@ -177,7 +211,9 @@ def _orca_stage_dir(
     )
     output = generation / "orca.out"
     output.write_text(
-        _completed_opt_output_text(
+        output_text
+        if output_text is not None
+        else _completed_opt_output_text(
             route_line=route_line,
             charge=charge,
             multiplicity=multiplicity,
@@ -188,11 +224,17 @@ def _orca_stage_dir(
         encoding="utf-8",
     )
     output_identity = confined_output_identity(generation, output)
+    # ``last_out_name`` names the terminal output the state records: the
+    # written one by default, a never-written name to exercise a missing
+    # output, and ``None`` for a run that recorded no terminal output at all.
+    final_result: dict[str, Any] = {"reason": reason}
+    if last_out_name is not None:
+        final_result["last_out_path"] = str(generation / last_out_name)
     report = {
         "schema_version": 1,
         "engine": "orca",
         "job": {"id": name},
-        "status": {"state": "completed", "reason": reason},
+        "status": {"state": status_state, "reason": reason},
         "input": {"primary_path": provenance["bound_selected_identity"]["path"]},
         "execution_provenance": provenance,
         "engine_payload": {
@@ -204,10 +246,7 @@ def _orca_stage_dir(
                     "markers": {"imaginary_frequency_count": 0},
                 }
             ],
-            "final_result": {
-                "reason": reason,
-                "last_out_path": str(output),
-            },
+            "final_result": final_result,
         },
     }
     _publish_orca_machine(generation, report)

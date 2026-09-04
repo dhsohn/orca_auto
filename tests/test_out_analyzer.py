@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.orca.completion_rules import CompletionMode
-from orca_auto.orca.out_analyzer import analyze_output
+from orca_auto.orca.out_analyzer import analyze_output, scan_ts_lines_for_imag_count
 from orca_auto.orca.statuses import AnalyzerStatus
 
 
@@ -215,6 +215,35 @@ class TestOutAnalyzer(unittest.TestCase):
         self.assertEqual(result.status, AnalyzerStatus.COMPLETED)
         self.assertEqual(result.markers["imaginary_frequency_count"], 1)
         self.assertFalse(result.markers["final_frequency_section"])
+
+    def test_ts_line_rule_matches_the_workflow_recount_across_a_form_feed(self) -> None:
+        # A small output is read whole and a large one is iterated; the
+        # workflow report iterates it too. ``str.splitlines()`` breaks on a
+        # form feed and file iteration does not, so a run whose output carries
+        # one inside a frequency section would otherwise be sectioned one way
+        # by the analyzer and the other way by the recount.
+        payload = "\n".join(
+            [
+                "FINAL SINGLE POINT ENERGY      -100.200000000000",
+                "VIBRATIONAL FREQUENCIES",
+                "  1   -420.00 cm**-1",
+                "  2    120.00 cm**-1",
+                "restart log\x0cFINAL SINGLE POINT ENERGY      -100.300000000000",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "a.out"
+            out.write_text(payload, encoding="utf-8")
+            result = analyze_output(
+                out, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS Freq")
+            )
+            with out.open("r", encoding="utf-8", errors="ignore") as handle:
+                recount = scan_ts_lines_for_imag_count(handle)
+        self.assertEqual(recount, (1, False, True))
+        self.assertEqual(result.reason, "ts_criteria_met")
+        self.assertEqual(result.markers["imaginary_frequency_count"], recount[0])
+        self.assertEqual(result.markers["final_frequency_section"], recount[2])
 
     def test_ts_ignores_tiny_negative_modes(self) -> None:
         payload = "\n".join(
