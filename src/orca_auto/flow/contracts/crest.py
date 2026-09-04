@@ -4,15 +4,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
 
+from orca_auto.core.artifacts import CREST_RETAINED_ENSEMBLE_NAMES
 from orca_auto.core.utils.coercion import normalize_text
 
 from ..manifest import require_int
 from ..xyz_utils import load_output_xyz_frames
 from .xtb import WorkflowStageInput
 
-_OVERLAPPING_CREST_OUTPUT_NAMES = frozenset(
-    {"crest_conformers.xyz", "crest_ensemble.xyz", "crest_rotamers.xyz", "crest_best.xyz"}
-)
+# Membership is all this layer needs; the order that decides the handoff
+# belongs to the runner's walk over the same names.
+_OVERLAPPING_CREST_OUTPUT_NAMES = frozenset(CREST_RETAINED_ENSEMBLE_NAMES)
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,10 @@ class CrestArtifactContract:
     selected_input_xyz: str = ""
     retained_conformer_count: int = 0
     retained_conformer_paths: tuple[str, ...] = ()
+    # Named ensemble files the runner refused for the handoff, each as
+    # {"name", "reason"}. The paths above say what arrived; this says what was
+    # dropped on the way, which the retained count alone cannot show.
+    rejected_retained_outputs: tuple[dict[str, str], ...] = ()
     output_identities: dict[str, dict[str, Any]] = field(default_factory=dict)
     resource_request: dict[str, int] = field(default_factory=dict)
     resource_actual: dict[str, int] = field(default_factory=dict)
@@ -43,6 +48,7 @@ class CrestArtifactContract:
             "selected_input_xyz": self.selected_input_xyz,
             "retained_conformer_count": self.retained_conformer_count,
             "retained_conformer_paths": list(self.retained_conformer_paths),
+            "rejected_retained_outputs": [dict(item) for item in self.rejected_retained_outputs],
             "output_identities": dict(self.output_identities),
             "resource_request": dict(self.resource_request),
             "resource_actual": dict(self.resource_actual),

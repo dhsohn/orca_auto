@@ -113,6 +113,63 @@ def test_maybe_notify_workflow_phase_summary_sends_crest_summary_once(
     assert payload["metadata"]["phase_notifications"]["crest_summary"]["sent_at"]
 
 
+def test_maybe_notify_workflow_phase_summary_names_a_refused_crest_ensemble(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    # A refused ensemble file leaves no output artifact and need not move the
+    # conformer count, so the Conformers metric alone cannot show the loss.
+    channel = _RecordingChannel()
+    _patch_channel(monkeypatch, channel)
+    rotamers = tmp_path / "crest_rotamers.xyz"
+    rotamers.write_text(
+        "".join(f"2\nframe {index}\nH 0.0 0.0 0.0\nH 0.0 0.0 {index}.0\n" for index in range(3)),
+        encoding="utf-8",
+    )
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_crest_refused",
+        "template_name": "reaction_ts_search",
+        "metadata": {},
+        "stages": [
+            {
+                "stage_id": "crest_reactant",
+                "status": "completed",
+                "task": {
+                    "engine": "crest",
+                    "status": "completed",
+                    "payload": {"input_role": "reactant"},
+                },
+                "metadata": {
+                    "crest_rejected_retained_outputs": [
+                        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"}
+                    ],
+                    "crest_no_primary_ensemble_retained": True,
+                },
+                "output_artifacts": [{"kind": "crest_conformer", "path": str(rotamers)}],
+            },
+            {
+                "stage_id": "crest_product",
+                "status": "completed",
+                "task": {
+                    "engine": "crest",
+                    "status": "completed",
+                    "payload": {"input_role": "product"},
+                },
+                "metadata": {},
+                "output_artifacts": [],
+            },
+        ],
+    }
+
+    assert workflow_notifications.maybe_notify_workflow_phase_summary(
+        payload=payload, config_path="cfg", phase_engine="crest"
+    )
+    description = _description(channel.messages[0])
+    stage_blocks = description.split("**Stage**: ")
+    assert "**Refused**: `crest_conformers.xyz`" in stage_blocks[1]
+    # The stage that refused nothing does not grow an empty metric.
+    assert "Refused" not in stage_blocks[2]
+
+
 def test_maybe_notify_workflow_phase_summary_sends_xtb_ready_counts(monkeypatch: Any) -> None:
     channel = _RecordingChannel()
     _patch_channel(monkeypatch, channel)

@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import CREST_PRIMARY_ENSEMBLE_NAMES
 from orca_auto.core.utils.coercion import safe_int
 
 
@@ -137,11 +138,28 @@ class WorkflowStageOrcaMutationMixin:
 
 class WorkflowStageCrestMutationMixin:
     def update_crest_contract_metadata(self: Any, contract: Any) -> None:
+        rejected = [dict(item) for item in getattr(contract, "rejected_retained_outputs", ())]
+        refused_primary = any(row.get("name") in CREST_PRIMARY_ENSEMBLE_NAMES for row in rejected)
+        retained_primary = any(
+            Path(str(path)).name in CREST_PRIMARY_ENSEMBLE_NAMES
+            for path in getattr(contract, "retained_conformer_paths", ())
+        )
         self.update_metadata(
             {
                 "child_job_id": contract.job_id,
                 "latest_known_path": contract.latest_known_path,
                 "reason": getattr(contract, "reason", ""),
+                "crest_rejected_retained_outputs": rejected,
+                # True only when a primary ensemble was refused AND no other
+                # primary reached the handoff, i.e. the stage passed on the
+                # rotamer and single-best files alone. A refusal by itself does
+                # not mean that: the two primary names can both be present in
+                # one job directory, so a primary can survive its sibling's
+                # refusal. The retained frame count cannot answer this either —
+                # crest_rotamers.xyz keeps the count up either way — which is
+                # why the question is asked by file name and not by count. Which
+                # file was refused is in the rows above.
+                "crest_no_primary_ensemble_retained": refused_primary and not retained_primary,
             }
         )
 

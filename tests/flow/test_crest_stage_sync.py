@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 
+from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths
 from orca_auto.flow.orchestration.stage_runtime import crest as crest_runtime
 from orca_auto.flow.orchestration.stage_runtime import xtb_path_jobs
 from orca_auto.flow.orchestration.stage_runtime.crest import (
@@ -15,6 +16,7 @@ from orca_auto.flow.orchestration.stage_runtime.crest import (
 )
 from orca_auto.flow.orchestration.stage_runtime.xtb_path_jobs import ensure_xtb_job_dir_impl
 from tests.flow.orchestration_services import orchestration_services
+from tests.flow.test_xtb_crest_adapters import _write_crest_state, _write_xyz
 
 
 def test_ensure_crest_job_dir_copies_input_and_populates_manifest(tmp_path: Path) -> None:
@@ -463,3 +465,71 @@ def test_sync_crest_stage_keeps_cancelled_stage_when_contract_lags(tmp_path: Pat
     assert stage["status"] == "cancelled"
     assert stage["task"]["status"] == "cancelled"
     assert stage["metadata"]["child_job_id"] == "crest_old"
+
+
+def test_sync_crest_stage_carries_a_refusal_from_job_state_json_into_stage_metadata(
+    tmp_path: Path,
+) -> None:
+    # End to end over the real loader rather than a SimpleNamespace: a refusal
+    # written into the child's job_state.json has to survive the contract load
+    # AND the stage mutation. Tested apart, either half could stop calling the
+    # other without a single assertion going red.
+    workspace_dir = tmp_path / "workspace" / "wf_crest_refusal"
+    allowed_root = workflow_workspace_internal_engine_paths(workspace_dir, engine="crest")[
+        "allowed_root"
+    ]
+    job_dir = allowed_root / "crest_reactant_01"
+    selected_input_xyz = job_dir / "input.xyz"
+    rotamers = job_dir / "crest_rotamers.xyz"
+    _write_xyz(selected_input_xyz)
+    _write_xyz(rotamers)
+    _write_crest_state(
+        job_dir,
+        job_id="crest_refusal_1",
+        selected_input_xyz=selected_input_xyz,
+        engine_payload={
+            "retained_conformer_paths": [str(rotamers)],
+            "rejected_retained_outputs": [
+                {"name": "crest_conformers.xyz", "reason": "no_valid_frames"},
+            ],
+        },
+    )
+    stage: dict[str, Any] = {
+        "stage_id": "crest_reactant_01",
+        "status": "submitted",
+        "metadata": {"queue_id": "q_crest_refusal"},
+        "task": {
+            "engine": "crest",
+            "status": "submitted",
+            "submission_result": {"status": "submitted", "queue_id": "q_crest_refusal"},
+            "payload": {
+                "job_dir": str(job_dir),
+                "selected_input_xyz": str(selected_input_xyz),
+            },
+            "enqueue_payload": {"priority": 8},
+        },
+    }
+    deps = orchestration_services(
+        overrides={
+            "submit_crest_job_dir": lambda **_kwargs: pytest.fail(
+                "a submitted stage is not resubmitted"
+            ),
+        }
+    )
+
+    sync_crest_stage_impl(
+        stage,
+        crest_config="/tmp/crest.yaml",
+        submit_ready=False,
+        workflow_id="wf_crest_refusal",
+        workspace_dir=workspace_dir,
+        services=deps,
+    )
+
+    metadata = cast(dict[str, Any], stage["metadata"])
+    assert stage["status"] == "completed"
+    assert metadata["child_job_id"] == "crest_refusal_1"
+    assert metadata["crest_rejected_retained_outputs"] == [
+        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"}
+    ]
+    assert metadata["crest_no_primary_ensemble_retained"] is True

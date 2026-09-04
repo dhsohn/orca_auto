@@ -10,6 +10,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `rejected_retained_outputs` crosses the artifact-contract boundary:
+  `load_crest_artifact_contract` reads it off the stored payload and
+  `CrestArtifactContract` carries and emits it, so a refusal a CREST child
+  recorded is readable from the workflow instead of ending at the contract. A
+  `job_state.json` written before the field existed still loads and yields no
+  refusals, and a malformed refusal row is dropped rather than failing the
+  load.
+
 - The workflow report takes a non-completed ORCA stage's imaginary-mode count
   from the ORCA output that stage's accepted `machine.json` binds, not from
   the engine's private `job_state.json` markers. Nothing publishes or
@@ -70,6 +78,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   so on the card.
 
 ### Added
+
+- A CREST stage records `crest_rejected_retained_outputs` and
+  `crest_no_primary_ensemble_retained` in its metadata. The flag is set only
+  when a refused file is a primary ensemble (`crest_conformers.xyz` or
+  `crest_ensemble.xyz`) *and* no primary ensemble reached the handoff: one job
+  directory can hold both names, so a refusal on its own does not mean the
+  conformer set is gone. `workflow restart` clears both keys with the other
+  contract-derived stage metadata.
+- The refused ensemble names reach two surfaces a person reads: the CREST stage
+  row of the workflow report appends `refused <names>` to its detail, and the
+  CREST phase summary notification gains a `Refused` metric for a stage that
+  has any. The refused file leaves no output artifact and need not move the
+  conformer count, so neither surface could show the loss before.
+- The CREST job-finished notification carries one line naming the refused files
+  and their reasons. That event is suppressed for a workflow child job, so this
+  line reaches standalone CREST jobs only; a workflow stage is served by the two
+  surfaces above.
 
 - The stationary SI block prints `Last output: <name>` before the
   coordinates, naming the output file its values were read from.
@@ -286,6 +311,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   verification that ran and state that real-engine re-validation was not run.
 
 ### Changed
+
+- The four CREST ensemble output names live once in `orca_auto.core.artifacts`
+  (`CREST_RETAINED_ENSEMBLE_NAMES`) instead of being spelled separately in the
+  engine runner and the contract layer.
 
 - A non-completed ORCA stage publishes an imaginary-mode count only when the
   reason its machine observation pins is the analyzer's own TS verdict. A

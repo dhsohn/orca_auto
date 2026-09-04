@@ -867,3 +867,109 @@ def test_select_crest_downstream_inputs_deduplicates_geometry_across_retained_fi
 
     assert [item.artifact_path for item in stage_inputs] == [str(first), str(distinct)]
     assert [item.rank for item in stage_inputs] == [1, 2]
+
+
+def test_load_crest_artifact_contract_carries_rejected_retained_outputs(tmp_path: Path) -> None:
+    job_dir = tmp_path / "crest_rejections"
+    selected_input_xyz = job_dir / "input.xyz"
+    rotamers = job_dir / "crest_rotamers.xyz"
+
+    _write_xyz(selected_input_xyz)
+    _write_xyz(rotamers)
+    _write_crest_state(
+        job_dir,
+        job_id="crest_rejections_1",
+        selected_input_xyz=selected_input_xyz,
+        engine_payload={
+            "retained_conformer_paths": [str(rotamers)],
+            "rejected_retained_outputs": [
+                {"name": "crest_conformers.xyz", "reason": "no_valid_frames"},
+            ],
+        },
+    )
+
+    contract = load_crest_artifact_contract(crest_index_root=tmp_path, target=str(job_dir))
+
+    assert contract.rejected_retained_outputs == (
+        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"},
+    )
+    assert contract.to_dict()["rejected_retained_outputs"] == [
+        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"}
+    ]
+
+
+def test_load_crest_artifact_contract_without_rejections_key_yields_empty(tmp_path: Path) -> None:
+    # Every job_state.json written before the field existed omits it, and those
+    # jobs must keep loading unchanged.
+    job_dir = tmp_path / "crest_no_rejections"
+    selected_input_xyz = job_dir / "input.xyz"
+    conformers = job_dir / "crest_conformers.xyz"
+
+    _write_xyz(selected_input_xyz)
+    _write_xyz(conformers)
+    _write_crest_state(
+        job_dir,
+        job_id="crest_no_rejections_1",
+        selected_input_xyz=selected_input_xyz,
+        engine_payload={"retained_conformer_paths": [str(conformers)]},
+    )
+
+    contract = load_crest_artifact_contract(crest_index_root=tmp_path, target=str(job_dir))
+
+    assert contract.rejected_retained_outputs == ()
+
+
+def test_load_crest_artifact_contract_drops_malformed_rejection_rows(tmp_path: Path) -> None:
+    # A refusal row is commentary on a job that already finished, so a bad row
+    # loses itself rather than the whole contract — unlike a retained path.
+    job_dir = tmp_path / "crest_bad_rejections"
+    selected_input_xyz = job_dir / "input.xyz"
+    conformers = job_dir / "crest_conformers.xyz"
+
+    _write_xyz(selected_input_xyz)
+    _write_xyz(conformers)
+    _write_crest_state(
+        job_dir,
+        job_id="crest_bad_rejections_1",
+        selected_input_xyz=selected_input_xyz,
+        engine_payload={
+            "retained_conformer_paths": [str(conformers)],
+            "rejected_retained_outputs": [
+                "crest_rotamers.xyz",
+                {"reason": "no_valid_frames"},
+                {"name": "crest_best.xyz"},
+                {"name": 7, "reason": "no_valid_frames"},
+                {"name": "crest_ensemble.xyz", "reason": ["no_valid_frames"]},
+                {"name": "   ", "reason": "no_valid_frames"},
+                {"name": "crest_rotamers.xyz", "reason": "identity_unreadable"},
+            ],
+        },
+    )
+
+    contract = load_crest_artifact_contract(crest_index_root=tmp_path, target=str(job_dir))
+
+    assert contract.rejected_retained_outputs == (
+        {"name": "crest_rotamers.xyz", "reason": "identity_unreadable"},
+    )
+
+
+def test_load_crest_artifact_contract_ignores_a_non_list_rejection_field(tmp_path: Path) -> None:
+    job_dir = tmp_path / "crest_scalar_rejections"
+    selected_input_xyz = job_dir / "input.xyz"
+    conformers = job_dir / "crest_conformers.xyz"
+
+    _write_xyz(selected_input_xyz)
+    _write_xyz(conformers)
+    _write_crest_state(
+        job_dir,
+        job_id="crest_scalar_rejections_1",
+        selected_input_xyz=selected_input_xyz,
+        engine_payload={
+            "retained_conformer_paths": [str(conformers)],
+            "rejected_retained_outputs": "crest_conformers.xyz",
+        },
+    )
+
+    contract = load_crest_artifact_contract(crest_index_root=tmp_path, target=str(job_dir))
+
+    assert contract.rejected_retained_outputs == ()

@@ -214,6 +214,33 @@ def test_notify_job_finished_maps_headlines_and_optional_fields(
         assert "resource_actual: " not in message
 
 
+def test_notify_job_finished_has_no_refusal_line_for_xtb(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only CREST refuses named outputs, so the shared renderer must not grow a
+    # refusal line for an engine that never declares the field.
+    cfg = _make_cfg(tmp_path, enabled=True)
+    transport = _FakeTransport(SendResult(sent=True))
+    monkeypatch.setattr(notifications, "build_channel", lambda _messenger: transport)
+
+    assert notifications.notify_xtb_job_finished(
+        cfg,
+        job_id="job-005",
+        queue_id="queue-005",
+        status="completed",
+        reason="done",
+        job_type="opt",
+        reaction_key="rxn-5",
+        job_dir=tmp_path / "job-005",
+        selected_xyz=tmp_path / "inputs" / "optimized.xyz",
+        candidate_count=1,
+        rejected_retained_outputs=({"name": "crest_conformers.xyz", "reason": "no_valid_frames"},),
+    )
+
+    assert "rejected_retained_outputs" not in transport.messages[-1]
+
+
 def test_workflow_child_notifications_are_suppressed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -208,3 +208,110 @@ def test_payload_view_filters_stage_views_and_preserves_bad_metadata() -> None:
     assert view.status(lambda value: str(value).strip()) == "queued"
     assert view.metadata() is None
     assert payload["metadata"] == "bad"
+
+
+def test_crest_stage_metadata_carries_refused_ensembles_and_flags_the_lost_conformer_set() -> None:
+    stage: dict[str, Any] = {}
+
+    WorkflowStageView(stage).update_crest_contract_metadata(
+        SimpleNamespace(
+            job_id="crest-1",
+            latest_known_path="/tmp/crest-1",
+            reason="completed",
+            retained_conformer_paths=("/tmp/crest-1/crest_rotamers.xyz",),
+            rejected_retained_outputs=(
+                {"name": "crest_conformers.xyz", "reason": "no_valid_frames"},
+            ),
+        )
+    )
+
+    assert stage["metadata"]["crest_rejected_retained_outputs"] == [
+        {"name": "crest_conformers.xyz", "reason": "no_valid_frames"}
+    ]
+    assert stage["metadata"]["crest_no_primary_ensemble_retained"] is True
+
+
+def test_crest_stage_metadata_flags_a_refused_crest_ensemble_with_no_primary_left() -> None:
+    # crest_ensemble.xyz is the CREST 3.x name for the conformer set that 2.x
+    # writes as crest_conformers.xyz, so refusing it with no other primary in
+    # the handoff costs the same thing.
+    stage: dict[str, Any] = {}
+
+    WorkflowStageView(stage).update_crest_contract_metadata(
+        SimpleNamespace(
+            job_id="crest-2",
+            latest_known_path="/tmp/crest-2",
+            reason="completed",
+            retained_conformer_paths=("/tmp/crest-2/crest_best.xyz",),
+            rejected_retained_outputs=(
+                {"name": "crest_ensemble.xyz", "reason": "no_valid_frames"},
+            ),
+        )
+    )
+
+    assert stage["metadata"]["crest_no_primary_ensemble_retained"] is True
+
+
+def test_crest_stage_metadata_does_not_flag_a_refusal_that_left_a_primary_behind() -> None:
+    # A CREST 3.0.2 job under this machine's run roots wrote crest_conformers.xyz
+    # AND crest_ensemble.xyz, so a refusal naming one of them can still leave the
+    # other in the handoff. The refusal is recorded; the flag stays down.
+    stage: dict[str, Any] = {}
+
+    WorkflowStageView(stage).update_crest_contract_metadata(
+        SimpleNamespace(
+            job_id="crest-3",
+            latest_known_path="/tmp/crest-3",
+            reason="completed",
+            retained_conformer_paths=(
+                "/tmp/crest-3/crest_conformers.xyz",
+                "/tmp/crest-3/crest_rotamers.xyz",
+            ),
+            rejected_retained_outputs=(
+                {"name": "crest_ensemble.xyz", "reason": "identity_changed_during_read"},
+            ),
+        )
+    )
+
+    assert stage["metadata"]["crest_rejected_retained_outputs"] == [
+        {"name": "crest_ensemble.xyz", "reason": "identity_changed_during_read"}
+    ]
+    assert stage["metadata"]["crest_no_primary_ensemble_retained"] is False
+
+
+def test_crest_stage_metadata_does_not_flag_a_secondary_refusal() -> None:
+    stage: dict[str, Any] = {}
+
+    WorkflowStageView(stage).update_crest_contract_metadata(
+        SimpleNamespace(
+            job_id="crest-4",
+            latest_known_path="/tmp/crest-4",
+            reason="completed",
+            retained_conformer_paths=(),
+            rejected_retained_outputs=(
+                {"name": "crest_rotamers.xyz", "reason": "atom_sequence_mismatch"},
+                {"name": "crest_best.xyz", "reason": "identity_unreadable"},
+            ),
+        )
+    )
+
+    assert stage["metadata"]["crest_rejected_retained_outputs"] == [
+        {"name": "crest_rotamers.xyz", "reason": "atom_sequence_mismatch"},
+        {"name": "crest_best.xyz", "reason": "identity_unreadable"},
+    ]
+    assert stage["metadata"]["crest_no_primary_ensemble_retained"] is False
+
+
+def test_crest_stage_metadata_without_refusals_is_empty_and_unflagged() -> None:
+    stage: dict[str, Any] = {}
+
+    WorkflowStageView(stage).update_crest_contract_metadata(
+        SimpleNamespace(
+            job_id="crest-5",
+            latest_known_path="/tmp/crest-5",
+            reason="completed",
+        )
+    )
+
+    assert stage["metadata"]["crest_rejected_retained_outputs"] == []
+    assert stage["metadata"]["crest_no_primary_ensemble_retained"] is False

@@ -48,6 +48,26 @@ def count_xyz_frames(path: Path) -> int | None:
     return total_lines // frame_lines if total_lines >= frame_lines else None
 
 
+def crest_refused_ensemble_names(stage: Mapping[str, Any]) -> tuple[str, ...]:
+    """Ensemble files the CREST child refused for the handoff, in stored order.
+
+    The refusal rows are the only record of a named ensemble that existed but
+    did not arrive: ``output_artifacts`` shows what did arrive and the retained
+    frame count can stay flat across the loss, so neither surface can name it.
+    """
+    rows = _stage_metadata(stage).get("crest_rejected_retained_outputs")
+    if not isinstance(rows, list):
+        return ()
+    names: list[str] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        name = _text(row.get("name"))
+        if name:
+            names.append(name)
+    return tuple(names)
+
+
 def crest_stage_detail(stage: Mapping[str, Any]) -> tuple[str, int | None]:
     metadata = _stage_metadata(stage)
     conformers_path = None
@@ -66,6 +86,9 @@ def crest_stage_detail(stage: Mapping[str, Any]) -> tuple[str, int | None]:
         parts.append(f"mode {mode}")
     if frames is not None:
         parts.append(f"{frames} conformers")
+    refused = crest_refused_ensemble_names(stage)
+    if refused:
+        parts.append(f"refused {', '.join(refused)}")
     return " · ".join(parts), frames
 
 
@@ -85,6 +108,7 @@ def xtb_stage_detail(stage: Mapping[str, Any]) -> tuple[str, int]:
 
 __all__ = [
     "count_xyz_frames",
+    "crest_refused_ensemble_names",
     "crest_stage_detail",
     "stage_task_kind",
     "xtb_stage_detail",

@@ -155,6 +155,7 @@ def finalize_processed_entry(
             job_dir=context.job_dir,
             selected_xyz=context.selected_xyz,
             retained_conformer_count=result.retained_conformer_count,
+            rejected_retained_outputs=result.rejected_retained_outputs,
             resource_request=context.resource_request,
             resource_actual=result.resource_actual,
         )

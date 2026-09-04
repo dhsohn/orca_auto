@@ -12,6 +12,31 @@ from ..contracts.xtb import WorkflowStageInput
 from . import _engine_adapter_helpers as _adapter_helpers
 
 
+def _rejected_retained_outputs(raw: Any) -> tuple[dict[str, str], ...]:
+    """Refusal rows off a stored payload, dropping every malformed one.
+
+    Unlike a retained path, a refusal row is commentary on a job that has
+    already reached its terminal status, so it must never be able to fail a
+    contract load: every job_state.json written before the field existed omits
+    it entirely, and a row that survived a hand-edit or an older writer is
+    worth less than the rest of the contract.
+    """
+    if not isinstance(raw, list):
+        return ()
+    rows: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        reason = item.get("reason")
+        if not isinstance(name, str) or not isinstance(reason, str):
+            continue
+        if not name.strip() or not reason.strip():
+            continue
+        rows.append({"name": name, "reason": reason})
+    return tuple(rows)
+
+
 def load_crest_artifact_contract(
     *, crest_index_root: str | Path, target: str
 ) -> CrestArtifactContract:
@@ -30,6 +55,7 @@ def load_crest_artifact_contract(
     payload = fields.payload
 
     retained_paths = fields.payload_sequence("retained_conformer_paths")
+    rejected_retained_outputs = _rejected_retained_outputs(payload.get("rejected_retained_outputs"))
     retained_count = int(
         payload.get("retained_conformer_count", len(retained_paths)) or len(retained_paths)
     )
@@ -82,6 +108,7 @@ def load_crest_artifact_contract(
         selected_input_xyz=selected_input_xyz,
         retained_conformer_count=retained_count,
         retained_conformer_paths=retained_paths,
+        rejected_retained_outputs=rejected_retained_outputs,
         output_identities=output_identities,
         resource_request=bundle.resource_request,
         resource_actual=bundle.resource_actual,

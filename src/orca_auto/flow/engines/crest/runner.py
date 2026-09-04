@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from orca_auto.core import engine_runner as _engine_runner
-from orca_auto.core.artifacts import CREST_JOB_MANIFEST_FILE
+from orca_auto.core.artifacts import (
+    CREST_JOB_MANIFEST_FILE,
+    CREST_RETAINED_ENSEMBLE_NAMES,
+)
 from orca_auto.core.config.engines import (
     WorkflowEngineAppConfig as AppConfig,
 )
@@ -45,14 +48,8 @@ from .job_inputs import (
 
 LOGGER = logging.getLogger(__name__)
 
-_RETAINED_ENSEMBLE_CANDIDATES = (
-    "crest_conformers.xyz",
-    "crest_ensemble.xyz",
-    "crest_rotamers.xyz",
-    "crest_best.xyz",
-)
 _CREST_SCRATCH_PUBLICATION_NAMES = frozenset(
-    (*_RETAINED_ENSEMBLE_CANDIDATES, "crest.stdout.log", "crest.stderr.log")
+    (*CREST_RETAINED_ENSEMBLE_NAMES, "crest.stdout.log", "crest.stderr.log")
 )
 _CREST_NATIVE_INT_MAX = (1 << 31) - 1
 _CREST_DEFAULT_MAX_MD_STEPS = 10_000_000
@@ -522,7 +519,7 @@ def _retained_outputs(
     retained_paths: list[str] = []
     seen_geometries: set[tuple[tuple[str, float, float, float], ...]] = set()
     retained_count = 0
-    for name in _RETAINED_ENSEMBLE_CANDIDATES:
+    for name in CREST_RETAINED_ENSEMBLE_NAMES:
         path = job_dir / name
         if not path.exists():
             continue
@@ -570,7 +567,7 @@ def _retained_outputs(
 def _clear_stale_crest_outputs(job_dir: Path, *, selected_input_xyz: Path) -> None:
     protected = selected_input_xyz.expanduser().resolve()
     removed = False
-    for name in _RETAINED_ENSEMBLE_CANDIDATES:
+    for name in CREST_RETAINED_ENSEMBLE_NAMES:
         path = job_dir / name
         if path.parent.resolve() / path.name == protected:
             raise ValueError(f"CREST input path conflicts with retained output name: {path}")
