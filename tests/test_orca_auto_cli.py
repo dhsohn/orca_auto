@@ -82,6 +82,37 @@ def test_main_preserves_handler_result_when_only_final_flush_hits_broken_pipe(
     assert unified_cli.main([]) == 7
 
 
+def test_main_preserves_handler_result_when_output_breaks_after_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    side_effects: list[str] = []
+
+    class ClosedPipe:
+        def write(self, _text: str) -> int:
+            raise BrokenPipeError("downstream closed after mutation")
+
+        def flush(self) -> None:
+            raise BrokenPipeError("downstream closed after mutation")
+
+        def fileno(self) -> int:
+            raise OSError("no file descriptor")
+
+    def handler(_args: SimpleNamespace) -> int:
+        side_effects.append("mutated")
+        unified_cli.sys.stdout.write("success payload\n")
+        return 7
+
+    parser = SimpleNamespace(
+        parse_args=lambda _argv: SimpleNamespace(no_color=False, func=handler),
+        print_help=lambda: None,
+    )
+    monkeypatch.setattr(unified_cli, "build_parser", lambda: parser)
+    monkeypatch.setattr(unified_cli, "sys", SimpleNamespace(stdout=ClosedPipe()))
+
+    assert unified_cli.main([]) == 7
+    assert side_effects == ["mutated"]
+
+
 def test_build_parser_parses_unified_queue_commands() -> None:
     parser = unified_cli.build_parser()
 
