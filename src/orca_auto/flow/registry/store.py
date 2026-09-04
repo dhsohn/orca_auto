@@ -144,7 +144,10 @@ def _record_from_summary(summary: dict[str, Any]) -> WorkflowRegistryRecord:
     if si_publish_attempts > 0:
         metadata["si_publish_attempts"] = si_publish_attempts
     # Undrained cancel transitions are why the authoritative clear guard refuses
-    # this row; carry the count so the operator surfaces can name the reason.
+    # this row; carry the count so the operator surfaces have a fallback for a
+    # workspace whose payload they cannot read. It is only a fallback: nothing
+    # resyncs this row after a worker drains the payload, so a reader that can
+    # reach the payload reports the payload's count instead of this cached one.
     # This is deliberately absent from the cached clearable-terminal check in
     # `_markers`: a stale row must stay clearable once the payload is drained.
     cancel_transitions_pending = _safe_int(summary.get("cancel_transitions_pending"), default=0)
