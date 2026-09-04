@@ -119,11 +119,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - `queue list` reports `cancel_transitions_pending`, the number of cancel
   status transitions still stored on a workflow payload because the cancel
   command died before journaling them. It is read from the workflow payload
-  summary, the same authority the terminal clear guard consults, so `--json`
-  carries the count in the row's `metadata`; the count cached on the registry
-  row is used only for a row whose payload cannot be read at all, because a
-  worker drain rewrites only `workflow.json` and a terminal workflow is then
-  skipped without a registry sync. The plain table prints a
+  summary, the same authority the terminal clear guard consults, and each
+  summary is matched to its registry row by workspace directory rather than by
+  the `workflow_id` the payload persists — a second, identity-quarantined
+  workspace can persist a live workflow's id, and matching on that id let its
+  payload answer for the real row. So `--json` carries the count in the row's
+  `metadata`; the count cached on the registry row is used only for a row whose
+  own workspace payload cannot be read at all, because a worker drain rewrites
+  only `workflow.json` and a terminal workflow is then skipped without a
+  registry sync. The plain table prints a
   `cancel_pending: <activity_id>=<count>` note under the table rather than in
   a cell, because the `detail` column is the first to lose width and a marker
   inside it is truncated away on an 80- or 100-column terminal. The count

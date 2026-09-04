@@ -255,7 +255,10 @@
 transition이 기록되어 있는 동안 그 workflow 행에 나타나며, 그 행이 stale clear를 거부하는
 이유를 이름 붙입니다. 판정 권한은 clear guard가 직접 읽는 payload에 있습니다. worker가
 transition을 배수하고 나면 registry entry에 아직 갱신되지 않은 값이 남아 있어도 이 키는
-행에서 사라집니다. 캐시된 값은 payload를 아예 읽을 수 없는 행에서만 보고합니다.
+행에서 사라집니다. 여기서 읽는 payload는 그 행이 가리키는 workspace의 payload입니다.
+payload summary는 payload가 보존한 `workflow_id`가 아니라 workspace 디렉터리로 행에
+연결합니다. 그 id는 identity-quarantine된 두 번째 workspace도 주장할 수 있기 때문입니다.
+캐시된 값은 그 행 자신의 workspace payload를 아예 읽을 수 없을 때만 보고합니다.
 plain `queue list` table은 같은 행들을 column이 아니라 table 아래 `cancel_pending:`
 note로 출력합니다.
 

@@ -52,11 +52,13 @@ def workflow_cancel_transitions_metadata(
     terminal workflow is then skipped without resynchronizing the registry, so
     the row's cached count stays positive until something else reindexes it.
 
-    An empty ``summary`` means no payload was read for this row at all:
-    ``list_workflow_summaries`` skips a workspace whose ``workflow.json`` is
-    missing, unreadable or unparsable, and an identity-quarantined row is filed
-    under the payload's persisted id rather than this record's id. The cached
-    count is the only evidence left in that state, so it is used there.
+    An empty ``summary`` means no payload was read for the workspace this row
+    names: ``list_workflow_summaries`` skips a workspace whose ``workflow.json``
+    is missing, unreadable or unparsable, and a row naming a workspace the scan
+    does not reach at all is handed nothing either. The cached count is the only
+    evidence left in that state, so it is used there. It is the row's own
+    workspace that decides this, never the id a payload persists -- summaries
+    are keyed by workspace precisely so a foreign payload cannot answer here.
 
     Two states can still disagree with the clear guard, both of them already
     anomalous and neither of them the stale-cache loop above. A workspace whose
@@ -73,12 +75,36 @@ def workflow_cancel_transitions_metadata(
     return {"cancel_transitions_pending": pending} if pending > 0 else {}
 
 
-def _workflow_summary_by_id(root: Path) -> dict[str, dict[str, Any]]:
-    return {
-        normalize_text(summary.get("workflow_id")): summary
-        for summary in list_workflow_summaries(root)
-        if normalize_text(summary.get("workflow_id"))
-    }
+def _resolved_workspace_key(workspace_dir: Any) -> str:
+    """Resolved absolute path a summary and a registry row can both be filed under."""
+    text = normalize_text(workspace_dir)
+    if not text:
+        return ""
+    try:
+        return str(Path(text).expanduser().resolve())
+    except OSError:
+        return ""
+
+
+def _workflow_summary_by_workspace(root: Path) -> dict[str, dict[str, Any]]:
+    """Payload summaries keyed by the workspace directory each one was read from.
+
+    Keying by ``workflow_id`` collides. A summary reports the id the payload
+    persists, while the registry files an identity-quarantined workspace under
+    its trusted directory name, so a quarantined workspace that persists a real
+    workflow's id lands on that workflow's key. ``iter_workflow_workspaces``
+    scans in reverse name order and this map keeps the last write, so the
+    lower-sorting directory would win and a real row would be answered from a
+    foreign payload -- including on ``cancel_transitions_pending``, where the
+    terminal clear guard reads the workspace the row itself names. Keying by
+    that same workspace is what keeps the two in agreement.
+    """
+    summaries: dict[str, dict[str, Any]] = {}
+    for summary in list_workflow_summaries(root):
+        key = _resolved_workspace_key(summary.get("workspace_dir"))
+        if key:
+            summaries[key] = summary
+    return summaries
 
 
 def _workflow_record_label(
@@ -195,15 +221,17 @@ def workflow_records(
 ) -> list[ActivityRecord]:
     root = Path(workflow_root).expanduser().resolve()
     registry_records = reindex_workflow_registry(root) if refresh else list_workflow_registry(root)
-    summary_by_id = _workflow_summary_by_id(root)
+    summary_by_workspace = _workflow_summary_by_workspace(root)
 
     rows: list[ActivityRecord] = []
     for record in registry_records:
-        workflow_id = normalize_text(record.workflow_id)
+        # The row's own workspace, not its id: an id can be claimed by a second
+        # workspace, a trusted workspace path is this row's alone.
+        workspace_key = _resolved_workspace_key(record.workspace_dir)
         rows.append(
             _workflow_activity_record(
                 record,
-                summary=summary_by_id.get(workflow_id, {}),
+                summary=summary_by_workspace.get(workspace_key, {}) if workspace_key else {},
                 workflow_root=root,
             )
         )
@@ -211,10 +239,11 @@ def workflow_records(
 
 
 __all__ = [
+    "_resolved_workspace_key",
     "_workflow_activity_record",
     "_workflow_record_aliases",
     "_workflow_record_label",
-    "_workflow_summary_by_id",
+    "_workflow_summary_by_workspace",
     "_workspace_display_name",
     "workflow_cancel_transitions_metadata",
     "workflow_elapsed_metadata",

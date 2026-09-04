@@ -1665,6 +1665,78 @@ def test_cmd_queue_list_keeps_the_cached_count_when_the_payload_cannot_be_read(
     assert registry.clear_terminal_workflow_registry(workflow_root) == 0
 
 
+def test_cmd_queue_list_names_a_transition_a_quarantined_twin_cannot_answer_for(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    # A second workspace persists the first one's `workflow_id` -- an operator
+    # copy of a workspace directory, which `advance` quarantines without
+    # rewriting the durable id -- and its directory name sorts first, so the
+    # reverse-name workspace scan visits it last. Matched by id it would be the
+    # summary the real row is answered from, and its own drained transition
+    # list would convert that row's count to zero. The clear guard reads the
+    # workspace each row names and still refuses both, so the note must stay.
+    from orca_auto.flow import registry
+    from orca_auto.flow.state import write_workflow_payload
+
+    workflow_root, _workspace, config_path, _payload = _cancel_authority_workflow_root(
+        tmp_path,
+        workflow_id="wf-cancel-real",
+        transitions=[dict(_STORED_CANCEL_TRANSITION)],
+    )
+    twin_workspace = workflow_root / "wf-cancel-copy"
+    twin_workspace.mkdir()
+    twin_payload: dict[str, Any] = {
+        "workflow_id": "wf-cancel-real",
+        "template_name": "reaction_ts_search",
+        "status": "failed",
+        "requested_at": "2026-08-11T05:00:00+00:00",
+        "stages": [],
+        "metadata": {
+            "cancellation_status_transitions": [],
+            "workflow_error": {
+                "status": "failed",
+                "scope": "workflow_identity_validation",
+                "reason": "workflow directory name does not match persisted workflow_id",
+            },
+        },
+    }
+    write_workflow_payload(twin_workspace, twin_payload)
+    registry.sync_workflow_registry(workflow_root, twin_workspace, twin_payload)
+    twin_row = next(
+        row
+        for row in registry.list_workflow_registry(workflow_root)
+        if row.workflow_id == "wf-cancel-copy"
+    )
+    assert twin_row.metadata["quarantined_persisted_workflow_id"] == "wf-cancel-real"
+
+    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
+
+    assert (
+        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
+        == 0
+    )
+    rows = {row["activity_id"]: row for row in json.loads(capsys.readouterr().out)["activities"]}
+    assert sorted(rows) == ["wf-cancel-copy", "wf-cancel-real"]
+    assert rows["wf-cancel-real"]["metadata"]["cancel_transitions_pending"] == 1
+    assert "cancel_transitions_pending" not in rows["wf-cancel-copy"]["metadata"]
+
+    assert (
+        unified_cli.cmd_queue_list(
+            _cancel_authority_args(workflow_root, config_path, as_json=False)
+        )
+        == 0
+    )
+    lines = _strip_ansi(capsys.readouterr().out).splitlines()
+    assert lines[-2:] == [
+        "cancel_pending: wf-cancel-real=1",
+        "  undrained cancel transitions; `queue list clear` refuses these rows.",
+    ]
+
+    assert registry.clear_terminal_workflow_registry(workflow_root) == 0
+
+
 _CANCEL_PENDING_ACTIVITY_ID = "wf_conformer_20260423_082755_542a9e"
 
 
