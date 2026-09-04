@@ -249,8 +249,15 @@
 
 `metadata`는 확장 가능한 mapping입니다. 스크립트는 `queue_id`, `task_id`, `task_kind`,
 `run_id`, `workflow_id`, `reaction_dir`, `job_dir`, `allowed_root`, `priority`,
-`template_name`, `workspace_dir` 같은 알려진 키를 사용할 수 있지만, 키가 없거나 새 키가
-추가되는 상황을 견뎌야 합니다. 필수 same-generation terminal 근거를 재구성할 수
+`template_name`, `workspace_dir`, `cancel_transitions_pending` 같은 알려진 키를 사용할 수
+있지만, 키가 없거나 새 키가 추가되는 상황을 견뎌야 합니다.
+`cancel_transitions_pending`는 workflow payload나 registry row에 아직 배수되지 않은
+cancel status transition이 기록되어 있는 동안 그 workflow 행에 나타나며(둘은 어느 쪽으로든
+지연될 수 있어 더 큰 값을 보고합니다), 그 행이 stale clear를 거부하는 이유를 이름 붙입니다.
+plain `queue list` table은 같은 행들을 column이 아니라 table 아래 `cancel_pending:`
+note로 출력합니다.
+
+필수 same-generation terminal 근거를 재구성할 수
 없는 종료 행은 무한히 복구를 반복하지 않고 `repair_blocked` activity로 노출하며,
 `repair_blocked_reason`과 `queue_error` metadata를 제공합니다.
 
@@ -690,18 +697,24 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
   결정적 충돌은 즉시 block합니다. writer 전 workflow/registry/report checkpoint 실패는 이 writer
   budget을 소모하지 않으며, 성공적으로 저장된 pending marker는 인프라 복구를 위해 즉시 due로
   남습니다. Registry clear는 workflow→registry lock 순서를 지키고 authoritative identity/status를
-  다시 확인하므로 publication pending·blocked, final-child-sync pending, identity quarantine,
-  authoritative active record는 stale로 지울 수 없습니다. 아직 격리되지 않은 identity 불일치는
+  다시 확인하므로 publication pending·blocked, final-child-sync pending, 배수되지 않은
+  cancel transition, identity quarantine, authoritative active record는 stale로 지울 수
+  없습니다. 아직 격리되지 않은 identity 불일치는
   registry에 캐시된 marker를 남기지 않습니다 — 캐시 상태가 아니라 그 authoritative 재확인이
   잡으므로, cleared marker에 이미 가려진 row는 운영자가 조치할 때까지 가려진 채로 남습니다.
   격리된 payload의 관측 durable ID는
   증거로 보존하고, registry의 단일 row는 신뢰할 수 있는 workspace 이름으로 key를 지정하면서
   관측 ID를 metadata에 기록합니다. 원인을 고친 뒤 운영자는
   `orca_auto run-dir <workflow_dir> --force`로 blocked publication을 다시 arm할 수 있습니다.
-  단, workflow가 이미 terminal observation을 게시했다면 그 observation이 `workflow_si.md`를
-  고정하므로 publication은 blocked로 남고, restart는 이를 terminal observation에 pinned된
-  것으로 기록하며, 게시된 observation 아래에서 pending flag를 발견한 re-advance도 같은
-  방식으로 retire합니다.
+  단, workflow가 이미 terminal observation을 게시했다면 그렇지 않습니다. 그 observation은
+  불변이며 `workflow_report.html`·`workflow_si.md`·자기 자신의 바이트를 고정합니다. 즉
+  observation을 게시한 workspace는 이후 어떤 advance에서도 이 셋 중 무엇도 다시 만들지
+  않습니다. 그런 workspace를 restart하면 실패/취소 stage는 다시 열리고 registry row도 새 상태를
+  따라가지만, 게시된 report·SI·observation은 게시 당시의 실행을 계속 서술합니다. restart는
+  restart summary와 응답에 `pinned_by_terminal_observation`을 기록하고 CLI가 이를 출력하며,
+  blocked publication은 blocked로 남고, 게시된 observation 아래에서 pending flag를 발견한
+  re-advance도 같은 방식으로 retire합니다. 새 report·SI·observation은 restart가 아니라 새
+  generation에서만 나옵니다.
 - Population 온도는 파싱된 thermochemistry 온도입니다. 선택적
   `boltzmann_temperature_k` 매니페스트 키는 admission에서 유한한 양수인지 검증해 내구성
   워크플로우 요청에 저장하는 pin입니다. 모든 주파수 작업의 파싱 온도와 0.01 K 이내로

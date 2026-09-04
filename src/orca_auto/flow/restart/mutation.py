@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from ..state import load_workflow_payload, workflow_summary, write_workflow_payl
 from ..workflow.machine import SI_PINNED_BY_TERMINAL_OBSERVATION, terminal_observation_published
 
 _RESTARTABLE_WORKFLOW_STATUSES = frozenset({*WORKFLOW_FAILED_STATUSES, STATUS_CANCELLED})
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -79,7 +81,20 @@ class WorkflowRestartMutation:
         }
         if self.electronic_state_change is not None:
             metadata["electronic_state_change"] = self.electronic_state_change
+        if self.pinned_by_terminal_observation:
+            # The stdout line is gone once the terminal scrolls and
+            # ``restart_summary`` is overwritten by the next restart, so the
+            # journal is the surviving record of why a later registry row can
+            # disagree with the published SI.
+            metadata["pinned_by_terminal_observation"] = True
         return metadata
+
+    @property
+    def pinned_by_terminal_observation(self) -> bool:
+        restart_summary = self.summary.get("restart_summary")
+        return isinstance(restart_summary, dict) and bool(
+            restart_summary.get("pinned_by_terminal_observation")
+        )
 
     def response_payload(self) -> dict[str, Any]:
         return {
@@ -96,6 +111,11 @@ class WorkflowRestartMutation:
             **(
                 {"electronic_state_change": self.electronic_state_change}
                 if self.electronic_state_change is not None
+                else {}
+            ),
+            **(
+                {"pinned_by_terminal_observation": True}
+                if self.pinned_by_terminal_observation
                 else {}
             ),
         }
@@ -275,6 +295,7 @@ def _reset_restartable_stages(
 def _apply_restart_summary(
     payload: dict[str, Any],
     *,
+    workspace: Path,
     previous_status: str,
     restarted_at: str,
     restarted_stages: list[dict[str, str]],
@@ -298,6 +319,28 @@ def _apply_restart_summary(
     electronic_state_change = flow_settings.get("electronic_state_change")
     if isinstance(electronic_state_change, dict):
         restart_summary["electronic_state_change"] = electronic_state_change
+    try:
+        observation_published = terminal_observation_published(workspace)
+    except (OSError, RuntimeError, ValueError):
+        # ``terminal_observation_published`` fails closed on a symlinked,
+        # unparseable or non-terminal ``machine.json``. Refusing the restart
+        # here would be a new outcome; this batch only adds words. Follow the
+        # quarantine precedent in ``orchestration/advance.py`` instead and
+        # treat an unreadable observation as pinned — advance_workflow raises
+        # on the same file before it could regenerate a pinned artifact, so
+        # this workspace cannot produce a new record either way.
+        _LOGGER.warning(
+            "Workflow machine observation is unreadable during restart for %s",
+            workspace,
+            exc_info=True,
+        )
+        observation_published = True
+    if observation_published:
+        # The reopened stages will run, but the published observation pins the
+        # report, the SI and itself: no later advance regenerates any of them.
+        # Without this the workspace diverges in silence — a registry row
+        # saying completed beside an SI describing the earlier failure.
+        restart_summary["pinned_by_terminal_observation"] = True
     metadata["restart_summary"] = restart_summary
 
 

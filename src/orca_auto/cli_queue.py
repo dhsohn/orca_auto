@@ -350,16 +350,25 @@ def _print_queue_list_text(
         print(lines[1])
         return 0
 
+    # Printed under the table, where no column shrinking can truncate it: the
+    # ``detail`` cell surrenders width first, so a narrow terminal would hide
+    # the one thing that explains an unclearable row. Empty for every queue
+    # without such a row.
+    pending_cancel_lines = _activity_rendering.queue_pending_cancel_lines(display_rows)
+
     # lines[1] is the header, lines[2] the divider, and the rest map one-to-one
     # onto display_rows so each data row is tinted by its status. On a non-TTY
     # this stays byte-for-byte identical to the historical output (paint is a
-    # no-op), so pipes/scripts are unaffected.
+    # no-op) except for those trailing note lines, so pipes/scripts are
+    # unaffected unless a row holds undrained cancel transitions.
     if not tty:
         print(cli_style.paint(lines[1], cli_style.BOLD))
         print(lines[2])
         for (_indent, item), line in zip(display_rows, lines[3:], strict=True):
             color = cli_style.status_color(item.get("status"))
             print(cli_style.paint(line, color) if color else line)
+        for note in pending_cancel_lines:
+            print(note)
         return 0
 
     # On a TTY each row gains a status-colored left rail; the header and divider
@@ -378,6 +387,8 @@ def _print_queue_list_text(
         if show_rail:
             body = cli_style.paint(_QUEUE_RAIL_GLYPH, color or cli_style.DIM) + " " + body
         print(body)
+    for note in pending_cancel_lines:
+        print(gutter + note)
     return 0
 
 

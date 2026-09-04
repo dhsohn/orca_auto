@@ -991,3 +991,132 @@ def test_clear_terminal_keeps_a_record_with_undrained_cancel_transitions(tmp_pat
     payload["metadata"] = {"cancellation_status_transitions": []}
     write_workflow_payload(workspace, payload)
     assert registry.clear_terminal_workflow_registry(tmp_path) == 1
+
+
+# The transitions a real cancel walks through, in order.
+_CANCEL_TRANSITION_SEQUENCE = (
+    ("running", "cancel_requested"),
+    ("cancel_requested", "cancelled"),
+)
+
+
+def _cancelled_payload(workflow_id: str, *, transitions: int = 0) -> dict[str, Any]:
+    """A cancelled payload holding transitions the cancel path really writes.
+
+    Built through `_record_cancellation_status_transition` rather than by hand,
+    so the counted entries are ones the drain would accept and journal instead
+    of a shape it discards.
+    """
+    from orca_auto.flow.orchestration import workflow_cancellation
+
+    payload: dict[str, Any] = {
+        "workflow_id": workflow_id,
+        "template_name": "reaction_ts_search",
+        "status": "cancelled",
+        "requested_at": "2026-08-11T05:00:00+00:00",
+        "stages": [],
+        "metadata": {"cancellation_status_transitions": []},
+    }
+    for index, (previous_status, status) in enumerate(_CANCEL_TRANSITION_SEQUENCE[:transitions]):
+        workflow_cancellation._record_cancellation_status_transition(
+            payload,
+            previous_status=previous_status,
+            status=status,
+            occurred_at=f"2026-08-11T05:1{index}:00+00:00",
+        )
+    return payload
+
+
+def test_summary_and_registry_count_undrained_cancel_transitions(tmp_path: Path) -> None:
+    # These are why the row refuses to clear; before this the operator saw an
+    # unclearable row and nothing anywhere saying why.
+    from orca_auto.flow.orchestration import workflow_cancellation
+    from orca_auto.flow.state import workflow_summary
+
+    workspace = tmp_path / "wf-cancel-pending"
+    workspace.mkdir()
+    payload = _cancelled_payload("wf-cancel-pending", transitions=2)
+    # The count and the drain agree on this payload: both see two entries.
+    assert len(workflow_cancellation._stored_cancellation_transitions(payload["metadata"])) == 2
+
+    summary = workflow_summary(workspace, payload)
+    assert summary["cancel_transitions_pending"] == 2
+    assert registry_store._record_from_summary(summary).metadata["cancel_transitions_pending"] == 2
+
+
+def test_summary_and_registry_omit_drained_cancel_transitions(tmp_path: Path) -> None:
+    # The normal path leaves the key present but empty. Flagging presence
+    # instead of length would mark every cancelled workflow unclearable.
+    from orca_auto.flow.state import workflow_summary
+
+    workspace = tmp_path / "wf-cancel-drained"
+    workspace.mkdir()
+
+    summary = workflow_summary(workspace, _cancelled_payload("wf-cancel-drained"))
+    assert "cancel_transitions_pending" not in summary
+    assert "cancel_transitions_pending" not in registry_store._record_from_summary(summary).metadata
+
+
+def test_summary_counts_a_hand_edited_transition_value_that_still_blocks_the_clear(
+    tmp_path: Path,
+) -> None:
+    # The clear guard reads raw truthiness, so a value that is not a list holds
+    # the row too. Counting list entries alone would leave that row refused
+    # with no count and no note — the silence this change exists to close.
+    from orca_auto.flow.state import workflow_summary, write_workflow_payload
+
+    workspace = tmp_path / "wf-cancel-hand-edited"
+    workspace.mkdir()
+    payload = _cancelled_payload("wf-cancel-hand-edited")
+    payload["metadata"]["cancellation_status_transitions"] = {"event_id": "wf_evt_1"}
+    write_workflow_payload(workspace, payload)
+    registry_store._save_records(
+        tmp_path,
+        [
+            registry.WorkflowRegistryRecord(
+                workflow_id="wf-cancel-hand-edited",
+                template_name="reaction_ts_search",
+                status="cancelled",
+                source_job_id="job-hand-edited",
+                source_job_type="reaction_ts_search",
+                reaction_key="rxn-hand-edited",
+                requested_at="2026-08-11T05:00:00+00:00",
+                workspace_dir=str(workspace),
+                workflow_file=str(workspace / "workflow.json"),
+            )
+        ],
+    )
+
+    assert workflow_summary(workspace, payload)["cancel_transitions_pending"] == 1
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 0
+
+
+def test_cached_cancel_transitions_metadata_never_blocks_a_drained_clear(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The authoritative clear guard reads the payload. Repeating the flag in
+    # the cached marker check would leave a stale registry row unclearable
+    # forever after the worker drained the payload.
+    from orca_auto.flow.state import write_workflow_payload
+
+    _patch_file_locks(monkeypatch)
+    workspace = tmp_path / "wf-cancel-stale-row"
+    workspace.mkdir()
+    write_workflow_payload(workspace, _cancelled_payload("wf-cancel-stale-row"))
+    stale_row = registry.WorkflowRegistryRecord(
+        workflow_id="wf-cancel-stale-row",
+        template_name="reaction_ts_search",
+        status="cancelled",
+        source_job_id="job-stale",
+        source_job_type="reaction_ts_search",
+        reaction_key="rxn-stale",
+        requested_at="2026-08-11T05:00:00+00:00",
+        workspace_dir=str(workspace),
+        workflow_file=str(workspace / "workflow.json"),
+        metadata={"cancel_transitions_pending": 2},
+    )
+    registry_store._save_records(tmp_path, [stale_row])
+
+    assert registry_store._markers.record_is_clearable_terminal(stale_row, {"cancelled"}) is True
+    assert registry.clear_terminal_workflow_registry(tmp_path) == 1

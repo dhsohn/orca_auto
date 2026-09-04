@@ -684,6 +684,7 @@ def test_restart_summary_and_journal_record_electronic_state_change(tmp_path: Pa
     payload: dict[str, Any] = {"metadata": {}, "stages": []}
     restart_mutation._apply_restart_summary(
         payload,
+        workspace=tmp_path / "wf",
         previous_status="failed",
         restarted_at="2026-09-03T00:00:00+00:00",
         restarted_stages=[],

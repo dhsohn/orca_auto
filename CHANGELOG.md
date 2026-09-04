@@ -99,6 +99,26 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Added
 
+- `queue list` reports `cancel_transitions_pending`, the number of cancel
+  status transitions still stored on a workflow payload because the cancel
+  command died before journaling them. It rides the existing workflow summary
+  -> registry record -> activity metadata path, so `--json` carries the count
+  in the row's `metadata`; the plain table prints a
+  `cancel_pending: <activity_id>=<count>` note under the table rather than in
+  a cell, because the `detail` column is the first to lose width and a marker
+  inside it is truncated away on an 80- or 100-column terminal. The count
+  names the reason such a row refuses a terminal clear, which nothing said
+  before.
+- A restart of a workspace that has already published its terminal
+  observation records `pinned_by_terminal_observation` in its restart summary,
+  its response payload and its `workflow_restarted` journal event, and
+  `run-dir` prints a line saying the report, SI and observation will not be
+  regenerated and that a fresh record needs a new generation from the scaffold
+  directory. A machine observation that cannot be read (symlinked,
+  unparseable, non-terminal) is treated as published for this flag, as the
+  quarantine path in `advance` already does; the restart itself behaves as it
+  did before.
+
 - A CREST stage records `crest_rejected_retained_outputs` and
   `crest_no_primary_ensemble_retained` in its metadata. The flag is set only
   when a refused file is a primary ensemble (`crest_conformers.xyz` or
@@ -331,6 +351,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   verification that ran and state that real-engine re-validation was not run.
 
 ### Changed
+
+- `docs/PUBLIC_CONTRACTS.md` and `docs/REFERENCE.md` (and their Korean copies)
+  state the full immutability rule: a workspace with a published terminal
+  observation regenerates none of `workflow_report.html`, `workflow_si.md` or
+  `machine.json` on any later advance, so a restart can leave a registry row
+  saying completed beside an SI describing the earlier run; the supported route
+  to a fresh record is `run-dir` on the scaffold directory, accepting that
+  CREST/xTB re-run. `docs/PUBLIC_CONTRACTS.md` also lists undrained cancel
+  transitions among the reasons a registry row cannot be cleared as stale, and
+  documents `cancel_transitions_pending` as a known `queue list --json`
+  metadata key.
 
 - The four CREST ensemble output names live once in `orca_auto.core.artifacts`
   (`CREST_RETAINED_ENSEMBLE_NAMES`) instead of being spelled separately in the

@@ -285,6 +285,14 @@ Workflow notes:
   a fresh generation next to the previous ones. The scaffold must sit directly
   under the configured `runs_root`.
 - If the target already contains `workflow.json` (a generation directory), `run-dir` restarts failed/cancelled stages in that existing workspace instead of creating a new workflow
+- Once that workspace has published its terminal observation (`machine.json`),
+  such a restart can no longer produce a new `workflow_report.html`,
+  `workflow_si.md` or `machine.json`: the observation pins their bytes and no
+  later advance regenerates them, so the reopened stages can succeed while the
+  published report and SI still describe the earlier run. The restart says so
+  on stdout. The supported route to a fresh record is to run `run-dir` on the
+  scaffold directory, which starts a new generation — accepting that its
+  CREST/xTB stages re-run.
 - If a directory mixes raw ORCA `*.inp` files with scaffold-style filenames but does not include `flow.yaml`, `run-dir` prefers ORCA direct submission
 - reaction-path and conformer workflows create and submit xTB/CREST stages internally
 - `reaction_ts_search` orders the selected reactant × product CREST pairs

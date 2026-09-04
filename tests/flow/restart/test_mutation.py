@@ -650,3 +650,105 @@ def test_restart_cleans_prior_orca_dirs_when_later_rematerialization_fails(
 
     assert not (workspace / "orca_valid.restart-001").exists()
     assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == original
+
+
+def _published_restartable_workspace(root: Path, workflow_id: str) -> dict[str, Any]:
+    workspace = root / workflow_id
+    (workspace / "old_xtb").mkdir(parents=True)
+    payload: dict[str, Any] = {
+        "workflow_id": workflow_id,
+        "template_name": "reaction_ts_search",
+        "status": "failed",
+        "reaction_key": "R01-P01",
+        "requested_at": "2026-08-09T12:00:00+00:00",
+        "stages": [
+            {
+                "stage_id": "xtb_path_01",
+                "status": "failed",
+                "task": {
+                    "engine": "xtb",
+                    "status": "failed",
+                    "payload": {"job_dir": str(workspace / "old_xtb")},
+                    "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                },
+                "metadata": {},
+            },
+        ],
+        "metadata": {"last_advanced_at": "2026-08-09T12:30:00+00:00"},
+    }
+    _write_workflow(workspace, payload)
+    (workspace / "workflow_report.html").write_text("<html>done</html>\n", encoding="utf-8")
+    return payload
+
+
+def test_restart_records_a_published_terminal_observation(tmp_path: Path) -> None:
+    # The reopened stage will run, but nothing this workspace produces from
+    # here on can reach the report, the SI or the observation. Say so.
+    from orca_auto.flow.workflow.machine import write_workflow_machine_observation
+
+    root = tmp_path / "workflow_runs"
+    payload = _published_restartable_workspace(root, "wf_pinned_restart")
+    workspace = root / "wf_pinned_restart"
+    assert write_workflow_machine_observation(workspace, payload) is not None
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert result["pinned_by_terminal_observation"] is True
+    assert saved["metadata"]["restart_summary"]["pinned_by_terminal_observation"] is True
+    assert result["summary"]["restart_summary"]["pinned_by_terminal_observation"] is True
+    # The journal is the record that survives: stdout scrolls away and the
+    # next restart overwrites `restart_summary`.
+    event = json.loads(
+        (root / "workflow_registry.journal.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+    )
+    assert event["event_type"] == "workflow_restarted"
+    assert event["metadata"]["pinned_by_terminal_observation"] is True
+
+
+def test_restart_without_a_published_observation_records_nothing_pinned(tmp_path: Path) -> None:
+    root = tmp_path / "workflow_runs"
+    _published_restartable_workspace(root, "wf_unpinned_restart")
+    workspace = root / "wf_unpinned_restart"
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert "pinned_by_terminal_observation" not in result
+    assert "pinned_by_terminal_observation" not in saved["metadata"]["restart_summary"]
+    event = json.loads(
+        (root / "workflow_registry.journal.jsonl").read_text(encoding="utf-8").splitlines()[-1]
+    )
+    assert "pinned_by_terminal_observation" not in event["metadata"]
+
+
+@pytest.mark.parametrize("damage", ["symlink", "truncated", "not_terminal"])
+def test_restart_treats_an_unreadable_observation_as_pinned(tmp_path: Path, damage: str) -> None:
+    # `terminal_observation_published` fails closed on a symlinked, unparseable
+    # or non-terminal machine.json. A visibility change must not turn those
+    # into a new restart refusal, so the unreadable state is reported as pinned
+    # — the same assumption the quarantine path in orchestration/advance.py
+    # makes — and the restart still reopens the stage.
+    from orca_auto.core.machine_observation import MACHINE_OBSERVATION_FILE
+
+    root = tmp_path / "workflow_runs"
+    _published_restartable_workspace(root, "wf_unreadable_observation")
+    workspace = root / "wf_unreadable_observation"
+    machine_path = workspace / MACHINE_OBSERVATION_FILE
+    if damage == "symlink":
+        machine_path.symlink_to(workspace / "workflow.json")
+    elif damage == "truncated":
+        machine_path.write_text('{"lifecycle": {"phase": "fin', encoding="utf-8")
+    else:
+        machine_path.write_text(
+            json.dumps({"lifecycle": {"phase": "running"}}) + "\n", encoding="utf-8"
+        )
+
+    result = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    saved = json.loads((workspace / "workflow.json").read_text(encoding="utf-8"))
+    assert result["status"] == "restarted"
+    assert saved["status"] == "planned"
+    assert saved["stages"][0]["status"] == "planned"
+    assert result["pinned_by_terminal_observation"] is True
+    assert saved["metadata"]["restart_summary"]["pinned_by_terminal_observation"] is True

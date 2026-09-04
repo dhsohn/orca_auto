@@ -1483,3 +1483,98 @@ def test_advance_workflow_auto_cancels_active_children_for_submission_failed_sta
     assert result["stages"][1]["task"]["status"] == "cancelled"
     assert result["metadata"]["sync_only"] is True
     assert result["metadata"]["final_child_sync_pending"] is True
+
+
+def test_restart_under_a_published_observation_diverges_from_its_pinned_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Characterizes the intended divergence, which already held: a researcher
+    # may restart a published cancelled workflow and watch the reopened stage
+    # succeed; the registry follows the new status while the report, SI and
+    # observation keep describing the cancelled run. Nothing here is new
+    # behaviour except the final assertion — the rest is a fence so that a
+    # change which starts regenerating those files trips a test instead of
+    # quietly invalidating a published receipt.
+    from orca_auto.flow import registry
+    from orca_auto.flow.restart import restart_failed_workflow
+    from orca_auto.flow.state import load_workflow_payload, write_workflow_payload
+
+    root = tmp_path / "workflow_runs"
+    workspace = root / "wf_pinned_divergence"
+    (workspace / "old_xtb").mkdir(parents=True)
+    payload: dict[str, Any] = {
+        "workflow_id": "wf_pinned_divergence",
+        "template_name": "reaction_ts_search",
+        "status": "cancelled",
+        "reaction_key": "R01-P01",
+        "requested_at": "2026-08-09T12:00:00+00:00",
+        "stages": [
+            {
+                "stage_id": "xtb_path_01",
+                "status": "cancelled",
+                "task": {
+                    "engine": "xtb",
+                    "status": "cancelled",
+                    "payload": {"job_dir": str(workspace / "old_xtb")},
+                    "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                },
+                "metadata": {},
+            },
+        ],
+        "metadata": {"last_advanced_at": "2026-08-09T12:30:00+00:00"},
+    }
+    write_workflow_payload(workspace, payload)
+    report_path = workspace / "workflow_report.html"
+    si_path = workspace / "workflow_si.md"
+    report_path.write_text("<html>cancelled run</html>\n", encoding="utf-8")
+    si_path.write_text("# SI for the cancelled run\n", encoding="utf-8")
+    machine_path = write_workflow_machine_observation(workspace, payload)
+    assert machine_path is not None
+    published = (
+        report_path.read_bytes(),
+        si_path.read_bytes(),
+        machine_path.read_bytes(),
+    )
+
+    restarted = restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
+
+    reopened = load_workflow_payload(workspace)
+    reopened["stages"][0]["status"] = "completed"
+    reopened["stages"][0]["task"]["status"] = "completed"
+    write_workflow_payload(workspace, reopened)
+
+    _patch_advance_operations(
+        monkeypatch,
+        append_crest_orca_stages_impl=lambda *args, **kwargs: False,
+        append_interaction_energy_stages_impl=lambda *args, **kwargs: False,
+        append_reaction_orca_stages_impl=lambda *args, **kwargs: False,
+        append_reaction_xtb_stages_impl=lambda *args, **kwargs: False,
+        clear_reaction_xtb_handoff_error_if_recovering_impl=lambda *args, **kwargs: None,
+        sync_crest_stage_impl=lambda *args, **kwargs: None,
+        sync_orca_stage_impl=lambda *args, **kwargs: None,
+        sync_xtb_stage_impl=lambda *args, **kwargs: None,
+        workflow_has_active_children_impl=lambda *args, **kwargs: False,
+    )
+    advanced = orchestration.advance_workflow(
+        target="wf_pinned_divergence",
+        workflow_root=root,
+        services=orchestration_services(
+            overrides={"notify_phase_summary": lambda *args, **kwargs: None}
+        ),
+    )
+
+    assert advanced["status"] == "completed"
+    assert (
+        report_path.read_bytes(),
+        si_path.read_bytes(),
+        machine_path.read_bytes(),
+    ) == published
+    assert [
+        (record.workflow_id, record.status)
+        for record in registry.list_workflow_registry(root, reindex_if_missing=False)
+    ] == [("wf_pinned_divergence", "completed")]
+    # Last, because everything above already held before this change: the
+    # divergence is old behaviour and this is the assertion that pins the new
+    # warning attached to it.
+    assert restarted["pinned_by_terminal_observation"] is True

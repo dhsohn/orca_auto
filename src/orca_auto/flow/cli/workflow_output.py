@@ -66,6 +66,16 @@ def emit_restarted_workflow(payload: dict[str, Any], *, json_mode: bool) -> int:
             f" previous_status={item.get('previous_status', '-')}"
             f" previous_task_status={item.get('previous_task_status', '-')}"
         )
+    if payload.get("pinned_by_terminal_observation"):
+        # The stages reopen, but this workspace can never publish a new record.
+        # Name the only route that can, so the divergence is not discovered
+        # from an SI that describes the run before this restart.
+        print(
+            f"{cli_style.label('note:')} the published terminal observation pins"
+            " workflow_report.html, workflow_si.md and machine.json; this workspace"
+            " will not regenerate them. For a fresh record run run-dir on the"
+            " scaffold directory to start a new generation (CREST/xTB re-run)."
+        )
     return 0
 
 
