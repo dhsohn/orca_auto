@@ -1430,6 +1430,241 @@ def test_cmd_queue_list_json_reports_undrained_cancel_transitions(
     assert rows[0]["metadata"]["cancel_transitions_pending"] == 1
 
 
+#: One transition in the shape `_stored_cancellation_transitions` accepts.
+_STORED_CANCEL_TRANSITION = {
+    "event_id": "wf_evt_1",
+    "occurred_at": "2026-08-11T05:10:00+00:00",
+    "previous_status": "running",
+    "status": "cancelled",
+}
+
+
+def _cancel_authority_workflow_root(
+    tmp_path: Path,
+    *,
+    workflow_id: str,
+    transitions: list[dict[str, str]],
+) -> tuple[Path, Path, Path, dict[str, Any]]:
+    """A real workflow root with one cancelled workflow and its registry row.
+
+    The row is synced from the payload as it stands here, so a later payload
+    rewrite without a sync leaves exactly the cached count a crashed cancel
+    plus a worker drain leaves behind.
+    """
+    from orca_auto.flow import registry
+    from orca_auto.flow.state import write_workflow_payload
+
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+
+    workflow_root = tmp_path / "workflow_runs"
+    workspace = workflow_root / workflow_id
+    workspace.mkdir(parents=True)
+    payload: dict[str, Any] = {
+        "workflow_id": workflow_id,
+        "template_name": "reaction_ts_search",
+        "status": "cancelled",
+        "requested_at": "2026-08-11T05:00:00+00:00",
+        "stages": [],
+        "metadata": {"cancellation_status_transitions": list(transitions)},
+    }
+    write_workflow_payload(workspace, payload)
+    registry.sync_workflow_registry(workflow_root, workspace, payload)
+    return workflow_root, workspace, config_path, payload
+
+
+def _cancel_authority_args(
+    workflow_root: Path, config_path: Path, *, as_json: bool
+) -> SimpleNamespace:
+    # `refresh=False` is the listing an operator gets by default; a refresh
+    # reindexes the registry from the payloads and would hide a stale row.
+    return SimpleNamespace(
+        action=None,
+        workflow_root=str(workflow_root),
+        orca_auto_config=str(config_path),
+        limit=0,
+        refresh=False,
+        engine=None,
+        status=None,
+        kind=None,
+        json=as_json,
+    )
+
+
+def _patch_real_queue_listing(
+    monkeypatch: pytest.MonkeyPatch, workflow_root: Path, config_path: Path
+) -> None:
+    from orca_auto.flow import activity
+
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **kwargs: activity.list_activities(
+            workflow_root=workflow_root,
+            shared_config=str(config_path),
+        ),
+    )
+
+
+def test_cmd_queue_list_drops_cancel_pending_once_the_payload_is_drained(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    # End to end over the real registry: the row was synced while a crashed
+    # cancel's transitions were stored, then a worker drained them and rewrote
+    # only `workflow.json`. A terminal workflow is skipped without a registry
+    # sync, so the row still caches the count. `queue list clear` reads the
+    # payload and clears this row, so the listing must stop naming it.
+    from orca_auto.flow import registry
+    from orca_auto.flow.state import write_workflow_payload
+
+    workflow_root, workspace, config_path, payload = _cancel_authority_workflow_root(
+        tmp_path,
+        workflow_id="wf-cancel-drained",
+        transitions=[dict(_STORED_CANCEL_TRANSITION)],
+    )
+    payload["metadata"]["cancellation_status_transitions"] = []
+    write_workflow_payload(workspace, payload)
+    stale_row = registry.list_workflow_registry(workflow_root)[0]
+    assert stale_row.metadata["cancel_transitions_pending"] == 1
+
+    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
+
+    assert (
+        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
+        == 0
+    )
+    rows = json.loads(capsys.readouterr().out)["activities"]
+    assert [row["activity_id"] for row in rows] == ["wf-cancel-drained"]
+    assert "cancel_transitions_pending" not in rows[0]["metadata"]
+
+    assert (
+        unified_cli.cmd_queue_list(
+            _cancel_authority_args(workflow_root, config_path, as_json=False)
+        )
+        == 0
+    )
+    assert "cancel_pending" not in _strip_ansi(capsys.readouterr().out)
+
+    # The listing and the authoritative guard now agree: this row does clear.
+    assert registry.clear_terminal_workflow_registry(workflow_root) == 1
+
+
+def test_cmd_queue_list_names_a_stored_cancel_transition_the_guard_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    # The other half of the same authority: a transition the payload really
+    # still stores is reported and named, and the clear guard really refuses.
+    from orca_auto.flow import registry
+
+    workflow_root, _workspace, config_path, _payload = _cancel_authority_workflow_root(
+        tmp_path,
+        workflow_id="wf-cancel-stored",
+        transitions=[dict(_STORED_CANCEL_TRANSITION)],
+    )
+    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
+
+    assert (
+        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
+        == 0
+    )
+    rows = json.loads(capsys.readouterr().out)["activities"]
+    assert rows[0]["metadata"]["cancel_transitions_pending"] == 1
+
+    assert (
+        unified_cli.cmd_queue_list(
+            _cancel_authority_args(workflow_root, config_path, as_json=False)
+        )
+        == 0
+    )
+    lines = _strip_ansi(capsys.readouterr().out).splitlines()
+    assert lines[-2:] == [
+        "cancel_pending: wf-cancel-stored=1",
+        "  undrained cancel transitions; `queue list clear` refuses these rows.",
+    ]
+
+    assert registry.clear_terminal_workflow_registry(workflow_root) == 0
+
+
+def test_cmd_queue_list_stays_quiet_for_the_normal_empty_transition_list(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    # A cancel that completed leaves the key present but empty. Flagging its
+    # presence rather than its length would mark every cancelled workflow.
+    from orca_auto.flow import registry
+
+    workflow_root, _workspace, config_path, _payload = _cancel_authority_workflow_root(
+        tmp_path,
+        workflow_id="wf-cancel-normal",
+        transitions=[],
+    )
+    assert (
+        "cancel_transitions_pending"
+        not in registry.list_workflow_registry(workflow_root)[0].metadata
+    )
+    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
+
+    assert (
+        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
+        == 0
+    )
+    rows = json.loads(capsys.readouterr().out)["activities"]
+    assert "cancel_transitions_pending" not in rows[0]["metadata"]
+
+    assert (
+        unified_cli.cmd_queue_list(
+            _cancel_authority_args(workflow_root, config_path, as_json=False)
+        )
+        == 0
+    )
+    assert "cancel_pending" not in _strip_ansi(capsys.readouterr().out)
+
+
+def test_cmd_queue_list_keeps_the_cached_count_when_the_payload_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    # Decided behaviour for an unreadable payload: no summary is produced for
+    # this workspace, so the cached count is reported. The clear guard refuses
+    # the row as well -- on the corruption ground rather than this one -- so
+    # the note is not contradicted, and it is the only evidence an operator
+    # has left that a cancel was still holding transitions.
+    from orca_auto.flow import registry
+
+    workflow_root, workspace, config_path, _payload = _cancel_authority_workflow_root(
+        tmp_path,
+        workflow_id="wf-cancel-unreadable",
+        transitions=[dict(_STORED_CANCEL_TRANSITION)],
+    )
+    (workspace / "workflow.json").write_text("{ not json", encoding="utf-8")
+    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
+
+    assert (
+        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
+        == 0
+    )
+    rows = json.loads(capsys.readouterr().out)["activities"]
+    assert rows[0]["metadata"]["cancel_transitions_pending"] == 1
+
+    assert (
+        unified_cli.cmd_queue_list(
+            _cancel_authority_args(workflow_root, config_path, as_json=False)
+        )
+        == 0
+    )
+    assert "cancel_pending: wf-cancel-unreadable=1" in _strip_ansi(capsys.readouterr().out)
+
+    assert registry.clear_terminal_workflow_registry(workflow_root) == 0
+
+
 _CANCEL_PENDING_ACTIVITY_ID = "wf_conformer_20260423_082755_542a9e"
 
 

@@ -43,13 +43,33 @@ def workflow_cancel_transitions_metadata(
     """Report cancel transitions no worker has journaled yet.
 
     Such a row cannot be cleared until the drain runs, and nothing else on the
-    operator surfaces says why. The registry row and the workflow summary can
-    disagree while a sync lags in either direction, so the larger count wins.
+    operator surfaces says why. The terminal clear guard decides that refusal
+    from the workflow payload alone, never from the registry row, so this count
+    follows the same authority: whenever a payload summary was read for the
+    row, its count wins outright -- including the zero a completed drain leaves
+    behind. Taking the larger of the two instead would report a refusal that no
+    longer happens, because the drain rewrites only ``workflow.json`` and a
+    terminal workflow is then skipped without resynchronizing the registry, so
+    the row's cached count stays positive until something else reindexes it.
+
+    An empty ``summary`` means no payload was read for this row at all:
+    ``list_workflow_summaries`` skips a workspace whose ``workflow.json`` is
+    missing, unreadable or unparsable, and an identity-quarantined row is filed
+    under the payload's persisted id rather than this record's id. The cached
+    count is the only evidence left in that state, so it is used there.
+
+    Two states can still disagree with the clear guard, both of them already
+    anomalous and neither of them the stale-cache loop above. A workspace whose
+    payload is gone is cleared by the guard while a stale cached count still
+    prints the note (the row and its note disappear together with that clear).
+    A payload that is unreadable, or whose identity does not match the row, is
+    refused by the guard on that ground rather than on this one, and the cached
+    count reported here may be stale in either direction.
     """
-    pending = max(
-        safe_int(record_metadata.get("cancel_transitions_pending"), default=0),
-        safe_int(summary.get("cancel_transitions_pending"), default=0),
-    )
+    if summary:
+        pending = safe_int(summary.get("cancel_transitions_pending"), default=0)
+    else:
+        pending = safe_int(record_metadata.get("cancel_transitions_pending"), default=0)
     return {"cancel_transitions_pending": pending} if pending > 0 else {}
 
 

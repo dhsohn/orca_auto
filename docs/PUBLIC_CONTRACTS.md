@@ -266,9 +266,12 @@ such as `queue_id`, `task_id`, `task_kind`, `run_id`, `workflow_id`,
 `reaction_dir`, `job_dir`, `allowed_root`, `priority`, `template_name`,
 `workspace_dir`, and `cancel_transitions_pending`, but should tolerate missing
 or additional keys. `cancel_transitions_pending` appears on a workflow row while
-an undrained cancel status transition is recorded on its workflow payload or on
-its registry row — the two lag each other in either direction and the larger
-count is reported — and it names why that row refuses a stale clear. The plain
+an undrained cancel status transition is recorded on its workflow payload, and
+it names why that row refuses a stale clear. The payload is the authority the
+clear guard itself consults: once a worker drains the transitions the key is
+gone from the row, even though its registry entry can still cache a count that
+no reindex has refreshed. The cached count is reported only for a row whose
+payload could not be read at all. The plain
 `queue list` table carries the same rows as a `cancel_pending:` note printed
 under it, not as a column.
 

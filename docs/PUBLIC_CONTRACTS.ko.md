@@ -251,9 +251,11 @@
 `run_id`, `workflow_id`, `reaction_dir`, `job_dir`, `allowed_root`, `priority`,
 `template_name`, `workspace_dir`, `cancel_transitions_pending` 같은 알려진 키를 사용할 수
 있지만, 키가 없거나 새 키가 추가되는 상황을 견뎌야 합니다.
-`cancel_transitions_pending`는 workflow payload나 registry row에 아직 배수되지 않은
-cancel status transition이 기록되어 있는 동안 그 workflow 행에 나타나며(둘은 어느 쪽으로든
-지연될 수 있어 더 큰 값을 보고합니다), 그 행이 stale clear를 거부하는 이유를 이름 붙입니다.
+`cancel_transitions_pending`는 workflow payload에 아직 배수되지 않은 cancel status
+transition이 기록되어 있는 동안 그 workflow 행에 나타나며, 그 행이 stale clear를 거부하는
+이유를 이름 붙입니다. 판정 권한은 clear guard가 직접 읽는 payload에 있습니다. worker가
+transition을 배수하고 나면 registry entry에 아직 갱신되지 않은 값이 남아 있어도 이 키는
+행에서 사라집니다. 캐시된 값은 payload를 아예 읽을 수 없는 행에서만 보고합니다.
 plain `queue list` table은 같은 행들을 column이 아니라 table 아래 `cancel_pending:`
 note로 출력합니다.
 

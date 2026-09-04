@@ -1094,21 +1094,48 @@ def test_workflow_activity_record_omits_drained_cancel_transitions(tmp_path: Pat
     assert "cancel_transitions_pending" not in record.metadata
 
 
-def test_workflow_activity_record_takes_the_larger_cancel_transition_count(
+def test_workflow_activity_record_prefers_a_drained_payload_over_a_stale_cached_count(
     tmp_path: Path,
 ) -> None:
-    # The registry row and the payload summary disagree while a sync lags in
-    # either direction; a lagging zero must not hide the pending drain.
-    from_summary = _activity_workflow_records._workflow_activity_record(
+    # The drain rewrites only `workflow.json` and a terminal workflow is then
+    # skipped without a registry sync, so the row caches its old count. The
+    # clear guard reads the payload, so this report must read it too; taking
+    # the larger of the two would announce a refusal that no longer happens.
+    record = _activity_workflow_records._workflow_activity_record(
+        _cancelled_workflow_registry_row({"cancel_transitions_pending": 3}),
+        summary={"workflow_id": "wf-cancel-pending", "status": "cancelled"},
+        workflow_root=tmp_path,
+    )
+
+    assert "cancel_transitions_pending" not in record.metadata
+
+
+def test_workflow_activity_record_reports_a_transition_the_registry_row_missed(
+    tmp_path: Path,
+) -> None:
+    # The payload wins in the other direction too: a registry row that has not
+    # caught up must not hide a transition the payload really still stores.
+    record = _activity_workflow_records._workflow_activity_record(
         _cancelled_workflow_registry_row({}),
         summary={"workflow_id": "wf-cancel-pending", "cancel_transitions_pending": 3},
         workflow_root=tmp_path,
     )
-    from_record = _activity_workflow_records._workflow_activity_record(
-        _cancelled_workflow_registry_row({"cancel_transitions_pending": 3}),
-        summary={"workflow_id": "wf-cancel-pending"},
+
+    assert record.metadata["cancel_transitions_pending"] == 3
+
+
+def test_workflow_activity_record_falls_back_to_the_cache_without_a_payload_summary(
+    tmp_path: Path,
+) -> None:
+    # `list_workflow_summaries` skips a workspace whose payload is missing,
+    # unreadable or unparsable, and files an identity-quarantined workspace
+    # under the payload's persisted id, so such a row is handed no summary at
+    # all. The cached count is the only evidence left there; this fallback is
+    # deliberate and is not the drained-payload path above.
+    record = _activity_workflow_records._workflow_activity_record(
+        _cancelled_workflow_registry_row({"cancel_transitions_pending": 2}),
+        summary={},
         workflow_root=tmp_path,
     )
 
-    assert from_summary.metadata["cancel_transitions_pending"] == 3
-    assert from_record.metadata["cancel_transitions_pending"] == 3
+    assert record.metadata["cancel_transitions_pending"] == 2
