@@ -10,6 +10,26 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- A relaxed-surface row carrying a number ORCA could not print — a Fortran
+  field overflowed to asterisks, `NaN`, `Inf` — now consumes its scan step
+  number instead of being skipped entirely, so every later point still
+  addresses the `.NNN.xyz` ORCA wrote for that step. Before, one such row
+  shifted the numbering by one and `highest_scants_surface_point`,
+  `scants_guess_xyz_for_output` and the scan endpoint geometry all named the
+  structure of the previous step. A line with no readable number in it at all
+  — an asterisk banner — is still prose and consumes nothing.
+- The width of the ScanTS actual-energy table falls back to the width most of
+  its valid rows share when no valid row is as wide as the first line holding
+  two numbers, so a malformed leading row no longer refuses every genuine row
+  after it and loses the whole table. Whenever a valid row does match the
+  first line's width, that width still wins, so the rule only ever adds rows
+  the old one refused.
+- The checkpoint-restart geometry, the recent-file candidate list and the
+  `.engrad` energy read as workflow report evidence break an exact mtime tie
+  by file name, as the ORCA input and CREST job-input pickers already do, so
+  the choice no longer depends on the order the filesystem returns directory
+  entries in.
+
 - `rejected_retained_outputs` crosses the artifact-contract boundary:
   `load_crest_artifact_contract` reads it off the stored payload and
   `CrestArtifactContract` carries and emits it, so a refusal a CREST child

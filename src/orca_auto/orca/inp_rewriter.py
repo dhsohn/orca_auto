@@ -157,4 +157,6 @@ def _latest_geometry_file(reaction_dir: Path) -> Path | None:
     candidates = {p.resolve(): p for p in reaction_dir.glob("*.xyz")}
     if not candidates:
         return None
-    return max(candidates.values(), key=lambda p: p.stat().st_mtime_ns)
+    # Two geometries written in the same nanosecond would otherwise be ordered
+    # by readdir, so the restart input would depend on the filesystem.
+    return max(candidates.values(), key=lambda p: (p.stat().st_mtime_ns, p.name.lower()))

@@ -90,22 +90,72 @@ _SURFACE_SECTION_END_MARKERS = (
     "ORCA TERMINATED NORMALLY",
 )
 
+# A number ORCA could not print: the Fortran field overflowed to asterisks, or
+# the value itself was not finite. `_FLOAT_RE` finds nothing in these, so a row
+# holding one looks like prose unless it is recognised here.
+_SPOILED_NUMBER_RE = re.compile(r"[-+]?(?:\*{2,}|nan|inf(?:inity)?)", re.IGNORECASE)
+# A row is read piece by piece rather than by splitting on whitespace, because
+# an overflowed Fortran field fills its own width with asterisks and so can
+# abut the column beside it. Every actual-energy row in this lab's 36 real ORCA
+# outputs is 28 columns — a 10-column coordinate ending at column 13, one
+# blank, a 14-column energy — and rows that printed cannot say whether that
+# blank is a literal separator or the energy field's own padding, so an
+# overflowed energy can leave `1.86000000***************`: a single token.
+_SURFACE_ROW_PIECE_RE = re.compile(
+    rf"(?P<blank>\s+)|(?P<number>{_FLOAT_RE.pattern})|(?P<spoiled>{_SPOILED_NUMBER_RE.pattern})",
+    re.IGNORECASE,
+)
+
+
+def _is_spoiled_surface_row(line: str) -> bool:
+    """True for a surface row whose columns ORCA failed to print in full.
+
+    The row happened and burned a step number even though no point can be read
+    from it, so it must be counted. The test is deliberately narrow: the whole
+    line has to be blanks, whole numbers and spoiled numbers, with at least one
+    number and at least one spoiled number present. Requiring a readable number
+    keeps an asterisk rule line (``***** *****``) prose — asterisk banners run
+    to 387,179 lines across this lab's 792 ORCA outputs, while no row losing
+    every column at once appears in any of them.
+    """
+    position = 0
+    readable = 0
+    spoiled = 0
+    for piece in _SURFACE_ROW_PIECE_RE.finditer(line):
+        if piece.start() != position:
+            # A gap means the line holds something that is neither a blank nor
+            # a number in any state: prose, a dashed rule, a label.
+            return False
+        position = piece.end()
+        if piece.group("number") is not None:
+            readable += 1
+        elif piece.group("spoiled") is not None:
+            spoiled += 1
+    return position == len(line) and readable > 0 and spoiled > 0
+
 
 def parse_scants_actual_surface(out_path: Path) -> list[ScanTSSurfacePoint]:
     """Points of the relaxed-scan table computed with the actual energy.
 
     A row is one or more scan coordinates followed by a total energy in Eh,
-    which is negative and finite for every real molecule. Every row must have
-    the same number of values as the first one; the table ends at the SCF
-    energy table or at the first later section marker. Anything else is a
-    non-row and is refused rather than read as a point.
+    which is negative and finite for every real molecule. Every row must be as
+    wide as the table, and rows of any other width are refused; the table ends
+    at the SCF energy table or at the first later section marker. Anything else
+    is a non-row and is refused rather than read as a point.
+
+    The table's width is that of the first line holding two numbers, unless no
+    valid row is that wide — then it is the width most of the valid rows share,
+    so a malformed leading row no longer refuses the whole table.
     """
-    points: list[ScanTSSurfacePoint] = []
+    candidates: list[ScanTSSurfacePoint] = []
+    # Insertion-ordered, so a tie in the fallback below resolves to the width
+    # that appeared first rather than to an arbitrary one.
+    valid_widths: dict[int, int] = {}
     in_actual_surface = False
-    row_width: int | None = None
+    first_row_width: int | None = None
     # ORCA numbers the scan steps by table row (`<base>.NNN.xyz`); a refused
-    # row keeps its number so the points after it still address the right
-    # step geometry.
+    # or unprintable row keeps its number so the points after it still address
+    # the right step geometry.
     row_number = 0
     try:
         with out_path.open("r", encoding="utf-8", errors="ignore") as handle:
@@ -120,28 +170,41 @@ def parse_scants_actual_surface(out_path: Path) -> list[ScanTSSurfacePoint]:
                     break
                 values = [float(match.group(0)) for match in _FLOAT_RE.finditer(line)]
                 if len(values) < 2:
+                    if _is_spoiled_surface_row(line):
+                        row_number += 1
                     continue
                 row_number += 1
-                if row_width is None:
-                    row_width = len(values)
+                if first_row_width is None:
+                    first_row_width = len(values)
                 energy = values[-1]
                 if (
-                    len(values) != row_width
-                    or not math.isfinite(energy)
+                    not math.isfinite(energy)
                     or energy >= 0.0
                     or not all(math.isfinite(value) for value in values[:-1])
                 ):
                     continue
-                points.append(
+                valid_widths[len(values)] = valid_widths.get(len(values), 0) + 1
+                candidates.append(
                     ScanTSSurfacePoint(
                         index=row_number,
                         coordinates=tuple(values[:-1]),
-                        energy=values[-1],
+                        energy=energy,
                     )
                 )
     except OSError:
         return []
-    return points
+    if not candidates:
+        return []
+    if first_row_width is not None and first_row_width in valid_widths:
+        # The first row's width still wins whenever any valid row shares it, so
+        # this rule only ever adds rows the old one refused.
+        row_width = first_row_width
+    else:
+        # No valid row is as wide as the first one, which is how a malformed
+        # leading row used to refuse the whole table. Take the width the
+        # surviving rows agree on instead.
+        row_width = max(valid_widths, key=lambda width: valid_widths[width])
+    return [point for point in candidates if len(point.coordinates) + 1 == row_width]
 
 
 def highest_scants_surface_point(out_path: Path) -> ScanTSSurfacePoint | None:

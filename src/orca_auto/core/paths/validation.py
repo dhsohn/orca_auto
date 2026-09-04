@@ -180,7 +180,9 @@ def recent_file_candidates(
         try:
             files = sorted(
                 (item for item in search_dir.glob(f"*{suffix}") if item.is_file()),
-                key=lambda item: item.stat().st_mtime,
+                # Name breaks an exact mtime tie; without it the candidate
+                # order is whatever readdir happened to return.
+                key=lambda item: (item.stat().st_mtime_ns, item.name.lower()),
                 reverse=True,
             )
         except OSError:

@@ -33,6 +33,33 @@ def test_engrad_energy_rejects_non_finite_values(tmp_path: Path) -> None:
     assert latest_engrad_energy(tmp_path) is None
 
 
+def test_engrad_energy_breaks_an_exact_mtime_tie_by_name(tmp_path: Path) -> None:
+    # A fast rerun, or a copy that preserved timestamps, leaves two `.engrad`
+    # files in the same nanosecond. Without a name tie-break the sort is stable
+    # and the energy that becomes report evidence is whichever one readdir
+    # returned first. Draining the directory asserts the whole ordering, not
+    # just the first pick.
+    stamp = (1_700_000_000_000_000_000, 1_700_000_000_000_000_000)
+    names = ["c", "h", "a", "m", "b", "z", "e", "q"]
+    energies = {name: -100.0 - index for index, name in enumerate(names)}
+    for name in names:
+        engrad = tmp_path / f"{name}.engrad"
+        engrad.write_text(
+            _ENGRAD_TEMPLATE.format(energy=f"{energies[name]:.12f}"), encoding="utf-8"
+        )
+        os.utime(engrad, ns=stamp)
+
+    picks: list[str] = []
+    while any(tmp_path.glob("*.engrad")):
+        energy = latest_engrad_energy(tmp_path)
+        assert energy is not None
+        name = next(key for key, value in energies.items() if value == pytest.approx(energy))
+        picks.append(name)
+        (tmp_path / f"{name}.engrad").unlink()
+
+    assert picks == sorted(names, reverse=True)
+
+
 @pytest.mark.parametrize("link_kind", ("symlink", "hardlink"))
 def test_engrad_energy_rejects_linked_generation_file(
     tmp_path: Path,
