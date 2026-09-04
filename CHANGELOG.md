@@ -6,7 +6,19 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
-## [Unreleased]
+## [3.1.0] - 2026-09-04
+
+A minor release: it adds public behaviour rather than only hardening it.
+`queue list` reports a stalled cancel repair and refuses a `runs_root` that
+does not exist, the CREST artifact contract carries the ensemble files a run
+refused, the SI block names the output it was read from, and
+[docs/PUBLIC_CONTRACTS.md](docs/PUBLIC_CONTRACTS.md) gains text on checkout
+freshness, terminal clear refusals and what a restart under a published
+observation can and cannot regenerate.
+
+It also includes #246, which had been sitting on main unreleased, so a
+deployment reported 3.0.3 while running it.
+
 
 ### Fixed
 
@@ -376,6 +388,28 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The workflow report has two owners instead of one module.
+  `flow/workflow/report_collection.py` gathers the evidence a report needs and
+  `flow/workflow/report_rendering.py` turns that evidence into HTML, and each
+  consumer imports from the owner it actually uses. The moved functions kept
+  their rendering logic — the only edits inside them are two literal status
+  sets swapped for `core.statuses` constants of identical value — so section
+  order, number formatting and escaping are unchanged, and the report logger is
+  pinned to the pre-split `orca_auto.flow.workflow.report` name so existing log
+  filters keep matching.
+- The report's failure statuses come from `core.statuses` instead of a private
+  literal copy of the same strings. The values are identical today, so nothing
+  renders differently; what changes is that widening the canonical failure set
+  now reaches the report too. The success comparisons in the metric cards and
+  the ORCA table still test the `"completed"` literal directly.
+- Both report modules are covered by the staged strict-style `mypy` overrides,
+  and an import-linter contract keeps every evidence consumer below rendering
+  so the split cannot quietly grow a cycle. Neither affects runtime behavior.
+- The 3.0.3 entry below described the drift between the two CREST
+  execution-context copies inaccurately — it named the incomplete-snapshot
+  check, which was in fact identical in both copies — and is corrected in
+  place.
+
 - `docs/PUBLIC_CONTRACTS.md` and `docs/REFERENCE.md` (and their Korean copies)
   state the full immutability rule: a workspace with a published terminal
   observation regenerates none of `workflow_report.html`, `workflow_si.md` or
@@ -401,6 +435,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   No live generation on this machine records one of them: the only job states
   carrying `retry_limit_reached` are fake-ORCA smoke fixtures that have no
   machine observation and so cannot reach the workflow report.
+
+### Removed
+
+- `orca_auto.flow.workflow.report` no longer exists. Import the collection
+  helpers from `orca_auto.flow.workflow.report_collection`, and the renderer
+  and its writer from `orca_auto.flow.workflow.report_rendering`.
 
 ## [3.0.3] - 2026-08-26
 
@@ -435,9 +475,14 @@ reliable rather than different.
   xTB/CREST submission snapshot transaction, the repair-pending enqueue
   compare-and-set, the parent queue-worker argument parser, and config, state,
   manifest, workflow-metadata, coercion, path and maxcore ownership. The two
-  CREST execution-context copies had already drifted: only the reachable one
-  had its incomplete-snapshot check tightened, and that is the one that
-  survives.
+  CREST execution-context copies had already drifted, and the body that
+  survives is the reachable one — the copy that takes its metadata accessors
+  through the injected worker dependencies. Their verification had drifted
+  inertly: both copies rejected an incomplete `execution_snapshot` with the
+  same check, and after it they differed only in a folded `ValueError` disjunct
+  against an `assert` that `python -O` strips, neither of which can fail once
+  that check has passed, and in the order the mode and molecule key are
+  resolved.
 - Executable content identity has a single implementation shared by the
   identity helper and the ORCA pinned launch. The queue snapshot writer and the
   launch-time verifier previously derived the same dictionary independently,
