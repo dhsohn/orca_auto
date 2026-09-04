@@ -263,8 +263,16 @@ Each activity item contains:
 
 The `metadata` mapping is intentionally extensible. Scripts may use known keys
 such as `queue_id`, `task_id`, `task_kind`, `run_id`, `workflow_id`,
-`reaction_dir`, `job_dir`, `allowed_root`, `priority`, `template_name`, and
-`workspace_dir`, but should tolerate missing or additional keys. A terminal row
+`reaction_dir`, `job_dir`, `allowed_root`, `priority`, `template_name`,
+`workspace_dir`, and `cancel_transitions_pending`, but should tolerate missing
+or additional keys. `cancel_transitions_pending` appears on a workflow row while
+an undrained cancel status transition is recorded on its workflow payload or on
+its registry row — the two lag each other in either direction and the larger
+count is reported — and it names why that row refuses a stale clear. The plain
+`queue list` table carries the same rows as a `cancel_pending:` note printed
+under it, not as a column.
+
+A terminal row
 whose required same-generation terminal evidence cannot be reconstructed is
 exposed as `repair_blocked` activity with `repair_blocked_reason` and
 `queue_error` metadata instead of being retried indefinitely.
@@ -776,8 +784,9 @@ Workflow runtime artifacts:
   immediately due for infrastructure reconciliation. Registry clear uses
   workflow-then-registry lock order and rechecks authoritative workflow
   identity/status; publication-pending, publication-blocked,
-  final-child-sync-pending, identity-quarantined, or authoritatively active
-  records cannot be cleared as stale. An identity mismatch that has not yet been
+  final-child-sync-pending, undrained-cancel-transition, identity-quarantined,
+  or authoritatively active records cannot be cleared as stale. An identity
+  mismatch that has not yet been
   quarantined carries no cached registry marker: it is caught by that
   authoritative recheck, not by cached state, so a row already hidden by a
   cleared marker stays hidden until an operator acts. A quarantined payload
@@ -785,10 +794,17 @@ Workflow runtime artifacts:
   by the trusted workspace name and records the observed ID in metadata. After fixing
   the cause, an operator can re-arm a blocked publication with
   `orca_auto run-dir <workflow_dir> --force`, unless the workflow has already
-  published its terminal observation: that observation pins `workflow_si.md`,
-  so the publication stays blocked, the restart records it as pinned by the
-  terminal observation, and a re-advance retires any pending flag it finds
-  under a published observation the same way.
+  published its terminal observation. That observation is immutable and pins
+  the bytes of `workflow_report.html`, `workflow_si.md` and itself: a workspace
+  that has published one regenerates none of the three on any later advance.
+  A restart of such a workspace still reopens its failed/cancelled stages and
+  its registry row still follows the new status, but the published report, SI
+  and observation keep describing the run they were published for. The restart
+  records `pinned_by_terminal_observation` in its restart summary and response
+  and the CLI prints it, the blocked publication stays blocked, and a
+  re-advance retires any pending flag it finds under a published observation
+  the same way. A fresh report, SI and observation require a new generation,
+  not a restart.
 - The population temperature is the parsed thermochemistry temperature. The
   optional `boltzmann_temperature_k` manifest key is a finite, strictly positive
   pin validated at admission and stored in the durable workflow request; it must

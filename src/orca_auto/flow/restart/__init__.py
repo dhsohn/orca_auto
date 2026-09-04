@@ -61,6 +61,7 @@ def restart_failed_workflow(
             restarted_at = now_utc_iso()
             _apply_restart_summary(
                 payload,
+                workspace=workspace,
                 previous_status=previous_status,
                 restarted_at=restarted_at,
                 restarted_stages=restarted_stages,

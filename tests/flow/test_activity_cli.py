@@ -1053,3 +1053,62 @@ def test_cancel_activity_autodiscovers_defaults(monkeypatch) -> None:
     assert captured["crest_config"] == "/tmp/orca_auto.yaml"
     assert captured["xtb_config"] == "/tmp/orca_auto.yaml"
     assert captured["orca_config"] == "/tmp/orca_auto.yaml"
+
+
+def _cancelled_workflow_registry_row(metadata: dict[str, Any]) -> SimpleNamespace:
+    return SimpleNamespace(
+        workflow_id="wf-cancel-pending",
+        template_name="reaction_ts_search",
+        status="cancelled",
+        source_job_id="",
+        source_job_type="",
+        reaction_key="rxn-9",
+        requested_at="2026-08-11T05:00:00+00:00",
+        workspace_dir="/tmp/wf/wf-cancel-pending",
+        workflow_file="/tmp/wf/wf-cancel-pending/workflow.json",
+        stage_count=0,
+        updated_at="2026-08-11T05:20:00+00:00",
+        metadata=metadata,
+    )
+
+
+def test_workflow_activity_record_reports_undrained_cancel_transitions(tmp_path: Path) -> None:
+    record = _activity_workflow_records._workflow_activity_record(
+        _cancelled_workflow_registry_row({"cancel_transitions_pending": 2}),
+        summary={"workflow_id": "wf-cancel-pending", "cancel_transitions_pending": 2},
+        workflow_root=tmp_path,
+    )
+
+    assert record.metadata["cancel_transitions_pending"] == 2
+
+
+def test_workflow_activity_record_omits_drained_cancel_transitions(tmp_path: Path) -> None:
+    # A cancelled workflow whose transitions were journaled is the common case;
+    # it must not carry the marker at all.
+    record = _activity_workflow_records._workflow_activity_record(
+        _cancelled_workflow_registry_row({}),
+        summary={"workflow_id": "wf-cancel-pending"},
+        workflow_root=tmp_path,
+    )
+
+    assert "cancel_transitions_pending" not in record.metadata
+
+
+def test_workflow_activity_record_takes_the_larger_cancel_transition_count(
+    tmp_path: Path,
+) -> None:
+    # The registry row and the payload summary disagree while a sync lags in
+    # either direction; a lagging zero must not hide the pending drain.
+    from_summary = _activity_workflow_records._workflow_activity_record(
+        _cancelled_workflow_registry_row({}),
+        summary={"workflow_id": "wf-cancel-pending", "cancel_transitions_pending": 3},
+        workflow_root=tmp_path,
+    )
+    from_record = _activity_workflow_records._workflow_activity_record(
+        _cancelled_workflow_registry_row({"cancel_transitions_pending": 3}),
+        summary={"workflow_id": "wf-cancel-pending"},
+        workflow_root=tmp_path,
+    )
+
+    assert from_summary.metadata["cancel_transitions_pending"] == 3
+    assert from_record.metadata["cancel_transitions_pending"] == 3

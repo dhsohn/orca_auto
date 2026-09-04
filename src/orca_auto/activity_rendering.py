@@ -6,7 +6,7 @@ from typing import Any
 
 from orca_auto import activity_labels as _activity_labels
 from orca_auto import terminal_table as _terminal_table
-from orca_auto.core.utils import normalize_text
+from orca_auto.core.utils import normalize_text, safe_int
 
 
 def _tree_prefixes(indents: Sequence[int]) -> list[str]:
@@ -110,6 +110,41 @@ def queue_list_text_lines(
         )
     )
     return lines
+
+
+#: At most this many rows are named before the note falls back to a count.
+_MAX_NAMED_PENDING_CANCEL_ROWS = 5
+
+
+def queue_pending_cancel_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> list[str]:
+    """Name the rows holding cancel transitions no worker has journaled yet.
+
+    This is a note printed under the table rather than a cell inside it.
+    ``detail`` is soft-capped at 36 columns and is first in
+    ``QUEUE_SHRINK_ORDER``, so on an 80- or 100-column terminal a marker in
+    that cell is truncated away — exactly the terminals an operator reads.
+    Returns an empty list when no row is affected, so the byte output of a
+    piped ``queue list`` is unchanged for every queue without one. A long list
+    of ids wraps rather than truncating: the ids are the note's payload.
+    """
+
+    pending: list[tuple[str, int]] = []
+    for _indent, item in rows:
+        metadata = item.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        count = safe_int(metadata.get("cancel_transitions_pending"), default=0)
+        if count > 0:
+            pending.append((normalize_text(item.get("activity_id")) or "-", count))
+    if not pending:
+        return []
+    named = pending[:_MAX_NAMED_PENDING_CANCEL_ROWS]
+    listed = ", ".join(f"{activity_id}={count}" for activity_id, count in named)
+    if len(pending) > len(named):
+        listed = f"{listed}, +{len(pending) - len(named)} more"
+    return [
+        f"cancel_pending: {listed}",
+        "  undrained cancel transitions; `queue list clear` refuses these rows.",
+    ]
 
 
 def queue_clear_lines(payload: dict[str, Any]) -> list[str]:

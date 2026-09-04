@@ -278,6 +278,12 @@ ORCA 고유 노트:
   시작됩니다. 스캐폴드는 설정된 `runs_root` 바로 아래에 있어야 합니다.
 - 대상에 이미 `workflow.json`이 있다면(generation 디렉터리), `run-dir`는 새 워크플로우를
   만드는 대신 기존 작업공간에서 실패/취소된 단계를 다시 시작합니다.
+- 그 작업공간이 이미 terminal observation(`machine.json`)을 게시했다면, 그런 restart는 더 이상
+  새 `workflow_report.html`·`workflow_si.md`·`machine.json`을 만들 수 없습니다. observation이
+  이들의 바이트를 고정하고 이후 어떤 advance도 다시 만들지 않으므로, 다시 연 단계가 성공해도
+  게시된 report와 SI는 이전 실행을 서술한 채로 남습니다. restart는 이 사실을 stdout에 알립니다.
+  새 기록을 얻는 지원 경로는 스캐폴드 디렉터리에 `run-dir`를 실행해 새 generation을 시작하는
+  것이며, 이때 CREST/xTB 단계가 다시 도는 것을 감수해야 합니다.
 - 디렉터리가 원시 ORCA `*.inp` 파일과 스캐폴드 스타일 파일명을 섞어 두었지만
   `flow.yaml`은 포함하지 않으면, `run-dir`는 ORCA 직접 제출을 선호합니다.
 - 반응 경로(reaction-path) 및 conformer 워크플로우는 내부적으로 xTB/CREST 단계를

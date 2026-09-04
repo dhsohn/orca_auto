@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.core.utils import normalize_text
+from orca_auto.core.utils import normalize_text, safe_int
 
 from ..registry import list_workflow_registry, reindex_workflow_registry
 from ..state import list_workflow_summaries
@@ -33,6 +33,24 @@ def workflow_elapsed_metadata(
     if restart_summary:
         metadata["restart_summary"] = restart_summary
     return metadata
+
+
+def workflow_cancel_transitions_metadata(
+    *,
+    record_metadata: dict[str, Any],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Report cancel transitions no worker has journaled yet.
+
+    Such a row cannot be cleared until the drain runs, and nothing else on the
+    operator surfaces says why. The registry row and the workflow summary can
+    disagree while a sync lags in either direction, so the larger count wins.
+    """
+    pending = max(
+        safe_int(record_metadata.get("cancel_transitions_pending"), default=0),
+        safe_int(summary.get("cancel_transitions_pending"), default=0),
+    )
+    return {"cancel_transitions_pending": pending} if pending > 0 else {}
 
 
 def _workflow_summary_by_id(root: Path) -> dict[str, dict[str, Any]]:
@@ -142,6 +160,10 @@ def _workflow_activity_record(
                 record_metadata=record_metadata,
                 summary=summary,
             ),
+            **workflow_cancel_transitions_metadata(
+                record_metadata=record_metadata,
+                summary=summary,
+            ),
         },
     )
 
@@ -174,6 +196,7 @@ __all__ = [
     "_workflow_record_label",
     "_workflow_summary_by_id",
     "_workspace_display_name",
+    "workflow_cancel_transitions_metadata",
     "workflow_elapsed_metadata",
     "workflow_records",
 ]

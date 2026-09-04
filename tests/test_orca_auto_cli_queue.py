@@ -1365,3 +1365,163 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
     assert captured.out == ""
     assert "runs_root does not exist" in captured.err
     assert "does_not_exist_root" in captured.err
+
+
+def test_cmd_queue_list_json_reports_undrained_cancel_transitions(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    # End to end over the real registry: a cancel that died before journaling
+    # leaves an unclearable row, and `queue list --json` is where an operator
+    # finds out why.
+    from orca_auto.flow import activity, registry
+    from orca_auto.flow.state import write_workflow_payload
+
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+
+    workflow_root = tmp_path / "workflow_runs"
+    workspace = workflow_root / "wf-cancel-pending"
+    workspace.mkdir(parents=True)
+    payload = {
+        "workflow_id": "wf-cancel-pending",
+        "template_name": "reaction_ts_search",
+        "status": "cancelled",
+        "requested_at": "2026-08-11T05:00:00+00:00",
+        "stages": [],
+        "metadata": {
+            "cancellation_status_transitions": [
+                {"event_id": "wf_evt_1", "status": "cancelled"},
+            ]
+        },
+    }
+    write_workflow_payload(workspace, payload)
+    registry.sync_workflow_registry(workflow_root, workspace, payload)
+
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **kwargs: activity.list_activities(
+            workflow_root=workflow_root,
+            shared_config=str(config_path),
+        ),
+    )
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=None,
+            workflow_root=str(workflow_root),
+            orca_auto_config=str(config_path),
+            limit=0,
+            refresh=False,
+            engine=None,
+            status=None,
+            kind=None,
+            json=True,
+        )
+    )
+
+    assert result == 0
+    rows = json.loads(capsys.readouterr().out)["activities"]
+    assert [row["activity_id"] for row in rows] == ["wf-cancel-pending"]
+    assert rows[0]["metadata"]["cancel_transitions_pending"] == 1
+
+
+_CANCEL_PENDING_ACTIVITY_ID = "wf_conformer_20260423_082755_542a9e"
+
+
+def _cancel_pending_queue_payload(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "count": 1,
+        "activities": [
+            {
+                "activity_id": _CANCEL_PENDING_ACTIVITY_ID,
+                "kind": "workflow",
+                "engine": "workflow",
+                "status": "cancelled",
+                "label": "rxn-9",
+                "source": "orca_auto_flow",
+                "submitted_at": "2026-08-11T05:00:00+00:00",
+                "updated_at": "2026-08-11T05:20:00+00:00",
+                "metadata": metadata,
+            }
+        ],
+        "sources": {},
+    }
+
+
+def _cancel_pending_queue_args() -> SimpleNamespace:
+    return SimpleNamespace(
+        action=None,
+        workflow_root=None,
+        orca_auto_config=None,
+        limit=0,
+        refresh=False,
+        engine=None,
+        status=None,
+        kind=None,
+        json=False,
+    )
+
+
+def test_cmd_queue_list_text_names_undrained_cancel_transitions_at_a_real_width(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # An operator's terminal is 80 to 120 columns wide. `detail` is soft-capped
+    # at 36 columns and surrenders width first, so a marker written into that
+    # cell is truncated away exactly where an operator would read it; this row
+    # uses the widest workflow label plus a crest mode to force that. The note
+    # goes under the table, where no column shrinking reaches it.
+    monkeypatch.setattr(terminal_table, "terminal_max_width", lambda: 80)
+    monkeypatch.setattr(
+        activity_labels, "queue_table_now", lambda: datetime(2026, 8, 11, 6, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **kwargs: _cancel_pending_queue_payload(
+            {
+                "template_name": "conformer_screening",
+                "request_parameters": {"crest_mode": "quick"},
+                "cancel_transitions_pending": 2,
+            }
+        ),
+    )
+
+    assert unified_cli.cmd_queue_list(_cancel_pending_queue_args()) == 0
+
+    lines = _strip_ansi(capsys.readouterr().out).splitlines()
+    assert lines[0].startswith("active_simulations:")
+    assert "Detail" in lines[1]
+    # The row itself is fitted to the terminal and its Detail cell is cut; the
+    # note below it is not part of the table and survives intact.
+    assert terminal_table.display_width(lines[3]) <= 80
+    assert "cancel_pending" not in lines[3]
+    assert lines[4:] == [
+        f"cancel_pending: {_CANCEL_PENDING_ACTIVITY_ID}=2",
+        "  undrained cancel transitions; `queue list clear` refuses these rows.",
+    ]
+
+
+def test_cmd_queue_list_text_stays_quiet_without_undrained_cancel_transitions(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Every queue without a stalled cancel keeps the output it had before.
+    monkeypatch.setattr(terminal_table, "terminal_max_width", lambda: 80)
+    monkeypatch.setattr(
+        activity_labels, "queue_table_now", lambda: datetime(2026, 8, 11, 6, 0, 0, tzinfo=UTC)
+    )
+    monkeypatch.setattr(
+        unified_cli,
+        "list_activities",
+        lambda **kwargs: _cancel_pending_queue_payload({"template_name": "conformer_screening"}),
+    )
+
+    assert unified_cli.cmd_queue_list(_cancel_pending_queue_args()) == 0
+
+    assert "cancel_pending" not in _strip_ansi(capsys.readouterr().out)

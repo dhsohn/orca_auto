@@ -175,6 +175,22 @@ def workflow_summary(
         si_publish_attempts = 0
     if si_publish_attempts:
         summary["si_publish_attempts"] = si_publish_attempts
+    # A cancel killed between its journal appends and its final payload write
+    # leaves transitions here, and the authoritative clear guard refuses the
+    # row for as long as the key stays truthy. This count mirrors that guard
+    # rather than the drain: it is the raw stored length, not the number of
+    # journal rows the drain will write (the drain drops malformed entries,
+    # de-duplicates and keeps at most eight), and a truthy non-list value a
+    # hand edit left behind counts as one so a refused row is never mute.
+    # The normal path leaves the key present but empty, so an empty value
+    # reports nothing.
+    raw_cancel_transitions = metadata.get("cancellation_status_transitions")
+    if isinstance(raw_cancel_transitions, list):
+        cancel_transitions_pending = len(raw_cancel_transitions)
+    else:
+        cancel_transitions_pending = 1 if raw_cancel_transitions else 0
+    if cancel_transitions_pending:
+        summary["cancel_transitions_pending"] = cancel_transitions_pending
     return summary
 
 
