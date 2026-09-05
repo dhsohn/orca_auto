@@ -243,7 +243,10 @@ python -m orca_auto.core.engines.worker_child \
 ```
 
 The parent worker (`EngineQueueWorker`) reserves an admission slot, spawns this
-child, and finalizes the terminal queue result after the child exits. ORCA keeps
+child, and finalizes the terminal queue result after the child exits. An engine
+composes it from three values: the shared `deps`, the pid-file `hooks`, and one
+immutable `EngineWorkerPolicy` that names only the lifecycle steps the engine
+owns. ORCA keeps
 its richer domain behavior (state machine, reports) inside
 `orca_auto.orca`, while its worker-child entrypoint uses the canonical
 `core.queue.engine.child` contract directly.

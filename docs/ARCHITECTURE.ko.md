@@ -237,7 +237,9 @@ python -m orca_auto.core.engines.worker_child \
 ```
 
 부모 워커(`EngineQueueWorker`)는 어드미션 슬롯을 예약하고 이 자식을 생성하며,
-자식이 종료된 후 최종 큐 결과를 확정합니다. ORCA는 더 풍부한 도메인 동작(상태
+자식이 종료된 후 최종 큐 결과를 확정합니다. 엔진은 이를 세 값 — 공유 `deps`, pid 파일
+`hooks`, 그리고 엔진이 소유한 생명주기 단계만 이름 붙인 불변 `EngineWorkerPolicy`
+하나 — 로 조합합니다. ORCA는 더 풍부한 도메인 동작(상태
 머신, 리포트)을 `orca_auto.orca` 내부에 유지하며, 워커 자식 진입점은
 canonical `core.queue.engine.child` 계약을 직접 사용합니다.
 

@@ -263,7 +263,11 @@ bash scripts/clean_artifacts.sh
 ## 엔진 워커
 
 xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩니다. 엔진 로컬 패키지는
-`EngineDefinition`을 노출해야 하며, 부모 워커는 `EngineQueueWorker`를 사용하고, 자식은
+`EngineDefinition`을 노출해야 하며, 부모 워커는 세 값 — 공유 `deps`, pid 파일 `hooks`,
+그리고 엔진이 소유한 생명주기 단계만 이름 붙인 불변 `EngineWorkerPolicy` 하나(ORCA의
+publication-repair·terminal-replay reserve 게이트와 run·interrupt·job-factory·finalization·취소
+단계, xTB/CREST의 publication-repair 게이트·child-exit finalization·orphan 정합) — 로
+조합한 `EngineQueueWorker`를 사용하고, 자식은
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`을
 사용합니다.
 부모 워커 인프라는 `EngineDefinition.build_queue_runtime()`에서 구성하고 canonical
