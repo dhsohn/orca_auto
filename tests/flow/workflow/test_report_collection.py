@@ -1184,25 +1184,26 @@ def test_non_candidate_stage_does_not_read_its_output_for_a_count(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A relaxed scan driven by ScanTS reaches a TS verdict too, but its row
-    # never enters the candidate table, so it must not pay for a whole-output
-    # scan whose result is discarded.
-    scanned: list[int] = []
-    scan = workflow_report_collection.scan_ts_lines_for_imag_count
+    # A relaxed-scan row never enters the candidate table, so it must not pay
+    # for a whole-output scan whose result is discarded.
+    scanned: list[Path] = []
+    recount = workflow_report_collection._final_section_imaginary_count
 
-    def _record_scan(lines: Iterable[str]) -> tuple[int, bool, bool]:
-        scanned.append(1)
-        return scan(lines)
+    def _record_recount(generation_dir: Path, *args: Any, **kwargs: Any) -> int | None:
+        scanned.append(generation_dir)
+        return recount(generation_dir, *args, **kwargs)
 
-    monkeypatch.setattr(workflow_report_collection, "scan_ts_lines_for_imag_count", _record_scan)
+    monkeypatch.setattr(
+        workflow_report_collection, "_final_section_imaginary_count", _record_recount
+    )
     scan_generation = _orca_stage_dir(
         tmp_path,
         "orca_relaxed_scan",
         energy=-1.1,
-        reason="ts_criteria_failed",
+        reason="scf_not_converged",
         status_state="failed",
-        route_line="! HF ScanTS",
-        output_text=_ts_freq_output_text(imaginary=2, route_line="! HF ScanTS"),
+        route_line="! HF Opt",
+        output_text=_ts_freq_output_text(imaginary=2, route_line="! HF Opt"),
     )
     candidate_generation = _orca_stage_dir(
         tmp_path,
@@ -1234,7 +1235,7 @@ def test_non_candidate_stage_does_not_read_its_output_for_a_count(
 
     assert [result.stage_id for result in data.orca_results] == ["orca_candidate"]
     assert data.orca_results[0].imaginary_count == 2
-    assert len(scanned) == 1
+    assert scanned == [candidate_generation]
 
 
 def test_generation_without_final_section_marker_still_publishes_count(tmp_path: Path) -> None:

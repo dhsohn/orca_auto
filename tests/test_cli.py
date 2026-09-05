@@ -24,7 +24,6 @@ from orca_auto.orca.execution import (
     _emit,
     execute_orca_run,
     existing_completed_out,
-    retry_inp_path,
     select_latest_inp,
 )
 from orca_auto.orca.orca_runner import RunResult, WorkerShutdownInterrupt
@@ -59,9 +58,7 @@ class TestCli(unittest.TestCase):
         payload = {
             "runs_root": str(allowed_root),
             "orca": {
-                "runtime": {
-                    "default_max_retries": 2,
-                },
+                "runtime": {},
                 "paths": {"orca_executable": str(fake_orca)},
             },
         }
@@ -121,7 +118,7 @@ class TestCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
             base = reaction / "rxn.inp"
-            retry = reaction / "rxn.retry01.inp"
+            retry = reaction / "rxn.scfgrad.inp"
             base.write_text("! Opt\n", encoding="utf-8")
             retry.write_text("! Opt\n", encoding="utf-8")
             os.utime(base, ns=(1_000_000_000, 1_000_000_000))
@@ -149,11 +146,6 @@ class TestCli(unittest.TestCase):
         # assertion cannot pass on the alphabetical tie-break alone.
         self.assertEqual(selected.name, "a.inp")
         self.assertIn("Multiple ORCA .inp candidates", "\n".join(logs.output))
-
-    def test_retry_inp_path_uses_canonical_base_stem(self) -> None:
-        retry_base = Path("/tmp/rxn.retry03.inp")
-        retry_next = retry_inp_path(retry_base, 1)
-        self.assertEqual(retry_next.name, "rxn.retry01.inp")
 
     def test_existing_completed_out_ignores_stale_output_older_than_selected_input(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -380,27 +372,6 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertFalse(state_path(reaction).exists())
 
-    def test_run_dir_queues_existing_completed_retry_out_for_worker_reconciliation(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            reaction = root / "orca_runs" / "rxn1_retry_done"
-            reaction.mkdir(parents=True)
-            inp = reaction / "rxn.inp"
-            retry_inp = reaction / "rxn.retry01.inp"
-            inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-            retry_inp.write_text("! Opt\n* xyzfile 0 1 rxn.xyz\n", encoding="utf-8")
-            (reaction / "rxn.out").write_text("SCF NOT CONVERGED\n", encoding="utf-8")
-            (reaction / "rxn.retry01.out").write_text(
-                "****ORCA TERMINATED NORMALLY****\n", encoding="utf-8"
-            )
-            config = self._write_config(root, root / "orca_runs")
-
-            with patch("orca_auto.orca.execution.OrcaRunner.run") as run_mock:
-                rc = main(["run-dir", "--config", str(config), str(reaction)])
-            self.assertFalse(run_mock.called)
-        self.assertEqual(rc, 0)
-        self.assertFalse(state_path(reaction).exists())
-
     def test_skip_existing_completed_out_still_respects_run_lock(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -435,7 +406,6 @@ class TestCli(unittest.TestCase):
                 "run_id": "run_resume_skip_existing_out",
                 "reaction_dir": str(reaction),
                 "selected_inp": str(inp),
-                "max_retries": 5,
                 "status": "failed",
                 "started_at": "2026-01-01T00:00:00+00:00",
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -524,38 +494,8 @@ class TestCli(unittest.TestCase):
         self.assertEqual(calls["n"], 1)
         self.assertFalse(retry_exists)
         self.assertEqual(state["status"], "failed")
-        self.assertEqual(state["max_retries"], 0)
+        self.assertNotIn("max_retries", state)
         self.assertEqual(len(state["attempts"]), 1)
-
-    @patch("orca_auto.orca.execution.notify_retry_event", return_value=True)
-    def test_standalone_optts_retry_flow_does_not_send_notification(
-        self, mock_notify: MagicMock
-    ) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            reaction = root / "orca_runs" / "rxn_notify"
-            reaction.mkdir(parents=True)
-            inp = reaction / "rxn.inp"
-            inp.write_text(
-                "! OptTS B3LYP def2-SVP Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-                encoding="utf-8",
-            )
-            config = self._write_config(root, root / "orca_runs", messenger_enabled=True)
-
-            calls = {"n": 0}
-
-            def _fake_run(_self, inp_path: Path) -> RunResult:
-                calls["n"] += 1
-                out = inp_path.with_suffix(".out")
-                out.write_text("SCF NOT CONVERGED AFTER 300 CYCLES\n", encoding="utf-8")
-                return RunResult(out_path=str(out), return_code=1)
-
-            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
-                rc = self._run_internal_execute(config, reaction)
-
-        self.assertEqual(rc, 1)
-        self.assertEqual(calls["n"], 1)
-        mock_notify.assert_not_called()
 
     def test_disk_io_error_without_restart_artifacts_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -587,7 +527,7 @@ class TestCli(unittest.TestCase):
         self.assertEqual(final_result["reason"], "disk_write_failed")
         self.assertEqual(final_result["analyzer_status"], "error_disk_io")
 
-    def test_positive_default_max_retries_uses_route_policy_cap(self) -> None:
+    def test_calculation_failure_records_one_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reaction = root / "orca_runs" / "rxn_disk_long"
@@ -603,9 +543,7 @@ class TestCli(unittest.TestCase):
                     {
                         "runs_root": str(root / "orca_runs"),
                         "orca": {
-                            "runtime": {
-                                "default_max_retries": 6,
-                            },
+                            "runtime": {},
                             "paths": {"orca_executable": str(fake_orca)},
                         },
                     }
@@ -626,13 +564,13 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertEqual(calls["n"], 1)
-        self.assertEqual(state["max_retries"], 0)
+        self.assertNotIn("max_retries", state)
         self.assertEqual(len(state["attempts"]), 1)
         final_result = _final_result(state)
         self.assertEqual(final_result["reason"], "disk_write_failed")
         self.assertEqual(final_result["analyzer_status"], "error_disk_io")
 
-    def test_zero_retry_resume_preserves_last_analyzer_reason(self) -> None:
+    def test_resume_preserves_recorded_analyzer_reason(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reaction = root / "orca_runs" / "rxn4"
@@ -648,9 +586,7 @@ class TestCli(unittest.TestCase):
                     {
                         "runs_root": str(root / "orca_runs"),
                         "orca": {
-                            "runtime": {
-                                "default_max_retries": 0,
-                            },
+                            "runtime": {},
                             "paths": {"orca_executable": str(fake_orca)},
                         },
                     }
@@ -661,7 +597,6 @@ class TestCli(unittest.TestCase):
                 "run_id": "run_test_resume",
                 "reaction_dir": str(reaction),
                 "selected_inp": str(inp),
-                "max_retries": 5,
                 "status": "running",
                 "started_at": "2026-01-01T00:00:00+00:00",
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -705,126 +640,6 @@ class TestCli(unittest.TestCase):
         self.assertEqual(final_result["reason"], "run_incomplete")
         self.assertEqual(final_result["last_out_path"], str(reaction / "rxn.retry01.out"))
 
-    def test_resume_runs_prepared_retry_input_after_multiple_attempts(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            reaction = root / "orca_runs" / "rxn_resume_prepared"
-            reaction.mkdir(parents=True)
-            inp = reaction / "rxn.inp"
-            inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-            (reaction / "rxn.retry02.inp").write_text(
-                inp.read_text(encoding="utf-8"), encoding="utf-8"
-            )
-            config = self._write_config(root, root / "orca_runs")
-            state = {
-                "run_id": "run_resume_prepared",
-                "reaction_dir": str(reaction),
-                "selected_inp": str(inp),
-                "max_retries": 5,
-                "status": "running",
-                "started_at": "2026-01-01T00:00:00+00:00",
-                "updated_at": "2026-01-01T00:00:00+00:00",
-                "attempts": [
-                    {
-                        "index": 1,
-                        "inp_path": str(inp),
-                        "out_path": str(reaction / "rxn.out"),
-                        "return_code": 1,
-                        "analyzer_status": "incomplete",
-                        "markers": {},
-                        "patch_actions": [],
-                        "started_at": "2026-01-01T00:00:00+00:00",
-                        "ended_at": "2026-01-01T00:00:01+00:00",
-                    },
-                    {
-                        "index": 2,
-                        "inp_path": str(reaction / "rxn.retry01.inp"),
-                        "out_path": str(reaction / "rxn.retry01.out"),
-                        "return_code": 1,
-                        "analyzer_status": "incomplete",
-                        "markers": {},
-                        "patch_actions": [],
-                        "started_at": "2026-01-01T00:00:02+00:00",
-                        "ended_at": "2026-01-01T00:00:03+00:00",
-                    },
-                ],
-                "final_result": None,
-            }
-            save_state(reaction, state)
-            seen = {"inp_name": ""}
-
-            def _fake_run(_self, inp_path: Path) -> RunResult:
-                seen["inp_name"] = inp_path.name
-                out = inp_path.with_suffix(".out")
-                out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
-                return RunResult(out_path=str(out), return_code=0)
-
-            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
-                rc = self._run_internal_execute(config, reaction)
-            saved = _loaded_state(reaction)
-
-        self.assertEqual(rc, 0)
-        self.assertEqual(seen["inp_name"], "rxn.retry02.inp")
-        self.assertEqual(saved["status"], "completed")
-        self.assertEqual(saved["max_retries"], 5)
-        self.assertEqual(len(saved["attempts"]), 3)
-
-    def test_resume_recreates_missing_retry_input_and_continues(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            reaction = root / "orca_runs" / "rxn_resume"
-            reaction.mkdir(parents=True)
-            inp = reaction / "rxn.inp"
-            inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-            config = self._write_config(root, root / "orca_runs")
-            state = {
-                "run_id": "run_resume_recover",
-                "reaction_dir": str(reaction),
-                "selected_inp": str(inp),
-                "max_retries": 5,
-                "status": "running",
-                "started_at": "2026-01-01T00:00:00+00:00",
-                "updated_at": "2026-01-01T00:00:00+00:00",
-                "attempts": [
-                    {
-                        "index": 1,
-                        "inp_path": str(inp),
-                        "out_path": str(reaction / "rxn.out"),
-                        "return_code": 1,
-                        "analyzer_status": "incomplete",
-                        "analyzer_reason": "run_incomplete",
-                        "markers": {},
-                        "patch_actions": [],
-                        "started_at": "2026-01-01T00:00:00+00:00",
-                        "ended_at": "2026-01-01T00:00:01+00:00",
-                    }
-                ],
-                "final_result": None,
-            }
-            save_state(reaction, state)
-            seen = {"inp_name": ""}
-
-            def _fake_run(_self, inp_path: Path) -> RunResult:
-                seen["inp_name"] = inp_path.name
-                out = inp_path.with_suffix(".out")
-                out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
-                return RunResult(out_path=str(out), return_code=0)
-
-            with patch("orca_auto.orca.execution.OrcaRunner.run", new=_fake_run):
-                rc = self._run_internal_execute(config, reaction)
-            saved = _loaded_state(reaction)
-            retry_exists = (reaction / "rxn.retry01.inp").exists()
-
-        self.assertEqual(rc, 0)
-        self.assertEqual(seen["inp_name"], "rxn.retry01.inp")
-        self.assertTrue(retry_exists)
-        self.assertEqual(saved["status"], "completed")
-        self.assertEqual(len(saved["attempts"]), 2)
-        actions = saved["attempts"][0].get("patch_actions", [])
-        self.assertTrue(
-            any("resume_recreated_missing_input:rxn.retry01.inp" in action for action in actions)
-        )
-
     def test_resume_interrupted_failure_keeps_run_id_and_continues(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -837,24 +652,10 @@ class TestCli(unittest.TestCase):
                 "run_id": "run_resume_interrupted",
                 "reaction_dir": str(reaction),
                 "selected_inp": str(inp),
-                "max_retries": 5,
                 "status": "failed",
                 "started_at": "2026-01-01T00:00:00+00:00",
                 "updated_at": "2026-01-01T00:00:00+00:00",
-                "attempts": [
-                    {
-                        "index": 1,
-                        "inp_path": str(inp),
-                        "out_path": str(reaction / "rxn.out"),
-                        "return_code": 1,
-                        "analyzer_status": "incomplete",
-                        "analyzer_reason": "run_incomplete",
-                        "markers": {},
-                        "patch_actions": [],
-                        "started_at": "2026-01-01T00:00:00+00:00",
-                        "ended_at": "2026-01-01T00:00:01+00:00",
-                    }
-                ],
+                "attempts": [],
                 "final_result": {
                     "status": "failed",
                     "analyzer_status": "incomplete",
@@ -879,10 +680,10 @@ class TestCli(unittest.TestCase):
 
         self.assertEqual(rc, 0)
         self.assertEqual(saved["run_id"], "run_resume_interrupted")
-        self.assertEqual(seen["inp_name"], "rxn.retry01.inp")
-        self.assertTrue(retry_exists)
+        self.assertEqual(seen["inp_name"], "rxn.inp")
+        self.assertFalse(retry_exists)
         self.assertEqual(saved["status"], "completed")
-        self.assertEqual(len(saved["attempts"]), 2)
+        self.assertEqual(len(saved["attempts"]), 1)
         self.assertTrue(_final_result(saved)["resumed"])
 
     def test_resume_completed_attempt_finalizes_without_extra_run(self) -> None:
@@ -899,7 +700,6 @@ class TestCli(unittest.TestCase):
                 "run_id": "run_resume_completed",
                 "reaction_dir": str(reaction),
                 "selected_inp": str(inp),
-                "max_retries": 5,
                 "status": "running",
                 "started_at": "2026-01-01T00:00:00+00:00",
                 "updated_at": "2026-01-01T00:00:00+00:00",

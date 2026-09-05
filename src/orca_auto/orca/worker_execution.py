@@ -55,6 +55,7 @@ from .attempt.reporting import build_final_result, last_out_path_from_state
 from .config import load_config
 from .execution import execute_orca_run, existing_completed_out, recover_crashed_state
 from .execution_binding import (
+    ORCA_EXECUTION_SNAPSHOT_VERSION,
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
     orca_execution_provenance,
@@ -114,7 +115,6 @@ class OrcaWorkerExecutionContext:
     source_selected_inp: str
     selected_input_xyz: str
     resource_request: dict[str, int]
-    max_retries: int
     execution_snapshot: dict[str, Any]
     orca_executable: str
 
@@ -181,6 +181,8 @@ def _build_execution_context(
     admission_token: str | None,
 ) -> OrcaWorkerExecutionContext:
     metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    if "max_retries" in metadata:
+        raise ValueError("Queued ORCA entry contains a removed execution setting; resubmit the job")
     raw_reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser()
     reaction_dir = raw_reaction_dir.resolve()
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
@@ -208,9 +210,6 @@ def _build_execution_context(
         )
     ):
         raise ValueError("Queued ORCA entry has no resource request")
-    max_retries = metadata.get("max_retries")
-    if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
-        raise ValueError("Queued ORCA entry has an invalid retry budget")
     # A generation whose bound input already has a completed, analyzer-verified
     # output legitimately carries runtime files: allow them so the run's
     # completed-adoption path can claim the finished result instead of dying
@@ -229,7 +228,6 @@ def _build_execution_context(
         expected_source_selected_inp=source_selected_inp,
         expected_selected_input_xyz=selected_input_xyz,
         expected_resource_request=resource_request,
-        expected_max_retries=max_retries,
         allow_runtime_outputs=completed_adoption,
     )
     return OrcaWorkerExecutionContext(
@@ -244,7 +242,6 @@ def _build_execution_context(
         source_selected_inp=source_selected_inp,
         selected_input_xyz=selected_input_xyz,
         resource_request=dict(resource_request),
-        max_retries=max_retries,
         execution_snapshot=snapshot,
         orca_executable=orca_executable,
     )
@@ -296,7 +293,6 @@ def _run_orca_job_for_entry(
                 expected_source_selected_inp=context.source_selected_inp,
                 expected_selected_input_xyz=context.selected_input_xyz,
                 expected_resource_request=context.resource_request,
-                expected_max_retries=context.max_retries,
                 allow_runtime_outputs=self._runtime_outputs_started,
             )
             try:
@@ -311,7 +307,6 @@ def _run_orca_job_for_entry(
                         expected_source_selected_inp=context.source_selected_inp,
                         expected_selected_input_xyz=context.selected_input_xyz,
                         expected_resource_request=context.resource_request,
-                        expected_max_retries=context.max_retries,
                         allow_runtime_outputs=True,
                     )
                 except BaseException as verify_exc:
@@ -329,7 +324,6 @@ def _run_orca_job_for_entry(
                     expected_source_selected_inp=context.source_selected_inp,
                     expected_selected_input_xyz=context.selected_input_xyz,
                     expected_resource_request=context.resource_request,
-                    expected_max_retries=context.max_retries,
                     allow_runtime_outputs=True,
                 )
             except BaseException as verify_exc:
@@ -345,7 +339,6 @@ def _run_orca_job_for_entry(
 
     bound_cfg = copy.copy(cfg)
     bound_cfg.runtime = copy.copy(cfg.runtime)
-    bound_cfg.runtime.default_max_retries = context.max_retries
     bound_cfg.resources = replace(
         cfg.resources,
         max_cores_per_task=context.resource_request["max_cores"],
@@ -438,6 +431,12 @@ def _maybe_rebind_recovery_generation(
         )
         refreshed = _queue_entry_by_id(queue_root, str(entry.queue_id))
         return refreshed if refreshed is not None else entry
+    if (
+        snapshot.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION
+        or "max_retries" in snapshot
+        or "max_retries" in metadata
+    ):
+        raise ValueError("ORCA recovery requires a current execution snapshot; resubmit the job")
     raw_count = metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY, 0)
     if (
         isinstance(raw_count, bool)
@@ -538,9 +537,6 @@ def _maybe_rebind_recovery_generation(
     source_selected = str(metadata.get("source_selected_inp") or "").strip()
     if not source_selected:
         raise ValueError("ORCA crash recovery requires the submission source input path")
-    max_retries = metadata.get("max_retries")
-    if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 0:
-        raise ValueError("ORCA crash recovery found an invalid retry budget on the queue row")
     recorded_request = metadata.get("resource_request")
     with acquire_run_lock(reaction_dir):
         recover_crashed_state(reaction_dir, logger=logger)
@@ -558,7 +554,6 @@ def _maybe_rebind_recovery_generation(
             Path(source_selected),
             selected_input_xyz=str(metadata.get("selected_input_xyz") or ""),
             resource_request=prepared.resource_request,
-            max_retries=max_retries,
             orca_executable=recovery_executable,
             queue_root=queue_root,
             snapshot_intent_token=intent_token,
@@ -709,7 +704,7 @@ def process_dequeued_entry(
     register_running_job: Callable[[Any | None], None] | None = None,
 ) -> OrcaWorkerExecutionOutcome:
     # execute_locked_run rebuilds the same durable registrar from the resolved
-    # admission root/token so every retry attempt is fenced inside OrcaRunner.
+    # admission root/token so every execution is fenced inside OrcaRunner.
     del dependencies, prepare_running_job, register_running_job
     if queue_root is None:
         raise ValueError("queue_root is required for ORCA worker execution")

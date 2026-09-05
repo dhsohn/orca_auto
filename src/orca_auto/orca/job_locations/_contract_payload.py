@@ -26,7 +26,6 @@ from ._utils import (
     coerce_attempts,
     derive_selected_input_xyz,
     final_result_payload,
-    max_retries,
     normalize_bool,
     normalize_text,
     prefer_orca_optimized_xyz,
@@ -372,7 +371,7 @@ def _generation_optimized_source(
     report: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str]:
     snapshot = queue_entry_metadata_value(queue_entry, "execution_snapshot")
-    if isinstance(snapshot, dict) and snapshot.get("version") == 2:
+    if isinstance(snapshot, dict) and snapshot.get("version") in {2, 3}:
         return snapshot, str(snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
     for payload in (state, report):
         provenance = _payload_execution_provenance(payload)
@@ -391,7 +390,7 @@ def _generation_optimized_xyz_policy(
     report: dict[str, Any],
     current_dir: Path | None,
 ) -> tuple[bool, Path | None, tuple[str, ...]]:
-    """Keep schema-2 staged XYZ inputs from masquerading as calculated outputs."""
+    """Keep generation-staged XYZ inputs from masquerading as calculated outputs."""
 
     source, owner_token = _generation_optimized_source(queue_entry, state, report)
     if source is None:
@@ -586,7 +585,6 @@ def orca_contract_payload(ctx: Any) -> dict[str, Any]:
             queue_entry=ctx.queue_entry,
         ),
         "attempt_count": attempt_count(ctx.state, ctx.report),
-        "max_retries": max_retries(ctx.state, ctx.report),
         "attempts": coerce_attempts(ctx.state, ctx.report),
         "final_result": final_result_payload(ctx.state, ctx.report),
         "resource_request": ctx.resource_request,

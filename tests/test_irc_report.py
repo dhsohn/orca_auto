@@ -183,7 +183,6 @@ def _state(
         "run_id": "run_irc",
         "reaction_dir": str(reaction_dir),
         "selected_inp": str(reaction_dir / "rxn.inp"),
-        "max_retries": 1,
         "status": "completed",
         "started_at": "2026-07-07T01:00:00+00:00",
         "updated_at": "2026-07-07T01:12:00+00:00",

@@ -91,7 +91,7 @@ class TestAttemptReporting(unittest.TestCase):
                 ),
                 owner_token=owner_token,
             )
-            state = new_state(reaction_dir, selected_inp, max_retries=2)
+            state = new_state(reaction_dir, selected_inp)
             state["execution_provenance"] = {
                 "execution_dir": str(generation),
                 "execution_dir_identity": {

@@ -36,9 +36,7 @@ def _write_config(
                     "max_active_simulations": max_concurrent,
                 },
                 "orca": {
-                    "runtime": {
-                        "default_max_retries": 2,
-                    },
+                    "runtime": {},
                     "paths": {"orca_executable": str(orca_executable)},
                 },
             }

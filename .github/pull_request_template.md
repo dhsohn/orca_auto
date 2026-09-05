@@ -6,7 +6,7 @@ Closes #
 
 ## Changes
 
-<!-- List concrete code, docs, tests, config, or workflow changes. Call out public CLI/config/report/retry behavior changes explicitly. -->
+<!-- List concrete code, docs, tests, config, or workflow changes. Call out public CLI/config/report/recovery behavior changes explicitly. -->
 
 -
 

@@ -199,7 +199,6 @@ def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
         "run_id": "run_neb",
         "reaction_dir": str(reaction_dir),
         "selected_inp": str(reaction_dir / "rxn.inp"),
-        "max_retries": 1,
         "status": "completed",
         "started_at": "2026-07-03T01:00:00+00:00",
         "updated_at": "2026-07-03T04:00:00+00:00",

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orca_auto.core.admission import active_slot_count
-from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
+from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution import execute_orca_run
 from orca_auto.orca.state_reading import state_path
 
@@ -16,7 +16,7 @@ def _make_cfg(tmp: str) -> AppConfig:
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     cfg = AppConfig(
-        runtime=RetryRuntimeConfig(allowed_root=tmp),
+        runtime=OrcaRuntimeConfig(allowed_root=tmp),
         paths=PathsConfig(orca_executable=str(fake_orca)),
     )
     cfg.runtime.max_concurrent = 1

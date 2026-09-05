@@ -105,7 +105,6 @@ class WorkflowStageOrcaMutationMixin:
                 "completed_at": contract.completed_at,
                 "state_status": contract.state_status,
                 "attempt_count": contract.attempt_count,
-                "max_retries": contract.max_retries,
                 "orca_attempts": [dict(item) for item in contract.attempts],
                 "orca_final_result": dict(contract.final_result),
             }

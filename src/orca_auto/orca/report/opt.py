@@ -1,4 +1,4 @@
-"""Opt / OptTS job report: convergence trace, retry chain, vibrational summary."""
+"""Opt / OptTS job report: convergence trace, execution history, vibrational summary."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def collect_opt_report_data(
     opt_converged = False
     final_energy: float | None = None
     # Prefer the latest attempt output that actually contains optimization
-    # cycles; a retry that died before the first cycle parses to an empty
+    # cycles; an execution that died before the first cycle parses to an empty
     # trace and must not mask an earlier attempt's convergence data.
     chosen: OptProgress | None = None
     fallback: OptProgress | None = None

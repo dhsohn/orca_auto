@@ -1,14 +1,13 @@
 """Scan-driven stage progression for the scan_ts_search workflow.
 
-Ports the recovery strategies proven in the ScanTS retry chain into proper
-workflow stages:
+Explicit relaxed-scan exploration and OptTS candidate workflow stages:
 
 1. Forward fan-out — once the forward relaxed scan(s) complete, every interior
    maximum of the combined forward profile with prominence above the threshold
    becomes an OptTS+Freq candidate stage.
 2. Scan extension — a completed forward profile with NO interior maximum gets
    one more forward scan stage extending the coordinate past the previous
-   endpoint (ScanTS continuation math: max(6, 20% of the range) extra points),
+   endpoint (max(6, 20% of the range) extra points),
    up to ``max_scan_extensions``; only then is ``scan_profile_no_barrier``
    recorded.
 3. Reverse rescue — when every forward candidate finishes without verifying a
@@ -45,12 +44,12 @@ from orca_auto.flow.orchestration.support import required_stage_budget
 from orca_auto.flow.orchestration.template_builders import scan_geom_block
 from orca_auto.flow.xyz_utils import validated_xyz_atom_count
 from orca_auto.orca.input_artifacts import derive_selected_input_xyz
-from orca_auto.orca.scants import (
+from orca_auto.orca.relaxed_scan import (
     ScanCoordinateSpec,
-    ScanTSSurfacePoint,
+    ScanSurfacePoint,
     format_scan_coordinate,
+    parse_scan_actual_surface,
     parse_scan_coordinate,
-    parse_scants_actual_surface,
     scan_profile_interior_maxima,
     validate_scan_coordinate,
 )
@@ -192,11 +191,11 @@ def _scan_spec(scan_stage: dict[str, Any]) -> ScanCoordinateSpec | None:
     return spec
 
 
-def _scan_surface(scan_stage: dict[str, Any]) -> list[ScanTSSurfacePoint]:
+def _scan_surface(scan_stage: dict[str, Any]) -> list[ScanSurfacePoint]:
     out_path = _scan_out_path(scan_stage)
     if out_path is None:
         return []
-    return parse_scants_actual_surface(out_path)
+    return parse_scan_actual_surface(out_path)
 
 
 def _scan_endpoint_xyz(scan_stage: dict[str, Any]) -> Path | None:
@@ -396,7 +395,7 @@ def _append_scan_stage(
 
 
 def _extension_spec(previous: ScanCoordinateSpec) -> ScanCoordinateSpec | None:
-    """Continue the scan past the previous endpoint (ScanTS continuation math)."""
+    """Continue the scan past the previous endpoint (bounded coordinate extension)."""
     if previous.points <= 1:
         return None
     step = (previous.end - previous.start) / (previous.points - 1)

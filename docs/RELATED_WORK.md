@@ -17,7 +17,7 @@ orca_auto is useful when that script layer needs durable state:
 - queue entries that survive terminal restarts;
 - supervised workers instead of foreground-only runs;
 - consistent internal `job_state.json` and public `machine.json` outputs;
-- retry and resume decisions that are recorded rather than implicit;
+- failure and recovery decisions that are recorded rather than implicit;
 - a compact activity view across multiple ORCA and workflow jobs.
 
 The design intent is to keep ORCA input files as the chemistry-facing contract
@@ -27,7 +27,7 @@ while adding an auditable runtime layer around execution.
 
 Schedulers and service managers such as SLURM, PBS, systemd, and cron are
 important infrastructure, but they do not by themselves understand ORCA job
-state, retry provenance, selected input files, or chemistry-specific failure
+state, execution provenance, selected input files, or chemistry-specific failure
 classification.
 
 orca_auto complements this layer. It can be run under systemd on Linux or WSL,

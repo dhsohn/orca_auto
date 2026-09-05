@@ -27,7 +27,7 @@ The core design principle is **durable submission, supervised execution**:
 - Per-job state and reports are recorded on disk next to the
   calculation.
 
-ORCA is the public, first-class engine with the richest retry/reporting/monitor
+ORCA is the public, first-class engine with the richest reporting/monitor
 surface. General **xTB** and **CREST** calculations remain
 internal **workflow stages** rather than standalone public commands.
 
@@ -68,10 +68,10 @@ src/orca_auto/
 │   │   └── worker_tracking.py
 │   ├── runtime/         # Run locks
 │   ├── engine.py        # ORCA EngineDefinition wiring
-│   ├── attempt/         # Attempt engine, retry, resume, reporting
+│   ├── attempt/         # Attempt engine, resume, reporting
 │   ├── parser/          # ORCA output parsing
 │   ├── state*.py        # Per-job state machine + persistence
-│   └── ...              # retry policy, completion rules, indexing
+│   └── ...              # input validation, completion rules, indexing
 │
 └── flow/                # Workflow orchestration package
     ├── orchestration/   # advance_workflow loop, phases, stage runtime
@@ -215,7 +215,7 @@ definition explicitly owns the workflow-aware runtime-root resolver, while
 live child-PID slot protection remains an xTB policy. Publication repair is
 shared: `flow/engines/queue_runtime_common.py` owns the sweep and the
 pre-reservation gate, and both the xTB and CREST workers install it.
-Crash-generation rebind, retry, publication repair, durable engine-process
+Crash-generation rebind, publication repair, durable engine-process
 recovery, cancellation, and terminal replay remain ORCA-owned policies. Do not
 reintroduce an engine-local or generic forwarding facade around these canonical
 owners.
@@ -244,7 +244,7 @@ python -m orca_auto.core.engines.worker_child \
 
 The parent worker (`EngineQueueWorker`) reserves an admission slot, spawns this
 child, and finalizes the terminal queue result after the child exits. ORCA keeps
-its richer domain behavior (state machine, retry, reports) inside
+its richer domain behavior (state machine, reports) inside
 `orca_auto.orca`, while its worker-child entrypoint uses the canonical
 `core.queue.engine.child` contract directly.
 
@@ -342,34 +342,18 @@ logic. Notable pieces:
   recovery reclaim the slot without waiting for a reboot.
   A worker/host crash can lose unpublished tmpfs checkpoints; the ordinary
   durable recovery path then resumes from evidence that was already published.
-- **Attempt engine** (`attempt/engine.py`, `attempt/retry.py`,
-  `attempt/resume.py`): runs an attempt, parses output, classifies the result,
-  and decides whether to retry.
+- **Attempt engine** (`attempt/engine.py`, `attempt/resume.py`): runs an attempt, parses output, classifies the result,
+  and records a terminal result without a calculation-failure loop.
 - **Output analysis** (`parser/`, `out_analyzer.py`,
   `output_status.py`, `completion_rules.py`): determines completion by mode —
   TS mode (`OptTS`/`NEB-TS`, requires exactly one imaginary frequency in the
   frequency section after the last final single point energy, plus an IRC
   marker when the route has `IRC`) vs Opt mode (normal termination).
-- **Calculation-type retry policy** (`retry_policy.py`):
-  retry counts and rewrites are fixed by ORCA route type, not by the raw user
-  retry count. Generic `TightSCF`/`SlowConv` escalation is not applied. Generic
-  `Opt`/`Opt+Freq`/`Freq`/single-point routes do not get automatic retries;
-  failed `.xyz`/`.gbw` artifacts are not reused as a generic rerun strategy.
-  Standalone `OptTS`/`NEB-TS` also has no automatic retry; Hessian hardening is
-  left to explicit user input. `ScanTS` retries fire only on calculation
-  failures, from scan artifacts: a mid-scan crash continues from the last
-  numbered scan point, and a zero-distance abort in ORCA's TS-guess refinement
-  gets one OptTS retry from the highest surface point. Failures after a
-  finished scan (including `ts_not_found`) end the run with
-  `scants_recipes_exhausted` — endpoint extension and reverse-scan exploration
-  belongs to the `scan_ts_search` workflow. If no
-  route-specific rewrite is available, retry fails closed rather than repeating
-  the identical input (`scants_recipes_exhausted` for an exhausted ScanTS
-  recipe chain). Charge
-  and multiplicity are
-  **never** auto-changed; the original `.inp` is preserved; retries are written
-  as `<name>.retryNN.inp`.
-- **Restart/resume:** for retry/resume it generates a restart input with
+- **Single-attempt execution:** calculation failures preserve the original analyzer
+  reason and end the run. Direct `ScanTS` routes are rejected before generation
+  creation. `relaxed_scan.py` owns coordinate validation and surface parsing for
+  plain scans and the separate `scan_ts_search` workflow.
+- **Restart/resume:** for interrupted-run recovery it generates a restart input with
   `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists. An
   existing top-level or `%scf` orbital-input declaration is recognized
   semantically, so recovery never injects a second source. Resumed inputs are
@@ -379,12 +363,11 @@ logic. Notable pieces:
   state mutation and artifact publication, while `state_machine.py` applies
   transitions. Completion publishes the common `machine.json` last. Opt,
   OptTS, NEB-TS,
-  ScanTS, IRC, and relaxed-scan jobs also get `job_report.html` (`report/`), a
+  IRC, and relaxed-scan jobs also get `job_report.html` (`report/`), a
   self-contained visual report assembled by `report/composer.py` from common
-  page chrome plus calculation components — scan energy profile (ScanTS and
-  plain relaxed scans), CI-NEB path profile plus TS refinement trace (NEB-TS),
+  page chrome plus calculation components — relaxed-scan energy profile, CI-NEB path profile plus TS refinement trace (NEB-TS),
   IRC path profile with combined OptTS/Freq sections when the route includes
-  them, or optimization convergence trace (Opt/OptTS), retry-recipe chain, and
+  them, or optimization convergence trace (Opt/OptTS), attempt history, and
   vibrational summary. Completed jobs ending on a stationary point also get
   `si_block.md` (`report/si.py`), a copy-paste Supporting Information block
   with energies, thermochemistry, Nimag, and coordinates; IRC routes get a
@@ -614,8 +597,7 @@ failure remains advisory to durable publication.
 
 `core/notifications/` holds the engine-specific notification functions
 (`engines.py`). Submission, execution, and terminal adapters bind the relevant
-queued/started/finished callbacks directly; ORCA retry notifications are bound by
-its execution adapter. Workflow alerts keep per-job ORCA messages but summarize
+queued/started/finished callbacks directly. Workflow alerts keep per-job ORCA messages but summarize
 internal CREST and reaction-path xTB child phases into one message each.
 
 The channel is enabled only when its credentials are complete: Discord requires
@@ -632,7 +614,7 @@ Config is a single YAML file resolved in this order:
 3. `~/orca_auto/config/orca_auto.yaml`
 
 `core/config/schema.py` defines the typed config dataclasses (e.g.
-`RetryRuntimeConfig`, `CommonResourceConfig`, `MessengerConfig`) with normalizing
+`OrcaRuntimeConfig`, `CommonResourceConfig`, `MessengerConfig`) with normalizing
 constructors. Notable rules:
 
 - **Linux paths only.** Windows drive paths, `/mnt/<drive>/...`, relative
@@ -644,9 +626,7 @@ constructors. Notable rules:
   observes the same admission root and limit.
 - `runs_root` is the single runs root for standalone ORCA jobs,
   workflow workspaces, and internal-engine runs.
-- `default_max_retries: 0` disables ORCA retries; any positive value enables the
-  calculation-type retry policy, whose per-route caps are recorded in
-  `job_state.json`/queue metadata.
+- ORCA has no calculation-failure retry configuration.
 
 ---
 

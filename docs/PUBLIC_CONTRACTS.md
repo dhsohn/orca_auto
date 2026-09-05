@@ -128,7 +128,6 @@ Supported configuration paths:
 - `messenger.discord.timeout_seconds`
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
-- `orca.runtime.default_max_retries`
 - `orca.runtime.scratch_root`
 - `orca.runtime.scratch_min_free_gb`
 - `orca.paths.orca_executable`
@@ -146,8 +145,7 @@ Behavior:
   Explicit `scheduler`, `resources`, `workflow`, `workflow.paths`, `messenger`,
   `orca`, `orca.runtime`, and `orca.paths` sections must be mappings.
   `scheduler.admission_root` must be an absolute Linux path; explicit
-  scheduler/resource limits must be positive integers; and explicit
-  `orca.runtime.default_max_retries` must be a non-negative integer. A section
+  scheduler/resource limits must be positive integers. A section
   or key may be omitted to use its documented default, but a configured
   execution-control key with a malformed value is rejected rather than
   defaulted.
@@ -156,9 +154,10 @@ Behavior:
   empty `---` document—scalar, or sequence at the top level is rejected.
   Duplicate mapping keys are rejected at every nesting depth rather than
   resolved with last-key-wins.
-- `orca.runtime.default_max_retries: 0` disables ORCA retries.
-- A positive `default_max_retries` enables calculation-type retry policy, still
-  capped by ORCA route type.
+- ORCA calculation failures are terminal after one attempt. The removed
+  `orca.runtime.default_max_retries` key is rejected, including zero; it has no alias.
+- Active `ScanTS` route tokens are rejected before generation creation or queue
+  publication. Plain relaxed scans and the `scan_ts_search` workflow remain supported.
 - `orca.runtime.scratch_root`, when present, must name a dedicated directory
   below `/dev/shm`; `scratch_min_free_gb` must be a positive integer. ORCA then
   executes one private tmpfs attempt at a time and publishes surviving regular
@@ -299,7 +298,7 @@ are internal implementation state and must not be edited by clients.
 xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,
 and new xTB/CREST/ORCA rows carry a submit-time execution snapshot. New
 ORCA rows own one visible direct child named `YYYYMMDD-HHMMSS-<8-hex>/`, use
-snapshot schema 2, and do not create an ORCA
+snapshot schema 3, and do not create an ORCA
 `.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, or nested
 `.inputs/` tree. The bound selected `.inp` and dependencies preserve their
 source basenames. Different referenced source paths with one basename always
@@ -310,7 +309,7 @@ to `h2.xyz`, with both names preserved. For routes that write `<stem>.xyz`, a
 sole main `* xyzfile` dependency may use that exact name: the bound `.inp`
 inlines its coordinates and ORCA may mutate the visible XYZ after launch.
 Same-stem auxiliary NEB Product/TS inputs remain unsupported. Frequency routes
-reserve `<stem>.hess`; EnGrad/EnergyGrad, NumGrad, optimization, OptTS/ScanTS,
+reserve `<stem>.hess`; EnGrad/EnergyGrad, NumGrad, optimization, OptTS,
 and IRC routes reserve `<stem>.engrad`; every route reserves `<stem>.out` and
 `<stem>.gbw`.
 Submission also rejects the selected `.inp` basename and generation-owned
@@ -455,7 +454,7 @@ Top-level expectations:
 - `timestamps.started_at`, `timestamps.updated_at`, and
   `timestamps.finished_at` are UTC-style ISO text when available.
 - `artifacts.last_out_path` points at the last ORCA output path when known.
-- `engine_payload.run_id`, `engine_payload.max_retries`,
+- `engine_payload.run_id`,
   `engine_payload.attempts`, and `engine_payload.final_result` carry the
   ORCA-specific run details.
 
@@ -507,7 +506,7 @@ ORCA run statuses:
 
 - `created`
 - `running`
-- `retrying`
+- `retrying` (retired, historical read-only value; never emitted by ORCA execution)
 - `completed`
 - `failed`
 
@@ -525,15 +524,20 @@ ORCA analyzer statuses:
 - `incomplete`
 - `unknown_failure`
 
-Reason strings are part of issue triage and report interpretation once they are
-documented or tested. Important current examples include `normal_termination`,
-`existing_out_completed`, `retry_limit_reached`, `interrupted_by_user`,
-`worker_shutdown`, `crashed_recovery`, `runner_exception`, `cancel_requested`,
-`rewrite_failed`, and `scants_recipes_exhausted`.
+The first failed calculation attempt is terminal and preserves its analyzer reason.
+No retry inputs, budgets, fallback recipes, or retry notifications are generated.
+Worker/host interruption recovery and explicit workflow restart are separate
+operations and remain supported.
 
-When the effective `max_retries` is zero, the first failed attempt is terminal
-and its analyzer reason is preserved as the final reason. `retry_limit_reached`
-is reserved for exhaustion of a positive retry budget.
+Historical `retrying` and retired reasons (`retry_limit_reached`, `rewrite_failed`,
+`scants_recipes_exhausted`) remain interpretable, but never drive new execution.
+Existing generation artifacts are not migrated, rewritten, or deleted.
+Historical `max_retries` fields, when present, must still match between the
+generation state and its machine observation. Terminal replay and notification
+receipts update only current-format root bookkeeping for these generations.
+Only execution snapshot schema 3 is executable; older queued submissions must
+be drained/cancelled and explicitly resubmitted. Historical schema 2 remains
+readable with the same generation ownership checks.
 
 ## Workflow Contract
 

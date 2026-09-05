@@ -112,15 +112,11 @@ def test_ensure_directory_covers_existing_decline_and_create(capsys, tmp_path: P
     assert missing.is_dir()
 
 
-def test_prompt_default_max_retries_and_max_active_simulations_validate(capsys) -> None:
-    with patch("orca_auto.orca.commands.init._prompt_text", side_effect=["abc", "-1", "2"]):
-        assert init._prompt_default_max_retries() == 2
-
+def test_prompt_max_active_simulations_validates(capsys) -> None:
     with patch("orca_auto.orca.commands.init._prompt_text", side_effect=["abc", "0", "4"]):
         assert init._prompt_max_active_simulations() == 4
 
     output = capsys.readouterr().out
-    assert "default_max_retries must be an integer >= 0." in output
     assert "max_active_simulations must be an integer >= 1." in output
 
 
@@ -240,7 +236,6 @@ def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
                 "runs_root": str(orca_allowed_root),
-                "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
         ),
@@ -287,7 +282,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
                 "runs_root": str(orca_allowed_root),
-                "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
         ),
@@ -349,9 +343,7 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             "discord": {"bot_token": "token", "default_channel_id": "123"},
         },
         "orca": {
-            "runtime": {
-                "default_max_retries": 2,
-            },
+            "runtime": {},
             "paths": {"orca_executable": "/usr/bin/orca"},
         },
     }
@@ -382,7 +374,6 @@ def test_cmd_init_force_preserves_existing_discord_messenger(tmp_path: Path, cap
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
                 "runs_root": str(orca_allowed_root),
-                "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
         ),
@@ -433,7 +424,6 @@ def test_prompt_init_values_can_replace_existing_messenger() -> None:
             "orca_auto.orca.commands.init._prompt_orca_runtime",
             return_value={
                 "runs_root": "/runs",
-                "default_max_retries": 2,
                 "executable": "/usr/bin/orca",
             },
         ),

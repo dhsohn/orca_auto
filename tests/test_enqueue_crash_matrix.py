@@ -164,8 +164,8 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     from orca_auto.orca.config import (
         AppConfig,
         CommonResourceConfig,
+        OrcaRuntimeConfig,
         PathsConfig,
-        RetryRuntimeConfig,
     )
     from orca_auto.orca.queue import publication_repair
 
@@ -175,7 +175,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     cfg = AppConfig(
-        runtime=RetryRuntimeConfig(allowed_root=str(root)),
+        runtime=OrcaRuntimeConfig(allowed_root=str(root)),
         paths=PathsConfig(orca_executable=str(fake_orca)),
         resources=CommonResourceConfig(max_cores_per_task=2, max_memory_gb_per_task=4),
     )

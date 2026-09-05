@@ -74,9 +74,6 @@ messenger:
 
 orca:
   runtime:
-    # Retry count after the initial attempt.
-    # Example: 2 means "1 initial run + up to 2 retries" = 3 total attempts.
-    default_max_retries: 2
     # Shared RAM-backed working root for ORCA and workflow-managed xTB/CREST.
     # Exactly one private attempt runs below /dev/shm. ORCA transactionally
     # publishes surviving non-*.tmp artifacts; workflow xTB/CREST publish their

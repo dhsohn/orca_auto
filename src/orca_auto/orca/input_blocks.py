@@ -43,6 +43,11 @@ def validate_supported_xyz_geometry_syntax(
             continue
         first_lower = tokens[0].value.lower()
         if any(
+            not token.quoted and token.value.lower() == "scants"
+            for token in orca_route_tokens(line)
+        ):
+            raise ValueError(f"{label} uses unsupported ORCA route keyword ScanTS")
+        if any(
             token.value.lower() in {"compound", "compound_file"}
             or token.value.lower().startswith("%compound")
             for token in orca_route_tokens(line)

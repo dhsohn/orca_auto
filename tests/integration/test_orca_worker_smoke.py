@@ -88,7 +88,7 @@ def _write_orca_worker_config(
     orca_executable: Path,
     scratch_root: Path | None = None,
 ) -> None:
-    runtime: dict[str, object] = {"default_max_retries": 0}
+    runtime: dict[str, object] = {}
     if scratch_root is not None:
         runtime.update(
             {

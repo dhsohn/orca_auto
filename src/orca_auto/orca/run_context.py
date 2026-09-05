@@ -15,7 +15,6 @@ from orca_auto.orca.admission_env import (
     ADMISSION_TOKEN_ENV_VAR,
 )
 from orca_auto.orca.config import AppConfig
-from orca_auto.orca.retry_policy import effective_max_retries
 
 
 def _validate_reaction_dir(cfg: AppConfig, reaction_dir_raw: str) -> Path:
@@ -61,7 +60,6 @@ class RunExecutionContext:
     selected_inp: Path
     allowed_root: Path
     admission_root: Path
-    max_retries: int
     max_concurrent: int
     admission_limit: int
     reservation_token: str | None
@@ -214,10 +212,6 @@ def resolve_execution_context(
         selected_inp=selected_inp,
         allowed_root=Path(cfg.runtime.allowed_root).expanduser().resolve(),
         admission_root=configured_admission_root(cfg),
-        max_retries=effective_max_retries(
-            selected_inp,
-            configured_max_retries=max(0, int(cfg.runtime.default_max_retries)),
-        ),
         max_concurrent=configured_max_concurrent(cfg),
         admission_limit=configured_admission_limit(cfg),
         reservation_token=_explicit_or_env(reservation_token, ADMISSION_TOKEN_ENV_VAR),

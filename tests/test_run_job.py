@@ -43,7 +43,6 @@ def _bound_orca_metadata(
         selected,
         selected_input_xyz="",
         resource_request=resources,
-        max_retries=0,
         orca_executable=executable,
     )
     return {
@@ -53,7 +52,6 @@ def _bound_orca_metadata(
         "selected_inp": snapshot["selected_inp"],
         "selected_input_xyz": "",
         "resource_request": resources,
-        "max_retries": 0,
         "execution_snapshot": snapshot,
     }
 
@@ -180,7 +178,6 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     bound_cfg = calls["kwargs"].pop("cfg")
     execution_provenance = calls["kwargs"].pop("execution_provenance")
     assert issubclass(runner_cls, OrcaRunner)
-    assert bound_cfg.runtime.default_max_retries == 0
     assert bound_cfg.resources.max_cores_per_task == 1
     assert bound_cfg.resources.max_memory_gb_per_task == 1
     runner = runner_cls("/changed/orca")
@@ -199,7 +196,7 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
         "queue_generation": queue_entry_generation_token(entry),
         "selected_inp": entry.metadata["selected_inp"],
     }
-    state = new_state(reaction_dir, Path(entry.metadata["selected_inp"]), max_retries=0)
+    state = new_state(reaction_dir, Path(entry.metadata["selected_inp"]))
     save_state(reaction_dir, state)
     with patch.object(
         OrcaRunner,
@@ -316,7 +313,6 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
     bound_cfg = calls["kwargs"].pop("cfg")
     execution_provenance = calls["kwargs"].pop("execution_provenance")
     assert issubclass(runner_cls, OrcaRunner)
-    assert bound_cfg.runtime.default_max_retries == 0
     assert bound_cfg.resources.max_cores_per_task == 1
     assert bound_cfg.resources.max_memory_gb_per_task == 1
     assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])

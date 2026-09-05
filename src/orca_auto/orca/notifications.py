@@ -29,7 +29,6 @@ from orca_auto.core.messaging import (
 if TYPE_CHECKING:
     from .types import (
         QueueEnqueuedNotification,
-        RetryNotification,
         RunFinishedNotification,
         RunStartedNotification,
     )
@@ -53,7 +52,6 @@ def run_started_message(event: RunStartedNotification) -> Message:
             "Attempt", raw(f"#{event['attempt_index']} ("), code(status or "running"), raw(")")
         ),
         field_row("Input", code(current_inp.name)),
-        field_row("Max retries", text(event["max_retries"])),
     ]
     if resumed:
         fields.append(field_row("Mode", text("resumed run")))
@@ -61,44 +59,6 @@ def run_started_message(event: RunStartedNotification) -> Message:
     return Message(
         title=title,
         severity="info",
-        groups=(group(*fields),),
-        author="orca_auto",
-    )
-
-
-def retry_message(event: RetryNotification) -> Message:
-    reaction_dir = Path(event["reaction_dir"])
-    failed_inp = Path(event["failed_inp"])
-    next_inp = Path(event["next_inp"])
-
-    fields = [
-        field_row("Job", text(reaction_dir.name or reaction_dir.as_posix())),
-        field_row(
-            "Attempt",
-            raw(
-                f"{event['attempt_index']} failed; "
-                f"retry {event['retry_number']}/{event['max_retries']} is starting"
-            ),
-        ),
-        field_row(
-            "Reason",
-            code(event["analyzer_status"]),
-            raw(" ("),
-            text(event["analyzer_reason"]),
-            raw(")"),
-        ),
-        field_row("Failed input", code(failed_inp.name)),
-        field_row("Restart input", code(next_inp.name)),
-    ]
-    patch_summary = _format_patch_actions(event.get("patch_actions", []))
-    if patch_summary:
-        fields.append(field_row("Applied patches", text(patch_summary)))
-    if event.get("resumed"):
-        fields.append(field_row("Mode", text("resumed run")))
-    fields.append(field_row("Directory", code(event["reaction_dir"])))
-    return Message(
-        title="ORCA retry",
-        severity="warning",
         groups=(group(*fields),),
         author="orca_auto",
     )
@@ -161,42 +121,6 @@ def queue_enqueued_message(event: QueueEnqueuedNotification) -> Message:
 
 
 # --------------------------------------------------------------------------- #
-# Patch-action humanisation (shared with retry rendering)
-# --------------------------------------------------------------------------- #
-def _format_patch_actions(actions: list[str]) -> str | None:
-    rendered: list[str] = []
-    for action in actions[:4]:
-        action_text = action.strip()
-        if not action_text:
-            continue
-        rendered.append(_humanize_patch_action(action_text))
-    if not rendered:
-        return None
-    if len(actions) > len(rendered):
-        rendered.append("...")
-    return ", ".join(rendered)
-
-
-def _humanize_patch_action(action: str) -> str:
-    labels = {
-        "route_add_tightscf_slowconv": "TightSCF + SlowConv",
-        "scf_maxiter_300": "SCF MaxIter 300",
-        "geom_hessian_and_maxiter": "Geom Hessian + MaxIter 300",
-        "geom_hessian_and_maxiter_500": "Geom Hessian + MaxIter 500",
-        "maxcore_increased": "MaxCore increased",
-        "route_add_looseopt": "LooseOpt",
-        "geometry_restart_not_applied": "geometry restart not applied",
-        "no_previous_xyz_file_found": "no previous xyz file found",
-        "no_geometry_file_found": "no geometry file found",
-        "no_recipe_applied": "no retry recipe applied",
-    }
-    if action.startswith("geometry_restart_from_"):
-        source = action.removeprefix("geometry_restart_from_")
-        return f"geometry restart from {source}"
-    return labels.get(action, action.replace("_", " "))
-
-
-# --------------------------------------------------------------------------- #
 # Delivery
 # --------------------------------------------------------------------------- #
 def notify_run_started_event(channel: MessageChannel, event: RunStartedNotification) -> bool:
@@ -207,15 +131,6 @@ def notify_run_started_event(channel: MessageChannel, event: RunStartedNotificat
     _log_delivery(
         "run_started", sent, reaction_dir=event["reaction_dir"], attempt=event["attempt_index"]
     )
-    return sent
-
-
-def notify_retry_event(channel: MessageChannel, event: RetryNotification) -> bool:
-    if not channel.enabled:
-        logger.debug("retry_notification_disabled")
-        return False
-    sent = channel.send(retry_message(event)).sent
-    _log_delivery("retry", sent, reaction_dir=event["reaction_dir"], retry=event["retry_number"])
     return sent
 
 
@@ -249,11 +164,9 @@ def _log_delivery(kind: str, sent: bool, **context: object) -> None:
 
 __all__ = [
     "notify_queue_enqueued_event",
-    "notify_retry_event",
     "notify_run_finished_event",
     "notify_run_started_event",
     "queue_enqueued_message",
-    "retry_message",
     "run_finished_message",
     "run_started_message",
 ]

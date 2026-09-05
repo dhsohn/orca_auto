@@ -7,18 +7,15 @@ import pytest
 from orca_auto.core.config.schema import (
     CommonRuntimeConfig,
     DiscordConfig,
-    RetryRuntimeConfig,
-    as_int,
+    OrcaRuntimeConfig,
     as_nonempty_str,
     as_str,
     discord_config_from_mapping,
     explicit_nonnegative_int,
     messenger_config_from_mapping,
     normalize_admission_limit,
-    normalize_default_max_retries,
     normalize_max_concurrent,
 )
-from orca_auto.core.utils.coercion import positive_int
 
 
 @pytest.mark.parametrize(
@@ -77,26 +74,24 @@ def test_common_runtime_config_rejects_invalid_explicit_admission_limit(
         _ = config.resolved_admission_limit
 
 
-def test_retry_runtime_config_normalizes_shared_runtime_fields() -> None:
-    config = RetryRuntimeConfig(
+def test_orca_runtime_config_normalizes_shared_runtime_fields() -> None:
+    config = OrcaRuntimeConfig(
         allowed_root="/runs/engine",
-        default_max_retries=cast(Any, "-2"),
         max_concurrent=cast(Any, "0"),
         admission_limit=cast(Any, "2"),
     )
 
-    assert config.default_max_retries == 0
     assert config.max_concurrent == 1
     assert config.admission_root == "/runs/engine"
     assert config.admission_limit == 2
 
 
 @pytest.mark.parametrize("admission_limit", ["bad", "0", -1, True])
-def test_retry_runtime_config_rejects_invalid_explicit_admission_limit(
+def test_orca_runtime_config_rejects_invalid_explicit_admission_limit(
     admission_limit: object,
 ) -> None:
     with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
-        RetryRuntimeConfig(
+        OrcaRuntimeConfig(
             allowed_root="/runs/engine",
             admission_limit=cast(Any, admission_limit),
         )
@@ -129,48 +124,6 @@ def test_as_nonempty_str_preserves_existing_string_behavior(
 )
 def test_as_str_normalizes_config_text(value: object, default: str, expected: str) -> None:
     assert as_str(value, default) == expected
-
-
-@pytest.mark.parametrize(
-    ("value", "default", "expected"),
-    [
-        ("9", 2, 9),
-        ("bad", 2, 2),
-        (None, 2, 2),
-    ],
-)
-def test_as_int_returns_config_default_for_invalid_values(
-    value: object,
-    default: int,
-    expected: int,
-) -> None:
-    assert as_int(value, default) == expected
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("7", 7),
-        ("0", None),
-        ("bad", None),
-        (True, None),
-        (None, None),
-    ],
-)
-def test_positive_int_accepts_only_positive_values(value: object, expected: int | None) -> None:
-    assert positive_int(value) == expected
-
-
-@pytest.mark.parametrize(
-    ("value", "default", "expected"),
-    [
-        ("9", 2, 9),
-        ("bad", 2, 2),
-        ("-3", 2, 0),
-    ],
-)
-def test_normalize_default_max_retries(value: object, default: int, expected: int) -> None:
-    assert normalize_default_max_retries(value, default) == expected
 
 
 @pytest.mark.parametrize(("value", "expected"), [(0, 0), ("7", 7), (8.0, 8)])

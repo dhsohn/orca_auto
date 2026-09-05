@@ -119,7 +119,6 @@ _CONVERGENCE_ITEM_RE = re.compile(
 # never the route line.
 _CALC_TYPE_KEYWORDS: dict[str, str] = {
     "OPTTS": "ts",
-    "SCANTS": "ts",
     "OPT": "opt",
     "FREQ": "freq",
     "MD": "md",

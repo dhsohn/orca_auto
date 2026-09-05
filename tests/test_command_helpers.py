@@ -11,16 +11,15 @@ from unittest.mock import patch
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as CONFIG_ENV_VAR
 from orca_auto.core.config import engines as config_engines
 from orca_auto.core.config.engines import default_shared_config_path as default_config_path
-from orca_auto.orca.config import AppConfig, PathsConfig, RetryRuntimeConfig
+from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution import _emit
 from orca_auto.orca.run_context import _validate_reaction_dir
 
 
 def _cfg(allowed_root: Path, *, workflow_root: Path | None = None) -> AppConfig:
     return AppConfig(
-        runtime=RetryRuntimeConfig(
+        runtime=OrcaRuntimeConfig(
             allowed_root=str(allowed_root),
-            default_max_retries=3,
         ),
         workflow_root=str(workflow_root.resolve()) if workflow_root is not None else "",
         paths=PathsConfig(orca_executable="/usr/bin/orca"),

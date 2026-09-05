@@ -11,14 +11,12 @@ from typing import Literal, Self
 from orca_auto.core.messaging import Message, SendResult
 from orca_auto.orca.notifications import (
     notify_queue_enqueued_event,
-    notify_retry_event,
     notify_run_finished_event,
     notify_run_started_event,
     run_finished_message,
 )
 from orca_auto.orca.types import (
     QueueEnqueuedNotification,
-    RetryNotification,
     RunFinishedNotification,
     RunStartedNotification,
 )
@@ -34,26 +32,8 @@ def _started_event() -> RunStartedNotification:
         "current_inp": "/tmp/rxn<demo>/rxn.inp",
         "run_id": "run_x",
         "attempt_index": 1,
-        "max_retries": 2,
         "status": "running",
         "attempt_started_at": "2026-03-10T00:00:00+00:00",
-        "resumed": False,
-    }
-
-
-def _retry_event() -> RetryNotification:
-    return {
-        "reaction_dir": "/tmp/rxn<demo>",
-        "selected_inp": "/tmp/rxn<demo>/rxn.inp",
-        "failed_inp": "/tmp/rxn<demo>/rxn.inp",
-        "failed_out": "/tmp/rxn<demo>/rxn.out",
-        "next_inp": "/tmp/rxn<demo>/rxn.retry01.inp",
-        "attempt_index": 1,
-        "retry_number": 1,
-        "max_retries": 2,
-        "analyzer_status": "error_scf",
-        "analyzer_reason": "scf_not_converged",
-        "patch_actions": ["route_add_tightscf_slowconv", "geometry_restart_from_rxn.xyz"],
         "resumed": False,
     }
 
@@ -67,7 +47,6 @@ def _finished_event() -> RunFinishedNotification:
         "analyzer_status": "completed",
         "reason": "normal_termination",
         "attempt_count": 2,
-        "max_retries": 2,
         "completed_at": "2026-03-10T00:05:00+00:00",
         "last_out_path": "/tmp/rxn<demo>/rxn.retry01.out",
         "resumed": False,
@@ -126,7 +105,6 @@ def test_notify_run_started_delivers_message() -> None:
 def test_notify_skips_when_channel_disabled() -> None:
     channel = _FakeChannel(enabled=False)
     assert notify_run_started_event(channel, _started_event()) is False
-    assert notify_retry_event(channel, _retry_event()) is False
     assert notify_run_finished_event(channel, _finished_event()) is False
     assert notify_queue_enqueued_event(channel, _queued_event()) is False
     assert channel.sent_messages == []

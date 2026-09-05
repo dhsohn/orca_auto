@@ -202,7 +202,6 @@ def test_orca_sync_defers_contract_pass_after_rejection_and_keeps_reason(
         run_state_path="",
         report_json_path="",
         attempt_count=0,
-        max_retries=0,
         attempts=(),
         final_result={},
     )

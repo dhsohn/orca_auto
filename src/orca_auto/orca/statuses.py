@@ -6,7 +6,7 @@ from enum import Enum
 class RunStatus(str, Enum):
     CREATED = "created"
     RUNNING = "running"
-    RETRYING = "retrying"
+    RETRYING = "retrying"  # Retired: immutable historical state reader only.
     COMPLETED = "completed"
     FAILED = "failed"
 

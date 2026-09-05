@@ -7,9 +7,8 @@ coordinates — as plain fixed-width text that pastes cleanly into Word or a
 LaTeX source. Lint warnings (``⚠`` lines) flag what a reviewer would: a
 minimum with imaginary modes, a TS without exactly one, missing
 thermochemistry. Non-stationary relaxed scans still get no block; IRC gets a
-summary-only validation block with no coordinates. ScanTS does get a structure
-block, because ORCA finishes it with an internal OptTS so the final geometry is
-a genuine TS. Like the HTML report, generation must never break run
+summary-only validation block with no coordinates. Like the HTML report,
+generation must never break run
 finalization: every error is logged and swallowed.
 """
 
@@ -29,7 +28,7 @@ from orca_auto.core.engine_process import atomic_write_confined_bytes
 from ..completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from ..input_blocks import file_route_lines
 from ..parser import OrcaResult, parse_orca_output
-from ..scants import first_scan_coordinate_spec
+from ..relaxed_scan import first_scan_coordinate_spec
 from .attempts import final_out_path
 from .frequencies import (
     FrequencyAnalysis,
@@ -46,7 +45,7 @@ logger = logging.getLogger(__name__)
 # Their endpoints must never be published as structures in an SI. No SCAN
 # token here: `SCAN` in a route line is the density functional
 # (`! SCAN def2-SVP Opt Freq`), not a scan job — relaxed scans are identified
-# from the `%geom Scan` block and ScanTS by the TS check.
+# from the `%geom Scan` block and OptTS by the TS check.
 _NON_STATIONARY_ROUTE_RE = re.compile(
     r"\b(?:ZOOM-)?NEB(?:-CI)?\b|\bMD\b",
     re.IGNORECASE,
@@ -67,7 +66,7 @@ def structure_kind(selected_inp: Path) -> str | None:
     A plain relaxed scan (Opt route + scan coordinate), IRC, plain NEB paths,
     and MD end on non-stationary geometries that must never enter the
     stationary-structure SI path; IRC has a separate summary-only writer. TS
-    routes (OptTS/ScanTS/NEB-TS) and plain Opt end on stationary points.
+    routes (OptTS/NEB-TS) and plain Opt end on stationary points.
     Everything else (single points, bare Freq) is reported without a minimum/TS
     claim.
     """
@@ -235,7 +234,7 @@ def render_si_block_md(block: SiBlock) -> str:
 
     lines.extend(f"⚠ {warning}" for warning in block.warnings)
 
-    # Multi-attempt runs keep several outputs (`tsopt.out`, `.retry01`, ...):
+    # Multi-attempt runs keep several outputs (submitted and resumed outputs):
     # name the one these numbers came from, as the IRC block does.
     if block.last_out_name:
         lines.append(f"Last output: {block.last_out_name}")

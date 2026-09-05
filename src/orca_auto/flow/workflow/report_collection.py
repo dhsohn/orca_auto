@@ -104,15 +104,8 @@ _CANDIDATE_TASK_KINDS = frozenset({"opt", "optts_freq"})
 # decision the machine observation carries: ``summary.reason`` is cross-checked
 # against ``final_result`` before a generation is accepted.
 #
-# A stage whose analyzer did reach a TS verdict can still be closed under a
-# reason of the engine's own, with the last attempt's markers left intact:
-# ``retry_limit_reached`` (state_machine), and ``scants_recipes_exhausted`` and
-# ``rewrite_failed`` (attempt.retry, attempt.resume). Those publish no Nimag —
-# each of those reasons is also produced by outcomes that characterized no
-# stationary point, so none of them says which verdict produced the last
-# output. No live generation here records one: the only job states carrying
-# ``retry_limit_reached`` are fake-ORCA smoke fixtures with no machine
-# observation, so none of them can reach this function.
+# Only explicit TS verdict reasons authorize a count. Historical terminal
+# reasons without a TS verdict remain readable, but cannot supply Nimag.
 _TS_VERDICT_REASONS = frozenset({"ts_criteria_met", "ts_criteria_failed"})
 
 # How much of the output the recount reads, hashes and decodes at a time.
@@ -316,9 +309,8 @@ def _orca_stage_result(
         generation_dir = report_json_path.parent
         if candidate_task:
             # Only a candidate row carries a Nimag into the report, and the
-            # recount reads the stage's terminal output whole. A relaxed scan
-            # driven by ScanTS reaches a TS verdict too, so without this gate
-            # it would pay for a count no row publishes.
+            # recount reads the stage's terminal output whole. Other task kinds
+            # do not publish a TS-candidate verdict.
             imaginary_count = _final_section_imaginary_count(
                 generation_dir, report_payload, output_receipt
             )

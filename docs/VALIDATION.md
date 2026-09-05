@@ -8,7 +8,7 @@ orca_auto validation is split into two honest layers:
    ORCA/xTB/CREST deployment when a change depends on engine runtime semantics.
 
 This split is intentional. The public test suite should prove the queue,
-configuration, parser, retry-policy, reporting, packaging, and fake-engine
+configuration, parser, execution-policy, reporting, packaging, and fake-engine
 integration contracts without requiring private credentials or licensed binaries.
 Real-engine checks should be recorded explicitly when they are needed.
 
@@ -25,7 +25,7 @@ The GitHub Actions workflow runs multiple independent checks:
 
 The pytest suite exercises ORCA logic with unit tests,
 sanitized fixtures, and fake-engine integration paths. These checks cover durable queue behavior,
-state/report writing, parser behavior, retry policy, notification formatting,
+state/report writing, parser behavior, execution policy, notification formatting,
 workflow handoff contracts, and CLI surfaces.
 
 ## What CI does not prove
@@ -53,7 +53,7 @@ bash scripts/check.sh
 For focused changes, pass pytest selectors through the shared script:
 
 ```bash
-bash scripts/check.sh tests/test_scants_support.py -q
+bash scripts/check.sh tests/test_single_attempt_contract.py -q
 bash scripts/check.sh tests/flow -q
 ```
 
@@ -99,7 +99,7 @@ Use a real ORCA acceptance check when a PR changes one of these areas:
 
 - ORCA process invocation;
 - input selection or resource directive rewriting;
-- retry/resume policy;
+- execution/recovery policy;
 - output analyzer classification;
 - report fields derived from real ORCA output;
 - systemd/runtime behavior that cannot be represented by fake-engine tests.
@@ -144,10 +144,28 @@ ORCA 6.1.1:
 - Idle five-worker supervisor with no calculation queued: steady CPU near `1.55%`
   of one core and about `160-165 MB` resident, with no fan spin-up.
 
-At the time of writing, real-engine re-validation is paused: the workstation is
-held for a hardware power/thermal issue that is under separate investigation. The
-public CI and fake-engine suites do not depend on that hardware and continue to
-run.
+Real-engine re-validation is an opt-in maintenance check, separate from the
+public CI and fake-engine suites. Record the exact runtime, calculation type,
+and observed result for each acceptance run; historical workstation incidents
+are not evidence of a current execution restriction.
+
+### 4.0.0 removal acceptance (2026-09-05)
+
+ORCA 6.1.1 on Linux/WSL2, one core per job, isolated temporary queues:
+
+- H2 `HF STO-3G SP TightSCF`: the opt-in
+  `test_real_orca_h2_single_point_acceptance_when_configured` test passed,
+  including normal termination, state, report, SI output and released admission.
+- H2O `HF STO-3G Opt TightSCF`, `%geom Scan` bond 0–1 from 0.8 to 1.1 Å in
+  four points: completed normally with four finite surface energies and a
+  relaxed-scan HTML report.
+- H2O `HF STO-3G SP TightSCF` with `%scf MaxIter 1`: intentionally failed
+  SCF convergence and ended after one attempt with `scf_not_converged`.
+  No retry input was generated; the submitted input remained unchanged.
+
+The CI-pinned common validator accepted all three generated `machine.json`
+files and their artifact receipts. These checks cover the stated runtime paths,
+not untested calculation types or a scientific TS-search acceptance.
 
 ## Fixture and artifact policy
 
@@ -157,7 +175,7 @@ run.
 - Do not commit credentials, private paths, messenger bot tokens, channel IDs, or private
   research data.
 - When a fixture represents a failure mode, document the expected classifier,
-  retry decision, and safe next action.
+  failure decision, and safe next action.
 
 ## PR validation reporting
 

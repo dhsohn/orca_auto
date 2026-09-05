@@ -124,7 +124,6 @@
 - `messenger.discord.timeout_seconds`
 - `messenger.discord.max_attempts`
 - `messenger.discord.retry_backoff_seconds`
-- `orca.runtime.default_max_retries`
 - `orca.runtime.scratch_root`
 - `orca.runtime.scratch_min_free_gb`
 - `orca.paths.orca_executable`
@@ -141,17 +140,17 @@
   해당 section에서 설정 로딩을 실패시킵니다. 명시한 `scheduler`, `resources`,
   `workflow`, `workflow.paths`, `messenger`, `orca`, `orca.runtime`, `orca.paths`
   section은 mapping이어야 합니다. `scheduler.admission_root`는 절대 Linux 경로여야
-  하고 명시한 scheduler/resource 상한은 양의 정수, 명시한
-  `orca.runtime.default_max_retries`는 음이 아닌 정수여야 합니다. section 또는 키를
+  하고 명시한 scheduler/resource 상한은 양의 정수여야 합니다. section 또는 키를
   생략하면 문서화된 기본값을 사용하지만, 명시한 실행 제어 키의 잘못된 값은 기본값으로
   바꾸지 않고 거부합니다.
 - YAML node가 없는 문서(빈 파일, 공백만 있는 파일, 주석만 있는 파일)는 빈 mapping으로
   취급합니다. 내용이 없는 `---` 문서를 포함해 최상위에 명시한 YAML null, scalar,
   sequence는 거부합니다. 모든 중첩 깊이에서 중복 mapping key를 last-key-wins로
   처리하지 않고 거부합니다.
-- `orca.runtime.default_max_retries: 0`은 ORCA 재시도를 비활성화합니다.
-- 양수 `default_max_retries`는 ORCA route 종류별 cap을 따르는 계산 종류별 재시도 정책을
-  활성화합니다.
+- ORCA 계산 실패는 첫 attempt에서 terminal로 종료합니다. 제거된
+  `orca.runtime.default_max_retries` 키는 0을 포함해 거부하며 별칭은 없습니다.
+- 활성 `ScanTS` route token은 generation 생성과 큐 발행 전에 거부합니다.
+  일반 relaxed scan과 `scan_ts_search` 워크플로우는 계속 지원합니다.
 - `orca.runtime.scratch_root`를 설정하면 `/dev/shm` 아래의 전용 디렉터리여야 하고,
   `scratch_min_free_gb`는 양의 정수여야 합니다. ORCA는 한 번에 하나의 private tmpfs attempt만
   실행하고 `*.tmp`/`*.tmp.*`를 제외한 남은 일반 파일을 inode로 고정한 durable visible
@@ -279,7 +278,7 @@ fence marker는 내부 구현 상태이므로 client가 편집하면 안 됩니�
 
 xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새
 xTB/CREST/ORCA 행에는 제출 시점 execution snapshot이 들어갑니다. 새 ORCA 행은 직접
-하위 visible `YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 소유하고 snapshot schema 2를
+하위 visible `YYYYMMDD-HHMMSS-<8자리 hex>/` 하나를 소유하고 snapshot schema 3를
 사용하며 ORCA용 `.orca_auto_input_snapshots/`, `.orca_auto_orca_executions/`, 중첩
 `.inputs/`를 만들지 않습니다. 바인딩한 선택 `.inp`와 의존성은 소스 basename을 유지합니다. 서로 다른
 소스 경로가 같은 basename을 쓰면 바이트가 같아도 제출을 fail-closed합니다.
@@ -289,7 +288,7 @@ Basename이 다르고 ORCA가 그 이름을 출력으로
 route에서도 주 `* xyzfile` 의존성 하나만 그 exact 이름을 쓰는 경우는 허용합니다.
 바인딩 `.inp`에 그 좌표를 inline하고, 실행 뒤 ORCA가 visible XYZ를 갱신할 수 있습니다.
 같은 stem의 보조 NEB Product/TS 입력은 계속 지원하지 않습니다. 주파수 route는
-`<stem>.hess`를, EnGrad/EnergyGrad·NumGrad·optimization·OptTS/ScanTS·IRC route는
+`<stem>.hess`를, EnGrad/EnergyGrad·NumGrad·optimization·OptTS·IRC route는
 `<stem>.engrad`를, 모든 route는 `<stem>.out`과 `<stem>.gbw`를 예약합니다. 선택 `.inp`
 basename과 generation이 소유하는 `job_state.json`, `machine.json`도 의존성
 basename으로 쓰면 제출 단계에서 거부합니다. `%base`와 NEB restart-GBW basename
@@ -415,7 +414,7 @@ orca_auto 내부 구현 상태이며 Hermes handoff 계약이 아닙니다:
 - `timestamps.started_at`, `timestamps.updated_at`, `timestamps.finished_at`은 가능할 때
   UTC 계열 ISO 문자열입니다.
 - `artifacts.last_out_path`는 알려진 경우 마지막 ORCA 출력 경로입니다.
-- `engine_payload.run_id`, `engine_payload.max_retries`, `engine_payload.attempts`,
+- `engine_payload.run_id`, `engine_payload.attempts`,
   `engine_payload.final_result`는 ORCA 고유 실행 세부 정보입니다.
 
 공개 `machine.json`은 `factory/machine-observation` version 1을 사용하며 최상위에는
@@ -464,7 +463,7 @@ ORCA 실행 상태:
 
 - `created`
 - `running`
-- `retrying`
+- `retrying` (은퇴한 과거 기록 읽기 전용 값; 새 ORCA 실행에서는 기록하지 않음)
 - `completed`
 - `failed`
 
@@ -482,13 +481,19 @@ ORCA analyzer 상태:
 - `incomplete`
 - `unknown_failure`
 
-문서화되거나 테스트된 reason 문자열은 이슈 triage와 리포트 해석의 일부입니다. 중요한 현재
-예시는 `normal_termination`, `existing_out_completed`, `retry_limit_reached`,
-`interrupted_by_user`, `worker_shutdown`, `crashed_recovery`, `runner_exception`,
-`cancel_requested`, `rewrite_failed`, `scants_recipes_exhausted`입니다.
+첫 계산 실패는 terminal로 종료하며 analyzer reason을 그대로 보존합니다.
+재시도 입력·횟수·fallback 레시피·재시도 알림은 생성하지 않습니다.
+worker/host 중단 복구와 명시적 workflow restart는 별도 동작이며 계속 지원합니다.
 
-유효 `max_retries`가 0이면 첫 실패 attempt가 terminal이 되며 analyzer reason을 final reason으로
-보존합니다. `retry_limit_reached`는 양수 retry budget을 소진한 경우에만 사용합니다.
+과거 `retrying`과 은퇴 reason(`retry_limit_reached`, `rewrite_failed`,
+`scants_recipes_exhausted`)은 읽어서 해석할 수 있지만 새 실행을 유발하지 않습니다.
+기존 generation artifact는 전환·덮어쓰기·삭제하지 않습니다. 과거
+`max_retries` 필드가 있으면 generation state와 machine observation의 값이
+일치하는지 계속 검증합니다. 이 generation의 terminal replay와 알림 수신 기록은
+현재 형식의 root bookkeeping만 갱신합니다.
+execution snapshot schema 3만 실행하며, 이전 큐 제출은 drain/cancel 후 사용자가
+명시적으로 다시 제출해야 합니다. 과거 schema 2의 읽기는 동일한 generation 소유권
+검증을 유지합니다.
 
 ## 워크플로우 계약
 

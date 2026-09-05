@@ -24,7 +24,6 @@ class OrcaArtifactContract:
     run_state_path: str = ""
     report_json_path: str = ""
     attempt_count: int = 0
-    max_retries: int = 0
     attempts: tuple[dict[str, Any], ...] = ()
     final_result: dict[str, Any] = field(default_factory=dict)
     resource_request: dict[str, int] = field(default_factory=dict)
@@ -50,7 +49,6 @@ class OrcaArtifactContract:
             "run_state_path": self.run_state_path,
             "report_json_path": self.report_json_path,
             "attempt_count": self.attempt_count,
-            "max_retries": self.max_retries,
             "attempts": [dict(item) for item in self.attempts],
             "final_result": dict(self.final_result),
             "resource_request": dict(self.resource_request),

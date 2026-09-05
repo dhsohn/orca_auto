@@ -133,10 +133,6 @@ def explicit_nonnegative_int(value: Any, *, field_name: str) -> int:
     return parsed
 
 
-def normalize_default_max_retries(value: Any, default: int = 2) -> int:
-    return max(0, as_int(value, default))
-
-
 def normalize_max_concurrent(value: Any, default: int = 4) -> int:
     return max(1, as_int(value, default))
 
@@ -180,18 +176,13 @@ class CommonRuntimeConfig(RuntimeAdmissionMixin):
 
 
 @dataclass
-class RetryRuntimeConfig(RuntimeAdmissionMixin):
+class OrcaRuntimeConfig(RuntimeAdmissionMixin):
     allowed_root: str = ""
-    default_max_retries: int = 2
     max_concurrent: int = 4
     admission_root: str | None = ""
     admission_limit: int | None = None
 
     def __post_init__(self) -> None:
-        self.default_max_retries = normalize_default_max_retries(
-            self.default_max_retries,
-            2,
-        )
         self.max_concurrent = normalize_max_concurrent(
             self.max_concurrent,
             4,

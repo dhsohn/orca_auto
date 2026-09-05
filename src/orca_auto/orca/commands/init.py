@@ -33,13 +33,9 @@ class _PromptedEngineRuntime(TypedDict):
     executable: str
 
 
-class _PromptedOrcaRuntime(_PromptedEngineRuntime):
-    default_max_retries: int
-
-
 @dataclass(frozen=True)
 class _PromptedInitValues:
-    orca_runtime: _PromptedOrcaRuntime
+    orca_runtime: _PromptedEngineRuntime
     xtb_runtime: dict[str, str]
     crest_runtime: dict[str, str]
     max_active_simulations: int
@@ -161,10 +157,6 @@ def _prompt_int(label: str, *, default: str, minimum: int) -> int:
         return value
 
 
-def _prompt_default_max_retries() -> int:
-    return _prompt_int("default_max_retries", default="2", minimum=0)
-
-
 def _prompt_max_active_simulations() -> int:
     return _prompt_int("max_active_simulations", default="4", minimum=1)
 
@@ -205,11 +197,10 @@ def _prompt_runs_root() -> str:
     return str(runs_root)
 
 
-def _prompt_orca_runtime() -> _PromptedOrcaRuntime:
+def _prompt_orca_runtime() -> _PromptedEngineRuntime:
     return {
         "runs_root": _prompt_runs_root(),
         "executable": str(_prompt_orca_executable()),
-        "default_max_retries": _prompt_default_max_retries(),
     }
 
 
@@ -306,9 +297,7 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
         },
         "messenger": values.messenger,
         "orca": {
-            "runtime": {
-                "default_max_retries": values.orca_runtime["default_max_retries"],
-            },
+            "runtime": {},
             "paths": {
                 "orca_executable": str(values.orca_runtime["executable"]),
             },

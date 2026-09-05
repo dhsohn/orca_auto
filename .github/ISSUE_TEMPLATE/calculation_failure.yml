@@ -1,19 +1,19 @@
-name: Calculation failure / retry triage
-description: Report an ORCA or workflow calculation that failed, retried incorrectly, or needs classification.
+name: Calculation failure triage
+description: Report an ORCA or workflow calculation that failed or needs classification.
 title: "calc: "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Use this form when the primary question is how orca_auto classified, retried, resumed, or reported a calculation. Remove secrets and private research data before posting.
+        Use this form when the primary question is how orca_auto classified, resumed, or reported a calculation. Remove secrets and private research data before posting.
   - type: dropdown
     id: calculation-type
     attributes:
       label: Calculation or workflow type
       options:
         - ORCA Opt/Freq/single job
-        - ORCA ScanTS
+        - scan_ts_search workflow
         - ORCA OptTS
         - ORCA IRC
         - ORCA NEB-TS
@@ -46,14 +46,13 @@ body:
     validations:
       required: true
   - type: textarea
-    id: retry
+    id: recovery
     attributes:
-      label: Retry/resume behavior
-      description: What retry happened or did not happen? Include attempt numbers and generated retry input names when available.
+      label: Interruption recovery behavior
+      description: If execution was interrupted, describe the recovery and checkpoint used. Calculation failures are terminal.
       placeholder: |
-        attempt 1:
-        attempt 2:
-        retry input:
+        interruption:
+        recovered execution:
         restart artifact used:
   - type: textarea
     id: artifacts
@@ -66,7 +65,7 @@ body:
     attributes:
       label: Expected safe next action
       description: If you know it, state the safe next action. Otherwise say what is unclear.
-      placeholder: Fail closed, reverse ScanTS from endpoint, complete endpoint scan first, no retry, etc.
+      placeholder: Report the failure, recover an interrupted execution, or explicitly submit a corrected input.
   - type: checkboxes
     id: checks
     attributes:
@@ -74,5 +73,3 @@ body:
       options:
         - label: I removed credentials, private paths, and proprietary/private structures that cannot be public.
           required: true
-        - label: I did not request a generic non-ScanTS restart for a ScanTS-specific failure without evidence of a safe restart source.
-          required: false

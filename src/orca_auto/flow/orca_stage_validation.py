@@ -20,7 +20,7 @@ from orca_auto.orca.input_blocks import (
     validate_supported_xyz_geometry_syntax,
 )
 from orca_auto.orca.job_type import FREQ_RE
-from orca_auto.orca.scants import validate_scan_coordinate_lines
+from orca_auto.orca.relaxed_scan import validate_scan_coordinate_lines
 
 from .contracts.workflow import SUPPORTED_WORKFLOW_ORCA_TASK_KINDS
 from .xyz_utils import validated_xyz_atom_count

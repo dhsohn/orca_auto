@@ -1,1 +1,1 @@
-"""ORCA attempt engine: retry, resume, reporting, notifications."""
+"""ORCA attempt engine: interrupted-run recovery, reporting, notifications."""

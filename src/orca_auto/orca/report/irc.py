@@ -485,7 +485,7 @@ def _parse_attempt_irc_output(attempt: Mapping[str, Any]) -> IrcParsedOutput | N
 def _latest_parsed_irc_output(attempts: Sequence[Mapping[str, Any]]) -> IrcParsedOutput:
     """Latest attempt output that actually contains IRC data.
 
-    A retry that died before the IRC driver started (or a trailing Freq-only
+    An execution that died before the IRC driver started (or a trailing Freq-only
     attempt) parses to an empty result; skipping such shells keeps the report
     consistent with the per-attempt detail column instead of masking an
     earlier attempt's parsed path.
@@ -579,7 +579,7 @@ def _path_chart_svg(data: IrcReportData) -> str:
 
 
 def _is_ts_route(route_line: str) -> bool:
-    return bool(re.search(r"\b(?:OPTTS|SCANTS|(?:ZOOM-)?NEB-TS)\b", route_line, re.IGNORECASE))
+    return bool(re.search(r"\b(?:OPTTS|(?:ZOOM-)?NEB-TS)\b", route_line, re.IGNORECASE))
 
 
 def _optimization_section_title(data: IrcReportData) -> str:

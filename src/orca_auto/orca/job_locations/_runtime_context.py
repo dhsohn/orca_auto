@@ -234,18 +234,19 @@ def _strict_identity(value: Any) -> tuple[int, int] | None:
 
 def _requires_schema_two_generation(inputs: _RuntimeInputs) -> bool:
     snapshot = queue_entry_metadata_value(inputs.queue_entry, "execution_snapshot")
-    return (
-        isinstance(snapshot, Mapping) and snapshot.get("version") == ORCA_EXECUTION_SNAPSHOT_VERSION
-    )
+    return isinstance(snapshot, Mapping) and snapshot.get("version") in {
+        2,
+        ORCA_EXECUTION_SNAPSHOT_VERSION,
+    }
 
 
 def _execution_generation(inputs: _RuntimeInputs) -> _ExecutionGeneration | None:
     queue_entry = inputs.queue_entry
     snapshot = queue_entry_metadata_value(queue_entry, "execution_snapshot")
-    if (
-        not isinstance(snapshot, Mapping)
-        or snapshot.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION
-    ):
+    if not isinstance(snapshot, Mapping) or snapshot.get("version") not in {
+        2,
+        ORCA_EXECUTION_SNAPSHOT_VERSION,
+    }:
         return None
 
     reaction_text = normalize_text(queue_entry_metadata_value(queue_entry, "reaction_dir"))

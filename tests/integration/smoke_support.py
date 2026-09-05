@@ -94,7 +94,7 @@ def configure_fake_orca(config_path: Path, executable: Path) -> None:
     if not isinstance(raw, dict):
         raise AssertionError("shared smoke config must be a mapping")
     raw["orca"] = {
-        "runtime": {"default_max_retries": 0},
+        "runtime": {},
         "paths": {"orca_executable": str(executable.resolve())},
     }
     config_path.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")

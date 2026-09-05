@@ -97,7 +97,6 @@ def test_load_orca_artifact_contract_prefers_orca_contract_payload_helper(tmp_pa
                 (tmp_path / "outputs" / "run_helper_1" / "job_report.json").resolve()
             ),
             "attempt_count": 2,
-            "max_retries": 3,
             "attempts": [{"attempt_number": 1, "analyzer_status": "completed"}],
             "final_result": {"reason": "normal_termination"},
             "resource_request": {"max_cores": 8, "max_memory_gb": 16},
@@ -113,5 +112,4 @@ def test_load_orca_artifact_contract_prefers_orca_contract_payload_helper(tmp_pa
     assert contract.status == "completed"
     assert contract.queue_id == "q_helper_1"
     assert contract.attempt_count == 2
-    assert contract.max_retries == 3
     assert contract.final_result["reason"] == "normal_termination"

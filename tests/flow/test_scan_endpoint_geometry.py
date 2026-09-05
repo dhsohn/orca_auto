@@ -21,7 +21,7 @@ def test_scan_endpoint_uses_the_last_retained_row_index(tmp_path: Path) -> None:
     # energy), so three rows are retained but the last step is 4. The
     # endpoint geometry is `.004.xyz`; counting rows would pick `.003.xyz`.
     inp = tmp_path / "scan.inp"
-    inp.write_text("! ScanTS B3LYP def2-SVP\n", encoding="utf-8")
+    inp.write_text("! Opt B3LYP def2-SVP\n", encoding="utf-8")
     out = tmp_path / "scan.out"
     out.write_text(
         "\n".join(
@@ -46,7 +46,7 @@ def test_scan_endpoint_uses_the_last_retained_row_index(tmp_path: Path) -> None:
 def test_scan_endpoint_without_a_surface_or_scan_spec_is_none(tmp_path: Path) -> None:
     # No table and no `scan_coordinate` metadata: nothing to number the endpoint by.
     inp = tmp_path / "scan.inp"
-    inp.write_text("! ScanTS B3LYP def2-SVP\n", encoding="utf-8")
+    inp.write_text("! Opt B3LYP def2-SVP\n", encoding="utf-8")
     out = tmp_path / "scan.out"
     out.write_text("no surface here\n", encoding="utf-8")
     stage = _scan_stage(inp, out)

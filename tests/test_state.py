@@ -74,7 +74,7 @@ class TestState(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
             generation, provenance = _bind_generation(reaction, token="bounded-report-token-0001")
-            state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+            state = new_state(reaction, generation / "nebts.inp")
             state["execution_provenance"] = provenance
             report_path = write_report_json(reaction, dict(state))
             assert report_path is not None
@@ -90,7 +90,7 @@ class TestState(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             reaction = Path(td)
             generation, provenance = _bind_generation(reaction, token="swapped-report-token-0001")
-            state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+            state = new_state(reaction, generation / "nebts.inp")
             state["execution_provenance"] = provenance
             report_path = write_report_json(reaction, dict(state))
             assert report_path is not None
@@ -171,7 +171,7 @@ class TestState(unittest.TestCase):
             reaction = Path(td)
             generation, provenance = _bind_generation(reaction, token="state-leak-token-0001")
             inp = generation / "nebts.inp"
-            state = new_state(reaction, inp, max_retries=1)
+            state = new_state(reaction, inp)
             self.assertRegex(str(state["run_id"]), re.compile(r"^run_\d{8}_\d{6}_[0-9a-f]{32}$"))
             state["execution_provenance"] = provenance
 
@@ -191,7 +191,7 @@ class TestState(unittest.TestCase):
             reaction = Path(td)
             inp = reaction / "rxn.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
-            state = new_state(reaction, inp, max_retries=1)
+            state = new_state(reaction, inp)
             state["queue_id"] = "q-orca-round-trip"
             state["queue_generation"] = "a" * 64
 
@@ -211,7 +211,7 @@ class TestState(unittest.TestCase):
             reaction = Path(td)
             inp = reaction / "rxn.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
-            save_state(reaction, new_state(reaction, inp, max_retries=1))
+            save_state(reaction, new_state(reaction, inp))
 
             raw = json.loads((reaction / "job_state.json").read_text(encoding="utf-8"))
             self.assertEqual(raw["job"]["queue_id"], "")
@@ -222,7 +222,7 @@ class TestState(unittest.TestCase):
             reaction = Path(td)
             inp = reaction / "rxn.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
-            state = new_state(reaction, inp, max_retries=1)
+            state = new_state(reaction, inp)
 
             reports = write_report_files(reaction, state)
 
@@ -237,7 +237,7 @@ class TestState(unittest.TestCase):
             reaction.mkdir()
             inp = reaction / "rxn.inp"
             inp.write_text("! Opt\n", encoding="utf-8")
-            state = new_state(reaction, inp, max_retries=1)
+            state = new_state(reaction, inp)
             original_identity = (reaction.stat().st_dev, reaction.stat().st_ino)
 
             @contextmanager
@@ -272,7 +272,7 @@ class TestState(unittest.TestCase):
             generation.mkdir()
             inp = generation / "nebts.inp"
             inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
-            state = new_state(reaction, inp, max_retries=0)
+            state = new_state(reaction, inp)
             generation_status = generation.stat()
             reaction_status = reaction.stat()
             owner_token = "state-mirror-owner-token-0001"
@@ -314,7 +314,7 @@ class TestState(unittest.TestCase):
             generation.mkdir()
             inp = generation / "nebts.inp"
             inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
-            state = new_state(reaction, inp, max_retries=0)
+            state = new_state(reaction, inp)
             generation_status = generation.stat()
             reaction_status = reaction.stat()
             owner_token = "state-mirror-owner-token-0002"
@@ -354,7 +354,7 @@ class TestState(unittest.TestCase):
             inp = generation / "nebts.inp"
             inp.write_text("! NEB-TS\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
             generation_status = generation.stat()
-            state = new_state(reaction, inp, max_retries=0)
+            state = new_state(reaction, inp)
             state["execution_provenance"] = {
                 "execution_dir": str(generation),
                 "execution_dir_identity": {
@@ -391,7 +391,7 @@ class TestState(unittest.TestCase):
             reaction = Path(td)
             generation, provenance = _bind_generation(reaction, token="state-helper-token-0001")
             inp = generation / "nebts.inp"
-            state = new_state(reaction, inp, max_retries=2)
+            state = new_state(reaction, inp)
             state["execution_provenance"] = provenance
 
             saved_path = write_state(reaction, state)
@@ -406,7 +406,6 @@ class TestState(unittest.TestCase):
                 "started_at": state["started_at"],
                 "updated_at": state["updated_at"],
                 "attempt_count": 0,
-                "max_retries": 2,
                 "attempts": [],
                 "execution_provenance": provenance,
                 "final_result": None,
@@ -430,7 +429,7 @@ class TestState(unittest.TestCase):
             reaction = Path(td)
             generation, provenance = _bind_generation(reaction, token="state-fields-token-0001")
             inp = generation / "nebts.inp"
-            state = new_state(reaction, inp, max_retries=3)
+            state = new_state(reaction, inp)
             state["status"] = "completed"
             state["attempts"] = [
                 {
@@ -482,7 +481,7 @@ class TestState(unittest.TestCase):
             assert report is not None
             self.assertIsNone(load_report_json(generation, require_consumable_success=True))
             self.assertEqual(report["status"]["state"], "completed")
-            self.assertEqual(report["engine_payload"]["max_retries"], 3)
+            self.assertNotIn("max_retries", report["engine_payload"])
             self.assertEqual(len(report["engine_payload"]["attempts"]), 1)
             self.assertEqual(report["engine_payload"]["attempts"], state["attempts"])
             self.assertEqual(
@@ -496,7 +495,7 @@ class TestState(unittest.TestCase):
             reaction = Path(td)
             generation, provenance = _bind_generation(reaction, token="reentry-terminal-tok-01")
             inp = generation / "nebts.inp"
-            state = new_state(reaction, inp, max_retries=0)
+            state = new_state(reaction, inp)
             state["status"] = "completed"
             state["execution_provenance"] = provenance
             state["final_result"] = {
@@ -539,7 +538,7 @@ class TestState(unittest.TestCase):
                     reaction,
                     token=f"unsafe-machine-link-token-{link_kind}",
                 )
-                state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+                state = new_state(reaction, generation / "nebts.inp")
                 state["status"] = "completed"
                 state["execution_provenance"] = provenance
 
@@ -597,7 +596,7 @@ class TestState(unittest.TestCase):
                 reaction,
                 token="immutable-machine-token-0001",
             )
-            state = new_state(reaction, generation / "nebts.inp", max_retries=0)
+            state = new_state(reaction, generation / "nebts.inp")
             state["status"] = "failed"
             state["execution_provenance"] = provenance
             final_result: RunFinalResult = {

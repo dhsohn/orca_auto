@@ -365,24 +365,6 @@ def test_neb_ts_route_is_still_a_ts_block(tmp_path: Path) -> None:
     assert block.kind == "ts"
 
 
-def test_scants_route_is_a_ts_block(tmp_path: Path) -> None:
-    inp_text = (
-        "! ScanTS B3LYP def2-SVP Freq\n"
-        "%geom\n  Scan\n    B 0 1 = 1.0, 2.0, 5\n  end\nend\n"
-        "* xyz 0 1\nC 0 0 0\n*\n"
-    )
-    reaction_dir, state = _job_dir(
-        tmp_path,
-        "scants_job",
-        inp_text=inp_text,
-        out_text=_out_text(route="ScanTS B3LYP def2-SVP Freq", freqs=(-512.3, 120.0), thermo=True),
-    )
-
-    block = collect_si_block(reaction_dir, state)
-    assert block is not None
-    assert block.kind == "ts"
-
-
 def test_incomplete_job_gets_no_block(tmp_path: Path) -> None:
     reaction_dir, state = _job_dir(tmp_path, "failed_job", inp_text=_TS_INP, out_text=_out_text())
     state["status"] = "failed"

@@ -177,13 +177,6 @@ def attempt_count(state: dict[str, Any], report: dict[str, Any]) -> int:
     return 0
 
 
-def max_retries(state: dict[str, Any], report: dict[str, Any]) -> int:
-    report_value = safe_int(report.get("max_retries"), default=-1)
-    if report_value >= 0:
-        return report_value
-    return safe_int(state.get("max_retries"), default=0)
-
-
 def coerce_attempts(state: dict[str, Any], report: dict[str, Any]) -> tuple[dict[str, Any], ...]:
     raw_attempts = report.get("attempts")
     if not isinstance(raw_attempts, list):

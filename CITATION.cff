@@ -8,8 +8,8 @@ authors:
 repository-code: "https://github.com/dhsohn/orca_auto"
 url: "https://github.com/dhsohn/orca_auto"
 license: MIT
-version: "3.1.0"
-date-released: "2026-09-04"
+version: "4.0.0"
+date-released: "2026-09-05"
 keywords:
   - computational chemistry
   - ORCA

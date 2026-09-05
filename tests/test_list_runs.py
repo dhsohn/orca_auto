@@ -34,9 +34,7 @@ class _ListTestBase(unittest.TestCase):
                 {
                     "runs_root": str(allowed_root),
                     "orca": {
-                        "runtime": {
-                            "default_max_retries": 2,
-                        },
+                        "runtime": {},
                         "paths": {"orca_executable": str(fake_orca)},
                     },
                 }
@@ -73,7 +71,6 @@ class _ListTestBase(unittest.TestCase):
             "run_id": run_id or f"run_{reaction_dir.name}",
             "reaction_dir": str(reaction_dir),
             "selected_inp": str(reaction_dir / inp_name),
-            "max_retries": 2,
             "status": status,
             "started_at": started_at,
             "updated_at": updated_at,
@@ -202,7 +199,6 @@ class TestListStandaloneRuns(_ListTestBase):
                 "run_id": "run_tracked",
                 "reaction_dir": str(organized),
                 "selected_inp": str(organized / "tracked.inp"),
-                "max_retries": 2,
                 "status": "completed",
                 "started_at": "2026-03-01T00:00:00+00:00",
                 "updated_at": "2026-03-01T01:00:00+00:00",

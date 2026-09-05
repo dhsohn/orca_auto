@@ -44,11 +44,10 @@ surface. Its hardening priorities were:
   separated clearly under the configured runs root.
 - Harden queue cancellation, orphan reconciliation, worker restart, and terminal
   state transitions.
-- Keep ScanTS and `scan_ts_search` behavior explicit: job-level retries only for
-  recognized calculation failures, workflow-level extension/reverse exploration
-  for search strategy.
+- Keep the `scan_ts_search` workflow's relaxed-scan/OptTS exploration explicit;
+  standalone ORCA calculation failures are terminal.
 - Improve report readability for failed jobs, partial workflow progress, and
-  retry-exhausted outcomes.
+  failed calculation outcomes.
 - Add focused tests around low-coverage runtime glue only when it protects a
   public contract or a high-risk failure mode.
 - Keep Korean documentation updated for user-facing behavior when English docs
@@ -105,8 +104,7 @@ changes the scope deliberately:
 - Requiring licensed chemistry binaries in public CI.
 - Publishing private structures, raw proprietary outputs, credentials, or
   site-specific scheduler policy as fixtures.
-- Reintroducing broad automatic retry ladders that are not tied to explicit,
-  tested calculation classes.
+- Reintroducing automatic ORCA calculation-failure retries or direct ScanTS support.
 - Adding one-off local lab scripts to the public CLI without a reusable contract.
 
 ## How To Use This Roadmap

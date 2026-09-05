@@ -38,11 +38,11 @@ from orca_auto.flow.orchestration.workflow_builders import _copy_input_impl
 from orca_auto.flow.registry import sync_workflow_registry
 from orca_auto.flow.state import write_workflow_payload
 from orca_auto.flow.xyz_utils import load_xyz_atom_sequence
+from orca_auto.orca.relaxed_scan import validate_scan_coordinate
 from orca_auto.orca.report.interaction_energy import (
     validate_fragment_electronic_states,
     validate_fragment_partition,
 )
-from orca_auto.orca.scants import validate_scan_coordinate
 
 
 @dataclass(frozen=True)

@@ -489,7 +489,9 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
             execution_dir_text = str(snapshot.get("execution_dir") or "").strip()
             snapshot_identity = snapshot.get("execution_dir_identity")
             if (
-                snapshot.get("version") != 2
+                # Directory ownership is shared by historical v2 and current v3;
+                # engine admission separately rejects retired execution contracts.
+                snapshot.get("version") not in {2, 3}
                 or not execution_dir_text
                 or not isinstance(snapshot_identity, Mapping)
             ):

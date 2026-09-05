@@ -201,7 +201,7 @@ def collect_neb_report_data(
         )
 
     # Prefer the latest attempt whose output actually contains NEB data (or
-    # optimization cycles); a retry that died before the driver started parses
+    # optimization cycles); an execution that died before the driver started parses
     # to an empty shell and must not mask an earlier attempt's results.
     parsed = next(
         (entry for entry in reversed(parsed_attempts) if _neb_parse_has_content(entry)),

@@ -43,7 +43,6 @@ def stage_event_metadata(stage: dict[str, Any]) -> dict[str, Any]:
         "xtb_handoff_retries_used",
         "xtb_handoff_retry_limit",
         "orca_attempt_count",
-        "orca_max_retries",
         "output_artifact_count",
     )
     for field in text_fields:

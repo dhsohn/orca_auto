@@ -147,7 +147,6 @@ def test_materialized_inhess_survives_freq_snapshot_binding(tmp_path: Path) -> N
         Path(materialized.selected_inp),
         selected_input_xyz=materialized.selected_xyz,
         resource_request={"max_cores": 4, "max_memory_gb": 8},
-        max_retries=2,
         orca_executable=executable,
     )
     dependency_names = {Path(path).name for path in snapshot["dependency_paths"]}

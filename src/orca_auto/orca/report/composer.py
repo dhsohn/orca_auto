@@ -10,7 +10,7 @@ from typing import Any
 
 from ..completion_rules import OPT_ROUTE_RE, TS_ROUTE_RE
 from ..input_blocks import file_route_lines
-from ..scants import first_scan_coordinate_spec, input_uses_scants
+from ..relaxed_scan import first_scan_coordinate_spec
 from .irc import (
     IrcReportData,
     collect_irc_report_data,
@@ -35,12 +35,12 @@ from .opt import (
     opt_report_meta_html,
 )
 from .render import ReportComponent, ReportPage, render_page, verdict_note
-from .scants import (
-    ScantsReportData,
-    collect_scants_report_data,
-    scants_report_badges,
-    scants_report_component,
-    scants_report_meta_html,
+from .scan import (
+    ScanReportData,
+    collect_scan_report_data,
+    scan_report_badges,
+    scan_report_component,
+    scan_report_meta_html,
 )
 from .si import structure_kind
 from .sp import (
@@ -54,7 +54,7 @@ from .sp import (
 # Every flavor shares the fields the composer needs for the page frame
 # (title, reason, attempts, last_out_name), so the primary facet is a plain
 # union and stays fully type-checked.
-JobReportData = NebReportData | ScantsReportData | IrcReportData | OptReportData | SpReportData
+JobReportData = NebReportData | ScanReportData | IrcReportData | OptReportData | SpReportData
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,7 @@ class HtmlReportParts:
     selected_inp: Path
     routes: str
     opt: OptReportData | None = None
-    scants: ScantsReportData | None = None
+    scan: ScanReportData | None = None
     neb: NebReportData | None = None
     irc: IrcReportData | None = None
     sp: SpReportData | None = None
@@ -112,21 +112,18 @@ def collect_html_report_parts(
     routes = " ".join(route_lines)
 
     has_irc = input_uses_irc(selected_inp)
-    has_scants = input_uses_scants(selected_inp)
     has_neb_ts = input_uses_neb_ts(selected_inp)
     has_relaxed_scan = first_scan_coordinate_spec(selected_inp) is not None
     has_ts = bool(TS_ROUTE_RE.search(routes))
     has_opt = bool(OPT_ROUTE_RE.search(routes))
 
     neb = collect_neb_report_data(reaction_dir, state) if has_neb_ts else None
-    scants: ScantsReportData | None = None
-    if has_scants:
-        scants = collect_scants_report_data(reaction_dir, state)
-    elif has_opt and has_relaxed_scan:
-        scants = collect_scants_report_data(reaction_dir, state, kind="scan")
+    scan: ScanReportData | None = None
+    if has_opt and has_relaxed_scan:
+        scan = collect_scan_report_data(reaction_dir, state)
 
     opt: OptReportData | None = None
-    if (has_ts or has_opt) and neb is None and scants is None:
+    if (has_ts or has_opt) and neb is None and scan is None:
         opt = collect_opt_report_data(
             reaction_dir,
             state,
@@ -136,18 +133,18 @@ def collect_html_report_parts(
     irc = collect_irc_report_data(reaction_dir, state) if has_irc else None
 
     sp: SpReportData | None = None
-    if all(part is None for part in (opt, scants, neb, irc)):
+    if all(part is None for part in (opt, scan, neb, irc)):
         if structure_kind(selected_inp) != "sp":
             return None
         sp = collect_sp_report_data(reaction_dir, state)
 
-    if all(part is None for part in (opt, scants, neb, irc, sp)):
+    if all(part is None for part in (opt, scan, neb, irc, sp)):
         return None
     return HtmlReportParts(
         selected_inp=selected_inp,
         routes=routes,
         opt=opt,
-        scants=scants,
+        scan=scan,
         neb=neb,
         irc=irc,
         sp=sp,
@@ -170,12 +167,12 @@ def _report_components(
                 include_vibrational=parts.irc is None,
             )
         )
-    if parts.scants is not None:
+    if parts.scan is not None:
         components.append(
-            scants_report_component(
-                parts.scants,
-                include_attempt_metric=primary is parts.scants,
-                include_attempt_chain=primary is parts.scants,
+            scan_report_component(
+                parts.scan,
+                include_attempt_metric=primary is parts.scan,
+                include_attempt_chain=primary is parts.scan,
                 include_frequency_metric=parts.irc is None,
                 include_vibrational=parts.irc is None,
             )
@@ -199,7 +196,7 @@ def _report_components(
                 include_attempt_chain=primary is parts.irc,
                 include_common_metric=primary is parts.irc,
                 include_optimization=(
-                    parts.opt is None and parts.neb is None and parts.scants is None
+                    parts.opt is None and parts.neb is None and parts.scan is None
                 ),
             )
         )
@@ -212,13 +209,13 @@ def _report_components(
 def _primary_report_data(parts: HtmlReportParts) -> JobReportData | None:
     # The primary facet supplies the page title, status, footer, and the one
     # attempt chain. Other detected calculation facets contribute sections.
-    return parts.neb or parts.scants or parts.irc or parts.opt or parts.sp
+    return parts.neb or parts.scan or parts.irc or parts.opt or parts.sp
 
 
 def _kind_label(primary: JobReportData) -> str:
     if isinstance(primary, NebReportData):
         return "NEB-TS"
-    if isinstance(primary, ScantsReportData):
+    if isinstance(primary, ScanReportData):
         return primary.kind_label()
     if isinstance(primary, IrcReportData):
         return "IRC"
@@ -233,8 +230,8 @@ def _combined_badges(
 ) -> tuple[tuple[str, str], ...]:
     if isinstance(primary, NebReportData):
         badges = list(neb_report_badges(primary))
-    elif isinstance(primary, ScantsReportData):
-        badges = list(scants_report_badges(primary))
+    elif isinstance(primary, ScanReportData):
+        badges = list(scan_report_badges(primary))
     elif isinstance(primary, IrcReportData):
         badges = list(irc_report_badges(primary))
     elif isinstance(primary, OptReportData):
@@ -265,8 +262,8 @@ def _extend_unique_badges(
 def _meta_html(primary: JobReportData) -> str:
     if isinstance(primary, NebReportData):
         return neb_report_meta_html(primary)
-    if isinstance(primary, ScantsReportData):
-        return scants_report_meta_html(primary)
+    if isinstance(primary, ScanReportData):
+        return scan_report_meta_html(primary)
     if isinstance(primary, IrcReportData):
         return irc_report_meta_html(primary)
     if isinstance(primary, OptReportData):

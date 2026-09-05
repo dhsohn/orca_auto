@@ -18,7 +18,7 @@ and reports — so you always know which calculation failed and what is safe to 
 
 Computational chemistry outgrows one-shot engine commands and ad-hoc shell loops:
 you need durable submission, supervised execution, explicit recovery, and an
-auditable record of failures. orca_auto covers the CLI / queue / report / retry
+auditable record of failures. orca_auto covers the CLI / queue / report / recovery
 contracts for repeated ORCA calculations, transition-state searches, and
 reaction or conformer workflows — without adopting a general workflow platform,
 and without replacing chemical judgment or ORCA input design.

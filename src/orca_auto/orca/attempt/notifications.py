@@ -20,7 +20,6 @@ class AttemptStartedNotification:
     state: RunState
     execution_index: int
     first_execution_index: int
-    max_retries: int
     status: RunStatus
     attempt_started_at: str
     resumed: bool
@@ -40,7 +39,6 @@ def notify_attempt_started(ctx: AttemptStartedNotification) -> None:
         current_inp=ctx.current_inp,
         state=ctx.state,
         execution_index=ctx.execution_index,
-        max_retries=ctx.max_retries,
         status=ctx.status,
         attempt_started_at=ctx.attempt_started_at,
         resumed=ctx.resumed,

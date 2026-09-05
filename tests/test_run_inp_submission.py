@@ -27,7 +27,7 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import submission as run_inp
-from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
+from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.notifications import notify_queue_enqueued_event
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import publication_repair
@@ -66,7 +66,7 @@ def _real_submission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     cfg = AppConfig(
-        runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
+        runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)),
         paths=PathsConfig(orca_executable=str(fake_orca)),
         resources=CommonResourceConfig(max_cores_per_task=2, max_memory_gb_per_task=4),
     )

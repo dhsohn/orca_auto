@@ -27,7 +27,7 @@ execution)** 입니다:
   집어 실행합니다.
 - 작업별 상태와 리포트는 계산 디렉터리 옆 디스크에 기록됩니다.
 
-ORCA는 가장 풍부한 재시도/리포팅/모니터링 표면을 가진 공개 1급 엔진입니다.
+ORCA는 가장 풍부한 리포팅/모니터링 표면을 가진 공개 1급 엔진입니다.
 일반 **xTB**와 **CREST** 계산은 독립 공개 명령이 아니라 **워크플로우 스테이지**로
 내부적으로만 사용됩니다.
 
@@ -68,10 +68,10 @@ src/orca_auto/
 │   │   └── worker_tracking.py
 │   ├── runtime/         # 실행 락
 │   ├── engine.py        # ORCA EngineDefinition 배선
-│   ├── attempt/         # 시도 엔진, 재시도, 재개, 리포팅
+│   ├── attempt/         # 시도 엔진, 재개, 리포팅
 │   ├── parser/          # ORCA 출력 파싱
 │   ├── state*.py        # 작업별 상태 머신 + 영속화
-│   └── ...              # 재시도 레시피, 완료 규칙, 인덱싱
+│   └── ...              # 입력 검증, 완료 규칙, 인덱싱
 │
 └── flow/                # 워크플로우 오케스트레이션 패키지
     ├── orchestration/   # advance_workflow 루프, 페이즈, 스테이지 런타임
@@ -210,7 +210,7 @@ predicate, 큐 항목 조회를 한 곳에서 설치합니다. 모든 엔진이 
 소유하고 live child-PID slot 보호는 xTB 정책으로 유지됩니다. publication repair는
 공용입니다 — `flow/engines/queue_runtime_common.py`가 sweep과 예약 직전 게이트를
 소유하고 xTB·CREST 워커가 모두 그것을 설치합니다.
-crash-generation rebind, 재시도, publication repair, 내구성 engine-process 복구, 취소,
+crash-generation rebind, publication repair, 내구성 engine-process 복구, 취소,
 terminal replay는 ORCA 소유 정책으로 유지됩니다. 이 canonical owner 주위에 엔진 로컬
 또는 범용 전달 facade를 다시 만들지 않습니다.
 
@@ -238,7 +238,7 @@ python -m orca_auto.core.engines.worker_child \
 
 부모 워커(`EngineQueueWorker`)는 어드미션 슬롯을 예약하고 이 자식을 생성하며,
 자식이 종료된 후 최종 큐 결과를 확정합니다. ORCA는 더 풍부한 도메인 동작(상태
-머신, 재시도, 리포트)을 `orca_auto.orca` 내부에 유지하며, 워커 자식 진입점은
+머신, 리포트)을 `orca_auto.orca` 내부에 유지하며, 워커 자식 진입점은
 canonical `core.queue.engine.child` 계약을 직접 사용합니다.
 
 ---
@@ -321,29 +321,16 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   failure가 소유권 없는 계산을 남기지 않습니다. 그보다 일찍 parent가 죽어 durable record가
   engine identity 없는 `pending`에 머물면, 같은 gate 근거로 reboot를 기다리지 않고 orphan
   recovery가 slot을 회수할 수 있습니다.
-- **시도 엔진**(`attempt/engine.py`, `attempt/retry.py`, `attempt/resume.py`):
-  시도를 실행하고 출력을 파싱·분류한 뒤 재시도 여부를 결정합니다.
+- **시도 엔진**(`attempt/engine.py`, `attempt/resume.py`):
+  시도를 한 번 실행하고 출력을 파싱·분류한 뒤 terminal 결과를 기록합니다.
 - **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
   `completion_rules.py`): 모드별로 완료를 판정합니다 — TS 모드(`OptTS`/`NEB-TS`,
   마지막 final single point energy 뒤의 진동수 섹션에 허수 진동수 정확히 1개 필요,
   경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt 모드(정상 종료).
-- **계산 종류별 재시도 정책**(`retry_policy.py`): 재시도
-  횟수와 rewrite는 사용자가 입력한 숫자를 그대로 따르지 않고 ORCA route 종류별
-  고정 정책을 따릅니다. 일반 `TightSCF`/`SlowConv` 에스컬레이션은 적용하지
-  않습니다. 일반 `Opt`/`Opt+Freq`/`Freq`/single-point route는 자동 재시도하지
-  않으며, 실패한 `.xyz`/`.gbw` artifact를 generic rerun 전략으로 재사용하지
-  않습니다. standalone `OptTS`/`NEB-TS`도 자동 재시도하지 않으며, Hessian
-  hardening은 사용자가 명시한 입력으로 남깁니다. `ScanTS` retry는 **계산
-  실패에서만** scan artifact 기반으로 발동합니다: scan 도중 크래시는 마지막
-  numbered point에서 이어가고, TS-guess refinement의 zero-distance abort는
-  최고 에너지 surface point에서 OptTS 재시도를 1회 수행합니다. scan 완주 후의
-  실패(`ts_not_found` 포함)는 `scants_recipes_exhausted`로 종료됩니다 —
-  endpoint 연장·역방향 탐색은 `scan_ts_search` 워크플로우가 담당합니다.
-  route별 rewrite가 없으면 동일 입력을 반복하지 않고
-  fail-closed 합니다(ScanTS 레시피 체인 소진 시 `scants_recipes_exhausted`). 전하와 다중도는 **절대**
-  자동 변경하지 않으며, 원본 `.inp`는 보존되고, 재시도는 `<name>.retryNN.inp`로
-  기록됩니다.
-- **재시작/재개:** 재시도/재개 시, 일치하는 비어 있지 않은 `.gbw` 체크포인트가
+- **단일 attempt 실행:** 계산 실패의 analyzer reason을 보존하고 종료합니다.
+  직접 `ScanTS` route는 generation 생성 전에 거부합니다. `relaxed_scan.py`는
+  일반 scan과 별도 `scan_ts_search` workflow의 좌표 검증·surface 파싱을 소유합니다.
+- **재시작/재개:** 중단된 실행을 재개할 때, 일치하는 비어 있지 않은 `.gbw` 체크포인트가
   있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 기존 top-level 또는 `%scf`
   orbital-input 선언을 semantic하게 인식하므로 recovery가 두 번째 source를 주입하지
   않습니다. 재개된 입력은 `*.resume.inp`로 기록되어 사용자 입력이 변경되지 않습니다.
@@ -351,12 +338,12 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   generation binding, public machine 검증을 소유하고, `state.py`는 state mutation과
   artifact publication을, `state_machine.py`는 transition 적용을 소유합니다. 완료 시
   공통 `machine.json`을 마지막에 발행합니다. Opt,
-  OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업은 추가로
+  OptTS, NEB-TS, IRC, relaxed scan 작업은 추가로
   `job_report.html`(`report/`)을 생성합니다 — `report/composer.py`가 공통
   페이지 틀과 계산 component를 조합해 만드는 단일 파일 시각 리포트입니다. 여기에는
-  scan 에너지 프로파일(ScanTS 및 일반 relaxed scan), CI-NEB 경로 프로파일과
+  relaxed-scan 에너지 프로파일, CI-NEB 경로 프로파일과
   TS refinement 궤적(NEB-TS), route에 포함된 OptTS/Freq 섹션과 조합된 IRC
-  경로 프로파일, 또는 최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동
+  경로 프로파일, 또는 최적화 수렴 궤적(Opt/OptTS), attempt 이력, 진동
   요약이 들어갑니다. 정류점으로 끝나는 완료 작업은
   `si_block.md`(`report/si.py`)도 생성합니다 — 에너지, 열화학, Nimag, 좌표를
   담은 복사-붙여넣기용 Supporting Information 블록입니다. IRC route는 좌표
@@ -565,8 +552,7 @@ orca_auto는 단방향 발신 알림만 전송합니다. 작업 및 워크플로
 정규화하므로 알림 실패는 durable publication에 대한 advisory로 남습니다.
 
 `core/notifications/`는 엔진별 알림 함수(`engines.py`)를 유지합니다. 제출·실행·종료
-adapter가 해당 queued/started/finished callback을 직접 연결하고, ORCA 재시도 알림은
-ORCA 실행 adapter가 연결합니다. 워크플로우 알림은 작업별 ORCA 메시지는 유지하되,
+adapter가 해당 queued/started/finished callback을 직접 연결합니다. 워크플로우 알림은 작업별 ORCA 메시지는 유지하되,
 내부 CREST 및 반응 경로 xTB 자식 페이즈는 각각 한 메시지로 요약합니다.
 
 채널은 해당 credential이 완전할 때만 활성화됩니다. Discord에는
@@ -583,7 +569,7 @@ ORCA 실행 adapter가 연결합니다. 워크플로우 알림은 작업별 ORCA
 3. `~/orca_auto/config/orca_auto.yaml`
 
 `core/config/schema.py`는 정규화 생성자를 갖춘 타입 설정 데이터클래스(예:
-`RetryRuntimeConfig`, `CommonResourceConfig`, `MessengerConfig`)를 정의합니다.
+`OrcaRuntimeConfig`, `CommonResourceConfig`, `MessengerConfig`)를 정의합니다.
 주요 규칙:
 
 - **Linux 경로만 허용.** Windows 드라이브 경로, `/mnt/<drive>/...`, 상대 실행
@@ -593,9 +579,7 @@ ORCA 실행 adapter가 연결합니다. 워크플로우 알림은 작업별 ORCA
 - `scheduler.admission_root`는 공유 슬롯 조정 루트입니다.
 - `runs_root`는 단독 ORCA 작업, 워크플로우 워크스페이스, 내부 엔진 실행이 모두
   사용하는 단일 runs 루트입니다.
-- `default_max_retries: 0`은 ORCA 재시도를 비활성화합니다. 양수 값은 계산
-  종류별 재시도 정책을 활성화하며, 실제 route별 cap은 `job_state.json`/큐 metadata에
-  기록됩니다.
+- ORCA에는 계산 실패 재시도 설정이 없습니다.
 
 ---
 

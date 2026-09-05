@@ -111,7 +111,6 @@ def _snapshot(tmp_path: Path) -> tuple[Path, Path, dict[str, Any], dict[str, int
         selected,
         selected_input_xyz=str((job_dir / "input.xyz").resolve()),
         resource_request=resources,
-        max_retries=2,
         orca_executable=executable,
     )
     return job_dir, selected, snapshot, resources
@@ -151,7 +150,6 @@ def _verify(
         expected_source_selected_inp=snapshot["source_selected_inp"],
         expected_selected_input_xyz=str((job_dir / "input.xyz").resolve()),
         expected_resource_request=resources,
-        expected_max_retries=2,
     )
 
 
@@ -170,7 +168,7 @@ def test_orca_execution_snapshot_binds_selected_dependencies_and_executable(
         str((job_dir / "initial.hess").resolve()),
         str((job_dir / "input.xyz").resolve()),
     ]
-    assert snapshot["version"] == 2
+    assert snapshot["version"] == 3
     assert set(snapshot["source_inputs"]) == {
         "selected_source",
         "dependency_000000",
@@ -237,7 +235,6 @@ def test_orca_execution_snapshot_allows_same_stem_xyz_dependency(tmp_path: Path)
         selected,
         selected_input_xyz=str(geometry.resolve()),
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -263,7 +260,6 @@ def test_orca_execution_snapshot_inlines_same_stem_xyz_for_optimization(tmp_path
         selected,
         selected_input_xyz=str(geometry.resolve()),
         resource_request=resources,
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -283,7 +279,6 @@ def test_orca_execution_snapshot_inlines_same_stem_xyz_for_optimization(tmp_path
             expected_source_selected_inp=snapshot["source_selected_inp"],
             expected_selected_input_xyz=str(geometry.resolve()),
             expected_resource_request=resources,
-            expected_max_retries=0,
         )
     verify_orca_execution_snapshot(
         job_dir,
@@ -292,7 +287,6 @@ def test_orca_execution_snapshot_inlines_same_stem_xyz_for_optimization(tmp_path
         expected_source_selected_inp=snapshot["source_selected_inp"],
         expected_selected_input_xyz=str(geometry.resolve()),
         expected_resource_request=resources,
-        expected_max_retries=0,
         allow_runtime_outputs=True,
     )
 
@@ -314,7 +308,6 @@ def test_orca_execution_snapshot_rejects_same_stem_hessian_for_frequency(tmp_pat
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -345,7 +338,6 @@ def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -353,43 +345,32 @@ def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
 
 
 @pytest.mark.parametrize(
-    ("route", "max_retries", "dependency_name"),
+    ("route", "dependency_name"),
     [
-        ("! HF STO-3G SP", 0, "h2.resume.inp"),
-        ("! HF STO-3G SP", 0, "h2.resume.out"),
-        ("! HF STO-3G SP", 0, "h2.resume.gbw"),
-        ("! HF STO-3G EnGrad", 0, "h2.engrad"),
-        ("! HF STO-3G EnGrad", 0, "h2.resume.engrad"),
-        ("! HF STO-3G EnergyGrad", 0, "h2.engrad"),
-        ("! HF STO-3G Opt", 0, "h2.engrad"),
-        ("! HF STO-3G SloppyOpt", 0, "h2.engrad"),
-        ("! HF STO-3G CrudeOpt", 0, "h2.engrad"),
-        ("! HF STO-3G OptH", 0, "h2.engrad"),
-        ("! HF STO-3G L-OPT", 0, "h2.engrad"),
-        ("! HF STO-3G L-OPTH", 0, "h2.engrad"),
-        ("! HF STO-3G QMMMOpt", 0, "h2.engrad"),
-        ("! HF STO-3G CI-OPT", 0, "h2.engrad"),
-        ("! HF STO-3G OptTS", 0, "h2.engrad"),
-        ("! HF STO-3G ScanTS", 0, "h2.engrad"),
-        ("! HF STO-3G IRC", 0, "h2.engrad"),
-        ("! HF STO-3G NumGrad", 0, "h2.engrad"),
-        ("! HF STO-3G Freq", 0, "h2.resume.hess"),
-        ("! HF STO-3G Opt", 0, "h2.resume.xyz"),
-        ("! HF STO-3G ScanTS", 1, "h2.retry01.inp"),
-        ("! HF STO-3G ScanTS", 1, "h2.retry01.out"),
-        ("! HF STO-3G ScanTS", 1, "h2.retry03.gbw"),
-        ("! HF STO-3G ScanTS", 1, "h2.retry03.engrad"),
-        ("! HF STO-3G ScanTS", 1, "h2.retry03.xyz"),
-        ("! HF STO-3G ScanTS Freq", 1, "h2.retry03.hess"),
-        ("! HF STO-3G ScanTS", 1, "h2.retry02.resume.inp"),
-        ("! HF STO-3G ScanTS", 1, "h2.retry02.resume.out"),
-        ("! HF STO-3G ScanTS", 1, "h2.retry02.resume.engrad"),
+        ("! HF STO-3G SP", "h2.resume.inp"),
+        ("! HF STO-3G SP", "h2.resume.out"),
+        ("! HF STO-3G SP", "h2.resume.gbw"),
+        ("! HF STO-3G EnGrad", "h2.engrad"),
+        ("! HF STO-3G EnGrad", "h2.resume.engrad"),
+        ("! HF STO-3G EnergyGrad", "h2.engrad"),
+        ("! HF STO-3G Opt", "h2.engrad"),
+        ("! HF STO-3G SloppyOpt", "h2.engrad"),
+        ("! HF STO-3G CrudeOpt", "h2.engrad"),
+        ("! HF STO-3G OptH", "h2.engrad"),
+        ("! HF STO-3G L-OPT", "h2.engrad"),
+        ("! HF STO-3G L-OPTH", "h2.engrad"),
+        ("! HF STO-3G QMMMOpt", "h2.engrad"),
+        ("! HF STO-3G CI-OPT", "h2.engrad"),
+        ("! HF STO-3G OptTS", "h2.engrad"),
+        ("! HF STO-3G IRC", "h2.engrad"),
+        ("! HF STO-3G NumGrad", "h2.engrad"),
+        ("! HF STO-3G Freq", "h2.resume.hess"),
+        ("! HF STO-3G Opt", "h2.resume.xyz"),
     ],
 )
-def test_orca_execution_snapshot_rejects_retry_and_resume_name_collisions(
+def test_orca_execution_snapshot_rejects_resume_name_collisions(
     tmp_path: Path,
     route: str,
-    max_retries: int,
     dependency_name: str,
 ) -> None:
     job_dir = tmp_path / "job"
@@ -408,7 +389,6 @@ def test_orca_execution_snapshot_rejects_retry_and_resume_name_collisions(
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=max_retries,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -445,7 +425,6 @@ def test_orca_execution_snapshot_allows_same_stem_engrad_without_active_engrad_r
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -459,21 +438,20 @@ def test_orca_execution_snapshot_allows_same_stem_engrad_without_active_engrad_r
         expected_source_selected_inp=snapshot["source_selected_inp"],
         expected_selected_input_xyz="",
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-        expected_max_retries=0,
     )
     assert verified_selected == Path(snapshot["selected_inp"])
 
 
-def test_orca_execution_snapshot_allows_retry_name_outside_effective_budget(
+def test_orca_execution_snapshot_allows_unreserved_dependency_name(
     tmp_path: Path,
 ) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()
-    dependency = job_dir / "h2.retry04.out"
+    dependency = job_dir / "charges.dat"
     dependency.write_text("0\n", encoding="utf-8")
     selected = job_dir / "h2.inp"
     selected.write_text(
-        '! HF STO-3G ScanTS\n%pointcharges "h2.retry04.out"\n* xyz 0 1\nH 0 0 0\n*\n',
+        '! HF STO-3G Opt\n%pointcharges "charges.dat"\n* xyz 0 1\nH 0 0 0\n*\n',
         encoding="utf-8",
     )
 
@@ -482,7 +460,6 @@ def test_orca_execution_snapshot_allows_retry_name_outside_effective_budget(
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=1,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -510,7 +487,6 @@ def test_orca_execution_snapshot_creates_sequential_sibling_generations(
         selected,
         selected_input_xyz=str((job_dir / "input.xyz").resolve()),
         resource_request=resources,
-        max_retries=2,
         orca_executable=tmp_path / "orca",
     )
 
@@ -559,7 +535,6 @@ def test_orca_execution_snapshot_rejects_distinct_sources_with_same_basename_and
             selected,
             selected_input_xyz=str(reactant.resolve()),
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -594,7 +569,6 @@ def test_orca_execution_snapshot_allows_repeated_references_to_one_source_path(
         selected,
         selected_input_xyz=str(geometry.resolve()),
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -635,7 +609,6 @@ def test_orca_execution_snapshot_binds_official_neb_geometry_files(
         selected,
         selected_input_xyz=str((job_dir / "input.xyz").resolve()),
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -689,7 +662,6 @@ def test_orca_execution_snapshot_does_not_bind_product_or_ts_outside_neb_block(
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -717,7 +689,6 @@ def test_orca_execution_snapshot_limits_neb_file_keys_to_end_boundary(
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -882,7 +853,6 @@ def test_orca_execution_snapshot_rejects_unbounded_geometry_formats(
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 2, "max_memory_gb": 4},
-            max_retries=0,
             orca_executable=executable,
         )
 
@@ -911,7 +881,6 @@ def test_orca_execution_snapshot_rejects_malformed_xyz_terminators(
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -932,7 +901,6 @@ def test_orca_execution_snapshot_rejects_multiple_geometry_blocks(tmp_path: Path
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 2, "max_memory_gb": 4},
-            max_retries=0,
             orca_executable=executable,
         )
 
@@ -969,7 +937,6 @@ def test_orca_execution_snapshot_rejects_ambiguous_duplicate_directives(
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -990,7 +957,6 @@ def test_orca_execution_snapshot_binds_spaced_percent_moinp(tmp_path: Path) -> N
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 2, "max_memory_gb": 4},
-        max_retries=0,
         orca_executable=executable,
     )
 
@@ -1025,7 +991,6 @@ def test_orca_execution_snapshot_rejects_moread_without_explicit_moinp(
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1059,7 +1024,6 @@ def test_orca_execution_snapshot_binds_scf_block_moinp(
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -1089,7 +1053,6 @@ def test_orca_execution_snapshot_allows_unquoted_progress_input_filenames(
         selected,
         selected_input_xyz=str(geometry),
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -1118,7 +1081,6 @@ def test_orca_execution_snapshot_rejects_unsafe_generated_xyzfile_path_and_clean
             selected,
             selected_input_xyz=str(geometry.resolve()),
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1142,7 +1104,6 @@ def test_orca_execution_snapshot_allows_builtin_gcpmethod(tmp_path: Path) -> Non
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
 
@@ -1193,7 +1154,6 @@ def test_orca_execution_snapshot_rejects_unbound_auxiliary_directives(
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 2, "max_memory_gb": 4},
-            max_retries=0,
             orca_executable=executable,
         )
 
@@ -1292,7 +1252,7 @@ def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
         "! HF STO-3G QMMMOpt",
         "! HF STO-3G CI-OPT",
         "! HF STO-3G OptTS",
-        "! HF STO-3G ScanTS",
+        "! HF STO-3G Opt",
         "! HF STO-3G IRC",
         "! HF STO-3G NumGrad",
     ],
@@ -1318,7 +1278,6 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
         selected,
         selected_input_xyz="",
         resource_request=resources,
-        max_retries=0,
         orca_executable=_write_executable(tmp_path / "orca"),
     )
     role = "dependency_000000"
@@ -1348,7 +1307,6 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
             expected_source_selected_inp=snapshot["source_selected_inp"],
             expected_selected_input_xyz="",
             expected_resource_request=resources,
-            expected_max_retries=0,
         )
 
 
@@ -1432,7 +1390,6 @@ def test_verify_orca_execution_snapshot_rejects_selected_source_metadata_substit
             expected_source_selected_inp=original_source,
             expected_selected_input_xyz=str((job_dir / "input.xyz").resolve()),
             expected_resource_request=resources,
-            expected_max_retries=2,
         )
 
 
@@ -1503,7 +1460,6 @@ def test_orca_execution_snapshot_rejects_referenced_path_escape(tmp_path: Path) 
             selected,
             selected_input_xyz=str(outside),
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1522,7 +1478,6 @@ def test_orca_execution_snapshot_rejects_selected_input_symlink(tmp_path: Path) 
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1548,7 +1503,6 @@ def test_orca_execution_snapshot_caps_external_reference_count(tmp_path: Path) -
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1577,7 +1531,6 @@ def test_orca_execution_snapshot_checks_aggregate_budget_before_dependency_copy(
             selected,
             selected_input_xyz=str(dependency),
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1604,7 +1557,6 @@ def test_orca_execution_snapshot_rejects_oversized_dependency_before_copy(
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1631,7 +1583,6 @@ def test_orca_execution_snapshot_rejects_inline_geometry_above_atom_cap(
             selected,
             selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1654,7 +1605,6 @@ def test_orca_execution_snapshot_rejects_xyzfile_geometry_above_atom_cap(
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1683,7 +1633,6 @@ def test_orca_execution_snapshot_rejects_neb_geometry_above_atom_cap(
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
 
@@ -1709,6 +1658,60 @@ def test_orca_frequency_snapshot_uses_stricter_hessian_atom_cap(
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
             resource_request={"max_cores": 1, "max_memory_gb": 1},
-            max_retries=0,
             orca_executable=_write_executable(tmp_path / "orca"),
         )
+
+
+@pytest.mark.parametrize("route", ["! ScanTS", "! HF\n! scants Freq", "! HF # note # SCANTS"])
+def test_removed_route_rejected_before_generation_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    from orca_auto.orca import execution_binding
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "calc.inp"
+    selected.write_text(route + "\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
+    original = selected.read_bytes()
+
+    def unexpected_reservation(*args: object, **kwargs: object) -> None:
+        raise AssertionError("Unsupported route reached generation reservation")
+
+    monkeypatch.setattr(execution_binding, "_reserve_execution_generation", unexpected_reservation)
+    with pytest.raises(ValueError, match="unsupported.*ScanTS"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=tmp_path / "never-executed",
+        )
+    assert selected.read_bytes() == original
+    assert list(job_dir.iterdir()) == [selected]
+
+
+@pytest.mark.parametrize("retired_version", [1, 2])
+def test_retired_snapshot_is_never_executable(tmp_path: Path, retired_version: int) -> None:
+    job_dir, selected, snapshot, resources = _snapshot(tmp_path)
+    snapshot["version"] = retired_version
+    with pytest.raises(ValueError, match="snapshot"):
+        _verify(job_dir, selected, snapshot, resources)
+    before = _visible_generations(job_dir)
+    with pytest.raises(ValueError, match="current execution snapshot"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request=resources,
+            orca_executable=tmp_path / "orca",
+            recovery_from=snapshot,
+        )
+    assert _visible_generations(job_dir) == before
+
+
+def test_new_snapshot_rejects_retired_policy_field(tmp_path: Path) -> None:
+    job_dir, selected, snapshot, resources = _snapshot(tmp_path)
+    assert "max_retries" not in snapshot
+    snapshot["max_retries"] = 0
+    with pytest.raises(ValueError, match="snapshot"):
+        _verify(job_dir, selected, snapshot, resources)

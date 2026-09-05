@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.frequencies import parse_frequency_analysis
-from orca_auto.orca.report.scants import collect_scants_report_data
+from orca_auto.orca.report.scan import collect_scan_report_data
 from orca_auto.orca.state import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 
@@ -84,41 +84,6 @@ The Calculated Surface using the SCF energy
    1.86000000 -101.00000000
 """
 
-_OPT_CYCLES_BLOCK = """
-                *** Geometry Optimization Cycle   1 ***
-
-FINAL SINGLE POINT ENERGY      -100.01000000
-
-                *** Geometry Optimization Cycle   2 ***
-
-FINAL SINGLE POINT ENERGY      -100.02000000
-
-                    ***********************HURRAY********************
-                    ***        THE OPTIMIZATION HAS CONVERGED     ***
-                    *************************************************
-"""
-
-_IRC_BLOCK = """
---------------------------------------------------------------------------------
-                   Intrinsic Reaction Coordinate Calculation
---------------------------------------------------------------------------------
-
-Settings:
-Direction                           .... both
-Storing full IRC trajectory in      .... scants_IRC_Full.xyz
-
-----------------------
-IRC PATH SUMMARY
-----------------------
-All gradients are in Eh/Bohr.
-
-Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
-  1    -100.050000    -18.83       0.00160   0.00080
-  2    -100.020000      0.00       0.00200   0.00090 <= TS
-  3    -100.060000    -25.10       0.00150   0.00070
-
-"""
-
 
 def _write_ts_out(path: Path) -> None:
     path.write_text(
@@ -131,24 +96,11 @@ def _write_ts_out(path: Path) -> None:
     )
 
 
-def _write_scants_irc_out(path: Path) -> None:
-    path.write_text(
-        _COORDS_BLOCK
-        + _SURFACE_BLOCK
-        + _OPT_CYCLES_BLOCK
-        + _FREQ_BLOCK
-        + _MODES_BLOCK
-        + _IRC_BLOCK
-        + "\n****ORCA TERMINATED NORMALLY****\n",
-        encoding="utf-8",
-    )
-
-
-def _write_scants_inp(path: Path) -> None:
+def _write_scan_inp(path: Path) -> None:
     path.write_text(
         "\n".join(
             [
-                "! ScanTS B3LYP def2-SVP Freq",
+                "! Opt B3LYP def2-SVP Freq",
                 "",
                 "%geom",
                 "  Scan",
@@ -170,7 +122,6 @@ def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
         "run_id": "run_test",
         "reaction_dir": str(reaction_dir),
         "selected_inp": str(reaction_dir / "rxn.inp"),
-        "max_retries": 3,
         "status": "completed",
         "started_at": "2026-07-03T01:00:00+00:00",
         "updated_at": "2026-07-03T04:00:00+00:00",
@@ -225,11 +176,11 @@ def test_parse_frequency_analysis_without_freq_block(tmp_path: Path) -> None:
 
 
 def test_collect_summarizes_imaginary_mode_and_alignment(tmp_path: Path) -> None:
-    _write_scants_inp(tmp_path / "rxn.inp")
+    _write_scan_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
 
-    data = collect_scants_report_data(tmp_path, _state(tmp_path, out_path))
+    data = collect_scan_report_data(tmp_path, _state(tmp_path, out_path))
 
     assert data is not None
     assert data.imaginary_count == 1
@@ -247,17 +198,17 @@ def test_collect_summarizes_imaginary_mode_and_alignment(tmp_path: Path) -> None
     assert data.segments[0].points[0].coordinates[0] == pytest.approx(1.86)
 
 
-def test_collect_returns_none_for_non_scants_input(tmp_path: Path) -> None:
+def test_collect_returns_none_for_non_scan_input(tmp_path: Path) -> None:
     inp = tmp_path / "rxn.inp"
     inp.write_text("! Opt B3LYP def2-SVP\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
 
-    assert collect_scants_report_data(tmp_path, _state(tmp_path, out_path)) is None
+    assert collect_scan_report_data(tmp_path, _state(tmp_path, out_path)) is None
 
 
-def test_write_job_html_report_renders_scants_sections(tmp_path: Path) -> None:
-    _write_scants_inp(tmp_path / "rxn.inp")
+def test_write_job_html_report_renders_scan_sections(tmp_path: Path) -> None:
+    _write_scan_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
 
@@ -267,10 +218,10 @@ def test_write_job_html_report_renders_scants_sections(tmp_path: Path) -> None:
 
     assert path == report_generation_target(tmp_path)[0] / "job_report.html"
     text = path.read_text(encoding="utf-8")
-    assert "ScanTS report" in text
+    assert "Relaxed scan report" in text
     assert "ts_criteria_met" in text
     assert "<polyline" in text
-    assert "initial ScanTS" in text
+    assert "initial relaxed scan" in text
     assert "imaginary mode" in text
     assert "B(0,1)" in text
     assert "85%" in text
@@ -319,34 +270,8 @@ def test_relaxed_scan_gets_profile_report_not_opt_report(tmp_path: Path) -> None
     assert "85%" in text
 
 
-def test_scants_irc_report_does_not_treat_scan_cycles_as_ts_refinement(
-    tmp_path: Path,
-) -> None:
-    _write_scants_inp(tmp_path / "rxn.inp")
-    (tmp_path / "rxn.inp").write_text(
-        (tmp_path / "rxn.inp").read_text(encoding="utf-8").replace("Freq", "Freq IRC"),
-        encoding="utf-8",
-    )
-    out_path = tmp_path / "rxn.out"
-    _write_scants_irc_out(out_path)
-
-    path = write_job_html_report(
-        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
-    )
-
-    assert path == report_generation_target(tmp_path)[0] / "job_report.html"
-    text = path.read_text(encoding="utf-8")
-    assert "ScanTS report" in text
-    assert "Scan energy profile" in text
-    assert "IRC path profile" in text
-    assert "scants_IRC_Full.xyz" in text
-    assert "TS optimization convergence" not in text
-    assert text.count('<div class="metric-label">Imaginary frequencies</div>') == 1
-    assert "initial ScanTS" in text
-
-
-def test_write_report_files_includes_html_for_scants(tmp_path: Path) -> None:
-    _write_scants_inp(tmp_path / "rxn.inp")
+def test_write_report_files_includes_html_for_scan(tmp_path: Path) -> None:
+    _write_scan_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
     _write_ts_out(out_path)
 
@@ -369,7 +294,7 @@ def test_write_report_files_skips_html_and_removes_stale_for_md(
     _write_ts_out(out_path)
     state = _state(tmp_path, out_path)
     generation = bind_report_generation(tmp_path, state)
-    # Leftover report from a previous Opt/ScanTS job in this reused generation
+    # Leftover report from a previous Opt job in this reused generation
     # must not survive, or downstream links would surface an obsolete report.
     stale = generation / "job_report.html"
     stale.write_text("<html>old opt report</html>", encoding="utf-8")

@@ -9,7 +9,6 @@ from ..state import finalize_state, now_utc_iso, write_report_files
 from ..state_reading import state_path
 from ..statuses import AnalyzerStatus, RunStatus
 from ..types import (
-    RetryNotification,
     RunFinalResult,
     RunFinishedNotification,
     RunStartedNotification,
@@ -90,37 +89,6 @@ def build_final_result(
     return result
 
 
-def build_retry_notification(
-    *,
-    reaction_dir: Path,
-    selected_inp: Path,
-    current_inp: Path,
-    out_path: Path,
-    next_inp: Path,
-    execution_index: int,
-    next_retry_number: int,
-    max_retries: int,
-    analysis_status: AnalyzerStatus | str,
-    analysis_reason: str,
-    patch_actions: list[str],
-    resumed: bool,
-) -> RetryNotification:
-    return {
-        "reaction_dir": str(reaction_dir),
-        "selected_inp": str(selected_inp),
-        "failed_inp": str(current_inp),
-        "failed_out": str(out_path),
-        "next_inp": str(next_inp),
-        "attempt_index": execution_index,
-        "retry_number": next_retry_number,
-        "max_retries": max_retries,
-        "analyzer_status": analyzer_status_text(analysis_status),
-        "analyzer_reason": analysis_reason,
-        "patch_actions": list(patch_actions),
-        "resumed": resumed,
-    }
-
-
 def build_run_started_notification(
     *,
     reaction_dir: Path,
@@ -128,7 +96,6 @@ def build_run_started_notification(
     current_inp: Path,
     state: RunState,
     execution_index: int,
-    max_retries: int,
     status: RunStatus | str,
     attempt_started_at: str,
     resumed: bool,
@@ -139,7 +106,6 @@ def build_run_started_notification(
         "current_inp": str(current_inp),
         "run_id": str(state.get("run_id", "")),
         "attempt_index": execution_index,
-        "max_retries": max_retries,
         "status": run_status_text(status),
         "attempt_started_at": attempt_started_at,
         "resumed": resumed,
@@ -169,7 +135,6 @@ def build_run_finished_notification(
         "analyzer_status": analyzer_status,
         "reason": reason,
         "attempt_count": len(attempts) if isinstance(attempts, list) else 0,
-        "max_retries": int(state.get("max_retries", 0)),
         "completed_at": completed_at,
         "last_out_path": last_out_path if isinstance(last_out_path, str) else None,
         "resumed": bool(final_result.get("resumed", False)),

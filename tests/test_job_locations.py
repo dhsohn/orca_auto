@@ -19,7 +19,7 @@ from orca_auto.core.queue.engine.input_snapshot import (
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca import state as orca_state
-from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
+from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.job_locations import _contract_payload as _job_location_payload
 from orca_auto.orca.job_locations import _runtime_context as _job_location_runtime
@@ -179,7 +179,6 @@ def _orca_payload(
     status: str = "completed",
     attempts: list[dict[str, object]] | None = None,
     final_result: dict[str, object] | None = None,
-    max_retries: int = 0,
     resource_request: dict[str, object] | None = None,
     resource_actual: dict[str, object] | None = None,
     engine_payload_extra: dict[str, object] | None = None,
@@ -194,7 +193,6 @@ def _orca_payload(
         status=status,
         attempts=attempts,
         final_result=final_result,
-        max_retries=max_retries,
         resource_request=resource_request,
         resource_actual=resource_actual,
         engine_payload_extra=engine_payload_extra,
@@ -215,7 +213,7 @@ def _make_cfg(root: Path) -> AppConfig:
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     return AppConfig(
-        runtime=RetryRuntimeConfig(
+        runtime=OrcaRuntimeConfig(
             allowed_root=str(root / "runs"),
         ),
         paths=PathsConfig(orca_executable=str(fake_orca)),
@@ -692,7 +690,6 @@ def test_root_only_payload_is_not_consumed() -> None:
             selected_xyz_path=xyz,
             attempts=attempts,
             final_result=final_result,
-            max_retries=3,
         )
         _write_orca_report(
             job_dir,
@@ -702,7 +699,6 @@ def test_root_only_payload_is_not_consumed() -> None:
             selected_xyz_path=xyz,
             attempts=attempts,
             final_result=final_result,
-            max_retries=3,
         )
         _write_json(
             allowed_root / "queue.json",

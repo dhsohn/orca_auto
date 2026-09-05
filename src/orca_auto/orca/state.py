@@ -101,14 +101,13 @@ def _write_generation_bytes(
     )
 
 
-def new_state(reaction_dir: Path, selected_inp: Path, max_retries: int) -> RunState:
+def new_state(reaction_dir: Path, selected_inp: Path) -> RunState:
     run_id = timestamped_token("run", token_bytes=16)
     ts = now_utc_iso()
     return {
         "run_id": run_id,
         "reaction_dir": str(reaction_dir),
         "selected_inp": str(selected_inp),
-        "max_retries": int(max_retries),
         "status": RunStatus.CREATED.value,
         "started_at": ts,
         "updated_at": ts,
@@ -145,7 +144,7 @@ def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
             generation_target = _state_reading.verified_generation_artifact_target(
                 reaction_dir, state_payload
             )
-            if generation_target is not None:
+            if generation_target is not None and not _retired_generation(generation_target[0]):
                 _write_generation_json(
                     generation_target,
                     _state_reading.state_path(generation_target[0]),
@@ -247,7 +246,6 @@ def _normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any])
         },
         engine_payload={
             "run_id": _state_reading.normalized_text(state.get("run_id")),
-            "max_retries": int(state.get("max_retries", 0) or 0),
             "attempts": attempts,
             "scratch_publications": scratch_publications,
             "execution_provenance": _dict(state.get("execution_provenance")),
@@ -339,7 +337,6 @@ def _machine_observation(
         "analyzer_status": analyzer_status,
         "reason": reason,
         "attempt_count": attempt_count,
-        "max_retries": int(engine_payload.get("max_retries", 0) or 0),
         "resumed": bool(final_result.get("resumed", False)),
         "skipped_execution": bool(final_result.get("skipped_execution", False)),
         "runner_error": _state_reading.normalized_text(final_result.get("runner_error")),
@@ -422,7 +419,6 @@ def write_report_json(
             "reaction_dir": _state_reading.normalized_text(report_payload.get("reaction_dir"))
             or str(reaction_dir),
             "selected_inp": _state_reading.normalized_text(report_payload.get("selected_inp")),
-            "max_retries": int(report_payload.get("max_retries", 0) or 0),
             "status": _state_reading.normalized_text(report_payload.get("status")),
             "started_at": _state_reading.normalized_text(report_payload.get("started_at")),
             "updated_at": _state_reading.normalized_text(report_payload.get("updated_at")),
@@ -515,6 +511,8 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
                 generation_target[0],
             )
         return existing_reports
+    if _retired_generation(generation_target[0]):
+        return {}
     reports: dict[str, str] = {}
     html_path = write_job_html_report(reaction_dir, state, generation_target=generation_target)
     if html_path is not None:
@@ -539,3 +537,14 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
     )
     reports["report_json"] = str(json_path)
     return reports
+
+
+def _retired_generation(generation_dir: Path) -> bool:
+    """Keep pre-removal generation artifacts immutable; root bookkeeping stays current."""
+    if not _state_reading.state_path(generation_dir).exists():
+        return False
+    loaded = _state_reading.load_generation_state(generation_dir)
+    if loaded is None:
+        raise ValueError("Cannot classify an unreadable ORCA generation state")
+    payload, _state = loaded
+    return "max_retries" in _dict(payload.get("engine_payload"))
