@@ -20,6 +20,14 @@ reverse fails the build. Cross-layer engine wiring goes through the lazy
 string module registries (`core/engines/registry.py`,
 `core/queue/worker/admission.py`) instead of imports.
 
+The top-level CLI modules (`cli*.py`, `activity_*.py`, `terminal_table.py`,
+`systemd_plan.py`) are the outermost layer: they compose the domain packages,
+and a second import-linter contract forbids `core`, `orca` and `flow` from
+importing any of them. What command adapters inside the domain packages share
+with the CLI lives in `core` instead — `core/terminal.py` owns ANSI styling and
+the `error:`/`hint:` output format, and `core/config/discovery.py` owns shared
+config and workflow-root resolution from parsed arguments.
+
 Within workflow orchestration, inject only the outer persistence, engine,
 clock, and event boundaries through `OrchestrationServices`. Import internal
 stage, materialization, and lifecycle operations directly. Tests must reject

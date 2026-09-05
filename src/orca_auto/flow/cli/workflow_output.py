@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from orca_auto import cli_style
-from orca_auto.cli_errors import emit_error as _emit_error
-from orca_auto.cli_errors import emit_prefixed_error
+from orca_auto.core import terminal
+from orca_auto.core.terminal import emit_error as _emit_error
+from orca_auto.core.terminal import emit_prefixed_error
 
 
 def emit_json(payload: dict[str, Any], *, pretty: bool) -> None:
@@ -34,13 +34,13 @@ def emit_created_workflow(payload: dict[str, Any], *, json_mode: bool) -> int:
     if _emit_json_when_requested(payload, json_mode=json_mode):
         return 0
 
-    print(f"{cli_style.label('workflow_id:')} {payload.get('workflow_id', '-')}")
-    print(f"{cli_style.label('template_name:')} {payload.get('template_name', '-')}")
+    print(f"{terminal.label('workflow_id:')} {payload.get('workflow_id', '-')}")
+    print(f"{terminal.label('template_name:')} {payload.get('template_name', '-')}")
     print(
-        f"{cli_style.label('workspace_dir:')} "
+        f"{terminal.label('workspace_dir:')} "
         f"{(payload.get('metadata') or {}).get('workspace_dir', '-')}"
     )
-    print(f"{cli_style.label('stage_count:')} {len(payload.get('stages', []))}")
+    print(f"{terminal.label('stage_count:')} {len(payload.get('stages', []))}")
     return 0
 
 
@@ -48,18 +48,18 @@ def emit_restarted_workflow(payload: dict[str, Any], *, json_mode: bool) -> int:
     if _emit_json_when_requested(payload, json_mode=json_mode):
         return 0
 
-    print(f"{cli_style.label('workflow_id:')} {payload.get('workflow_id', '-')}")
-    print(f"{cli_style.label('status:')} {cli_style.status_text(payload.get('status', '-'))}")
+    print(f"{terminal.label('workflow_id:')} {payload.get('workflow_id', '-')}")
+    print(f"{terminal.label('status:')} {terminal.status_text(payload.get('status', '-'))}")
     print(
-        f"{cli_style.label('workflow_status:')} "
-        f"{cli_style.status_text(payload.get('workflow_status', '-'))}"
+        f"{terminal.label('workflow_status:')} "
+        f"{terminal.status_text(payload.get('workflow_status', '-'))}"
     )
     print(
-        f"{cli_style.label('previous_status:')} "
-        f"{cli_style.status_text(payload.get('previous_status', '-'))}"
+        f"{terminal.label('previous_status:')} "
+        f"{terminal.status_text(payload.get('previous_status', '-'))}"
     )
-    print(f"{cli_style.label('workspace_dir:')} {payload.get('workspace_dir', '-')}")
-    print(f"{cli_style.label('restarted_count:')} {payload.get('restarted_count', 0)}")
+    print(f"{terminal.label('workspace_dir:')} {payload.get('workspace_dir', '-')}")
+    print(f"{terminal.label('restarted_count:')} {payload.get('restarted_count', 0)}")
     for item in payload.get("restarted_stages", []):
         print(
             f"- restarted {item.get('stage_id', '-')}"
@@ -71,7 +71,7 @@ def emit_restarted_workflow(payload: dict[str, Any], *, json_mode: bool) -> int:
         # Name the only route that can, so the divergence is not discovered
         # from an SI that describes the run before this restart.
         print(
-            f"{cli_style.label('note:')} the published terminal observation pins"
+            f"{terminal.label('note:')} the published terminal observation pins"
             " workflow_report.html, workflow_si.md and machine.json; this workspace"
             " will not regenerate them. For a fresh record run run-dir on the"
             " scaffold directory to start a new generation (CREST/xTB re-run)."

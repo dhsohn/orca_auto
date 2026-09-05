@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto import cli_common
-from orca_auto.cli_common import (
-    _workflow_root_for_args as _cli_workflow_root_for_args,
+from orca_auto.core.config import discovery
+from orca_auto.core.config.discovery import (
+    workflow_root_for_args as _cli_workflow_root_for_args,
 )
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.flow.orchestration.charge_spin import strict_int
@@ -234,14 +234,10 @@ def _manifest_workflow_root(manifest: dict[str, Any]) -> str | None:
 
 
 def _resolve_required_workflow_root(args: Any, manifest: dict[str, Any]) -> str:
-    # Attribute access keeps the cli_common monkeypatch seam used by tests.
-    resolved_workflow_root = cli_common._discover_workflow_root(
-        getattr(args, "workflow_root", None)
-    )
+    # Attribute access keeps the discovery monkeypatch seam used by tests.
+    resolved_workflow_root = discovery.resolve_workflow_root(getattr(args, "workflow_root", None))
     if not resolved_workflow_root:
-        resolved_workflow_root = cli_common._discover_workflow_root(
-            _manifest_workflow_root(manifest)
-        )
+        resolved_workflow_root = discovery.resolve_workflow_root(_manifest_workflow_root(manifest))
     if not resolved_workflow_root:
         config_path = getattr(args, "orca_auto_config", None) or getattr(args, "config", None)
         resolved_workflow_root = _cli_workflow_root_for_args(args, config_path=config_path)

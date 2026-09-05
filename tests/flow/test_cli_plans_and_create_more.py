@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto import cli_common
+from orca_auto.core.config import discovery
 from orca_auto.flow.cli import run_dir as cli_run_dir
 from orca_auto.flow.run_dir import manifest as run_dir_manifest
 from orca_auto.flow.run_dir import options as run_dir_options
@@ -81,9 +81,7 @@ def test_cmd_run_dir_reads_manifest_for_reaction_workflow(
     (workflow_dir / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
     captured: dict[str, Any] = {}
 
-    monkeypatch.setattr(
-        cli_common, "_discover_workflow_root", lambda explicit: "/tmp/workflow_root"
-    )
+    monkeypatch.setattr(discovery, "resolve_workflow_root", lambda explicit: "/tmp/workflow_root")
 
     def fake_create_reaction_ts_search_workflow(**kwargs: Any) -> dict[str, Any]:
         captured.update(kwargs)
@@ -392,8 +390,8 @@ def test_cmd_run_dir_rejects_missing_active_orca_optts_route_line(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        cli_common,
-        "_discover_workflow_root",
+        discovery,
+        "resolve_workflow_root",
         lambda explicit: str(workflow_root.resolve()),
     )
 
@@ -412,7 +410,7 @@ def test_cmd_run_dir_passes_scaffold_dir_for_generation_workspace(
     captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
-        cli_common, "_discover_workflow_root", lambda explicit: str(workflow_root.resolve())
+        discovery, "resolve_workflow_root", lambda explicit: str(workflow_root.resolve())
     )
     monkeypatch.setattr(
         cli_run_dir,
@@ -443,7 +441,7 @@ def test_cmd_run_dir_materializes_generation_workspace_inside_scaffold(
     _reaction_scaffold(workflow_dir)
 
     monkeypatch.setattr(
-        cli_common, "_discover_workflow_root", lambda explicit: str(workflow_root.resolve())
+        discovery, "resolve_workflow_root", lambda explicit: str(workflow_root.resolve())
     )
 
     assert cli_run_dir.cmd_run_dir(_run_dir_args(workflow_dir)) == 0
@@ -620,7 +618,7 @@ def test_cmd_run_dir_requires_workflow_root_for_reaction_workflow(
     (workflow_dir / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
     create_called = False
 
-    monkeypatch.setattr(cli_common, "_discover_workflow_root", lambda explicit: None)
+    monkeypatch.setattr(discovery, "resolve_workflow_root", lambda explicit: None)
     monkeypatch.setattr(
         run_dir_options, "_cli_workflow_root_for_args", lambda args, *, config_path=None: None
     )
@@ -654,7 +652,7 @@ def test_cmd_run_dir_requires_workflow_root_for_conformer_workflow(
     )
     create_called = False
 
-    monkeypatch.setattr(cli_common, "_discover_workflow_root", lambda explicit: None)
+    monkeypatch.setattr(discovery, "resolve_workflow_root", lambda explicit: None)
     monkeypatch.setattr(
         run_dir_options, "_cli_workflow_root_for_args", lambda args, *, config_path=None: None
     )
@@ -720,9 +718,7 @@ def test_cmd_run_dir_for_reaction_uses_nested_engine_sections(
     )
     captured: dict[str, Any] = {}
 
-    monkeypatch.setattr(
-        cli_common, "_discover_workflow_root", lambda explicit: "/tmp/workflow_root"
-    )
+    monkeypatch.setattr(discovery, "resolve_workflow_root", lambda explicit: "/tmp/workflow_root")
 
     def fake_create_reaction_ts_search_workflow(**kwargs: Any) -> dict[str, Any]:
         captured.update(kwargs)

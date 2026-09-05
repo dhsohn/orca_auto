@@ -9,25 +9,33 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.cli_common import (
-    _configure_orca_logging,
-    _engine_config_for_command,
-)
-from orca_auto.cli_errors import emit_error
 from orca_auto.core.commands.run_dir import (
     use_run_dir_publication_guard,
     validate_production_run_dir_target,
 )
+from orca_auto.core.config.discovery import engine_config_for_args
 from orca_auto.core.config.files import shared_workflow_root_from_config
+from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.run_dir.layout import inspect_workflow_run_dir
+
+
+def _configure_orca_logging(args: argparse.Namespace) -> None:
+    from orca_auto.orca.cli_logging import configure_logging
+
+    configure_logging(
+        argparse.Namespace(
+            verbose=bool(getattr(args, "verbose", False)),
+            log_file=getattr(args, "log_file", None),
+        )
+    )
 
 
 def cmd_init(args: argparse.Namespace) -> int:
     from orca_auto.orca.commands.init import cmd_init as _cmd_orca_init
 
     _configure_orca_logging(args)
-    args.config = _engine_config_for_command(args)
+    args.config = engine_config_for_args(args)
     return int(_cmd_orca_init(args))
 
 
@@ -35,7 +43,7 @@ def cmd_orca_run_dir(args: argparse.Namespace) -> int:
     from orca_auto.orca.commands.run_inp import cmd_run_inp as _cmd_orca_run_dir
 
     _configure_orca_logging(args)
-    args.config = _engine_config_for_command(args)
+    args.config = engine_config_for_args(args)
     return int(_cmd_orca_run_dir(args))
 
 
@@ -65,7 +73,7 @@ def _detect_run_dir_app(target: Path) -> str:
 
 
 def _configured_runs_root_for_run_dir(args: Any) -> str:
-    config_path = _engine_config_for_command(args)
+    config_path = engine_config_for_args(args)
     return shared_workflow_root_from_config(config_path) or ""
 
 
@@ -215,7 +223,7 @@ def cmd_run_dir(args: Any) -> int:
 def cmd_workflow_run_dir(args: argparse.Namespace) -> int:
     from orca_auto.flow.cli.run_dir import cmd_run_dir as _cmd_workflow_run_dir
 
-    shared_config = _engine_config_for_command(args)
+    shared_config = engine_config_for_args(args)
     if shared_config:
         args.orca_auto_config = shared_config
     return int(_cmd_workflow_run_dir(args))

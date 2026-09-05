@@ -13,15 +13,15 @@ from pathlib import Path
 from typing import Any
 
 import orca_auto.cli_worker_supervision as cli_worker_supervision
-from orca_auto.cli_common import (
-    _discover_shared_config_path,
-    _effective_shared_config_text,
-    _repo_root_for_subprocess,
-    _workflow_root_for_args,
-)
-from orca_auto.cli_errors import emit_error
 from orca_auto.core.app_ids import ORCA_AUTO_WORKFLOW_WORKER_MODULE
+from orca_auto.core.config.discovery import (
+    repo_root_for_subprocess,
+    resolve_shared_config_path,
+    shared_config_text_from_args,
+    workflow_root_for_args,
+)
 from orca_auto.core.engine_catalog import supervised_engine_entries
+from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
 
 LOGGER = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ def _engine_worker_spec(
 ) -> cli_worker_supervision.WorkerSpec:
     argv, cwd, env = worker_module_command(
         config_path=config_path,
-        repo_root=_repo_root_for_subprocess(),
+        repo_root=repo_root_for_subprocess(),
         module_name=_ENGINE_WORKER_MODULES[app],
         tail_argv=_engine_worker_tail_argv(app=app),
     )
@@ -210,8 +210,8 @@ def _add_workflow_worker_spec(
 def _build_worker_specs(args: Any) -> list[cli_worker_supervision.WorkerSpec]:
     explicit_apps = list(getattr(args, "app", None) or [])
     apps = _selected_worker_apps(explicit_apps)
-    config_path = _discover_shared_config_path(_effective_shared_config_text(args))
-    workflow_root = _workflow_root_for_args(args)
+    config_path = resolve_shared_config_path(shared_config_text_from_args(args))
+    workflow_root = workflow_root_for_args(args)
     workflow_enabled = "workflow" in apps
     engine_apps = _worker_engine_apps(apps, workflow_enabled=workflow_enabled)
     _validate_engine_worker_config(engine_apps, config_path)
@@ -259,7 +259,7 @@ def _detect_existing_orca_worker_conflict(
     if not any(spec.app == "orca" for spec in specs):
         return None
 
-    config_path = _discover_shared_config_path(_effective_shared_config_text(args))
+    config_path = resolve_shared_config_path(shared_config_text_from_args(args))
     if not normalize_text(config_path):
         return None
 

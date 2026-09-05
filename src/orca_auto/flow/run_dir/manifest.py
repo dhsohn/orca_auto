@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from orca_auto.cli_common import _normalize_workflow_type
 from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.flow.templates import normalize_workflow_template_id
 
 from ..manifest import (
     FLOW_MANIFEST_FILENAMES as WORKFLOW_MANIFEST_FILENAMES,
@@ -85,7 +85,7 @@ def _resolve_run_dir_workflow_type(
     if not workflow_type_text:
         workflow_type_text = normalize_text(manifest.get("workflow_type"))
     if workflow_type_text:
-        return _normalize_workflow_type(workflow_type_text)
+        return normalize_workflow_template_id(normalize_text(workflow_type_text))
     if workflow_layout.is_ambiguous:
         raise ValueError(
             "Ambiguous workflow_dir: found both reaction inputs and conformer input. "

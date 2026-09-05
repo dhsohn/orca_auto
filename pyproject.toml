@@ -409,6 +409,33 @@ forbidden_modules = [
     "orca_auto.orca.scratch",
 ]
 
+# The top-level CLI modules are the outermost layer: they compose the domain
+# packages, and no domain package may reach back up into them. Shared terminal
+# presentation and config discovery live in core so command adapters inside
+# flow can use them without crossing this boundary.
+[[tool.importlinter.contracts]]
+name = "Domain packages never import the top-level CLI layer"
+type = "forbidden"
+source_modules = ["orca_auto.core", "orca_auto.orca", "orca_auto.flow"]
+forbidden_modules = [
+    "orca_auto.activity_labels",
+    "orca_auto.activity_rendering",
+    "orca_auto.activity_view",
+    "orca_auto.cli",
+    "orca_auto.cli_handlers",
+    "orca_auto.cli_parsers",
+    "orca_auto.cli_queue",
+    "orca_auto.cli_systemd_apply",
+    "orca_auto.cli_systemd_freshness",
+    "orca_auto.cli_systemd_restart",
+    "orca_auto.cli_systemd_status",
+    "orca_auto.cli_systemd_units",
+    "orca_auto.cli_worker_supervision",
+    "orca_auto.cli_workers",
+    "orca_auto.systemd_plan",
+    "orca_auto.terminal_table",
+]
+
 [tool.coverage.run]
 source = ["src/orca_auto"]
 

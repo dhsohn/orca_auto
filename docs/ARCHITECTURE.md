@@ -682,7 +682,9 @@ worker; process cwd is not treated as import-source evidence.
 
 The CLI is argparse-based (`cli.py` → `cli_parsers.py` → `cli_handlers.py`), with
 status-aware colorized table rendering (`terminal_table.py`, `activity_*.py`,
-`cli_style.py`). The public command surface:
+`core/terminal.py`). Shared config discovery lives in `core/config/discovery.py`,
+and no domain package imports the top-level CLI modules (an import-linter
+contract enforces it). The public command surface:
 
 - `init` — create/update shared config
 - `scaffold <ts_search|conformer_search|scan_ts> <path>` — write workflow scaffolds

@@ -10,6 +10,7 @@ from orca_auto.core.paths import validate_configured_executable_path
 from orca_auto.core.paths.validation import validated_absolute_linux_path_text
 from orca_auto.core.utils.coercion import positive_int
 
+from .discovery import repo_root
 from .files import (
     default_config_path_from_repo_root,
     default_shared_admission_root,
@@ -80,8 +81,7 @@ def positive_int_mapping(raw: object) -> dict[str, int]:
 
 
 def default_shared_config_path() -> str:
-    repo_root = Path(__file__).resolve().parents[4]
-    return default_config_path_from_repo_root(repo_root, env_var=CONFIG_ENV_VAR)
+    return default_config_path_from_repo_root(repo_root(), env_var=CONFIG_ENV_VAR)
 
 
 def resource_request_from_manifest(cfg: Any, manifest: dict[str, Any]) -> dict[str, int]:

@@ -1,8 +1,8 @@
 """Build the ``orca_auto`` argument parser.
 
 ``argparse`` writes its own ``prog: error: ...`` line straight to ``stderr``,
-bypassing :mod:`orca_auto.cli_errors`. :class:`OrcaAutoArgumentParser` funnels
-those errors through :func:`orca_auto.cli_errors.emit_error` so every
+bypassing :mod:`orca_auto.core.terminal`. :class:`OrcaAutoArgumentParser` funnels
+those errors through :func:`orca_auto.core.terminal.emit_error` so every
 user-facing failure — runtime or argument-parsing — shares one
 ``error:``/``hint:`` format, and adds a "did you mean" suggestion when an
 unknown subcommand looks like a typo. ``add_subparsers`` defaults
@@ -19,11 +19,11 @@ from typing import NoReturn, cast
 
 from orca_auto import cli_handlers, cli_queue, cli_workers
 from orca_auto._version import package_version
-from orca_auto.cli_errors import emit_error
 from orca_auto.cli_systemd_apply import cmd_systemd_install
 from orca_auto.cli_systemd_restart import cmd_service_restart
 from orca_auto.cli_systemd_status import cmd_service_status
 from orca_auto.core.engine_catalog import known_engine_ids, supervised_engine_entries
+from orca_auto.core.terminal import emit_error
 from orca_auto.flow.cli.worker_options import (
     WorkflowWorkerOptionConfig,
     add_workflow_worker_cli_options,

@@ -10,6 +10,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The top-level CLI modules are now the outermost import layer, enforced by a
+  new import-linter contract: `core`, `orca` and `flow` never import them.
+  What the workflow command adapters shared with the CLI moved into `core`:
+  `core/terminal.py` owns ANSI styling and the `error:`/`hint:` output format
+  (replacing the `cli_style` and `cli_errors` modules), and
+  `core/config/discovery.py` owns shared config and workflow-root resolution
+  from parsed arguments (replacing `cli_common`). Command output and config
+  resolution are unchanged; there is no compatibility alias.
 - An idle queue-worker poll performs no durable write. The worker now reads
   the shared admission count first, then looks for a claimable pending row,
   and only then reserves a slot: a full pool costs one lock-free read instead

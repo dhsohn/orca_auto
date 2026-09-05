@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.cli_errors import emit_error
 from orca_auto.cli_systemd_units import _run_command
+from orca_auto.core.terminal import emit_error
 from orca_auto.systemd_plan import (
     DEFAULT_SYSTEMD_UNIT_DIR,
     SystemdInstallPlan,

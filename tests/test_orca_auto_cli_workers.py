@@ -8,12 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from orca_auto import cli_common
 from orca_auto import cli_handlers as cli_run_dir
 from orca_auto import cli_worker_supervision as worker_supervision
 from orca_auto import cli_workers as unified_cli
 from orca_auto import cli_workers as worker_conflicts
 from orca_auto import cli_workers as worker_specs
+from orca_auto.core.config import discovery
 
 
 @pytest.fixture(autouse=True)
@@ -23,12 +23,12 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
             return None
         return str(Path(explicit).expanduser().resolve())
 
-    monkeypatch.setattr(worker_specs, "_discover_shared_config_path", _explicit_shared_config_path)
+    monkeypatch.setattr(worker_specs, "resolve_shared_config_path", _explicit_shared_config_path)
     monkeypatch.setattr(
-        worker_conflicts, "_discover_shared_config_path", _explicit_shared_config_path
+        worker_conflicts, "resolve_shared_config_path", _explicit_shared_config_path
     )
-    monkeypatch.setattr(cli_common, "_discover_shared_config_path", _explicit_shared_config_path)
-    monkeypatch.setattr(cli_common, "shared_workflow_root_from_config", lambda config_path: None)
+    monkeypatch.setattr(discovery, "resolve_shared_config_path", _explicit_shared_config_path)
+    monkeypatch.setattr(discovery, "shared_workflow_root_from_config", lambda config_path: None)
 
 
 @pytest.mark.parametrize(
@@ -104,7 +104,7 @@ def test_worker_module_command_with_repo_root_uses_module_execution_and_prepends
 
 def test_build_worker_specs_defaults_to_orca_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        worker_specs, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+        worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
 
     def fake_worker_module_command(
@@ -134,7 +134,7 @@ def test_build_worker_specs_runs_each_selected_default_engine_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        worker_specs, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+        worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
 
     def fake_worker_module_command(
@@ -167,10 +167,10 @@ def test_build_worker_specs_does_not_infer_workflow_workers_from_configured_root
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        worker_specs, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+        worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
     monkeypatch.setattr(
-        cli_common, "shared_workflow_root_from_config", lambda config_path: "/tmp/workflows"
+        discovery, "shared_workflow_root_from_config", lambda config_path: "/tmp/workflows"
     )
 
     def fake_worker_module_command(
@@ -196,7 +196,7 @@ def test_build_worker_specs_does_not_infer_workflow_workers_from_configured_root
 
 def test_build_worker_specs_requires_workflow_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        worker_specs, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+        worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
     with pytest.raises(ValueError, match="workflow worker requires runs_root in orca_auto.yaml"):
         worker_specs._build_worker_specs(
@@ -208,10 +208,10 @@ def test_build_worker_specs_explicit_workflow_app_uses_configured_workflow_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        worker_specs, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+        worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
     monkeypatch.setattr(
-        cli_common, "shared_workflow_root_from_config", lambda config_path: "/tmp/workflows"
+        discovery, "shared_workflow_root_from_config", lambda config_path: "/tmp/workflows"
     )
 
     specs = worker_specs._build_worker_specs(
@@ -231,7 +231,7 @@ def test_workflow_root_for_args_uses_shared_config(monkeypatch: pytest.MonkeyPat
     seen: list[str | None] = []
 
     monkeypatch.setattr(
-        cli_common, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+        discovery, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
 
     def _shared_workflow_root(config_path: str | None) -> str:
@@ -239,12 +239,12 @@ def test_workflow_root_for_args_uses_shared_config(monkeypatch: pytest.MonkeyPat
         return "/tmp/from-config-workflows"
 
     monkeypatch.setattr(
-        cli_common,
+        discovery,
         "shared_workflow_root_from_config",
         _shared_workflow_root,
     )
 
-    discovered = cli_common._workflow_root_for_args(
+    discovered = discovery.workflow_root_for_args(
         SimpleNamespace(
             workflow_root=None,
             orca_auto_config=None,
@@ -256,14 +256,14 @@ def test_workflow_root_for_args_uses_shared_config(monkeypatch: pytest.MonkeyPat
     assert seen == ["/tmp/orca_auto.yaml"]
 
 
-def test_engine_config_for_command_uses_discovered_shared_config(
+def test_engine_config_for_args_uses_discovered_shared_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        cli_common, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+        discovery, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
 
-    discovered = cli_common._engine_config_for_command(
+    discovered = discovery.engine_config_for_args(
         argparse.Namespace(
             orca_auto_config=None,
             config=None,
@@ -284,7 +284,7 @@ def test_cmd_orca_run_dir_uses_discovered_shared_config(
 
     monkeypatch.setattr(cli_run_dir, "_configure_orca_logging", lambda args: None)
     monkeypatch.setattr(
-        cli_common, "_discover_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+        discovery, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
 
     import orca_auto.orca.commands.run_inp as run_inp_cmd
