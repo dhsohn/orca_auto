@@ -334,11 +334,9 @@ def submit_reaction_dir(
     max_cores: int | None = None,
     max_memory_gb: int | None = None,
     force: bool = False,
-    repo_root: str | None = None,
     expected_selected_inp: str | None = None,
     workflow_task_kind: str | None = None,
 ) -> dict[str, Any]:
-    del repo_root
     request = _submit_request(
         reaction_dir=reaction_dir,
         priority=priority,
@@ -374,9 +372,7 @@ def cancel_target(
     *,
     target: str,
     config_path: str,
-    repo_root: str | None = None,
 ) -> dict[str, Any]:
-    del repo_root
     request = _cancel_request(target=target, config_path=config_path)
     if not request.target:
         return _failure_payload(

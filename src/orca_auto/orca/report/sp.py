@@ -14,6 +14,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..evidence import (
+    OrcaEvidenceError,
+    collect_structure_evidence,
+    final_out_path,
+    parsed_final_output,
+)
+from ..frequencies import (
+    FrequencyAnalysis,
+    ModeSummary,
+    find_frequency_analysis,
+    mode_summaries,
+)
 from ..input_blocks import file_route_lines
 from ..parser import OrcaResult
 from .attempts import (
@@ -22,15 +34,10 @@ from .attempts import (
     attempt_report_rows,
     attempts_table_html,
     duration_text,
-    final_out_path,
     terminal_actions_html,
 )
 from .frequencies import (
-    FrequencyAnalysis,
-    ModeSummary,
-    find_frequency_analysis,
     mode_section_html,
-    mode_summaries,
 )
 from .render import (
     ReportComponent,
@@ -39,9 +46,6 @@ from .render import (
     status_badges,
 )
 from .si import (
-    SiBlockError,
-    collect_si_block,
-    parsed_final_output,
     render_si_block_md,
 )
 
@@ -92,8 +96,8 @@ def collect_sp_report_data(reaction_dir: Path, state: Mapping[str, Any]) -> SpRe
     # geometry; the report is still useful without it (failed runs keep the
     # attempt chain), so its absence is not an error here.
     try:
-        block = collect_si_block(reaction_dir, state)
-    except SiBlockError:
+        block = collect_structure_evidence(reaction_dir, state)
+    except OrcaEvidenceError:
         block = None
     si_block_text = render_si_block_md(block) if block is not None else None
 

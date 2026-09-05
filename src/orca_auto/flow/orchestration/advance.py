@@ -135,7 +135,6 @@ def advance_workflow(
     crest_config: str | None = None,
     xtb_config: str | None = None,
     orca_config: str | None = None,
-    orca_repo_root: str | None = None,
     engine_options: WorkflowEngineOptions | None = None,
     submit_ready: bool = True,
     services: OrchestrationServices | None = None,
@@ -146,7 +145,6 @@ def advance_workflow(
         crest_config=crest_config,
         xtb_config=xtb_config,
         orca_config=orca_config,
-        orca_repo_root=orca_repo_root,
     )
     workspace_dir = resolved.persistence.resolve_workflow_workspace(
         target=target,

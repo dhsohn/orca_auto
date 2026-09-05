@@ -995,14 +995,14 @@ def test_workflow_si_rechecks_terminal_output_after_parsing(
     )
     stage = _orca_stage("orca_output_parse_race", generation)
     out = generation / "job.out"
-    original_collect = stage_evidence.collect_si_block
+    original_collect = stage_evidence.collect_structure_evidence
 
     def replace_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
         block = original_collect(reaction_dir, state)
         out.write_text(out.read_text(encoding="utf-8") + "\nraced replacement\n", encoding="utf-8")
         return block
 
-    monkeypatch.setattr(stage_evidence, "collect_si_block", replace_after_parse)
+    monkeypatch.setattr(stage_evidence, "collect_structure_evidence", replace_after_parse)
 
     data = collect_workflow_si_data(_payload([stage]))
 
@@ -1025,7 +1025,7 @@ def test_workflow_si_rechecks_bound_input_after_parsing(
     )
     stage = _orca_stage("orca_input_parse_race", generation)
     selected = generation / "job.inp"
-    original_collect = stage_evidence.collect_si_block
+    original_collect = stage_evidence.collect_structure_evidence
 
     def replace_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
         block = original_collect(reaction_dir, state)
@@ -1034,7 +1034,7 @@ def test_workflow_si_rechecks_bound_input_after_parsing(
         )
         return block
 
-    monkeypatch.setattr(stage_evidence, "collect_si_block", replace_after_parse)
+    monkeypatch.setattr(stage_evidence, "collect_structure_evidence", replace_after_parse)
 
     data = collect_workflow_si_data(_payload([stage]))
 
@@ -1056,14 +1056,14 @@ def test_workflow_si_rechecks_generation_owner_after_parsing(
         thermo=True,
     )
     stage = _orca_stage("orca_owner_parse_race", generation)
-    original_collect = stage_evidence.collect_si_block
+    original_collect = stage_evidence.collect_structure_evidence
 
     def remove_owner_after_parse(reaction_dir: Path, state: dict[str, Any]) -> Any:
         block = original_collect(reaction_dir, state)
         os.removexattr(generation, "user.orca_auto.generation_owner")
         return block
 
-    monkeypatch.setattr(stage_evidence, "collect_si_block", remove_owner_after_parse)
+    monkeypatch.setattr(stage_evidence, "collect_structure_evidence", remove_owner_after_parse)
 
     data = collect_workflow_si_data(_payload([stage]))
 
@@ -2653,7 +2653,7 @@ def test_multi_route_line_selected_input_stays_provenance_verified(tmp_path: Pat
     assert [entry.stage_id for entry in data.entries] == ["conf_multi"]
     block = data.entries[0].block
     assert block.result.electronic_state_verified
-    assert not any("provenance" in warning for warning in block.warnings)
+    assert not any("provenance" in warning for warning in block.provenance_warnings)
 
 
 def test_interaction_energy_fails_closed_when_fragment_state_metadata_is_missing(

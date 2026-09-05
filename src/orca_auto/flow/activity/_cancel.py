@@ -12,7 +12,6 @@ from ..orchestration import cancel_materialized_workflow
 from ..submitters.crest import cancel_target as cancel_crest_target
 from ..submitters.orca import cancel_target as cancel_orca_target
 from ..submitters.xtb import cancel_target as cancel_xtb_target
-from . import _sources
 from ._model import ActivityCancelRequest, ActivityRecord, ResolvedActivitySources
 
 _CANCEL_ENGINE_TARGETS = {
@@ -79,7 +78,6 @@ def cancel_workflow_activity(
         crest_config=resolved.crest_config,
         xtb_config=resolved.xtb_config,
         orca_config=resolved.orca_config,
-        orca_repo_root=request.engine_options.orca.repo_root,
     )
 
 
@@ -115,7 +113,6 @@ def cancel_orca_activity(
     return cancel_orca_target(
         target=record.cancel_target,
         config_path=config_path,
-        repo_root=_sources.discover_orca_repo_root(request.engine_options.orca.repo_root),
     )
 
 

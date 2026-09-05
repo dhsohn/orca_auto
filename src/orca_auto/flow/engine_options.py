@@ -10,16 +10,10 @@ class EngineConfigOptions:
 
 
 @dataclass(frozen=True)
-class EngineRuntimeOptions:
-    config: str | None = None
-    repo_root: str | None = None
-
-
-@dataclass(frozen=True)
 class WorkflowEngineOptions:
     crest: EngineConfigOptions
     xtb: EngineConfigOptions
-    orca: EngineRuntimeOptions
+    orca: EngineConfigOptions
 
     @classmethod
     def from_values(
@@ -29,7 +23,6 @@ class WorkflowEngineOptions:
         crest_config: str | None = None,
         xtb_config: str | None = None,
         orca_config: str | None = None,
-        orca_repo_root: str | None = None,
     ) -> Self:
         shared_config = shared_config or None
         return cls(
@@ -39,9 +32,8 @@ class WorkflowEngineOptions:
             xtb=EngineConfigOptions(
                 config=xtb_config or shared_config,
             ),
-            orca=EngineRuntimeOptions(
+            orca=EngineConfigOptions(
                 config=orca_config or shared_config,
-                repo_root=orca_repo_root,
             ),
         )
 
@@ -63,7 +55,3 @@ class WorkflowEngineOptions:
     @property
     def orca_config(self) -> str | None:
         return self.orca.config
-
-    @property
-    def orca_repo_root(self) -> str | None:
-        return self.orca.repo_root

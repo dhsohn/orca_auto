@@ -15,8 +15,6 @@ ORCA_SUBMITTERS = frozenset({ORCA_AUTO_ORCA_SUBMITTER})
 
 ORCA_AUTO_CONFIG_ENV_VAR = "ORCA_AUTO_CONFIG"
 
-ORCA_AUTO_REPO_ROOT_ENV_VAR = "ORCA_AUTO_REPO_ROOT"
-
 
 def is_orca_submitter(value: object | None) -> bool:
     return str(value or "").strip() in ORCA_SUBMITTERS

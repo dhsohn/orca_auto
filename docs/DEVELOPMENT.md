@@ -26,6 +26,25 @@ stage, materialization, and lifecycle operations directly. Tests must reject
 unknown outer-service overrides and patch the owning module when isolating an
 internal operation.
 
+ORCA structure evidence is independent of human report presentation:
+
+- `orca/evidence.py` owns `OrcaStructureEvidence`, final-output selection,
+  cached parsing, route classification, and completed-structure collection.
+- `orca/frequencies.py` owns vibrational parsing and mode summaries.
+- Workflow stage receipt/provenance verification remains in
+  `flow/orca_stage_evidence.py`; selection imports the scientific record
+  directly, without passing through the SI renderer.
+- `orca/report/si.py` derives SI lint warnings and renders/publishes Markdown;
+  `orca/report/frequencies.py` renders vibrational HTML only. Neither is a
+  compatibility facade for the read owners. Import-linter enforces these
+  evidence/presentation boundaries. Existing RMSD/interaction-energy modules
+  are outside this extraction.
+
+`orca/output_status.py` owns optimization verdict markers and the last-line
+verdict rule, shared by output analysis, parsed results, and progress cards.
+Internal engine submission outcomes are selected by control flow, never by
+searching human diagnostic text for status words.
+
 Workflow SI is a flat package of three modules — `collection.py`, `publication.py`,
 and `rendering.py`. Import them directly; `flow.workflow.si.__init__` exports
 nothing and is not a facade. An import-linter layers contract enforces the

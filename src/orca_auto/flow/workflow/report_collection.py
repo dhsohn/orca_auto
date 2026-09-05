@@ -28,10 +28,12 @@ from orca_auto.flow.orca_stage_evidence import (
 from orca_auto.flow.orca_stage_evidence import (
     stage_task as _stage_task,
 )
+from orca_auto.orca.evidence import (
+    OrcaStructureEvidence,
+)
 from orca_auto.orca.out_analyzer import scan_ts_lines_for_imag_count
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.attempts import duration_text
-from orca_auto.orca.report.si import SiBlock
 
 from . import report_diagnostics, report_energy_evidence
 from .stage_summary import crest_stage_detail, stage_task_kind, xtb_stage_detail
@@ -274,7 +276,7 @@ def _orca_stage_result(
     *,
     candidate_task: bool,
     authoritative_evidence: tuple[
-        SiBlock,
+        OrcaStructureEvidence,
         OrcaSelectedInputScienceIdentity | None,
     ]
     | None = None,

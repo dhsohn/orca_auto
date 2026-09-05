@@ -6,6 +6,30 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [4.0.1] - 2026-09-05
+
+### Fixed
+
+- Internal CREST/xTB submission errors no longer become resource waits because
+  their diagnostic text mentions admission limits. Invalid engine manifests
+  fail the stage with their original diagnostic; structured cancellation
+  deferral remains unchanged.
+- Optimization analysis, parsed results, and progress/report cards share the
+  last explicit convergence verdict, including large-output streaming scans.
+
+### Changed
+
+- ORCA structure/frequency evidence has direct read-only owners outside report
+  presentation. Workflow selection consumes that evidence; SI warnings and
+  formatting stay in the renderer. Scientific selection and output bytes are
+  preserved by the extraction.
+
+### Removed
+
+- The inert workflow `orca_repo_root` option, its submit/cancel `repo_root`
+  arguments, and `ORCA_AUTO_REPO_ROOT` discovery/forwarding. There is no
+  compatibility alias or fallback.
+
 ## [4.0.0] - 2026-09-05
 
 ### Removed

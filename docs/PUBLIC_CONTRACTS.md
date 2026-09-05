@@ -669,7 +669,10 @@ admission rejects manifest shape, engine input-file paths, `endpoint_pairing`,
 type schema is checked when that engine job is submitted, so an unknown
 `xtb.ts_guess_validation` key surfaces at the first xTB stage rather than at
 workflow admission. The engine `charge`/`uhf` conflict rule below is checked
-earlier, when the workflow is created.
+earlier, when the workflow is created. Internal engine submission exceptions
+produce `submission_failed` with the original diagnostic; mentioning a slot or
+admission limit in that text cannot turn a failure into a resource wait.
+Actual cancellation deferral is an explicit structured submission outcome.
 Fragment labels are at most 80 characters. An enabled interaction-energy block
 requires 2–8 fragments; each multiplicity is an integer in `[1, 100]`, and
 `sp_route_line` must describe a pure single-point calculation. Fragment indices

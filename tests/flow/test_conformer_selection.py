@@ -30,8 +30,10 @@ from orca_auto.flow.manifest import (
     DEFAULT_RMSD_ENERGY_WINDOW_KCAL,
     DEFAULT_RMSD_THRESHOLD_ANGSTROM,
 )
+from orca_auto.orca.evidence import (
+    OrcaStructureEvidence,
+)
 from orca_auto.orca.parser import OrcaResult
-from orca_auto.orca.report.si import SiBlock
 
 AtomRow = tuple[str, float, float, float]
 
@@ -65,14 +67,13 @@ def _block(
     imaginary_count: int | None = 0,
     name: str = "structure",
     **result_overrides: object,
-) -> SiBlock:
-    return SiBlock(
+) -> OrcaStructureEvidence:
+    return OrcaStructureEvidence(
         name=name,
         kind=kind,
         result=_result(**result_overrides),
         analysis=None,
         imaginary_count=imaginary_count,
-        warnings=(),
     )
 
 

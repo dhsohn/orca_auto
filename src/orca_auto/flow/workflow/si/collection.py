@@ -25,6 +25,9 @@ from orca_auto.flow.orca_stage_evidence import (
 from orca_auto.flow.orca_stage_evidence import (
     stage_metadata as _stage_metadata,
 )
+from orca_auto.orca.evidence import (
+    OrcaStructureEvidence,
+)
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.interaction_energy import (
     InteractionEnergyResult,
@@ -35,7 +38,6 @@ from orca_auto.orca.report.interaction_energy import (
 )
 from orca_auto.orca.report.render import R_KCAL_PER_MOL_K
 from orca_auto.orca.report.rmsd import RmsdGroup
-from orca_auto.orca.report.si import SiBlock
 
 from ...conformer_selection import (
     OrcaSelectedInputScienceIdentity,
@@ -77,12 +79,12 @@ def _text(value: Any) -> str:
 @dataclass(frozen=True)
 class WorkflowSiEntry:
     stage_id: str
-    block: SiBlock
+    block: OrcaStructureEvidence
     selected_input_identity: OrcaSelectedInputScienceIdentity | None = None
     # The matched single-point block, kept so its level (method/basis/solvation/
     # version/route) can be documented: a composite energy is unreproducible
     # without the level that produced E(SP).
-    sp_block: SiBlock | None = None
+    sp_block: OrcaStructureEvidence | None = None
     sp_selected_input_identity: OrcaSelectedInputScienceIdentity | None = None
     sp_energy: float | None = None
     sp_label: str = ""
@@ -154,7 +156,7 @@ def _stage_label(stage: Mapping[str, Any]) -> str:
     return _text(_stage_metadata(stage).get("selected_input_label")) or _text(stage.get("stage_id"))
 
 
-def _block_has_only_finite_numbers(block: SiBlock) -> bool:
+def _block_has_only_finite_numbers(block: OrcaStructureEvidence) -> bool:
     result = block.result
     optional_values = (
         result.energy_hartree,
@@ -184,7 +186,7 @@ def _block_has_only_finite_numbers(block: SiBlock) -> bool:
 
 def _collect_stage_block(
     stage: Mapping[str, Any],
-) -> tuple[SiBlock | None, str, OrcaSelectedInputScienceIdentity | None]:
+) -> tuple[OrcaStructureEvidence | None, str, OrcaSelectedInputScienceIdentity | None]:
     """Return a parsed block, exclusion reason, and bound selected-input identity."""
     block, reason, selected_input_identity = collect_verified_orca_stage_evidence(stage)
     if block is None:
@@ -329,7 +331,9 @@ def _rmsd_eligible_minimum(
     )
 
 
-def _completed_interaction_block(stage: Mapping[str, Any]) -> tuple[SiBlock | None, str]:
+def _completed_interaction_block(
+    stage: Mapping[str, Any],
+) -> tuple[OrcaStructureEvidence | None, str]:
     status = _text(stage.get("status"))
     if status != "completed":
         return None, f"stage status is {status or 'unknown'}"
@@ -446,8 +450,8 @@ def _interaction_energy_results(
         if state_reason:
             blockers.append(state_reason)
 
-        observed_blocks: list[SiBlock] = []
-        complex_block: SiBlock | None = None
+        observed_blocks: list[OrcaStructureEvidence] = []
+        complex_block: OrcaStructureEvidence | None = None
         complex_sp_stage_id = ""
         if len(complex_candidates) == 1:
             complex_stage = complex_candidates[0]
@@ -481,7 +485,7 @@ def _interaction_energy_results(
             expected_charge = int(expected["charge"])
             expected_multiplicity = int(expected["multiplicity"])
             expected_label = _text(expected.get("label")) or f"fragment_{index + 1}"
-            block: SiBlock | None = None
+            block: OrcaStructureEvidence | None = None
             stage_id = ""
             if len(candidates) != 1:
                 blockers.append(
@@ -598,7 +602,7 @@ def _cluster_key(entry: WorkflowSiEntry) -> str:
 
 
 def _provenance_key(
-    block: SiBlock,
+    block: OrcaStructureEvidence,
     selected_input_identity: OrcaSelectedInputScienceIdentity,
 ) -> tuple[str, str, str, str, OrcaSelectedInputScienceIdentity]:
     """Exact executed level and electronic state used for cross-structure comparisons."""
@@ -613,7 +617,7 @@ def _provenance_key(
 
 
 def _has_complete_comparison_provenance(
-    block: SiBlock | None,
+    block: OrcaStructureEvidence | None,
     selected_input_identity: OrcaSelectedInputScienceIdentity | None,
 ) -> bool:
     return (
@@ -1023,7 +1027,7 @@ def collect_workflow_si_data(
         [entry for entry in stationary if id(entry.block) not in eligible_blocks],
         remaining_single_points,
     )
-    # Corrupt payloads may repeat stage IDs. SiBlock identity is stable through
+    # Corrupt payloads may repeat stage IDs. OrcaStructureEvidence identity is stable through
     # dataclass replacement and keeps this merge 1:1.
     paired_by_block = {id(entry.block): entry for entry in (*eligible_paired, *ineligible_paired)}
     pre_dedup_ranked = [paired_by_block.get(id(entry.block), entry) for entry in stationary]

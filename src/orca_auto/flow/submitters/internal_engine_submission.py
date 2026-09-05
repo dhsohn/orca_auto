@@ -47,14 +47,11 @@ from orca_auto.core.queue.enqueue_publication import (
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import mutate_entries, reject_active_task_duplicate
 from orca_auto.core.statuses import (
-    STATUS_ADMISSION_LIMIT_REACHED,
     STATUS_BLOCKED,
     STATUS_CANCEL_REQUESTED,
     STATUS_FAILED,
     STATUS_QUEUED,
     STATUS_SUBMITTED,
-    STATUS_WAITING_FOR_SLOT,
-    SUBMISSION_DEFERRED_STATUSES,
 )
 from orca_auto.core.utils import normalize_text
 
@@ -203,56 +200,6 @@ def _matches_submission_engine_identity(entry: QueueEntry, submission: Any) -> b
     )
 
 
-def transient_submission_block_reason(
-    *, parsed_stdout: dict[str, str], stdout: str, stderr: str
-) -> str:
-    parsed_status = normalize_text(parsed_stdout.get("status")).lower()
-    if parsed_status in SUBMISSION_DEFERRED_STATUSES:
-        return parsed_status
-
-    combined = f"{stdout}\n{stderr}".lower()
-    if parsed_status == STATUS_BLOCKED and any(
-        token in combined for token in ("admission", "slot", "limit")
-    ):
-        return STATUS_WAITING_FOR_SLOT
-
-    patterns = (
-        ("admission limit reached", STATUS_ADMISSION_LIMIT_REACHED),
-        ("admission slots are full", STATUS_ADMISSION_LIMIT_REACHED),
-        (STATUS_WAITING_FOR_SLOT, STATUS_WAITING_FOR_SLOT),
-        ("waiting for slot", STATUS_WAITING_FOR_SLOT),
-        ("no admission slot", STATUS_WAITING_FOR_SLOT),
-        ("active simulation limit", STATUS_ADMISSION_LIMIT_REACHED),
-        ("max_active_simulations", STATUS_ADMISSION_LIMIT_REACHED),
-    )
-    for pattern, reason in patterns:
-        if pattern in combined:
-            return reason
-    return ""
-
-
-def queue_submission_status(
-    *,
-    returncode: int,
-    parsed_stdout: dict[str, str],
-    stdout: str,
-    stderr: str,
-) -> tuple[str, str]:
-    if (
-        int(returncode) == 0
-        and normalize_text(parsed_stdout.get("status")).lower() == STATUS_QUEUED
-    ):
-        return STATUS_SUBMITTED, ""
-    blocked_reason = transient_submission_block_reason(
-        parsed_stdout=parsed_stdout,
-        stdout=stdout,
-        stderr=stderr,
-    )
-    if blocked_reason:
-        return STATUS_BLOCKED, blocked_reason
-    return STATUS_FAILED, ""
-
-
 def _submission_failure_payload(
     *,
     command_trace: list[str],
@@ -260,20 +207,12 @@ def _submission_failure_payload(
     stderr: str,
     extra_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    parsed: dict[str, str] = {}
-    status, reason = queue_submission_status(
-        returncode=1,
-        parsed_stdout=parsed,
-        stdout="",
-        stderr=stderr,
-    )
     return InternalEngineCommandResult(
-        status=status,
-        reason=reason,
+        status=STATUS_FAILED,
         returncode=1,
         command_argv=command_trace,
         stderr=stderr,
-        parsed_stdout=parsed,
+        parsed_stdout={},
         job_dir=job_dir,
         extra_fields=dict(extra_fields or {}),
     ).to_payload()

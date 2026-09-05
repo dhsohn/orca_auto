@@ -216,7 +216,6 @@ def test_orca_sync_defers_contract_pass_after_rejection_and_keeps_reason(
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca_auto.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )
@@ -234,7 +233,6 @@ def test_orca_sync_defers_contract_pass_after_rejection_and_keeps_reason(
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca_auto.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )

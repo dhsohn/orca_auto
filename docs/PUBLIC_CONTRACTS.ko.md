@@ -606,6 +606,9 @@ metadata만으로 primary stage를 숨길 수 없습니다.
 mapping 자체의 키·타입 스키마는 해당 엔진 작업을 제출할 때 검사합니다 — 그래서 알 수 없는
 `xtb.ts_guess_validation` 키는 워크플로우 admission이 아니라 첫 xTB 스테이지에서 드러납니다.
 아래의 엔진 `charge`/`uhf` 충돌 규칙은 그보다 이른 워크플로우 생성 시점에 검사합니다.
+내부 엔진 제출 예외는 원래 진단을 보존한 `submission_failed`로 처리합니다.
+오류 문구에 slot이나 admission limit이 포함되어도 자원 대기로 바꾸지 않습니다.
+실제 취소 대기는 명시적으로 구조화된 제출 결과로 전달합니다.
 fragment label은 최대 80자입니다.
 활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
 정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는

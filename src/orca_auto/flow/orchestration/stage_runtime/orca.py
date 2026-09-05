@@ -50,13 +50,11 @@ def _submit_orca_stage(
     reaction_dir: str,
     submission_binding: _OrcaSubmissionBinding,
     orca_config: str | None,
-    orca_repo_root: str | None,
 ) -> bool:
     submission = services.engines.submit_reaction_dir(
         reaction_dir=reaction_dir,
         priority=normalize_queue_priority(enqueue_payload.get("priority")),
         config_path=str(orca_config),
-        repo_root=orca_repo_root,
         expected_selected_inp=str(submission_binding.selected_inp),
         workflow_task_kind=task_view.kind(),
         **_orca_submission_resource_kwargs(enqueue_payload),
@@ -270,7 +268,6 @@ def sync_orca_stage_impl(
     stage: dict[str, Any],
     *,
     orca_config: str | None,
-    orca_repo_root: str | None,
     submit_ready: bool,
     services: OrchestrationServices | None = None,
 ) -> None:
@@ -306,7 +303,6 @@ def sync_orca_stage_impl(
             reaction_dir=reaction_dir_hint,
             submission_binding=submission_binding,
             orca_config=orca_config,
-            orca_repo_root=orca_repo_root,
         )
         if not submission_applied:
             return

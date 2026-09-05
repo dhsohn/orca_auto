@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from ..orca_chemistry import build_formula as _build_formula
 from ..orca_opt_progress import OptProgress, OptStep, parse_opt_progress
-from ..output_status import coarse_orca_status
+from ..output_status import coarse_orca_status, last_optimization_convergence
 from .extractors import (
     AtomRow,
 )
@@ -41,8 +41,6 @@ from .patterns import (
     _ENTHALPY_RE,
     _GIBBS_CORRECTION_RE,
     _GIBBS_RE,
-    _OPT_CONVERGED_RE,
-    _OPT_NOT_CONVERGED_RE,
     _THERMO_TEMPERATURE_RE,
     _ZPE_RE,
     FINAL_SINGLE_POINT_ENERGY_RE,
@@ -217,10 +215,7 @@ def _populate_energy(result: OrcaResult, final_energy: re.Match[str] | None) -> 
 
 
 def _populate_convergence(result: OrcaResult, text: str) -> None:
-    if _OPT_CONVERGED_RE.search(text):
-        result.opt_converged = True
-    elif _OPT_NOT_CONVERGED_RE.search(text):
-        result.opt_converged = False
+    result.opt_converged = last_optimization_convergence(text.splitlines())
 
 
 def _final_stage_text(

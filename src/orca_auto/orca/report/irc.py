@@ -10,6 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from ..completion_rules import IRC_ROUTE_RE
+from ..evidence import (
+    final_out_path,
+)
+from ..frequencies import (
+    ModeSummary,
+    find_frequency_analysis,
+    mode_summaries,
+)
 from ..input_blocks import file_route_lines
 from ..parser import OrcaResult, parse_opt_progress, parse_orca_output
 from ..parser.io import read_orca_text
@@ -19,10 +27,11 @@ from .attempts import (
     attempt_report_rows,
     attempts_table_html,
     duration_text,
-    final_out_path,
     terminal_actions_html,
 )
-from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
+from .frequencies import (
+    mode_section_html,
+)
 from .render import (
     ChartSeries,
     ReportComponent,

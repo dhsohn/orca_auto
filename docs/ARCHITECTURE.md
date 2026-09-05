@@ -348,7 +348,9 @@ logic. Notable pieces:
   `output_status.py`, `completion_rules.py`): determines completion by mode —
   TS mode (`OptTS`/`NEB-TS`, requires exactly one imaginary frequency in the
   frequency section after the last final single point energy, plus an IRC
-  marker when the route has `IRC`) vs Opt mode (normal termination).
+  marker when the route has `IRC`) vs Opt mode (normal termination without a
+  final non-convergence verdict). `output_status.py` owns the last explicit
+  optimization verdict used by the analyzer, parser, and progress reports.
 - **Single-attempt execution:** calculation failures preserve the original analyzer
   reason and end the run. Direct `ScanTS` routes are rejected before generation
   creation. `relaxed_scan.py` owns coordinate validation and surface parsing for

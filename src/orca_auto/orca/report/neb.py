@@ -14,6 +14,11 @@ from orca_auto.orca.parser.patterns import (
     final_single_point_energy_value,
 )
 
+from ..frequencies import (
+    ModeSummary,
+    find_frequency_analysis,
+    mode_summaries,
+)
 from ..input_blocks import file_route_lines
 from ..orca_opt_progress import OptProgress, parse_opt_progress
 from ..parser import KCAL_PER_HARTREE
@@ -28,7 +33,9 @@ from .attempts import (
     duration_text,
     terminal_actions_html,
 )
-from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
+from .frequencies import (
+    mode_section_html,
+)
 from .render import (
     ChartSeries,
     ReportComponent,

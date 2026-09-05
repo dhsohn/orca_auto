@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..frequencies import (
+    ModeSummary,
+    find_frequency_analysis,
+    mode_summaries,
+)
 from ..input_blocks import file_route_lines
 from ..parser import KCAL_PER_HARTREE
 from ..relaxed_scan import (
@@ -27,7 +32,9 @@ from .attempts import (
     duration_text,
     terminal_actions_html,
 )
-from .frequencies import ModeSummary, find_frequency_analysis, mode_section_html, mode_summaries
+from .frequencies import (
+    mode_section_html,
+)
 from .render import (
     ChartSeries,
     ReportComponent,

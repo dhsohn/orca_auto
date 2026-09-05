@@ -6,7 +6,64 @@ from pathlib import Path
 
 import pytest
 
+from orca_auto.orca.completion_rules import CompletionMode
+from orca_auto.orca.out_analyzer import analyze_output
+from orca_auto.orca.output_status import last_optimization_convergence
 from orca_auto.orca.parser import parse_opt_progress, parse_orca_output
+from orca_auto.orca.report.opt import collect_opt_report_data
+
+
+def test_optimization_verdict_absence_and_same_line_negative_precedence() -> None:
+    assert last_optimization_convergence(["no verdict here"]) is None
+    assert (
+        last_optimization_convergence(
+            ["THE OPTIMIZATION HAS CONVERGED; THE OPTIMIZATION DID NOT CONVERGE"]
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "positive,negative",
+    [
+        ("THE OPTIMIZATION HAS CONVERGED", "THE OPTIMIZATION DID NOT CONVERGE"),
+        ("OPTIMIZATION RUN DONE", "OPTIMIZATION HAS NOT YET CONVERGED"),
+        ("the optimization has converged", "ORCA GEOMETRY OPTIMIZATION NOT CONVERGED"),
+    ],
+)
+@pytest.mark.parametrize("converged", [False, True])
+@pytest.mark.parametrize("padding", ["", "padding\n" * 40000], ids=["small", "tail-fallback"])
+def test_last_optimization_verdict_agrees_across_consumers(
+    tmp_path: Path, positive: str, negative: str, converged: bool, padding: str
+) -> None:
+    first, last = (negative, positive) if converged else (positive, negative)
+    out = tmp_path / "optimization.out"
+    out.write_text(
+        "! HF STO-3G Opt\n"
+        f"GEOMETRY OPTIMIZATION CYCLE 1\nFINAL SINGLE POINT ENERGY -1.0\n{first}\n"
+        f"GEOMETRY OPTIMIZATION CYCLE 2\nFINAL SINGLE POINT ENERGY -0.9\n{last}\n"
+        f"{padding}****ORCA TERMINATED NORMALLY****\n",
+        encoding="utf-8",
+    )
+    analysis = analyze_output(out, CompletionMode("opt", False, "! Opt"))
+    result = parse_orca_output(str(out))
+    progress = parse_opt_progress(str(out))
+    inp = tmp_path / "optimization.inp"
+    inp.write_text("! HF STO-3G Opt\n", encoding="utf-8")
+    report = collect_opt_report_data(
+        tmp_path,
+        {"selected_inp": str(inp), "attempts": [{"out_path": str(out)}]},
+        kind="opt",
+    )
+
+    assert analysis.markers["last_opt_converged"] is converged
+    assert analysis.status.value == ("completed" if converged else "geom_not_converged")
+    assert result.opt_converged is converged
+    assert result.status == ("completed" if converged else "failed")
+    assert progress.is_converged is converged
+    assert len(progress.steps) == 2
+    assert report is not None
+    assert report.opt_converged is converged
 
 
 def test_annotated_final_energy_is_not_published(tmp_path: Path) -> None:

@@ -122,6 +122,38 @@ Use small, non-confidential systems. Prefer sanitized or public fixtures, and do
 not commit proprietary structures or large raw outputs unless a separate issue
 justifies them.
 
+### Optimization verdict and evidence-extraction acceptance (2026-09-05)
+
+ORCA 6.1.1 on Linux/WSL2, one core and 1 GB per job, isolated temporary
+queues/admission; no production worker restart:
+
+```bash
+ORCA_REAL_EXECUTABLE=/path/to/orca timeout --signal=TERM --kill-after=10s 180s \
+  .venv/bin/python -m pytest -q --no-cov \
+  tests/integration/test_orca_worker_smoke.py -k water_optimization_acceptance
+```
+
+Both opt-in cases passed:
+
+- Public H2O, `HF STO-3G Opt Freq TightSCF`, `MaxIter 30`: completed with a
+  finite electronic/Gibbs energy, nine vibrational frequencies and zero
+  imaginary modes. Parser, progress, HTML and structure evidence agree.
+- The same geometry, `HF STO-3G Opt TightSCF`, `MaxIter 1`: normally terminated
+  but `geometry_not_converged`, failed queue/state and no SI block. Parser and
+  progress/report cards do not claim convergence.
+- Both released admission slots. Their generation `machine.json` files passed
+  the CI-pinned common validator with artifact-byte verification and producer
+  `orca_auto` / payload `chemistry/results-bundle` v1 pins. Success was
+  `succeeded/complete/ready`; non-convergence was `failed/complete/blocked`.
+
+Separately, the structure/frequency extraction retained 15 moved definitions'
+ASTs apart from declared symbol/docstring/lint ownership changes. Two baseline
+generations and the post-move generation of eight synthetic report cases
+produced identical HTML/SI bytes (15 files; plain scan has no SI block).
+Independent review also compared 144 SI lint/provenance combinations byte-for-byte.
+These extraction comparisons do not claim real-engine acceptance for TS, NEB,
+IRC, or scan calculations.
+
 ## Recorded real-engine runs
 
 These are real-engine runs performed on the maintainer workstation (Linux/WSL2).

@@ -10,7 +10,6 @@ import pytest
 from orca_auto.core.app_ids import (
     ORCA_AUTO_CONFIG_ENV_VAR,
     ORCA_AUTO_ORCA_SOURCE,
-    ORCA_AUTO_REPO_ROOT_ENV_VAR,
 )
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -328,12 +327,6 @@ def test_activity_helper_edges_and_discovery_paths(
     assert resolved.crest_config == str(existing.resolve())
     assert resolved.xtb_config == str(existing.resolve())
     assert resolved.orca_config == str(existing.resolve())
-
-    monkeypatch.setenv(ORCA_AUTO_REPO_ROOT_ENV_VAR, str(tmp_path / "repo"))
-    assert _activity_sources.discover_orca_repo_root(None) == str((tmp_path / "repo").resolve())
-    assert _activity_sources.discover_orca_repo_root(str(tmp_path / "explicit")) == str(
-        (tmp_path / "explicit").resolve()
-    )
 
     assert (
         _activity_sources.shared_config_hint("", None, " /tmp/shared.yaml ") == "/tmp/shared.yaml"
@@ -842,9 +835,6 @@ def test_cancel_activity_routes_crest_and_orca_targets(monkeypatch: pytest.Monke
     monkeypatch.setattr(
         _activity_cancel, "cancel_orca_target", lambda **kwargs: {"status": "", **kwargs}
     )
-    monkeypatch.setattr(
-        _activity_sources, "discover_orca_repo_root", lambda explicit: "/tmp/orca-repo"
-    )
 
     crest_payload = activity.cancel_activity(target="crest-q", crest_config="/tmp/crest.yaml")
     orca_payload = activity.cancel_activity(target="orca-q", orca_config="/tmp/orca.yaml")
@@ -852,7 +842,8 @@ def test_cancel_activity_routes_crest_and_orca_targets(monkeypatch: pytest.Monke
     assert crest_payload["status"] == "cancel_requested"
     assert crest_payload["result"]["config_path"] == str(Path("/tmp/crest.yaml").resolve())
     assert orca_payload["status"] == "failed"
-    assert orca_payload["result"]["repo_root"] == "/tmp/orca-repo"
+    assert orca_payload["result"]["target"] == "orca-q"
+    assert orca_payload["result"]["config_path"] == str(Path("/tmp/orca.yaml").resolve())
 
 
 def test_clear_activities_clears_workflow_and_engine_terminal_sources(monkeypatch) -> None:
