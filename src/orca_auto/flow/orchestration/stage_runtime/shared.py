@@ -169,6 +169,8 @@ def _record_submission_failure_metadata(
     )[:_SUBMISSION_ERROR_DETAIL_LIMIT]
     if failure_detail:
         stage_metadata["submission_error_detail"] = failure_detail
+    else:
+        stage_metadata.pop("submission_error_detail", None)
 
 
 def _clear_submission_failure_metadata(stage_metadata: dict[str, Any]) -> None:
@@ -212,14 +214,25 @@ def _apply_submission_result(
         _record_submission_failure_metadata(stage_metadata, submission)
     stage_metadata.update(active_metadata or {})
     _clear_submission_deferred_metadata(stage_metadata)
-    return True
+    return submitted
 
 
-def _apply_contract_status(stage: dict[str, Any], task: dict[str, Any], status: str) -> None:
+def _apply_contract_status(stage: dict[str, Any], task: dict[str, Any], status: str) -> bool:
     del task
-    if status == STATUS_UNKNOWN:
-        return
     stage_view = WorkflowStageView(stage)
+    if stage_view.status() == STATUS_SUBMISSION_FAILED and status_in(status, TERMINAL_STATUSES):
+        # A terminal artifact can belong to the attempt that preceded a newly
+        # rejected submission. A later non-terminal contract may still prove
+        # that a live job exists and reattach it, but terminal history alone
+        # must not replace the new submission-failure provenance.
+        _LOGGER.info(
+            "Ignoring terminal contract status %r for submission-failed stage %r",
+            status,
+            _stage_id_for_log(stage),
+        )
+        return False
+    if status == STATUS_UNKNOWN:
+        return True
     if status_in(stage_view.status(), TERMINAL_STATUSES) and not status_in(
         status, TERMINAL_STATUSES
     ):
@@ -238,8 +251,9 @@ def _apply_contract_status(stage: dict[str, Any], task: dict[str, Any], status: 
             _stage_id_for_log(stage),
             stage_view.status(),
         )
-        return
+        return True
     stage_view.set_status_pair(stage_status=status, task_status=status)
+    return True
 
 
 def _engine_job_dir_contract_lookup(

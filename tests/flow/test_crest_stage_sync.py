@@ -301,6 +301,83 @@ def test_sync_crest_stage_retries_after_cancel_deferred_without_applying_old_con
     assert "submission_deferred_reason" not in stage["metadata"]
 
 
+def test_sync_crest_stage_does_not_apply_old_contract_after_submission_failure(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "crest_allowed" / "job"
+    stale_terminal_contract = SimpleNamespace(
+        status="failed",
+        job_id="crest_old",
+        latest_known_path="/tmp/crest_old",
+        selected_input_xyz="/tmp/crest_old/input.xyz",
+        retained_conformer_paths=(),
+        rejected_retained_outputs=(),
+        mode="standard",
+        reason="old_crest_failure",
+    )
+    contract_calls = 0
+
+    def load_contract(**_kwargs: Any) -> Any:
+        nonlocal contract_calls
+        contract_calls += 1
+        return stale_terminal_contract
+
+    stage: dict[str, Any] = {
+        "stage_id": "crest_rejected",
+        "status": "planned",
+        "metadata": {"queue_id": "q_old"},
+        "task": {
+            "engine": "crest",
+            "status": "planned",
+            "payload": {
+                "job_dir": str(job_dir),
+                "selected_input_xyz": str(job_dir / "input.xyz"),
+            },
+            "enqueue_payload": {"priority": 8},
+        },
+    }
+    deps = orchestration_services(
+        overrides={
+            "submit_crest_job_dir": lambda **_kwargs: {
+                "status": "failed",
+                "reason": "invalid_submission_input",
+                "stderr": "rejected new CREST submission",
+            },
+            "load_crest_artifact_contract": load_contract,
+            "now_utc_iso": lambda: "2026-09-04T00:00:00+00:00",
+        }
+    )
+
+    sync_crest_stage_impl(
+        stage,
+        crest_config="/tmp/crest.yaml",
+        submit_ready=True,
+        workflow_id="wf_rejected",
+        workspace_dir=tmp_path / "workspace",
+        services=deps,
+    )
+
+    assert stage["status"] == "submission_failed"
+    assert stage["task"]["status"] == "submission_failed"
+    assert stage["metadata"]["reason"] == "invalid_submission_input"
+    assert contract_calls == 0
+
+    sync_crest_stage_impl(
+        stage,
+        crest_config="/tmp/crest.yaml",
+        submit_ready=True,
+        workflow_id="wf_rejected",
+        workspace_dir=tmp_path / "workspace",
+        services=deps,
+    )
+
+    assert contract_calls == 1
+    assert stage["status"] == "submission_failed"
+    assert stage["task"]["status"] == "submission_failed"
+    assert stage["metadata"]["reason"] == "invalid_submission_input"
+    assert stage["metadata"].get("child_job_id") != "crest_old"
+
+
 def test_sync_crest_stage_returns_without_target_when_not_submitted_and_no_queue_id(
     tmp_path: Path,
 ) -> None:

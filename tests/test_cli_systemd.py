@@ -1520,6 +1520,34 @@ def test_apply_systemd_install_plan_keeps_new_units_when_command_fails(
     assert "enabled:" not in captured.out
 
 
+def test_apply_systemd_install_plan_reports_missing_command_after_writing_units(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    plan = _single_unit_plan(
+        tmp_path,
+        commands=(("systemctl", "daemon-reload"),),
+        enabled_unit="orca_auto-runtime@alice.target",
+    )
+
+    def missing_command(
+        argv: list[str],
+        check: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del argv, check
+        raise FileNotFoundError("systemctl executable is missing")
+
+    assert cli_systemd_apply.apply_systemd_install_plan(plan, run=missing_command) == 1
+
+    destination = plan.units[0].destination
+    assert destination.read_text(encoding="utf-8") == plan.units[0].content
+    captured = capsys.readouterr()
+    assert "systemd install command failed after unit files were updated" in captured.err
+    assert "systemctl executable is missing" in captured.err
+    assert "rerun `orca_auto systemd install`" in captured.err
+    assert "enabled:" not in captured.out
+
+
 def test_run_command_uses_shared_systemd_argv_and_display(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

@@ -80,7 +80,14 @@ def apply_systemd_install_plan(
         return rc
 
     for command in plan.commands:
-        rc = _run_command(command, use_sudo=plan.use_sudo, run=run)
+        try:
+            rc = _run_command(command, use_sudo=plan.use_sudo, run=run)
+        except OSError as exc:
+            emit_error(
+                "systemd install command failed after unit files were updated: "
+                f"{exc}; fix the failure and rerun `orca_auto systemd install`"
+            )
+            return 1
         if rc != 0:
             emit_error(
                 "systemd install command failed after unit files were updated; "

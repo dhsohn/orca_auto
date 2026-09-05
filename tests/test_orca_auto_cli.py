@@ -36,6 +36,83 @@ def test_main_without_command_prints_help(capsys) -> None:
     assert "usage: orca_auto" in out
 
 
+def test_main_does_not_mask_broken_pipe_before_handler_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    side_effects: list[str] = []
+
+    def closed_pipe() -> None:
+        raise BrokenPipeError("downstream closed before mutation")
+
+    def handler(_args: SimpleNamespace) -> int:
+        closed_pipe()
+        side_effects.append("mutated")
+        return 0
+
+    parser = SimpleNamespace(
+        parse_args=lambda _argv: SimpleNamespace(no_color=False, func=handler),
+        print_help=lambda: None,
+    )
+    monkeypatch.setattr(unified_cli, "build_parser", lambda: parser)
+    monkeypatch.setattr(unified_cli, "_silence_broken_stdout", lambda: None)
+
+    with pytest.raises(BrokenPipeError, match="before mutation"):
+        unified_cli.main([])
+
+    assert side_effects == []
+
+
+def test_main_preserves_handler_result_when_only_final_flush_hits_broken_pipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ClosedPipe:
+        def flush(self) -> None:
+            raise BrokenPipeError("downstream closed after handler")
+
+        def fileno(self) -> int:
+            raise OSError("no file descriptor")
+
+    parser = SimpleNamespace(
+        parse_args=lambda _argv: SimpleNamespace(no_color=False, func=lambda _args: 7),
+        print_help=lambda: None,
+    )
+    monkeypatch.setattr(unified_cli, "build_parser", lambda: parser)
+    monkeypatch.setattr(unified_cli, "sys", SimpleNamespace(stdout=ClosedPipe()))
+
+    assert unified_cli.main([]) == 7
+
+
+def test_main_preserves_handler_result_when_output_breaks_after_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    side_effects: list[str] = []
+
+    class ClosedPipe:
+        def write(self, _text: str) -> int:
+            raise BrokenPipeError("downstream closed after mutation")
+
+        def flush(self) -> None:
+            raise BrokenPipeError("downstream closed after mutation")
+
+        def fileno(self) -> int:
+            raise OSError("no file descriptor")
+
+    def handler(_args: SimpleNamespace) -> int:
+        side_effects.append("mutated")
+        unified_cli.sys.stdout.write("success payload\n")
+        return 7
+
+    parser = SimpleNamespace(
+        parse_args=lambda _argv: SimpleNamespace(no_color=False, func=handler),
+        print_help=lambda: None,
+    )
+    monkeypatch.setattr(unified_cli, "build_parser", lambda: parser)
+    monkeypatch.setattr(unified_cli, "sys", SimpleNamespace(stdout=ClosedPipe()))
+
+    assert unified_cli.main([]) == 7
+    assert side_effects == ["mutated"]
+
+
 def test_build_parser_parses_unified_queue_commands() -> None:
     parser = unified_cli.build_parser()
 

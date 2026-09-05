@@ -47,6 +47,7 @@ from .input_blocks import (
     orca_input_requests_moread,
     orca_moinp_references,
     orca_route_line,
+    orca_route_tokens,
     quote_orca_path,
     set_moinp,
     unquoted_orca_path,
@@ -71,6 +72,22 @@ _GENERATION_RUNTIME_FILE_NAMES = frozenset(
 )
 _XYZ_GEOMETRY_REFERENCE_KINDS = frozenset({"geometry", "neb_geometry"})
 _NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
+_ENGRAD_EXACT_ROUTE_KEYWORDS = frozenset(
+    {
+        "ci-opt",
+        "crudeopt",
+        "engrad",
+        "energygrad",
+        "l-opt",
+        "l-opth",
+        "numgrad",
+        "opth",
+        "optts",
+        "qmmmopt",
+        "scants",
+        "sloppyopt",
+    }
+)
 _XYZ_ATOM_LABEL_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_:+().{}\[\]-]*\Z")
 _XYZ_COORDINATE_RE = re.compile(r"\A[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?\Z")
 
@@ -82,6 +99,7 @@ class _SelectedSnapshotInput:
     lines: list[str]
     references: list[OrcaFileReference]
     requests_moread: bool
+    engrad_is_output: bool
     hessian_requested: bool
     same_stem_xyz_is_output: bool
     effective_retry_count: int
@@ -155,6 +173,21 @@ def _inline_geometry_atom_count(selected_text: str) -> int | None:
 def _route_requests_hessian(lines: list[str]) -> bool:
     route_text = " ".join(route for line in lines if (route := orca_route_line(line)) is not None)
     return bool(FREQ_RE.search(route_text))
+
+
+def _route_writes_engrad(lines: list[str]) -> bool:
+    for line in lines:
+        for token in orca_route_tokens(line):
+            if token.quoted:
+                continue
+            # ORCA's keywords ending in "Opt" do not uniformly emit this
+            # file, so keep the nonstandard optimization spellings exact.
+            if token.value.casefold() in _ENGRAD_EXACT_ROUTE_KEYWORDS or any(
+                pattern.fullmatch(token.value) is not None
+                for pattern in (OPT_ROUTE_RE, IRC_ROUTE_RE)
+            ):
+                return True
+    return False
 
 
 def _route_writes_same_stem_xyz(lines: list[str]) -> bool:
@@ -346,6 +379,7 @@ def _validate_dependency_basename(
     selected_inp: Path,
     *,
     effective_retry_count: int,
+    engrad_is_output: bool,
     hessian_requested: bool,
     same_stem_xyz_is_output: bool,
     inline_same_stem_xyz: bool,
@@ -365,6 +399,8 @@ def _validate_dependency_basename(
     for runtime_input in runtime_input_variants:
         runtime_owned_names.add(runtime_input.with_suffix(".out").name)
         runtime_owned_names.add(runtime_input.with_suffix(".gbw").name)
+        if engrad_is_output:
+            runtime_owned_names.add(runtime_input.with_suffix(".engrad").name)
         if hessian_requested:
             runtime_owned_names.add(runtime_input.with_suffix(".hess").name)
         if same_stem_xyz_is_output and not inline_same_stem_xyz:
@@ -918,6 +954,7 @@ def _load_selected_snapshot_input(
             "ORCA MORead requires an explicit MOInp file so the checkpoint can be "
             "bound into the execution snapshot"
         )
+    engrad_is_output = _route_writes_engrad(lines)
     hessian_requested = _route_requests_hessian(lines)
     same_stem_xyz_is_output = _route_writes_same_stem_xyz(lines)
     effective_retry_count = effective_max_retries(
@@ -939,6 +976,7 @@ def _load_selected_snapshot_input(
         lines=lines,
         references=input_references.scan_orca_file_references(lines),
         requests_moread=requests_moread,
+        engrad_is_output=engrad_is_output,
         hessian_requested=hessian_requested,
         same_stem_xyz_is_output=same_stem_xyz_is_output,
         effective_retry_count=effective_retry_count,
@@ -1030,6 +1068,7 @@ def _plan_bound_dependencies(
             dependency,
             source_selected,
             effective_retry_count=selected.effective_retry_count,
+            engrad_is_output=selected.engrad_is_output,
             hessian_requested=selected.hessian_requested,
             same_stem_xyz_is_output=selected.same_stem_xyz_is_output,
             inline_same_stem_xyz=inline_same_stem_xyz,
@@ -1702,6 +1741,7 @@ def _verify_bound_snapshot_content(
         raise ValueError("Queued ORCA bound selected input must be UTF-8 text") from exc
     selected_lines = selected_text.splitlines()
     bound_references = input_references.scan_orca_file_references(selected_lines)
+    engrad_is_output = _route_writes_engrad(selected_lines)
     hessian_requested = _route_requests_hessian(selected_lines)
     same_stem_xyz_is_output = _route_writes_same_stem_xyz(selected_lines)
     effective_retry_count = effective_max_retries(
@@ -1715,6 +1755,7 @@ def _verify_bound_snapshot_content(
             source_path,
             verified.source_selected_path,
             effective_retry_count=effective_retry_count,
+            engrad_is_output=engrad_is_output,
             hessian_requested=hessian_requested,
             same_stem_xyz_is_output=same_stem_xyz_is_output,
             inline_same_stem_xyz=role in verified.mutable_roles,

@@ -25,7 +25,7 @@ _WORKFLOW_RUNNING_STATES = frozenset({"active", "activating", "reloading", "fail
 _WORKFLOW_STOPPED_STATES = frozenset({"inactive", "deactivating", "unknown", ""})
 _WORKFLOW_STATE_RETURN_CODES = {
     "active": frozenset({0}),
-    "activating": frozenset({0}),
+    "activating": frozenset({0, 3}),
     "reloading": frozenset({0}),
     "failed": frozenset({3}),
     "inactive": frozenset({3}),

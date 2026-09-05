@@ -310,7 +310,9 @@ to `h2.xyz`, with both names preserved. For routes that write `<stem>.xyz`, a
 sole main `* xyzfile` dependency may use that exact name: the bound `.inp`
 inlines its coordinates and ORCA may mutate the visible XYZ after launch.
 Same-stem auxiliary NEB Product/TS inputs remain unsupported. Frequency routes
-reserve `<stem>.hess`; every route reserves `<stem>.out` and `<stem>.gbw`.
+reserve `<stem>.hess`; EnGrad/EnergyGrad, NumGrad, optimization, OptTS/ScanTS,
+and IRC routes reserve `<stem>.engrad`; every route reserves `<stem>.out` and
+`<stem>.gbw`.
 Submission also rejects the selected `.inp` basename and generation-owned
 `job_state.json` and `machine.json` as dependency basenames. Output-base
 overrides such as `%base` and NEB restart-GBW basename controls fail closed.
