@@ -55,9 +55,12 @@ def file_lock_at(
         lock_payload = (
             payload if payload is not None else f"pid={os.getpid()}\nacquired_at={now_utc_iso()}"
         )
+        # The payload is diagnostic only: ``held_file_lock_payload`` reads it
+        # through the shared page cache while the flock is held, and the flock
+        # itself vanishes with its owner, so the bytes never need to survive a
+        # crash. Flush for other processes; do not fsync on every acquisition.
         handle.write(lock_payload.rstrip("\n") + "\n")
         handle.flush()
-        os.fsync(handle.fileno())
         try:
             yield
         finally:

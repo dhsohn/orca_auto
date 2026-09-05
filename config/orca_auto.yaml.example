@@ -44,9 +44,11 @@ workflow:
     xtb_executable: /home/user/bin/xtb-dist/bin/xtb
     crest_executable: /home/user/bin/crest/crest
   # Internal xTB/CREST runtime roots are derived automatically and are not set
-  # directly in config. Each workflow keeps its own queue.json,
+  # directly in config. Each workflow keeps its own xTB/CREST queue.json,
   # job_locations.json, and job dirs under one directory per engine stage,
-  # e.g. <runs_root>/<workflow_id>/01_crest, .../02_xtb, .../03_orca.
+  # e.g. <runs_root>/<workflow_id>/01_crest and .../02_xtb. Workflow ORCA
+  # stage job dirs live under .../03_orca, but their queue rows and
+  # job-location records stay in the shared ORCA queue at <runs_root>.
   # Fixed admission guardrails are not config knobs: YAML job manifests are at
   # most 1 MiB/32 aliases/10,000 nodes/64 levels with cyclic/recursive graphs
   # rejected; geometries are capped at 10,000 atoms locally and 1,000 for

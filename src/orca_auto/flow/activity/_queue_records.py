@@ -6,7 +6,7 @@ from typing import Any
 from orca_auto.core.config.files import shared_workflow_root_from_config
 from orca_auto.core.engine_catalog import (
     EngineCatalogEntry,
-    find_engine_catalog_entry,
+    engine_uses_workflow_stage_roots,
 )
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.paths.workflow import workflow_stage_dirnames_for_engine
@@ -54,8 +54,7 @@ def engine_queue_roots(
     engine: str,
 ) -> tuple[Path, ...]:
     runtime_paths = runtime_paths_for_engine(config_path, engine=engine)
-    entry = find_engine_catalog_entry(engine)
-    if entry is None or entry.workflow_stage_role != "workflow-stage":
+    if not engine_uses_workflow_stage_roots(engine):
         engine_roots: list[Path] = [runtime_paths["allowed_root"]]
         return tuple(engine_roots)
 

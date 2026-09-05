@@ -11,6 +11,8 @@ class SleepTimer(Protocol):
 
 
 QueueEntryDequeuer = Callable[[Any], tuple[Path, Any] | None]
+QueueEntryPeeker = Callable[[Any], tuple[Path, Any] | None]
+AdmissionCapacityCheck = Callable[[Any], bool]
 AdmissionReserver = Callable[[Any], str | None]
 
 
@@ -24,6 +26,8 @@ class DequeuedEntryReserver(Protocol):
         cfg: Any,
         *,
         admission_root: str | Path,
+        has_capacity_fn: AdmissionCapacityCheck,
+        peek_next_fn: QueueEntryPeeker,
         reserve_slot_fn: AdmissionReserver,
         dequeue_next_fn: QueueEntryDequeuer,
         release_slot_fn: SlotReleaser,
@@ -49,15 +53,19 @@ class ChildQueueWorkerDeps:
     start_background_job_process: BackgroundJobProcessStarter
     release_slot: SlotReleaser
     reserve_dequeued_entry: DequeuedEntryReserver
+    has_admission_capacity: AdmissionCapacityCheck
+    peek_next_entry: QueueEntryPeeker
     dequeue_next_entry: QueueEntryDequeuer
     try_reserve_admission_slot: AdmissionReserver
 
 
 __all__ = [
+    "AdmissionCapacityCheck",
     "ChildQueueWorkerDeps",
     "BackgroundJobProcessStarter",
     "DequeuedEntryReserver",
     "QueueEntryDequeuer",
+    "QueueEntryPeeker",
     "SleepTimer",
     "SlotReleaser",
 ]

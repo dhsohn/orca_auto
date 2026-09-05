@@ -174,7 +174,7 @@ Field descriptions:
   whitespace is trimmed, a non-empty token must use printable ASCII characters
   without whitespace
 - Internal xTB/CREST runtimes are scoped to each workflow
-- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under the generation workspace `<runs_root>/<scaffold>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`, `03_orca`)
+- Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs are stored only under the generation workspace `<runs_root>/<scaffold>/<workflow_id>/<NN_engine>` (`01_crest`, `02_xtb`). Workflow ORCA stage job dirs live under `03_orca`, but their queue rows and job-location records stay in the shared ORCA queue and index at `<runs_root>`; the ORCA worker never polls a per-workflow root
 - `orca.paths.orca_executable`: ORCA executable path
 
 Notes:

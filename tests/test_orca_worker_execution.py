@@ -111,15 +111,17 @@ def test_child_cancellation_probe_propagates_post_acquire_payload_timeout(
         captured.update(kwargs)
         return sentinel
 
-    def timed_out_fsync(_descriptor: int) -> None:
-        raise TimeoutError("simulated lock payload fsync timeout")
+    # The lock's diagnostic payload is stamped after the flock is held, so a
+    # clock that raises there simulates a post-acquire failure inside queue_lock.
+    def timed_out_payload_clock() -> str:
+        raise TimeoutError("simulated lock payload timeout")
 
     monkeypatch.setattr(
         worker_execution._engine_execution,
         "run_engine_worker_entry_with_spec_factory_options",
         fake_run_engine_worker_entry,
     )
-    monkeypatch.setattr(lock_utils.os, "fsync", timed_out_fsync)
+    monkeypatch.setattr(lock_utils, "now_utc_iso", timed_out_payload_clock)
 
     outcome = worker_execution.process_dequeued_entry(
         object(),
@@ -129,7 +131,7 @@ def test_child_cancellation_probe_propagates_post_acquire_payload_timeout(
     )
 
     assert outcome is sentinel
-    with pytest.raises(TimeoutError, match="simulated lock payload fsync timeout"):
+    with pytest.raises(TimeoutError, match="simulated lock payload timeout"):
         captured["should_cancel"]()
 
 
@@ -146,7 +148,7 @@ def test_child_cancellation_probe_propagates_post_acquire_timeout_with_lock_mess
         captured.update(kwargs)
         return sentinel
 
-    def timed_out_fsync(_descriptor: int) -> None:
+    def timed_out_payload_clock() -> str:
         raise TimeoutError(message)
 
     monkeypatch.setattr(
@@ -154,7 +156,7 @@ def test_child_cancellation_probe_propagates_post_acquire_timeout_with_lock_mess
         "run_engine_worker_entry_with_spec_factory_options",
         fake_run_engine_worker_entry,
     )
-    monkeypatch.setattr(lock_utils.os, "fsync", timed_out_fsync)
+    monkeypatch.setattr(lock_utils, "now_utc_iso", timed_out_payload_clock)
 
     outcome = worker_execution.process_dequeued_entry(
         object(),

@@ -52,10 +52,42 @@ def test_queue_runtime_listing_applies_entry_acceptance_filter(tmp_path: Any) ->
         list_queue_fn=lambda _root: [rejected, accepted],
         dequeue_next_fn=lambda _root: None,
         dequeue_next_across_roots_fn=lambda *_args, **_kwargs: None,
+        peek_next_across_roots_fn=lambda *_args, **_kwargs: None,
         accept_entry_fn=lambda entry: entry is accepted,
     )
 
     assert runtime.queue_entries_with_roots(SimpleNamespace()) == [(queue_root, accepted)]
+
+
+def test_queue_runtime_peek_previews_the_selected_entry_without_dequeuing(tmp_path: Any) -> None:
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir()
+    entry = SimpleNamespace(queue_id="queue-1")
+    seen: list[dict[str, Any]] = []
+
+    def peek_next_across_roots(roots: Any, **kwargs: Any) -> Any:
+        seen.append({"roots": roots, **kwargs})
+        return (queue_root, entry)
+
+    def dequeue_next(_root: Any) -> Any:
+        raise AssertionError("a preview must not dequeue")
+
+    runtime = queue_cmd.QueueRuntime(
+        load_config_fn=lambda value: value,
+        runtime_roots_for_cfg_fn=lambda _cfg: (tmp_path / "missing", queue_root),
+        list_queue_fn=lambda _root: [entry],
+        dequeue_next_fn=dequeue_next,
+        dequeue_next_across_roots_fn=dequeue_next,
+        peek_next_across_roots_fn=peek_next_across_roots,
+        dequeue_entry_if_pending_fn=lambda *_args, **_kwargs: None,
+        accept_entry_fn=lambda candidate: candidate is entry,
+    )
+
+    assert runtime.peek_next_entry(SimpleNamespace()) == (queue_root, entry)
+    assert len(seen) == 1
+    assert seen[0]["roots"] == (queue_root,)
+    assert seen[0]["select_all_rows"] is True
+    assert seen[0]["accept_entry_fn"](entry) is True
 
 
 def test_run_queue_worker_command_uses_existing_pid_reporter(

@@ -92,12 +92,21 @@ def test_process_one_returns_blocked_when_no_admission_slot(
 ) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root="ignored"))
 
+    # A full pool blocks the poll before any queue root is listed.
+    def peek_next(cfg_obj: object) -> None:
+        raise AssertionError("a full pool must not list any queue root")
+
+    monkeypatch.setattr(
+        queue_cmd,
+        "_ENGINE_RUNTIME",
+        SimpleNamespace(has_admission_capacity=lambda cfg_obj: False, peek_next_entry=peek_next),
+    )
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda cfg_obj: None)
 
     assert process_one_crest_for_test(queue_cmd, cfg) == "blocked"
 
 
-def test_process_one_returns_idle_and_releases_reserved_slot(
+def test_process_one_returns_idle_without_touching_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -108,17 +117,21 @@ def test_process_one_returns_idle_and_releases_reserved_slot(
             allowed_root=str(tmp_path / "allowed"),
             admission_root="",
             resolved_admission_root=str(tmp_path / "allowed"),
+            resolved_admission_limit=1,
         )
     )
     released: list[tuple[str, str | None]] = []
 
-    monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda cfg_obj: "slot-1")
+    def reserve_slot(cfg_obj: object) -> str:
+        raise AssertionError("an idle poll must not reserve an admission slot")
+
+    monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", reserve_slot)
     monkeypatch.setattr(
         queue_cmd, "release_slot", lambda root, token: released.append((root, token))
     )
 
     assert process_one_crest_for_test(queue_cmd, cfg) == "idle"
-    assert released == [(cfg.runtime.allowed_root, "slot-1")]
+    assert released == []
 
 
 def test_cmd_queue_worker_runs_pool_worker_when_not_once(

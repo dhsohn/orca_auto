@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.engine_catalog import engine_uses_workflow_stage_roots
 from orca_auto.core.paths.workflow import (
     iter_workflow_runtime_workspaces,
     workflow_stage_dirnames_for_engine,
@@ -38,6 +39,13 @@ def runtime_roots_for_cfg(cfg: Any, *, engine: str) -> tuple[Path, ...]:
     roots: list[Path] = []
     append_unique_root(roots, index_root_for_cfg(cfg))
 
+    # Only a workflow-stage engine (xTB, CREST) keeps per-workflow queues and
+    # indexes. A shared-root engine (ORCA) publishes every queue row and
+    # job-location record in the shared runs root, so scanning its workflow
+    # stage directories would only touch historical workspaces on every poll.
+    if not engine_uses_workflow_stage_roots(engine):
+        return tuple(roots)
+
     workflow_root = normalize_text(getattr(cfg, "workflow_root", ""))
     if not workflow_root:
         return tuple(roots)
@@ -61,7 +69,7 @@ def index_root_for_path(
     engine: str,
 ) -> Path:
     workflow_root = normalize_text(getattr(cfg, "workflow_root", ""))
-    if workflow_root:
+    if workflow_root and engine_uses_workflow_stage_roots(engine):
         for raw_path in paths:
             text = normalize_text(raw_path)
             if not text:

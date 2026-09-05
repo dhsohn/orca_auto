@@ -175,7 +175,10 @@ orca:
   있지 않은 token은 공백 없는 출력 가능한 ASCII 문자만 사용해야 합니다
 - 내부 xTB/CREST 런타임은 각 워크플로우 범위로 한정됩니다.
 - 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은 오직
-  `<runs_root>/<스캐폴드>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`, `03_orca`) 아래에만 저장됩니다.
+  `<runs_root>/<스캐폴드>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`) 아래에만 저장됩니다.
+  워크플로우 ORCA 스테이지 작업 디렉터리는 `03_orca` 아래에 있지만, 그 큐 행과 작업 위치
+  레코드는 `<runs_root>`의 공유 ORCA 큐·인덱스에 남습니다. ORCA 워커는 워크플로우별
+  루트를 폴링하지 않습니다.
 - `orca.paths.orca_executable`: ORCA 실행 경로
 
 참고:

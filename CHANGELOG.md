@@ -6,6 +6,31 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [Unreleased]
+
+### Changed
+
+- An idle queue-worker poll performs no durable write. The worker now reads
+  the shared admission count first, then looks for a claimable pending row,
+  and only then reserves a slot: a full pool costs one lock-free read instead
+  of a queue scan, and an empty queue no longer rewrites the admission slot
+  file twice per poll. A reservation still precedes the dequeue, a row lost
+  between the preview and the claim releases its slot again, and the poll
+  statuses (`blocked` while the pool is full, `idle` on an empty queue) are
+  unchanged.
+- Runtime-root discovery follows the engine catalog: only workflow-stage
+  engines (xTB, CREST) get per-workflow queue and index roots. ORCA is a
+  shared-root engine whose queue rows and job-location records already lived
+  only in the shared runs root, so the ORCA worker no longer scans every
+  workflow workspace, parses each `workflow.json`, or acquires `queue.lock`
+  inside historical `03_orca` directories on every poll. `03_orca` remains the
+  ORCA stage directory name. The `queue.lock` files that earlier releases
+  created inside `03_orca` directories are inert and can be deleted.
+- Acquiring a file lock no longer fsyncs its diagnostic payload. The payload is
+  still written and flushed for other processes; the advisory lock itself
+  dies with its owner, so the bytes never needed crash durability, and every
+  read-only poll paid one fsync per lock for nothing.
+
 ## [4.0.1] - 2026-09-05
 
 ### Fixed
