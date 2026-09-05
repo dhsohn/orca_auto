@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import math
 
+from orca_auto.orca.evidence import (
+    OrcaStructureEvidence,
+)
 from orca_auto.orca.parser import KCAL_PER_HARTREE
-from orca_auto.orca.report.si import SiBlock, render_si_block_md
+from orca_auto.orca.report.si import (
+    render_si_block_md,
+)
 
 from ...conformer_selection import finite
 from .collection import (
@@ -23,7 +28,7 @@ from .collection import (
 # ---------------------------------------------------------------------------
 
 
-def _level_key(block: SiBlock) -> tuple[str, str, str, str]:
+def _level_key(block: OrcaStructureEvidence) -> tuple[str, str, str, str]:
     result = block.result
     return (result.method, result.basis_set, result.solvation, result.orca_version)
 
@@ -140,9 +145,9 @@ def _interaction_level_sentences(data: WorkflowSiData) -> list[str]:
     ]
 
 
-def _documented_blocks(data: WorkflowSiData) -> list[SiBlock]:
+def _documented_blocks(data: WorkflowSiData) -> list[OrcaStructureEvidence]:
     """Every block whose level the SI must document, including matched SPs."""
-    blocks: list[SiBlock] = []
+    blocks: list[OrcaStructureEvidence] = []
     for entry in data.entries:
         blocks.append(entry.block)
         if entry.sp_block is not None:

@@ -326,7 +326,8 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
 - **출력 분석**(`parser/`, `out_analyzer.py`, `output_status.py`,
   `completion_rules.py`): 모드별로 완료를 판정합니다 — TS 모드(`OptTS`/`NEB-TS`,
   마지막 final single point energy 뒤의 진동수 섹션에 허수 진동수 정확히 1개 필요,
-  경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt 모드(정상 종료).
+  경로에 `IRC`가 있으면 IRC 마커도 필요) vs Opt 모드(정상 종료이며 최종 미수렴 판정이 없음).
+  `output_status.py`가 마지막 명시적 수렴 판정을 소유하며 analyzer·parser·진행 보고서가 공유합니다.
 - **단일 attempt 실행:** 계산 실패의 analyzer reason을 보존하고 종료합니다.
   직접 `ScanTS` route는 generation 생성 전에 거부합니다. `relaxed_scan.py`는
   일반 scan과 별도 `scan_ts_search` workflow의 좌표 검증·surface 파싱을 소유합니다.

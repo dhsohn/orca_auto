@@ -716,6 +716,9 @@ TS mode completion:
 Opt mode completion:
 
 - `****ORCA TERMINATED NORMALLY****` exists
+- A final explicit non-convergence verdict prevents completion even after normal
+  termination. The last optimization verdict line wins; the analyzer, parsed
+  result, and progress/report card share that rule.
 
 ## 10) Failure Classification and Automatic Recovery
 

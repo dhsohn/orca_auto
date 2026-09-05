@@ -8,6 +8,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..evidence import (
+    final_out_path,
+    parsed_final_output,
+)
+from ..frequencies import (
+    FrequencyAnalysis,
+    ModeSummary,
+    find_frequency_analysis,
+    mode_summaries,
+)
 from ..input_blocks import file_route_lines
 from ..parser import OptProgress, parse_opt_progress
 from .attempts import (
@@ -16,15 +26,10 @@ from .attempts import (
     attempt_report_rows,
     attempts_table_html,
     duration_text,
-    final_out_path,
     terminal_actions_html,
 )
 from .frequencies import (
-    FrequencyAnalysis,
-    ModeSummary,
-    find_frequency_analysis,
     mode_section_html,
-    mode_summaries,
 )
 from .render import (
     ReportComponent,
@@ -33,7 +38,6 @@ from .render import (
     relative_energy_cycle_chart_svg,
     status_badges,
 )
-from .si import parsed_final_output
 
 
 @dataclass(frozen=True)

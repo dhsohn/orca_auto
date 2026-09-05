@@ -40,14 +40,6 @@ def final_single_point_energy_value(raw: str | bytes) -> float:
     return value
 
 
-# Optimization convergence
-_OPT_CONVERGED_RE = re.compile(r"THE OPTIMIZATION HAS CONVERGED")
-_OPT_NOT_CONVERGED_RE = re.compile(
-    r"ORCA GEOMETRY OPTIMIZATION.*(?:DID NOT CONVERGE|NOT CONVERGED)|"
-    r"The optimization did not converge",
-    re.IGNORECASE,
-)
-
 # Coordinate section (element + xyz)
 _COORD_SECTION_RE = re.compile(
     r"CARTESIAN COORDINATES \(ANGSTROEM\)\s*\n"

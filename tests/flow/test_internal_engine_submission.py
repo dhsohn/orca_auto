@@ -39,6 +39,10 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     transition_snapshot_intent,
 )
 from orca_auto.core.queue.publication import queue_record_sync_metadata
+from orca_auto.flow.engines.crest.submission import _build_submission_impl
+from orca_auto.flow.manifest import resolve_engine_manifest
+from orca_auto.flow.orchestration.lifecycle import recompute_workflow_status_impl
+from orca_auto.flow.orchestration.stage_runtime.shared import _apply_submission_result
 from orca_auto.flow.submitters import crest as crest_submitter
 from orca_auto.flow.submitters import internal_engine_submission
 from orca_auto.flow.submitters import xtb as xtb_submitter
@@ -89,16 +93,70 @@ def _concurrent_internal_enqueue(
         result_queue.put(("enqueued", entry.queue_id))
 
 
-def test_queue_submission_status_treats_admission_wait_as_blocked() -> None:
-    status, reason = internal_engine_submission.queue_submission_status(
-        returncode=1,
-        parsed_stdout={"status": "waiting_for_slot"},
-        stdout="status: waiting_for_slot\n",
-        stderr="Admission limit reached",
+@pytest.mark.parametrize("unknown_key", ["max_active_simulations", "ordinary_bad_key"])
+def test_invalid_crest_manifest_fails_workflow_instead_of_waiting_for_slot(
+    tmp_path: Path, unknown_key: str
+) -> None:
+    manifest = resolve_engine_manifest(
+        tmp_path,
+        {"workflow_type": "conformer_screening", "crest": {unknown_key: 2}},
+        "crest",
     )
 
-    assert status == "blocked"
-    assert reason == "waiting_for_slot"
+    def build(cfg: Any, job_dir: Path, manifest: Any, args: Any) -> Any:
+        return _build_submission_impl(
+            cfg, job_dir, manifest, args, job_id="probe", snapshot_namespace="unused"
+        )
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("Invalid manifest must not publish a queue entry or queued record")
+
+    result = internal_engine_submission.submit_internal_engine_job_dir(
+        load_config_fn=lambda _: None,
+        resolve_job_dir_fn=lambda _, path: Path(path),
+        load_manifest_fn=lambda _: manifest,
+        build_submission_fn=build,
+        record_queued_fn=forbidden,
+        enqueue_fn=forbidden,
+        api_name="orca_auto.crest.direct_submit",
+        job_dir=str(tmp_path / "01_crest" / "crest_1"),
+        priority=0,
+        config_path=str(tmp_path / "config.yaml"),
+    )
+    stage: dict[str, Any] = {
+        "stage_id": "crest_1",
+        "status": "planned",
+        "task": {"engine": "crest", "status": "planned"},
+        "metadata": {},
+    }
+    _apply_submission_result(
+        stage=stage,
+        task=stage["task"],
+        stage_metadata=stage["metadata"],
+        submission=result,
+    )
+    workflow = {"status": "running", "template_name": "conformer_screening", "stages": [stage]}
+    status = recompute_workflow_status_impl(
+        workflow, effective_stage_status_fn=lambda stage: stage["status"]
+    )
+
+    assert result["status"] == "failed"
+    assert f"Unknown CREST manifest fields: ['{unknown_key}']" in result["stderr"]
+    assert stage["task"]["status"] == "submission_failed"
+    assert status == "failed"
+    assert "submission_deferred_reason" not in stage["metadata"]
+
+
+@pytest.mark.parametrize(
+    "diagnostic", ["Admission limit reached", "waiting_for_slot", "no admission slot"]
+)
+def test_submission_failure_diagnostics_do_not_control_status(diagnostic: str) -> None:
+    result = internal_engine_submission._submission_failure_payload(
+        command_trace=[], job_dir="/unused", stderr=diagnostic
+    )
+    assert result["status"] == "failed"
+    assert not result.get("reason")
+    assert result["stderr"] == diagnostic
 
 
 @pytest.mark.parametrize(

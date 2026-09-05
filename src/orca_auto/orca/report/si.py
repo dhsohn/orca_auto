@@ -15,97 +15,23 @@ finalization: every error is logged and swallowed.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Mapping
-from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
 from orca_auto.core.engine_process import atomic_write_confined_bytes
 
-from ..completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
-from ..input_blocks import file_route_lines
-from ..parser import OrcaResult, parse_orca_output
-from ..relaxed_scan import first_scan_coordinate_spec
-from .attempts import final_out_path
-from .frequencies import (
-    FrequencyAnalysis,
-    ModeSummary,
-    mode_summaries,
-    parse_frequency_analysis,
-)
+from .. import evidence
+from ..frequencies import ModeSummary, mode_summaries
+from ..parser import OrcaResult
 from .irc import collect_irc_si_block, input_uses_irc, render_irc_si_block_md
 
 logger = logging.getLogger(__name__)
 
-# Route families whose final geometry is not a stationary point: path methods
-# (plain NEB / NEB-CI — NEB-TS is claimed by the TS check first) and dynamics.
-# Their endpoints must never be published as structures in an SI. No SCAN
-# token here: `SCAN` in a route line is the density functional
-# (`! SCAN def2-SVP Opt Freq`), not a scan job — relaxed scans are identified
-# from the `%geom Scan` block and OptTS by the TS check.
-_NON_STATIONARY_ROUTE_RE = re.compile(
-    r"\b(?:ZOOM-)?NEB(?:-CI)?\b|\bMD\b",
-    re.IGNORECASE,
-)
-
 # SI convention: energies in Eh to 6 decimals, coordinates in Å to 6 decimals.
 _ENERGY_FMT = "{:16.6f}"
 _MODE_TOP_ATOMS = 3
-
-
-class SiBlockError(Exception):
-    """The job has no valid SI block (missing output, energy, or geometry)."""
-
-
-def structure_kind(selected_inp: Path) -> str | None:
-    """``"ts"`` / ``"min"`` / ``"sp"``; ``None`` for non-stationary jobs.
-
-    A plain relaxed scan (Opt route + scan coordinate), IRC, plain NEB paths,
-    and MD end on non-stationary geometries that must never enter the
-    stationary-structure SI path; IRC has a separate summary-only writer. TS
-    routes (OptTS/NEB-TS) and plain Opt end on stationary points.
-    Everything else (single points, bare Freq) is reported without a minimum/TS
-    claim.
-    """
-    routes = " ".join(file_route_lines(selected_inp))
-    if not routes:
-        return None
-    if IRC_ROUTE_RE.search(routes):
-        return None
-    if TS_ROUTE_RE.search(routes):
-        return "ts"
-    if _NON_STATIONARY_ROUTE_RE.search(routes):
-        return None
-    if OPT_ROUTE_RE.search(routes):
-        if first_scan_coordinate_spec(selected_inp) is not None:
-            return None
-        return "min"
-    return "sp"
-
-
-@lru_cache(maxsize=32)
-def _parsed_output_cached(
-    out_path_text: str, mtime_ns: int, size: int
-) -> tuple[OrcaResult, FrequencyAnalysis | None]:
-    return (
-        parse_orca_output(out_path_text),
-        parse_frequency_analysis(Path(out_path_text)),
-    )
-
-
-def parsed_final_output(out_path: Path) -> tuple[OrcaResult, FrequencyAnalysis | None]:
-    """Parsed (result, frequency analysis), cached per (path, mtime, size).
-
-    Workflow SI regeneration re-reads every completed stage on every advance;
-    a finished job's output never changes, so parsing it once per process is
-    enough. Callers must treat both returned objects as read-only — they are
-    shared across cache hits.
-    """
-    stat = out_path.stat()
-    return _parsed_output_cached(str(out_path), stat.st_mtime_ns, stat.st_size)
 
 
 def _mode_note(summary: ModeSummary) -> str:
@@ -133,61 +59,7 @@ def _lint_warnings(kind: str, result: OrcaResult, imaginary_count: int | None) -
     return tuple(warnings)
 
 
-@dataclass(frozen=True)
-class SiBlock:
-    """Everything needed to render one structure's SI block."""
-
-    name: str
-    kind: str
-    result: OrcaResult
-    analysis: FrequencyAnalysis | None
-    imaginary_count: int | None
-    warnings: tuple[str, ...]
-    last_out_name: str = ""
-
-
-def collect_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> SiBlock | None:
-    """SI block for a completed job; ``None`` when the job type has none.
-
-    Raises:
-        SiBlockError: for a job that should have a block but is missing its
-            output, final energy, or coordinates.
-    """
-    if str(state.get("status") or "") != "completed":
-        return None
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-    # An unreadable input is an error, not "this job type has no SI block":
-    # every valid ORCA input has at least one route line, so an empty read
-    # means the file is gone (archived / moved stage dir).
-    if not file_route_lines(selected_inp):
-        raise SiBlockError(f"cannot read route lines from input {selected_inp}")
-    kind = structure_kind(selected_inp)
-    if kind is None:
-        return None
-
-    out_path = final_out_path(state)
-    if out_path is None:
-        raise SiBlockError(f"no output file found for {reaction_dir}")
-    result, analysis = parsed_final_output(out_path)
-    if result.energy_hartree is None or not result.coordinates:
-        raise SiBlockError(f"output {out_path} lacks a final energy or geometry")
-
-    imaginary_count = analysis.imaginary_count() if analysis is not None else None
-    return SiBlock(
-        name=reaction_dir.name,
-        kind=kind,
-        result=result,
-        analysis=analysis,
-        imaginary_count=imaginary_count,
-        warnings=_lint_warnings(kind, result, imaginary_count),
-        last_out_name=out_path.name,
-    )
-
-
-def render_si_block_md(block: SiBlock) -> str:
+def render_si_block_md(block: evidence.OrcaStructureEvidence) -> str:
     """One structure's SI block as plain fixed-width text."""
     result = block.result
     lines = [f"== {block.name} =="]
@@ -232,7 +104,8 @@ def render_si_block_md(block: SiBlock) -> str:
                 nimag_line += f"  ({'; '.join(notes)})"
         lines.append(nimag_line)
 
-    lines.extend(f"⚠ {warning}" for warning in block.warnings)
+    warnings = _lint_warnings(block.kind, result, block.imaginary_count)
+    lines.extend(f"⚠ {warning}" for warning in (*warnings, *block.provenance_warnings))
 
     # Multi-attempt runs keep several outputs (submitted and resumed outputs):
     # name the one these numbers came from, as the IRC block does.
@@ -287,7 +160,7 @@ def write_si_block(
             _publish(render_irc_si_block_md(irc_block))
             return path
 
-        block = collect_si_block(reaction_dir, state)
+        block = evidence.collect_structure_evidence(reaction_dir, state)
         if block is None:
             _remove_stale()
             return None
@@ -299,12 +172,7 @@ def write_si_block(
 
 
 __all__ = [
-    "SiBlock",
-    "SiBlockError",
-    "collect_si_block",
-    "parsed_final_output",
     "render_si_block_md",
     "si_block_path",
-    "structure_kind",
     "write_si_block",
 ]

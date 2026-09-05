@@ -60,7 +60,6 @@ def test_sync_orca_stage_binds_completed_contract_to_durable_task_role(
     sync_orca_stage_impl(
         stage,
         orca_config=None,
-        orca_repo_root=None,
         submit_ready=False,
         services=deps,
     )
@@ -123,7 +122,6 @@ def test_sync_interaction_sp_rejects_completed_non_single_point_input(
     sync_orca_stage_impl(
         stage,
         orca_config=None,
-        orca_repo_root=None,
         submit_ready=False,
         services=deps,
     )
@@ -167,7 +165,6 @@ def test_sync_orca_rejects_unknown_task_kind_on_completed_contract(tmp_path: Pat
     sync_orca_stage_impl(
         stage,
         orca_config=None,
-        orca_repo_root=None,
         submit_ready=False,
         services=deps,
     )
@@ -241,7 +238,6 @@ def test_sync_orca_stage_rejects_role_mismatch_before_submit(
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )
@@ -313,7 +309,6 @@ def test_sync_interaction_sp_rejects_non_single_point_route_before_submit(
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )
@@ -354,7 +349,6 @@ def test_sync_interaction_sp_requires_durable_selected_input_before_submit(
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )
@@ -396,7 +390,6 @@ def test_sync_orca_role_stage_requires_durable_selected_input_before_submit(
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )
@@ -459,7 +452,6 @@ def test_sync_orca_role_stage_rejects_divergent_durable_submission_paths(
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )
@@ -513,7 +505,6 @@ def test_sync_orca_submission_and_lookup_share_canonical_reaction_dir(
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )
@@ -600,7 +591,6 @@ def test_sync_orca_stage_fails_closed_when_route_role_cannot_be_verified(
     sync_orca_stage_impl(
         stage,
         orca_config=None,
-        orca_repo_root=None,
         submit_ready=False,
         services=deps,
     )
@@ -687,7 +677,6 @@ def test_sync_orca_stage_rejects_invalid_relaxed_scan_coordinate_contract(
     sync_orca_stage_impl(
         stage,
         orca_config=None,
-        orca_repo_root=None,
         submit_ready=False,
         services=deps,
     )
@@ -773,7 +762,6 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts(
     sync_orca_stage_impl(
         stage,
         orca_config=None,
-        orca_repo_root=None,
         submit_ready=False,
         services=deps,
     )
@@ -858,7 +846,6 @@ def test_sync_orca_stage_rejects_unknown_task_kind_before_submission(tmp_path: P
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )
@@ -915,7 +902,6 @@ def test_sync_orca_stage_leaves_submission_conflict_planned(tmp_path: Path) -> N
     sync_orca_stage_impl(
         stage,
         orca_config="/tmp/orca.yaml",
-        orca_repo_root=None,
         submit_ready=True,
         services=deps,
     )

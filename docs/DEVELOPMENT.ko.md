@@ -27,6 +27,22 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 직접 import합니다. 테스트는 알 수 없는 외부 서비스 override를 거부해야 하며, 내부
 동작을 격리할 때는 그 동작을 소유한 모듈을 patch해야 합니다.
 
+ORCA 구조 근거는 사람이 읽는 보고서 표시 계층과 분리합니다.
+
+- `orca/evidence.py`는 `OrcaStructureEvidence`, 최종 출력 선택, 캐시 파싱,
+  route 분류, 완료 구조 수집을 소유합니다.
+- `orca/frequencies.py`는 진동 파싱과 mode summary를 소유합니다.
+- workflow stage의 receipt/provenance 검증은 `flow/orca_stage_evidence.py`에
+  남습니다. 선정 로직은 SI renderer를 거치지 않고 과학 근거를 직접 import합니다.
+- `orca/report/si.py`는 SI lint 경고와 Markdown 렌더링·발행을 담당하며,
+  `orca/report/frequencies.py`에는 진동 HTML 렌더링만 남습니다. 두 모듈은
+  read owner의 호환 facade가 아닙니다. import-linter가 이 근거/표시 경계를
+  검사합니다. 기존 RMSD·interaction-energy 모듈은 이번 분리 범위 밖입니다.
+
+`orca/output_status.py`는 수렴 marker와 마지막 판정 우선 규칙을 소유하며,
+출력 분석·파싱 결과·진행 카드가 공유합니다. 내부 엔진 제출 결과는 제어 흐름으로
+결정하며, 사람이 읽는 오류 문구에서 상태 단어를 검색해 결정하지 않습니다.
+
 workflow SI는 `collection.py`·`publication.py`·`rendering.py` 세 모듈의 평평한
 패키지입니다. 직접 임포트하세요. `flow.workflow.si.__init__`은 아무것도 export하지
 않으며 facade가 아닙니다. import-linter layers 계약이 다음 의존 방향을

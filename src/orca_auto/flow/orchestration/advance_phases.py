@@ -233,7 +233,6 @@ def _sync_orca_phase(
         sync_orca_stage_impl(
             stage,
             orca_config=config.orca_config,
-            orca_repo_root=config.orca_repo_root,
             submit_ready=context.submit_ready,
             services=context.services,
         )

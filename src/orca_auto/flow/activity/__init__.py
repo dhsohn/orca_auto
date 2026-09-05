@@ -69,7 +69,6 @@ def cancel_activity(
     crest_config: str | None = None,
     xtb_config: str | None = None,
     orca_config: str | None = None,
-    orca_repo_root: str | None = None,
 ) -> dict[str, Any]:
     request = ActivityCancelRequest(
         target=target,
@@ -85,7 +84,6 @@ def cancel_activity(
             crest_config=crest_config,
             xtb_config=xtb_config,
             orca_config=orca_config,
-            orca_repo_root=orca_repo_root,
         ),
     )
     resolved = _activity_sources.resolve_activity_source_request(request.sources)

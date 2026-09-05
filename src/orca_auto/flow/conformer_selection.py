@@ -26,6 +26,9 @@ from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca import input_references
+from orca_auto.orca.evidence import (
+    OrcaStructureEvidence,
+)
 from orca_auto.orca.input_blocks import (
     BLOCK_START_RE,
     GEOM_HEADER_RE,
@@ -46,7 +49,6 @@ from orca_auto.orca.report.rmsd import (
     group_by_rmsd,
     rmsd_comparison_key,
 )
-from orca_auto.orca.report.si import SiBlock
 
 from .manifest import DEFAULT_RMSD_ENERGY_WINDOW_KCAL, DEFAULT_RMSD_THRESHOLD_ANGSTROM
 
@@ -402,11 +404,11 @@ def coordinates_match(
     return True
 
 
-def blocks_match_geometry(a: SiBlock, b: SiBlock) -> bool:
+def blocks_match_geometry(a: OrcaStructureEvidence, b: OrcaStructureEvidence) -> bool:
     return coordinates_match(a.result.coordinates, b.result.coordinates)
 
 
-def has_required_provenance(block: SiBlock) -> bool:
+def has_required_provenance(block: OrcaStructureEvidence) -> bool:
     result = block.result
     return bool(
         result.input_line.strip()
@@ -415,7 +417,7 @@ def has_required_provenance(block: SiBlock) -> bool:
     )
 
 
-def selected_input_state_matches(block: SiBlock, state: Mapping[str, Any]) -> bool:
+def selected_input_state_matches(block: OrcaStructureEvidence, state: Mapping[str, Any]) -> bool:
     """The executed charge/multiplicity/route must match the selected input file.
 
     Fails closed: an unreadable selected input, a missing geometry header, or
@@ -441,7 +443,7 @@ def selected_input_state_matches(block: SiBlock, state: Mapping[str, Any]) -> bo
 
 
 def eligible_minimum_block(
-    block: SiBlock,
+    block: OrcaStructureEvidence,
     *,
     expected_charge: int | None = None,
     expected_multiplicity: int | None = None,
@@ -467,8 +469,8 @@ def eligible_minimum_block(
 
 
 def unique_single_point_matches(
-    stationary_blocks: Sequence[SiBlock],
-    single_point_blocks: Sequence[SiBlock],
+    stationary_blocks: Sequence[OrcaStructureEvidence],
+    single_point_blocks: Sequence[OrcaStructureEvidence],
 ) -> list[int | None]:
     """Globally unique 1:1 geometry/electronic-state single-point matches.
 
@@ -501,7 +503,7 @@ def unique_single_point_matches(
 
 def rmsd_candidate_for_block(
     stage_id: str,
-    block: SiBlock,
+    block: OrcaStructureEvidence,
     *,
     energy_hartree: float | None,
     selected_input_identity: OrcaSelectedInputScienceIdentity | None = None,

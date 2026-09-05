@@ -23,7 +23,11 @@ from orca_auto.flow.conformer_selection import (
 )
 from orca_auto.flow.contracts.workflow import is_supported_orca_stage_contract
 from orca_auto.flow.orca_stage_validation import validate_workflow_orca_input
-from orca_auto.orca.report.si import SiBlock, SiBlockError, collect_si_block
+from orca_auto.orca.evidence import (
+    OrcaEvidenceError,
+    OrcaStructureEvidence,
+    collect_structure_evidence,
+)
 from orca_auto.orca.state_reading import (
     load_generation_state,
     load_report_json_with_output_receipt,
@@ -418,7 +422,7 @@ def _selected_input_role_matches(
 
 def collect_verified_orca_stage_evidence(
     stage: Mapping[str, Any],
-) -> tuple[SiBlock | None, str, OrcaSelectedInputScienceIdentity | None]:
+) -> tuple[OrcaStructureEvidence | None, str, OrcaSelectedInputScienceIdentity | None]:
     """Parse one stage only through its verified report generation and bindings."""
 
     if not is_supported_orca_stage_contract(stage):
@@ -441,8 +445,8 @@ def collect_verified_orca_stage_evidence(
         return None, "selected input route does not match durable ORCA task kind", None
     selected_input_identity = _selected_input_science_identity(generation_dir, report)
     try:
-        block = collect_si_block(generation_dir, state)
-    except (OSError, SiBlockError):
+        block = collect_structure_evidence(generation_dir, state)
+    except (OSError, OrcaEvidenceError):
         return None, "job evidence could not be parsed into a complete SI block", None
     if issue := _state_evidence_issue(generation_dir, report, state_payload):
         return None, issue, None
@@ -463,7 +467,7 @@ def collect_verified_orca_stage_evidence(
         block = replace(
             block,
             result=replace(result, electronic_state_verified=False),
-            warnings=(*block.warnings, warning),
+            provenance_warnings=(*block.provenance_warnings, warning),
         )
     return block, "", selected_input_identity
 

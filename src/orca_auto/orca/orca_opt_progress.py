@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .orca_chemistry import build_formula
-from .output_status import has_error_termination, has_normal_termination
+from .output_status import (
+    has_error_termination,
+    has_normal_termination,
+    last_optimization_convergence,
+)
 from .parser.extractors import parse_coordinates, parse_input_line, parse_wall_time
 from .parser.io import read_orca_text
 from .parser.patterns import (
     _CONVERGENCE_ITEM_RE,
-    _OPT_CONVERGED_RE,
     _OPT_CYCLE_RE,
     FINAL_SINGLE_POINT_ENERGY_RE,
     final_single_point_energy_value,
@@ -69,6 +72,7 @@ def parse_opt_progress(file_path: str) -> OptProgress:
         method=method,
         basis_set=basis_set,
         calc_type=calc_type,
+        is_converged=last_optimization_convergence(text.splitlines()) is True,
     )
 
     cycle_positions = [(m.start(), int(m.group(1))) for m in _OPT_CYCLE_RE.finditer(text)]
@@ -98,7 +102,6 @@ def parse_opt_progress(file_path: str) -> OptProgress:
 
         progress.steps.append(_parse_opt_step(cycle_num, energy, cycle_text))
 
-    progress.is_converged = bool(_OPT_CONVERGED_RE.search(text))
     progress.is_running = (
         not has_normal_termination(text)
         and not has_error_termination(text)

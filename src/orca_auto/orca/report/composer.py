@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from ..completion_rules import OPT_ROUTE_RE, TS_ROUTE_RE
+from ..evidence import (
+    structure_kind,
+)
 from ..input_blocks import file_route_lines
 from ..relaxed_scan import first_scan_coordinate_spec
 from .irc import (
@@ -42,7 +45,6 @@ from .scan import (
     scan_report_component,
     scan_report_meta_html,
 )
-from .si import structure_kind
 from .sp import (
     SpReportData,
     collect_sp_report_data,

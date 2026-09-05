@@ -67,11 +67,13 @@ from orca_auto.flow.manifest import (
 from orca_auto.flow.orca_stage_evidence import collect_verified_orca_stage_evidence
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 from orca_auto.flow.xyz_utils import write_fragment_xyz
+from orca_auto.orca.evidence import (
+    OrcaStructureEvidence,
+)
 from orca_auto.orca.report.interaction_energy import (
     validate_fragment_electronic_states,
     validate_fragment_partition,
 )
-from orca_auto.orca.report.si import SiBlock
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,7 @@ _INTERACTION_SOURCE_DIRNAME = "_interaction_sources"
 _OptimizedEvidence = tuple[
     str,
     dict[str, Any],
-    SiBlock,
+    OrcaStructureEvidence,
     OrcaSelectedInputScienceIdentity,
 ]
 
@@ -120,7 +122,7 @@ def _completed_complex_evidence(
     *,
     expected_charge: int,
     expected_multiplicity: int,
-) -> tuple[SiBlock, OrcaSelectedInputScienceIdentity] | None:
+) -> tuple[OrcaStructureEvidence, OrcaSelectedInputScienceIdentity] | None:
     if _task_kind(stage) != "opt":
         return None
     block, _reason, selected_input_identity = collect_verified_orca_stage_evidence(stage)
@@ -141,7 +143,7 @@ def _completed_complex_evidence(
 
 def _completed_single_point_evidence(
     stage: Mapping[str, Any],
-) -> tuple[SiBlock, OrcaSelectedInputScienceIdentity] | None:
+) -> tuple[OrcaStructureEvidence, OrcaSelectedInputScienceIdentity] | None:
     if _task_kind(stage) != "sp":
         return None
     block, _reason, selected_input_identity = collect_verified_orca_stage_evidence(stage)
@@ -163,7 +165,7 @@ def _completed_single_point_evidence(
 
 def _uniform_single_point_energies(
     optimized: list[_OptimizedEvidence],
-    single_points: list[tuple[SiBlock, OrcaSelectedInputScienceIdentity]],
+    single_points: list[tuple[OrcaStructureEvidence, OrcaSelectedInputScienceIdentity]],
 ) -> dict[str, float]:
     if not optimized:
         return {}
@@ -408,7 +410,7 @@ def append_interaction_energy_stages_impl(
         return False
 
     parsed: list[_OptimizedEvidence] = []
-    single_points: list[tuple[SiBlock, OrcaSelectedInputScienceIdentity]] = []
+    single_points: list[tuple[OrcaStructureEvidence, OrcaSelectedInputScienceIdentity]] = []
     for stage in complex_stages:
         if _text(stage.get("status")) != STATUS_COMPLETED:
             continue

@@ -20,9 +20,12 @@ from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
 from orca_auto.orca.engine import ENGINE_DEFINITION
+from orca_auto.orca.evidence import collect_structure_evidence
+from orca_auto.orca.orca_opt_progress import parse_opt_progress
 from orca_auto.orca.parser import parse_orca_output
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
 from orca_auto.orca.queue.worker import QueueWorker
+from orca_auto.orca.report.opt import collect_opt_report_data
 from orca_auto.orca.state_reading import (
     load_report_json,
     load_state,
@@ -657,3 +660,74 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert "H2" in si_text
     assert "HF STO-3G SP TightSCF" in si_text
     assert parsed.orca_version in si_text
+
+
+@pytest.mark.parametrize("converged", [True, False], ids=["opt-freq", "opt-iteration-limit"])
+def test_real_orca_water_optimization_acceptance_when_configured(
+    tmp_path: Path, converged: bool
+) -> None:
+    executable_text = os.environ.get("ORCA_REAL_EXECUTABLE", "").strip()
+    if not executable_text:
+        pytest.skip("set ORCA_REAL_EXECUTABLE to run the real ORCA acceptance")
+    executable = Path(executable_text).expanduser().resolve()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        pytest.fail(f"ORCA_REAL_EXECUTABLE is not executable: {executable}")
+
+    allowed_root = tmp_path / "orca_runs"
+    admission_root = tmp_path / "admission"
+    reaction_dir = allowed_root / "real_orca_water_opt"
+    reaction_dir.mkdir(parents=True)
+    config_path = tmp_path / "orca_auto.yaml"
+    _write_orca_worker_config(
+        config_path,
+        allowed_root=allowed_root,
+        admission_root=admission_root,
+        orca_executable=executable,
+    )
+    freq = " Freq" if converged else ""
+    max_iter = 30 if converged else 1
+    (reaction_dir / "water.inp").write_text(
+        f"! HF STO-3G Opt{freq} TightSCF\n%geom MaxIter {max_iter} end\n"
+        "* xyz 0 1\nO 0 0 0\nH 0 0 1.1\nH 1.1 0 0\n*\n",
+        encoding="utf-8",
+    )
+    assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker.poll_interval_seconds = 0.05
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+
+    entry = _queue_entry_for_reaction(allowed_root, reaction_dir)
+    assert entry.status == (QueueStatus.COMPLETED if converged else QueueStatus.FAILED)
+    assert list_slots(admission_root) == []
+    generation = Path(entry.metadata["execution_snapshot"]["execution_dir"])
+    state = load_state(reaction_dir)
+    assert state is not None and state["final_result"] is not None
+    assert state["status"] == ("completed" if converged else "failed")
+    assert state["final_result"]["reason"] == (
+        "normal_termination" if converged else "geometry_not_converged"
+    )
+    out_text = state["final_result"]["last_out_path"]
+    assert isinstance(out_text, str) and out_text
+    out = Path(out_text)
+    assert "ORCA TERMINATED NORMALLY" in out.read_text(encoding="utf-8")
+    parsed = parse_orca_output(str(out))
+    assert parsed.opt_converged is converged
+    assert parsed.energy_hartree is not None and math.isfinite(parsed.energy_hartree)
+    assert parsed.formula == "H2O" and parsed.n_atoms == 3
+    assert parsed.charge == 0 and parsed.multiplicity == 1
+    assert parse_opt_progress(str(out)).is_converged is converged
+    report = collect_opt_report_data(reaction_dir, state, kind="opt")
+    assert report is not None and report.opt_converged is converged
+    assert report_json_path(generation).is_file()
+    assert (generation / RUN_REPORT_HTML_FILE).is_file()
+    assert load_report_json(generation, require_consumable_success=converged) is not None
+    evidence = collect_structure_evidence(reaction_dir, state)
+    if converged:
+        assert evidence is not None and evidence.kind == "min"
+        assert evidence.imaginary_count == 0
+        assert evidence.analysis is not None and len(evidence.analysis.frequencies) == 9
+        assert parsed.gibbs_energy is not None and math.isfinite(parsed.gibbs_energy)
+        assert (generation / SI_BLOCK_MD_FILE).is_file()
+    else:
+        assert evidence is None
+        assert not (generation / SI_BLOCK_MD_FILE).exists()

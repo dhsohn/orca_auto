@@ -101,7 +101,6 @@ def test_submit_reaction_dir_uses_direct_submission_api(
         max_cores=16,
         max_memory_gb=64,
         force=True,
-        repo_root=" /tmp/orca_repo ",
     )
 
     args = captured["args"]
@@ -332,7 +331,6 @@ def test_cancel_target_uses_direct_queue_adapter(
     result = orca_submitter.cancel_target(
         target=target,
         config_path=" /tmp/orca.yaml ",
-        repo_root=" /tmp/orca_repo ",
     )
 
     resolved_allowed_root = allowed_root.resolve()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orca_auto"
-version = "4.0.0"
+version = "4.0.1"
 description = "orca_auto monorepo for ORCA, xTB, CREST, and workflow automation"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -272,6 +272,24 @@ forbidden_modules = [
     "orca_auto.orca.state",
     "orca_auto.orca.report",
 ]
+
+[[tool.importlinter.contracts]]
+name = "ORCA structure and frequency evidence never depend on human reports"
+type = "forbidden"
+source_modules = [
+    "orca_auto.orca.evidence",
+    "orca_auto.orca.frequencies",
+]
+forbidden_modules = ["orca_auto.orca.report"]
+
+[[tool.importlinter.contracts]]
+name = "Workflow structure evidence and selection never depend on SI presentation"
+type = "forbidden"
+source_modules = [
+    "orca_auto.flow.orca_stage_evidence",
+    "orca_auto.flow.conformer_selection",
+]
+forbidden_modules = ["orca_auto.orca.report.si", "orca_auto.orca.report.frequencies"]
 
 [[tool.importlinter.contracts]]
 name = "Workflow stage views stay below orchestration wiring"

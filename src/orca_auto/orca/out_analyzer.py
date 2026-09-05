@@ -9,7 +9,12 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
 from .completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1, CompletionMode
-from .output_status import ERROR_TERMINATION_NEEDLES, NORMAL_TERMINATION_NEEDLES
+from .output_status import (
+    ERROR_TERMINATION_NEEDLES,
+    NORMAL_TERMINATION_NEEDLES,
+    last_optimization_convergence,
+    optimization_convergence_line,
+)
 from .statuses import AnalyzerStatus
 
 logger = logging.getLogger(__name__)
@@ -65,17 +70,10 @@ class OutMarkers(TypedDict):
     final_frequency_section: bool
 
 
-_OPT_CONVERGED_NEEDLES = ("THE OPTIMIZATION HAS CONVERGED", "OPTIMIZATION RUN DONE")
-_OPT_NOT_CONVERGED_NEEDLES = (
-    "THE OPTIMIZATION DID NOT CONVERGE",
-    "OPTIMIZATION HAS NOT YET CONVERGED",
-)
-
 _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     ("terminated_normally", NORMAL_TERMINATION_NEEDLES),
     ("total_run_time_seen", ("TOTAL RUN TIME",)),
     ("irc_marker_found", ("IRC PATH SUMMARY", "IRC-DRV")),
-    ("opt_converged", _OPT_CONVERGED_NEEDLES),
     ("scf_error", ("SCF NOT CONVERGED", "SCF CONVERGENCE FAILED")),
     ("scfgrad_abort", ("ORCA FINISHED BY ERROR TERMINATION IN SCF GRADIENT",)),
     ("disk_io_error", ("COULD NOT WRITE TO DISK", "NO SPACE LEFT ON DEVICE")),
@@ -85,10 +83,6 @@ _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     (
         "geometry_zero_distance",
         ("ZERO DISTANCE ENCOUNTERED", "ZERO DISTANCE BETWEEN ATOMS"),
-    ),
-    (
-        "geom_not_converged",
-        _OPT_NOT_CONVERGED_NEEDLES,
     ),
 )
 
@@ -138,10 +132,10 @@ def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
     upper = line.upper()
     if "MULTIPLICITY" in upper and "IMPOSSIBLE" in upper:
         markers["multiplicity_impossible"] = True
-    if any(needle in upper for needle in _OPT_CONVERGED_NEEDLES):
-        markers["last_opt_converged"] = True
-    if any(needle in upper for needle in _OPT_NOT_CONVERGED_NEEDLES):
-        markers["last_opt_converged"] = False
+    verdict = optimization_convergence_line(line)
+    if verdict is not None:
+        markers["last_opt_converged"] = verdict
+        _set_marker(markers, "opt_converged" if verdict else "geom_not_converged")
     for marker_name, needles in _MARKER_RULES:
         if any(needle in upper for needle in needles):
             _set_marker(markers, marker_name)
@@ -235,15 +229,8 @@ def _scan_full_for_opt_convergence(out_path: Path, encoding: str) -> bool | None
     wins, so a superseded early verdict followed by a cycle that never
     reached one reads the same whether or not the file exceeds the window.
     """
-    verdict: bool | None = None
     with out_path.open("r", encoding=encoding, errors="ignore") as handle:
-        for line in handle:
-            upper = line.upper()
-            if any(needle in upper for needle in _OPT_CONVERGED_NEEDLES):
-                verdict = True
-            if any(needle in upper for needle in _OPT_NOT_CONVERGED_NEEDLES):
-                verdict = False
-    return verdict
+        return last_optimization_convergence(handle)
 
 
 def _read_head(out_path: Path, encoding: str, nbytes: int) -> str:

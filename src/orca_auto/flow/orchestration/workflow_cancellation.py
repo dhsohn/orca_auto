@@ -111,7 +111,6 @@ def _cancel_orca_target(
     return services.engines.orca_cancel_target(
         target=target,
         config_path=config_path,
-        repo_root=config.orca.repo_root,
     )
 
 
@@ -440,7 +439,6 @@ def cancel_materialized_workflow(
     crest_config: str | None = None,
     xtb_config: str | None = None,
     orca_config: str | None = None,
-    orca_repo_root: str | None = None,
     engine_options: WorkflowEngineOptions | None = None,
     services: OrchestrationServices | None = None,
 ) -> dict[str, Any]:
@@ -498,7 +496,6 @@ def cancel_materialized_workflow(
                 crest_config=crest_config,
                 xtb_config=xtb_config,
                 orca_config=orca_config,
-                orca_repo_root=orca_repo_root,
             )
             cancellation = _cancel_active_workflow_stages(
                 payload,

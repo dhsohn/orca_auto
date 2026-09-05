@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR, ORCA_AUTO_REPO_ROOT_ENV_VAR
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config.files import (
     discover_shared_config_path,
     shared_workflow_root_from_config,
@@ -97,13 +96,3 @@ def resolve_activity_source_request(
         orca_config=resolved_orca_config,
         engine_configs=engine_configs,
     )
-
-
-def discover_orca_repo_root(explicit: str | None) -> str | None:
-    explicit_text = normalize_text(explicit)
-    if explicit_text:
-        return str(Path(explicit_text).expanduser().resolve())
-    env_text = normalize_text(os.getenv(ORCA_AUTO_REPO_ROOT_ENV_VAR))
-    if env_text:
-        return str(Path(env_text).expanduser().resolve())
-    return None

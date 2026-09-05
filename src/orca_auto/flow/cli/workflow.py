@@ -125,7 +125,6 @@ def _advance_workflow_worker_cycle(
         advance_workflow_registry_once(
             workflow_root=options.workflow_root_text,
             shared_config=engines.shared_config,
-            orca_repo_root=engines.orca.repo_root,
             submit_ready=options.submit_ready,
             refresh_registry=options.refresh_each_cycle
             or (options.refresh_registry and cycle_count == 1),
