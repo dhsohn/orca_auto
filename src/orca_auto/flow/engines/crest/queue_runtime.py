@@ -21,6 +21,7 @@ from orca_auto.core.config.engines import (
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
+    EngineWorkerPolicy,
     build_engine_queue_worker_parser,
     build_runtime_engine_queue_worker,
 )
@@ -499,9 +500,11 @@ def QueueWorker(
         hooks=_queue_worker_hooks(),
         worker_pid_file_name=ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
         admission_root=_admission_root_for_cfg(cfg),
-        after_init=_after_crest_worker_init,
-        finalize_child_exit=_finalize_child_exit,
-        reconcile_orphaned_running=_reconcile_orphaned_running,
+        policy=EngineWorkerPolicy(
+            after_init=_after_crest_worker_init,
+            finalize_child_exit=_finalize_child_exit,
+            reconcile_orphaned_running=_reconcile_orphaned_running,
+        ),
     )
 
 

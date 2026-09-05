@@ -18,6 +18,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `core/config/discovery.py` owns shared config and workflow-root resolution
   from parsed arguments (replacing `cli_common`). Command output and config
   resolution are unchanged; there is no compatibility alias.
+- An engine names the queue-worker lifecycle steps it owns in one immutable
+  `EngineWorkerPolicy` instead of eleven optional callback keywords:
+  `EngineQueueWorker` and `build_runtime_engine_queue_worker` take `policy=`
+  next to the shared `deps` and the pid-file `hooks`, and the worker dispatches
+  through that policy instead of eleven private callback attributes. The
+  worker lifecycle, gates and finalization order are unchanged.
 - An idle queue-worker poll performs no durable write. The worker now reads
   the shared admission count first, then looks for a claimable pending row,
   and only then reserves a slot: a full pool costs one lock-free read instead

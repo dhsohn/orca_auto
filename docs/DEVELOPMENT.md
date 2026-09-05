@@ -278,7 +278,12 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
 
 xTB, CREST, and ORCA all execute through the common engine runtime. Engine-local
 packages should expose an `EngineDefinition`; parent workers use
-`EngineQueueWorker`, and children use
+`EngineQueueWorker` composed from three values — the shared `deps`, the
+pid-file `hooks`, and one immutable `EngineWorkerPolicy` naming only the
+lifecycle steps the engine owns (ORCA's reserve gate for publication repair
+and terminal replay, its run, interrupt, job-factory, finalization and
+cancellation steps; the xTB/CREST publication-repair gate, child-exit
+finalization and orphan reconciliation) — and children use
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
 Build parent-worker infrastructure from `EngineDefinition.build_queue_runtime()`
 and use the canonical `core.queue.engine` admission, child, lifecycle, worker

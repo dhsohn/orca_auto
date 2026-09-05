@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,31 @@ QUEUE_WORKER_MODULE = "orca_auto.core.engines.queue_worker"
 
 WorkerCallback = Callable[..., Any]
 ReserveGateCallback = Callable[[Any], tuple[str, Any | None] | None]
+
+
+@dataclass(frozen=True)
+class EngineWorkerPolicy:
+    """The engine-owned behaviour a parent queue worker composes in.
+
+    Every field is optional; an engine sets only the steps it owns and the
+    shared worker keeps its default for the rest. ORCA installs its terminal
+    replay, publication repair and cancellation policies here, while the
+    internal xTB/CREST engines install their publication-repair gate and
+    orphan reconciliation. The value is immutable so a running worker cannot
+    have its policy swapped underneath it.
+    """
+
+    after_init: WorkerCallback | None = None
+    before_run: WorkerCallback | None = None
+    after_run: WorkerCallback | None = None
+    keyboard_interrupt: WorkerCallback | None = None
+    running_queue_id: WorkerCallback | None = None
+    running_job_factory: WorkerCallback | None = None
+    finalize_finished_job: WorkerCallback | None = None
+    finalize_child_exit: WorkerCallback | None = None
+    reconcile_orphaned_running: WorkerCallback | None = None
+    check_cancel_requests: WorkerCallback | None = None
+    reserve_gate: ReserveGateCallback | None = None
 
 
 class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
@@ -28,17 +54,7 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         worker_pid_file_name: str,
         max_concurrent: int | None = None,
         admission_root: str | Path | None = None,
-        after_init: WorkerCallback | None = None,
-        before_run: WorkerCallback | None = None,
-        after_run: WorkerCallback | None = None,
-        keyboard_interrupt: WorkerCallback | None = None,
-        running_queue_id: WorkerCallback | None = None,
-        running_job_factory: WorkerCallback | None = None,
-        finalize_finished_job: WorkerCallback | None = None,
-        finalize_child_exit: WorkerCallback | None = None,
-        reconcile_orphaned_running: WorkerCallback | None = None,
-        check_cancel_requests: WorkerCallback | None = None,
-        reserve_gate: ReserveGateCallback | None = None,
+        policy: EngineWorkerPolicy | None = None,
     ) -> None:
         self.engine = engine
         self.admission_limit: int | None = None
@@ -46,17 +62,7 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         # typed object here (for example the ORCA terminal-replay bookkeeping)
         # instead of stuffing untyped attributes onto the shared worker.
         self.engine_state: Any = None
-        self._reserve_gate_callback = reserve_gate
-        self._after_init_callback = after_init
-        self._before_run_callback = before_run
-        self._after_run_callback = after_run
-        self._keyboard_interrupt_callback = keyboard_interrupt
-        self._running_queue_id_callback = running_queue_id
-        self._running_job_factory_callback = running_job_factory
-        self._finalize_finished_job_callback = finalize_finished_job
-        self._finalize_child_exit_callback = finalize_child_exit
-        self._reconcile_orphaned_running_callback = reconcile_orphaned_running
-        self._check_cancel_requests_callback = check_cancel_requests
+        self.policy = policy if policy is not None else EngineWorkerPolicy()
         super().__init__(
             cfg,
             config_path=config_path,
@@ -66,37 +72,37 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
             worker_pid_file_name=worker_pid_file_name,
             admission_root=admission_root,
         )
-        if self._after_init_callback is not None:
-            self._after_init_callback(self)
+        if self.policy.after_init is not None:
+            self.policy.after_init(self)
 
     def _before_run(self) -> None:
         super()._before_run()
-        if self._before_run_callback is not None:
-            self._before_run_callback(self)
+        if self.policy.before_run is not None:
+            self.policy.before_run(self)
 
     def _after_run(self) -> None:
         super()._after_run()
-        if self._after_run_callback is not None:
-            self._after_run_callback(self)
+        if self.policy.after_run is not None:
+            self.policy.after_run(self)
 
     def _run_iteration(self) -> None:
         try:
             super()._run_iteration()
         except KeyboardInterrupt:
-            if self._keyboard_interrupt_callback is not None:
-                self._keyboard_interrupt_callback(self)
+            if self.policy.keyboard_interrupt is not None:
+                self.policy.keyboard_interrupt(self)
             raise
 
     def _reserve_next_entry(self) -> tuple[str, Any | None]:
-        if self._reserve_gate_callback is not None:
-            gated = self._reserve_gate_callback(self)
+        if self.policy.reserve_gate is not None:
+            gated = self.policy.reserve_gate(self)
             if gated is not None:
                 return gated
         return super()._reserve_next_entry()
 
     def _running_queue_id(self, entry: Any) -> str:
-        if self._running_queue_id_callback is not None:
-            return str(self._running_queue_id_callback(entry))
+        if self.policy.running_queue_id is not None:
+            return str(self.policy.running_queue_id(entry))
         return super()._running_queue_id(entry)
 
     def _make_running_job(
@@ -107,8 +113,8 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         process: Any,
         admission_token: str,
     ) -> Any:
-        if self._running_job_factory_callback is not None:
-            return self._running_job_factory_callback(
+        if self.policy.running_job_factory is not None:
+            return self.policy.running_job_factory(
                 self,
                 queue_root=queue_root,
                 entry=entry,
@@ -123,27 +129,27 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
         )
 
     def _finalize_finished_job(self, queue_id: str, job: Any, *, rc: int) -> None:
-        if self._finalize_finished_job_callback is not None:
-            self._finalize_finished_job_callback(self, queue_id, job, rc=rc)
+        if self.policy.finalize_finished_job is not None:
+            self.policy.finalize_finished_job(self, queue_id, job, rc=rc)
             return
         self._finalize_completed_job(queue_id, job, rc)
 
     def _finalize_child_exit(self, job: Any, *, rc: int) -> None:
-        if self._finalize_child_exit_callback is None:
+        if self.policy.finalize_child_exit is None:
             raise AttributeError("finalize_child_exit callback is not configured")
-        self._finalize_child_exit_callback(self, job, rc=rc)
+        self.policy.finalize_child_exit(self, job, rc=rc)
 
     def _reconcile_orphaned_running(self) -> None:
-        if self._reconcile_orphaned_running_callback is None:
+        if self.policy.reconcile_orphaned_running is None:
             self._reconcile_worker_state()
             return
-        self._reconcile_orphaned_running_callback(self)
+        self.policy.reconcile_orphaned_running(self)
 
     def _check_cancel_requests(self) -> None:
-        if self._check_cancel_requests_callback is None:
+        if self.policy.check_cancel_requests is None:
             super()._check_cancel_requests()
             return
-        self._check_cancel_requests_callback(self)
+        self.policy.check_cancel_requests(self)
 
 
 def build_runtime_engine_queue_worker(
@@ -157,17 +163,7 @@ def build_runtime_engine_queue_worker(
     hooks: Any,
     worker_pid_file_name: str,
     admission_root: str | Path,
-    after_init: WorkerCallback | None = None,
-    before_run: WorkerCallback | None = None,
-    after_run: WorkerCallback | None = None,
-    keyboard_interrupt: WorkerCallback | None = None,
-    running_queue_id: WorkerCallback | None = None,
-    running_job_factory: WorkerCallback | None = None,
-    finalize_finished_job: WorkerCallback | None = None,
-    finalize_child_exit: WorkerCallback | None = None,
-    reconcile_orphaned_running: WorkerCallback | None = None,
-    check_cancel_requests: WorkerCallback | None = None,
-    reserve_gate: ReserveGateCallback | None = None,
+    policy: EngineWorkerPolicy | None = None,
 ) -> EngineQueueWorker:
     resolved_config_path = str(config_path or "").strip() or default_config_path()
     return EngineQueueWorker(
@@ -179,17 +175,7 @@ def build_runtime_engine_queue_worker(
         hooks=hooks,
         worker_pid_file_name=worker_pid_file_name,
         admission_root=admission_root,
-        after_init=after_init,
-        before_run=before_run,
-        after_run=after_run,
-        keyboard_interrupt=keyboard_interrupt,
-        running_queue_id=running_queue_id,
-        running_job_factory=running_job_factory,
-        finalize_finished_job=finalize_finished_job,
-        finalize_child_exit=finalize_child_exit,
-        reconcile_orphaned_running=reconcile_orphaned_running,
-        check_cancel_requests=check_cancel_requests,
-        reserve_gate=reserve_gate,
+        policy=policy,
     )
 
 
@@ -223,6 +209,7 @@ def main(argv: list[str] | None = None) -> int:
 
 __all__ = [
     "EngineQueueWorker",
+    "EngineWorkerPolicy",
     "QUEUE_WORKER_MODULE",
     "build_runtime_engine_queue_worker",
     "build_engine_queue_worker_parser",

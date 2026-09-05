@@ -18,6 +18,7 @@ from orca_auto.core.config.schema import resolved_admission_limit
 from orca_auto.core.engine_catalog import get_engine_catalog_entry
 from orca_auto.core.engines.queue_worker import (
     EngineQueueWorker,
+    EngineWorkerPolicy,
     build_runtime_engine_queue_worker,
 )
 from orca_auto.core.queue.types import QueueEntry
@@ -296,15 +297,17 @@ def QueueWorker(
         hooks=_queue_worker_hooks(),
         worker_pid_file_name=ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
         admission_root=_admission_root_for_cfg(worker_cfg),
-        after_init=_after_orca_worker_init,
-        before_run=_before_orca_worker_run,
-        after_run=_after_orca_worker_run,
-        keyboard_interrupt=_log_orca_worker_interrupt,
-        running_queue_id=queue_entry_id,
-        running_job_factory=_make_orca_running_job,
-        finalize_finished_job=replay.finalize_completed_job,
-        reconcile_orphaned_running=replay.reconcile_worker_state,
-        check_cancel_requests=_check_orca_cancel_requests,
-        reserve_gate=_orca_reserve_gate,
+        policy=EngineWorkerPolicy(
+            after_init=_after_orca_worker_init,
+            before_run=_before_orca_worker_run,
+            after_run=_after_orca_worker_run,
+            keyboard_interrupt=_log_orca_worker_interrupt,
+            running_queue_id=queue_entry_id,
+            running_job_factory=_make_orca_running_job,
+            finalize_finished_job=replay.finalize_completed_job,
+            reconcile_orphaned_running=replay.reconcile_worker_state,
+            check_cancel_requests=_check_orca_cancel_requests,
+            reserve_gate=_orca_reserve_gate,
+        ),
     )
     return worker
