@@ -570,18 +570,22 @@ def _flow_restart_settings(workspace: Path, payload: dict[str, Any]) -> dict[str
     return _flow_restart_settings_from_manifest(workspace, payload, manifest)
 
 
-def _flow_restart_settings_from_manifest(
-    workspace: Path,
+def _reject_science_changes_on_completed_stages(
     payload: dict[str, Any],
-    manifest: dict[str, Any],
-) -> dict[str, Any]:
-    template_name = _workflow_template_name(payload, manifest)
-    route_line, manifest_optts_route_line = _validate_manifest_orca_routes(
-        template_name,
-        manifest,
-    )
-    manifest_charge, manifest_multiplicity = _manifest_electronic_state(manifest)
-    persisted_interaction_fingerprint = _durable_interaction_config_fingerprint(payload)
+    *,
+    template_name: str,
+    route_line: str,
+    optts_route_line: str,
+    manifest_charge: int | None,
+    manifest_multiplicity: int | None,
+    persisted_interaction_fingerprint: str,
+) -> dict[str, int | None]:
+    """Refuse a manifest that changes the science behind completed stages.
+
+    Returns the electronic state the payload recorded. It is read only after
+    the ORCA science check so a corrupt recorded charge cannot pre-empt the
+    science-change refusal.
+    """
     completed_primary_orca = _completed_primary_orca_stage_ids(
         payload,
         expected_interaction_fingerprint=persisted_interaction_fingerprint,
@@ -590,7 +594,7 @@ def _flow_restart_settings_from_manifest(
         payload,
         template_name=template_name,
         route_line=route_line,
-        optts_route_line=manifest_optts_route_line,
+        optts_route_line=optts_route_line,
         manifest_charge=manifest_charge,
         manifest_multiplicity=manifest_multiplicity,
     )
@@ -612,8 +616,8 @@ def _flow_restart_settings_from_manifest(
     if manifest_charge is not None or manifest_multiplicity is not None:
         # Compare the pair the restart will actually run on: a stated field,
         # else the recorded one, else the neutral-singlet default the request
-        # parameters fall back to below. A manifest stating only one field
-        # must not slip the other past a completed stage.
+        # parameters fall back to. A manifest stating only one field must not
+        # slip the other past a completed stage.
         effective_charge = (
             manifest_charge
             if manifest_charge is not None
@@ -644,6 +648,129 @@ def _flow_restart_settings_from_manifest(
             f"multiplicity={effective_multiplicity!r}), "
             f"completed_stages={mismatched_engine_stages!r}"
         )
+    return previous_electronic_state
+
+
+def _electronic_state_change(
+    previous_electronic_state: dict[str, int | None],
+    *,
+    manifest_charge: int | None,
+    manifest_multiplicity: int | None,
+    charge: Any,
+    multiplicity: Any,
+) -> dict[str, Any] | None:
+    """Describe the manifest's charge/multiplicity change, or ``None`` when unchanged."""
+    changed_electronic_fields = [
+        key
+        for key, stated in (("charge", manifest_charge), ("multiplicity", manifest_multiplicity))
+        if stated is not None and previous_electronic_state[key] != stated
+    ]
+    if not changed_electronic_fields:
+        return None
+    return {
+        # A previous value is None when the workflow never recorded it.
+        "previous": dict(previous_electronic_state),
+        "current": {
+            "charge": strict_int(charge, field="charge"),
+            "multiplicity": strict_int(multiplicity, field="multiplicity", minimum=1),
+        },
+        "fields": changed_electronic_fields,
+    }
+
+
+def _validate_interaction_energy_restart(
+    workspace: Path,
+    payload: dict[str, Any],
+    *,
+    interaction_cfg: dict[str, Any],
+    charge: int,
+    multiplicity: int,
+) -> None:
+    """Check the durable interaction-energy block against input.xyz and the complex state."""
+    _validate_interaction_energy_state_balance(
+        interaction_cfg,
+        complex_charge=charge,
+        complex_multiplicity=multiplicity,
+    )
+    atom_symbols = _interaction_source_atom_sequence(workspace, payload)
+    fragments = interaction_cfg.get("fragments")
+    if not isinstance(fragments, list):
+        raise ValueError("interaction_energy restart fragments are unavailable")
+    partition_reason = validate_fragment_partition(
+        [fragment["atom_indices"] for fragment in fragments], len(atom_symbols)
+    )
+    if partition_reason:
+        raise ValueError(
+            f"interaction_energy restart fragments do not partition input.xyz: {partition_reason}"
+        )
+    state_reason = validate_fragment_electronic_states(atom_symbols, fragments)
+    if state_reason:
+        raise ValueError(f"interaction_energy restart fragment state is impossible: {state_reason}")
+
+
+def _reject_interaction_fingerprint_change(
+    payload: dict[str, Any],
+    *,
+    persisted_interaction_fingerprint: str,
+    interaction_fingerprint: str,
+) -> None:
+    """Refuse new interaction-energy science once fan-out stages were materialized."""
+    workflow_stages = [
+        raw_stage for raw_stage in payload.get("stages", []) if isinstance(raw_stage, dict)
+    ]
+    for raw_stage in workflow_stages:
+        if not is_valid_interaction_stage_contract(
+            raw_stage,
+            workflow_stages,
+            expected_config_fingerprint=persisted_interaction_fingerprint,
+        ):
+            continue
+        if persisted_interaction_fingerprint != interaction_fingerprint:
+            raise ValueError(
+                "interaction_energy scientific settings cannot change after its stages "
+                "were materialized; disable the feature or start a new workflow"
+            )
+
+
+def _optts_route_for_template(
+    template_name: str,
+    *,
+    route_line: str,
+    manifest_optts_route_line: str,
+    params: dict[str, Any],
+) -> tuple[str, bool]:
+    """Resolve the OptTS route line and whether the manifest stated it."""
+    if template_name == "reaction_ts_search":
+        return route_line or _normalize_text(params.get("orca_route_line")), bool(route_line)
+    if template_name == "scan_ts_search":
+        return (
+            manifest_optts_route_line or _normalize_text(params.get("orca_optts_route_line")),
+            bool(manifest_optts_route_line),
+        )
+    return "", False
+
+
+def _flow_restart_settings_from_manifest(
+    workspace: Path,
+    payload: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    template_name = _workflow_template_name(payload, manifest)
+    route_line, manifest_optts_route_line = _validate_manifest_orca_routes(
+        template_name,
+        manifest,
+    )
+    manifest_charge, manifest_multiplicity = _manifest_electronic_state(manifest)
+    persisted_interaction_fingerprint = _durable_interaction_config_fingerprint(payload)
+    previous_electronic_state = _reject_science_changes_on_completed_stages(
+        payload,
+        template_name=template_name,
+        route_line=route_line,
+        optts_route_line=manifest_optts_route_line,
+        manifest_charge=manifest_charge,
+        manifest_multiplicity=manifest_multiplicity,
+        persisted_interaction_fingerprint=persisted_interaction_fingerprint,
+    )
     crest_present, crest_manifest = _resolve_engine_manifest(workspace, manifest, "crest")
     xtb_present, xtb_manifest = _resolve_engine_manifest(workspace, manifest, "xtb")
     endpoint_pairing = _resolve_endpoint_pairing_manifest(manifest, xtb_manifest)
@@ -691,51 +818,25 @@ def _flow_restart_settings_from_manifest(
     multiplicity = params.get(
         "multiplicity", manifest_multiplicity if manifest_multiplicity is not None else 1
     )
-    changed_electronic_fields = [
-        key
-        for key, stated in (("charge", manifest_charge), ("multiplicity", manifest_multiplicity))
-        if stated is not None and previous_electronic_state[key] != stated
-    ]
-    electronic_state_change = (
-        {
-            # A previous value is None when the workflow never recorded it.
-            "previous": dict(previous_electronic_state),
-            "current": {
-                "charge": strict_int(charge, field="charge"),
-                "multiplicity": strict_int(multiplicity, field="multiplicity", minimum=1),
-            },
-            "fields": changed_electronic_fields,
-        }
-        if changed_electronic_fields
-        else None
+    electronic_state_change = _electronic_state_change(
+        previous_electronic_state,
+        manifest_charge=manifest_charge,
+        manifest_multiplicity=manifest_multiplicity,
+        charge=charge,
+        multiplicity=multiplicity,
     )
     interaction_cfg = params.get("interaction_energy")
     interaction_cfg = interaction_cfg if isinstance(interaction_cfg, dict) else None
     rmsd_cfg = params.get("rmsd_dedup")
     rmsd_cfg = rmsd_cfg if isinstance(rmsd_cfg, dict) else None
     if interaction_cfg is not None:
-        _validate_interaction_energy_state_balance(
-            interaction_cfg,
-            complex_charge=int(charge),
-            complex_multiplicity=int(multiplicity),
+        _validate_interaction_energy_restart(
+            workspace,
+            payload,
+            interaction_cfg=interaction_cfg,
+            charge=int(charge),
+            multiplicity=int(multiplicity),
         )
-        atom_symbols = _interaction_source_atom_sequence(workspace, payload)
-        fragments = interaction_cfg.get("fragments")
-        if not isinstance(fragments, list):
-            raise ValueError("interaction_energy restart fragments are unavailable")
-        partition_reason = validate_fragment_partition(
-            [fragment["atom_indices"] for fragment in fragments], len(atom_symbols)
-        )
-        if partition_reason:
-            raise ValueError(
-                f"interaction_energy restart fragments do not partition input.xyz: "
-                f"{partition_reason}"
-            )
-        state_reason = validate_fragment_electronic_states(atom_symbols, fragments)
-        if state_reason:
-            raise ValueError(
-                f"interaction_energy restart fragment state is impossible: {state_reason}"
-            )
     interaction_fingerprint = (
         _interaction_energy_config_fingerprint(
             interaction_cfg,
@@ -747,32 +848,17 @@ def _flow_restart_settings_from_manifest(
         else ""
     )
     if interaction_cfg is not None:
-        workflow_stages = [
-            raw_stage for raw_stage in payload.get("stages", []) if isinstance(raw_stage, dict)
-        ]
-        for raw_stage in workflow_stages:
-            if not is_valid_interaction_stage_contract(
-                raw_stage,
-                workflow_stages,
-                expected_config_fingerprint=persisted_interaction_fingerprint,
-            ):
-                continue
-            if persisted_interaction_fingerprint != interaction_fingerprint:
-                raise ValueError(
-                    "interaction_energy scientific settings cannot change after its stages "
-                    "were materialized; disable the feature or start a new workflow"
-                )
-    if template_name == "reaction_ts_search":
-        optts_route_line = route_line or _normalize_text(params.get("orca_route_line"))
-        optts_route_line_present = bool(route_line)
-    elif template_name == "scan_ts_search":
-        optts_route_line = manifest_optts_route_line or _normalize_text(
-            params.get("orca_optts_route_line")
+        _reject_interaction_fingerprint_change(
+            payload,
+            persisted_interaction_fingerprint=persisted_interaction_fingerprint,
+            interaction_fingerprint=interaction_fingerprint,
         )
-        optts_route_line_present = bool(manifest_optts_route_line)
-    else:
-        optts_route_line = ""
-        optts_route_line_present = False
+    optts_route_line, optts_route_line_present = _optts_route_for_template(
+        template_name,
+        route_line=route_line,
+        manifest_optts_route_line=manifest_optts_route_line,
+        params=params,
+    )
     return {
         "applied": True,
         "resources": resources,

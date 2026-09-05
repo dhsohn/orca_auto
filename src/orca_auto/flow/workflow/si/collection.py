@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from orca_auto.core.utils.coercion import safe_int
@@ -362,6 +362,133 @@ def _interaction_config_fingerprint(
     )
 
 
+def _complex_single_point(
+    complex_candidates: list[Mapping[str, Any]],
+    *,
+    entry: WorkflowSiEntry,
+    expected_fingerprint: str,
+    complex_charge: int,
+    complex_multiplicity: int,
+) -> tuple[OrcaStructureEvidence | None, str, list[str]]:
+    """Verify the complex single point; returns ``(block, stage_id, blockers)``."""
+    blockers: list[str] = []
+    if len(complex_candidates) != 1:
+        return None, "", blockers
+    complex_stage = complex_candidates[0]
+    complex_sp_stage_id = _text(complex_stage.get("stage_id"))
+    meta = _stage_metadata(complex_stage)
+    if _text(meta.get(INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
+        blockers.append("complex stage belongs to another interaction config generation")
+    complex_block, reason = _completed_interaction_block(complex_stage)
+    if complex_block is None:
+        blockers.append(f"complex single point unavailable: {reason}")
+        return None, complex_sp_stage_id, blockers
+    if not blocks_match_geometry(entry.block, complex_block):
+        blockers.append("complex single point does not use the optimized complex geometry")
+    if (
+        not complex_block.result.electronic_state_verified
+        or complex_block.result.charge != complex_charge
+        or complex_block.result.multiplicity != complex_multiplicity
+    ):
+        blockers.append(
+            "complex single-point selected-input route/electronic state does not match the request"
+        )
+    return complex_block, complex_sp_stage_id, blockers
+
+
+def _fragment_energy_row(
+    index: int,
+    expected: Mapping[str, Any],
+    candidates: list[Mapping[str, Any]],
+    *,
+    expected_fingerprint: str,
+    opt_coordinates: tuple[Any, ...],
+) -> tuple[InteractionFragmentEnergy, OrcaStructureEvidence | None, list[str]]:
+    """Verify one fragment single point against the request and the complex geometry."""
+    blockers: list[str] = []
+    expected_indices = tuple(int(value) for value in expected["atom_indices"])
+    expected_charge = int(expected["charge"])
+    expected_multiplicity = int(expected["multiplicity"])
+    expected_label = _text(expected.get("label")) or f"fragment_{index + 1}"
+    block: OrcaStructureEvidence | None = None
+    stage_id = ""
+    if len(candidates) != 1:
+        blockers.append(f"fragment {index} expected exactly one stage, found {len(candidates)}")
+    else:
+        stage = candidates[0]
+        stage_id = _text(stage.get("stage_id"))
+        meta = _stage_metadata(stage)
+        if _text(meta.get(INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
+            blockers.append(f"fragment {index} belongs to another config generation")
+        if tuple(meta.get("fragment_atom_indices", ())) != expected_indices:
+            blockers.append(f"fragment {index} atom-index metadata differs from the request")
+        # Absent or corrupt metadata must never pass by defaulting to the
+        # expected value: the gate exists to catch exactly that drift.
+        if (
+            _meta_int_or_none(meta.get("fragment_charge")) != expected_charge
+            or _meta_int_or_none(meta.get("fragment_multiplicity")) != expected_multiplicity
+        ):
+            blockers.append(f"fragment {index} electronic-state metadata differs or is missing")
+        block, reason = _completed_interaction_block(stage)
+        if block is None:
+            blockers.append(f"fragment {index} single point unavailable: {reason}")
+        else:
+            expected_coordinates = tuple(opt_coordinates[position] for position in expected_indices)
+            if not coordinates_match(expected_coordinates, tuple(block.result.coordinates)):
+                blockers.append(f"fragment {index} geometry is not the requested complex subset")
+            if (
+                not block.result.electronic_state_verified
+                or block.result.charge != expected_charge
+                or block.result.multiplicity != expected_multiplicity
+            ):
+                blockers.append(
+                    f"fragment {index} selected-input route/electronic state does not "
+                    "match the request"
+                )
+    row = InteractionFragmentEnergy(
+        label=expected_label,
+        stage_id=stage_id,
+        charge=expected_charge,
+        multiplicity=expected_multiplicity,
+        energy_hartree=block.result.energy_hartree if block is not None else None,
+        atom_indices=expected_indices,
+        formula=block.result.formula if block is not None else "",
+    )
+    return row, block, blockers
+
+
+def _shared_single_point_level(
+    observed_blocks: list[OrcaStructureEvidence],
+    *,
+    expected_count: int,
+    expected_route: str,
+) -> tuple[tuple[str, str, str, str, str], list[str]]:
+    """The one level of theory shared by the complete single-point set, or blockers."""
+    provenance: tuple[str, str, str, str, str] = ("", "", "", "", "")
+    if len(observed_blocks) != expected_count:
+        return provenance, ["the complete complex/fragment single-point set is not available"]
+    if any(not has_required_provenance(block) for block in observed_blocks):
+        return provenance, ["single-point provenance is incomplete"]
+    levels = {
+        (
+            block.result.method,
+            block.result.basis_set,
+            block.result.solvation,
+            block.result.orca_version,
+            normalized_route_line(block.result.input_line),
+        )
+        for block in observed_blocks
+    }
+    if len(levels) != 1:
+        return provenance, ["complex and fragment single-point levels differ"]
+    provenance = next(iter(levels))
+    if provenance[4] != expected_route:
+        return provenance, [
+            "executed single-point route differs from interaction_energy.sp_route_line"
+        ]
+    return provenance, []
+
+
 def _interaction_energy_results(
     interaction_stages: list[Mapping[str, Any]],
     stationary: list[WorkflowSiEntry],
@@ -451,122 +578,37 @@ def _interaction_energy_results(
             blockers.append(state_reason)
 
         observed_blocks: list[OrcaStructureEvidence] = []
-        complex_block: OrcaStructureEvidence | None = None
-        complex_sp_stage_id = ""
-        if len(complex_candidates) == 1:
-            complex_stage = complex_candidates[0]
-            complex_sp_stage_id = _text(complex_stage.get("stage_id"))
-            meta = _stage_metadata(complex_stage)
-            if _text(meta.get(INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
-                blockers.append("complex stage belongs to another interaction config generation")
-            complex_block, reason = _completed_interaction_block(complex_stage)
-            if complex_block is None:
-                blockers.append(f"complex single point unavailable: {reason}")
-            else:
-                observed_blocks.append(complex_block)
-                if not blocks_match_geometry(entry.block, complex_block):
-                    blockers.append(
-                        "complex single point does not use the optimized complex geometry"
-                    )
-                if (
-                    not complex_block.result.electronic_state_verified
-                    or complex_block.result.charge != complex_charge
-                    or complex_block.result.multiplicity != complex_multiplicity
-                ):
-                    blockers.append(
-                        "complex single-point selected-input route/electronic state does not "
-                        "match the request"
-                    )
+        complex_block, complex_sp_stage_id, complex_blockers = _complex_single_point(
+            complex_candidates,
+            entry=entry,
+            expected_fingerprint=expected_fingerprint,
+            complex_charge=complex_charge,
+            complex_multiplicity=complex_multiplicity,
+        )
+        blockers.extend(complex_blockers)
+        if complex_block is not None:
+            observed_blocks.append(complex_block)
 
         fragment_rows: list[InteractionFragmentEnergy] = []
         for index, expected in enumerate(expected_fragments):
-            candidates = fragment_candidates.get(index, [])
-            expected_indices = tuple(int(value) for value in expected["atom_indices"])
-            expected_charge = int(expected["charge"])
-            expected_multiplicity = int(expected["multiplicity"])
-            expected_label = _text(expected.get("label")) or f"fragment_{index + 1}"
-            block: OrcaStructureEvidence | None = None
-            stage_id = ""
-            if len(candidates) != 1:
-                blockers.append(
-                    f"fragment {index} expected exactly one stage, found {len(candidates)}"
-                )
-            else:
-                stage = candidates[0]
-                stage_id = _text(stage.get("stage_id"))
-                meta = _stage_metadata(stage)
-                if _text(meta.get(INTERACTION_CONFIG_FINGERPRINT_KEY)) != expected_fingerprint:
-                    blockers.append(f"fragment {index} belongs to another config generation")
-                if tuple(meta.get("fragment_atom_indices", ())) != expected_indices:
-                    blockers.append(
-                        f"fragment {index} atom-index metadata differs from the request"
-                    )
-                # Absent or corrupt metadata must never pass by defaulting to the
-                # expected value: the gate exists to catch exactly that drift.
-                if (
-                    _meta_int_or_none(meta.get("fragment_charge")) != expected_charge
-                    or _meta_int_or_none(meta.get("fragment_multiplicity")) != expected_multiplicity
-                ):
-                    blockers.append(
-                        f"fragment {index} electronic-state metadata differs or is missing"
-                    )
-                block, reason = _completed_interaction_block(stage)
-                if block is None:
-                    blockers.append(f"fragment {index} single point unavailable: {reason}")
-                else:
-                    observed_blocks.append(block)
-                    expected_coordinates = tuple(
-                        opt_coordinates[position] for position in expected_indices
-                    )
-                    if not coordinates_match(expected_coordinates, tuple(block.result.coordinates)):
-                        blockers.append(
-                            f"fragment {index} geometry is not the requested complex subset"
-                        )
-                    if (
-                        not block.result.electronic_state_verified
-                        or block.result.charge != expected_charge
-                        or block.result.multiplicity != expected_multiplicity
-                    ):
-                        blockers.append(
-                            f"fragment {index} selected-input route/electronic state does not "
-                            "match the request"
-                        )
-            fragment_rows.append(
-                InteractionFragmentEnergy(
-                    label=expected_label,
-                    stage_id=stage_id,
-                    charge=expected_charge,
-                    multiplicity=expected_multiplicity,
-                    energy_hartree=block.result.energy_hartree if block is not None else None,
-                    atom_indices=expected_indices,
-                    formula=block.result.formula if block is not None else "",
-                )
+            row, block, fragment_blockers = _fragment_energy_row(
+                index,
+                expected,
+                fragment_candidates.get(index, []),
+                expected_fingerprint=expected_fingerprint,
+                opt_coordinates=opt_coordinates,
             )
+            blockers.extend(fragment_blockers)
+            if block is not None:
+                observed_blocks.append(block)
+            fragment_rows.append(row)
 
-        provenance: tuple[str, str, str, str, str] = ("", "", "", "", "")
-        if len(observed_blocks) != 1 + len(expected_fragments):
-            blockers.append("the complete complex/fragment single-point set is not available")
-        elif any(not has_required_provenance(block) for block in observed_blocks):
-            blockers.append("single-point provenance is incomplete")
-        else:
-            levels = {
-                (
-                    block.result.method,
-                    block.result.basis_set,
-                    block.result.solvation,
-                    block.result.orca_version,
-                    normalized_route_line(block.result.input_line),
-                )
-                for block in observed_blocks
-            }
-            if len(levels) != 1:
-                blockers.append("complex and fragment single-point levels differ")
-            else:
-                provenance = next(iter(levels))
-                if provenance[4] != expected_route:
-                    blockers.append(
-                        "executed single-point route differs from interaction_energy.sp_route_line"
-                    )
+        provenance, level_blockers = _shared_single_point_level(
+            observed_blocks,
+            expected_count=1 + len(expected_fragments),
+            expected_route=expected_route,
+        )
+        blockers.extend(level_blockers)
 
         results.append(
             compute_interaction_energy(
@@ -880,15 +922,28 @@ def _compute_populations(
 # ---------------------------------------------------------------------------
 
 
-def collect_workflow_si_data(
-    payload: Mapping[str, Any],
-    *,
-    boltzmann_temperature_k: float | None = None,
-    population_blocker: str = "",
-) -> WorkflowSiData:
-    template_name = _text(payload.get("template_name"))
-    workflow_status = _text(payload.get("status"))
-    parameters = workflow_request_parameters(payload)
+@dataclass
+class _ClassifiedStages:
+    """Workflow stages sorted into the SI roles they can play."""
+
+    crest_total: int | None = None
+    xtb_total: int | None = None
+    stationary: list[WorkflowSiEntry] = field(default_factory=list)
+    single_points: list[WorkflowSiEntry] = field(default_factory=list)
+    extra: list[WorkflowSiEntry] = field(default_factory=list)
+    excluded: list[ExcludedStage] = field(default_factory=list)
+    incomplete_population_stages: list[str] = field(default_factory=list)
+    interaction_raw_stages: list[Mapping[str, Any]] = field(default_factory=list)
+
+
+def _conformer_postprocessing_config(
+    template_name: str, parameters: Mapping[str, Any]
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+    """Durable interaction-energy and RMSD blocks plus the fingerprint they imply.
+
+    Invalid or template-incompatible blocks are logged and dropped; the
+    fingerprint is empty when the feature is off or cannot be fingerprinted yet.
+    """
     try:
         interaction_cfg = normalize_interaction_energy_block(parameters.get("interaction_energy"))
     except ValueError:
@@ -921,99 +976,104 @@ def collect_workflow_si_data(
             # The requested feature will fail explicitly during assembly. Until
             # then, no stage may be hidden as a trusted generated child.
             pass
-    crest_total: int | None = None
-    xtb_total: int | None = None
-    stationary: list[WorkflowSiEntry] = []
-    single_points: list[WorkflowSiEntry] = []
-    extra: list[WorkflowSiEntry] = []
-    excluded: list[ExcludedStage] = []
-    incomplete_population_stages: list[str] = []
-    # Interaction-energy fragment/complex single points are internal inputs, not
-    # SI structures. Only stages satisfying the complete interaction-stage
-    # contract are pulled out BEFORE any min/ts/sp classification, so arbitrary
-    # role metadata cannot hide a primary result from the structures list.
-    interaction_raw_stages: list[Mapping[str, Any]] = []
-    stages = workflow_stage_dicts(payload)
+    return interaction_cfg, rmsd_cfg, expected_interaction_fingerprint
 
+
+def _classify_workflow_stages(
+    stages: list[dict[str, Any]],
+    *,
+    template_name: str,
+    expected_interaction_fingerprint: str,
+) -> _ClassifiedStages:
+    """Count engine stages and sort ORCA stages into SI entries or exclusions."""
+    out = _ClassifiedStages()
+    conformer_screening = template_name == "conformer_screening"
     for stage in stages:
         stage_kind = _text(stage.get("stage_kind"))
         if stage_kind == "crest_stage":
             _, frames = crest_stage_detail(stage)
             if frames is not None:
-                crest_total = (crest_total or 0) + frames
+                out.crest_total = (out.crest_total or 0) + frames
             continue
         if stage_kind == "xtb_stage":
             _, candidates = xtb_stage_detail(stage)
-            xtb_total = (xtb_total or 0) + candidates
+            out.xtb_total = (out.xtb_total or 0) + candidates
             continue
         if not is_orca_stage_kind(stage):
             continue
         if not is_supported_orca_stage_contract(stage):
             stage_id = _text(stage.get("stage_id"))
             label = _stage_label(stage)
-            excluded.append(
+            out.excluded.append(
                 ExcludedStage(
                     stage_id,
                     label,
                     "unsupported or contradictory ORCA stage contract",
                 )
             )
-            if template_name == "conformer_screening":
-                incomplete_population_stages.append(label or stage_id or "unknown")
+            if conformer_screening:
+                out.incomplete_population_stages.append(label or stage_id or "unknown")
             continue
+        # Interaction-energy fragment/complex single points are internal inputs,
+        # not SI structures. Only stages satisfying the complete interaction-stage
+        # contract are pulled out BEFORE any min/ts/sp classification, so
+        # arbitrary role metadata cannot hide a primary result from the
+        # structures list.
         if is_valid_interaction_stage_contract(
             stage,
             stages,
             expected_config_fingerprint=expected_interaction_fingerprint,
         ):
-            interaction_raw_stages.append(stage)
+            out.interaction_raw_stages.append(stage)
             continue
 
         stage_id = _text(stage.get("stage_id"))
         label = _stage_label(stage)
         status = _text(stage.get("status"))
         if stage_task_kind(stage) == "relaxed_scan":
-            excluded.append(
+            out.excluded.append(
                 ExcludedStage(
                     stage_id, label, "relaxed scan (prerequisite, not a stationary point)"
                 )
             )
             continue
         if status != "completed":
-            excluded.append(ExcludedStage(stage_id, label, f"stage status: {status or 'unknown'}"))
-            if template_name == "conformer_screening":
-                incomplete_population_stages.append(label or stage_id or "unknown")
+            out.excluded.append(
+                ExcludedStage(stage_id, label, f"stage status: {status or 'unknown'}")
+            )
+            if conformer_screening:
+                out.incomplete_population_stages.append(label or stage_id or "unknown")
             continue
         block, reason, selected_input_identity = _collect_stage_block(stage)
         if block is None:
-            excluded.append(ExcludedStage(stage_id, label, reason))
-            if template_name == "conformer_screening":
-                incomplete_population_stages.append(label or stage_id or "unknown")
+            out.excluded.append(ExcludedStage(stage_id, label, reason))
+            if conformer_screening:
+                out.incomplete_population_stages.append(label or stage_id or "unknown")
             continue
         if (
-            template_name == "conformer_screening"
+            conformer_screening
             and block.kind != "min"
             and (stage_task_kind(stage) == "opt" or block.kind == "ts")
         ):
-            incomplete_population_stages.append(label or stage_id or "unknown")
+            out.incomplete_population_stages.append(label or stage_id or "unknown")
         entry = WorkflowSiEntry(
             stage_id=stage_id,
             block=block,
             selected_input_identity=selected_input_identity,
         )
         if block.kind in ("min", "ts"):
-            stationary.append(entry)
+            out.stationary.append(entry)
         elif block.analysis is None:
-            single_points.append(entry)
+            out.single_points.append(entry)
         else:
-            extra.append(entry)
+            out.extra.append(entry)
+    return out
 
-    stationary.sort(
-        key=lambda entry: (
-            entry.block.result.energy_hartree is None,
-            entry.block.result.energy_hartree or 0.0,
-        )
-    )
+
+def _pair_stationary_with_single_points(
+    stationary: list[WorkflowSiEntry], single_points: list[WorkflowSiEntry]
+) -> tuple[list[WorkflowSiEntry], list[WorkflowSiEntry]]:
+    """Attach optional SP refinements; returns ``(ranked_entries, unpaired_single_points)``."""
     # Give scientifically eligible minima first claim on optional SP refinements.
     # A known saddle/unconverged structure at the same geometry must not make an
     # otherwise unique minimum refinement ambiguous. Remaining stationary
@@ -1023,15 +1083,26 @@ def collect_workflow_si_data(
         eligible_stationary, single_points
     )
     eligible_blocks = {id(entry.block) for entry in eligible_stationary}
-    ineligible_paired, pre_dedup_unpaired = _pair_single_points(
+    ineligible_paired, unpaired = _pair_single_points(
         [entry for entry in stationary if id(entry.block) not in eligible_blocks],
         remaining_single_points,
     )
     # Corrupt payloads may repeat stage IDs. OrcaStructureEvidence identity is stable through
     # dataclass replacement and keeps this merge 1:1.
     paired_by_block = {id(entry.block): entry for entry in (*eligible_paired, *ineligible_paired)}
-    pre_dedup_ranked = [paired_by_block.get(id(entry.block), entry) for entry in stationary]
+    return [paired_by_block.get(id(entry.block), entry) for entry in stationary], unpaired
 
+
+def _pre_dedup_population_blocker(
+    pre_dedup_ranked: list[WorkflowSiEntry],
+    *,
+    template_name: str,
+    workflow_status: str,
+    incomplete_population_stages: list[str],
+    population_blocker: str,
+    boltzmann_temperature_k: float | None,
+) -> str:
+    """Why populations must be omitted, judged on the full pre-dedup ensemble."""
     # Validate population completeness against the full pre-dedup ensemble.
     # Dropping an unusable duplicate must never turn an incomplete ensemble into
     # a fabricated 100% population for the remaining representative.
@@ -1059,6 +1130,46 @@ def collect_workflow_si_data(
     except Exception:  # noqa: BLE001
         logger.warning("Pre-dedup population validation failed", exc_info=True)
         population_blocker = "(populations omitted: population validation failed)"
+    return population_blocker
+
+
+def collect_workflow_si_data(
+    payload: Mapping[str, Any],
+    *,
+    boltzmann_temperature_k: float | None = None,
+    population_blocker: str = "",
+) -> WorkflowSiData:
+    template_name = _text(payload.get("template_name"))
+    workflow_status = _text(payload.get("status"))
+    parameters = workflow_request_parameters(payload)
+    interaction_cfg, rmsd_cfg, expected_interaction_fingerprint = _conformer_postprocessing_config(
+        template_name, parameters
+    )
+    classified = _classify_workflow_stages(
+        workflow_stage_dicts(payload),
+        template_name=template_name,
+        expected_interaction_fingerprint=expected_interaction_fingerprint,
+    )
+    stationary = classified.stationary
+    single_points = classified.single_points
+
+    stationary.sort(
+        key=lambda entry: (
+            entry.block.result.energy_hartree is None,
+            entry.block.result.energy_hartree or 0.0,
+        )
+    )
+    pre_dedup_ranked, pre_dedup_unpaired = _pair_stationary_with_single_points(
+        stationary, single_points
+    )
+    population_blocker = _pre_dedup_population_blocker(
+        pre_dedup_ranked,
+        template_name=template_name,
+        workflow_status=workflow_status,
+        incomplete_population_stages=classified.incomplete_population_stages,
+        population_blocker=population_blocker,
+        boltzmann_temperature_k=boltzmann_temperature_k,
+    )
 
     # RMSD re-dedup and interaction-energy assembly are requested explicitly, so
     # a failure in either aborts the whole publication rather than quietly
@@ -1074,7 +1185,7 @@ def collect_workflow_si_data(
     interaction_energies: tuple[InteractionEnergyResult, ...] = ()
     if interaction_cfg is not None:
         interaction_energies = _interaction_energy_results(
-            interaction_raw_stages,
+            classified.interaction_raw_stages,
             stationary,
             single_points,
             interaction_cfg,
@@ -1103,11 +1214,11 @@ def collect_workflow_si_data(
         template_name=template_name,
         status=workflow_status,
         reaction_key=_text(payload.get("reaction_key")),
-        crest_conformer_total=crest_total,
-        xtb_candidate_total=xtb_total,
+        crest_conformer_total=classified.crest_total,
+        xtb_candidate_total=classified.xtb_total,
         entries=tuple(ranked),
-        extra_blocks=tuple(unpaired + extra),
-        excluded=tuple(excluded),
+        extra_blocks=tuple(unpaired + classified.extra),
+        excluded=tuple(classified.excluded),
         boltzmann_temperature_k=temperature,
         boltzmann_temperature_source=temperature_source,
         population_note=population_note,

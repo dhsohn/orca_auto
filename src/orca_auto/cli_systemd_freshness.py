@@ -390,6 +390,202 @@ def _worker_staleness_payload(
     }
 
 
+@dataclass(frozen=True)
+class _WorkerVerdict:
+    """One active worker's staleness judgement: which payload list it joins."""
+
+    kind: str  # "worker" | "undetermined" | "uncompared"
+    row: dict[str, Any]
+    stale: bool = False
+
+
+def _override_root_payload(
+    override_root: Path,
+    *,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+) -> dict[str, Any] | None:
+    """Aggregate-only payload for the test/diagnostic override without workers."""
+    if not (override_root / ".git").exists():
+        return None
+    try:
+        evidence = _checkout_head_evidence(override_root, run=run)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return _worker_staleness_payload(
+            workers=[],
+            stale=[],
+            undetermined=[{"label": "", "unit": "", "detail": f"cannot read checkout HEAD: {exc}"}],
+        )
+    evidence_row = {
+        "source_root": str(evidence.source_root),
+        "head_sha": evidence.head_sha,
+        "head_commit_epoch": evidence.head_commit_epoch,
+        "head_update_epoch": evidence.head_update_epoch,
+    }
+    return _worker_staleness_payload(
+        workers=[],
+        stale=[],
+        undetermined=[],
+        uncompared=[],
+        aggregate_evidence=[evidence_row],
+    )
+
+
+def _judge_worker(
+    status: cli_systemd_units.ServiceUnitStatus,
+    *,
+    override_root: Path | None,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+    read_process_file: Callable[[str], bytes],
+) -> _WorkerVerdict:
+    """Judge one active worker: locate its checkout, snapshot HEAD, compare."""
+    base_row: dict[str, Any] = {"label": status.label, "unit": status.unit}
+    pid_before = _unit_main_pid(status.unit, run=run)
+    if pid_before <= 0:
+        return _WorkerVerdict("undetermined", {**base_row, "detail": "no readable main PID"})
+    import_evidence: _WorkerImportEvidence | None = None
+    import_source: Path | None = None
+    observed_root: Path | None
+    if override_root is not None:
+        observed_root = override_root
+    else:
+        try:
+            import_evidence = _worker_process_import_evidence(
+                pid_before,
+                read_process_file=read_process_file,
+            )
+            import_source = import_evidence.import_source
+            observed_root = _tracked_checkout_for_import_source(import_source, run=run)
+        except (OSError, ValueError, RuntimeError) as exc:
+            return _WorkerVerdict(
+                "undetermined",
+                {
+                    **base_row,
+                    "pid": pid_before,
+                    "detail": f"cannot identify worker checkout: {exc}",
+                },
+            )
+    process_start_ticks = None if import_evidence is None else import_evidence.process_start_ticks
+
+    def race_detail() -> str:
+        return _process_identity_race_detail(
+            status.unit,
+            pid=pid_before,
+            process_start_ticks=process_start_ticks,
+            run=run,
+            read_process_file=read_process_file,
+        )
+
+    detail = race_detail()
+    if detail:
+        row: dict[str, Any] = {**base_row, "detail": detail}
+        if import_source is not None:
+            row["import_source"] = str(import_source)
+        elif observed_root is not None:
+            row["source_root"] = str(observed_root)
+        return _WorkerVerdict("undetermined", row)
+
+    # Wheel installs have no checkout HEAD to compare. Preserve the public
+    # null/not-applicable contract instead of turning a healthy wheel worker
+    # into an undetermined deployment, even when systemd cannot render a
+    # start timestamp that is irrelevant without checkout evidence. In a
+    # mixed deployment, keep judging git-backed workers and expose the wheel
+    # worker as additive evidence.
+    if observed_root is None:
+        assert import_source is not None
+        return _WorkerVerdict(
+            "uncompared",
+            {
+                **base_row,
+                "pid": pid_before,
+                "source_root": str(import_source.parent),
+                "import_source": str(import_source),
+                "reason": "installed_distribution",
+            },
+        )
+
+    try:
+        started_epoch = _unit_start_epoch(status.unit, run=run)
+    except ValueError as exc:
+        return _WorkerVerdict(
+            "undetermined",
+            {
+                **base_row,
+                "pid": pid_before,
+                "source_root": str(observed_root),
+                "detail": f"cannot read unit start time: {exc}",
+            },
+        )
+    detail = race_detail()
+    if detail:
+        return _WorkerVerdict(
+            "undetermined",
+            {**base_row, "source_root": str(observed_root), "detail": detail},
+        )
+
+    # A checkout can move while this command is observing another worker,
+    # and an editable package can diverge from HEAD without moving it at
+    # all. Snapshot both for each process instead of reusing an earlier
+    # worker's evidence or treating a dirty source tree as proven fresh.
+    try:
+        dirty_before = (
+            _checkout_import_package_dirty(observed_root, import_source, run=run)
+            if import_source is not None
+            else False
+        )
+        head_evidence = _checkout_head_evidence(observed_root, run=run)
+        dirty_after = (
+            _checkout_import_package_dirty(observed_root, import_source, run=run)
+            if import_source is not None
+            else False
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        return _WorkerVerdict(
+            "undetermined",
+            {
+                **base_row,
+                "pid": pid_before,
+                "source_root": str(observed_root),
+                "detail": f"cannot read checkout HEAD: {exc}",
+            },
+        )
+    if dirty_before or dirty_after:
+        return _WorkerVerdict(
+            "undetermined",
+            {
+                **base_row,
+                "pid": pid_before,
+                "source_root": str(observed_root),
+                "import_source": str(import_source),
+                "detail": "worker import package has uncommitted source changes",
+            },
+        )
+
+    detail = race_detail()
+    if detail:
+        return _WorkerVerdict(
+            "undetermined",
+            {**base_row, "source_root": str(head_evidence.source_root), "detail": detail},
+        )
+    worker_row = {
+        **base_row,
+        "pid": pid_before,
+        "started_epoch": int(started_epoch),
+        "source_root": str(head_evidence.source_root),
+        "head_sha": head_evidence.head_sha,
+        "head_commit_epoch": head_evidence.head_commit_epoch,
+        "head_update_epoch": head_evidence.head_update_epoch,
+    }
+    if import_evidence is not None and import_source is not None:
+        worker_row["import_source"] = str(import_source)
+        worker_row["process_start_ticks"] = import_evidence.process_start_ticks
+    # systemd's formatted start timestamp has one-second precision. Treat an
+    # equal-second checkout update conservatively rather than allowing a
+    # timing truncation to produce a false-fresh verdict.
+    return _WorkerVerdict(
+        "worker", worker_row, stale=started_epoch <= head_evidence.head_update_epoch
+    )
+
+
 def collect_worker_staleness(
     statuses: Sequence[cli_systemd_units.ServiceUnitStatus],
     *,
@@ -419,228 +615,27 @@ def collect_worker_staleness(
     if not active_workers:
         if override_root is None:
             return None
-        if not (override_root / ".git").exists():
-            return None
-        try:
-            evidence = _checkout_head_evidence(override_root, run=run)
-        except (OSError, ValueError, RuntimeError) as exc:
-            return _worker_staleness_payload(
-                workers=[],
-                stale=[],
-                undetermined=[
-                    {"label": "", "unit": "", "detail": f"cannot read checkout HEAD: {exc}"}
-                ],
-            )
-        evidence_row = {
-            "source_root": str(evidence.source_root),
-            "head_sha": evidence.head_sha,
-            "head_commit_epoch": evidence.head_commit_epoch,
-            "head_update_epoch": evidence.head_update_epoch,
-        }
-        return _worker_staleness_payload(
-            workers=[],
-            stale=[],
-            undetermined=[],
-            uncompared=[],
-            aggregate_evidence=[evidence_row],
-        )
+        return _override_root_payload(override_root, run=run)
 
     workers: list[dict[str, Any]] = []
     stale: list[dict[str, Any]] = []
     undetermined: list[dict[str, Any]] = []
     uncompared: list[dict[str, Any]] = []
     for status in active_workers:
-        pid_before = _unit_main_pid(status.unit, run=run)
-        if pid_before <= 0:
-            undetermined.append(
-                {
-                    "label": status.label,
-                    "unit": status.unit,
-                    "detail": "no readable main PID",
-                }
-            )
-            continue
-        import_evidence: _WorkerImportEvidence | None = None
-        import_source: Path | None = None
-        observed_root: Path | None
-        if override_root is not None:
-            observed_root = override_root
-            race_detail = _process_identity_race_detail(
-                status.unit,
-                pid=pid_before,
-                process_start_ticks=None,
-                run=run,
-                read_process_file=read_process_file,
-            )
+        verdict = _judge_worker(
+            status,
+            override_root=override_root,
+            run=run,
+            read_process_file=read_process_file,
+        )
+        if verdict.kind == "undetermined":
+            undetermined.append(verdict.row)
+        elif verdict.kind == "uncompared":
+            uncompared.append(verdict.row)
         else:
-            try:
-                import_evidence = _worker_process_import_evidence(
-                    pid_before,
-                    read_process_file=read_process_file,
-                )
-                import_source = import_evidence.import_source
-                observed_root = _tracked_checkout_for_import_source(import_source, run=run)
-            except (OSError, ValueError, RuntimeError) as exc:
-                undetermined.append(
-                    {
-                        "label": status.label,
-                        "unit": status.unit,
-                        "pid": pid_before,
-                        "detail": f"cannot identify worker checkout: {exc}",
-                    }
-                )
-                continue
-            race_detail = _process_identity_race_detail(
-                status.unit,
-                pid=pid_before,
-                process_start_ticks=import_evidence.process_start_ticks,
-                run=run,
-                read_process_file=read_process_file,
-            )
-        if race_detail:
-            row: dict[str, Any] = {
-                "label": status.label,
-                "unit": status.unit,
-                "detail": race_detail,
-            }
-            if import_source is not None:
-                row["import_source"] = str(import_source)
-            elif observed_root is not None:
-                row["source_root"] = str(observed_root)
-            undetermined.append(row)
-            continue
-
-        # Wheel installs have no checkout HEAD to compare. Preserve the public
-        # null/not-applicable contract instead of turning a healthy wheel worker
-        # into an undetermined deployment, even when systemd cannot render a
-        # start timestamp that is irrelevant without checkout evidence. In a
-        # mixed deployment, keep judging git-backed workers and expose the wheel
-        # worker as additive evidence.
-        if observed_root is None:
-            assert import_source is not None
-            uncompared.append(
-                {
-                    "label": status.label,
-                    "unit": status.unit,
-                    "pid": pid_before,
-                    "source_root": str(import_source.parent),
-                    "import_source": str(import_source),
-                    "reason": "installed_distribution",
-                }
-            )
-            continue
-
-        try:
-            started_epoch = _unit_start_epoch(status.unit, run=run)
-        except ValueError as exc:
-            undetermined.append(
-                {
-                    "label": status.label,
-                    "unit": status.unit,
-                    "pid": pid_before,
-                    "source_root": str(observed_root),
-                    "detail": f"cannot read unit start time: {exc}",
-                }
-            )
-            continue
-        race_detail = _process_identity_race_detail(
-            status.unit,
-            pid=pid_before,
-            process_start_ticks=(
-                None if import_evidence is None else import_evidence.process_start_ticks
-            ),
-            run=run,
-            read_process_file=read_process_file,
-        )
-        if race_detail:
-            undetermined.append(
-                {
-                    "label": status.label,
-                    "unit": status.unit,
-                    "source_root": str(observed_root),
-                    "detail": race_detail,
-                }
-            )
-            continue
-
-        # A checkout can move while this command is observing another worker,
-        # and an editable package can diverge from HEAD without moving it at
-        # all. Snapshot both for each process instead of reusing an earlier
-        # worker's evidence or treating a dirty source tree as proven fresh.
-        try:
-            dirty_before = (
-                _checkout_import_package_dirty(observed_root, import_source, run=run)
-                if import_source is not None
-                else False
-            )
-            head_evidence = _checkout_head_evidence(observed_root, run=run)
-            dirty_after = (
-                _checkout_import_package_dirty(observed_root, import_source, run=run)
-                if import_source is not None
-                else False
-            )
-        except (OSError, ValueError, RuntimeError) as exc:
-            undetermined.append(
-                {
-                    "label": status.label,
-                    "unit": status.unit,
-                    "pid": pid_before,
-                    "source_root": str(observed_root),
-                    "detail": f"cannot read checkout HEAD: {exc}",
-                }
-            )
-            continue
-        if dirty_before or dirty_after:
-            undetermined.append(
-                {
-                    "label": status.label,
-                    "unit": status.unit,
-                    "pid": pid_before,
-                    "source_root": str(observed_root),
-                    "import_source": str(import_source),
-                    "detail": "worker import package has uncommitted source changes",
-                }
-            )
-            continue
-
-        race_detail = _process_identity_race_detail(
-            status.unit,
-            pid=pid_before,
-            process_start_ticks=(
-                None if import_evidence is None else import_evidence.process_start_ticks
-            ),
-            run=run,
-            read_process_file=read_process_file,
-        )
-        if race_detail:
-            undetermined.append(
-                {
-                    "label": status.label,
-                    "unit": status.unit,
-                    "source_root": str(head_evidence.source_root),
-                    "detail": race_detail,
-                }
-            )
-            continue
-        worker_row = {
-            "label": status.label,
-            "unit": status.unit,
-            "pid": pid_before,
-            "started_epoch": int(started_epoch),
-            "source_root": str(head_evidence.source_root),
-            "head_sha": head_evidence.head_sha,
-            "head_commit_epoch": head_evidence.head_commit_epoch,
-            "head_update_epoch": head_evidence.head_update_epoch,
-        }
-        if import_evidence is not None and import_source is not None:
-            worker_row["import_source"] = str(import_source)
-            worker_row["process_start_ticks"] = import_evidence.process_start_ticks
-        workers.append(worker_row)
-        # systemd's formatted start timestamp has one-second precision. Treat an
-        # equal-second checkout update conservatively rather than allowing a
-        # timing truncation to produce a false-fresh verdict.
-        if started_epoch <= head_evidence.head_update_epoch:
-            stale.append(dict(worker_row))
+            workers.append(verdict.row)
+            if verdict.stale:
+                stale.append(dict(verdict.row))
     if uncompared and not workers and not undetermined:
         return None
     return _worker_staleness_payload(
