@@ -257,8 +257,7 @@ Build parent-worker infrastructure from `EngineDefinition.build_queue_runtime()`
 and use the canonical `core.queue.engine` admission, child, lifecycle, worker
 execution, and hook contracts directly. The former generic internal-engine
 facade no longer exists. Keep workflow-root discovery, publication fencing, and
-live child-PID reconciliation as explicit xTB policy. Keep retry,
-crash-generation recovery, publication, terminal replay, and state/report
+live child-PID reconciliation as explicit xTB policy. Keep crash-generation recovery, publication, terminal replay, and state/report
 policy inside `orca_auto.orca`. Do not add a forwarding module when the
 canonical runtime already owns the operation.
 
@@ -267,7 +266,7 @@ Queued-publication repair belongs to `queue.publication_repair`, cancellation
 to `queue.cancellation`, terminal reconciliation/replay to `queue.replay`, and
 job-index/notification tracking to `queue.worker_tracking`.
 
-ORCA-specific state, retry, input selection, reports, and the downstream
+ORCA-specific state, input selection, reports, and the downstream
 `reaction_dir` contract stay in `orca_auto.orca`. The
 direct ORCA worker-job `--reaction-dir` mode is not supported.
 

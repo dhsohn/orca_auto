@@ -192,10 +192,12 @@ def test_dead_creator_with_unbound_visible_generation_retires_intent_only(
     assert not _intent_path(tmp_path, token).exists()
 
 
+@pytest.mark.parametrize("snapshot_version", [2, 3])
 @pytest.mark.parametrize("kind", ["orca_visible_generation"])
 def test_visible_generation_finalize_requires_matching_queue_snapshot_identity(
     tmp_path: Path,
     kind: str,
+    snapshot_version: int,
 ) -> None:
     generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-visible-finalize"
@@ -212,7 +214,7 @@ def test_visible_generation_finalize_requires_matching_queue_snapshot_identity(
     matching_entry = SimpleNamespace(
         metadata={
             "execution_snapshot": {
-                "version": 2,
+                "version": snapshot_version,
                 "execution_dir": str(generation.resolve()),
                 "execution_dir_identity": {
                     "device": details.st_dev,

@@ -1273,7 +1273,7 @@ def _record_terminal_run_state(
             selected_path = Path(selected_text).expanduser() if selected_text else job_dir / "-"
             if not selected_path.is_absolute():
                 selected_path = job_dir / selected_path
-            state = new_state(job_dir, selected_path, max_retries=0)
+            state = new_state(job_dir, selected_path)
             if expected_job_id:
                 state["job_id"] = expected_job_id
         if execution_provenance:

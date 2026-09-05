@@ -253,7 +253,7 @@ class TestConfigValidation:
             assert cfg.runtime.allowed_root == str(allowed)
             assert cfg.paths.orca_executable == str(fake_orca.resolve())
 
-    def test_default_max_retries_can_exceed_five(self) -> None:
+    def test_runtime_has_no_retry_setting(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -265,14 +265,12 @@ class TestConfigValidation:
                 root / "orca_auto.yaml",
                 {
                     "runs_root": str(allowed),
-                    "runtime": {
-                        "default_max_retries": 9,
-                    },
+                    "runtime": {},
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )
             cfg = load_config(str(cfg_path))
-            assert cfg.runtime.default_max_retries == 9
+            assert not hasattr(cfg.runtime, "default_max_retries")
             assert cfg.runtime.max_concurrent == 4
 
     def test_resources_section_and_common_runtime_conversion_are_loaded(self) -> None:
@@ -425,7 +423,7 @@ class TestConfigValidation:
                 },
             )
             cfg = load_config(str(cfg_path))
-            assert cfg.runtime.default_max_retries == 2
+            assert not hasattr(cfg.runtime, "default_max_retries")
             assert cfg.runtime.max_concurrent == 4
 
     def test_template_placeholder_paths_are_rejected(self) -> None:

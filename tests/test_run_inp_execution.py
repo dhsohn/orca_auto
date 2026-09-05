@@ -22,7 +22,6 @@ def _write_running_state(reaction_dir: Path) -> None:
             "run_id": "run_active",
             "reaction_dir": str(reaction_dir),
             "selected_inp": str(inp),
-            "max_retries": 2,
             "status": "running",
             "started_at": "2026-01-01T00:00:00+00:00",
             "updated_at": "2026-01-01T00:00:00+00:00",
@@ -45,7 +44,7 @@ def test_run_with_state_rejects_admitted_runner_without_process_registrar(
     monkeypatch.setattr(
         run_inp_execution,
         "notification_callbacks",
-        lambda _cfg: (None, None, None),
+        lambda _cfg: (None, None),
     )
     monkeypatch.setattr(run_inp_execution, "run_attempts", lambda *_args, **_kwargs: 0)
     cfg = SimpleNamespace(
@@ -63,7 +62,6 @@ def test_run_with_state_rejects_admitted_runner_without_process_registrar(
             reaction_dir=tmp_path / "rxn",
             selected_inp=tmp_path / "rxn.inp",
             runner_cls=RunnerWithoutRegistrar,
-            max_retries=0,
             resumed=False,
             state={},
             admission_root=tmp_path / "admission",
@@ -150,7 +148,6 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
             reservation_token=None,
             admission_app_name=None,
             admission_task_id="",
-            max_retries=2,
             cfg=None,
         ),
     )
@@ -235,7 +232,6 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
             reservation_token=None,
             admission_app_name=None,
             admission_task_id="queue-task-id",
-            max_retries=2,
             cfg=None,
         ),
     )

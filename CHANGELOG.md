@@ -6,6 +6,27 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [4.0.0] - 2026-09-05
+
+### Removed
+
+- Automatic ORCA calculation-failure retries, retry input recipes, retry
+  notifications, and retry budgets in config, queue metadata, and new results.
+  Remove `orca.runtime.default_max_retries` before upgrading; even zero is rejected.
+- Direct ORCA `ScanTS` support. Active route tokens are rejected before any
+  generation or queue publication. Plain relaxed scans and the separate
+  `scan_ts_search` workflow remain supported.
+
+### Changed
+
+- New ORCA execution snapshots use schema 3. Older submissions are not executed
+  or converted; drain/cancel them and explicitly resubmit supported inputs.
+- Each calculation failure is terminal with its original analyzer reason.
+  Worker/host interruption recovery and manual workflow restart remain separate.
+- Historical generation artifacts and their retired fields remain read-only.
+  Terminal replay and notification receipts update current-format root
+  bookkeeping without rewriting old generation state or reports.
+
 ## [3.1.0] - 2026-09-04
 
 A minor release: it adds public behaviour rather than only hardening it.

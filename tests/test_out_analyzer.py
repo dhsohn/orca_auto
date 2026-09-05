@@ -335,7 +335,7 @@ class TestOutAnalyzer(unittest.TestCase):
             out = Path(td) / "a.out"
             out.write_text(payload, encoding="utf-8")
             result = analyze_output(
-                out, CompletionMode(kind="ts", require_irc=False, route_line="! ScanTS")
+                out, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS")
             )
         self.assertEqual(result.status, AnalyzerStatus.ERROR_GEOMETRY)
         self.assertEqual(result.reason, "geometry_zero_distance")

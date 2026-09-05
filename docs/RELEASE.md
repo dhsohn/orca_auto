@@ -14,7 +14,7 @@ PRs, changelog entries, tags, and reproducible verification.
 A release should answer three questions clearly:
 
 1. What user-visible or maintainer-visible problem motivated the release?
-2. What changed in CLI/config/report/retry/docs behavior?
+2. What changed in CLI/config/report/execution/docs behavior?
 3. What verification evidence shows the release is safe to tag?
 
 Use the same structure in release PRs and GitHub release notes:
@@ -31,7 +31,7 @@ Use the same structure in release PRs and GitHub release notes:
 
 `pyproject.toml` is the source of truth for the package version.
 
-- Patch version: bug fixes, documentation, tests, CI, or narrow retry/reporting
+- Patch version: bug fixes, documentation, tests, CI, or narrow execution/reporting
   hardening that preserves public contracts.
 - Minor version: new public CLI/config/report behavior, new workflow surfaces,
   or meaningful contract additions.

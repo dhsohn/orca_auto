@@ -45,7 +45,6 @@ def test_load_orca_artifact_contract_short_circuits_on_tracked_payload(
         "run_state_path": str(tmp_path / "outputs" / "run_payload_1" / "job_state.json"),
         "report_json_path": str(tmp_path / "outputs" / "run_payload_1" / "job_report.json"),
         "attempt_count": 2,
-        "max_retries": 3,
         "attempts": ({"attempt_number": 1, "analyzer_status": "completed"},),
         "final_result": {"reason": "normal_termination"},
         "resource_request": {"max_cores": 8, "max_memory_gb": 16},
@@ -71,7 +70,6 @@ def test_load_orca_artifact_contract_short_circuits_on_tracked_payload(
     assert contract.queue_status == "completed"
     assert contract.cancel_requested is True
     assert contract.attempt_count == 2
-    assert contract.max_retries == 3
     assert contract.attempts == ({"attempt_number": 1, "analyzer_status": "completed"},)
     assert contract.resource_request == {"max_cores": 8, "max_memory_gb": 16}
     assert contract.resource_actual == {"max_cores": 6, "max_memory_gb": 12}

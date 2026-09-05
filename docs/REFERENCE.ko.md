@@ -10,7 +10,7 @@ orca_auto는 ORCA와 워크플로우 오케스트레이션을 위한 큐 우선
 일반 xTB와 CREST는 내부 워크플로우 단계 엔진으로
 실행됩니다. 이 레퍼런스는 공유 공개
 CLI를 표준화하고, 더 깊은 ORCA 런타임 동작을 한곳에 문서화합니다. ORCA가 여전히
-가장 풍부한 재시도, 리포팅, 모니터링 표면을 가지고 있기 때문입니다.
+가장 풍부한 리포팅, 모니터링 표면을 가지고 있기 때문입니다.
 
 현재 개발자 대상 패키지 규칙:
 
@@ -27,8 +27,8 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
 - 제출할 때 대상 디렉터리에서 가장 최근에 수정된 `*.inp`를 선택하고 바인딩합니다.
 - 큐를 통해 작업을 내구성 있게 제출합니다.
 - 감독되는 워커가 큐에 쌓인 작업을 실행하도록 합니다.
-- 인식된 실패에 대해 원본 입력을 덮어쓰지 않고 보수적으로 재시도합니다.
-- 가능할 때 일치하는 비어 있지 않은 ORCA `.gbw` 파일을 재시도/재개 재시작 입력에
+- 계산 실패를 기록하며 자동 재계산하거나 원본 입력을 덮어쓰지 않습니다.
+- 가능할 때 일치하는 비어 있지 않은 ORCA `.gbw` 파일을 중단된 실행의 재개 입력에
   사용합니다.
 - 실행 상태와 결과를 계산 옆에 기록합니다.
 
@@ -48,7 +48,7 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
 - ORCA 워커는 큐 정체성(`--queue-root/--queue-id`)으로 큐 자식을 시작하고, 그 자식이
   현재 큐 항목을 해석한 뒤 공유
   `core.queue.engine.worker_execution.EngineWorkerExecutionSpec` 라이프사이클을 통해 실행합니다.
-- ORCA 상태, 재시도, 리포트, 알림 동작은 ORCA 도메인 동작으로 남아 있습니다.
+- ORCA 상태, 리포트, 알림 동작은 ORCA 도메인 동작으로 남아 있습니다.
   자식이 종료된 뒤에도 부모 큐 종료 처리가 최종 큐 결과를 기록합니다.
 - WSL에서는 권장 감독자가 `systemd`입니다.
 
@@ -148,7 +148,6 @@ messenger:
 
 orca:
   runtime:
-    default_max_retries: 2
     scratch_root: "/dev/shm/orca_auto"
     scratch_min_free_gb: 8
   paths:
@@ -159,8 +158,7 @@ orca:
 
 - `runs_root`: 단독 ORCA 작업과 워크플로우 워크스페이스가 공유하는 단일 runs 루트.
   완료된 실행은 제출 당시 디렉터리 이름 그대로 이곳에 남습니다
-- `orca.runtime.default_max_retries`: `0`이면 ORCA 재시도 비활성화, 양수면
-  계산 종류별 재시도 정책 활성화
+
 - `orca.runtime.scratch_root`: private attempt별 ORCA 및 workflow xTB/CREST 작업
   디렉터리가 공유하는 `/dev/shm` 아래의 선택적 전용 경로
 - `orca.runtime.scratch_min_free_gb`: RAM scratch를 활성화했을 때 적용하는 양의 tmpfs
@@ -256,7 +254,7 @@ ORCA 고유 노트:
   `--max-memory-gb` 플래그는 단독 ORCA 입력 지시어를 재정의하지 않습니다. 정규화 전
   자원 reader는 모든 활성값 중 최댓값을 사용하므로 뒤쪽 중복값으로 더 큰 요청을
   숨길 수 없습니다.
-- 재시도 입력과 재개된 워커-종료 입력은, 원본 입력에 일치하는 비어 있지 않은 `.gbw`
+- 재개된 워커-종료 입력은, 원본 입력에 일치하는 비어 있지 않은 `.gbw`
   체크포인트가 있고 그 앞부분 바이트가 모두 0이 아닐 때 `MORead`와 `%moinp`를
   추가합니다(crash로 찢어진 체크포인트는 0으로 읽히므로 crash recovery와 같이
   건너뜁니다). Top-level과 `%scf`
@@ -482,7 +480,7 @@ ORCA 고유 노트:
   [큐와 activity 계약](PUBLIC_CONTRACTS.ko.md#큐와-activity-계약)에 명세되어
   있습니다. 엔진 신뢰/격리 경계(캡처된 환경, qualification한 배포본, 같은 UID
   프로세스)는 [런타임 계약](PUBLIC_CONTRACTS.ko.md#런타임-계약)에 명세되어 있습니다.
-- snapshot과 generation 트리는 큐 replay, retry, reconciliation, 감사에 필요하도록
+- snapshot과 generation 트리는 큐 replay, recovery, reconciliation, 감사에 필요하도록
   보존합니다. 독립적인 snapshot GC 명령은 없습니다. pending, running, retrying,
   cancel-pending 또는 복구 가능한 terminal 행이 사용하는 generation은 편집하거나
   삭제하면 안 됩니다. 어떤 큐나 복구 레코드도 더는 참조하지 않음을 확인한 뒤 의도적으로
@@ -679,32 +677,17 @@ Opt 모드 완료:
 열거된 ORCA analyzer 상태입니다(예: `error_geometry`는 ORCA zero-distance geometry
 collapse를 포함합니다).
 
-재시도 정책:
+실행 정책:
 
-- `Opt`, `Opt+Freq`, `Freq`, single-point route: 자동 재시도하지 않습니다. 실패한
-  `*.xyz`/`.gbw` artifact를 generic restart 근거로 보지 않습니다.
-- standalone `OptTS`/`NEB-TS`: 자동 재시도하지 않습니다. Hessian hardening은
-  자동 fallback이 아니라 사용자가 명시하는 입력 선택으로 남깁니다.
-- `ScanTS`: retry는 **계산 실패에서만** 발동하며 scan artifact를 사용합니다.
-  scan 도중 크래시(surface 테이블 없음)는 마지막 numbered point에서 scan을
-  이어가고, scan이 maximum을 포착한 뒤 ORCA의 TS-guess refinement가
-  zero-distance로 abort하면 refinement를 우회해 최고 에너지 surface point에서
-  OptTS 재시도를 1회 수행합니다(`ScanTS` -> `OptTS`, scan 블록 제거). scan이
-  완주된 뒤의 실패는 — `ts_not_found`를 포함해 — `scants_recipes_exhausted`로
-  종료됩니다: endpoint 연장·역방향 탐색은 권장 TS 탐색 경로인 `scan_ts_search`
-  워크플로우가 담당합니다. 일반 SCF/geometry hardening은 적용하지 않습니다.
-
-지오메트리 재시작 규칙:
-
-- 일반 geometry/checkpoint restart는 non-ScanTS retry 정책에 포함하지 않습니다.
-- ScanTS는 numbered scan `*.NNN.xyz` artifact를 continuation retry에 사용할 수 있습니다.
-- route별 rewrite가 없으면 원본 지오메트리를 그대로 반복하지 않고 fail-closed합니다.
-
-원칙:
-
-- 원본 전하와 다중도(multiplicity)는 자동으로 변경되지 않습니다.
-- 원본 `.inp`는 보존됩니다.
-- 재시도 입력은 `<name>.retryNN.inp`로 생성됩니다.
+- ORCA 계산은 한 번 실행하며 실패 시 analyzer reason을 그대로 보존합니다.
+- 직접 `ScanTS`는 지원하지 않고 generation/큐 발행 전에 거부합니다.
+- 일반 relaxed scan과 `scan_ts_search` 워크플로우는 계속 지원합니다.
+- 원본 전하·다중도·입력 파일은 자동 변경하지 않습니다.
+- worker/host 중단 복구는 검증된 `*.resume.inp` 체크포인트 입력을 생성할 수 있습니다.
+- 업그레이드 전에 설정에서 `orca.runtime.default_max_retries`를 제거해야 합니다.
+  0도 거부합니다. 이전 execution snapshot은 실행하거나 자동 변환하지 않습니다.
+- 기존 generation은 읽기 전용 이력으로 보존하며 terminal replay/알림 bookkeeping은
+  root에 현재 형식으로만 기록합니다.
 
 워커 재시작과 crash recovery (문서화된 제한):
 
@@ -725,12 +708,12 @@ visible 실행 generation이 남습니다. 각 generation이 그 실행의 상�
 
 - `job_state.json` (내부 상태와 복구)
 - `machine.json` (유일한 공개 기계 metadata)
-- `job_report.html` (Opt, OptTS, NEB-TS, ScanTS, IRC, relaxed scan 작업): 공통
+- `job_report.html` (Opt, OptTS, NEB-TS, IRC, relaxed scan 작업): 공통
   페이지 틀과 계산 component를 조합한 단일 파일 시각 리포트입니다. 파싱된
-  route/output에 따라 scan 에너지 프로파일(ScanTS 및 일반 relaxed scan —
+  route/output에 따라 scan 에너지 프로파일(일반 relaxed scan —
   `Opt` route + `%geom Scan` 블록), CI-NEB 경로 프로파일과 TS refinement
   궤적(NEB-TS), 존재하는 OptTS/Freq 섹션과 조합된 IRC 경로 프로파일, 또는
-  최적화 수렴 궤적(Opt/OptTS), 재시도 레시피 체인, 진동 요약(허수 모드,
+  최적화 수렴 궤적(Opt/OptTS), attempt 이력, 진동 요약(허수 모드,
   주요 원자 변위, scan 작업의 경우 스캔 좌표와의 일치도)을 담습니다.
 - `si_block.md`: 정류점으로 끝나는 완료 작업(single point 포함, relaxed scan
   제외)은 route line과 ORCA 버전, E(el)/ZPE/H/G와 G−E(el) 보정, Nimag와
@@ -854,7 +837,6 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 - `run_state_path`
 - `report_json_path`
 - `attempt_count`
-- `max_retries`
 - `attempts`
 - `final_result`
 - `resource_request`

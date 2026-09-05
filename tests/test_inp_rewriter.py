@@ -9,7 +9,6 @@ from orca_auto.orca.inp_rewriter import (
     prepare_checkpoint_restart_input,
     prepare_submission_resource_request,
     read_resource_request_from_input,
-    rewrite_for_retry,
 )
 from orca_auto.orca.input_blocks import ensure_route_keywords, set_block_key_value, set_moinp
 from orca_auto.orca.resource_directives import clamp_maxcore_to_budget, read_maxcore, read_nprocs
@@ -225,23 +224,6 @@ class TestInpRewriter(unittest.TestCase):
         self.assertIn("no_previous_xyz_file_found", actions)
         self.assertIn("no_geometry_file_found", actions)
 
-    def test_rewrite_for_retry_clamps_maxcore_to_budget(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry01.inp"
-            src.write_text(
-                "! Opt\n%pal\n  nprocs 8\nend\n# hidden # %maxcore 100000\n"
-                "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-                encoding="utf-8",
-            )
-            actions = rewrite_for_retry(src, dst, max_memory_gb=32)
-            text = dst.read_text(encoding="utf-8")
-        # 32 GB across 8 cores -> 4096 MB per-core ceiling.
-        self.assertIn("%maxcore 4096", text)
-        self.assertNotIn("%maxcore 100000", text)
-        self.assertIn("maxcore_clamped_to_budget", actions)
-
     def test_mutators_replace_active_directives_after_closed_comments(self) -> None:
         lines = [
             "# Freq is commentary # ! SP",
@@ -319,20 +301,6 @@ class TestInpRewriter(unittest.TestCase):
                 "4",
             )
 
-    def test_rewrite_for_retry_leaves_within_budget_maxcore_unchanged(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.retry01.inp"
-            src.write_text(
-                "! Opt\n%pal\n  nprocs 8\nend\n%maxcore 2000\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-                encoding="utf-8",
-            )
-            actions = rewrite_for_retry(src, dst, max_memory_gb=32)
-            text = dst.read_text(encoding="utf-8")
-        self.assertIn("%maxcore 2000", text)
-        self.assertNotIn("maxcore_clamped_to_budget", actions)
-
     def test_find_block_range_does_not_mutate_lines(self) -> None:
         """find_block_range must not append 'end' to the shared lines list.
 
@@ -370,11 +338,11 @@ class TestInpRewriter(unittest.TestCase):
         self.assertTrue(needs_close)
         self.assertEqual(len(lines), original_len)
 
-    def test_geom_retry_keys_are_inserted_outside_nested_scan_block(self) -> None:
+    def test_geom_keys_are_inserted_outside_nested_scan_block(self) -> None:
         from orca_auto.orca.input_blocks import set_block_key_value
 
         lines = [
-            "! ScanTS B3LYP def2-SVP Freq",
+            "! Opt B3LYP def2-SVP Freq",
             "%geom",
             "  MaxIter 200",
             "  Scan",
@@ -390,7 +358,7 @@ class TestInpRewriter(unittest.TestCase):
         self.assertEqual(
             lines,
             [
-                "! ScanTS B3LYP def2-SVP Freq",
+                "! Opt B3LYP def2-SVP Freq",
                 "%geom",
                 "  MaxIter 200",
                 "  Scan",
@@ -401,40 +369,3 @@ class TestInpRewriter(unittest.TestCase):
                 "* xyzfile 0 1 input.xyz",
             ],
         )
-
-
-SCANTS_NO_GEOMETRY_INP = """! ScanTS B3LYP def2-SVP
-
-%geom
-  Scan
-    B 0 1 = 1.0, 2.0, 5
-  end
-end
-"""
-
-
-class TestScantsResumeAllOrNothing(unittest.TestCase):
-    def test_scants_resume_never_leaks_a_partial_optts_conversion(self) -> None:
-        # The resume path finds a TS guess (refinement marker + same-stem xyz)
-        # but the malformed input has no geometry block to replace. The OptTS
-        # conversion cannot be completed, so none of it may leak into the
-        # written input: previously the route was already flipped to OPTTS and
-        # the scan block removed before the geometry check bailed.
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            src = root / "rxn.inp"
-            dst = root / "rxn.resume.inp"
-            src.write_text(SCANTS_NO_GEOMETRY_INP, encoding="utf-8")
-            (root / "rxn.gbw").write_bytes(b"checkpoint")
-            (root / "rxn.out").write_text("REFINING THE TS GUESS STRUCTURE\n", encoding="utf-8")
-            (root / "rxn.xyz").write_text("2\n\nH 0 0 0\nH 0 0 0.75\n", encoding="utf-8")
-
-            prepared, actions = prepare_checkpoint_restart_input(src, dst, root)
-            out = dst.read_text(encoding="utf-8")
-
-        self.assertEqual(prepared, dst)
-        self.assertNotIn("scants_resume_to_optts", actions)
-        self.assertNotIn("scants_scan_block_removed", actions)
-        self.assertNotIn("OPTTS", out)
-        self.assertIn("ScanTS", out)
-        self.assertIn("B 0 1 = 1.0, 2.0, 5", out)

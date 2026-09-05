@@ -8,7 +8,7 @@ orca_auto validation is split into two honest layers:
    ORCA/xTB/CREST deployment when a change depends on engine runtime semantics.
 
 This split is intentional. The public test suite should prove the queue,
-configuration, parser, retry-policy, reporting, packaging, and fake-engine
+configuration, parser, execution-policy, reporting, packaging, and fake-engine
 integration contracts without requiring private credentials or licensed binaries.
 Real-engine checks should be recorded explicitly when they are needed.
 
@@ -25,7 +25,7 @@ The GitHub Actions workflow runs multiple independent checks:
 
 The pytest suite exercises ORCA logic with unit tests,
 sanitized fixtures, and fake-engine integration paths. These checks cover durable queue behavior,
-state/report writing, parser behavior, retry policy, notification formatting,
+state/report writing, parser behavior, execution policy, notification formatting,
 workflow handoff contracts, and CLI surfaces.
 
 ## What CI does not prove
@@ -53,7 +53,7 @@ bash scripts/check.sh
 For focused changes, pass pytest selectors through the shared script:
 
 ```bash
-bash scripts/check.sh tests/test_scants_support.py -q
+bash scripts/check.sh tests/test_single_attempt_contract.py -q
 bash scripts/check.sh tests/flow -q
 ```
 
@@ -99,7 +99,7 @@ Use a real ORCA acceptance check when a PR changes one of these areas:
 
 - ORCA process invocation;
 - input selection or resource directive rewriting;
-- retry/resume policy;
+- execution/recovery policy;
 - output analyzer classification;
 - report fields derived from real ORCA output;
 - systemd/runtime behavior that cannot be represented by fake-engine tests.
@@ -157,7 +157,7 @@ run.
 - Do not commit credentials, private paths, messenger bot tokens, channel IDs, or private
   research data.
 - When a fixture represents a failure mode, document the expected classifier,
-  retry decision, and safe next action.
+  failure decision, and safe next action.
 
 ## PR validation reporting
 

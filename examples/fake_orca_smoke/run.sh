@@ -70,9 +70,6 @@ config_path.write_text(
                 "admission_root": str(admission_root),
             },
             "orca": {
-                "runtime": {
-                    "default_max_retries": 0,
-                },
                 "paths": {"orca_executable": str(fake_orca)},
             },
             "messenger": {"discord": {"bot_token": "", "default_channel_id": ""}},

@@ -41,7 +41,6 @@ from .inp_rewriter import prepare_submission_resource_request, read_resource_req
 from .input_artifacts import selected_input_artifacts
 from .notifications import notify_queue_enqueued_event
 from .queue import adapter as queue_adapter
-from .retry_policy import effective_max_retries
 from .run_context import WorkerStatusInfo, resolve_submission_context
 from .types import QueueEnqueuedNotification
 
@@ -229,13 +228,8 @@ def build_queue_metadata(
     )
     requested = dict(prepared_input.resource_request)
     assert selected_inp is not None
-    max_retries = effective_max_retries(
-        selected_inp,
-        configured_max_retries=max(0, int(cfg.runtime.default_max_retries)),
-    )
     metadata: dict[str, Any] = {
         "submitted_via": "run_inp",
-        "max_retries": max_retries,
         "job_type": job_type,
         "molecule_key": molecule_key,
         "resource_request": requested,
@@ -246,7 +240,6 @@ def build_queue_metadata(
         selected_inp,
         selected_input_xyz=artifacts.selected_input_xyz,
         resource_request=requested,
-        max_retries=max_retries,
         orca_executable=cfg.paths.orca_executable,
         queue_root=Path(cfg.runtime.allowed_root).expanduser().resolve(),
         snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),

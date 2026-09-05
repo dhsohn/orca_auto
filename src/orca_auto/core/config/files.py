@@ -15,7 +15,6 @@ from orca_auto.core.utils.coercion import normalize_text
 
 from . import bounded_yaml as _bounded_yaml
 from .schema import (
-    explicit_nonnegative_int,
     explicit_positive_int,
     messenger_config_from_mapping,
 )
@@ -35,9 +34,7 @@ _RESOURCE_CONFIG_FIELDS = frozenset({"max_cores_per_task", "max_memory_gb_per_ta
 _WORKFLOW_CONFIG_FIELDS = frozenset({"paths"})
 _WORKFLOW_PATH_CONFIG_FIELDS = frozenset({"crest_executable", "xtb_executable"})
 _ORCA_CONFIG_FIELDS = frozenset({"paths", "runtime"})
-_ORCA_RUNTIME_CONFIG_FIELDS = frozenset(
-    {"default_max_retries", "scratch_min_free_gb", "scratch_root"}
-)
+_ORCA_RUNTIME_CONFIG_FIELDS = frozenset({"scratch_min_free_gb", "scratch_root"})
 _ORCA_PATH_CONFIG_FIELDS = frozenset({"orca_executable"})
 
 
@@ -223,11 +220,6 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
         allowed=_ORCA_RUNTIME_CONFIG_FIELDS,
         section="orca.runtime",
     )
-    if "default_max_retries" in orca_runtime:
-        explicit_nonnegative_int(
-            orca_runtime.get("default_max_retries"),
-            field_name="orca.runtime.default_max_retries",
-        )
     scratch_config_from_runtime_mapping(orca_runtime)
     orca_paths = _configured_mapping_section(orca, "paths", field_name="orca.paths")
     _reject_unknown_config_fields(

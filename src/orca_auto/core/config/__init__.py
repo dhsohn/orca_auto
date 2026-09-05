@@ -3,7 +3,7 @@ from .schema import (
     CommonRuntimeConfig,
     DiscordConfig,
     MessengerConfig,
-    RetryRuntimeConfig,
+    OrcaRuntimeConfig,
     discord_config_from_mapping,
     messenger_config_from_mapping,
 )
@@ -14,7 +14,7 @@ __all__ = [
     "CommonRuntimeConfig",
     "DiscordConfig",
     "MessengerConfig",
-    "RetryRuntimeConfig",
+    "OrcaRuntimeConfig",
     "ScratchConfig",
     "discord_config_from_mapping",
     "messenger_config_from_mapping",

@@ -129,7 +129,6 @@ def orca_artifact_payload(
     reason: str = "",
     attempts: list[dict[str, Any]] | None = None,
     final_result: Mapping[str, Any] | None = None,
-    max_retries: int = 0,
     queue_id: str = "",
     app_name: str = "orca_auto_orca",
     task_id: str = "",
@@ -145,7 +144,6 @@ def orca_artifact_payload(
     payload_artifacts.update(dict(artifacts_extra or {}))
     payload_engine = {
         "run_id": run_id,
-        "max_retries": max_retries,
         "attempts": list(attempts or []),
         "final_result": final_payload,
     }

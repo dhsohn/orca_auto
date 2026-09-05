@@ -53,7 +53,6 @@ def _write_state(
         "run_id": run_id,
         "reaction_dir": str(reaction_dir),
         "selected_inp": str(reaction_dir / inp_name),
-        "max_retries": 2,
         "status": status,
         "started_at": "2026-03-10T00:00:00+00:00",
         "updated_at": "2026-03-10T01:00:00+00:00",

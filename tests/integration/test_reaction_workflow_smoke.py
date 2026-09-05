@@ -108,9 +108,7 @@ def _write_orca_config(
         if isinstance(loaded, dict):
             payload = dict(loaded)
     payload["orca"] = {
-        "runtime": {
-            "default_max_retries": 0,
-        },
+        "runtime": {},
         "paths": {
             "orca_executable": str(orca_executable.resolve()),
         },

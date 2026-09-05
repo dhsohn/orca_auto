@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from orca_auto.flow.orca_stage_validation import validate_workflow_orca_input_bytes
 from orca_auto.orca.commands.run_inp import cmd_run_inp
-from orca_auto.orca.config import AppConfig, CommonResourceConfig, PathsConfig, RetryRuntimeConfig
+from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.submission import submit_reaction_dir_to_queue
@@ -22,7 +22,7 @@ def _make_cfg(tmp: str, *, max_cores: int = 8, max_memory_gb: int = 32) -> AppCo
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     cfg = AppConfig(
-        runtime=RetryRuntimeConfig(allowed_root=tmp),
+        runtime=OrcaRuntimeConfig(allowed_root=tmp),
         paths=PathsConfig(orca_executable=str(fake_orca)),
         resources=CommonResourceConfig(
             max_cores_per_task=max_cores,
@@ -252,7 +252,7 @@ class TestRunInpSubmit(unittest.TestCase):
             )
             self.assertEqual(metadata["selected_input_path"], str(reaction_dir / "rxn.inp"))
             self.assertEqual(metadata["selected_input_xyz"], "")
-            self.assertEqual(metadata["max_retries"], 0)
+            self.assertNotIn("max_retries", metadata)
             self.assertEqual(metadata["submitted_via"], "run_inp")
             self.assertEqual(metadata["job_type"], "opt")
             self.assertEqual(

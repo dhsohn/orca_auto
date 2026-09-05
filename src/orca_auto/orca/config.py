@@ -21,8 +21,7 @@ from orca_auto.core.config.files import (
     validated_runs_root_text,
 )
 from orca_auto.core.config.schema import (
-    RetryRuntimeConfig,
-    explicit_nonnegative_int,
+    OrcaRuntimeConfig,
     messenger_config_from_mapping,
 )
 
@@ -73,7 +72,7 @@ class PathsConfig:
 
 @dataclass
 class AppConfig:
-    runtime: RetryRuntimeConfig = field(default_factory=RetryRuntimeConfig)
+    runtime: OrcaRuntimeConfig = field(default_factory=OrcaRuntimeConfig)
     workflow_root: str = ""
     paths: PathsConfig = field(default_factory=PathsConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
@@ -118,7 +117,7 @@ def _scheduler_runtime_settings(
     scheduler_enabled = bool(scheduler_raw)
     settings = _config_engines.scheduler_runtime_settings(
         scheduler_raw,
-        default_max_active=RetryRuntimeConfig.max_concurrent,
+        default_max_active=OrcaRuntimeConfig.max_concurrent,
         default_admission_root=default_shared_admission_root(runs_root),
         admission_limit_enabled=scheduler_enabled,
     )
@@ -147,14 +146,6 @@ def load_config(config_path: str) -> AppConfig:
     resources_raw = _section_mapping(raw, "resources")
 
     orca_executable = _required_config_paths(path, runs_root, paths_raw)
-    default_max_retries = (
-        explicit_nonnegative_int(
-            runtime_raw.get("default_max_retries"),
-            field_name="orca.runtime.default_max_retries",
-        )
-        if "default_max_retries" in runtime_raw
-        else RetryRuntimeConfig.default_max_retries
-    )
     max_concurrent, admission_root, admission_limit = _scheduler_runtime_settings(
         scheduler_raw,
         runs_root,
@@ -162,9 +153,8 @@ def load_config(config_path: str) -> AppConfig:
     messenger_cfg = messenger_config_from_mapping(messenger_raw)
 
     cfg = AppConfig(
-        runtime=RetryRuntimeConfig(
+        runtime=OrcaRuntimeConfig(
             allowed_root=runs_root,
-            default_max_retries=default_max_retries,
             max_concurrent=max_concurrent,
             admission_root=admission_root,
             admission_limit=admission_limit,

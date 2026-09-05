@@ -28,7 +28,7 @@ from orca_auto.core.queue.lifecycle import TerminalProcessQueueMarkResult
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
-from orca_auto.orca.config import AppConfig, RetryRuntimeConfig
+from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.engine import read_worker_pid
 from orca_auto.orca.queue import cancellation as cancellation_mod
 from orca_auto.orca.queue import replay as replay_mod
@@ -481,7 +481,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
     def test_failed_state_write_leaves_durable_replay_for_worker_restart(self) -> None:
         rxn = self.root / "mol_durable_restart"
         rxn.mkdir()
-        old_state = new_state(rxn, rxn / "task-a.inp", max_retries=0)
+        old_state = new_state(rxn, rxn / "task-a.inp")
         old_state["job_id"] = "task-a"
         finalize_state(
             rxn,
@@ -949,7 +949,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_upsert_terminal: MagicMock,
     ) -> None:
         cfg = AppConfig(
-            runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
+            runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
             messenger=MessengerConfig(
                 discord=DiscordConfig(bot_token="token", default_channel_id="123")
             ),
@@ -998,7 +998,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_upsert_terminal: MagicMock,
     ) -> None:
         cfg = AppConfig(
-            runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
+            runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
             messenger=MessengerConfig(
                 discord=DiscordConfig(bot_token="token", default_channel_id="123")
             ),
@@ -1047,7 +1047,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_notify: MagicMock,
     ) -> None:
         cfg = AppConfig(
-            runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
+            runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
             messenger=MessengerConfig(
                 discord=DiscordConfig(bot_token="token", default_channel_id="123")
             ),
@@ -1071,7 +1071,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_notify: MagicMock,
     ) -> None:
         cfg = AppConfig(
-            runtime=RetryRuntimeConfig(allowed_root=str(self.root)),
+            runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
             messenger=MessengerConfig(
                 discord=DiscordConfig(bot_token="token", default_channel_id="123")
             ),
@@ -1128,7 +1128,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
     ) -> None:
         rxn = self.root / "mol_failed_before_current_state"
         rxn.mkdir()
-        previous = new_state(rxn, rxn / "task-a.inp", max_retries=0)
+        previous = new_state(rxn, rxn / "task-a.inp")
         previous["job_id"] = "task-a"
         previous_run_id = previous["run_id"]
         finalize_state(
@@ -1917,7 +1917,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         dequeue_next(self.root)
         cancel(self.root, entry.queue_id)
 
-        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        state = new_state(rxn, rxn / "job.inp")
         state["job_id"] = entry.task_id
         state["status"] = "running"
         save_state(rxn, state)
@@ -1963,7 +1963,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         entry = enqueue(self.root, str(rxn))
         dequeue_next(self.root)
 
-        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        state = new_state(rxn, rxn / "job.inp")
         state["job_id"] = entry.task_id
         state["status"] = "completed"
         state["final_result"] = {
@@ -2009,7 +2009,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         entry = enqueue(self.root, str(rxn))
         dequeue_next(self.root)
 
-        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        state = new_state(rxn, rxn / "job.inp")
         state["job_id"] = entry.task_id
         state["status"] = "failed"
         state["final_result"] = {
@@ -2100,7 +2100,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         # The finished child left a terminal run state, so it is eligible for
         # the completion path; that path is then made to fail.
-        state = new_state(rxn_done, rxn_done / "job.inp", max_retries=3)
+        state = new_state(rxn_done, rxn_done / "job.inp")
         state["job_id"] = done_entry.task_id
         state["status"] = "completed"
         state["final_result"] = {
@@ -2228,7 +2228,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         entry = enqueue(self.root, str(rxn))
         dequeue_next(self.root)
 
-        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        state = new_state(rxn, rxn / "job.inp")
         state["job_id"] = entry.task_id
         state["status"] = "running"
         save_state(rxn, state)
@@ -2439,7 +2439,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         entry = enqueue(self.root, str(rxn))
         dequeue_next(self.root)
 
-        state = new_state(rxn, rxn / "job.inp", max_retries=3)
+        state = new_state(rxn, rxn / "job.inp")
         state["job_id"] = "task-from-an-earlier-submission"
         state["status"] = "completed"
         state["final_result"] = {"status": "completed", "reason": "normal_termination"}

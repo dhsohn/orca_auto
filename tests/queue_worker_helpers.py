@@ -5,14 +5,14 @@ from unittest.mock import patch
 
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.orca.attempt.reporting import build_final_result
-from orca_auto.orca.config import AppConfig, RetryRuntimeConfig
+from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.state import finalize_state, new_state
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 
 
 def make_queue_worker_cfg(tmp: str) -> AppConfig:
-    return AppConfig(runtime=RetryRuntimeConfig(allowed_root=tmp))
+    return AppConfig(runtime=OrcaRuntimeConfig(allowed_root=tmp))
 
 
 def current_orca_queue_metadata(
@@ -36,7 +36,7 @@ def current_orca_queue_metadata(
 def write_completed_run_state(reaction_dir: Path) -> None:
     selected_inp = reaction_dir / "rxn.inp"
     selected_inp.write_text("! Opt\n", encoding="utf-8")
-    state = new_state(reaction_dir, selected_inp, max_retries=2)
+    state = new_state(reaction_dir, selected_inp)
     state["job_id"] = "task_terminal_123"
     state["attempts"].append(
         {

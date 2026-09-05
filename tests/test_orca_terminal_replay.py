@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,7 +21,7 @@ from orca_auto.core.statuses import (
     STATUS_FAILED,
     STATUS_RUNNING,
 )
-from orca_auto.orca.config import AppConfig, RetryRuntimeConfig
+from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
 from orca_auto.orca.queue.adapter import (
@@ -82,7 +82,6 @@ class TestGetRunIdFromState(unittest.TestCase):
                     "run_id": "test_run_123",
                     "reaction_dir": str(tmp),
                     "selected_inp": "",
-                    "max_retries": 0,
                     "status": "completed",
                     "attempts": [],
                     "final_result": {},
@@ -100,7 +99,6 @@ class TestGetRunIdFromState(unittest.TestCase):
                     "run_id": "run-a",
                     "reaction_dir": str(tmp),
                     "selected_inp": "",
-                    "max_retries": 0,
                     "status": "completed",
                     "attempts": [],
                     "final_result": {},
@@ -134,7 +132,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
             "orca_terminal_replay": replay_marker,
         },
     )
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     if existing_cursor:
         replay_mod.get_replay_state(worker).reconcile_statuses = {
@@ -209,7 +207,7 @@ def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
     queue_file = tmp_path / "queue.json"
     queue_bytes = queue_file.read_bytes()
     queue_mtime_ns = queue_file.stat().st_mtime_ns
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
 
     def current_entries(_cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
         return [(tmp_path, list_queue(tmp_path)[0])]
@@ -322,7 +320,7 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
     [terminal] = list_queue(tmp_path)
     assert terminal.status.value == expected_status
     assert replay_mod.terminal_replay_marker_from_entry(terminal) is not None
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
 
     def current_entries(_cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
         return [(tmp_path, current) for current in list_queue(tmp_path)]
@@ -506,7 +504,7 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
         _terminal_replay_entry(tmp_path, QueueStatus.FAILED),
         metadata=metadata,
     )
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -564,7 +562,7 @@ def test_terminal_replay_completes_when_the_notification_fails(tmp_path: Path) -
     (tmp_path / "rxn").mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
     cfg = AppConfig(
-        runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
+        runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)),
         messenger=MessengerConfig(
             discord=DiscordConfig(bot_token="token", default_channel_id="123")
         ),
@@ -603,7 +601,7 @@ def test_terminal_replay_completes_when_the_notifier_raises(tmp_path: Path) -> N
     (tmp_path / "rxn").mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
     cfg = AppConfig(
-        runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)),
+        runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)),
         messenger=MessengerConfig(
             discord=DiscordConfig(bot_token="token", default_channel_id="123")
         ),
@@ -643,7 +641,7 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
 ) -> None:
     (tmp_path / "rxn").mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -666,7 +664,7 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path:
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -708,7 +706,7 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -743,7 +741,7 @@ def test_terminal_replay_observes_pending_to_cancelled_transition(tmp_path: Path
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
     pending = _terminal_replay_entry(tmp_path, QueueStatus.PENDING)
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -799,11 +797,11 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
         cancel_requested=False,
         enqueued_at="",
     )
-    current_state = new_state(reaction_dir, reaction_dir / "task-b.inp", max_retries=3)
+    current_state = new_state(reaction_dir, reaction_dir / "task-b.inp")
     current_state["job_id"] = "task-b"
     current_state["status"] = STATUS_RUNNING
     save_state(reaction_dir, current_state)
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     entries = [
         (old_queue_root, old_cancelled),
@@ -891,7 +889,7 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
     owner_b = (str(root_b.resolve()), failed_b.queue_id)
     reaction_key = str(reaction_dir.resolve())
     entries = [(root_a, active_a), (root_b, failed_b)]
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     replay_mod.get_replay_state(worker).generation_owners = {reaction_key: owner_b}
     replay_mod.get_replay_state(worker).generation_owner_active = {reaction_key: True}
@@ -947,7 +945,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
         task_id="task-new",
         enqueued_at="",
     )
-    state = new_state(reaction_dir, reaction_dir / "new.inp", max_retries=0)
+    state = new_state(reaction_dir, reaction_dir / "new.inp")
     state["job_id"] = new_cancelled.task_id
     save_state(reaction_dir, state)
     report_json_path(reaction_dir).write_text(
@@ -963,7 +961,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
         encoding="utf-8",
     )
     entries = [(old_root, old_cancelled), (new_root, new_cancelled)]
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
@@ -1035,7 +1033,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
         enqueued_at="",
     )
     entries = [(root_a, cancelled_a), (root_b, cancelled_b)]
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
@@ -1067,7 +1065,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
         record_cancelled.assert_not_called()
         assert all(status == STATUS_RUNNING for status in _reconcile_statuses(worker).values())
 
-        state = new_state(reaction_dir, reaction_dir / "b.inp", max_retries=0)
+        state = new_state(reaction_dir, reaction_dir / "b.inp")
         state["job_id"] = cancelled_b.task_id
         save_state(reaction_dir, state)
         replay_mod.reconcile_worker_state(worker)
@@ -1084,7 +1082,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
     entries = [(tmp_path, entry)]
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
@@ -1143,7 +1141,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
     entries = [(tmp_path, entry)]
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
@@ -1209,7 +1207,7 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
     reaction_dir.mkdir()
     running = _terminal_replay_entry(tmp_path, QueueStatus.RUNNING)
     cancelled = replace(running, status=QueueStatus.CANCELLED)
-    stale = new_state(reaction_dir, reaction_dir / "old.inp", max_retries=0)
+    stale = new_state(reaction_dir, reaction_dir / "old.inp")
     stale["job_id"] = "task-old"
     finalize_state(
         reaction_dir,
@@ -1217,7 +1215,7 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
         status=STATUS_COMPLETED,
         final_result={"status": STATUS_COMPLETED, "reason": "old-generation"},
     )
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -1270,10 +1268,10 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
     reaction_dir.mkdir()
     running = _terminal_replay_entry(tmp_path, QueueStatus.RUNNING)
     cancelled = replace(running, status=QueueStatus.CANCELLED)
-    current = new_state(reaction_dir, reaction_dir / "current.inp", max_retries=0)
+    current = new_state(reaction_dir, reaction_dir / "current.inp")
     current["job_id"] = cancelled.task_id
     save_state(reaction_dir, current)
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -1294,7 +1292,7 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
         assert len(pending) == 1
         assert next(iter(pending.values())).state_prepared
 
-        newer = new_state(reaction_dir, reaction_dir / "newer.inp", max_retries=0)
+        newer = new_state(reaction_dir, reaction_dir / "newer.inp")
         newer["job_id"] = "task-newer"
         newer["status"] = STATUS_RUNNING
         save_state(reaction_dir, newer)
@@ -1317,7 +1315,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
 ) -> None:
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
-    state_a = new_state(reaction_dir, reaction_dir / "a.inp", max_retries=0)
+    state_a = new_state(reaction_dir, reaction_dir / "a.inp")
     state_a["job_id"] = "task-a"
     finalize_state(
         reaction_dir,
@@ -1340,7 +1338,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
             "orca_terminal_replay": marker,
         },
     )
-    state_b = new_state(reaction_dir, reaction_dir / "b.inp", max_retries=0)
+    state_b = new_state(reaction_dir, reaction_dir / "b.inp")
     state_b["job_id"] = "task-b"
     finalize_state(
         reaction_dir,
@@ -1348,7 +1346,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
         status=STATUS_COMPLETED,
         final_result={"status": STATUS_COMPLETED, "reason": "normal_termination"},
     )
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
 
     with (
@@ -1390,7 +1388,7 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
     )
     old_entries = [(old_root, old_cancelled)]
     new_entries = [(new_root, new_running)]
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     replay_mod.get_replay_state(worker).reconcile_statuses = {
         (str(old_root.resolve()), old_cancelled.queue_id): STATUS_RUNNING
@@ -1458,7 +1456,7 @@ def test_record_cancelled_run_state_synthesizes_missing_terminal_state(tmp_path:
 
 
 def test_record_cancelled_run_state_normalizes_nonterminal_final_result(tmp_path: Path) -> None:
-    state = new_state(tmp_path, tmp_path / "job.inp", max_retries=2)
+    state = new_state(tmp_path, tmp_path / "job.inp")
     state["job_id"] = "task-cancelled"
     state["final_result"] = {"status": STATUS_RUNNING, "reason": "malformed"}
     save_state(tmp_path, state)
@@ -1481,7 +1479,7 @@ def test_record_cancelled_run_state_normalizes_nonterminal_final_result(tmp_path
 
 
 def test_record_failed_run_state_normalizes_nonterminal_final_result(tmp_path: Path) -> None:
-    state = new_state(tmp_path, tmp_path / "job.inp", max_retries=2)
+    state = new_state(tmp_path, tmp_path / "job.inp")
     state["job_id"] = "task-failed"
     state["final_result"] = {"status": STATUS_RUNNING, "reason": "malformed"}
     save_state(tmp_path, state)
@@ -1507,7 +1505,7 @@ def test_record_failed_run_state_normalizes_nonterminal_final_result(tmp_path: P
 def test_terminal_state_helpers_fail_closed_on_active_generation_mismatch(
     tmp_path: Path,
 ) -> None:
-    state = new_state(tmp_path, tmp_path / "task-b.inp", max_retries=2)
+    state = new_state(tmp_path, tmp_path / "task-b.inp")
     state["job_id"] = "task-b"
     state["status"] = STATUS_RUNNING
     save_state(tmp_path, state)
@@ -1534,7 +1532,7 @@ def test_terminal_state_helpers_fail_closed_on_active_generation_mismatch(
 def test_terminal_state_helper_cannot_write_while_current_run_lock_is_held(
     tmp_path: Path,
 ) -> None:
-    state = new_state(tmp_path, tmp_path / "task-a.inp", max_retries=2)
+    state = new_state(tmp_path, tmp_path / "task-a.inp")
     state["job_id"] = "task-a"
     state["status"] = STATUS_RUNNING
     save_state(tmp_path, state)
@@ -1553,7 +1551,7 @@ def test_terminal_state_helper_cannot_write_while_current_run_lock_is_held(
 
 
 def test_terminal_state_cas_rejects_changed_terminal_fingerprint(tmp_path: Path) -> None:
-    state_a = new_state(tmp_path, tmp_path / "a.inp", max_retries=0)
+    state_a = new_state(tmp_path, tmp_path / "a.inp")
     state_a["job_id"] = "task-a"
     finalize_state(
         tmp_path,
@@ -1563,7 +1561,7 @@ def test_terminal_state_cas_rejects_changed_terminal_fingerprint(tmp_path: Path)
     )
     observed = replay_mod.load_state_generation_fingerprint(tmp_path)
 
-    state_b = new_state(tmp_path, tmp_path / "b.inp", max_retries=0)
+    state_b = new_state(tmp_path, tmp_path / "b.inp")
     state_b["job_id"] = "task-b"
     finalize_state(
         tmp_path,
@@ -1641,12 +1639,12 @@ def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
 
 
 def test_terminal_state_cas_rejects_same_task_new_run_id(tmp_path: Path) -> None:
-    first = new_state(tmp_path, tmp_path / "same.inp", max_retries=0)
+    first = new_state(tmp_path, tmp_path / "same.inp")
     first["job_id"] = "task-same"
     save_state(tmp_path, first)
     observed = replay_mod.load_state_generation_fingerprint(tmp_path)
 
-    second = new_state(tmp_path, tmp_path / "same.inp", max_retries=0)
+    second = new_state(tmp_path, tmp_path / "same.inp")
     second["job_id"] = "task-same"
     save_state(tmp_path, second)
     before = state_path(tmp_path).read_bytes()
@@ -1681,7 +1679,7 @@ def test_terminal_state_cas_rejects_same_task_new_run_id(tmp_path: Path) -> None
 def test_terminal_state_cas_rejects_expected_task_run_after_different_observation(
     tmp_path: Path,
 ) -> None:
-    previous = new_state(tmp_path, tmp_path / "previous.inp", max_retries=0)
+    previous = new_state(tmp_path, tmp_path / "previous.inp")
     previous["job_id"] = "task-a"
     finalize_state(
         tmp_path,
@@ -1691,7 +1689,7 @@ def test_terminal_state_cas_rejects_expected_task_run_after_different_observatio
     )
     observed = replay_mod.load_state_generation_fingerprint(tmp_path)
 
-    current = new_state(tmp_path, tmp_path / "current.inp", max_retries=0)
+    current = new_state(tmp_path, tmp_path / "current.inp")
     current["job_id"] = "task-b"
     current["status"] = STATUS_RUNNING
     save_state(tmp_path, current)
@@ -1741,7 +1739,7 @@ def test_terminal_upsert_filters_previous_generation_report(tmp_path: Path) -> N
         ),
         encoding="utf-8",
     )
-    cfg = AppConfig(runtime=RetryRuntimeConfig(allowed_root=str(tmp_path)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
 
     with patch.object(worker_tracking_mod, "upsert_job_record") as upsert:
         assert worker_tracking_mod.upsert_terminal_job_record(
@@ -1758,7 +1756,7 @@ def test_record_cancelled_run_state_writes_terminal_cancelled(tmp_path: Path) ->
     # A cancelled run is stopped by a signal and never writes its own terminal
     # result, so the worker records a cancelled outcome on its behalf. Without it
     # the run state lingers as "running" (job never leaves the list, no notify).
-    state = new_state(tmp_path, tmp_path / "job.inp", max_retries=3)
+    state = new_state(tmp_path, tmp_path / "job.inp")
     state["status"] = "running"
     save_state(tmp_path, state)
 
@@ -1776,7 +1774,7 @@ def test_record_cancelled_run_state_writes_terminal_cancelled(tmp_path: Path) ->
 
 def test_record_cancelled_run_state_keeps_existing_terminal_result(tmp_path: Path) -> None:
     # If a real terminal outcome landed just before cancellation, don't clobber it.
-    state = new_state(tmp_path, tmp_path / "job.inp", max_retries=3)
+    state = new_state(tmp_path, tmp_path / "job.inp")
     finalize_state(
         tmp_path,
         state,
@@ -1800,3 +1798,73 @@ def test_record_cancelled_run_state_keeps_existing_terminal_result(tmp_path: Pat
     assert written is not None
     assert written["final_result"] is not None
     assert written["final_result"]["status"] == "completed"
+
+
+@pytest.mark.parametrize("budget", [0, 3])
+@pytest.mark.parametrize("terminal", [True, False])
+def test_retired_generation_is_frozen_across_terminal_replay_and_notification(
+    tmp_path: Path,
+    budget: int,
+    terminal: bool,
+) -> None:
+    from orca_auto.orca.attempt.reporting import mark_finished_notification_sent
+    from orca_auto.orca.state import write_report_files
+    from orca_auto.orca.state_reading import load_report_json_with_output_receipt
+    from tests.engine_artifact_helpers import bind_report_generation
+
+    selected = tmp_path / "job.inp"
+    selected.write_text("! HF\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
+    state = new_state(tmp_path, selected)
+    state["job_id"] = "retired-job"
+    generation = bind_report_generation(tmp_path, cast(dict[str, Any], state))
+    if terminal:
+        finalize_state(
+            tmp_path,
+            state,
+            status="failed",
+            final_result={
+                "status": "failed",
+                "analyzer_status": "incomplete",
+                "reason": "scants_recipes_exhausted",
+                "last_out_path": None,
+            },
+        )
+        write_report_files(tmp_path, state)
+    else:
+        state["status"] = "retrying"
+        save_state(tmp_path, state)
+    for state_file in (state_path(tmp_path), state_path(generation)):
+        payload = json.loads(state_file.read_text())
+        payload["engine_payload"]["max_retries"] = budget
+        state_file.write_text(json.dumps(payload))
+    machine_path = report_json_path(generation)
+    if terminal:
+        observation = json.loads(machine_path.read_text())
+        observation["payload"]["data"]["results"]["max_retries"] = budget
+        machine_path.write_text(json.dumps(observation))
+        assert load_report_json_with_output_receipt(generation) is not None
+    frozen = {path: path.read_bytes() for path in generation.iterdir() if path.is_file()}
+
+    for _ in range(2):
+        _record_failed_run_state(
+            tmp_path, reason="unsupported_snapshot", fallback_job_id="retired-job"
+        )
+        current = load_state(tmp_path)
+        assert current is not None
+        assert current["status"] == "failed"
+        mark_finished_notification_sent(tmp_path, current, sent_at="2026-09-05T00:00:00+00:00")
+        assert {path: path.read_bytes() for path in frozen} == frozen
+        assert "max_retries" not in json.loads(state_path(tmp_path).read_text())["engine_payload"]
+        notified = load_state(tmp_path)
+        assert notified is not None
+        final_result = notified["final_result"]
+        assert final_result is not None
+        assert final_result["finished_notification_sent_at"]
+
+    if terminal:
+        assert load_report_json_with_output_receipt(generation) is not None
+        observation["payload"]["data"]["results"]["max_retries"] = budget + 1
+        machine_path.write_text(json.dumps(observation))
+        assert load_report_json_with_output_receipt(generation) is None
+    else:
+        assert not machine_path.exists()

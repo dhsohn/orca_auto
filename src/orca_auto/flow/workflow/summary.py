@@ -94,7 +94,6 @@ def _workflow_stage_summary(stage: dict[str, Any]) -> dict[str, Any]:
         "xtb_handoff_retries_used": stage_metadata.get("xtb_handoff_retries_used"),
         "xtb_handoff_retry_limit": stage_metadata.get("xtb_handoff_retry_limit"),
         "orca_attempt_count": stage_metadata.get("attempt_count"),
-        "orca_max_retries": stage_metadata.get("max_retries"),
         "completed_at": _normalize_text(stage_metadata.get("completed_at")),
         "output_artifact_count": len(_coerce_sequence(stage.get("output_artifacts"))),
         "last_out_path": _normalize_text(task_payload.get("last_out_path")),

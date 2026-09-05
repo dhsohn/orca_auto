@@ -214,17 +214,14 @@ def test_attempt_helpers_prefer_report_values_and_coerce_attempt_rows() -> None:
             },
             "skip",
         ],
-        "max_retries": 5,
     }
     report = {
         "attempt_count": "3",
-        "max_retries": "7",
     }
 
     attempts = _canonical_orca_status.coerce_attempts(state, report)
 
     assert _canonical_orca_status.attempt_count(state, report) == 3
-    assert _canonical_orca_status.max_retries(state, report) == 7
     assert attempts == (
         {
             "index": 2,

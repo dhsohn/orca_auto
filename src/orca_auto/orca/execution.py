@@ -24,13 +24,11 @@ from .attempt.engine import _exit_with_result, run_attempts
 from .completion_rules import detect_completion_mode
 from .config import load_config
 from .notifications import (
-    notify_retry_event,
     notify_run_finished_event,
     notify_run_started_event,
 )
 from .orca_runner import OrcaRunner
 from .out_analyzer import analyze_output
-from .retry_policy import retry_input_path
 from .run_context import RunExecutionContext, resolve_execution_context
 from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy
@@ -39,10 +37,9 @@ from .state_machine import RESUMABLE_RUN_STATUSES, load_or_create_state
 from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
 
-RETRY_INP_RE = re.compile(r"\.retry\d+$", re.IGNORECASE)
 ORCA_GENERATED_INP_RE = re.compile(
     r"\.(scfgrad|scfhess|cis|autoci|cipsi|mrci|mdci|eprnmr|loc|nbo|compound|hess)"
-    r"(\.retry\d+)?$",
+    r"$",
     re.IGNORECASE,
 )
 
@@ -54,12 +51,8 @@ def select_latest_inp(reaction_dir: Path) -> Path:
     all_candidates = list(reaction_dir.glob("*.inp"))
     if not all_candidates:
         raise ValueError(f"No .inp file found in: {reaction_dir}")
-    # Prefer user-authored base inputs over generated retry/intermediate files.
-    candidates = [
-        p
-        for p in all_candidates
-        if not RETRY_INP_RE.search(p.stem) and not ORCA_GENERATED_INP_RE.search(p.stem)
-    ]
+    # Prefer user-authored base inputs over generated intermediate files.
+    candidates = [p for p in all_candidates if not ORCA_GENERATED_INP_RE.search(p.stem)]
     if not candidates:
         candidates = all_candidates
     candidates = [
@@ -78,10 +71,6 @@ def select_latest_inp(reaction_dir: Path) -> Path:
             candidates[0].name,
         )
     return candidates[0]
-
-
-def retry_inp_path(selected_inp: Path, retry_number: int) -> Path:
-    return retry_input_path(selected_inp, retry_number)
 
 
 def _to_resolved_local(path_text: str) -> Path:
@@ -181,12 +170,9 @@ def _admission_context(
 
 
 def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:
-    base_stem = RETRY_INP_RE.sub("", selected_inp.stem)
-    if not base_stem:
-        base_stem = selected_inp.stem
+    base_stem = selected_inp.stem
 
     out_candidates = list(selected_inp.parent.glob(f"{base_stem}.out"))
-    out_candidates.extend(selected_inp.parent.glob(f"{base_stem}.retry*.out"))
     out_candidates.sort(key=lambda p: (p.stat().st_mtime_ns, p.name.lower()), reverse=True)
 
     seen: set[Path] = set()
@@ -261,10 +247,10 @@ def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> st
     )
 
 
-def notification_callbacks(cfg: Any) -> tuple[Any, Any, Any]:
+def notification_callbacks(cfg: Any) -> tuple[Any, Any]:
     channel = build_channel(cfg.messenger, logger=logging.getLogger(__name__))
     if not channel.enabled:
-        return None, None, None
+        return None, None
 
     def notify_started(event: Any) -> bool:
         return notify_run_started_event(channel, event)
@@ -272,10 +258,7 @@ def notification_callbacks(cfg: Any) -> tuple[Any, Any, Any]:
     def notify_finished(event: Any) -> bool:
         return notify_run_finished_event(channel, event)
 
-    def notify_retry(event: Any) -> bool:
-        return notify_retry_event(channel, event)
-
-    return notify_started, notify_finished, notify_retry
+    return notify_started, notify_finished
 
 
 def run_with_state(
@@ -284,13 +267,12 @@ def run_with_state(
     reaction_dir: Path,
     selected_inp: Path,
     runner_cls: type[Any],
-    max_retries: int,
     resumed: bool,
     state: Any,
     admission_root: Path | None = None,
     reservation_token: str | None = None,
 ) -> int:
-    notify_started, notify_finished, notify_retry = notification_callbacks(cfg)
+    notify_started, notify_finished = notification_callbacks(cfg)
     runner = runner_cls(cfg.paths.orca_executable)
     if cfg.scratch.enabled:
         set_scratch_policy = getattr(runner, "set_scratch_policy", None)
@@ -317,22 +299,15 @@ def run_with_state(
                 reservation_token,
             ),
         )
-    # Carry the per-task memory budget into the run so retry rewrites can cap
-    # escalated %maxcore (see inp_rewriter.rewrite_for_retry).
-    state["max_memory_gb_per_task"] = int(cfg.resources.max_memory_gb_per_task)
     return run_attempts(
         reaction_dir,
         selected_inp,
         state,
         resumed=resumed,
         runner=runner,
-        max_retries=max_retries,
-        retry_inp_path=retry_inp_path,
-        to_resolved_local=_to_resolved_local,
         emit=_emit,
         notify_started=notify_started,
         notify_finished=notify_finished,
-        notify_retry=notify_retry,
     )
 
 
@@ -342,7 +317,6 @@ def existing_completed_exit(
     selected_inp: Path,
     admission_root: Path,
     reservation_token: str | None,
-    max_retries: int,
     admission_task_id: str | None,
     execution_provenance: Mapping[str, Any] | None = None,
     queue_id: str | None = None,
@@ -356,7 +330,6 @@ def existing_completed_exit(
     state, resumed = load_or_create_state(
         reaction_dir,
         selected_inp,
-        max_retries=max_retries,
         to_resolved_local=_to_resolved_local,
     )
     state_changed = False
@@ -420,7 +393,6 @@ def execute_locked_run(
                     "selected_inp": context.selected_inp,
                     "admission_root": context.admission_root,
                     "reservation_token": context.reservation_token,
-                    "max_retries": context.max_retries,
                     "admission_task_id": context.admission_task_id,
                 }
                 if context_provenance:
@@ -438,7 +410,6 @@ def execute_locked_run(
             state, resumed = load_or_create_state(
                 context.reaction_dir,
                 context.selected_inp,
-                max_retries=context.max_retries,
                 to_resolved_local=_to_resolved_local,
             )
             state_changed = False
@@ -464,7 +435,6 @@ def execute_locked_run(
                 reaction_dir=context.reaction_dir,
                 selected_inp=context.selected_inp,
                 runner_cls=runner_cls,
-                max_retries=context.max_retries,
                 resumed=resumed,
                 state=state,
                 admission_root=context.admission_root,

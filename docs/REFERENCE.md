@@ -7,7 +7,7 @@ uses the shared internal-engine queue lifecycle for worker admission, child
 entry execution, terminal side effects, and orphan recovery while preserving
 its public ORCA queue contract. General xTB and CREST run as internal workflow-stage engines. This reference standardizes the shared public CLI and keeps the deeper
 ORCA runtime behavior documented in one place, since ORCA still has the richest
-retry, reporting, and monitoring surface.
+reporting and monitoring surface.
 
 Current developer-facing package rule:
 
@@ -25,8 +25,8 @@ surfaces that are treated as public contracts, see
 - Select and bind the most recently modified `*.inp` at submission
 - Submit work durably through the queue
 - Let a supervised worker execute queued jobs
-- Retry conservatively on recognized failures without overwriting the original input
-- Use matching non-empty ORCA `.gbw` files for retry/resume restart inputs when available
+- Record calculation failures without rerunning or overwriting the original input
+- Use matching non-empty ORCA `.gbw` files for interrupted-run recovery inputs when available
 - Record execution status and results alongside the calculation
 
 ## 2) Runtime Model
@@ -47,7 +47,7 @@ Current intended semantics:
   (`--queue-root/--queue-id`), then the child resolves the current queue entry
   and runs through the shared `core.queue.engine.worker_execution.EngineWorkerExecutionSpec`
   lifecycle
-- ORCA state, retry, report, and notification behavior remain ORCA-domain
+- ORCA state, report, and notification behavior remain ORCA-domain
   behavior; parent queue finalization still records the terminal queue result
   after the child exits
 - On WSL, the recommended supervisor is `systemd`
@@ -148,7 +148,6 @@ messenger:
 
 orca:
   runtime:
-    default_max_retries: 2
     scratch_root: "/dev/shm/orca_auto"
     scratch_min_free_gb: 8
   paths:
@@ -159,8 +158,6 @@ Field descriptions:
 
 - `runs_root`: The single runs root shared by standalone ORCA jobs and workflow
   workspaces; completed runs stay here under their submitted directory names
-- `orca.runtime.default_max_retries`: `0` disables ORCA retries; positive values
-  enable the calculation-type retry policy
 - `orca.runtime.scratch_root`: optional shared dedicated directory below
   `/dev/shm` for private per-attempt ORCA and workflow
   xTB/CREST working directories
@@ -260,7 +257,7 @@ ORCA-specific notes:
   flags do not override standalone ORCA input directives. Resource readers use
   the largest active value before normalization so a later duplicate cannot
   hide a larger request.
-- Retry inputs and resumed worker-shutdown inputs add `MORead` plus `%moinp`
+- Resumed worker-shutdown inputs add `MORead` plus `%moinp`
   when the source input has a matching non-empty `.gbw` checkpoint whose
   leading bytes are not all zero (a checkpoint torn by a crash reads back as
   zeros and is skipped, as it is for crash recovery). Top-level
@@ -514,7 +511,7 @@ There is no public direct-execution mode for new work. `run-dir` is the durable 
   the engine trust and isolation boundary (captured environment, qualified
   distributions, same-UID processes) is specified in the
   [Runtime Contract](PUBLIC_CONTRACTS.md#runtime-contract).
-- Snapshot and generation trees are retained for queue replay, retry,
+- Snapshot and generation trees are retained for queue replay, recovery,
   reconciliation, and audit. There is no standalone snapshot-GC command. Never
   edit or delete a generation used by a pending, running, retrying,
   cancel-pending, or repairable terminal row. Reclaim it only with an
@@ -727,35 +724,17 @@ Representative statuses are the ORCA analyzer statuses listed in the
 (for example, `error_geometry` covers an ORCA zero-distance geometry
 collapse).
 
-Retry policy:
+Execution policy:
 
-- `Opt`, `Opt+Freq`, `Freq`, and single-point routes: no automatic retry. Failed
-  `*.xyz`/`.gbw` artifacts are not treated as useful generic restart evidence.
-- Standalone `OptTS`/`NEB-TS`: no automatic retry. Hessian hardening remains an
-  explicit input choice rather than an automatic fallback.
-- `ScanTS`: retries fire ONLY on calculation failures, from scan artifacts.
-  A mid-scan crash (no surface table yet) continues the scan from the last
-  numbered point; a zero-distance abort in ORCA's TS-guess refinement (after
-  the scan bracketed a maximum) gets one OptTS retry directly from the highest
-  surface point (`ScanTS` -> `OptTS`, scan block removed), bypassing the
-  refinement. Any failure after a finished scan — including `ts_not_found` —
-  ends the run with `scants_recipes_exhausted`: endpoint-extension and
-  reverse-scan exploration belongs to the `scan_ts_search` workflow, which is
-  the recommended TS-search path. Generic SCF/geometry hardening is not
-  applied.
-
-Geometry restart rules:
-
-- Generic geometry/checkpoint restart is not part of normal non-ScanTS retry.
-- ScanTS may use numbered scan `*.NNN.xyz` artifacts for continuation retries.
-- Fail closed instead of repeating the original geometry unchanged if no
-  route-specific rewrite is available.
-
-Principles:
-
-- Original charge and multiplicity are never changed automatically
-- Original `.inp` is preserved
-- Retry inputs are generated as `<name>.retryNN.inp`
+- Every ORCA calculation runs once. Failure preserves the analyzer reason.
+- Direct `ScanTS` is unsupported and rejected before generation/queue publication.
+- Plain relaxed scans and the `scan_ts_search` workflow remain supported.
+- Original charge, multiplicity, and input files are never changed automatically.
+- Interrupted worker/host recovery may create a verified `*.resume.inp` checkpoint input.
+- Remove `orca.runtime.default_max_retries` from configuration before upgrading;
+  even zero is rejected. Older execution snapshots are not run or converted.
+- Existing generations remain read-only history; terminal replay/notification
+  bookkeeping for them is written only at the root, in the current format.
 
 Worker restarts and crash recovery (documented limitation):
 
@@ -779,13 +758,13 @@ that run's state and reports:
 
 - `job_state.json` (internal state and recovery)
 - `machine.json` (the only public machine metadata)
-- `job_report.html` (Opt, OptTS, NEB-TS, ScanTS, IRC, and relaxed-scan jobs):
+- `job_report.html` (Opt, OptTS, NEB-TS, IRC, and relaxed-scan jobs):
   self-contained visual report assembled from common page chrome plus
   calculation components. Depending on the parsed route/output it may include
-  the scan energy profile (ScanTS and plain relaxed scans, i.e. `Opt` routes
+  the scan energy profile (plain relaxed scans, i.e. `Opt` routes
   with a `%geom Scan` block), CI-NEB path profile plus TS refinement trace
   (NEB-TS), IRC path profile with combined OptTS/Freq sections when present, or
-  optimization convergence trace (Opt/OptTS), the retry-recipe chain, and a
+  optimization convergence trace (Opt/OptTS), the attempt history, and a
   vibrational summary (imaginary modes, dominant atom displacements, and — for
   scans — alignment with the scanned coordinate)
 - `si_block.md`: for completed jobs ending on a stationary point (single points
@@ -916,7 +895,6 @@ least these fields:
 - `run_state_path`
 - `report_json_path`
 - `attempt_count`
-- `max_retries`
 - `attempts`
 - `final_result`
 - `resource_request`

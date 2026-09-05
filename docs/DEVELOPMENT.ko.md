@@ -247,7 +247,7 @@ xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩니다. �
 `core.queue.engine`의 어드미션, 자식, 라이프사이클, 워커 실행, 훅 계약을 직접
 사용하세요. 이전 범용 internal-engine facade는 제거했습니다. workflow-root 탐색,
 publication fencing, live child-PID reconciliation은 명시적인 xTB 정책으로 유지하세요.
-재시도, crash-generation 복구, publication, terminal replay, 상태/리포트 정책은
+crash-generation 복구, publication, terminal replay, 상태/리포트 정책은
 `orca_auto.orca` 내부에 유지합니다. canonical 런타임이 이미 소유한 연산을 전달만 하는
 모듈은 새로 만들지 마세요.
 
@@ -256,7 +256,7 @@ repair는 `queue.publication_repair`, 취소는 `queue.cancellation`, terminal
 reconciliation/replay는 `queue.replay`, 작업 인덱스/알림 추적은
 `queue.worker_tracking`이 소유합니다.
 
-ORCA 고유의 상태, 재시도, 입력 선택, 리포트, 자동 정리 동작, 그리고 다운스트림
+ORCA 고유의 상태, 입력 선택, 리포트, 자동 정리 동작, 그리고 다운스트림
 `reaction_dir` 계약은 `orca_auto.orca`에 남아 있습니다. 직접 ORCA 워커-작업
 `--reaction-dir` 모드는 지원되지 않습니다.
 

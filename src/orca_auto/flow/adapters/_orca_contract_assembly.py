@@ -115,7 +115,6 @@ def _contract_from_payload(
         run_state_path=payload.get("run_state_path", ""),
         report_json_path=payload.get("report_json_path", ""),
         attempt_count=payload.get("attempt_count", 0),
-        max_retries=payload.get("max_retries", 0),
         attempts=payload.get("attempts", ()),
         final_result=payload.get("final_result", {}),
         resource_request=payload.get("resource_request", {}),

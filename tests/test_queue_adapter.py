@@ -420,7 +420,7 @@ class TestQueueStore(unittest.TestCase):
     def test_reconcile_orphaned_force_entry_ignores_previous_generation_state(self) -> None:
         reaction_dir = self.root / "mol_force_state"
         reaction_dir.mkdir()
-        previous = new_state(reaction_dir, reaction_dir / "job.inp", max_retries=0)
+        previous = new_state(reaction_dir, reaction_dir / "job.inp")
         previous["job_id"] = "task-a"
         finalize_state(
             reaction_dir,
@@ -451,7 +451,7 @@ class TestQueueStore(unittest.TestCase):
     def test_reconcile_orphaned_force_same_task_requires_run_identity(self) -> None:
         reaction_dir = self.root / "mol_force_same_task"
         reaction_dir.mkdir()
-        previous = new_state(reaction_dir, reaction_dir / "old.inp", max_retries=0)
+        previous = new_state(reaction_dir, reaction_dir / "old.inp")
         previous["job_id"] = "task-same"
         previous_run_id = previous["run_id"]
         finalize_state(
@@ -495,7 +495,7 @@ class TestQueueStore(unittest.TestCase):
     def test_reconcile_orphaned_force_same_task_accepts_new_run_identity(self) -> None:
         reaction_dir = self.root / "mol_force_same_task_current"
         reaction_dir.mkdir()
-        previous = new_state(reaction_dir, reaction_dir / "old.inp", max_retries=0)
+        previous = new_state(reaction_dir, reaction_dir / "old.inp")
         previous["job_id"] = "task-same"
         finalize_state(
             reaction_dir,
@@ -525,7 +525,6 @@ class TestQueueStore(unittest.TestCase):
         current_state = new_state(
             reaction_dir,
             reaction_dir / "current.inp",
-            max_retries=0,
         )
         current_state["job_id"] = "task-same"
         finalize_state(

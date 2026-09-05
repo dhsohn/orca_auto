@@ -291,8 +291,8 @@ def test_shared_engine_loaders_reject_unknown_config_fields(
 
 
 @pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
-@pytest.mark.parametrize("invalid", [None, "", "bad", -1, True, 1.5])
-def test_shared_engine_loaders_reject_invalid_explicit_orca_retry_limit(
+@pytest.mark.parametrize("invalid", [None, "", "bad", -1, True, 1.5, 0, 1, 3])
+def test_shared_engine_loaders_reject_removed_orca_retry_setting(
     tmp_path: Path,
     loader_name: str,
     loader: Loader,
@@ -306,7 +306,7 @@ def test_shared_engine_loaders_reject_invalid_explicit_orca_retry_limit(
 
     with pytest.raises(
         ValueError,
-        match="orca.runtime.default_max_retries must be an integer >= 0",
+        match="Unknown orca.runtime config fields",
     ):
         loader(str(config_path))
 

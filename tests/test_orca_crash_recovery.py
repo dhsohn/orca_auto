@@ -61,7 +61,6 @@ def _build(
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=0,
         orca_executable=executable,
         **kwargs,
     )
@@ -75,7 +74,6 @@ def _verify(job_dir: Path, snapshot: dict[str, Any], **kwargs: Any) -> None:
         expected_source_selected_inp=snapshot["source_selected_inp"],
         expected_selected_input_xyz="",
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-        expected_max_retries=0,
         **kwargs,
     )
 
@@ -405,7 +403,6 @@ def test_recovery_build_orders_roles_by_stored_source_paths(tmp_path: Path) -> N
         expected_source_selected_inp=replacement["source_selected_inp"],
         expected_selected_input_xyz="",
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-        expected_max_retries=0,
     )
 
 
@@ -489,7 +486,6 @@ def test_recovery_checkpoint_skipped_when_source_already_moreads(tmp_path: Path)
         expected_source_selected_inp=replacement["source_selected_inp"],
         expected_selected_input_xyz="",
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-        expected_max_retries=0,
     )
 
 
@@ -636,7 +632,6 @@ def test_recovery_checkpoint_with_freq_and_hessian_dependency(tmp_path: Path) ->
         expected_source_selected_inp=replacement["source_selected_inp"],
         expected_selected_input_xyz="",
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-        expected_max_retries=0,
     )
 
 
@@ -667,7 +662,6 @@ def test_verify_rejects_checkpoint_rename_contract_violation(tmp_path: Path) -> 
             expected_source_selected_inp=tampered["source_selected_inp"],
             expected_selected_input_xyz="",
             expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-            expected_max_retries=0,
         )
 
 
@@ -779,7 +773,6 @@ def _claimed_mutable_entry(tmp_path: Path) -> tuple[Path, Any, dict[str, Any], P
         "selected_inp": snapshot["selected_inp"],
         "selected_input_xyz": "",
         "resource_request": {"max_cores": 1, "max_memory_gb": 1},
-        "max_retries": 0,
         "execution_snapshot": snapshot,
     }
     enqueue(queue_root, str(job_dir), force=True, task_id="task-recovery", metadata=metadata)
@@ -1226,23 +1219,23 @@ def test_recovering_finder_records_a_rejection_raised_after_the_claim_reservatio
     cfg = _worker_cfg(queue_root, executable)
     from orca_auto.orca.queue.adapter import update_metadata
 
-    # The retry budget is validated only after the durable claim was reserved,
+    # The source path is validated only after the durable claim was reserved,
     # so the row the finder was handed is already stale when the rejection fires.
     assert update_metadata(
         queue_root,
         str(running.queue_id),
-        {"max_retries": -1},
+        {"source_selected_inp": ""},
         expected_entry=running,
     )
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
 
-    with pytest.raises(ValueError, match="invalid retry budget"):
+    with pytest.raises(ValueError, match="submission source input path"):
         find(queue_root, str(running.queue_id))
 
     (row,) = list_queue(queue_root)
     assert row.status is QueueStatus.FAILED
-    assert "invalid retry budget" in row.error
+    assert "submission source input path" in row.error
     assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
     assert isinstance(row.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY], dict)
     assert row.metadata["execution_snapshot"] == snapshot
@@ -1766,7 +1759,6 @@ def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> Non
         "selected_inp": snapshot["selected_inp"],
         "selected_input_xyz": "",
         "resource_request": {"max_cores": 1, "max_memory_gb": 1},
-        "max_retries": 0,
         "execution_snapshot": snapshot,
     }
     enqueue(queue_root, str(job_dir), force=True, task_id="task-completed", metadata=metadata)
@@ -1806,34 +1798,32 @@ def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> Non
 def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> None:
     import os
 
-    job_dir = tmp_path / "scants_job"
+    job_dir = tmp_path / "checkpoint_job"
     job_dir.mkdir()
     (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
     selected = job_dir / "ts.inp"
-    selected.write_text("! HF STO-3G ScanTS\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
-    executable = _write_executable(tmp_path / "scants-orca")
+    selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
+    executable = _write_executable(tmp_path / "checkpoint-orca")
     crashed = build_orca_execution_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=3,
         orca_executable=executable,
     )
     generation = Path(crashed["execution_dir"])
     (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
     (generation / "ts.gbw").write_bytes(b"attempt-base")
-    (generation / "ts.retry01.gbw").write_bytes(b"attempt-retry01")
+    (generation / "ts.resume.gbw").write_bytes(b"attempt-resume")
     base_ns = 1_700_000_000_000_000_000
     os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
-    os.utime(generation / "ts.retry01.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
+    os.utime(generation / "ts.resume.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
 
     replacement = build_orca_execution_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=3,
         orca_executable=executable,
         recovery_from=crashed,
     )
@@ -1843,9 +1833,9 @@ def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> N
     materialized = replacement["materialized_inputs"][checkpoint_role]
     private = Path(str(materialized["path"]))
     assert private.name == "ts.moinp.gbw"
-    assert private.read_bytes() == b"attempt-retry01"
+    assert private.read_bytes() == b"attempt-resume"
     assert replacement["source_inputs"][checkpoint_role]["source_path"] == str(
-        generation / "ts.retry01.gbw"
+        generation / "ts.resume.gbw"
     )
     verify_orca_execution_snapshot(
         job_dir,
@@ -1854,7 +1844,6 @@ def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> N
         expected_source_selected_inp=replacement["source_selected_inp"],
         expected_selected_input_xyz="",
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-        expected_max_retries=3,
     )
 
 
@@ -1891,37 +1880,35 @@ def test_marker_finalize_is_quiet_when_worker_already_retired_the_intent(
 def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) -> None:
     import os
 
-    job_dir = tmp_path / "scants_edit_job"
+    job_dir = tmp_path / "checkpoint_edit_job"
     job_dir.mkdir()
     (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
     selected = job_dir / "ts.inp"
-    selected.write_text("! HF STO-3G ScanTS\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
-    executable = _write_executable(tmp_path / "scants-edit-orca")
+    selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
+    executable = _write_executable(tmp_path / "checkpoint-edit-orca")
     crashed = build_orca_execution_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=3,
         orca_executable=executable,
     )
     generation = Path(crashed["execution_dir"])
     (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
-    (generation / "ts.retry01.gbw").write_bytes(b"retry-orbitals")
+    (generation / "ts.resume.gbw").write_bytes(b"resume-orbitals")
     base_ns = 1_700_000_000_000_000_000
-    os.utime(generation / "ts.retry01.gbw", ns=(base_ns, base_ns))
+    os.utime(generation / "ts.resume.gbw", ns=(base_ns, base_ns))
     replacement = build_orca_execution_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=3,
         orca_executable=executable,
         recovery_from=crashed,
     )
     assert replacement["recovery"]["checkpoint_role"]
 
-    # A later benign edit of the mutable source input (route no longer ScanTS)
+    # A later benign edit of the mutable source input (resource-independent route change)
     # must not brick the intact, hash-pinned recovery snapshot at re-claim.
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
 
@@ -1932,7 +1919,6 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
         expected_source_selected_inp=replacement["source_selected_inp"],
         expected_selected_input_xyz="",
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-        expected_max_retries=3,
     )
 
 
@@ -1959,34 +1945,32 @@ def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_o
 ) -> None:
     import os
 
-    job_dir = tmp_path / "scants_job"
+    job_dir = tmp_path / "checkpoint_job"
     job_dir.mkdir()
     (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
     selected = job_dir / "ts.inp"
-    selected.write_text("! HF STO-3G ScanTS\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
-    executable = _write_executable(tmp_path / "scants-orca")
+    selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
+    executable = _write_executable(tmp_path / "checkpoint-orca")
     crashed = build_orca_execution_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=3,
         orca_executable=executable,
     )
     generation = Path(crashed["execution_dir"])
     (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
     (generation / "ts.gbw").write_bytes(b"\xff" * 16 + b"attempt-base")
-    (generation / "ts.retry01.gbw").write_bytes(b"\x00" * 4096)
+    (generation / "ts.resume.gbw").write_bytes(b"\x00" * 4096)
     base_ns = 1_700_000_000_000_000_000
     os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
-    os.utime(generation / "ts.retry01.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
+    os.utime(generation / "ts.resume.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
 
     replacement = build_orca_execution_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
         resource_request={"max_cores": 1, "max_memory_gb": 1},
-        max_retries=3,
         orca_executable=executable,
         recovery_from=crashed,
     )
@@ -2005,5 +1989,4 @@ def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_o
         expected_source_selected_inp=replacement["source_selected_inp"],
         expected_selected_input_xyz="",
         expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-        expected_max_retries=3,
     )

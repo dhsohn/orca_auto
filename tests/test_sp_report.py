@@ -84,7 +84,6 @@ def _job_dir(
         "run_id": "run_test",
         "reaction_dir": str(tmp_path),
         "selected_inp": str(inp),
-        "max_retries": 3,
         "status": status,
         "started_at": "2026-07-06T01:00:00+00:00",
         "updated_at": "2026-07-06T02:00:00+00:00",

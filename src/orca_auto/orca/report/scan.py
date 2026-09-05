@@ -1,4 +1,4 @@
-"""ScanTS job report: scan energy profile, retry chain, vibrational summary."""
+"""Relaxed-scan energy profile, attempt history, and vibrational summary."""
 
 from __future__ import annotations
 
@@ -10,13 +10,11 @@ from typing import Any
 
 from ..input_blocks import file_route_lines
 from ..parser import KCAL_PER_HARTREE
-from ..scants import (
-    SCANTS_BARRIER_NOISE_KCAL,
+from ..relaxed_scan import (
     ScanCoordinateSpec,
-    ScanTSSurfacePoint,
+    ScanSurfacePoint,
     first_scan_coordinate_spec,
-    input_uses_scants,
-    parse_scants_actual_surface,
+    parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
 )
 from .attempts import (
@@ -44,13 +42,12 @@ from .render import (
 class ScanSegment:
     attempt_index: int
     role: str
-    points: tuple[ScanTSSurfacePoint, ...]
+    points: tuple[ScanSurfacePoint, ...]
 
 
 @dataclass(frozen=True)
-class ScantsReportData:
+class ScanReportData:
     title: str
-    kind: str
     job_id: str
     status: str
     reason: str
@@ -69,33 +66,26 @@ class ScantsReportData:
     last_out_name: str
 
     def kind_label(self) -> str:
-        return "ScanTS" if self.kind == "scants" else "Relaxed scan"
+        return "Relaxed scan"
 
 
-def collect_scants_report_data(
+def collect_scan_report_data(
     reaction_dir: Path,
     state: Mapping[str, Any],
-    *,
-    kind: str = "scants",
-) -> ScantsReportData | None:
-    """Report data for ScanTS (``kind="scants"``) and plain relaxed scans.
-
-    A relaxed scan (``! Opt`` route with a ``%geom Scan`` block) prints the
-    same actual-energy surface table, so it shares the profile chart, barrier
-    prominence, and vibrational summary; only the TS-hunt wording differs.
-    """
+) -> ScanReportData | None:
+    """Collect the energy profile and vibrational summary of a relaxed scan."""
     selected_raw = str(state.get("selected_inp") or "").strip()
     if not selected_raw:
         return None
     selected_inp = Path(selected_raw)
-    if kind == "scants" and not input_uses_scants(selected_inp):
-        return None
 
     route_lines = file_route_lines(selected_inp)
     scan_spec = first_scan_coordinate_spec(selected_inp)
+    if scan_spec is None:
+        return None
     attempts = attempt_dicts(state)
 
-    initial_label = "initial ScanTS" if kind == "scants" else "initial relaxed scan"
+    initial_label = "initial relaxed scan"
     rows: list[AttemptReportRow] = []
     segments: list[ScanSegment] = []
     forward_energies: list[float] = []
@@ -105,9 +95,9 @@ def collect_scants_report_data(
         else:
             label, direction = attempt_role(attempt_actions(attempts[position - 1]))
         out_raw = str(attempt.get("out_path") or "").strip()
-        points: tuple[ScanTSSurfacePoint, ...] = ()
+        points: tuple[ScanSurfacePoint, ...] = ()
         if out_raw:
-            points = tuple(parse_scants_actual_surface(Path(out_raw)))
+            points = tuple(parse_scan_actual_surface(Path(out_raw)))
         index = int(attempt.get("index", position + 1) or (position + 1))
         rows.append(
             AttemptReportRow(
@@ -144,9 +134,8 @@ def collect_scants_report_data(
     if not last_out and attempts:
         last_out = str(attempts[-1].get("out_path") or "").strip()
 
-    return ScantsReportData(
+    return ScanReportData(
         title=reaction_dir.name or str(reaction_dir),
-        kind=kind,
         job_id=str(state.get("job_id") or ""),
         status=str(state.get("status") or ""),
         reason=str(final_payload.get("reason") or ""),
@@ -169,17 +158,12 @@ def collect_scants_report_data(
 
 
 _SEGMENT_STYLES = {
-    "initial ScanTS": ("#2f6fb2", ""),
     "initial relaxed scan": ("#2f6fb2", ""),
-    "scan continuation": ("#2f6fb2", ""),
-    "retry": ("#2f6fb2", ""),
     "resume": ("#2f6fb2", ""),
-    "endpoint completion (Opt scan)": ("#158a72", ""),
-    "reverse ScanTS": ("#d97706", "6 4"),
 }
 
 
-def _profile_chart_svg(data: ScantsReportData) -> str:
+def _profile_chart_svg(data: ScanReportData) -> str:
     all_energy = [point.energy for segment in data.segments for point in segment.points]
     if len(all_energy) < 2:
         return ""
@@ -208,11 +192,11 @@ def _profile_chart_svg(data: ScantsReportData) -> str:
     )
 
 
-def scants_report_badges(data: ScantsReportData) -> tuple[tuple[str, str], ...]:
+def scan_report_badges(data: ScanReportData) -> tuple[tuple[str, str], ...]:
     return tuple(status_badges(data.status, data.reason))
 
 
-def scants_report_meta_html(data: ScantsReportData) -> str:
+def scan_report_meta_html(data: ScanReportData) -> str:
     scan_text = ""
     if data.scan_spec is not None:
         scan_text = (
@@ -230,26 +214,17 @@ def scants_report_meta_html(data: ScantsReportData) -> str:
 
 
 def _metric_cards(
-    data: ScantsReportData,
+    data: ScanReportData,
     *,
     include_attempts: bool = True,
     include_frequency: bool = True,
 ) -> str:
-    scants = data.kind == "scants"
     cards = []
     if data.forward_barrier_kcal is not None:
-        below = data.forward_barrier_kcal < SCANTS_BARRIER_NOISE_KCAL
-        if scants:
-            barrier_note = (
-                f"below {SCANTS_BARRIER_NOISE_KCAL} noise threshold"
-                if below
-                else f"above {SCANTS_BARRIER_NOISE_KCAL} noise threshold"
-            )
-        else:
-            barrier_note = "prominence over the shallower flank"
+        barrier_note = "prominence over the shallower flank"
         cards.append(
             metric_card(
-                "Forward interior barrier" if scants else "Interior barrier",
+                "Interior barrier",
                 f"{data.forward_barrier_kcal:.2f} <small>kcal/mol</small>",
                 barrier_note,
             )
@@ -257,7 +232,7 @@ def _metric_cards(
     if data.forward_drop_kcal is not None:
         cards.append(
             metric_card(
-                "Forward profile span" if scants else "Profile span",
+                "Profile span",
                 f"{data.forward_drop_kcal:+.1f} <small>kcal/mol</small>",
                 "endpoint relative to scan start",
             )
@@ -283,8 +258,8 @@ def _metric_cards(
     return "".join(cards)
 
 
-def scants_report_component(
-    data: ScantsReportData,
+def scan_report_component(
+    data: ScanReportData,
     *,
     include_attempt_metric: bool = True,
     include_attempt_chain: bool = True,

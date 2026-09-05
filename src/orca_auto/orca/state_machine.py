@@ -4,7 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .retry_policy import retry_input_path
 from .state import new_state, save_state
 from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
@@ -34,25 +33,11 @@ def decide_attempt_outcome(
     *,
     analyzer_status: AnalyzerStatus | str,
     analyzer_reason: str,
-    retries_used: int,
-    max_retries: int,
-) -> AttemptDecision | None:
+) -> AttemptDecision:
     parsed = parse_analyzer_status(analyzer_status)
     if parsed == AnalyzerStatus.COMPLETED:
         return AttemptDecision(run_status=RunStatus.COMPLETED, reason=analyzer_reason, exit_code=0)
-    if parsed == AnalyzerStatus.ERROR_MULTIPLICITY_IMPOSSIBLE:
-        return AttemptDecision(run_status=RunStatus.FAILED, reason=analyzer_reason, exit_code=1)
-    if max_retries <= 0:
-        return AttemptDecision(
-            run_status=RunStatus.FAILED,
-            reason=analyzer_reason,
-            exit_code=1,
-        )
-    if retries_used >= max_retries:
-        return AttemptDecision(
-            run_status=RunStatus.FAILED, reason="retry_limit_reached", exit_code=1
-        )
-    return None
+    return AttemptDecision(run_status=RunStatus.FAILED, reason=analyzer_reason, exit_code=1)
 
 
 def state_matches_selected(
@@ -89,17 +74,10 @@ def is_resumable_state(state: RunState) -> bool:
     return False
 
 
-def _prepared_next_retry_input_exists(selected_inp: Path, attempt_count: int) -> bool:
-    if attempt_count < 1:
-        return False
-    return retry_input_path(selected_inp, attempt_count).exists()
-
-
 def load_or_create_state(
     reaction_dir: Path,
     selected_inp: Path,
     *,
-    max_retries: int,
     to_resolved_local: Callable[[str], Path],
 ) -> tuple[RunState, bool]:
     state = load_state(reaction_dir)
@@ -107,23 +85,14 @@ def load_or_create_state(
     if not state or not state_matches_selected(
         state, selected_inp, to_resolved_local=to_resolved_local
     ):
-        state = new_state(reaction_dir, selected_inp, max_retries=max_retries)
+        state = new_state(reaction_dir, selected_inp)
     elif is_resumable_state(state):
         resumed = True
         if state.get("final_result") is not None:
             state["final_result"] = None
     else:
-        state = new_state(reaction_dir, selected_inp, max_retries=max_retries)
+        state = new_state(reaction_dir, selected_inp)
 
-    if resumed:
-        attempts = state.get("attempts")
-        attempt_count = len(attempts) if isinstance(attempts, list) else 0
-        if attempt_count <= 1 or _prepared_next_retry_input_exists(selected_inp, attempt_count):
-            state["max_retries"] = max(0, int(state.get("max_retries", max_retries)), max_retries)
-        else:
-            state["max_retries"] = max_retries
-    else:
-        state["max_retries"] = max_retries
     if not isinstance(state.get("attempts"), list):
         state["attempts"] = []
     save_state(reaction_dir, state)

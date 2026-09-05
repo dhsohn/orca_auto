@@ -78,23 +78,19 @@ class TestGeomNotConvergedDetection(unittest.TestCase):
 
 
 class TestDecideAttemptOutcomeExpanded(unittest.TestCase):
-    def test_memory_error_is_retryable(self) -> None:
+    def test_memory_error_is_terminal(self) -> None:
         result = decide_attempt_outcome(
             analyzer_status=AnalyzerStatus.ERROR_MEMORY,
             analyzer_reason="out_of_memory",
-            retries_used=0,
-            max_retries=4,
         )
-        self.assertIsNone(result)  # None means "keep retrying"
+        self.assertEqual(result.run_status.value, "failed")
 
-    def test_geom_not_converged_is_retryable(self) -> None:
+    def test_geom_not_converged_is_terminal(self) -> None:
         result = decide_attempt_outcome(
             analyzer_status=AnalyzerStatus.GEOM_NOT_CONVERGED,
             analyzer_reason="geometry_not_converged",
-            retries_used=0,
-            max_retries=4,
         )
-        self.assertIsNone(result)
+        self.assertEqual(result.run_status.value, "failed")
 
 
 # ── Crash Recovery ──
@@ -111,9 +107,7 @@ class TestCrashRecovery(unittest.TestCase):
                 {
                     "runs_root": str(allowed_root),
                     "orca": {
-                        "runtime": {
-                            "default_max_retries": 4,
-                        },
+                        "runtime": {},
                         "paths": {"orca_executable": str(fake_orca)},
                     },
                 }
@@ -142,7 +136,7 @@ class TestCrashRecovery(unittest.TestCase):
         }
         self.assertTrue(is_resumable_state(state))
 
-    def test_crash_recovery_resumes_and_completes(self) -> None:
+    def test_crash_recovery_finalizes_recorded_failure_without_rerunning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             reaction = root / "orca_runs" / "rxn_crash"
@@ -156,7 +150,6 @@ class TestCrashRecovery(unittest.TestCase):
                 "run_id": "run_crashed",
                 "reaction_dir": str(reaction),
                 "selected_inp": str(inp),
-                "max_retries": 4,
                 "status": "running",
                 "started_at": "2026-01-01T00:00:00+00:00",
                 "updated_at": "2026-01-01T00:00:00+00:00",
@@ -206,10 +199,10 @@ class TestCrashRecovery(unittest.TestCase):
                 )
             saved = load_state(reaction)
 
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 1)
         assert saved is not None
         self.assertEqual(saved["run_id"], "run_crashed")  # Preserved run_id
-        self.assertEqual(saved["status"], "completed")
+        self.assertEqual(saved["status"], "failed")
         final_result = saved["final_result"]
         assert final_result is not None
         self.assertTrue(final_result["resumed"])

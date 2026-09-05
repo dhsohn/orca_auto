@@ -743,7 +743,6 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts(
         run_state_path="/tmp/rxn_done/job_state.json",
         report_json_path="/tmp/rxn_done/job_report.json",
         attempt_count=2,
-        max_retries=3,
         attempts=(
             {
                 "index": 2,
@@ -801,7 +800,7 @@ def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts(
     assert metadata["latest_known_path"] == contract.latest_known_path
     assert metadata["optimized_xyz_path"] == contract.optimized_xyz_path
     assert metadata["attempt_count"] == 2
-    assert metadata["max_retries"] == 3
+    assert "max_retries" not in metadata
     assert metadata["orca_latest_attempt_number"] == 1
     assert metadata["orca_latest_attempt_status"] == "completed"
     assert metadata["orca_final_result"]["reason"] == "normal_termination"

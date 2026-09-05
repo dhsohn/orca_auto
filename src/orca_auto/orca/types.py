@@ -48,8 +48,6 @@ class RunState(TypedDict, total=False):
     run_id: str
     reaction_dir: str
     selected_inp: str
-    max_retries: int
-    max_memory_gb_per_task: int
     execution_provenance: dict[str, Any]
     status: str
     started_at: str
@@ -59,28 +57,12 @@ class RunState(TypedDict, total=False):
     final_result: RunFinalResult | None
 
 
-class RetryNotification(TypedDict):
-    reaction_dir: str
-    selected_inp: str
-    failed_inp: str
-    failed_out: str
-    next_inp: str
-    attempt_index: int
-    retry_number: int
-    max_retries: int
-    analyzer_status: str
-    analyzer_reason: str
-    patch_actions: list[str]
-    resumed: bool
-
-
 class RunStartedNotification(TypedDict):
     reaction_dir: str
     selected_inp: str
     current_inp: str
     run_id: str
     attempt_index: int
-    max_retries: int
     status: str
     attempt_started_at: str
     resumed: bool
@@ -94,7 +76,6 @@ class RunFinishedNotification(TypedDict):
     analyzer_status: str
     reason: str
     attempt_count: int
-    max_retries: int
     completed_at: str
     last_out_path: str | None
     resumed: bool

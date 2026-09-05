@@ -2,7 +2,7 @@
 
 Everything here is calculation-type agnostic: page skeleton, badges, metric
 cards, and a dependency-free SVG line chart. Type-specific report modules
-(``scants``, ``opt``) compose these into full pages.
+(``scan``, ``opt``) compose these into full pages.
 """
 
 from __future__ import annotations
@@ -28,10 +28,6 @@ REASON_NOTES = {
         "The assembled forward profile is monotonic: no interior maximum above the noise "
         "threshold exists along the scanned coordinate. Reconsider the scan coordinate or "
         "the mechanistic hypothesis."
-    ),
-    "scants_recipes_exhausted": (
-        "Every ScanTS retry recipe (continuation, endpoint completion, reverse scan) "
-        "was used without meeting the TS criteria."
     ),
     "geometry_zero_distance": (
         "ORCA aborted after constructing a geometry with two atoms at zero distance; "

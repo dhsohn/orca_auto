@@ -16,7 +16,7 @@ from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 from orca_auto.orca.types import RunState
 
 
-def test_parse_analyzer_status_and_decide_attempt_outcome_cover_terminal_and_retry_paths() -> None:
+def test_parse_analyzer_status_and_decide_attempt_outcome_cover_terminal_paths() -> None:
     assert parse_analyzer_status(AnalyzerStatus.COMPLETED) is AnalyzerStatus.COMPLETED
     assert parse_analyzer_status("completed") is AnalyzerStatus.COMPLETED
     assert parse_analyzer_status("invalid") is None
@@ -24,8 +24,6 @@ def test_parse_analyzer_status_and_decide_attempt_outcome_cover_terminal_and_ret
     assert decide_attempt_outcome(
         analyzer_status=AnalyzerStatus.COMPLETED,
         analyzer_reason="normal_termination",
-        retries_used=0,
-        max_retries=2,
     ) == AttemptDecision(
         run_status=RunStatus.COMPLETED,
         reason="normal_termination",
@@ -34,8 +32,6 @@ def test_parse_analyzer_status_and_decide_attempt_outcome_cover_terminal_and_ret
     assert decide_attempt_outcome(
         analyzer_status=AnalyzerStatus.ERROR_MULTIPLICITY_IMPOSSIBLE.value,
         analyzer_reason="bad_spin",
-        retries_used=0,
-        max_retries=3,
     ) == AttemptDecision(
         run_status=RunStatus.FAILED,
         reason="bad_spin",
@@ -44,8 +40,6 @@ def test_parse_analyzer_status_and_decide_attempt_outcome_cover_terminal_and_ret
     assert decide_attempt_outcome(
         analyzer_status=AnalyzerStatus.UNKNOWN_FAILURE.value,
         analyzer_reason="error_termination",
-        retries_used=0,
-        max_retries=0,
     ) == AttemptDecision(
         run_status=RunStatus.FAILED,
         reason="error_termination",
@@ -53,23 +47,16 @@ def test_parse_analyzer_status_and_decide_attempt_outcome_cover_terminal_and_ret
     )
     assert decide_attempt_outcome(
         analyzer_status=AnalyzerStatus.INCOMPLETE.value,
-        analyzer_reason="will_retry",
-        retries_used=2,
-        max_retries=2,
+        analyzer_reason="run_incomplete",
     ) == AttemptDecision(
         run_status=RunStatus.FAILED,
-        reason="retry_limit_reached",
+        reason="run_incomplete",
         exit_code=1,
     )
-    assert (
-        decide_attempt_outcome(
-            analyzer_status=AnalyzerStatus.INCOMPLETE.value,
-            analyzer_reason="still_running",
-            retries_used=0,
-            max_retries=2,
-        )
-        is None
-    )
+    assert decide_attempt_outcome(
+        analyzer_status=AnalyzerStatus.INCOMPLETE.value,
+        analyzer_reason="still_running",
+    ) == AttemptDecision(run_status=RunStatus.FAILED, reason="still_running", exit_code=1)
 
 
 def test_state_matches_selected_handles_blank_and_resolver_errors(tmp_path: Path) -> None:
@@ -160,14 +147,12 @@ def test_load_or_create_state_creates_new_state_for_missing_or_mismatched_select
         state, resumed = load_or_create_state(
             reaction_dir,
             selected_inp,
-            max_retries=4,
             to_resolved_local=lambda raw: Path(raw).resolve(),
         )
 
     assert not resumed
     assert state["run_id"] == "run_new"
-    assert state["max_retries"] == 4
-    new_state_mock.assert_called_once_with(reaction_dir, selected_inp, max_retries=4)
+    new_state_mock.assert_called_once_with(reaction_dir, selected_inp)
     save_state_mock.assert_called_once_with(reaction_dir, state)
 
     mismatched_loaded_state: RunState = {
@@ -188,13 +173,12 @@ def test_load_or_create_state_creates_new_state_for_missing_or_mismatched_select
         state, resumed = load_or_create_state(
             reaction_dir,
             selected_inp,
-            max_retries=2,
             to_resolved_local=lambda raw: Path(raw).resolve(),
         )
 
     assert not resumed
     assert state["run_id"] == "run_new"
-    new_state_mock.assert_called_once_with(reaction_dir, selected_inp, max_retries=2)
+    new_state_mock.assert_called_once_with(reaction_dir, selected_inp)
 
 
 def test_load_or_create_state_resumes_or_resets_and_normalizes_attempts(tmp_path: Path) -> None:
@@ -220,14 +204,12 @@ def test_load_or_create_state_resumes_or_resets_and_normalizes_attempts(tmp_path
         state, resumed = load_or_create_state(
             reaction_dir,
             selected_inp,
-            max_retries=3,
             to_resolved_local=lambda raw: Path(raw).resolve(),
         )
 
     assert resumed
     assert state["final_result"] is None
     assert state["attempts"] == []
-    assert state["max_retries"] == 3
     new_state_mock.assert_not_called()
     save_state_mock.assert_called_once_with(reaction_dir, state)
 
@@ -248,14 +230,12 @@ def test_load_or_create_state_resumes_or_resets_and_normalizes_attempts(tmp_path
         state, resumed = load_or_create_state(
             reaction_dir,
             selected_inp,
-            max_retries=2,
             to_resolved_local=lambda raw: Path(raw).resolve(),
         )
 
     assert resumed
     assert state["final_result"] is None
     assert state["attempts"] == []
-    assert state["max_retries"] == 2
     new_state_mock.assert_not_called()
     save_state_mock.assert_called_once_with(reaction_dir, state)
 
@@ -284,10 +264,9 @@ def test_load_or_create_state_resumes_or_resets_and_normalizes_attempts(tmp_path
         state, resumed = load_or_create_state(
             reaction_dir,
             selected_inp,
-            max_retries=1,
             to_resolved_local=lambda raw: Path(raw).resolve(),
         )
 
     assert not resumed
     assert state["run_id"] == "run_reset"
-    new_state_mock.assert_called_once_with(reaction_dir, selected_inp, max_retries=1)
+    new_state_mock.assert_called_once_with(reaction_dir, selected_inp)

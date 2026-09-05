@@ -161,7 +161,6 @@ def state_from_normalized_payload(payload: dict[str, Any]) -> RunState | None:
         "run_id": normalized_text(engine_payload.get("run_id")),
         "reaction_dir": normalized_text(job.get("dir")),
         "selected_inp": normalized_text(input_payload.get("primary_path")),
-        "max_retries": int(engine_payload.get("max_retries", 0) or 0),
         "status": normalized_text(status.get("state")),
         "started_at": normalized_text(timestamps.get("started_at")),
         "updated_at": normalized_text(timestamps.get("updated_at")),
@@ -335,7 +334,7 @@ def load_report_json_with_output_receipt(
         or summary.get("analyzer_status") != normalized_text(final_result.get("analyzer_status"))
         or results.get("run_id") != normalized_text(engine_payload.get("run_id"))
         or results.get("attempt_count") != attempt_count
-        or results.get("max_retries") != int(engine_payload.get("max_retries", 0) or 0)
+        or results.get("max_retries") != engine_payload.get("max_retries")
         or results.get("resumed") != bool(final_result.get("resumed", False))
         or results.get("skipped_execution") != bool(final_result.get("skipped_execution", False))
         or results.get("runner_error") != normalized_text(final_result.get("runner_error"))

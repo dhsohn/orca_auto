@@ -12,10 +12,6 @@ from orca_auto.core.engine_scratch import (
 )
 from orca_auto.orca.attempt.engine import run_attempts
 from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
-from orca_auto.orca.retry_policy import (
-    effective_max_retries,
-    retry_policy_for_input,
-)
 from orca_auto.orca.state import new_state
 from orca_auto.orca.state_reading import load_state
 
@@ -78,7 +74,7 @@ class _AlwaysScfFailRunner:
     def run(self, inp_path: Path):
         self.seen.append(inp_path)
         inp_path.with_suffix(".xyz").write_text(
-            "2\nretry geometry\nH 0 0 0\nH 0 0 0.75\n",
+            "2\ncheckpoint geometry\nH 0 0 0\nH 0 0 0.75\n",
             encoding="utf-8",
         )
         out_path = inp_path.with_suffix(".out")
@@ -95,44 +91,6 @@ class _NoArtifactScfFailRunner:
         out_path = inp_path.with_suffix(".out")
         out_path.write_text("SCF NOT CONVERGED AFTER 300 CYCLES\n", encoding="utf-8")
         return SimpleNamespace(out_path=str(out_path), return_code=1)
-
-
-class _OptTsRetryThenSuccessRunner:
-    def __init__(self) -> None:
-        self.seen: list[Path] = []
-
-    def run(self, inp_path: Path):
-        self.seen.append(inp_path)
-        inp_path.with_suffix(".xyz").write_text(
-            "2\nTS retry geometry\nH 0 0 0\nH 0 0 0.75\n",
-            encoding="utf-8",
-        )
-        out_path = inp_path.with_suffix(".out")
-        if len(self.seen) == 1:
-            out_path.write_text(
-                "\n".join(
-                    [
-                        "VIBRATIONAL FREQUENCIES",
-                        "  1    120.00 cm**-1",
-                        "  2    240.00 cm**-1",
-                        "****ORCA TERMINATED NORMALLY****",
-                    ]
-                ),
-                encoding="utf-8",
-            )
-            return SimpleNamespace(out_path=str(out_path), return_code=0)
-        out_path.write_text(
-            "\n".join(
-                [
-                    "VIBRATIONAL FREQUENCIES",
-                    "  1   -150.00 cm**-1",
-                    "  2    120.00 cm**-1",
-                    "****ORCA TERMINATED NORMALLY****",
-                ]
-            ),
-            encoding="utf-8",
-        )
-        return SimpleNamespace(out_path=str(out_path), return_code=0)
 
 
 class _UnusedRunner:
@@ -168,17 +126,13 @@ class _CaptureSuccessRunner:
         )
 
 
-def _retry_inp_path(selected_inp: Path, retry_number: int) -> Path:
-    return selected_inp.parent / f"{selected_inp.stem}.retry{retry_number:02d}.inp"
-
-
 class TestAttemptEngine(unittest.TestCase):
     def test_keyboard_interrupt_emits_single_run_interrupted_event(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction_dir = Path(td)
             selected_inp = reaction_dir / "rxn.inp"
             selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-            state = new_state(reaction_dir, selected_inp, max_retries=3)
+            state = new_state(reaction_dir, selected_inp)
 
             emitted_payloads = []
 
@@ -188,9 +142,6 @@ class TestAttemptEngine(unittest.TestCase):
                 state,
                 resumed=False,
                 runner=_InterruptRunner(),
-                max_retries=3,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
                 emit=lambda payload: emitted_payloads.append(payload),
             )
 
@@ -215,7 +166,7 @@ class TestAttemptEngine(unittest.TestCase):
                 reaction_dir = Path(td)
                 selected_inp = reaction_dir / "rxn.inp"
                 selected_inp.write_text("! SP\n", encoding="utf-8")
-                state = new_state(reaction_dir, selected_inp, max_retries=0)
+                state = new_state(reaction_dir, selected_inp)
 
                 rc = run_attempts(
                     reaction_dir,
@@ -223,9 +174,6 @@ class TestAttemptEngine(unittest.TestCase):
                     state,
                     resumed=False,
                     runner=_InPlaceFailureRunner(exc),
-                    max_retries=0,
-                    retry_inp_path=_retry_inp_path,
-                    to_resolved_local=lambda raw: Path(raw),
                     emit=lambda _payload: None,
                 )
                 saved = load_state(reaction_dir)
@@ -242,50 +190,6 @@ class TestAttemptEngine(unittest.TestCase):
                     str(selected_inp.with_suffix(".out")),
                 )
 
-    def test_in_place_retry_failure_prefers_current_partial_output(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            reaction_dir = Path(td)
-            selected_inp = reaction_dir / "rxn.inp"
-            selected_inp.write_text("! ScanTS\n", encoding="utf-8")
-            previous_out = selected_inp.with_suffix(".out")
-            previous_out.write_text("previous output\n", encoding="utf-8")
-            retry_inp = _retry_inp_path(selected_inp, 1)
-            retry_inp.write_text("! ScanTS\n", encoding="utf-8")
-            state = new_state(reaction_dir, selected_inp, max_retries=3)
-            state["attempts"].append(
-                {
-                    "index": 1,
-                    "inp_path": str(selected_inp),
-                    "out_path": str(previous_out),
-                    "return_code": 1,
-                    "analyzer_status": "error_scf",
-                    "analyzer_reason": "scf_not_converged",
-                    "markers": {},
-                    "patch_actions": [],
-                    "started_at": "2026-07-19T00:00:00+00:00",
-                    "ended_at": "2026-07-19T00:00:01+00:00",
-                }
-            )
-
-            rc = run_attempts(
-                reaction_dir,
-                selected_inp,
-                state,
-                resumed=False,
-                runner=_InPlaceFailureRunner(RuntimeError("retry failed")),
-                max_retries=3,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
-                emit=lambda _payload: None,
-            )
-            saved = load_state(reaction_dir)
-
-        assert saved is not None
-        final_result = saved["final_result"]
-        assert final_result is not None
-        self.assertEqual(rc, 1)
-        self.assertEqual(final_result["last_out_path"], str(retry_inp.with_suffix(".out")))
-
     def test_in_place_failure_does_not_report_symlink_output(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction_dir = Path(td)
@@ -294,7 +198,7 @@ class TestAttemptEngine(unittest.TestCase):
             outside_out = reaction_dir / "outside.out"
             outside_out.write_text("outside\n", encoding="utf-8")
             selected_inp.with_suffix(".out").symlink_to(outside_out)
-            state = new_state(reaction_dir, selected_inp, max_retries=0)
+            state = new_state(reaction_dir, selected_inp)
 
             rc = run_attempts(
                 reaction_dir,
@@ -302,9 +206,6 @@ class TestAttemptEngine(unittest.TestCase):
                 state,
                 resumed=False,
                 runner=_InterruptRunner(),
-                max_retries=0,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
                 emit=lambda _payload: None,
             )
             saved = load_state(reaction_dir)
@@ -320,7 +221,7 @@ class TestAttemptEngine(unittest.TestCase):
             reaction_dir = Path(td)
             selected_inp = reaction_dir / "rxn.inp"
             selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-            state = new_state(reaction_dir, selected_inp, max_retries=3)
+            state = new_state(reaction_dir, selected_inp)
 
             emitted_payloads = []
 
@@ -331,9 +232,6 @@ class TestAttemptEngine(unittest.TestCase):
                     state,
                     resumed=False,
                     runner=_WorkerShutdownRunner(),
-                    max_retries=3,
-                    retry_inp_path=_retry_inp_path,
-                    to_resolved_local=lambda raw: Path(raw),
                     emit=lambda payload: emitted_payloads.append(payload),
                 )
 
@@ -350,7 +248,7 @@ class TestAttemptEngine(unittest.TestCase):
             reaction_dir = Path(td)
             selected_inp = reaction_dir / "rxn.inp"
             selected_inp.write_text("! SP\n", encoding="utf-8")
-            state = new_state(reaction_dir, selected_inp, max_retries=0)
+            state = new_state(reaction_dir, selected_inp)
 
             with self.assertRaises(WorkerShutdownInterrupt):
                 run_attempts(
@@ -359,9 +257,6 @@ class TestAttemptEngine(unittest.TestCase):
                     state,
                     resumed=False,
                     runner=_WorkerShutdownWithScratchRunner(),
-                    max_retries=0,
-                    retry_inp_path=_retry_inp_path,
-                    to_resolved_local=lambda raw: Path(raw),
                     emit=lambda _payload: None,
                 )
 
@@ -383,7 +278,7 @@ class TestAttemptEngine(unittest.TestCase):
             reaction_dir = Path(td)
             selected_inp = reaction_dir / "rxn.inp"
             selected_inp.write_text("! SP\n", encoding="utf-8")
-            state = new_state(reaction_dir, selected_inp, max_retries=0)
+            state = new_state(reaction_dir, selected_inp)
 
             with patch(
                 "orca_auto.orca.attempt.engine.analyze_output",
@@ -395,9 +290,6 @@ class TestAttemptEngine(unittest.TestCase):
                     state,
                     resumed=False,
                     runner=_PublishedSuccessRunner(),
-                    max_retries=0,
-                    retry_inp_path=_retry_inp_path,
-                    to_resolved_local=lambda raw: Path(raw),
                     emit=lambda _payload: None,
                 )
 
@@ -412,87 +304,12 @@ class TestAttemptEngine(unittest.TestCase):
             saved["final_result"]["last_out_path"], str(selected_inp.with_suffix(".out"))
         )
 
-    def test_zero_retry_overbudget_state_preserves_last_analyzer_reason(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            reaction_dir = Path(td)
-            selected_inp = reaction_dir / "rxn.inp"
-            selected_inp.write_text(
-                "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-                encoding="utf-8",
-            )
-            out_path = reaction_dir / "rxn.out"
-            state = new_state(reaction_dir, selected_inp, max_retries=0)
-            state["attempts"] = [
-                {
-                    "out_path": str(out_path),
-                    "analyzer_status": "error_scf",
-                    "analyzer_reason": "scf_not_converged",
-                }
-            ]
-
-            rc = run_attempts(
-                reaction_dir,
-                selected_inp,
-                state,
-                resumed=False,
-                runner=_UnusedRunner(),
-                max_retries=0,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
-                emit=lambda _payload: None,
-            )
-            saved = load_state(reaction_dir)
-
-        self.assertEqual(rc, 1)
-        self.assertIsNotNone(saved)
-        assert saved is not None
-        final_result = saved.get("final_result")
-        assert final_result is not None
-        self.assertEqual(final_result.get("analyzer_status"), "error_scf")
-        self.assertEqual(final_result.get("reason"), "scf_not_converged")
-
-    def test_standalone_optts_policy_disables_retry_notifications(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            reaction_dir = Path(td)
-            selected_inp = reaction_dir / "rxn.inp"
-            selected_inp.write_text(
-                "! OptTS B3LYP def2-SVP Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-                encoding="utf-8",
-            )
-            state = new_state(reaction_dir, selected_inp, max_retries=2)
-            notifications = []
-
-            rc = run_attempts(
-                reaction_dir,
-                selected_inp,
-                state,
-                resumed=False,
-                runner=_OptTsRetryThenSuccessRunner(),
-                max_retries=2,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
-                emit=lambda _payload: None,
-                notify_retry=lambda payload: notifications.append(payload),
-            )
-            retry_inp = reaction_dir / "rxn.retry01.inp"
-            saved = load_state(reaction_dir)
-
-        self.assertEqual(rc, 1)
-        self.assertEqual(notifications, [])
-        self.assertFalse(retry_inp.exists())
-        self.assertIsNotNone(saved)
-        assert saved is not None
-        self.assertEqual(saved["max_retries"], 0)
-        final_result = saved.get("final_result")
-        assert final_result is not None
-        self.assertEqual(final_result.get("reason"), "ts_criteria_failed")
-
-    def test_opt_policy_disables_artifact_restart_despite_configured_count(self) -> None:
+    def test_opt_failure_is_terminal_despite_restart_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction_dir = Path(td)
             selected_inp = reaction_dir / "rxn.inp"
             selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-            state = new_state(reaction_dir, selected_inp, max_retries=8)
+            state = new_state(reaction_dir, selected_inp)
             runner = _AlwaysScfFailRunner()
 
             rc = run_attempts(
@@ -501,9 +318,6 @@ class TestAttemptEngine(unittest.TestCase):
                 state,
                 resumed=False,
                 runner=runner,
-                max_retries=8,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
                 emit=lambda _payload: None,
             )
 
@@ -515,17 +329,17 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertFalse(retry_inp.exists())
         self.assertIsNotNone(saved)
         assert saved is not None
-        self.assertEqual(saved["max_retries"], 0)
+        self.assertNotIn("max_retries", saved)
         final_result = saved.get("final_result")
         assert final_result is not None
         self.assertEqual(final_result.get("reason"), "scf_not_converged")
 
-    def test_no_retry_policy_ignores_missing_artifacts_for_non_scants_routes(self) -> None:
+    def test_scf_failure_is_terminal_without_restart_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction_dir = Path(td)
             selected_inp = reaction_dir / "rxn.inp"
             selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-            state = new_state(reaction_dir, selected_inp, max_retries=8)
+            state = new_state(reaction_dir, selected_inp)
             runner = _NoArtifactScfFailRunner()
 
             rc = run_attempts(
@@ -534,9 +348,6 @@ class TestAttemptEngine(unittest.TestCase):
                 state,
                 resumed=False,
                 runner=runner,
-                max_retries=8,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
                 emit=lambda _payload: None,
             )
 
@@ -548,55 +359,20 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertFalse(retry_inp.exists())
         self.assertIsNotNone(saved)
         assert saved is not None
-        self.assertEqual(saved["max_retries"], 0)
+        self.assertNotIn("max_retries", saved)
         final_result = saved.get("final_result")
         assert final_result is not None
         self.assertEqual(final_result.get("reason"), "scf_not_converged")
 
-    def test_standalone_optts_policy_disables_retry_despite_configured_count(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            reaction_dir = Path(td)
-            selected_inp = reaction_dir / "ts.inp"
-            selected_inp.write_text(
-                "! OptTS B3LYP def2-SVP Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
-            )
-            state = new_state(reaction_dir, selected_inp, max_retries=8)
-            runner = _OptTsRetryThenSuccessRunner()
-
-            rc = run_attempts(
-                reaction_dir,
-                selected_inp,
-                state,
-                resumed=False,
-                runner=runner,
-                max_retries=8,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
-                emit=lambda _payload: None,
-            )
-
-            retry01 = reaction_dir / "ts.retry01.inp"
-            saved = load_state(reaction_dir)
-
-        self.assertEqual(rc, 1)
-        self.assertEqual(runner.seen, [selected_inp])
-        self.assertFalse(retry01.exists())
-        self.assertIsNotNone(saved)
-        assert saved is not None
-        self.assertEqual(saved["max_retries"], 0)
-        final_result = saved.get("final_result")
-        assert final_result is not None
-        self.assertEqual(final_result.get("reason"), "ts_criteria_failed")
-
-    def test_neb_ts_policy_disables_retry_despite_configured_count(self) -> None:
+    def test_neb_ts_failure_is_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             reaction_dir = Path(td)
             selected_inp = reaction_dir / "neb.inp"
             selected_inp.write_text(
                 "! NEB-TS B3LYP def2-SVP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
             )
-            state = new_state(reaction_dir, selected_inp, max_retries=8)
-            runner = _OptTsRetryThenSuccessRunner()
+            state = new_state(reaction_dir, selected_inp)
+            runner = _NoImaginaryModeRunner()
 
             rc = run_attempts(
                 reaction_dir,
@@ -604,9 +380,6 @@ class TestAttemptEngine(unittest.TestCase):
                 state,
                 resumed=False,
                 runner=runner,
-                max_retries=8,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
                 emit=lambda _payload: None,
             )
 
@@ -618,7 +391,7 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertFalse(retry01.exists())
         self.assertIsNotNone(saved)
         assert saved is not None
-        self.assertEqual(saved["max_retries"], 0)
+        self.assertNotIn("max_retries", saved)
         final_result = saved.get("final_result")
         assert final_result is not None
         self.assertEqual(final_result.get("reason"), "ts_criteria_failed")
@@ -628,10 +401,9 @@ class TestAttemptEngine(unittest.TestCase):
             reaction_dir = Path(td)
             selected_inp = reaction_dir / "rxn.inp"
             selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
-            state = new_state(reaction_dir, selected_inp, max_retries=2)
+            state = new_state(reaction_dir, selected_inp)
             started_notifications = []
             finished_notifications = []
-            retry_notifications = []
 
             rc = run_attempts(
                 reaction_dir,
@@ -639,18 +411,13 @@ class TestAttemptEngine(unittest.TestCase):
                 state,
                 resumed=False,
                 runner=_CaptureSuccessRunner(),
-                max_retries=2,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
                 emit=lambda _payload: None,
                 notify_started=lambda payload: started_notifications.append(payload),
                 notify_finished=lambda payload: finished_notifications.append(payload),
-                notify_retry=lambda payload: retry_notifications.append(payload),
             )
 
         self.assertEqual(rc, 0)
         self.assertEqual(len(started_notifications), 1)
-        self.assertEqual(retry_notifications, [])
         self.assertEqual(len(finished_notifications), 1)
 
         started = started_notifications[0]
@@ -677,7 +444,7 @@ class TestAttemptEngine(unittest.TestCase):
                 "****ORCA TERMINATED NORMALLY****\nTOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds 0 msec\n",
                 encoding="utf-8",
             )
-            state = new_state(reaction_dir, selected_inp, max_retries=2)
+            state = new_state(reaction_dir, selected_inp)
             state["attempts"].append(
                 {
                     "index": 1,
@@ -701,9 +468,6 @@ class TestAttemptEngine(unittest.TestCase):
                 state,
                 resumed=True,
                 runner=_UnusedRunner(),
-                max_retries=2,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
                 emit=lambda payload: emitted_payloads.append(payload),
                 notify_finished=lambda payload: finished_notifications.append(payload),
             )
@@ -725,7 +489,7 @@ class TestAttemptEngine(unittest.TestCase):
                 "2\nresume geometry\nH 0 0 0\nH 0 0 0.75\n",
                 encoding="utf-8",
             )
-            state = new_state(reaction_dir, selected_inp, max_retries=2)
+            state = new_state(reaction_dir, selected_inp)
             runner = _CaptureSuccessRunner()
 
             rc = run_attempts(
@@ -734,9 +498,6 @@ class TestAttemptEngine(unittest.TestCase):
                 state,
                 resumed=True,
                 runner=runner,
-                max_retries=2,
-                retry_inp_path=_retry_inp_path,
-                to_resolved_local=lambda raw: Path(raw),
                 emit=lambda _payload: None,
             )
 
@@ -766,51 +527,15 @@ class TestAttemptEngine(unittest.TestCase):
         self.assertIn("resume_geometry_restart_from_rxn.xyz", saved["attempts"][0]["patch_actions"])
 
 
-class TestRetryPolicy(unittest.TestCase):
-    def test_policy_retry_counts_are_calculation_type_budgets(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            opt = root / "opt.inp"
-            opt.write_text("! Opt B3LYP def2-SVP\n", encoding="utf-8")
-            optts = root / "optts.inp"
-            optts.write_text("! OptTS B3LYP def2-SVP Freq\n", encoding="utf-8")
-            commented_opt = root / "commented_opt.inp"
-            commented_opt.write_text(
-                "! Opt B3LYP def2-SVP  # TS candidate for later\n", encoding="utf-8"
-            )
-            scants = root / "scants.inp"
-            scants.write_text("! ScanTS B3LYP def2-SVP Freq\n", encoding="utf-8")
-            freq = root / "freq.inp"
-            freq.write_text("! Freq B3LYP def2-SVP\n", encoding="utf-8")
+class _NoImaginaryModeRunner:
+    def __init__(self) -> None:
+        self.seen: list[Path] = []
 
-            self.assertEqual(retry_policy_for_input(opt).name, "opt")
-            self.assertEqual(effective_max_retries(opt, configured_max_retries=8), 0)
-            self.assertEqual(retry_policy_for_input(optts).name, "standalone_ts")
-            self.assertEqual(effective_max_retries(optts, configured_max_retries=8), 0)
-            # Neither a bare TS token (not an ORCA keyword) nor a "TS" inside a
-            # route comment selects the standalone_ts policy.
-            self.assertEqual(retry_policy_for_input(commented_opt).name, "opt")
-            self.assertEqual(retry_policy_for_input(scants).name, "scants")
-            self.assertEqual(effective_max_retries(scants, configured_max_retries=8), 3)
-            self.assertEqual(retry_policy_for_input(freq).name, "freq")
-            self.assertEqual(effective_max_retries(freq, configured_max_retries=8), 0)
-            self.assertEqual(effective_max_retries(scants, configured_max_retries=0), 0)
-
-    def test_policy_reads_split_simple_route_lines(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            scants = root / "split_scants.inp"
-            scants.write_text(
-                "! B3LYP def2-SVP\n! ScanTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-                encoding="utf-8",
-            )
-            optts = root / "split_optts.inp"
-            optts.write_text(
-                "! B3LYP def2-SVP\n! OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-                encoding="utf-8",
-            )
-
-            self.assertEqual(retry_policy_for_input(scants).name, "scants")
-            self.assertEqual(effective_max_retries(scants, configured_max_retries=8), 3)
-            self.assertEqual(retry_policy_for_input(optts).name, "standalone_ts")
-            self.assertEqual(effective_max_retries(optts, configured_max_retries=8), 0)
+    def run(self, inp_path: Path):
+        self.seen.append(inp_path)
+        out_path = inp_path.with_suffix(".out")
+        out_path.write_text(
+            "VIBRATIONAL FREQUENCIES\n  1    120.00 cm**-1\n  2    240.00 cm**-1\n****ORCA TERMINATED NORMALLY****\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(out_path=str(out_path), return_code=0)

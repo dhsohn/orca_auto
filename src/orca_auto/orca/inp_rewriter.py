@@ -20,18 +20,10 @@ from .input_blocks import (
     set_moinp as _set_moinp,
 )
 from .resource_directives import (
-    clamp_maxcore_to_budget,
     ensure_submission_resource_request,
     maxcore_mb_per_core,
     prepare_submission_resource_request,
     read_resource_request_from_input,
-)
-from .scants import (
-    apply_scants_optts_resume_rewrite,
-    apply_scants_relaxed_scan_resume_rewrite,
-    input_uses_scants,
-    prepare_scants_optts_fallback_input,
-    prepare_scants_scan_retry_input,
 )
 
 __all__ = [
@@ -42,27 +34,8 @@ __all__ = [
     "maxcore_mb_per_core",
     "prepare_submission_resource_request",
     "prepare_checkpoint_restart_input",
-    "prepare_scants_optts_fallback_input",
-    "prepare_scants_scan_retry_input",
     "read_resource_request_from_input",
-    "rewrite_for_retry",
 ]
-
-
-def rewrite_for_retry(
-    source_inp: Path,
-    target_inp: Path,
-    *,
-    max_memory_gb: int | None = None,
-) -> list[str]:
-    lines = source_inp.read_text(encoding="utf-8", errors="ignore").splitlines()
-    actions: list[str] = []
-
-    if max_memory_gb is not None and clamp_maxcore_to_budget(lines, max_memory_gb=max_memory_gb):
-        actions.append("maxcore_clamped_to_budget")
-
-    atomic_write_text(target_inp, "\n".join(lines).rstrip() + "\n")
-    return actions
 
 
 def prepare_checkpoint_restart_input(
@@ -75,26 +48,7 @@ def prepare_checkpoint_restart_input(
     if not _apply_checkpoint_restart(lines, actions, source_inp, target_inp):
         return None, []
 
-    # ORCA writes the same-stem XYZ during relaxed ScanTS scan steps too, so the
-    # file alone cannot prove that ORCA has entered OPTTS refinement.  Promote a
-    # resumed ScanTS input to OPTTS only when the previous output either contains
-    # an explicit TS-refinement marker or a completed actual-energy scan surface
-    # from which we can select the maximum numbered scan point.
-    scants_resume_actions: list[str] = []
-    uses_scants = input_uses_scants(source_inp)
-    if uses_scants:
-        scants_resume_actions = apply_scants_optts_resume_rewrite(
-            lines=lines,
-            source_inp=source_inp,
-            target_inp=target_inp,
-            out_path=source_inp.with_suffix(".out"),
-        )
-        actions.extend(scants_resume_actions)
-
-    if not scants_resume_actions:
-        if uses_scants:
-            actions.extend(apply_scants_relaxed_scan_resume_rewrite(lines, source_inp))
-        _apply_geometry_restart(lines, actions, source_inp, target_inp, reaction_dir)
+    _apply_geometry_restart(lines, actions, source_inp, target_inp, reaction_dir)
     atomic_write_text(target_inp, "\n".join(lines).rstrip() + "\n")
     return target_inp, actions
 
@@ -160,3 +114,7 @@ def _latest_geometry_file(reaction_dir: Path) -> Path | None:
     # Two geometries written in the same nanosecond would otherwise be ordered
     # by readdir, so the restart input would depend on the filesystem.
     return max(candidates.values(), key=lambda p: (p.stat().st_mtime_ns, p.name.lower()))
+
+
+def resume_checkpoint_input_path(current_inp: Path) -> Path:
+    return current_inp.with_name(f"{current_inp.stem}.resume.inp")

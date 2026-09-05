@@ -16,7 +16,7 @@ Good contributions usually improve one of these surfaces:
 
 - durable queue submission, cancellation, and worker behavior;
 - ORCA state/report/provenance files;
-- fail-closed retry and resume policy;
+- fail-closed execution and interrupted-run recovery;
 - workflow handoff contracts for internal xTB/CREST stages;
 - documentation, examples, validation, and release hygiene.
 
@@ -50,7 +50,7 @@ For ORCA runtime changes, name the calculation class or queue state involved.
 ### Changes
 
 List the concrete code, docs, test, or configuration changes. Call out public
-surface changes such as CLI flags, config keys, report fields, retry behavior,
+surface changes such as CLI flags, config keys, report fields, execution behavior,
 or output layout changes.
 
 ### Verification
@@ -65,7 +65,7 @@ A good verification section looks like:
 ```text
 ## Verification
 
-- `bash scripts/check.sh tests/test_scants_support.py -q` — passed
+- `bash scripts/check.sh tests/test_single_attempt_contract.py -q` — passed
 - `bash examples/fake_orca_smoke/run.sh` — passed; fake ORCA queue lifecycle completed
 - Manual ORCA acceptance: not run; docs-only change
 ```
@@ -87,7 +87,7 @@ suite.
 For a narrower loop:
 
 ```bash
-bash scripts/check.sh tests/test_scants_support.py -q
+bash scripts/check.sh tests/test_single_attempt_contract.py -q
 bash scripts/check.sh tests/flow -q
 ```
 
@@ -130,18 +130,16 @@ Both need `.venv` (run `scripts/check.sh` once first) and can be bypassed with
 - Real ORCA acceptance checks belong in PR verification when the change depends
   on ORCA runtime semantics.
 
-## Retry and failure-classification changes
+## Execution and failure-classification changes
 
-Retry policy changes are high-risk because they can waste compute or silently
-hide bad chemistry. Keep these contributions especially small and test-backed.
+Execution and recovery changes are high-risk because they can waste compute or
+hide failed calculations. Required expectations:
 
-Required expectations:
-
-- prefer explicit classifiers over broad fallback behavior;
-- fail closed when a safe restart artifact cannot be verified;
-- keep ScanTS-specific retry ladders separate from generic ORCA retries;
-- do not introduce silent `.xyz`/`.gbw` restarts for ScanTS failures;
-- update docs and tests whenever retry caps, reasons, or report fields change.
+- keep every calculation failure terminal after one attempt;
+- reject unsupported routes before queue/generation publication;
+- preserve verified worker/host interruption recovery;
+- keep historical artifacts immutable and verify their receipts when reading;
+- update both public-contract translations and focused regression tests.
 
 ## Documentation changes
 
