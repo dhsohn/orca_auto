@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
+from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory, open_pinned_readonly
 
 SNAPSHOT_DIR_NAME = ".orca_auto_input_snapshots"
 MAX_INPUT_SNAPSHOT_BYTES = 64 * 1024 * 1024
@@ -424,11 +424,8 @@ def read_stable_regular_file(
     if max_bytes < 1:
         raise ValueError("Stable file read limit must be positive")
     effective_max_bytes = int(max_bytes)
-    flags = os.O_RDONLY
-    flags |= os.O_NONBLOCK
-    flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(source_path, flags)
+        descriptor = open_pinned_readonly(source_path)
     except OSError as exc:
         raise ValueError(f"Input source is not a readable regular file: {source_path}") from exc
     try:

@@ -19,6 +19,7 @@ from orca_auto.core.utils.persistence import (
     durable_mkdir,
     fsync_directory,
     now_utc_iso,
+    open_pinned_readonly,
 )
 
 logger = logging.getLogger(__name__)
@@ -145,10 +146,7 @@ def _intent_path(queue_root: Path, token: str, *, create_dir: bool) -> Path:
 
 
 def _read_intent(path: Path, *, expected_root: Path) -> dict[str, Any]:
-    flags = os.O_RDONLY
-    flags |= os.O_NONBLOCK
-    flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags)
+    descriptor = open_pinned_readonly(path)
     try:
         before = os.fstat(descriptor)
         if (

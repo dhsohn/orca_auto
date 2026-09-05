@@ -12,7 +12,7 @@ from typing import Any, TextIO
 
 from orca_auto.core.queue.cancellable import retain_process_ownership_until_exit
 from orca_auto.core.queue.processes import terminate_process_group
-from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory
+from orca_auto.core.utils.persistence import durable_mkdir, fsync_directory, open_pinned_readonly
 
 
 @dataclass(frozen=True)
@@ -157,10 +157,7 @@ def read_confined_text(
     descriptor = -1
     try:
         opened_parent = os.fstat(directory_fd)
-        file_flags = os.O_RDONLY
-        file_flags |= os.O_NONBLOCK
-        file_flags |= os.O_NOFOLLOW
-        descriptor = os.open(path.name, file_flags, dir_fd=directory_fd)
+        descriptor = open_pinned_readonly(path.name, dir_fd=directory_fd)
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink < 1 or before.st_nlink > max_links:
             raise ValueError(f"{label} must be a single-link regular file: {path}")
@@ -255,9 +252,7 @@ def read_confined_tail_lines(
     directory_flags |= os.O_NOFOLLOW
     directory_fd = os.open(parent, directory_flags)
     try:
-        file_flags = os.O_RDONLY
-        file_flags |= os.O_NOFOLLOW
-        descriptor = os.open(path.name, file_flags, dir_fd=directory_fd)
+        descriptor = open_pinned_readonly(path.name, dir_fd=directory_fd)
     finally:
         os.close(directory_fd)
     file_status = os.fstat(descriptor)

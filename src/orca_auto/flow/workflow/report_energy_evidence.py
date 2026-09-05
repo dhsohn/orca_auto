@@ -12,6 +12,7 @@ from typing import Any
 
 from orca_auto.core.engine_process import read_confined_text
 from orca_auto.core.utils import mapping_or_empty as _mapping
+from orca_auto.core.utils.persistence import open_pinned_readonly
 from orca_auto.orca.parser.patterns import (
     FINAL_SINGLE_POINT_ENERGY_BYTES_RE,
     final_single_point_energy_value,
@@ -141,11 +142,7 @@ def _last_final_energy_line_from_output(
         directory_flags |= os.O_DIRECTORY | os.O_NOFOLLOW
         parent_fd = os.open(resolved.parent, directory_flags)
 
-        output_flags = os.O_RDONLY | os.O_CLOEXEC
-        # O_NONBLOCK covers the stat-to-open race: without it a path swapped to a
-        # FIFO between the two would block the report writer indefinitely.
-        output_flags |= os.O_NONBLOCK | os.O_NOFOLLOW
-        output_fd = os.open(relative.parts[-1], output_flags, dir_fd=parent_fd)
+        output_fd = open_pinned_readonly(relative.parts[-1], dir_fd=parent_fd)
         opened = os.fstat(output_fd)
         # The fd pins one inode. Comparing it against the pre-open stat rejects
         # anything swapped between that stat and this open. A swap that already

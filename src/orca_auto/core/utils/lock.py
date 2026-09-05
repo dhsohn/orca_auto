@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
-from .persistence import now_utc_iso
+from .persistence import now_utc_iso, open_pinned_readonly
 
 _MAX_LOCK_PAYLOAD_BYTES = 16 * 1024
 
@@ -106,9 +106,8 @@ def held_file_lock_payload(lock_path: Path) -> str | None:
         return None
     descriptor = -1
     try:
-        file_flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
         try:
-            descriptor = os.open(lock_path.name, file_flags, dir_fd=directory_fd)
+            descriptor = open_pinned_readonly(lock_path.name, dir_fd=directory_fd)
         except FileNotFoundError:
             return None
         details = os.fstat(descriptor)

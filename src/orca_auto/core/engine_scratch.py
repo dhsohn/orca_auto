@@ -23,6 +23,7 @@ from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.lock import file_lock_at
+from orca_auto.core.utils.persistence import open_pinned_readonly
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 
 SCRATCH_MANIFEST_FILE_NAME = ".orca_auto_scratch.json"
@@ -733,9 +734,7 @@ def _read_stable_regular_file_at(
     display_path: Path,
     max_bytes: int = MAX_INPUT_SNAPSHOT_BYTES,
 ) -> tuple[bytes, int]:
-    flags = os.O_RDONLY
-    flags |= os.O_NOFOLLOW
-    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    descriptor = open_pinned_readonly(name, dir_fd=directory_fd)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
@@ -874,9 +873,7 @@ def _regular_file_sha256_at(
     *,
     display_path: Path,
 ) -> tuple[str, int]:
-    flags = os.O_RDONLY
-    flags |= os.O_NOFOLLOW
-    descriptor = os.open(name, flags, dir_fd=directory_fd)
+    descriptor = open_pinned_readonly(name, dir_fd=directory_fd)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
@@ -954,11 +951,9 @@ def _copy_artifact_to_staging(
             f"Durable engine artifact target is unsafe: {durable_dir / target_name}"
         )
     temporary_name = f"{_PUBLICATION_TEMP_PREFIX}{secrets.token_hex(16)}.tmp"
-    source_flags = os.O_RDONLY
     destination_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    source_flags |= os.O_NOFOLLOW
     destination_flags |= os.O_NOFOLLOW
-    source_fd = os.open(source_name, source_flags, dir_fd=workspace_dir_fd)
+    source_fd = open_pinned_readonly(source_name, dir_fd=workspace_dir_fd)
     destination_fd: int | None = None
     backup_name: str | None = None
     try:
