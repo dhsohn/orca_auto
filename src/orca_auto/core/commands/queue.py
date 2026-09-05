@@ -26,6 +26,7 @@ class QueueRuntime:
     list_queue_fn: Callable[[Path], list[Any]]
     dequeue_next_fn: Callable[[Path], Any | None]
     dequeue_next_across_roots_fn: Callable[..., tuple[Path, Any] | None]
+    peek_next_across_roots_fn: Callable[..., tuple[Path, Any] | None]
     dequeue_entry_if_pending_fn: Callable[..., Any | None] | None = None
     accept_entry_fn: Callable[[Any], bool] | None = None
 
@@ -33,6 +34,16 @@ class QueueRuntime:
         return queue_roots(
             cfg,
             runtime_roots_for_cfg_fn=self.runtime_roots_for_cfg_fn,
+        )
+
+    def peek_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
+        return peek_next_entry(
+            cfg,
+            queue_roots_fn=self.queue_roots,
+            list_queue_fn=self.list_queue_fn,
+            peek_next_across_roots_fn=self.peek_next_across_roots_fn,
+            select_all_rows=self.dequeue_entry_if_pending_fn is not None,
+            accept_entry_fn=self.accept_entry_fn,
         )
 
     def queue_entries_with_roots(self, cfg: Any) -> list[tuple[Path, Any]]:
@@ -81,6 +92,24 @@ def queue_entries_with_roots(
                 continue
             rows.append((root, entry))
     return rows
+
+
+def peek_next_entry(
+    cfg: Any,
+    *,
+    queue_roots_fn: Callable[[Any], tuple[Path, ...]],
+    list_queue_fn: Callable[[Path], list[Any]],
+    peek_next_across_roots_fn: Callable[..., tuple[Path, Any] | None],
+    select_all_rows: bool,
+    accept_entry_fn: Callable[[Any], bool] | None = None,
+) -> tuple[Path, Any] | None:
+    """Read-only preview of the entry ``dequeue_next_entry`` would claim, or ``None``."""
+    return peek_next_across_roots_fn(
+        existing_queue_roots(queue_roots_fn(cfg)),
+        list_queue_fn=list_queue_fn,
+        select_all_rows=select_all_rows,
+        accept_entry_fn=accept_entry_fn,
+    )
 
 
 def dequeue_next_entry(

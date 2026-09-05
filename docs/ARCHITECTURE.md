@@ -526,8 +526,13 @@ retained conformers to ORCA child jobs on the next workflow cycle.
 
 Workflow-managed xTB/CREST job dirs, per-workflow queues/indexes, and outputs
 live **only** under `<runs root>/<workflow_id>/<NN_engine>` (`01_crest`,
-`02_xtb`, `03_orca`). They are not
+`02_xtb`). They are not
 part of the public CLI surface; users submit them through workflow `run-dir`.
+ORCA is a `shared-root` engine in the catalog: its workflow stage job dirs live
+under `03_orca`, but every ORCA queue row and job-location record stays in the
+shared queue and index at the runs root, so runtime-root discovery
+(`core/indexing/roots.py`) never enumerates `03_orca` directories and the ORCA
+worker polls exactly one queue root.
 The ORCA-only `scan_ts_search` template uses no engine root: its ORCA stages
 are workflow-ordered directories directly under the workspace (`01_scan`,
 `02_scan_maximum`, ...).

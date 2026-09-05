@@ -133,6 +133,7 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
         reserved: tuple[str, Any | None] = deps.reserve_dequeued_entry(
             self.cfg,
             admission_root=self.admission_root,
+            peek_next_fn=deps.peek_next_entry,
             reserve_slot_fn=deps.try_reserve_admission_slot,
             dequeue_next_fn=deps.dequeue_next_entry,
             release_slot_fn=deps.release_slot,

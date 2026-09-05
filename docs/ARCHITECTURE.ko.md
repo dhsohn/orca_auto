@@ -486,9 +486,13 @@ stage 상한까지 배치합니다.
 ### 내부 엔진 스코프
 
 워크플로우가 관리하는 xTB/CREST 작업 디렉터리, 워크플로우별 큐/인덱스, 출력은
-**오직** `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`,
-`03_orca`) 아래에만 존재합니다. 이들은 공개 CLI 표면의 일부가 아니며, 사용자는
-워크플로우 `run-dir`을 통해 제출합니다. ORCA 전용 `scan_ts_search` 템플릿은 엔진
+**오직** `<runs root>/<workflow_id>/<NN_engine>`(`01_crest`, `02_xtb`)
+아래에만 존재합니다. 이들은 공개 CLI 표면의 일부가 아니며, 사용자는
+워크플로우 `run-dir`을 통해 제출합니다. ORCA는 카탈로그상 `shared-root` 엔진입니다:
+워크플로우 ORCA 스테이지 작업 디렉터리는 `03_orca` 아래에 있지만 모든 ORCA 큐 행과
+작업 위치 레코드는 runs root의 공유 큐·인덱스에 남으므로, 런타임 루트 탐색
+(`core/indexing/roots.py`)은 `03_orca` 디렉터리를 열거하지 않고 ORCA 워커는 정확히
+하나의 큐 루트만 폴링합니다. ORCA 전용 `scan_ts_search` 템플릿은 엔진
 루트를 쓰지 않습니다: ORCA 스테이지가 워크스페이스 바로 아래 워크플로우 순번
 디렉터리(`01_scan`, `02_scan_maximum`, …)로 생성됩니다.
 

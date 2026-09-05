@@ -266,10 +266,12 @@ def test_engine_queue_runtime_builds_child_worker_deps(tmp_path: Path) -> None:
     )
 
     assert deps.admission_root(cfg) == "/tmp/admission"
+    assert deps.peek_next_entry(cfg) == (tmp_path / "a", entry)
     assert deps.dequeue_next_entry(cfg) == (tmp_path / "a", entry)
     status, reserved = deps.reserve_dequeued_entry(
         cfg,
         admission_root=deps.admission_root(cfg),
+        peek_next_fn=deps.peek_next_entry,
         reserve_slot_fn=deps.try_reserve_admission_slot,
         dequeue_next_fn=deps.dequeue_next_entry,
         release_slot_fn=deps.release_slot,

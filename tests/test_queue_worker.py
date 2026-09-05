@@ -228,6 +228,55 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(len(self.worker._running), 0)
 
     @patch("orca_auto.orca.queue.worker.start_background_process")
+    def test_fill_slots_idle_poll_leaves_admission_file_untouched(
+        self, mock_start_background_process: MagicMock
+    ) -> None:
+        # Capacity must remain: at the limit main also skips the write, which
+        # would make the assertion vacuous. One live slot out of two stays.
+        token = reserve_slot(self.worker.admission_root, 2, source="queue_worker", state="reserved")
+        assert token is not None
+        try:
+            self.assertEqual(self.worker.admission_limit, 2)
+            self.assertEqual(len(list_slots(self.worker.admission_root)), 1)
+            admission_file = self.root / "admission_slots.json"
+            before = admission_file.stat()
+
+            status = self.worker._fill_slots()
+
+            after = admission_file.stat()
+            self.assertEqual(status, "idle")
+            self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+            slots = json.loads(admission_file.read_text(encoding="utf-8"))
+            self.assertEqual([slot["token"] for slot in slots], [token])
+            self.assertEqual(len(self.worker._running), 0)
+            mock_start_background_process.assert_not_called()
+        finally:
+            release_slot(self.worker.admission_root, token)
+
+    def test_admission_reservation_moves_the_admission_file_to_a_new_inode(self) -> None:
+        # Positive control for the idle-poll probe above: a real reservation
+        # write replaces the admission file, so an unchanged inode is evidence
+        # that no reservation happened.
+        first = reserve_slot(self.worker.admission_root, 2, source="probe", state="reserved")
+        assert first is not None
+        admission_file = self.root / "admission_slots.json"
+        before = admission_file.stat()
+        second = reserve_slot(self.worker.admission_root, 2, source="probe", state="reserved")
+        try:
+            after = admission_file.stat()
+            self.assertIsNotNone(second)
+            # The atomic replace may reuse the freed inode number, so the probe
+            # the idle-poll test relies on is the (inode, mtime_ns) pair.
+            self.assertNotEqual(
+                (after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns)
+            )
+            self.assertEqual(len(list_slots(self.worker.admission_root)), 2)
+        finally:
+            release_slot(self.worker.admission_root, first)
+            if second is not None:
+                release_slot(self.worker.admission_root, second)
+
+    @patch("orca_auto.orca.queue.worker.start_background_process")
     def test_start_job(self, mock_start_background_process: MagicMock) -> None:
         mock_proc = MagicMock()
         mock_proc.pid = 4321

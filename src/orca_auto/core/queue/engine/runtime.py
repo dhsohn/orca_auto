@@ -19,6 +19,7 @@ from ..worker import (
     dequeue_next_across_roots,
     engine_queue_worker_source,
     make_child_queue_worker_deps,
+    peek_next_across_roots,
     read_worker_pid_file,
     reserve_engine_queue_worker_slot,
     resolve_admission_root,
@@ -149,12 +150,16 @@ class EngineQueueRuntime:
             list_queue_fn=list_queue_fn or self.list_queue,
             dequeue_next_fn=self.dequeue_next,
             dequeue_next_across_roots_fn=dequeue_next_across_roots,
+            peek_next_across_roots_fn=peek_next_across_roots,
             dequeue_entry_if_pending_fn=self.dequeue_entry_if_pending,
             accept_entry_fn=self.accept_entry_fn,
         )
 
     def queue_roots(self, cfg: Any) -> tuple[Path, ...]:
         return self._queue_runtime().queue_roots(cfg)
+
+    def peek_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
+        return self._queue_runtime().peek_next_entry(cfg)
 
     def queue_entries_with_roots(
         self,
@@ -203,6 +208,7 @@ class EngineQueueRuntime:
             time_module=time_module,
             release_slot_fn=release_slot_fn,
             admission_root_fn=self.admission_root,
+            peek_next_entry_fn=self.peek_next_entry,
             dequeue_next_entry_fn=self.dequeue_next_entry,
             start_background_job_process_fn=start_background_job_process_fn,
             try_reserve_admission_slot_fn=try_reserve_admission_slot_fn,

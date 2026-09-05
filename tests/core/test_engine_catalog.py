@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -14,12 +15,15 @@ from orca_auto import cli_workers as cli_worker_specs
 from orca_auto.core.engine_catalog import (
     activity_engine_entries,
     engine_catalog,
+    engine_uses_workflow_stage_roots,
     known_engine_ids,
     supervised_engine_entries,
     workflow_stage_engine_entries,
 )
 from orca_auto.core.engines.registry import get_engine_definition
+from orca_auto.core.indexing.roots import runtime_roots_for_cfg
 from orca_auto.core.paths.workflow import (
+    WORKFLOW_FILE_NAME,
     WORKFLOW_STAGE_DIRNAMES,
     workflow_stage_dirnames_for_engine,
     workflow_workspace_internal_engine_paths,
@@ -178,6 +182,44 @@ def test_every_catalog_engine_has_registry_supervision_admission_and_stage_metad
             tmp_path,
             engine=entry.engine_id,
         )["allowed_root"] == tmp_path / str(entry.workflow_stage_dirname)
+
+
+def test_only_workflow_stage_engines_get_per_workflow_runtime_roots(tmp_path: Path) -> None:
+    workflow_root = tmp_path / "workflows"
+    workspace = workflow_root / "wf-all-engines"
+    workspace.mkdir(parents=True)
+    for entry in engine_catalog():
+        (workspace / str(entry.workflow_stage_dirname)).mkdir()
+    (workspace / WORKFLOW_FILE_NAME).write_text(
+        json.dumps(
+            {
+                "workflow_id": "wf-all-engines",
+                "stages": [
+                    {"stage_id": f"{entry.engine_id}_01", "task": {"engine": entry.engine_id}}
+                    for entry in engine_catalog()
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = type(
+        "Cfg",
+        (),
+        {
+            "runtime": type("Runtime", (), {"allowed_root": str(tmp_path / "runs")})(),
+            "workflow_root": str(workflow_root),
+        },
+    )()
+
+    assert engine_uses_workflow_stage_roots("demo") is False
+    assert engine_uses_workflow_stage_roots("") is False
+    for entry in engine_catalog():
+        expects_stage_root = entry.workflow_stage_role == "workflow-stage"
+        assert engine_uses_workflow_stage_roots(entry.engine_id) is expects_stage_root
+        roots = runtime_roots_for_cfg(cfg, engine=entry.engine_id)
+        stage_root = (workspace / str(entry.workflow_stage_dirname)).resolve()
+        assert roots[0] == (tmp_path / "runs").resolve()
+        assert (stage_root in roots) is expects_stage_root
 
 
 def test_orca_worker_reservation_uses_catalog_identity(

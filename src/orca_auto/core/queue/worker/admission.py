@@ -56,22 +56,20 @@ def reserve_engine_queue_worker_slot(
     )
 
 
-def dequeue_next_across_roots(
+def _select_next_claimable_entry(
     roots: tuple[Path, ...],
     *,
     list_queue_fn: Callable[[Path], list[T]],
-    dequeue_next_fn: Callable[[Path], T | None],
-    dequeue_entry_fn: Callable[..., T | None] | None = None,
-    accept_entry_fn: Callable[[T], bool] | None = None,
+    select_all_rows: bool,
+    accept_entry_fn: Callable[[T], bool] | None,
 ) -> tuple[Path, T] | None:
-    if len(roots) == 1 and accept_entry_fn is None:
-        entry = dequeue_next_fn(roots[0])
-        if entry is None:
-            return None
-        return roots[0], entry
+    """Pick the row a dequeue would claim across *roots* without mutating anything.
 
+    ``select_all_rows`` is true when the caller can dequeue a specific row by
+    id; otherwise each root's own head-of-queue rule decides, so only the first
+    eligible row per root is considered.
+    """
     selected_root: Path | None = None
-    selected_queue_id = ""
     selected_entry: T | None = None
     selected_key: tuple[int, str, int] | None = None
 
@@ -86,7 +84,7 @@ def dequeue_next_across_roots(
             if not queue_entry_is_claimable(entry):
                 continue
             if accept_entry_fn is not None and not accept_entry_fn(entry):
-                if dequeue_entry_fn is None:
+                if not select_all_rows:
                     break
                 continue
             # Within one queue file the row position is the arrival order:
@@ -100,7 +98,7 @@ def dequeue_next_across_roots(
             if champion_key is None or key < champion_key:
                 champion_key = key
                 champion_entry = entry
-            if dequeue_entry_fn is None:
+            if not select_all_rows:
                 break
         if champion_entry is None or champion_key is None:
             continue
@@ -114,13 +112,71 @@ def dequeue_next_across_roots(
         if selected_key is None or root_key < selected_key:
             selected_key = root_key
             selected_root = root
-            selected_queue_id = str(getattr(champion_entry, "queue_id", "")).strip()
             selected_entry = champion_entry
 
-    if selected_root is None:
+    if selected_root is None or selected_entry is None:
         return None
+    return selected_root, selected_entry
 
-    if dequeue_entry_fn is not None and selected_queue_id and selected_entry is not None:
+
+def peek_next_across_roots(
+    roots: tuple[Path, ...],
+    *,
+    list_queue_fn: Callable[[Path], list[T]],
+    select_all_rows: bool,
+    accept_entry_fn: Callable[[T], bool] | None = None,
+) -> tuple[Path, T] | None:
+    """Read-only preview of ``dequeue_next_across_roots`` for the same roots.
+
+    The worker consults this before reserving an admission slot so an idle
+    poll never rewrites the admission file. The preview is never stricter than
+    the dequeue: a row it selects may still be lost to a concurrent claim or
+    cancellation, and the dequeue then reports that. On the single-root fast
+    path the root's own ``dequeue_next`` owns the eligibility rule, so the
+    preview only requires what every queue store requires — a pending,
+    uncancelled row — and leaves the rest to the dequeue.
+    """
+    if len(roots) == 1 and accept_entry_fn is None:
+        for entry in list_queue_fn(roots[0]):
+            status_value = getattr(getattr(entry, "status", None), "value", None)
+            status = str(status_value).strip().lower()
+            if status == "pending" and not getattr(entry, "cancel_requested", False):
+                return roots[0], entry
+        return None
+    return _select_next_claimable_entry(
+        roots,
+        list_queue_fn=list_queue_fn,
+        select_all_rows=select_all_rows,
+        accept_entry_fn=accept_entry_fn,
+    )
+
+
+def dequeue_next_across_roots(
+    roots: tuple[Path, ...],
+    *,
+    list_queue_fn: Callable[[Path], list[T]],
+    dequeue_next_fn: Callable[[Path], T | None],
+    dequeue_entry_fn: Callable[..., T | None] | None = None,
+    accept_entry_fn: Callable[[T], bool] | None = None,
+) -> tuple[Path, T] | None:
+    if len(roots) == 1 and accept_entry_fn is None:
+        entry = dequeue_next_fn(roots[0])
+        if entry is None:
+            return None
+        return roots[0], entry
+
+    selected = _select_next_claimable_entry(
+        roots,
+        list_queue_fn=list_queue_fn,
+        select_all_rows=dequeue_entry_fn is not None,
+        accept_entry_fn=accept_entry_fn,
+    )
+    if selected is None:
+        return None
+    selected_root, selected_entry = selected
+    selected_queue_id = str(getattr(selected_entry, "queue_id", "")).strip()
+
+    if dequeue_entry_fn is not None and selected_queue_id:
         entry = dequeue_entry_fn(
             selected_root,
             selected_queue_id,
@@ -150,10 +206,19 @@ def reserve_dequeued_entry(
     cfg: Any,
     *,
     admission_root: str | Path,
+    peek_next_fn: Callable[[Any], tuple[Path, T] | None],
     reserve_slot_fn: Callable[[Any], str | None],
     dequeue_next_fn: Callable[[Any], tuple[Path, T] | None],
     release_slot_fn: Callable[[str | Path, str], object],
 ) -> tuple[str, ReservedQueueEntry[T] | None]:
+    # Look before reserving: an admission reservation is a durable write to
+    # the shared slot file, and an idle worker must not pay it (twice, with
+    # the release) on every poll. The slot still comes before the dequeue so a
+    # claimed row always holds capacity; a preview that loses the race simply
+    # releases the slot again.
+    if peek_next_fn(cfg) is None:
+        return "idle", None
+
     admission_token = reserve_slot_fn(cfg)
     if admission_token is None:
         return "blocked", None
@@ -184,6 +249,7 @@ def make_child_queue_worker_deps(
     time_module: Any,
     release_slot_fn: Callable[[str | Path, str], object],
     admission_root_fn: Callable[[Any], str],
+    peek_next_entry_fn: Callable[[Any], tuple[Path, Any] | None],
     dequeue_next_entry_fn: Callable[[Any], tuple[Path, Any] | None],
     start_background_job_process_fn: Callable[..., Any],
     try_reserve_admission_slot_fn: Callable[[Any], str | None],
@@ -194,6 +260,7 @@ def make_child_queue_worker_deps(
         release_slot=release_slot_fn,
         reserve_dequeued_entry=reserve_dequeued_entry,
         admission_root=admission_root_fn,
+        peek_next_entry=peek_next_entry_fn,
         dequeue_next_entry=dequeue_next_entry_fn,
         start_background_job_process=start_background_job_process_fn,
         try_reserve_admission_slot=try_reserve_admission_slot_fn,
@@ -209,6 +276,7 @@ __all__ = [
     "config_path_for_worker",
     "dequeue_next_across_roots",
     "make_child_queue_worker_deps",
+    "peek_next_across_roots",
     "queue_entry_by_id",
     "reserve_dequeued_entry",
     "reserve_engine_queue_worker_slot",

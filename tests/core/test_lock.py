@@ -132,6 +132,41 @@ def test_file_lock_at_uses_pinned_directory_descriptor(tmp_path: Path) -> None:
     assert f"pid={os.getpid()}\n" in contents
 
 
+def test_file_lock_at_does_not_fsync_its_diagnostic_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_fsync = os.fsync
+    fsynced: list[int] = []
+
+    def recording_fsync(descriptor: int) -> None:
+        fsynced.append(descriptor)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr("orca_auto.core.utils.lock.os.fsync", recording_fsync)
+    lock_path = tmp_path / "resource.lock"
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with file_lock_at(
+            directory_fd,
+            "resource.lock",
+            display_path=lock_path,
+            payload='{"pid":4321}',
+        ):
+            # The payload is written and flushed for other processes ...
+            held = held_file_lock_payload(lock_path)
+            calls_while_held = list(fsynced)
+    finally:
+        os.close(directory_fd)
+
+    # ... but never fsynced: the flock dies with its owner, so the diagnostic
+    # bytes have no reader after a crash and durability would be an fsync for
+    # nothing on every acquisition.
+    assert held == '{"pid":4321}\n'
+    assert calls_while_held == []
+    assert fsynced == []
+    assert lock_path.read_text(encoding="utf-8") == '{"pid":4321}\n'
+
+
 @pytest.mark.parametrize("lock_name", ["", ".", "..", "nested/resource.lock"])
 def test_file_lock_at_rejects_non_plain_names(tmp_path: Path, lock_name: str) -> None:
     directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)

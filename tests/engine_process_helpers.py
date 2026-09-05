@@ -4,6 +4,10 @@ from typing import Any
 
 
 def process_one_xtb_for_test(queue_cmd: Any, cfg: Any) -> str:
+    # Mirror the production poll order: look for a claimable row first, and
+    # only then reserve capacity. An idle poll must not touch admission.
+    if queue_cmd._ENGINE_RUNTIME.peek_next_entry(cfg) is None:
+        return "idle"
     slot_token = queue_cmd._try_reserve_admission_slot(cfg)
     if slot_token is None:
         return "blocked"
@@ -27,6 +31,8 @@ def process_one_xtb_for_test(queue_cmd: Any, cfg: Any) -> str:
 def process_one_crest_for_test(queue_cmd: Any, cfg: Any) -> str:
     from orca_auto.flow.engines.crest import execution as crest_worker_execution
 
+    if queue_cmd._ENGINE_RUNTIME.peek_next_entry(cfg) is None:
+        return "idle"
     slot_token = queue_cmd._try_reserve_admission_slot(cfg)
     if slot_token is None:
         return "blocked"

@@ -930,25 +930,34 @@ def test_process_one_returns_blocked_when_no_admission_slot(
 ) -> None:
     cfg = _make_cfg(tmp_path)
 
+    # A claimable row exists but no capacity does: only then is a poll blocked.
+    monkeypatch.setattr(
+        queue_cmd,
+        "_ENGINE_RUNTIME",
+        SimpleNamespace(peek_next_entry=lambda _cfg: (tmp_path, object())),
+    )
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: None)
 
     assert process_one_xtb_for_test(queue_cmd, cfg) == "blocked"
 
 
-def test_process_one_returns_idle_and_releases_reserved_slot(
+def test_process_one_returns_idle_without_touching_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cfg = _make_cfg(tmp_path)
     released: list[tuple[object, object]] = []
 
-    monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: "slot-1")
+    def reserve_slot(_cfg: object) -> str:
+        raise AssertionError("an idle poll must not reserve an admission slot")
+
+    monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", reserve_slot)
     monkeypatch.setattr(
         queue_cmd, "release_slot", lambda root, token: released.append((str(root), token))
     )
 
     assert process_one_xtb_for_test(queue_cmd, cfg) == "idle"
-    assert released == [(cfg.runtime.admission_root, "slot-1")]
+    assert released == []
 
 
 def test_queue_worker_starts_up_to_max_concurrent_children(
@@ -1002,6 +1011,7 @@ def test_queue_worker_starts_up_to_max_concurrent_children(
         "_queue_worker_deps",
         lambda: replace(
             real_deps,
+            peek_next_entry=lambda _cfg: (queue_root, entries[0]),
             dequeue_next_entry=lambda _cfg: (queue_root, _dequeued_running_entry(next(dequeued))),
         ),
     )
@@ -1202,6 +1212,7 @@ def test_queue_worker_run_once_waits_for_child_completion_and_prints_summary(
         "_queue_worker_deps",
         lambda: replace(
             real_deps,
+            peek_next_entry=lambda _cfg: (queue_root, entry),
             dequeue_next_entry=lambda _cfg: (queue_root, _dequeued_running_entry(entry)),
         ),
     )

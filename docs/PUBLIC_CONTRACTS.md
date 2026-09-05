@@ -839,8 +839,12 @@ Workflow runtime artifacts:
   A single output XYZ handed to a downstream stage has a 512 MiB
   materialization cap; larger output ensembles fail closed rather than being
   loaded without a bound.
-- Internal engine queues and outputs live under workflow stage directories such
-  as `<runs root>/<workflow_id>/01_crest`, `02_xtb`, and `03_orca`.
+- Internal xTB/CREST engine queues and outputs live under workflow stage
+  directories such as `<runs root>/<workflow_id>/01_crest` and `02_xtb`.
+  Workflow ORCA stage job directories live under `03_orca`, but their queue
+  rows and job-location records stay in the shared ORCA queue and index at the
+  runs root: ORCA is a shared-root engine, and its worker never polls a
+  per-workflow root.
   `scan_ts_search` is ORCA-only and uses no engine root: its stages are
   workflow-ordered directories directly under the workspace (`01_scan`,
   `02_scan_maximum`, ...), and no `inputs/` copy of the source geometry is

@@ -227,8 +227,8 @@ def drain_cancellation_transitions(
     except (OSError, ValueError):
         return 0
     # Lockless pre-read: the common case stores nothing, and taking the lock
-    # first would write and fsync a lock file for every cancelled record each
-    # cycle and recreate a workspace directory an operator removed.
+    # first would write a lock file for every cancelled record each cycle and
+    # recreate a workspace directory an operator removed.
     try:
         preview = load_workflow_payload_fn(workspace_path)
     except (OSError, ValueError):

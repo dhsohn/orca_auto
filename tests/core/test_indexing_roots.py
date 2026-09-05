@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from orca_auto.core.engine_catalog import get_engine_catalog_entry
 from orca_auto.core.indexing import roots
+from orca_auto.core.paths.workflow import WORKFLOW_FILE_NAME, workflow_stage_dirnames_for_engine
 
 
 def _cfg(allowed_root: Path, *, workflow_root: Path | str = "") -> Any:
@@ -61,28 +64,65 @@ def test_runtime_roots_for_cfg_deduplicates_workflow_engine_roots(
     )
 
 
-def test_runtime_roots_for_cfg_includes_canonical_orca_root(
+def _mixed_engine_workspace(workflow_root: Path) -> Path:
+    """A real direct-child workspace whose manifest names an xTB and an ORCA stage."""
+    workspace = workflow_root / "wf-mixed"
+    (workspace / "02_xtb").mkdir(parents=True)
+    (workspace / "03_orca").mkdir()
+    (workspace / WORKFLOW_FILE_NAME).write_text(
+        json.dumps(
+            {
+                "workflow_id": "wf-mixed",
+                "stages": [
+                    {"stage_id": "xtb_01", "task": {"engine": "xtb"}},
+                    {"stage_id": "orca_01", "task": {"engine": "orca"}},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return workspace
+
+
+def test_runtime_roots_for_cfg_keeps_a_shared_root_engine_on_the_shared_root(
     tmp_path: Path,
-    monkeypatch: Any,
 ) -> None:
     workflow_root = tmp_path / "workflows"
-    workspace = workflow_root / "wf-orca"
-    reaction_orca_root = workspace / "03_orca"
-    reaction_orca_root.mkdir(parents=True)
+    workspace = _mixed_engine_workspace(workflow_root)
+    cfg = _cfg(tmp_path / "fallback", workflow_root=workflow_root)
 
-    monkeypatch.setattr(
-        roots,
-        "iter_workflow_runtime_workspaces",
-        lambda _root, engine: (workspace,),
-    )
+    # The exclusion is a catalog-role decision, not a path-layer change: 03_orca
+    # stays the ORCA stage directory name.
+    assert get_engine_catalog_entry("orca").workflow_stage_role == "shared-root"
+    assert workflow_stage_dirnames_for_engine("orca") == ("03_orca",)
 
-    assert roots.runtime_roots_for_cfg(
-        _cfg(tmp_path / "fallback", workflow_root=workflow_root),
-        engine="orca",
-    ) == (
+    assert roots.runtime_roots_for_cfg(cfg, engine="orca") == ((tmp_path / "fallback").resolve(),)
+    # Positive control through the very same workspace, manifest and discovery
+    # path: a workflow-stage engine still gets its per-workflow root.
+    assert roots.runtime_roots_for_cfg(cfg, engine="xtb") == (
         (tmp_path / "fallback").resolve(),
-        reaction_orca_root.resolve(),
+        (workspace / "02_xtb").resolve(),
     )
+
+
+def test_index_root_for_path_keeps_a_shared_root_engine_on_the_shared_root(
+    tmp_path: Path,
+) -> None:
+    workflow_root = tmp_path / "workflows"
+    workspace = _mixed_engine_workspace(workflow_root)
+    cfg = _cfg(tmp_path / "fallback", workflow_root=workflow_root)
+
+    assert (
+        roots.index_root_for_path(cfg, str(workspace / "03_orca" / "job"), engine="orca")
+        == (tmp_path / "fallback").resolve()
+    )
+    assert (
+        roots.index_root_for_path(cfg, str(workspace / "02_xtb" / "job"), engine="xtb")
+        == (workspace / "02_xtb").resolve()
+    )
+    assert roots.lookup_roots_for_target(
+        cfg, str(workspace / "03_orca" / "job"), engine="orca"
+    ) == ((tmp_path / "fallback").resolve(),)
 
 
 def test_index_root_for_path_prefers_matching_workflow_runtime_root(

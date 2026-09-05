@@ -137,6 +137,19 @@ def workflow_stage_engine_entries() -> tuple[EngineCatalogEntry, ...]:
     )
 
 
+def engine_uses_workflow_stage_roots(engine: object) -> bool:
+    """True only for engines whose queues and indexes live per workflow stage.
+
+    A ``shared-root`` engine (ORCA) keeps every queue row and job-location
+    record in the shared runs root even when its stage job directories sit
+    inside a workflow workspace, so root discovery must not enumerate its
+    workflow stage directories. An unknown engine is not a workflow-stage
+    engine.
+    """
+    entry = find_engine_catalog_entry(engine)
+    return entry is not None and entry.workflow_stage_role == "workflow-stage"
+
+
 def supervised_engine_entries() -> tuple[EngineCatalogEntry, ...]:
     return tuple(sorted(_ENGINE_CATALOG, key=lambda entry: entry.supervision_order))
 
@@ -152,6 +165,7 @@ __all__ = [
     "WorkflowStageRole",
     "activity_engine_entries",
     "engine_catalog",
+    "engine_uses_workflow_stage_roots",
     "find_engine_catalog_entry",
     "find_engine_catalog_entry_by_source_id",
     "get_engine_catalog_entry",

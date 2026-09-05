@@ -422,12 +422,154 @@ def test_reserve_dequeued_entry_releases_slot_when_dequeue_raises() -> None:
         worker_common.reserve_dequeued_entry(
             _cfg(admission_root="/tmp/admission"),
             admission_root="/tmp/admission",
+            peek_next_fn=lambda _cfg: (Path("/allowed"), _entry("q-1")),
             reserve_slot_fn=lambda _cfg: "slot-1",
             dequeue_next_fn=lambda _cfg: (_ for _ in ()).throw(RuntimeError("queue corrupt")),
             release_slot_fn=lambda root, token: released.append((str(root), token)),
         )
 
     assert released == [("/tmp/admission", "slot-1")]
+
+
+def test_reserve_dequeued_entry_never_touches_admission_when_nothing_is_claimable() -> None:
+    def reserve_slot(_cfg: Any) -> str:
+        raise AssertionError("an idle poll must not reserve an admission slot")
+
+    def release_slot(_root: Any, _token: str) -> None:
+        raise AssertionError("an idle poll has no slot to release")
+
+    def dequeue_next(_cfg: Any) -> None:
+        raise AssertionError("an idle poll must not attempt a dequeue")
+
+    assert worker_common.reserve_dequeued_entry(
+        _cfg(admission_root="/tmp/admission"),
+        admission_root="/tmp/admission",
+        peek_next_fn=lambda _cfg: None,
+        reserve_slot_fn=reserve_slot,
+        dequeue_next_fn=dequeue_next,
+        release_slot_fn=release_slot,
+    ) == ("idle", None)
+
+
+def test_reserve_dequeued_entry_reserves_only_after_a_claimable_preview() -> None:
+    calls: list[str] = []
+    entry = _entry("q-1")
+
+    def reserve_slot(_cfg: Any) -> str:
+        calls.append("reserve")
+        return "slot-1"
+
+    def dequeue_next(_cfg: Any) -> tuple[Path, Any]:
+        calls.append("dequeue")
+        return Path("/allowed"), entry
+
+    status, reserved = worker_common.reserve_dequeued_entry(
+        _cfg(admission_root="/tmp/admission"),
+        admission_root="/tmp/admission",
+        peek_next_fn=lambda _cfg: _append_and_return(calls, "peek", (Path("/allowed"), entry)),
+        reserve_slot_fn=reserve_slot,
+        dequeue_next_fn=dequeue_next,
+        release_slot_fn=lambda _root, _token: calls.append("release"),
+    )
+
+    assert status == "processed"
+    assert reserved is not None
+    assert reserved.entry is entry
+    assert reserved.admission_token == "slot-1"
+    assert calls == ["peek", "reserve", "dequeue"]
+
+
+def test_reserve_dequeued_entry_releases_slot_when_previewed_row_is_lost() -> None:
+    released: list[tuple[str, str]] = []
+
+    assert worker_common.reserve_dequeued_entry(
+        _cfg(admission_root="/tmp/admission"),
+        admission_root="/tmp/admission",
+        peek_next_fn=lambda _cfg: (Path("/allowed"), _entry("q-1")),
+        reserve_slot_fn=lambda _cfg: "slot-1",
+        dequeue_next_fn=lambda _cfg: None,
+        release_slot_fn=lambda root, token: released.append((str(root), token)),
+    ) == ("idle", None)
+    assert released == [("/tmp/admission", "slot-1")]
+
+
+def test_peek_next_across_roots_selects_exactly_what_the_dequeue_would_claim(
+    tmp_path: Path,
+) -> None:
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    foreign = _entry("foreign", enqueued_at="2026-01-01T00:00:00Z")
+    unpublished = _entry(
+        "unpublished",
+        enqueued_at="2026-01-01T00:00:01Z",
+        metadata={QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING},
+    )
+    cancelled = _entry("cancelled", enqueued_at="2026-01-01T00:00:02Z", cancel_requested=True)
+    running = _entry("running", status="running", enqueued_at="2026-01-01T00:00:03Z")
+    later = _entry("later", enqueued_at="2026-01-01T00:00:09Z")
+    earlier = _entry("earlier", enqueued_at="2026-01-01T00:00:04Z")
+    queues = {root_a: [foreign, unpublished, cancelled, running, later], root_b: [earlier]}
+    dequeued: list[tuple[Path, str]] = []
+
+    def accept(entry: Any) -> bool:
+        return entry.queue_id != "foreign"
+
+    def dequeue_entry(root: Path, queue_id: str, *, expected_entry: Any) -> Any:
+        dequeued.append((root, queue_id))
+        return expected_entry
+
+    preview = worker_common.peek_next_across_roots(
+        (root_a, root_b),
+        list_queue_fn=lambda root: queues[root],
+        select_all_rows=True,
+        accept_entry_fn=accept,
+    )
+    claimed = worker_common.dequeue_next_across_roots(
+        (root_a, root_b),
+        list_queue_fn=lambda root: queues[root],
+        dequeue_next_fn=lambda _root: None,
+        dequeue_entry_fn=dequeue_entry,
+        accept_entry_fn=accept,
+    )
+
+    assert preview == (root_b, earlier)
+    assert claimed == (root_b, earlier)
+    assert dequeued == [(root_b, "earlier")]
+
+    assert (
+        worker_common.peek_next_across_roots(
+            (root_a,),
+            list_queue_fn=lambda _root: [foreign, unpublished, cancelled, running],
+            select_all_rows=True,
+            accept_entry_fn=accept,
+        )
+        is None
+    )
+
+
+def test_peek_next_across_roots_defers_eligibility_to_the_single_root_dequeue() -> None:
+    root = Path("/allowed")
+    unpublished = _entry(
+        "unpublished", metadata={QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING}
+    )
+    cancelled = _entry("cancelled", cancel_requested=True)
+
+    # With one root and no acceptance filter the dequeue fast path hands the
+    # whole eligibility rule to the store, so the preview may only demand a
+    # pending, uncancelled row: it must never be stricter than that dequeue.
+    assert worker_common.peek_next_across_roots(
+        (root,),
+        list_queue_fn=lambda _root: [cancelled, unpublished],
+        select_all_rows=False,
+    ) == (root, unpublished)
+    assert (
+        worker_common.peek_next_across_roots(
+            (root,),
+            list_queue_fn=lambda _root: [cancelled, _entry("done", status="completed")],
+            select_all_rows=False,
+        )
+        is None
+    )
 
 
 def test_queue_entry_by_id_scans_queue_with_injected_lister(tmp_path: Path) -> None:
