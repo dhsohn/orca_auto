@@ -11,8 +11,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from orca_auto.cli_errors import emit_error
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
+from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
 
 LOGGER = logging.getLogger(__name__)

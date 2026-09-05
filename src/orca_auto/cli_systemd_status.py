@@ -10,33 +10,34 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from orca_auto import cli_style, cli_systemd_freshness, cli_systemd_units
+from orca_auto import cli_systemd_freshness, cli_systemd_units
 from orca_auto._version import installed_version_drift
-from orca_auto.cli_errors import emit_error
+from orca_auto.core import terminal
+from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils.coercion import normalize_text
 
 _SERVICE_ACTIVE_COLORS = {
-    "active": cli_style.GREEN,
-    "failed": cli_style.RED,
-    "inactive": cli_style.DIM,
-    "dead": cli_style.DIM,
+    "active": terminal.GREEN,
+    "failed": terminal.RED,
+    "inactive": terminal.DIM,
+    "dead": terminal.DIM,
 }
 
 
 def _service_active_color(value: str) -> str:
-    return _SERVICE_ACTIVE_COLORS.get(value.strip().lower(), cli_style.YELLOW)
+    return _SERVICE_ACTIVE_COLORS.get(value.strip().lower(), terminal.YELLOW)
 
 
 def _paint_field(text: str, width: int, color: str | None) -> str:
     padded = f"{text:<{width}}"
-    return cli_style.paint(padded, color) if color else padded
+    return terminal.paint(padded, color) if color else padded
 
 
 def _print_service_status(
     target_user: str, statuses: Sequence[cli_systemd_units.ServiceUnitStatus]
 ) -> None:
     print(f"orca_auto service status for {target_user} ({_selected_service_mode(statuses)}):")
-    print(cli_style.paint(f"{'Name':<10} {'Active':<14} Unit", cli_style.BOLD))
+    print(terminal.paint(f"{'Name':<10} {'Active':<14} Unit", terminal.BOLD))
     for status in statuses:
         active = _paint_field(status.active, 14, _service_active_color(status.active))
         print(f"{status.label:<10} {active} {status.unit}")

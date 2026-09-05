@@ -7,15 +7,15 @@ from typing import Any
 
 import pytest
 
-from orca_auto import cli_common
 from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.cli import main as cli_main
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
+from orca_auto.core.config import discovery
 from orca_auto.flow.run_dir.layout import WorkflowRunDirLayout, inspect_workflow_run_dir
 from orca_auto.orca.queue import adapter as queue_adapter
 
 
-def test_cli_common_discovers_config_from_explicit_env_and_repo_candidate(
+def test_discovery_resolves_config_from_explicit_env_and_repo_candidate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -28,30 +28,30 @@ def test_cli_common_discovers_config_from_explicit_env_and_repo_candidate(
     repo_config.parent.mkdir(parents=True)
     repo_config.write_text("workflow:\n  root: /tmp/workflows\n", encoding="utf-8")
 
-    assert cli_common._discover_shared_config_path(str(explicit_config)) == str(
+    assert discovery.resolve_shared_config_path(str(explicit_config)) == str(
         explicit_config.resolve()
     )
 
     monkeypatch.setenv(ORCA_AUTO_CONFIG_ENV_VAR, str(env_config))
-    assert cli_common._discover_shared_config_path(None) == str(env_config.resolve())
+    assert discovery.resolve_shared_config_path(None) == str(env_config.resolve())
 
     monkeypatch.delenv(ORCA_AUTO_CONFIG_ENV_VAR)
-    monkeypatch.setattr(cli_common, "_repo_root", lambda: repo_root)
-    assert cli_common._discover_shared_config_path(None) == str(repo_config.resolve())
-    assert cli_common._discover_workflow_root(str(tmp_path / "workflows")) == str(
+    monkeypatch.setattr(discovery, "repo_root", lambda: repo_root)
+    assert discovery.resolve_shared_config_path(None) == str(repo_config.resolve())
+    assert discovery.resolve_workflow_root(str(tmp_path / "workflows")) == str(
         (tmp_path / "workflows").resolve()
     )
-    assert cli_common._discover_workflow_root(" ") is None
+    assert discovery.resolve_workflow_root(" ") is None
 
 
 def test_workflow_root_for_args_prefers_explicit_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        cli_common,
+        discovery,
         "shared_workflow_root_from_config",
         lambda config_path: (_ for _ in ()).throw(AssertionError("config should not be read")),
     )
 
-    assert cli_common._workflow_root_for_args(
+    assert discovery.workflow_root_for_args(
         argparse.Namespace(
             workflow_root="/tmp/explicit-workflows",
             orca_auto_config=None,

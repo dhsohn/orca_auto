@@ -257,7 +257,7 @@ class TestCli(unittest.TestCase):
         with (
             patch("orca_auto.orca.commands.run_inp.cmd_run_inp", side_effect=_fake_run_inp),
             patch(
-                "orca_auto.cli_handlers._engine_config_for_command",
+                "orca_auto.cli_handlers.engine_config_for_args",
                 return_value=resolved_config,
             ),
         ):
@@ -293,7 +293,7 @@ class TestCli(unittest.TestCase):
         with (
             patch("orca_auto.orca.commands.init.cmd_init", side_effect=_record("init", 42)),
             patch(
-                "orca_auto.cli_handlers._engine_config_for_command",
+                "orca_auto.cli_handlers.engine_config_for_args",
                 return_value=resolved_config,
             ),
         ):

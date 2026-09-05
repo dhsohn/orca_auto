@@ -7,14 +7,14 @@ from typing import Any
 import pytest
 
 from orca_auto import cli as unified_cli
+from orca_auto import cli_handlers as cli_run_dir
 from orca_auto import (
-    cli_common,
     cli_queue,
     cli_systemd_apply,
     cli_systemd_restart,
     cli_systemd_status,
 )
-from orca_auto import cli_handlers as cli_run_dir
+from orca_auto.core.config import discovery
 
 
 @pytest.fixture(autouse=True)
@@ -24,8 +24,8 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
             return None
         return str(Path(explicit).expanduser().resolve())
 
-    monkeypatch.setattr(cli_common, "_discover_shared_config_path", _explicit_shared_config_path)
-    monkeypatch.setattr(cli_common, "shared_workflow_root_from_config", lambda config_path: None)
+    monkeypatch.setattr(discovery, "resolve_shared_config_path", _explicit_shared_config_path)
+    monkeypatch.setattr(discovery, "shared_workflow_root_from_config", lambda config_path: None)
 
 
 def test_main_without_command_prints_help(capsys) -> None:

@@ -1,16 +1,19 @@
-"""Dependency-free ANSI styling helpers for terminal output.
+"""Dependency-free terminal presentation shared by every command adapter.
 
 The project intentionally keeps a single runtime dependency (PyYAML), so this
 module hand-rolls the small amount of ANSI handling the CLI needs: TTY
-detection, ``NO_COLOR``/``FORCE_COLOR``/``--no-color`` support, and a couple of
-``paint`` helpers. Messenger output never routes through here.
+detection, ``NO_COLOR``/``FORCE_COLOR``/``--no-color`` support, a couple of
+``paint`` helpers, and the ``error:`` line format every command uses on
+``stderr``. Messenger output never routes through here. It lives in ``core``
+so the workflow command adapters can use it without reaching up into the
+top-level CLI layer.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-from typing import IO
+from typing import IO, Any
 
 from orca_auto.core import statuses as _s
 
@@ -117,6 +120,27 @@ def status_text(status: object, *, stream: IO[str] | None = None) -> str:
     return paint(text, color, stream=stream) if color else text
 
 
+def emit_error(message: Any, *, hint: str | None = None) -> None:
+    """Print ``error: <message>`` to stderr, with an optional ``hint:`` line.
+
+    Errors and their recovery hints go to ``stderr`` so they stay out of piped
+    ``stdout`` data and ``--json`` payloads; the prefix is tinted red when the
+    stream is a TTY.
+    """
+
+    prefix = paint("error:", RED, stream=sys.stderr)
+    print(f"{prefix} {message}", file=sys.stderr)
+    if hint:
+        print(paint(f"hint: {hint}", DIM, stream=sys.stderr), file=sys.stderr)
+
+
+def emit_prefixed_error(prefix: str, message: Any) -> None:
+    """Print ``<prefix>: <message>`` to stderr using the shared error styling."""
+
+    styled_prefix = paint(f"{prefix}:", RED, stream=sys.stderr)
+    print(f"{styled_prefix} {message}", file=sys.stderr)
+
+
 __all__ = [
     "BLUE",
     "BOLD",
@@ -127,9 +151,12 @@ __all__ = [
     "RED",
     "YELLOW",
     "color_enabled",
+    "emit_error",
+    "emit_prefixed_error",
     "label",
     "paint",
     "set_color_override",
+    "sgr",
     "status_color",
     "status_text",
 ]

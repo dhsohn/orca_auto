@@ -57,12 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    from orca_auto import cli_style
+    from orca_auto.core import terminal
 
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "no_color", False):
-        cli_style.set_color_override(False)
+        terminal.set_color_override(False)
     if not getattr(args, "func", None):
         parser.print_help()
         return 0

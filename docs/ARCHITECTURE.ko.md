@@ -627,8 +627,9 @@ package-tree clean 상태를 판정하고, process cwd는 import-source 근거�
 ## 12. CLI 표면
 
 CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이며, 상태
-인식 색상 테이블 렌더링(`terminal_table.py`, `activity_*.py`, `cli_style.py`)을
-갖춥니다. 공개 명령 표면:
+인식 색상 테이블 렌더링(`terminal_table.py`, `activity_*.py`, `core/terminal.py`)을
+갖춥니다. 공유 설정 탐색은 `core/config/discovery.py`에 있으며, 어떤 도메인 패키지도
+최상위 CLI 모듈을 임포트하지 않습니다(import-linter 계약이 강제). 공개 명령 표면:
 
 - `init` — 공유 설정 생성/갱신
 - `scaffold <ts_search|conformer_search|scan_ts> <path>` — 워크플로우 스캐폴드 작성

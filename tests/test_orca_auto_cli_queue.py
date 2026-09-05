@@ -12,8 +12,10 @@ from typing import Any
 import pytest
 import yaml
 
-from orca_auto import activity_labels, cli_common, cli_style, terminal_table
+from orca_auto import activity_labels, terminal_table
 from orca_auto import cli_queue as unified_cli
+from orca_auto.core import terminal
+from orca_auto.core.config import discovery
 from orca_auto.core.queue import QueueStoreCorruptError
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -29,24 +31,24 @@ def test_layout_interactive_requires_terminal_and_color(
     # FORCE_COLOR on a pipe must not enable the human layout, and a real terminal
     # keeps the released plain layout when ANSI painting is disabled.
     monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: False)
-    cli_style.set_color_override(True)
+    terminal.set_color_override(True)
     try:
         assert unified_cli._layout_interactive() is False
     finally:
-        cli_style.set_color_override(None)
+        terminal.set_color_override(None)
 
     monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
-    cli_style.set_color_override(True)
+    terminal.set_color_override(True)
     try:
         assert unified_cli._layout_interactive() is True
     finally:
-        cli_style.set_color_override(None)
+        terminal.set_color_override(None)
 
-    cli_style.set_color_override(False)
+    terminal.set_color_override(False)
     try:
         assert unified_cli._layout_interactive() is False
     finally:
-        cli_style.set_color_override(None)
+        terminal.set_color_override(None)
 
 
 def test_queue_list_stays_plain_under_force_color_pipe(
@@ -104,7 +106,7 @@ def test_queue_list_stays_plain_under_force_color_pipe(
             "sources": {},
         },
     )
-    cli_style.set_color_override(True)  # FORCE_COLOR-like: color on, not a TTY
+    terminal.set_color_override(True)  # FORCE_COLOR-like: color on, not a TTY
     try:
         result = unified_cli.cmd_queue_list(
             SimpleNamespace(
@@ -119,7 +121,7 @@ def test_queue_list_stays_plain_under_force_color_pipe(
             )
         )
     finally:
-        cli_style.set_color_override(None)
+        terminal.set_color_override(None)
     assert result == 0
     stdout = capsys.readouterr().out
     plain = _strip_ansi(stdout)
@@ -139,7 +141,7 @@ def test_queue_header_band_respects_terminal_width() -> None:
         (0, {"status": status})
         for status in ("running", "queued", "completed", "repair_blocked", "cancelled", "unknown")
     ]
-    cli_style.set_color_override(True)
+    terminal.set_color_override(True)
     try:
         lines = unified_cli._queue_header_band_lines(
             rows,
@@ -152,7 +154,7 @@ def test_queue_header_band_respects_terminal_width() -> None:
             max_width=20,
         )[0]
     finally:
-        cli_style.set_color_override(None)
+        terminal.set_color_override(None)
     plain_lines = [_strip_ansi(line) for line in lines]
     assert all(terminal_table.display_width(line) <= 40 for line in plain_lines)
     summary = " ".join(plain_lines[1:])
@@ -169,8 +171,8 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
             return None
         return str(Path(explicit).expanduser().resolve())
 
-    monkeypatch.setattr(cli_common, "_discover_shared_config_path", _explicit_shared_config_path)
-    monkeypatch.setattr(cli_common, "shared_workflow_root_from_config", lambda config_path: None)
+    monkeypatch.setattr(discovery, "resolve_shared_config_path", _explicit_shared_config_path)
+    monkeypatch.setattr(discovery, "shared_workflow_root_from_config", lambda config_path: None)
 
 
 def test_queue_elapsed_prefers_attempt_anchor_metadata() -> None:
@@ -336,7 +338,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
     )
 
     # ``set_color_override`` is process-global, so always restore it.
-    cli_style.set_color_override(True)
+    terminal.set_color_override(True)
     try:
         result = unified_cli.cmd_queue_list(
             SimpleNamespace(
@@ -351,7 +353,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
             )
         )
     finally:
-        cli_style.set_color_override(None)
+        terminal.set_color_override(None)
 
     assert result == 0
     stdout = capsys.readouterr().out
@@ -439,11 +441,11 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
         # Interactive layout needs a real terminal; color alone (e.g. FORCE_COLOR)
         # must not restructure. color=False stays plain via color_enabled anyway.
         monkeypatch.setattr(unified_cli, "_stdout_isatty", lambda: True)
-        cli_style.set_color_override(color)
+        terminal.set_color_override(color)
         try:
             assert unified_cli.cmd_queue_list(args) == 0
         finally:
-            cli_style.set_color_override(None)
+            terminal.set_color_override(None)
         return capsys.readouterr().out
 
     def _table_lines(out: str) -> list[str]:
@@ -1337,7 +1339,7 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
 ) -> None:
     monkeypatch.setattr(
         unified_cli,
-        "_workflow_root_for_args",
+        "workflow_root_for_args",
         lambda args, config_path=None: str(tmp_path / "does_not_exist_root"),
     )
     monkeypatch.setattr(

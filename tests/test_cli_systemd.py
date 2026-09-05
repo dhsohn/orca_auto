@@ -14,7 +14,6 @@ import pytest
 
 from orca_auto import (
     _process_evidence,
-    cli_common,
     cli_systemd_apply,
     cli_systemd_freshness,
     cli_systemd_status,
@@ -341,12 +340,10 @@ def test_systemd_templates_are_loaded_from_required_repo_checkout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo, config_path = _make_repo(tmp_path)
-    wheel_module = tmp_path / "wheel" / "site-packages" / "orca_auto" / "cli_common.py"
-    monkeypatch.setattr(
-        cli_common,
-        "__file__",
-        str(wheel_module),
-    )
+    # Templates come from the --repo checkout, never from the installed package
+    # location, so an installer imported from a wheel still renders them.
+    wheel_module = tmp_path / "wheel" / "site-packages" / "orca_auto" / "systemd_plan.py"
+    monkeypatch.setattr(systemd_plan, "__file__", str(wheel_module))
 
     plan = systemd_plan.build_systemd_install_plan(
         target_user="alice",

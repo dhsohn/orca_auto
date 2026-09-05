@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.cli_errors import emit_error
 from orca_auto.core.paths.workflow import validate_workflow_id_path_segment
+from orca_auto.core.terminal import emit_error
 from orca_auto.flow.templates import (
     CONFORMER_SCREENING_SHORTCUT,
     CONFORMER_SCREENING_TEMPLATE_ID,

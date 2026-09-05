@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto import activity_labels, cli_common, cli_style, terminal_table
+from orca_auto import activity_labels, terminal_table
 from orca_auto import activity_rendering as _activity_rendering
 from orca_auto.activity_view import (
     activity_counter_config_path,
@@ -19,16 +19,18 @@ from orca_auto.activity_view import (
     queue_list_default_visible_items,
     queue_list_display_rows,
 )
-from orca_auto.cli_common import (
-    _effective_shared_config_text,
-    _workflow_root_for_args,
-)
-from orca_auto.cli_errors import emit_error
 from orca_auto.core import statuses as _s
+from orca_auto.core import terminal
 from orca_auto.core.activity_icons import activity_status_icon
+from orca_auto.core.config import discovery
 from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.discovery import (
+    shared_config_text_from_args,
+    workflow_root_for_args,
+)
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
+from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.activity import cancel_activity, clear_activities, list_activities
 from orca_auto.flow.registry import WorkflowRegistryCorruptError
@@ -86,7 +88,7 @@ def _layout_interactive() -> bool:
     ``FORCE_COLOR`` on a pipe may paint text but cannot enable the human layout.
     """
 
-    return cli_style.color_enabled() and _stdout_isatty()
+    return terminal.color_enabled() and _stdout_isatty()
 
 
 # The queue table gains a status-colored left rail on a TTY; the rail glyph plus
@@ -144,26 +146,26 @@ def _queue_header_band_lines(
             continue
         label, representative = _SUMMARY_META[key]
         text = f"{activity_status_icon(representative)} {count} {label}"
-        color = cli_style.status_color(representative)
+        color = terminal.status_color(representative)
         segments.append((text, color))
 
     active_plain = f"{int(active_simulations)} active"
     title_candidates = (
         (
-            cli_style.paint(_QUEUE_RAIL, cli_style.CYAN)
-            + cli_style.paint("orca_auto queue", cli_style.BOLD)
+            terminal.paint(_QUEUE_RAIL, terminal.CYAN)
+            + terminal.paint("orca_auto queue", terminal.BOLD)
             + "   "
-            + cli_style.paint(active_plain, cli_style.BOLD),
+            + terminal.paint(active_plain, terminal.BOLD),
             f"{_QUEUE_RAIL}orca_auto queue   {active_plain}",
         ),
         (
-            cli_style.paint(_QUEUE_RAIL, cli_style.CYAN)
-            + cli_style.paint("queue", cli_style.BOLD)
+            terminal.paint(_QUEUE_RAIL, terminal.CYAN)
+            + terminal.paint("queue", terminal.BOLD)
             + "   "
-            + cli_style.paint(active_plain, cli_style.BOLD),
+            + terminal.paint(active_plain, terminal.BOLD),
             f"{_QUEUE_RAIL}queue   {active_plain}",
         ),
-        (cli_style.paint(active_plain, cli_style.BOLD), active_plain),
+        (terminal.paint(active_plain, terminal.BOLD), active_plain),
     )
     title = next(
         (
@@ -171,9 +173,9 @@ def _queue_header_band_lines(
             for styled, plain in title_candidates
             if max_width is None or terminal_table.display_width(plain) <= max_width
         ),
-        cli_style.paint(
+        terminal.paint(
             terminal_table.truncate(active_plain, max_width=max(0, max_width or 0)),
-            cli_style.BOLD,
+            terminal.BOLD,
         ),
     )
     lines = [title]
@@ -195,7 +197,7 @@ def _queue_header_band_lines(
         if current:
             rows.append(current)
 
-        separator = cli_style.paint(" · ", cli_style.DIM)
+        separator = terminal.paint(" · ", terminal.DIM)
         for row in rows:
             plain = "  " + " · ".join(text for text, _color in row)
             if max_width is not None and terminal_table.display_width(plain) > max_width:
@@ -203,9 +205,9 @@ def _queue_header_band_lines(
                 # Keep a visible, bounded prefix instead of dropping the bucket.
                 text, color = row[0]
                 bounded = terminal_table.truncate(f"  {text}", max_width=max_width)
-                lines.append(cli_style.paint(bounded, color) if color else bounded)
+                lines.append(terminal.paint(bounded, color) if color else bounded)
                 continue
-            styled = [cli_style.paint(text, color) if color else text for text, color in row]
+            styled = [terminal.paint(text, color) if color else text for text, color in row]
             lines.append("  " + separator.join(styled))
     return lines
 
@@ -231,11 +233,11 @@ def _queue_list_text_lines(
 
 
 def _queue_list_request(args: Any) -> _QueueListRequest:
-    explicit_config = _effective_shared_config_text(args) or None
+    explicit_config = shared_config_text_from_args(args) or None
     return _QueueListRequest(
         # Resolve one effective config up front so activity rows and the global
         # active count use the same checkout and runtime roots.
-        shared_config=cli_common._discover_shared_config_path(explicit_config),
+        shared_config=discovery.resolve_shared_config_path(explicit_config),
         limit=int(getattr(args, "limit", 0) or 0),
         engine_values=normalize_activity_filter_values(getattr(args, "engine", None)),
         status_values=normalize_activity_filter_values(getattr(args, "status", None)),
@@ -246,7 +248,7 @@ def _queue_list_request(args: Any) -> _QueueListRequest:
 
 def _queue_list_clear_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
     return clear_activities(
-        workflow_root=_workflow_root_for_args(args, config_path=request.shared_config),
+        workflow_root=workflow_root_for_args(args, config_path=request.shared_config),
         crest_config=request.shared_config,
         xtb_config=request.shared_config,
         orca_config=request.shared_config,
@@ -264,7 +266,7 @@ def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int
 
 def _missing_workflow_root(args: Any, request: _QueueListRequest) -> str | None:
     """The configured runs root when it is not a directory, else None."""
-    root = _workflow_root_for_args(args, config_path=request.shared_config)
+    root = workflow_root_for_args(args, config_path=request.shared_config)
     if not root:
         return None
     return None if Path(root).is_dir() else str(root)
@@ -272,7 +274,7 @@ def _missing_workflow_root(args: Any, request: _QueueListRequest) -> str | None:
 
 def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
     return list_activities(
-        workflow_root=_workflow_root_for_args(args, config_path=request.shared_config),
+        workflow_root=workflow_root_for_args(args, config_path=request.shared_config),
         limit=0,
         refresh=bool(getattr(args, "refresh", False)),
         crest_config=request.shared_config,
@@ -362,11 +364,11 @@ def _print_queue_list_text(
     # no-op) except for those trailing note lines, so pipes/scripts are
     # unaffected unless a row holds undrained cancel transitions.
     if not tty:
-        print(cli_style.paint(lines[1], cli_style.BOLD))
+        print(terminal.paint(lines[1], terminal.BOLD))
         print(lines[2])
         for (_indent, item), line in zip(display_rows, lines[3:], strict=True):
-            color = cli_style.status_color(item.get("status"))
-            print(cli_style.paint(line, color) if color else line)
+            color = terminal.status_color(item.get("status"))
+            print(terminal.paint(line, color) if color else line)
         for note in pending_cancel_lines:
             print(note)
         return 0
@@ -379,13 +381,13 @@ def _print_queue_list_text(
     table_width = terminal_table.display_width(lines[2])
     show_rail = term_width is None or table_width + rail_width <= term_width
     gutter = " " * rail_width if show_rail else ""
-    print(gutter + cli_style.paint(lines[1], cli_style.BOLD))
-    print(gutter + cli_style.paint(lines[2], cli_style.DIM))
+    print(gutter + terminal.paint(lines[1], terminal.BOLD))
+    print(gutter + terminal.paint(lines[2], terminal.DIM))
     for (_indent, item), line in zip(display_rows, lines[3:], strict=True):
-        color = cli_style.status_color(item.get("status"))
-        body = cli_style.paint(line, color) if color else line
+        color = terminal.status_color(item.get("status"))
+        body = terminal.paint(line, color) if color else line
         if show_rail:
-            body = cli_style.paint(_QUEUE_RAIL_GLYPH, color or cli_style.DIM) + " " + body
+            body = terminal.paint(_QUEUE_RAIL_GLYPH, color or terminal.DIM) + " " + body
         print(body)
     for note in pending_cancel_lines:
         print(gutter + note)
@@ -474,22 +476,22 @@ def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
         print(json.dumps(payload, ensure_ascii=True, indent=2))
         return 0
 
-    print(f"{cli_style.label('activity_id:')} {payload.get('activity_id', '-')}")
-    print(f"{cli_style.label('kind:')} {payload.get('kind', '-')}")
-    print(f"{cli_style.label('engine:')} {payload.get('engine', '-')}")
-    print(f"{cli_style.label('source:')} {payload.get('source', '-')}")
-    print(f"{cli_style.label('label:')} {payload.get('label', '-')}")
-    print(f"{cli_style.label('status:')} {cli_style.status_text(payload.get('status', '-'))}")
-    print(f"{cli_style.label('cancel_target:')} {payload.get('cancel_target', '-')}")
+    print(f"{terminal.label('activity_id:')} {payload.get('activity_id', '-')}")
+    print(f"{terminal.label('kind:')} {payload.get('kind', '-')}")
+    print(f"{terminal.label('engine:')} {payload.get('engine', '-')}")
+    print(f"{terminal.label('source:')} {payload.get('source', '-')}")
+    print(f"{terminal.label('label:')} {payload.get('label', '-')}")
+    print(f"{terminal.label('status:')} {terminal.status_text(payload.get('status', '-'))}")
+    print(f"{terminal.label('cancel_target:')} {payload.get('cancel_target', '-')}")
     return 0
 
 
 def cmd_queue_cancel(args: Any) -> int:
-    shared_config = _effective_shared_config_text(args) or None
+    shared_config = shared_config_text_from_args(args) or None
     try:
         payload = cancel_activity(
             target=args.target,
-            workflow_root=_workflow_root_for_args(args),
+            workflow_root=workflow_root_for_args(args),
             crest_config=shared_config,
             xtb_config=shared_config,
             orca_config=shared_config,

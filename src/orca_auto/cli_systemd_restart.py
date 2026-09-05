@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from orca_auto import cli_systemd_units, systemd_plan
-from orca_auto.cli_errors import emit_error
+from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils.coercion import normalize_text
 
 

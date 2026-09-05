@@ -22,6 +22,13 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 문자열 모듈 레지스트리(`core/engines/registry.py`,
 `core/queue/worker/admission.py`)를 사용합니다.
 
+최상위 CLI 모듈(`cli*.py`, `activity_*.py`, `terminal_table.py`,
+`systemd_plan.py`)은 가장 바깥 계층입니다. 도메인 패키지를 조합할 뿐이며, 두 번째
+import-linter 계약이 `core`·`orca`·`flow`가 이 모듈들을 임포트하는 것을 금지합니다.
+도메인 패키지 안의 명령 어댑터가 CLI와 공유하는 것은 대신 `core`에 둡니다 —
+`core/terminal.py`가 ANSI 스타일링과 `error:`/`hint:` 출력 형식을, `core/config/discovery.py`가
+파싱된 인자로부터의 공유 설정·워크플로우 루트 해석을 소유합니다.
+
 워크플로우 오케스트레이션 내부에서는 `OrchestrationServices`를 통해 영속화, 엔진,
 시계, 이벤트의 외부 경계만 주입합니다. 내부 stage, materialization, lifecycle 동작은
 직접 import합니다. 테스트는 알 수 없는 외부 서비스 override를 거부해야 하며, 내부
