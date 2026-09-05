@@ -96,6 +96,20 @@ def load_json_mapping_list_file(path: Path) -> list[dict[str, Any]]:
     return [item for item in raw if isinstance(item, dict)]
 
 
+def open_pinned_readonly(path: str | Path, *, dir_fd: int | None = None) -> int:
+    """Acquire a non-inheritable read-only fd without following the final symlink.
+
+    Nonblocking acquisition lets callers reject FIFOs before reading. The caller
+    owns confinement, regular-file/link validation, stability checks and closing
+    the descriptor; opening alone does not establish those guarantees.
+    """
+    return os.open(
+        path,
+        os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=dir_fd,
+    )
+
+
 def fsync_directory(path: str | Path) -> None:
     """Durably publish directory-entry changes."""
 

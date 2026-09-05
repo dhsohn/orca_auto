@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import os
 from datetime import UTC, datetime, timezone
 from pathlib import Path
@@ -11,6 +12,52 @@ import pytest
 from orca_auto.core.utils import persistence
 
 FIXED_NOW = datetime(2026, 4, 19, 12, 34, 56, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_open_pinned_readonly_pins_bytes_and_leaves_fd_owned_by_caller(
+    tmp_path: Path, relative: bool
+) -> None:
+    path = tmp_path / "input"
+    path.write_bytes(b"original")
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        descriptor = persistence.open_pinned_readonly(
+            path.name if relative else path, dir_fd=directory_fd if relative else None
+        )
+        try:
+            assert not os.get_inheritable(descriptor)
+            flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+            assert flags & os.O_ACCMODE == os.O_RDONLY
+            assert flags & os.O_NONBLOCK
+            replacement = tmp_path / "replacement"
+            replacement.write_bytes(b"replacement")
+            replacement.replace(path)
+            assert os.read(descriptor, 100) == b"original"
+            with pytest.raises(OSError) as failure:
+                os.write(descriptor, b"overwrite")
+            assert failure.value.errno == errno.EBADF
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory_fd)
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_open_pinned_readonly_rejects_final_symlink(tmp_path: Path, relative: bool) -> None:
+    target = tmp_path / "target"
+    target.write_bytes(b"target")
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    directory_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(OSError) as failure:
+            persistence.open_pinned_readonly(
+                link.name if relative else link, dir_fd=directory_fd if relative else None
+            )
+        assert failure.value.errno == errno.ELOOP
+    finally:
+        os.close(directory_fd)
 
 
 class _FixedDatetime:

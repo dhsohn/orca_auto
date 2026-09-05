@@ -10,6 +10,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Regular-file descriptor readers share one pinned read-only acquisition policy
+  in `core/utils/persistence.py`. Caller-specific confinement, link checks and
+  stable-read validation remain in place. The log-tail reader and three scratch
+  read/copy paths now reject FIFOs without waiting for a writer.
 - The five longest functions now read as a sequence of named phases in
   their own modules: worker staleness judges one worker at a time, restart
   settings refuse changed science before they resolve manifests, the

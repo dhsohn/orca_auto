@@ -34,6 +34,14 @@ stage, materialization, and lifecycle operations directly. Tests must reject
 unknown outer-service overrides and patch the owning module when isolating an
 internal operation.
 
+`core/utils/persistence.py::open_pinned_readonly` owns the fixed read-only,
+nonblocking, no-follow, close-on-exec acquisition policy for regular-file
+descriptor readers in engine execution, snapshots/intents, lock inspection and
+report evidence. Callers still own path confinement, type/link checks, stable
+content validation, error translation and descriptor lifetime. Directory opens,
+writable publication, procfs reads and run-snapshot JSON reopening are separate
+operations, not alternate implementations of that reader policy.
+
 ORCA structure evidence is independent of human report presentation:
 
 - `orca/evidence.py` owns `OrcaStructureEvidence`, final-output selection,

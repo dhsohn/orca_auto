@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from orca_auto.core.machine_observation import ReceiptDigest
 from orca_auto.core.statuses import FAILED_STATUSES
 from orca_auto.core.utils import mapping_or_empty as _mapping
+from orca_auto.core.utils.persistence import open_pinned_readonly
 from orca_auto.flow.conformer_selection import OrcaSelectedInputScienceIdentity
 from orca_auto.flow.contracts.workflow import (
     is_orca_stage_kind,
@@ -226,7 +227,7 @@ def _stable_final_section_count(
         # keeps a path swapped for a FIFO from blocking the report writer
         # indefinitely.
         before = out_path.stat()
-        descriptor = os.open(out_path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+        descriptor = open_pinned_readonly(out_path)
         opened = os.fstat(descriptor)
         # The descriptor pins one inode; comparing it against the pre-open
         # stat rejects anything substituted between the two. A substitution

@@ -38,6 +38,7 @@ from orca_auto.core.queue.processes import (
     process_group_exists,
     terminate_process_group,
 )
+from orca_auto.core.utils.persistence import open_pinned_readonly
 
 from .scratch import OrcaScratchPolicy
 
@@ -184,9 +185,7 @@ class OrcaRunner:
     @staticmethod
     def _open_pinned_launch_gate() -> int:
         path = Path(__file__).resolve().with_name("launch_gate.py")
-        flags = os.O_RDONLY | os.O_NONBLOCK
-        flags |= os.O_NOFOLLOW
-        descriptor = os.open(path, flags)
+        descriptor = open_pinned_readonly(path)
         try:
             details = os.fstat(descriptor)
             if not stat.S_ISREG(details.st_mode):

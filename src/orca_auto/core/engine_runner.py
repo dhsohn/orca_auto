@@ -13,7 +13,7 @@ from typing import Any
 from orca_auto.core.config import engines as _config_engines
 from orca_auto.core.engine_scratch import SCRATCH_RUNTIME_HOME_DIR_NAME
 from orca_auto.core.paths import validate_configured_executable_path
-from orca_auto.core.utils.persistence import fsync_directory
+from orca_auto.core.utils.persistence import fsync_directory, open_pinned_readonly
 
 _INTEGER_TEXT_RE = re.compile(r"[-+]?\d+")
 _RUNTIME_ENV_KEYS = ("PATH", "LD_LIBRARY_PATH", "XTBPATH", "XTBHOME")
@@ -86,13 +86,7 @@ def open_pinned_executable(
     directly; a caller that only needs the identity uses `executable_identity`.
     """
     resolved = Path(path).expanduser().resolve()
-    flags = os.O_RDONLY
-    # A pathname can be replaced after snapshot verification.  Open non-blocking
-    # so a substituted FIFO cannot stall the caller before fstat() rejects it as
-    # a non-regular executable.
-    flags |= os.O_NONBLOCK
-    flags |= os.O_NOFOLLOW
-    descriptor = os.open(resolved, flags)
+    descriptor = open_pinned_readonly(resolved)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
@@ -149,10 +143,7 @@ def confined_output_identity(root: str | Path, path: str | Path) -> dict[str, An
     resolved = candidate.resolve()
     if not resolved.is_relative_to(resolved_root):
         raise ValueError(f"Engine output must stay inside its job directory: {candidate}")
-    flags = os.O_RDONLY
-    flags |= os.O_NONBLOCK
-    flags |= os.O_NOFOLLOW
-    descriptor = os.open(resolved, flags)
+    descriptor = open_pinned_readonly(resolved)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
