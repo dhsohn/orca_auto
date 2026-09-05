@@ -10,6 +10,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- The five longest functions now read as a sequence of named phases in
+  their own modules: worker staleness judges one worker at a time, restart
+  settings refuse changed science before they resolve manifests, the
+  interaction-energy fan-out validates its durable inputs before it
+  selects representatives, and SI collection classifies stages, pairs
+  single points and judges the pre-dedup ensemble in separate steps. Same
+  outputs, blockers, exceptions and side effects in the same order.
 - The top-level CLI modules are now the outermost import layer, enforced by a
   new import-linter contract: `core`, `orca` and `flow` never import them.
   What the workflow command adapters shared with the CLI moved into `core`:

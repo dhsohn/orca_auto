@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -299,13 +300,38 @@ def _append_interaction_stage(
     payload.setdefault("stages", []).append(stage_dict)
 
 
-def append_interaction_energy_stages_impl(
-    payload: dict[str, Any],
-    *,
-    workspace_dir: Path,
-) -> bool:
-    if _text(payload.get("template_name")) != "conformer_screening":
-        return False
+@dataclass(frozen=True)
+class _FanoutInputs:
+    """The durable interaction-energy request, validated for fan-out."""
+
+    cfg: dict[str, Any]
+    rmsd_cfg: dict[str, Any] | None
+    fragments: list[Any]
+    complex_charge: int
+    complex_multiplicity: int
+    config_fingerprint: str
+
+
+@dataclass(frozen=True)
+class _FanoutPlan:
+    """Everything one representative complex needs to fan out its single points."""
+
+    allowed_root: Path
+    source_root: Path
+    fragments: list[Any]
+    fragment_index_lists: list[Any]
+    existing: set[tuple[str, str, int]]
+    sp_route_line: str
+    complex_charge: int
+    complex_multiplicity: int
+    priority: int
+    max_cores: int
+    max_memory_gb: int
+    config_fingerprint: str
+
+
+def _durable_fanout_inputs(payload: dict[str, Any]) -> _FanoutInputs | None:
+    """Normalize the durable request; ``None`` (with the error recorded) skips fan-out."""
     params = workflow_request_parameters(payload)
     cfg = params.get("interaction_energy")
     try:
@@ -319,9 +345,9 @@ def append_interaction_energy_stages_impl(
         logger.warning(
             "interaction_energy fan-out skipped: invalid durable configuration", exc_info=True
         )
-        return False
+        return None
     if normalized_cfg is None:
-        return False
+        return None
     cfg = normalized_cfg
     try:
         rmsd_cfg = normalize_rmsd_dedup_block(params.get("rmsd_dedup"))
@@ -335,10 +361,10 @@ def append_interaction_energy_stages_impl(
             "interaction_energy fan-out skipped: invalid durable RMSD configuration",
             exc_info=True,
         )
-        return False
+        return None
     fragments = cfg.get("fragments")
     if not isinstance(fragments, list) or not fragments:
-        return False
+        return None
     max_fragments = safe_int(cfg.get("max_fragments"), default=0)
     if (
         max_fragments < 2
@@ -352,7 +378,7 @@ def append_interaction_energy_stages_impl(
             max_fragments,
             INTERACTION_ENERGY_MAX_FRAGMENTS_CAP,
         )
-        return False
+        return None
 
     try:
         complex_charge = require_int(params.get("charge", 0), field="charge")
@@ -377,38 +403,56 @@ def append_interaction_energy_stages_impl(
             "interaction_energy fan-out skipped: electronic states are invalid or incompatible",
             exc_info=True,
         )
-        return False
+        return None
 
-    config_fingerprint = interaction_energy_config_fingerprint(
-        cfg,
+    return _FanoutInputs(
+        cfg=cfg,
+        rmsd_cfg=rmsd_cfg,
+        fragments=fragments,
         complex_charge=complex_charge,
         complex_multiplicity=complex_multiplicity,
-        rmsd_dedup=rmsd_cfg,
+        config_fingerprint=interaction_energy_config_fingerprint(
+            cfg,
+            complex_charge=complex_charge,
+            complex_multiplicity=complex_multiplicity,
+            rmsd_dedup=rmsd_cfg,
+        ),
     )
 
-    stages = workflow_stage_dicts(payload)
+
+def _terminal_complex_stages(
+    stages: list[dict[str, Any]], *, config_fingerprint: str
+) -> list[dict[str, Any]]:
+    """Primary ORCA stages eligible for fan-out; empty until the whole set is terminal."""
     declared_orca_stages = [stage for stage in stages if is_orca_stage_kind(stage)]
     if any(not is_exact_orca_stage_contract(stage) for stage in declared_orca_stages):
-        return False
-    orca_stages = declared_orca_stages
+        return []
     complex_stages = [
         stage
-        for stage in orca_stages
+        for stage in declared_orca_stages
         if not is_valid_interaction_stage_contract(
             stage,
             stages,
             expected_config_fingerprint=config_fingerprint,
         )
     ]
-    if not complex_stages:
-        return False
     # Fire only once the primary ORCA set is terminal. Partial-success conformer
     # workflows use their completed subset; restart refuses to reopen failed
     # primary stages after interaction children exist unless the feature is
     # explicitly disabled and those children are retired.
     if not all(is_stage_terminal_status(_text(stage.get("status"))) for stage in complex_stages):
-        return False
+        return []
+    return complex_stages
 
+
+def _representative_complexes(
+    complex_stages: list[dict[str, Any]],
+    *,
+    complex_charge: int,
+    complex_multiplicity: int,
+    rmsd_cfg: dict[str, Any] | None,
+) -> list[_OptimizedEvidence] | None:
+    """RMSD representatives among the completed complexes; ``None`` when they disagree."""
     parsed: list[_OptimizedEvidence] = []
     single_points: list[tuple[OrcaStructureEvidence, OrcaSelectedInputScienceIdentity]] = []
     for stage in complex_stages:
@@ -431,7 +475,7 @@ def append_interaction_energy_stages_impl(
                 single_points.append(single_point_evidence)
     optimized_science_identities = {identity for _stage_id, _stage, _block, identity in parsed}
     if not parsed or len(optimized_science_identities) != 1:
-        return False
+        return None
 
     representative_ids = _rmsd_representative_ids(
         parsed,
@@ -445,7 +489,130 @@ def append_interaction_energy_stages_impl(
     for _stage_id, stage, _block, _identity in representatives:
         if is_interaction_role(_stage_role(stage)):
             mapping_or_empty(stage.get("metadata")).pop("role", None)
-    fragment_index_lists = [fragment.get("atom_indices", []) for fragment in fragments]
+    return representatives
+
+
+def _append_fanout_for_representative(
+    payload: dict[str, Any],
+    plan: _FanoutPlan,
+    *,
+    stage_id: str,
+    block: OrcaStructureEvidence,
+) -> int:
+    """Write the complex/fragment XYZ files and append the missing single-point stages."""
+    coordinates = list(block.result.coordinates)
+    natoms = len(coordinates)
+    reason = validate_fragment_partition(plan.fragment_index_lists, natoms)
+    if reason:
+        logger.warning("interaction_energy fan-out skipped for %s: %s", stage_id, reason)
+        return 0
+    state_reason = validate_fragment_electronic_states(
+        [row[0] for row in coordinates], plan.fragments
+    )
+    if state_reason:
+        logger.warning("interaction_energy fan-out skipped for %s: %s", stage_id, state_reason)
+        return 0
+    safe_parent = safe_name(stage_id, fallback="complex")
+    created = 0
+
+    if (INTERACTION_COMPLEX_SP_ROLE, stage_id, -1) not in plan.existing:
+        complex_xyz = plan.source_root / f"{safe_parent}_complex.xyz"
+        write_fragment_xyz(
+            coordinates=coordinates,
+            atom_indices=list(range(natoms)),
+            target_path=complex_xyz,
+            comment=f"interaction complex {stage_id}",
+        )
+        _append_interaction_stage(
+            payload=payload,
+            allowed_root=plan.allowed_root,
+            source_xyz=complex_xyz,
+            stage_id=f"orca_ie_{safe_parent}_complex",
+            stage_key=f"ie_{safe_parent}_complex",
+            kind="interaction_complex",
+            route_line=plan.sp_route_line,
+            charge=plan.complex_charge,
+            multiplicity=plan.complex_multiplicity,
+            priority=plan.priority,
+            max_cores=plan.max_cores,
+            max_memory_gb=plan.max_memory_gb,
+            metadata={
+                "role": INTERACTION_COMPLEX_SP_ROLE,
+                "parent_stage_id": stage_id,
+                INTERACTION_CONFIG_FINGERPRINT_KEY: plan.config_fingerprint,
+            },
+        )
+        created += 1
+
+    for index, fragment in enumerate(plan.fragments):
+        if (INTERACTION_FRAGMENT_ROLE, stage_id, index) in plan.existing:
+            continue
+        atom_indices = [int(value) for value in fragment.get("atom_indices", [])]
+        label = _text(fragment.get("label")) or f"fragment_{index + 1}"
+        fragment_charge = safe_int(fragment.get("charge", 0), default=0)
+        fragment_multiplicity = safe_int(fragment.get("multiplicity", 1), default=1)
+        fragment_xyz = plan.source_root / f"{safe_parent}_f{index:02d}.xyz"
+        write_fragment_xyz(
+            coordinates=coordinates,
+            atom_indices=atom_indices,
+            target_path=fragment_xyz,
+            comment=f"interaction fragment {label} of {stage_id}",
+        )
+        _append_interaction_stage(
+            payload=payload,
+            allowed_root=plan.allowed_root,
+            source_xyz=fragment_xyz,
+            stage_id=f"orca_ie_{safe_parent}_f{index:02d}",
+            stage_key=f"ie_{safe_parent}_f{index:02d}",
+            kind="interaction_fragment",
+            route_line=plan.sp_route_line,
+            charge=fragment_charge,
+            multiplicity=fragment_multiplicity,
+            priority=plan.priority,
+            max_cores=plan.max_cores,
+            max_memory_gb=plan.max_memory_gb,
+            metadata={
+                "role": INTERACTION_FRAGMENT_ROLE,
+                "parent_stage_id": stage_id,
+                "fragment_index": index,
+                "fragment_label": label,
+                "fragment_charge": fragment_charge,
+                "fragment_multiplicity": fragment_multiplicity,
+                "fragment_atom_indices": list(atom_indices),
+                INTERACTION_CONFIG_FINGERPRINT_KEY: plan.config_fingerprint,
+            },
+        )
+        created += 1
+    return created
+
+
+def append_interaction_energy_stages_impl(
+    payload: dict[str, Any],
+    *,
+    workspace_dir: Path,
+) -> bool:
+    if _text(payload.get("template_name")) != "conformer_screening":
+        return False
+    inputs = _durable_fanout_inputs(payload)
+    if inputs is None:
+        return False
+    params = workflow_request_parameters(payload)
+    cfg = inputs.cfg
+
+    stages = workflow_stage_dicts(payload)
+    complex_stages = _terminal_complex_stages(stages, config_fingerprint=inputs.config_fingerprint)
+    if not complex_stages:
+        return False
+    representatives = _representative_complexes(
+        complex_stages,
+        complex_charge=inputs.complex_charge,
+        complex_multiplicity=inputs.complex_multiplicity,
+        rmsd_cfg=inputs.rmsd_cfg,
+    )
+    if representatives is None:
+        return False
+
+    fragment_index_lists = [fragment.get("atom_indices", []) for fragment in inputs.fragments]
     # The normalized durable block always carries a validated sp_route_line;
     # read it fail-closed instead of silently substituting a level of theory.
     sp_route_line = required_route_line(cfg, "sp_route_line")
@@ -455,101 +622,31 @@ def append_interaction_energy_stages_impl(
 
     existing = _existing_interaction_keys(
         stages,
-        expected_config_fingerprint=config_fingerprint,
+        expected_config_fingerprint=inputs.config_fingerprint,
     )
     orca_paths = workflow_workspace_internal_engine_paths(workspace_dir, engine="orca")
     allowed_root = orca_paths["allowed_root"]
-    source_root = ensure_confined_directory(
-        allowed_root,
-        allowed_root / _INTERACTION_SOURCE_DIRNAME,
-        label="interaction-energy source directory",
+    plan = _FanoutPlan(
+        allowed_root=allowed_root,
+        source_root=ensure_confined_directory(
+            allowed_root,
+            allowed_root / _INTERACTION_SOURCE_DIRNAME,
+            label="interaction-energy source directory",
+        ),
+        fragments=inputs.fragments,
+        fragment_index_lists=fragment_index_lists,
+        existing=existing,
+        sp_route_line=sp_route_line,
+        complex_charge=inputs.complex_charge,
+        complex_multiplicity=inputs.complex_multiplicity,
+        priority=priority,
+        max_cores=max_cores,
+        max_memory_gb=max_memory_gb,
+        config_fingerprint=inputs.config_fingerprint,
     )
     created = 0
-
     for stage_id, _stage, block, _identity in representatives:
-        coordinates = list(block.result.coordinates)
-        natoms = len(coordinates)
-        reason = validate_fragment_partition(fragment_index_lists, natoms)
-        if reason:
-            logger.warning("interaction_energy fan-out skipped for %s: %s", stage_id, reason)
-            continue
-        state_reason = validate_fragment_electronic_states(
-            [row[0] for row in coordinates], fragments
-        )
-        if state_reason:
-            logger.warning("interaction_energy fan-out skipped for %s: %s", stage_id, state_reason)
-            continue
-        safe_parent = safe_name(stage_id, fallback="complex")
-
-        if (INTERACTION_COMPLEX_SP_ROLE, stage_id, -1) not in existing:
-            complex_xyz = source_root / f"{safe_parent}_complex.xyz"
-            write_fragment_xyz(
-                coordinates=coordinates,
-                atom_indices=list(range(natoms)),
-                target_path=complex_xyz,
-                comment=f"interaction complex {stage_id}",
-            )
-            _append_interaction_stage(
-                payload=payload,
-                allowed_root=allowed_root,
-                source_xyz=complex_xyz,
-                stage_id=f"orca_ie_{safe_parent}_complex",
-                stage_key=f"ie_{safe_parent}_complex",
-                kind="interaction_complex",
-                route_line=sp_route_line,
-                charge=complex_charge,
-                multiplicity=complex_multiplicity,
-                priority=priority,
-                max_cores=max_cores,
-                max_memory_gb=max_memory_gb,
-                metadata={
-                    "role": INTERACTION_COMPLEX_SP_ROLE,
-                    "parent_stage_id": stage_id,
-                    INTERACTION_CONFIG_FINGERPRINT_KEY: config_fingerprint,
-                },
-            )
-            created += 1
-
-        for index, fragment in enumerate(fragments):
-            if (INTERACTION_FRAGMENT_ROLE, stage_id, index) in existing:
-                continue
-            atom_indices = [int(value) for value in fragment.get("atom_indices", [])]
-            label = _text(fragment.get("label")) or f"fragment_{index + 1}"
-            fragment_charge = safe_int(fragment.get("charge", 0), default=0)
-            fragment_multiplicity = safe_int(fragment.get("multiplicity", 1), default=1)
-            fragment_xyz = source_root / f"{safe_parent}_f{index:02d}.xyz"
-            write_fragment_xyz(
-                coordinates=coordinates,
-                atom_indices=atom_indices,
-                target_path=fragment_xyz,
-                comment=f"interaction fragment {label} of {stage_id}",
-            )
-            _append_interaction_stage(
-                payload=payload,
-                allowed_root=allowed_root,
-                source_xyz=fragment_xyz,
-                stage_id=f"orca_ie_{safe_parent}_f{index:02d}",
-                stage_key=f"ie_{safe_parent}_f{index:02d}",
-                kind="interaction_fragment",
-                route_line=sp_route_line,
-                charge=fragment_charge,
-                multiplicity=fragment_multiplicity,
-                priority=priority,
-                max_cores=max_cores,
-                max_memory_gb=max_memory_gb,
-                metadata={
-                    "role": INTERACTION_FRAGMENT_ROLE,
-                    "parent_stage_id": stage_id,
-                    "fragment_index": index,
-                    "fragment_label": label,
-                    "fragment_charge": fragment_charge,
-                    "fragment_multiplicity": fragment_multiplicity,
-                    "fragment_atom_indices": list(atom_indices),
-                    INTERACTION_CONFIG_FINGERPRINT_KEY: config_fingerprint,
-                },
-            )
-            created += 1
-
+        created += _append_fanout_for_representative(payload, plan, stage_id=stage_id, block=block)
     return created > 0
 
 

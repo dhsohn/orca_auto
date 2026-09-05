@@ -923,3 +923,37 @@ def test_recorded_electronic_state_rejects_present_invalid_values(
 
     with pytest.raises(ValueError, match=message):
         restart_settings._recorded_electronic_state(payload)
+
+
+@pytest.mark.parametrize("recorded_charge", [1.5, True])
+def test_science_change_refusal_precedes_a_corrupt_recorded_charge(
+    tmp_path: Path, recorded_charge: object
+) -> None:
+    payload: dict[str, Any] = {
+        "template_name": "conformer_screening",
+        "metadata": {
+            "request": {
+                "parameters": {
+                    "orca_route_line": "! Opt HF",
+                    "charge": recorded_charge,
+                    "multiplicity": 1,
+                }
+            }
+        },
+        "stages": [
+            {
+                "stage_id": "orca_primary",
+                "stage_kind": "orca_stage",
+                "status": "completed",
+                "task": {"engine": "orca", "task_kind": "opt", "status": "completed"},
+                "metadata": {},
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="scientific settings cannot change"):
+        restart_settings._flow_restart_settings_from_manifest(
+            tmp_path,
+            payload,
+            {"orca": {"route_line": "! Opt B3LYP"}},
+        )
