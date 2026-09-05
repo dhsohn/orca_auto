@@ -422,6 +422,7 @@ def test_reserve_dequeued_entry_releases_slot_when_dequeue_raises() -> None:
         worker_common.reserve_dequeued_entry(
             _cfg(admission_root="/tmp/admission"),
             admission_root="/tmp/admission",
+            has_capacity_fn=lambda _cfg: True,
             peek_next_fn=lambda _cfg: (Path("/allowed"), _entry("q-1")),
             reserve_slot_fn=lambda _cfg: "slot-1",
             dequeue_next_fn=lambda _cfg: (_ for _ in ()).throw(RuntimeError("queue corrupt")),
@@ -431,7 +432,7 @@ def test_reserve_dequeued_entry_releases_slot_when_dequeue_raises() -> None:
     assert released == [("/tmp/admission", "slot-1")]
 
 
-def test_reserve_dequeued_entry_never_touches_admission_when_nothing_is_claimable() -> None:
+def test_reserve_dequeued_entry_writes_nothing_to_admission_when_nothing_is_claimable() -> None:
     def reserve_slot(_cfg: Any) -> str:
         raise AssertionError("an idle poll must not reserve an admission slot")
 
@@ -444,11 +445,30 @@ def test_reserve_dequeued_entry_never_touches_admission_when_nothing_is_claimabl
     assert worker_common.reserve_dequeued_entry(
         _cfg(admission_root="/tmp/admission"),
         admission_root="/tmp/admission",
+        has_capacity_fn=lambda _cfg: True,
         peek_next_fn=lambda _cfg: None,
         reserve_slot_fn=reserve_slot,
         dequeue_next_fn=dequeue_next,
         release_slot_fn=release_slot,
     ) == ("idle", None)
+
+
+def test_reserve_dequeued_entry_is_blocked_before_any_queue_read_when_the_pool_is_full() -> None:
+    def peek_next(_cfg: Any) -> None:
+        raise AssertionError("a full pool must not list any queue root")
+
+    def reserve_slot(_cfg: Any) -> str:
+        raise AssertionError("a full pool must not attempt a reservation")
+
+    assert worker_common.reserve_dequeued_entry(
+        _cfg(admission_root="/tmp/admission"),
+        admission_root="/tmp/admission",
+        has_capacity_fn=lambda _cfg: False,
+        peek_next_fn=peek_next,
+        reserve_slot_fn=reserve_slot,
+        dequeue_next_fn=lambda _cfg: None,
+        release_slot_fn=lambda _root, _token: None,
+    ) == ("blocked", None)
 
 
 def test_reserve_dequeued_entry_reserves_only_after_a_claimable_preview() -> None:
@@ -466,6 +486,7 @@ def test_reserve_dequeued_entry_reserves_only_after_a_claimable_preview() -> Non
     status, reserved = worker_common.reserve_dequeued_entry(
         _cfg(admission_root="/tmp/admission"),
         admission_root="/tmp/admission",
+        has_capacity_fn=lambda _cfg: _append_and_return(calls, "capacity", True),
         peek_next_fn=lambda _cfg: _append_and_return(calls, "peek", (Path("/allowed"), entry)),
         reserve_slot_fn=reserve_slot,
         dequeue_next_fn=dequeue_next,
@@ -476,7 +497,7 @@ def test_reserve_dequeued_entry_reserves_only_after_a_claimable_preview() -> Non
     assert reserved is not None
     assert reserved.entry is entry
     assert reserved.admission_token == "slot-1"
-    assert calls == ["peek", "reserve", "dequeue"]
+    assert calls == ["capacity", "peek", "reserve", "dequeue"]
 
 
 def test_reserve_dequeued_entry_releases_slot_when_previewed_row_is_lost() -> None:
@@ -485,6 +506,7 @@ def test_reserve_dequeued_entry_releases_slot_when_previewed_row_is_lost() -> No
     assert worker_common.reserve_dequeued_entry(
         _cfg(admission_root="/tmp/admission"),
         admission_root="/tmp/admission",
+        has_capacity_fn=lambda _cfg: True,
         peek_next_fn=lambda _cfg: (Path("/allowed"), _entry("q-1")),
         reserve_slot_fn=lambda _cfg: "slot-1",
         dequeue_next_fn=lambda _cfg: None,

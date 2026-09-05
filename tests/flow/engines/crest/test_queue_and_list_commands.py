@@ -92,11 +92,14 @@ def test_process_one_returns_blocked_when_no_admission_slot(
 ) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root="ignored"))
 
-    # A claimable row exists but no capacity does: only then is a poll blocked.
+    # A full pool blocks the poll before any queue root is listed.
+    def peek_next(cfg_obj: object) -> None:
+        raise AssertionError("a full pool must not list any queue root")
+
     monkeypatch.setattr(
         queue_cmd,
         "_ENGINE_RUNTIME",
-        SimpleNamespace(peek_next_entry=lambda cfg_obj: ("ignored", object())),
+        SimpleNamespace(has_admission_capacity=lambda cfg_obj: False, peek_next_entry=peek_next),
     )
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda cfg_obj: None)
 
@@ -114,6 +117,7 @@ def test_process_one_returns_idle_without_touching_admission(
             allowed_root=str(tmp_path / "allowed"),
             admission_root="",
             resolved_admission_root=str(tmp_path / "allowed"),
+            resolved_admission_limit=1,
         )
     )
     released: list[tuple[str, str | None]] = []

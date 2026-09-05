@@ -16,6 +16,7 @@ from .. import lifecycle as _queue_lifecycle
 from ..dependencies import ChildQueueWorkerDeps
 from ..worker import (
     PidFileChildProcessQueueWorkerHooks,
+    admission_has_capacity,
     dequeue_next_across_roots,
     engine_queue_worker_source,
     make_child_queue_worker_deps,
@@ -161,6 +162,9 @@ class EngineQueueRuntime:
     def peek_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
         return self._queue_runtime().peek_next_entry(cfg)
 
+    def has_admission_capacity(self, cfg: Any) -> bool:
+        return admission_has_capacity(cfg)
+
     def queue_entries_with_roots(
         self,
         cfg: Any,
@@ -208,6 +212,7 @@ class EngineQueueRuntime:
             time_module=time_module,
             release_slot_fn=release_slot_fn,
             admission_root_fn=self.admission_root,
+            has_admission_capacity_fn=self.has_admission_capacity,
             peek_next_entry_fn=self.peek_next_entry,
             dequeue_next_entry_fn=self.dequeue_next_entry,
             start_background_job_process_fn=start_background_job_process_fn,

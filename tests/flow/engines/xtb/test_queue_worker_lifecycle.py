@@ -930,11 +930,14 @@ def test_process_one_returns_blocked_when_no_admission_slot(
 ) -> None:
     cfg = _make_cfg(tmp_path)
 
-    # A claimable row exists but no capacity does: only then is a poll blocked.
+    # A full pool blocks the poll before any queue root is listed.
+    def peek_next(_cfg: object) -> None:
+        raise AssertionError("a full pool must not list any queue root")
+
     monkeypatch.setattr(
         queue_cmd,
         "_ENGINE_RUNTIME",
-        SimpleNamespace(peek_next_entry=lambda _cfg: (tmp_path, object())),
+        SimpleNamespace(has_admission_capacity=lambda _cfg: False, peek_next_entry=peek_next),
     )
     monkeypatch.setattr(queue_cmd, "_try_reserve_admission_slot", lambda _cfg: None)
 

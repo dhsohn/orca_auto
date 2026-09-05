@@ -10,16 +10,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
-- An idle queue-worker poll performs no durable write. The worker now looks
-  for a claimable pending row before it reserves an admission slot, so an
-  empty queue no longer rewrites the admission slot file twice per poll; a
-  reservation still precedes the dequeue, and a row lost between the preview
-  and the claim releases its slot again. As a consequence the admission step
-  reports `blocked` only when a claimable row exists and no slot is free; an
-  empty queue is `idle` there regardless of capacity. The engine reserve gates
-  that run before it (the ORCA terminal-replay barrier and the queued
-  publication repair) are unchanged and still report `blocked` on their own
-  conditions.
+- An idle queue-worker poll performs no durable write. The worker now reads
+  the shared admission count first, then looks for a claimable pending row,
+  and only then reserves a slot: a full pool costs one lock-free read instead
+  of a queue scan, and an empty queue no longer rewrites the admission slot
+  file twice per poll. A reservation still precedes the dequeue, a row lost
+  between the preview and the claim releases its slot again, and the poll
+  statuses (`blocked` while the pool is full, `idle` on an empty queue) are
+  unchanged.
 - Runtime-root discovery follows the engine catalog: only workflow-stage
   engines (xTB, CREST) get per-workflow queue and index roots. ORCA is a
   shared-root engine whose queue rows and job-location records already lived

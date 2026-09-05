@@ -4,7 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeVar
 
-from orca_auto.core.admission import reserve_slot
+from orca_auto.core.admission import read_active_slot_count, reserve_slot
 from orca_auto.core.engine_catalog import find_engine_catalog_entry
 
 from ..child.execution import find_queue_entry_by_id
@@ -29,6 +29,17 @@ def resolve_admission_root(cfg: Any) -> str:
     this function as a value, so a property alone cannot serve them.
     """
     return str(cfg.runtime.resolved_admission_root)
+
+
+def admission_has_capacity(cfg: Any) -> bool:
+    """Read-only check that the shared pool could admit one more slot.
+
+    Counts live slots without locking or rewriting the admission file, using
+    the same limit the reservation itself enforces. A worker whose pool is
+    full stops here, before it lists any queue root.
+    """
+    limit = int(cfg.runtime.resolved_admission_limit)
+    return read_active_slot_count(resolve_admission_root(cfg)) < limit
 
 
 def reserve_engine_queue_worker_slot(
@@ -206,16 +217,20 @@ def reserve_dequeued_entry(
     cfg: Any,
     *,
     admission_root: str | Path,
+    has_capacity_fn: Callable[[Any], bool],
     peek_next_fn: Callable[[Any], tuple[Path, T] | None],
     reserve_slot_fn: Callable[[Any], str | None],
     dequeue_next_fn: Callable[[Any], tuple[Path, T] | None],
     release_slot_fn: Callable[[str | Path, str], object],
 ) -> tuple[str, ReservedQueueEntry[T] | None]:
-    # Look before reserving: an admission reservation is a durable write to
-    # the shared slot file, and an idle worker must not pay it (twice, with
-    # the release) on every poll. The slot still comes before the dequeue so a
-    # claimed row always holds capacity; a preview that loses the race simply
-    # releases the slot again.
+    # Read before writing, and read the cheap thing first: a full pool is one
+    # lock-free admission read, and an empty queue is a queue listing, while
+    # an admission reservation is a durable write to the shared slot file that
+    # an idle worker must not pay (twice, with the release) on every poll. The
+    # slot still comes before the dequeue so a claimed row always holds
+    # capacity; a preview that loses the race simply releases the slot again.
+    if not has_capacity_fn(cfg):
+        return "blocked", None
     if peek_next_fn(cfg) is None:
         return "idle", None
 
@@ -249,6 +264,7 @@ def make_child_queue_worker_deps(
     time_module: Any,
     release_slot_fn: Callable[[str | Path, str], object],
     admission_root_fn: Callable[[Any], str],
+    has_admission_capacity_fn: Callable[[Any], bool],
     peek_next_entry_fn: Callable[[Any], tuple[Path, Any] | None],
     dequeue_next_entry_fn: Callable[[Any], tuple[Path, Any] | None],
     start_background_job_process_fn: Callable[..., Any],
@@ -260,6 +276,7 @@ def make_child_queue_worker_deps(
         release_slot=release_slot_fn,
         reserve_dequeued_entry=reserve_dequeued_entry,
         admission_root=admission_root_fn,
+        has_admission_capacity=has_admission_capacity_fn,
         peek_next_entry=peek_next_entry_fn,
         dequeue_next_entry=dequeue_next_entry_fn,
         start_background_job_process=start_background_job_process_fn,
@@ -273,6 +290,7 @@ def config_path_for_worker(args: Any, *, default_config_path_fn: Callable[[], st
 
 
 __all__ = [
+    "admission_has_capacity",
     "config_path_for_worker",
     "dequeue_next_across_roots",
     "make_child_queue_worker_deps",

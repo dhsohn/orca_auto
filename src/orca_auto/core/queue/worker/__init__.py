@@ -20,6 +20,7 @@ from ..processes import (
     write_worker_pid_file,
 )
 from .admission import (
+    admission_has_capacity,
     config_path_for_worker,
     dequeue_next_across_roots,
     engine_queue_worker_source,
@@ -52,6 +53,7 @@ from .process import (
 __all__ = [
     "BackgroundRunningJob",
     "ChildProcessQueueWorker",
+    "admission_has_capacity",
     "EngineRunningJob",
     "HookedPidFileChildProcessQueueWorker",
     "ManagedProcess",
