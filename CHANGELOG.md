@@ -10,6 +10,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- `orca_auto.core.engines` no longer lazily exposes `EngineQueueWorker` or the
+  worker-child entrypoint helpers; import them from
+  `orca_auto.core.engines.queue_worker` and `orca_auto.core.engines.worker_child`,
+  which every caller already did. The development guide states the facade
+  rule: a package re-exports eagerly or not at all, with `core.messaging`'s
+  test-pinned adapter isolation as the one lazy exception.
+- Upserting a job-location row that equals the stored row after normalization
+  no longer rewrites `job_locations.json`; the index is still written for a changed or
+  new row, and every historical row is kept.
 - Regular-file descriptor readers share one pinned read-only acquisition policy
   in `core/utils/persistence.py`. Caller-specific confinement, link checks and
   stable-read validation remain in place. The log-tail reader and three scratch
