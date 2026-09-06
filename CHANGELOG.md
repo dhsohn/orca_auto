@@ -8,6 +8,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-09-06
+
 ### Changed
 
 - `orca_auto.core.engines` no longer lazily exposes `EngineQueueWorker` or the
