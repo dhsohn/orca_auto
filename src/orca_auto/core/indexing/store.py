@@ -156,6 +156,13 @@ def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocat
         for index, existing in enumerate(records):
             if existing.job_id != replacement.job_id:
                 continue
+            if existing == replacement:
+                # The loaded row already equals the normalized replacement,
+                # so every reader would see the same record: skip the
+                # whole-index atomic write and its fsync. Bytes on disk that
+                # differ only in formatting or unknown keys stay as they are
+                # until a row actually changes.
+                return replacement
             records[index] = replacement
             updated = True
             break

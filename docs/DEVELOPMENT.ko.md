@@ -194,7 +194,8 @@ Flow 내부는 공개 CLI 모듈이 아닙니다. 예시는 `orca_auto ...`에 �
 ```python
 from orca_auto.cli import main
 from orca_auto.orca.commands.run_inp import cmd_run_inp
-from orca_auto.core.engines import EngineDefinition, EngineQueueWorker
+from orca_auto.core.engines import EngineDefinition
+from orca_auto.core.engines.queue_worker import EngineQueueWorker
 
 from orca_auto.core.queue import enqueue
 from orca_auto.core.admission import reserve_slot
@@ -202,6 +203,14 @@ from orca_auto.core.indexing import get_job_location
 ```
 
 임포트는 `orca_auto.*` 아래로 유지하고, 최상위 별칭이나 대체 심(shim)은 피하세요.
+
+패키지 `__init__`는 이름을 eager하게 재수출하거나 아예 내보내지 않습니다. 허용된 lazy 모듈
+`__getattr__`는 `orca_auto.core.messaging` 하나로, 중립 import에서 Discord 어댑터를 떼어 두기
+위한 것이며 `test_neutral_messaging_import_does_not_eagerly_load_adapters`가 그 격리를
+고정합니다. 새 lazy facade는 같은 종류의 테스트가 없으면 허용되지 않습니다.
+`orca_auto.core.utils`는 `__all__`의 coercion·lock·persistence 이름만 재수출하며, 그 밖의
+것은 소유 하위 모듈(`core.utils.process` 등)에서 직접 import합니다. import해서는 안 되는
+계층 간 배선은 lazy 속성이 아니라 위의 문자열 모듈 레지스트리를 씁니다.
 
 ## 테스트 레이아웃
 

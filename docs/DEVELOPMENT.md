@@ -212,7 +212,8 @@ Use these patterns in new code:
 ```python
 from orca_auto.cli import main
 from orca_auto.orca.commands.run_inp import cmd_run_inp
-from orca_auto.core.engines import EngineDefinition, EngineQueueWorker
+from orca_auto.core.engines import EngineDefinition
+from orca_auto.core.engines.queue_worker import EngineQueueWorker
 
 from orca_auto.core.queue import enqueue
 from orca_auto.core.admission import reserve_slot
@@ -220,6 +221,16 @@ from orca_auto.core.indexing import get_job_location
 ```
 
 Keep imports under `orca_auto.*`; avoid top-level aliases or alternate shims.
+
+A package `__init__` either re-exports a name eagerly or does not export it.
+The one accepted lazy module `__getattr__` is `orca_auto.core.messaging`, which
+keeps the Discord adapter out of the neutral import; that isolation is pinned
+by `test_neutral_messaging_import_does_not_eagerly_load_adapters`, and a new
+lazy facade needs the same kind of test or it is not allowed. `orca_auto.core.utils`
+re-exports only the coercion, lock and persistence names in its `__all__`;
+import everything else from its owning submodule (`core.utils.process`, ...).
+Cross-layer wiring that must not import uses the string module registries
+named above, not a lazy attribute.
 
 ## Test Layout
 
