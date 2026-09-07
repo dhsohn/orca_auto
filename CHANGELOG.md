@@ -63,6 +63,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   option parser and the workflow worker resolve the shared config through
   `core.config.discovery` like every other command surface; the duplicate
   `shared_config_for_args` is gone. Resolution results are unchanged.
+- `QueueStoreCorruptError` and `AdmissionStoreCorruptError` are each defined
+  once, in the persistence module that raises them; the queue and admission
+  stores re-export that class instead of declaring an empty subclass under
+  the same name. A handler that catches the store's or the package's name
+  therefore also catches an error raised by the persistence layer directly.
+  Import paths, names and messages are unchanged; the class now reports the
+  persistence module as its home in tracebacks and `repr`.
 
 
 ## [4.1.0] - 2026-09-06

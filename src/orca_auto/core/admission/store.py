@@ -41,8 +41,9 @@ class AdmissionLimitReachedError(RuntimeError):
     """Raised when no additional admission slots are available."""
 
 
-class AdmissionStoreCorruptError(_admission_persistence.AdmissionStoreCorruptError):
-    """Raised when the admission slot file cannot be safely loaded."""
+# The persistence layer raises this class directly; the store re-exports it so
+# callers catch one class whether they import from here or from the package.
+AdmissionStoreCorruptError = _admission_persistence.AdmissionStoreCorruptError
 
 
 def _admission_path(root: Path) -> Path:
