@@ -115,10 +115,8 @@ def test_worker_without_a_policy_uses_shared_defaults(tmp_path: Path) -> None:
     assert worker.policy == EngineWorkerPolicy()
     assert worker._reserve_next_entry() == ("idle", None)
     assert worker._running_queue_id(SimpleNamespace(queue_id="q-1")) == "q-1"
-    with pytest.raises(AttributeError, match="finalize_child_exit"):
-        worker._finalize_child_exit(SimpleNamespace(), rc=0)
-    worker._finalize_finished_job("q-1", SimpleNamespace(), rc=2)
-    worker._reconcile_orphaned_running()
+    worker._finalize_completed_job("q-1", SimpleNamespace(), 2)
+    worker._reconcile_worker_state()
     worker._check_cancel_requests()
 
     assert calls == [
@@ -165,31 +163,24 @@ def test_interrupt_and_job_factory_steps_receive_the_worker(
 def test_policy_steps_receive_the_worker_and_the_job(tmp_path: Path) -> None:
     calls: list[tuple[str, Any]] = []
     job = SimpleNamespace(queue_id="q-1")
+    hook_calls: list[str] = []
     worker = _worker(
         tmp_path,
-        [],
+        hook_calls,
         EngineWorkerPolicy(
             running_queue_id=lambda entry: f"id:{entry.queue_id}",
-            finalize_finished_job=lambda w, queue_id, current, *, rc: calls.append(
-                ("finished", (w is worker, queue_id, current is job, rc))
-            ),
-            finalize_child_exit=lambda w, current, *, rc: calls.append(
-                ("exit", (w is worker, current is job, rc))
-            ),
-            reconcile_orphaned_running=lambda w: calls.append(("reconcile", w is worker)),
             check_cancel_requests=lambda w: calls.append(("cancel", w is worker)),
         ),
     )
 
     assert worker._running_queue_id(job) == "id:q-1"
-    worker._finalize_finished_job("q-1", job, rc=3)
-    worker._finalize_child_exit(job, rc=4)
-    worker._reconcile_orphaned_running()
+    worker._finalize_completed_job("q-1", job, 3)
+    worker._reconcile_worker_state()
     worker._check_cancel_requests()
 
-    assert calls == [
-        ("finished", (True, "q-1", True, 3)),
-        ("exit", (True, True, 4)),
-        ("reconcile", True),
-        ("cancel", True),
+    assert calls == [("cancel", True)]
+    # Finalization and reconciliation are hook-owned; a policy cannot intercept them.
+    assert hook_calls == [
+        "hooks.finalize_completed_job:3",
+        "hooks.reconcile_worker_state",
     ]

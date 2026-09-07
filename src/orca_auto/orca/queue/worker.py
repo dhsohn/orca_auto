@@ -304,8 +304,6 @@ def QueueWorker(
             keyboard_interrupt=_log_orca_worker_interrupt,
             running_queue_id=queue_entry_id,
             running_job_factory=_make_orca_running_job,
-            finalize_finished_job=replay.finalize_completed_job,
-            reconcile_orphaned_running=replay.reconcile_worker_state,
             check_cancel_requests=_check_orca_cancel_requests,
             reserve_gate=_orca_reserve_gate,
         ),
