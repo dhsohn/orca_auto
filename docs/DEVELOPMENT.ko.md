@@ -241,9 +241,10 @@ bash scripts/clean_artifacts.sh
   (`line-length = 100`)는 포매터가 결정하므로 `E501`은 의도적으로 lint `select`에서
   제외되어 있습니다.
 - Mypy는 `[tool.mypy]`에서 전반적으로 비엄격(non-strict) 상태로 유지됩니다. 엄격 스타일
-  옵션은 이미 강화된 override 목록 모듈로 의도적으로 한정되어 있습니다. 전체 검사가 여전히
-  통과할 때만 override 목록을 확장하고, 엄격 옵션을 `[tool.mypy]`로 옮기는 것은 전체
-  `src` + `tests` 트리가 동등한 엄격 플래그를 통과한 뒤에만 하세요.
+  옵션은 override 하나로 `orca_auto` 패키지 전체(`orca_auto`, `orca_auto.*`)에 적용되며,
+  모든 소스 모듈이 이미 이를 통과하므로 새로 만들거나 옮긴 모듈은 기본으로 엄격 검사를
+  받습니다. 엄격 옵션을 `[tool.mypy]`로 옮기는 것은 전체 `src` + `tests` 트리가 동등한
+  엄격 플래그를 통과한 뒤에만 하세요.
 
 ## 테스트 결합 정책
 

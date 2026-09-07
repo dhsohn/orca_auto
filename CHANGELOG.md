@@ -35,6 +35,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   ORCA now calls the core loader directly;
   queue-row parsing and the corrupt-queue error type are unchanged.
 
+### Changed
+
+- The strict mypy options now apply to the whole `orca_auto` package through
+  one override (`orca_auto`, `orca_auto.*`) instead of a hand-maintained list
+  of 121 module patterns. Every source module already passed the strict flags;
+  the list only decided which modules the gate looked at, and a module that was
+  added or moved outside a listed name silently dropped back to the non-strict
+  defaults. The flags themselves are unchanged, and `tests/` stays on the
+  non-strict top-level configuration.
+
 
 ## [4.1.0] - 2026-09-06
 
