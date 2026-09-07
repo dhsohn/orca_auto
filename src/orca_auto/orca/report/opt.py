@@ -19,7 +19,7 @@ from ..frequencies import (
     mode_summaries,
 )
 from ..input_blocks import file_route_lines
-from ..parser import OptProgress, parse_opt_progress
+from ..orca_opt_progress import OptProgress, parse_opt_progress
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,

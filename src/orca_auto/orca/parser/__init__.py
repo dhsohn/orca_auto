@@ -12,7 +12,6 @@ import re
 from dataclasses import dataclass, field
 
 from ..orca_chemistry import build_formula as _build_formula
-from ..orca_opt_progress import OptProgress, OptStep, parse_opt_progress
 from ..output_status import coarse_orca_status, last_optimization_convergence
 from .extractors import (
     AtomRow,
@@ -60,10 +59,7 @@ __all__ = [
     "HARTREE_TO_EV",
     "KCAL_PER_HARTREE",
     "AtomRow",
-    "OptProgress",
-    "OptStep",
     "OrcaResult",
-    "parse_opt_progress",
     "parse_orca_output",
 ]
 

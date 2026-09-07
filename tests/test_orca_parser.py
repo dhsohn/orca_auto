@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from orca_auto.orca.completion_rules import CompletionMode
+from orca_auto.orca.orca_opt_progress import parse_opt_progress
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.output_status import last_optimization_convergence
-from orca_auto.orca.parser import parse_opt_progress, parse_orca_output
+from orca_auto.orca.parser import parse_orca_output
 from orca_auto.orca.report.opt import collect_opt_report_data
 
 
@@ -682,3 +685,14 @@ def test_route_line_without_a_prompt_is_still_parsed(tmp_path: Path) -> None:
     result = parse_orca_output(str(out_path))
 
     assert result.input_line == "Opt B3LYP def2-SVP Freq"
+
+
+def test_opt_progress_module_imports_in_a_fresh_interpreter() -> None:
+    """The parser package must not re-export from a module that imports the parser."""
+    completed = subprocess.run(
+        [sys.executable, "-c", "import orca_auto.orca.orca_opt_progress"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr

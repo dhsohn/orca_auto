@@ -11,6 +11,7 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 ### Fixed
 
 - `config/orca_auto.yaml.example` loads again. The empty `orca.runtime:` key
+
   left behind by #299 parsed as `null`, so every config loader rejected the
   shipped template with "orca.runtime section must be a mapping when
   configured." The key is now commented out beside its optional scratch
@@ -44,6 +45,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   added or moved outside a listed name silently dropped back to the non-strict
   defaults. The flags themselves are unchanged, and `tests/` stays on the
   non-strict top-level configuration.
+
+- `orca_auto.orca.orca_opt_progress` imports on its own again. The parser
+
+  package re-exported `OptProgress`, `OptStep` and `parse_opt_progress` from
+  that module while the module itself imports the parser's submodules, so a
+  fresh `import orca_auto.orca.orca_opt_progress` failed with a partially
+  initialised module (since the parser became a subpackage in #19). The
+  re-export is gone; the two report modules and the
+  parser tests import from the owning module, and a test imports it in a
+  fresh interpreter.
 
 
 ## [4.1.0] - 2026-09-06
