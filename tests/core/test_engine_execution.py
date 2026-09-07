@@ -202,7 +202,7 @@ def test_run_engine_worker_entry_with_spec_runs_lifecycle(tmp_path: Path) -> Non
         _queue_root: Path,
         options: engine_execution.EngineWorkerOptions,
     ) -> str:
-        calls.append(("finalize", options.emit_output))
+        calls.append(("finalize", options.worker_job_pid))
         return f"{result}:finalized"
 
     def build_outcome(_context: Any, result: str, finalized: str) -> str:
@@ -225,17 +225,14 @@ def test_run_engine_worker_entry_with_spec_runs_lifecycle(tmp_path: Path) -> Non
         entry,
         queue_root=tmp_path / "queue",
         spec=spec,
-        options=engine_execution.EngineWorkerOptions(
-            worker_job_pid=101,
-            emit_output=True,
-        ),
+        options=engine_execution.EngineWorkerOptions(worker_job_pid=101),
     )
 
     assert outcome == "result:finalized"
     assert calls == [
         ("mark", 101),
         ("run", tmp_path / "queue"),
-        ("finalize", True),
+        ("finalize", 101),
         ("outcome", "result"),
     ]
 
@@ -267,10 +264,7 @@ def test_run_engine_worker_entry_with_spec_factory_options_builds_options(
                 else options.shutdown_requested(),
             }
         ),
-        finalize_entry=lambda _cfg, _context, result, _queue_root, options: {
-            **result,
-            "emit_output": options.emit_output,
-        },
+        finalize_entry=lambda _cfg, _context, result, _queue_root, _options: dict(result),
     )
 
     outcome = engine_execution.run_engine_worker_entry_with_spec_factory_options(
@@ -282,13 +276,11 @@ def test_run_engine_worker_entry_with_spec_factory_options_builds_options(
         shutdown_requested=lambda: False,
         register_running_job=register_running_job,
         worker_job_pid=101,
-        emit_output=True,
     )
 
     assert outcome == {
         "should_cancel": True,
         "shutdown_requested": False,
-        "emit_output": True,
     }
     assert calls == [("mark", 101), ("register", running_process)]
 
@@ -402,13 +394,11 @@ def test_sync_terminal_result_runs_common_terminal_sequence() -> None:
             mark_queue_terminal=mark_queue_terminal,
             sync_job_record=sync_job_record,
             notify_finished=lambda sync_result: calls.append(f"notify:{sync_result}"),
-            emit_output=lambda sync_result: calls.append(f"emit:{sync_result}"),
             build_outcome=lambda sync_result: ("outcome", sync_result),
         ),
-        emit_output=True,
     )
 
-    assert calls == ["write", "sync", "mark", "notify:organized", "emit:organized"]
+    assert calls == ["write", "sync", "mark", "notify:organized"]
     assert outcome == ("outcome", "organized")
 
 

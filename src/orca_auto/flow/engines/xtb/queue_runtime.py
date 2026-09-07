@@ -233,7 +233,6 @@ def _finalize_execution_result(
     queue_root: Path,
     entry: Any,
     result: XtbRunResult,
-    emit_output: bool,
     previous_state: dict[str, Any] | None = None,
     resumed: bool = False,
 ) -> _worker_execution.WorkerExecutionOutcome:
@@ -242,7 +241,6 @@ def _finalize_execution_result(
         queue_root=queue_root,
         entry=entry,
         result=result,
-        emit_output=emit_output,
         previous_state=previous_state,
         resumed=resumed,
         outcome_cls=_worker_execution.WorkerExecutionOutcome,
@@ -265,7 +263,6 @@ def _execute_queue_entry(
     should_cancel: Callable[[], bool] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
-    emit_output: bool = False,
 ) -> _worker_execution.WorkerExecutionOutcome:
     return _worker_execution.execute_queue_entry(
         cfg,
@@ -274,7 +271,6 @@ def _execute_queue_entry(
         should_cancel=should_cancel,
         register_running_job=register_running_job,
         worker_job_pid=worker_job_pid,
-        emit_output=emit_output,
         dependencies=_worker_execution_dependencies(),
     )
 

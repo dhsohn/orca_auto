@@ -90,7 +90,6 @@ def finalize_execution_result(
     queue_root: Path,
     entry: Any,
     result: XtbRunResult,
-    emit_output: bool,
     previous_state: dict[str, Any] | None = None,
     resumed: bool = False,
 ) -> WorkerExecutionOutcome:
@@ -99,7 +98,6 @@ def finalize_execution_result(
         queue_root=queue_root,
         entry=entry,
         result=result,
-        emit_output=emit_output,
         previous_state=previous_state,
         resumed=resumed,
         outcome_cls=WorkerExecutionOutcome,

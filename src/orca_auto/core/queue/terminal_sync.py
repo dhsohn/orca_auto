@@ -16,14 +16,11 @@ class TerminalSyncActions(Generic[SyncResultT, OutcomeT]):
     sync_job_record: Callable[[], SyncResultT]
     notify_finished: Callable[[SyncResultT | None], Any]
     build_outcome: Callable[[SyncResultT | None], OutcomeT]
-    emit_output: Callable[[SyncResultT | None], Any] | None = None
     handle_uncommitted_terminal: Callable[[], OutcomeT] | None = None
 
 
 def sync_terminal_result(
     actions: TerminalSyncActions[SyncResultT, OutcomeT],
-    *,
-    emit_output: bool = False,
 ) -> OutcomeT:
     # Keep the queue entry replayable until both the terminal artifacts and
     # idempotent terminal index are durable. The queue mutation invokes these
@@ -46,8 +43,6 @@ def sync_terminal_result(
         return actions.build_outcome(None)
     sync_result = sync_results[0] if sync_results else None
     actions.notify_finished(sync_result)
-    if emit_output and actions.emit_output is not None:
-        actions.emit_output(sync_result)
     return actions.build_outcome(sync_result)
 
 
