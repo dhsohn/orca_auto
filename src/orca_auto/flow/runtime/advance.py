@@ -35,7 +35,7 @@ class WorkflowAdvanceDeps:
     workflow_needs_terminal_child_sync_fn: Callable[..., bool]
     append_workflow_advance_failed_event_fn: Callable[..., Any]
     append_workflow_advanced_events_fn: Callable[..., Any]
-    append_workflow_journal_event_fn: Callable[..., Any]
+    append_workflow_journal_event_fn: runtime_models.WorkflowJournalWriter
     workflow_skipped_terminal_result_fn: Callable[..., WorkflowAdvanceResult]
     workflow_advance_failed_result_fn: Callable[..., WorkflowAdvanceResult]
     workflow_advanced_result_fn: Callable[..., WorkflowAdvanceResult]

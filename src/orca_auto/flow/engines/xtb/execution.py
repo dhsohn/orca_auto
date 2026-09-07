@@ -168,7 +168,6 @@ class WorkerExecutionDependencies:
     artifacts: WorkerArtifactDependencies
     tracking: WorkerTrackingDependencies
     runner: WorkerRunnerDependencies
-    execute_queue_entry: Callable[..., Any] | None = None
 
 
 def build_worker_execution_dependencies_from_groups(
@@ -181,7 +180,6 @@ def build_worker_execution_dependencies_from_groups(
     artifacts: WorkerArtifactDependencies,
     tracking: WorkerTrackingDependencies,
     runner: WorkerRunnerDependencies,
-    execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> WorkerExecutionDependencies:
     dependencies: WorkerExecutionDependencies = (
         _worker_dependencies.build_worker_execution_dependencies_from_groups(
@@ -196,7 +194,6 @@ def build_worker_execution_dependencies_from_groups(
                 "tracking": tracking,
                 "runner": runner,
             },
-            execute_queue_entry_fn=execute_queue_entry_fn,
         )
     )
     return dependencies
@@ -295,7 +292,6 @@ def build_worker_execution_dependencies(
     artifacts: WorkerArtifactDependencies | None = None,
     tracking: WorkerTrackingDependencies | None = None,
     runner: WorkerRunnerDependencies | None = None,
-    execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> WorkerExecutionDependencies:
     dependencies: WorkerExecutionDependencies = (
         _worker_dependencies.build_worker_execution_dependency_container(
@@ -311,7 +307,6 @@ def build_worker_execution_dependencies(
                 "runner": runner,
             },
             _worker_execution_default_factories(),
-            execute_queue_entry_fn=execute_queue_entry_fn,
         )
     )
     return dependencies

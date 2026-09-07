@@ -31,7 +31,6 @@ class XtbQueueRuntimeWorkerExecutionCallbacks:
     finalize_execution_result: Callable[..., _worker_execution.WorkerExecutionOutcome]
     upsert_job_record: Callable[..., Any]
     notify_job_started: Callable[..., Any]
-    execute_queue_entry: Callable[..., Any]
     run_xtb_ranking_job: Callable[..., _worker_execution.XtbRunResult]
     start_xtb_job: Callable[..., Any]
     finalize_xtb_job: Callable[..., _worker_execution.XtbRunResult]
@@ -99,7 +98,6 @@ def build_queue_runtime_worker_execution_dependencies(
             upsert_job_record=callbacks.upsert_job_record,
             notify_job_started=callbacks.notify_job_started,
         ),
-        execute_queue_entry_fn=callbacks.execute_queue_entry,
     )
 
 

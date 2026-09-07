@@ -10,7 +10,6 @@ from .artifacts import (
     EngineArtifactStatus,
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
-    load_engine_artifact_payload,
 )
 from .definition_builder import (
     build_engine_runtime_roots,
@@ -47,6 +46,5 @@ __all__ = [
     "build_queue_entry_by_id",
     "entry_matches_engine_identity",
     "get_engine_definition",
-    "load_engine_artifact_payload",
     "own_engine_accept_entry",
 ]

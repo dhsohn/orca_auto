@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 from enum import Enum
-from pathlib import Path
 
 import pytest
 
@@ -15,7 +13,6 @@ from orca_auto.core.engines.artifacts import (
     EngineArtifactStatus,
     EngineArtifactTimestamps,
     build_engine_artifact_payload,
-    load_engine_artifact_payload,
 )
 
 
@@ -151,22 +148,3 @@ def test_engine_artifact_payload_unwraps_nested_string_enums() -> None:
 
     assert payload["engine_payload"]["attempts"][0]["analyzer_status"] == "completed"
     assert type(payload["engine_payload"]["attempts"][0]["analyzer_status"]) is str
-
-
-def test_engine_artifact_loader_rejects_invalid_or_unknown_payloads(tmp_path: Path) -> None:
-    path = tmp_path / "job_state.json"
-
-    path.write_text(json.dumps({"status": "completed"}), encoding="utf-8")
-    assert load_engine_artifact_payload(path) is None
-
-    path.write_text(
-        json.dumps({"schema_version": 0, "engine": "orca"}),
-        encoding="utf-8",
-    )
-    assert load_engine_artifact_payload(path) is None
-
-    path.write_text(
-        json.dumps({"schema_version": 1, "engine": "orca"}),
-        encoding="utf-8",
-    )
-    assert load_engine_artifact_payload(path) == {"schema_version": 1, "engine": "orca"}

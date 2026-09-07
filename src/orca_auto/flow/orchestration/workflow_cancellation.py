@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
 from orca_auto.core.statuses import (
@@ -24,6 +24,9 @@ from orca_auto.flow.orchestration.services import (
 )
 from orca_auto.flow.orchestration.stage_views import WorkflowPayloadView, WorkflowStageView
 from orca_auto.flow.orchestration.support import submission_target_impl
+
+if TYPE_CHECKING:
+    from orca_auto.flow.runtime.models import WorkflowJournalWriter
 
 _CancelTargetHandler = Callable[
     [OrchestrationServices, str, WorkflowEngineOptions],
@@ -202,7 +205,7 @@ def drain_cancellation_transitions(
     acquire_workflow_lock_fn: Callable[..., Any],
     load_workflow_payload_fn: Callable[[Any], dict[str, Any]],
     write_workflow_payload_fn: Callable[[Any, dict[str, Any]], Any],
-    append_workflow_journal_event_fn: Callable[..., Any],
+    append_workflow_journal_event_fn: WorkflowJournalWriter,
 ) -> int:
     """Journal cancel transitions that a crashed cancel command left behind.
 
@@ -291,7 +294,7 @@ def drain_cancellation_transitions(
 
 
 def _append_cancel_transition_event(
-    append_workflow_journal_event_fn: Callable[..., Any],
+    append_workflow_journal_event_fn: WorkflowJournalWriter,
     workflow_root: Path,
     transition: dict[str, str],
     *,

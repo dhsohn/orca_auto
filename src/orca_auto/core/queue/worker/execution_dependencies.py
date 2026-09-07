@@ -114,14 +114,9 @@ def build_worker_admission_dependencies(
 def build_worker_execution_dependencies_from_groups(
     dependencies_type: Callable[..., Any],
     groups: Mapping[str, Any],
-    *,
-    execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> Any:
     resolved = {name: value for name, value in groups.items() if value is not None}
-    return dependencies_type(
-        **resolved,
-        execute_queue_entry=execute_queue_entry_fn,
-    )
+    return dependencies_type(**resolved)
 
 
 def build_worker_process_default_factories(
@@ -213,17 +208,12 @@ def build_worker_execution_dependency_container(
     container_builder: Callable[..., Any],
     overrides: Mapping[str, Any],
     default_factories: Mapping[str, DependencyFactory],
-    *,
-    execute_queue_entry_fn: Callable[..., Any] | None = None,
 ) -> Any:
     resolved: dict[str, Any] = {}
     for name, default_factory in default_factories.items():
         override = overrides.get(name)
         resolved[name] = default_factory() if override is None else override
-    return container_builder(
-        **resolved,
-        execute_queue_entry_fn=execute_queue_entry_fn,
-    )
+    return container_builder(**resolved)
 
 
 __all__ = [

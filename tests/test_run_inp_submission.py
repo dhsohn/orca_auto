@@ -88,6 +88,35 @@ def _real_submission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
     return reaction_dir, args
 
 
+@pytest.mark.parametrize("snapshot", [None, {}])
+def test_internal_snapshot_failure_is_not_invalid_user_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    snapshot: dict[str, Any] | None,
+) -> None:
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    source_input = (reaction_dir / "rxn.inp").read_bytes()
+    cleanup_calls: list[object] = []
+    monkeypatch.setattr(
+        run_inp, "build_queue_metadata", lambda *_args, **_kwargs: {"execution_snapshot": snapshot}
+    )
+    monkeypatch.setattr(
+        run_inp,
+        "cleanup_unowned_orca_execution_snapshot",
+        lambda *args, **kwargs: cleanup_calls.append((args, kwargs)),
+    )
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "failed"
+    assert result.reason == "queue_submission_failed"
+    assert "RuntimeError: ORCA submission" in result.stderr
+    assert len(cleanup_calls) == 1
+    assert queue_adapter.list_queue(tmp_path) == []
+    assert not (tmp_path / "queue.json").exists()
+    assert (reaction_dir / "rxn.inp").read_bytes() == source_input
+
+
 def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

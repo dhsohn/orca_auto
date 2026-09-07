@@ -16,9 +16,10 @@ New code, tests, and docs should import from `orca_auto.*`.
 The domain packages form enforced layers — `flow` → `orca` → `core` — checked
 by import-linter (`lint-imports`, configured in `pyproject.toml` and run by
 `scripts/check.sh`, so also by CI). Higher layers may import lower ones; the
-reverse fails the build. Cross-layer engine wiring goes through the lazy
-string module registries (`core/engines/registry.py`,
-`core/queue/worker/admission.py`) instead of imports.
+reverse fails the build. Cross-layer engine wiring resolves lazy string module
+paths owned by `core/engine_catalog.py` instead of importing engine modules
+directly. `core/engines/registry.py` and `core/queue/worker/admission.py` consume
+that catalog.
 
 The top-level CLI modules (`cli*.py`, `activity_*.py`, `terminal_table.py`,
 `systemd_plan.py`, `_process_evidence.py`) are the outermost layer: they
@@ -239,7 +240,7 @@ named above, not a lazy attribute.
 - `tests/flow/engines/`: internal xTB/CREST engine tests
 - `tests/integration/`: in-repo integration smoke tests
 - `tests/core/`: shared infrastructure tests
-- top-level `tests/test_*.py`: ORCA-focused regression tests
+- top-level `tests/test_*.py`: ORCA, CLI, workflow, and repository-wide regression tests
 
 Common commands:
 

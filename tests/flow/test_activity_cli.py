@@ -11,6 +11,7 @@ from orca_auto.core.app_ids import (
     ORCA_AUTO_CONFIG_ENV_VAR,
     ORCA_AUTO_ORCA_SOURCE,
 )
+from orca_auto.core.config import discovery
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.flow import activity
@@ -316,8 +317,6 @@ def test_activity_helper_edges_and_discovery_paths(
         (tmp_path / "wf").resolve()
     )
     monkeypatch.setenv(ORCA_AUTO_CONFIG_ENV_VAR, str(existing))
-    assert _activity_sources.discover_shared_config(None) == str(existing.resolve())
-    assert _activity_sources.discover_shared_config(str(existing)) == str(existing.resolve())
     resolved = _activity_sources.resolve_activity_source_request(
         _activity_model.ActivitySourceRequest(
             workflow_root=tmp_path / "wf",
@@ -955,8 +954,8 @@ def test_list_activities_autodiscovers_defaults_when_no_args(monkeypatch) -> Non
         _activity_sources, "discover_workflow_root", lambda workflow_root: "/tmp/workflow_root"
     )
     monkeypatch.setattr(
-        _activity_sources,
-        "discover_shared_config",
+        discovery,
+        "resolve_shared_config_path",
         lambda explicit: "/tmp/orca_auto.yaml",
     )
     captured: dict[str, Any] = {}
@@ -1010,8 +1009,8 @@ def test_cancel_activity_autodiscovers_defaults(monkeypatch) -> None:
         _activity_sources, "discover_workflow_root", lambda workflow_root: "/tmp/workflow_root"
     )
     monkeypatch.setattr(
-        _activity_sources,
-        "discover_shared_config",
+        discovery,
+        "resolve_shared_config_path",
         lambda explicit: "/tmp/orca_auto.yaml",
     )
     monkeypatch.setattr(

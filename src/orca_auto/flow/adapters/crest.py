@@ -5,7 +5,7 @@ from typing import Any
 
 from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.indexing import resolve_job_location
-from orca_auto.core.utils.coercion import coerce_int_mapping
+from orca_auto.core.utils.coercion import coerce_int_mapping, normalize_text
 
 from ..contracts.crest import CrestArtifactContract, CrestDownstreamPolicy, to_workflow_stage_inputs
 from ..contracts.xtb import WorkflowStageInput
@@ -60,7 +60,7 @@ def load_crest_artifact_contract(
         payload.get("retained_conformer_count", len(retained_paths)) or len(retained_paths)
     )
     status = fields.payload_record_text("status", "status", default="unknown")
-    reason = _adapter_helpers.normalize_text(payload.get("reason"))
+    reason = normalize_text(payload.get("reason"))
     job_id = fields.payload_record_text("job_id", "job_id")
     mode = fields.payload_record_text("mode", "job_type", default="standard")
     molecule_key = fields.payload_record_text("molecule_key", "molecule_key")

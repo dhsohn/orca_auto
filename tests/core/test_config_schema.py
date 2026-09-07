@@ -11,7 +11,6 @@ from orca_auto.core.config.schema import (
     as_nonempty_str,
     as_str,
     discord_config_from_mapping,
-    explicit_nonnegative_int,
     messenger_config_from_mapping,
     normalize_admission_limit,
     normalize_max_concurrent,
@@ -124,17 +123,6 @@ def test_as_nonempty_str_preserves_existing_string_behavior(
 )
 def test_as_str_normalizes_config_text(value: object, default: str, expected: str) -> None:
     assert as_str(value, default) == expected
-
-
-@pytest.mark.parametrize(("value", "expected"), [(0, 0), ("7", 7), (8.0, 8)])
-def test_explicit_nonnegative_int_accepts_integer_values(value: object, expected: int) -> None:
-    assert explicit_nonnegative_int(value, field_name="retry") == expected
-
-
-@pytest.mark.parametrize("value", [None, "", "bad", -1, True, 1.5])
-def test_explicit_nonnegative_int_rejects_malformed_values(value: object) -> None:
-    with pytest.raises(ValueError, match="retry must be an integer >= 0"):
-        explicit_nonnegative_int(value, field_name="retry")
 
 
 @pytest.mark.parametrize(

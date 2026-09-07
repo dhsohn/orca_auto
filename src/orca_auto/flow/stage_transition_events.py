@@ -18,7 +18,11 @@ from .stage_event_metadata import (
 from .workflow._phases import phase_transition_event_payloads
 
 if TYPE_CHECKING:
-    from .runtime.models import StageTransitionContext, WorkflowJournalEventPayload
+    from .runtime.models import (
+        StageTransitionContext,
+        WorkflowJournalEventPayload,
+        WorkflowJournalWriter,
+    )
 
 
 @dataclass(frozen=True)
@@ -226,7 +230,7 @@ def append_workflow_advance_failed_event(
     previous_status: str,
     reason: str,
     worker_session_id: str,
-    append_workflow_journal_event_fn: Callable[..., Any],
+    append_workflow_journal_event_fn: WorkflowJournalWriter,
 ) -> None:
     event_kwargs = _WorkflowEventContext(
         workflow_id=record.workflow_id,
@@ -253,7 +257,7 @@ def append_workflow_advanced_events(
     previous_summary: dict[str, Any],
     worker_session_id: str,
     reason: str = "",
-    append_workflow_journal_event_fn: Callable[..., Any],
+    append_workflow_journal_event_fn: WorkflowJournalWriter,
     normalize_text_fn: Callable[[Any], str] = normalize_text,
 ) -> None:
     status = normalize_text_fn(payload.get("status")).lower()

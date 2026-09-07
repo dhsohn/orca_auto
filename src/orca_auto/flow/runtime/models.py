@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Self, TypedDict
+from typing import Any, Protocol, Required, Self, TypedDict, Unpack
 
 from ..engine_options import WorkflowEngineOptions
 
@@ -18,7 +18,9 @@ class StageTransitionContext(TypedDict):
 
 
 class WorkflowJournalEventPayload(TypedDict, total=False):
-    event_type: str
+    event_type: Required[str]
+    event_id: str
+    occurred_at: str
     workflow_id: str
     template_name: str
     status: str
@@ -33,6 +35,12 @@ class WorkflowJournalEventPayload(TypedDict, total=False):
     reaction_handoff_status: str
     previous_reaction_handoff_status: str
     metadata: dict[str, Any]
+
+
+class WorkflowJournalWriter(Protocol):
+    def __call__(
+        self, workflow_root: str | Path, /, **event: Unpack[WorkflowJournalEventPayload]
+    ) -> object: ...
 
 
 class WorkflowAdvanceResult(TypedDict, total=False):

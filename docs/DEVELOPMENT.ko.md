@@ -18,9 +18,10 @@
 도메인 패키지는 강제되는 계층 — `flow` → `orca` → `core` — 을 이룹니다.
 import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 실행하므로 CI에서도 검사)가 확인합니다. 상위 계층은 하위 계층을 임포트할 수
-있지만 그 역방향은 빌드 실패입니다. 계층을 넘는 엔진 배선은 임포트 대신 지연
-문자열 모듈 레지스트리(`core/engines/registry.py`,
-`core/queue/worker/admission.py`)를 사용합니다.
+있지만 그 역방향은 빌드 실패입니다. 계층을 넘는 엔진 배선은 엔진 모듈을 직접
+임포트하는 대신 `core/engine_catalog.py`가 소유하는 지연 문자열 모듈 경로를
+해석합니다. `core/engines/registry.py`와 `core/queue/worker/admission.py`는
+이 카탈로그를 소비합니다.
 
 최상위 CLI 모듈(`cli*.py`, `activity_*.py`, `terminal_table.py`,
 `systemd_plan.py`, `_process_evidence.py`)은 가장 바깥 계층입니다. 도메인 패키지를 조합할 뿐이며, 두 번째
@@ -218,7 +219,7 @@ from orca_auto.core.indexing import get_job_location
 - `tests/flow/engines/`: 내부 xTB/CREST 엔진 테스트
 - `tests/integration/`: 저장소 내 통합 스모크 테스트
 - `tests/core/`: 공용 인프라 테스트
-- 최상위 `tests/test_*.py`: ORCA 중심 회귀 테스트
+- 최상위 `tests/test_*.py`: ORCA, CLI, 워크플로우 및 저장소 전반의 회귀 테스트
 
 자주 쓰는 명령:
 

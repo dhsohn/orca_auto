@@ -8,6 +8,7 @@ from typing import Any
 
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.utils import copy_dict_or_empty as _mapping
+from orca_auto.core.utils.coercion import normalize_text
 
 
 @dataclass(frozen=True)
@@ -71,12 +72,6 @@ class ContractFieldReader:
 
     def resolved_paths(self, values: Iterable[Any], *, roots: tuple[Path, ...]) -> tuple[str, ...]:
         return tuple(path for value in values if (path := self.resolved_path(value, roots=roots)))
-
-
-def normalize_text(value: Any) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
 
 
 def normalize_scalar_text(value: Any) -> str:

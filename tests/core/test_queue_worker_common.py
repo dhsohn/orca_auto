@@ -95,7 +95,6 @@ def test_worker_execution_dependency_container_prefers_overrides_and_builds_defa
     class Container:
         a: str
         b: str
-        execute_queue_entry_fn: object
 
     calls: list[str] = []
 
@@ -107,20 +106,15 @@ def test_worker_execution_dependency_container_prefers_overrides_and_builds_defa
         calls.append("b")
         return "default-b"
 
-    def execute_queue_entry(entry: object) -> str:
-        return "executed"
-
     container = worker_dependency_helpers.build_worker_execution_dependency_container(
         Container,
         {"a": "override-a", "b": None},
         {"a": default_a, "b": default_b},
-        execute_queue_entry_fn=execute_queue_entry,
     )
 
     assert container == Container(
         a="override-a",
         b="default-b",
-        execute_queue_entry_fn=execute_queue_entry,
     )
     assert calls == ["b"]
 

@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.utils.coercion import copy_dict_or_empty as _mapping
 from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.orca.job_locations._generation import current_generation_payloads
+from orca_auto.orca.job_locations._models import JobRuntimeContext
 
 from . import _orca_local_lookup as _local_lookup
 from . import _orca_path_helpers as _path_helpers
@@ -30,7 +32,7 @@ class LoadRoots:
 class LoaderContext:
     tracked_artifact_dir: Path | None
     tracked_dir: Path | None
-    tracked_record: Any
+    tracked_record: JobLocationRecord | None
     state: dict[str, Any]
     report: dict[str, Any]
     queue_entry: dict[str, Any] | None
@@ -64,15 +66,16 @@ def load_context(request: LoadRequest, roots: LoadRoots) -> LoaderContext:
     return context
 
 
-def context_from_runtime(runtime_context: tuple[Any, ...]) -> LoaderContext:
-    tracked_artifact_dir, tracked_dir, record, state, report, queue_entry = runtime_context
+def context_from_runtime(runtime_context: JobRuntimeContext) -> LoaderContext:
+    artifact = runtime_context.artifact
+    queue_entry = runtime_context.queue_entry
     return LoaderContext(
-        tracked_artifact_dir=tracked_artifact_dir,
-        tracked_dir=tracked_dir,
-        tracked_record=record,
-        state=dict(state),
-        report=dict(report),
-        queue_entry=queue_entry,
+        tracked_artifact_dir=runtime_context.artifact_dir,
+        tracked_dir=artifact.job_dir,
+        tracked_record=artifact.record,
+        state=_mapping(artifact.state),
+        report=_mapping(artifact.report),
+        queue_entry=dict(queue_entry) if isinstance(queue_entry, dict) else None,
     )
 
 

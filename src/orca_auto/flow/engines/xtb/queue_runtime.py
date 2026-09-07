@@ -129,7 +129,6 @@ def _worker_execution_callbacks() -> XtbQueueRuntimeWorkerExecutionCallbacks:
         finalize_execution_result=_finalize_execution_result,
         upsert_job_record=upsert_job_record,
         notify_job_started=notify_job_started,
-        execute_queue_entry=_execute_queue_entry,
         run_xtb_ranking_job=run_xtb_ranking_job,
         start_xtb_job=start_xtb_job,
         finalize_xtb_job=finalize_xtb_job,

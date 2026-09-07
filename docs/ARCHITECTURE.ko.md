@@ -66,7 +66,7 @@ src/orca_auto/
 │   │   ├── cancellation.py
 │   │   ├── publication_repair.py
 │   │   └── worker_tracking.py
-│   ├── runtime/         # 실행 락
+│   ├── run_lock.py      # 실행 락
 │   ├── engine.py        # ORCA EngineDefinition 배선
 │   ├── attempt/         # 시도 엔진, 재개, 리포팅
 │   ├── parser/          # ORCA 출력 파싱
@@ -99,9 +99,9 @@ src/orca_auto/
 `scripts/check.sh`와 CI가 실행)로 강제됩니다: `flow`는 `orca`와 `core`를
 임포트할 수 있고, `orca`는 `core`만, `core`는 이 도메인 패키지 중
 어느 것도 임포트하지 않습니다.
-엔진 배선은 지연 문자열 모듈 경로(`core/engines/registry.py`,
-`core/queue/worker/admission.py`)로만 계층을 넘습니다 — 의도된 플러그인
-심(seam)이며, 임포트 그래프에 일부러 드러나지 않습니다.
+엔진 배선은 `core/engines/registry.py`와 `core/queue/worker/admission.py` 같은
+소비자를 통해 `core/engine_catalog.py`의 지연 문자열 모듈 경로를 해석합니다.
+이는 의도된 플러그인 심(seam)이며, 정적 임포트 그래프에 일부러 드러나지 않습니다.
 
 ORCA 내부에서도 의존성은 안쪽을 향합니다. `commands`는 도메인 모듈을 호출할 수 있지만,
 제출·실행·worker-child·queue 정책은 `orca.commands`를 임포트하면 안 됩니다. 이 경계는
@@ -584,7 +584,7 @@ adapter가 해당 queued/started/finished callback을 직접 연결합니다. �
   존재하는 실행 가능한 절대 Linux 경로여야 합니다.
 - `scheduler.max_active_simulations`는 공유 어드미션 상한입니다.
 - `scheduler.admission_root`는 공유 슬롯 조정 루트입니다.
-- 엔진 범위로 나뉜 scheduler 값은 거부됩니다. 모든 워커가 같은 어드미션 루트와
+- 모든 엔진별 scheduler 값은 거부됩니다. 모든 워커가 같은 어드미션 루트와
   상한을 관찰해야 하기 때문입니다.
 - `runs_root`는 단독 ORCA 작업, 워크플로우 워크스페이스, 내부 엔진 실행이 모두
   사용하는 단일 runs 루트입니다.
@@ -657,8 +657,8 @@ Python 3.11/3.12/3.13 매트릭스, 휠 타입 메타데이터
 정확히 같고 root `py.typed` marker가 하나뿐인지도 확인합니다.
 
 테스트는 `tests/core/`, `tests/flow/`, `tests/flow/engines/`, `tests/integration/`,
-최상위 ORCA 회귀 테스트로 구성됩니다. 프로젝트는 내부 위임 테스트보다 동작을
-검증하는 테스트(페이로드, 영속 파일, CLI 출력, 상태 전이)를 선호합니다.
+최상위 ORCA, CLI, 워크플로우 및 저장소 전반의 회귀 테스트로 구성됩니다. 프로젝트는
+내부 위임 테스트보다 동작을 검증하는 테스트(페이로드, 영속 파일, CLI 출력, 상태 전이)를 선호합니다.
 
 ---
 

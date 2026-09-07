@@ -126,8 +126,6 @@ def _workflow_worker_spec(
         argv.extend(["--orca_auto-config", str(Path(str(config_path)).expanduser().resolve())])
     if bool(getattr(args, "no_submit", False)):
         argv.append("--no-submit")
-    if bool(getattr(args, "once", False)):
-        argv.append("--once")
     if bool(getattr(args, "refresh_registry", False)):
         argv.append("--refresh-registry")
     if bool(getattr(args, "refresh_each_cycle", False)):
@@ -144,7 +142,7 @@ def _workflow_worker_spec(
     lock_timeout_seconds = float(getattr(args, "lock_timeout_seconds", 0.0) or 0.0)
     if lock_timeout_seconds > 0:
         argv.extend(["--lock-timeout-seconds", str(lock_timeout_seconds)])
-    finite_worker = bool(getattr(args, "once", False)) or max_cycles > 0
+    finite_worker = max_cycles > 0
     return cli_worker_supervision.WorkerSpec(
         app="workflow",
         argv=tuple(argv),

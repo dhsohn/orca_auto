@@ -66,7 +66,7 @@ src/orca_auto/
 │   │   ├── cancellation.py
 │   │   ├── publication_repair.py
 │   │   └── worker_tracking.py
-│   ├── runtime/         # Run locks
+│   ├── run_lock.py      # Run locks
 │   ├── engine.py        # ORCA EngineDefinition wiring
 │   ├── attempt/         # Attempt engine, resume, reporting
 │   ├── parser/          # ORCA output parsing
@@ -98,9 +98,10 @@ There are no top-level alias packages or alternate runtime shims.
 Layering is directional and enforced by import-linter (`lint-imports`,
 configured in `pyproject.toml`, run by `scripts/check.sh` and CI): `flow` may
 import `orca` and `core`; `orca` may import only `core`; `core`
-imports none of those domain packages. Engine wiring crosses layers exclusively through lazy string module
-paths (`core/engines/registry.py`, `core/queue/worker/admission.py`) — the
-deliberate plugin seam, invisible to the import graph on purpose.
+imports none of those domain packages. Engine wiring resolves lazy string module
+paths from `core/engine_catalog.py` through consumers such as
+`core/engines/registry.py` and `core/queue/worker/admission.py` — the deliberate
+plugin seam, invisible to the static import graph on purpose.
 
 Within ORCA, dependencies also point inward: `commands` may call the domain
 modules, but submission, execution, worker-child, and queue policy must never
@@ -632,7 +633,7 @@ constructors. Notable rules:
   executables must be absolute Linux paths to existing executable files.
 - `scheduler.max_active_simulations` is the shared admission cap.
 - `scheduler.admission_root` is the shared slot-coordination root.
-- Divergent engine-scoped scheduler values are rejected so every worker
+- All engine-scoped scheduler values are rejected so every worker
   observes the same admission root and limit.
 - `runs_root` is the single runs root for standalone ORCA jobs,
   workflow workspaces, and internal-engine runs.
@@ -711,8 +712,8 @@ and a wheel smoke that requires the packaged Python-module inventory to exactly 
 `src/orca_auto` with one root `py.typed` marker.
 
 Tests are organized as `tests/core/`, `tests/flow/`, `tests/flow/engines/`,
-`tests/integration/`, and top-level ORCA regression tests. The project prefers
-behavior-asserting tests (payloads, persisted files, CLI output, state
+`tests/integration/`, and top-level ORCA, CLI, workflow, and repository-wide
+regression tests. The project prefers behavior-asserting tests (payloads, persisted files, CLI output, state
 transitions) over internal delegation tests.
 
 ---

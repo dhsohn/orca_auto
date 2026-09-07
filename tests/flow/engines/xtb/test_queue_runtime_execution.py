@@ -35,7 +35,6 @@ def _callbacks(calls: list[str]) -> XtbQueueRuntimeWorkerExecutionCallbacks:
         finalize_execution_result=_callable("finalize_execution_result", calls),
         upsert_job_record=_callable("upsert_job_record", calls),
         notify_job_started=_callable("notify_job_started", calls),
-        execute_queue_entry=_callable("execute_queue_entry", calls),
         run_xtb_ranking_job=_callable("run_xtb_ranking_job", calls),
         start_xtb_job=_callable("start_xtb_job", calls),
         finalize_xtb_job=_callable("finalize_xtb_job", calls),
@@ -77,7 +76,6 @@ def test_build_worker_execution_dependencies_maps_callback_groups() -> None:
     assert deps.artifacts.finalize_execution_result is callbacks.finalize_execution_result
     assert deps.tracking.upsert_job_record is callbacks.upsert_job_record
     assert deps.tracking.notify_job_started is callbacks.notify_job_started
-    assert deps.execute_queue_entry is callbacks.execute_queue_entry
     assert deps.timing.now_utc_iso() == "2026-01-01T00:00:00+00:00"
     assert deps.runner.cancel_check_interval_seconds == 9
     assert deps.runner.run_xtb_ranking_job is callbacks.run_xtb_ranking_job

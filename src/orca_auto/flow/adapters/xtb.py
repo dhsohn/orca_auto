@@ -6,7 +6,7 @@ from typing import Any
 
 from orca_auto.core import engine_runner as _engine_runner
 from orca_auto.core.indexing import JobLocationRecord, resolve_job_location
-from orca_auto.core.utils.coercion import coerce_int_mapping
+from orca_auto.core.utils.coercion import coerce_int_mapping, normalize_text
 
 from ..contracts.xtb import (
     WorkflowStageInput,
@@ -21,7 +21,7 @@ from . import _engine_adapter_helpers as _adapter_helpers
 def _job_type_from_record(record: JobLocationRecord | None, fallback: str) -> str:
     if record is None:
         return fallback
-    value = _adapter_helpers.normalize_text(record.job_type)
+    value = normalize_text(record.job_type)
     value = value.removeprefix("xtb_")
     return value or fallback
 
@@ -166,7 +166,7 @@ def load_xtb_artifact_contract(*, xtb_index_root: str | Path, target: str) -> Xt
         payload.get("job_type"),
         default=_job_type_from_record(fields.record, "unknown"),
     )
-    reason = _adapter_helpers.normalize_text(payload.get("reason"))
+    reason = normalize_text(payload.get("reason"))
     job_id = fields.payload_record_text("job_id", "job_id")
     reaction_key = fields.payload_record_text("reaction_key", "molecule_key")
     selected_input_xyz = fields.payload_record_text("selected_input_xyz", "selected_input_xyz")
