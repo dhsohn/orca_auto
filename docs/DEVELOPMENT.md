@@ -21,7 +21,8 @@ string module registries (`core/engines/registry.py`,
 `core/queue/worker/admission.py`) instead of imports.
 
 The top-level CLI modules (`cli*.py`, `activity_*.py`, `terminal_table.py`,
-`systemd_plan.py`) are the outermost layer: they compose the domain packages,
+`systemd_plan.py`, `_process_evidence.py`) are the outermost layer: they
+compose the domain packages,
 and a second import-linter contract forbids `core`, `orca` and `flow` from
 importing any of them. What command adapters inside the domain packages share
 with the CLI lives in `core` instead — `core/terminal.py` owns ANSI styling and

@@ -584,6 +584,8 @@ adapter가 해당 queued/started/finished callback을 직접 연결합니다. �
   존재하는 실행 가능한 절대 Linux 경로여야 합니다.
 - `scheduler.max_active_simulations`는 공유 어드미션 상한입니다.
 - `scheduler.admission_root`는 공유 슬롯 조정 루트입니다.
+- 엔진 범위로 나뉜 scheduler 값은 거부됩니다. 모든 워커가 같은 어드미션 루트와
+  상한을 관찰해야 하기 때문입니다.
 - `runs_root`는 단독 ORCA 작업, 워크플로우 워크스페이스, 내부 엔진 실행이 모두
   사용하는 단일 runs 루트입니다.
 - ORCA에는 계산 실패 재시도 설정이 없습니다.

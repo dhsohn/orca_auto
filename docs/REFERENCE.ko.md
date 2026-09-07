@@ -166,7 +166,8 @@ orca:
 - `scheduler.max_active_simulations`: ORCA, 내부 xTB 단계, 내부 CREST 단계 전반에 걸친
   공유 활성 실행 총 상한
 - `scheduler.admission_root`: 머신 전역 슬롯 조율을 위한 공유 admission 루트.
-  기본값은 `<runs_root>/.admission`
+  기본값은 `<runs_root>/.admission`. scheduler 제어는 최상위에 두어야 하며, 엔진 범위
+  값은 공유 admission 풀을 쪼개므로 서로 달라질 수 없습니다
 - `workflow.paths.xtb_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 xTB
   실행 경로
 - `workflow.paths.crest_executable`: 워크플로우가 관리하는 내부 단계가 사용하는 CREST

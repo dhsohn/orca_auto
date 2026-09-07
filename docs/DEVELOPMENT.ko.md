@@ -23,7 +23,7 @@ import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
 `core/queue/worker/admission.py`)를 사용합니다.
 
 최상위 CLI 모듈(`cli*.py`, `activity_*.py`, `terminal_table.py`,
-`systemd_plan.py`)은 가장 바깥 계층입니다. 도메인 패키지를 조합할 뿐이며, 두 번째
+`systemd_plan.py`, `_process_evidence.py`)은 가장 바깥 계층입니다. 도메인 패키지를 조합할 뿐이며, 두 번째
 import-linter 계약이 `core`·`orca`·`flow`가 이 모듈들을 임포트하는 것을 금지합니다.
 도메인 패키지 안의 명령 어댑터가 CLI와 공유하는 것은 대신 `core`에 둡니다 —
 `core/terminal.py`가 ANSI 스타일링과 `error:`/`hint:` 출력 형식을, `core/config/discovery.py`가
