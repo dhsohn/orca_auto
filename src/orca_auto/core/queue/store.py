@@ -50,8 +50,9 @@ class DuplicateQueueEntryError(RuntimeError):
     """Raised when an equivalent active task is already queued or running."""
 
 
-class QueueStoreCorruptError(_queue_persistence.QueueStoreCorruptError):
-    """Raised when the queue file exists but cannot be safely loaded."""
+# The persistence layer raises this class directly; the store re-exports it so
+# callers catch one class whether they import from here or from the package.
+QueueStoreCorruptError = _queue_persistence.QueueStoreCorruptError
 
 
 class QueueLockTimeoutError(TimeoutError):
