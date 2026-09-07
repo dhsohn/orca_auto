@@ -20,7 +20,6 @@ from .queue.adapter import (
     queue_entry_reaction_dir,
     queue_entry_status,
 )
-from .queue.entries import load_entries as _load_queue_entries
 from .queue.terminal_replay import (
     TerminalReplayMarkerKind,
     terminal_replay_marker_kind,
@@ -88,7 +87,7 @@ def _queue_generation_blocks_state_cleanup(
     allowed_root: Path,
     reaction_dir: str,
 ) -> bool:
-    for entry in _load_queue_entries(allowed_root):
+    for entry in _queue_store.load_entries(allowed_root):
         if not is_orca_queue_entry(entry):
             continue
         if _resolved_path_text(queue_entry_reaction_dir(entry)) != reaction_dir:

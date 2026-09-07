@@ -45,9 +45,6 @@ from .entries import (
     queue_entry_status,
     queue_entry_task_id,
 )
-from .entries import (
-    load_entries as _load_entries,
-)
 from .orphans import reconcile_orphaned_running_entries
 from .terminal_replay import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
@@ -303,7 +300,6 @@ def enqueue(
     entry = _queue_store.mutate_entries(
         allowed_root,
         append,
-        load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
         after_commit_fn=after_commit_fn,
     )
@@ -357,7 +353,6 @@ def dequeue_next(
 
     entry = _queue_store.dequeue_next(
         allowed_root,
-        load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
         accept_entry_fn=accepts_orca,
     )
@@ -381,7 +376,6 @@ def dequeue_entry_if_pending(
     entry = _queue_store.dequeue_entry_if_pending(
         allowed_root,
         queue_id,
-        load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
         accept_entry_fn=is_orca_queue_entry,
         expected_entry=expected_entry,
@@ -453,7 +447,6 @@ def mark_completed(
                 error="",
                 metadata_update=merged_metadata,
             ),
-            load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
                 is_orca_queue_entry(current)
@@ -514,7 +507,6 @@ def mark_failed(
                 if publish_terminal_side_effects
                 else _administrative_terminal_metadata_update_fn
             ),
-            load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
                 is_orca_queue_entry(current)
@@ -559,7 +551,6 @@ def mark_cancelled(
                 error="cancel_requested",
                 metadata_update=metadata_update,
             ),
-            load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
                 is_orca_queue_entry(current)
@@ -599,7 +590,6 @@ def requeue_running_entry(
                 error="cancel_requested",
                 allow_terminal_candidate=True,
             ),
-            load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
                 is_orca_queue_entry(current)
@@ -639,7 +629,6 @@ def cancel(
                 or queue_entries_same_publication_generation(current, expected_entry)
             )
         ),
-        load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
     )
     if entry is None:
@@ -658,9 +647,7 @@ def list_queue(
 ) -> list[QueueEntry]:
     """List queue entries, optionally filtered by status."""
     entries = [
-        entry
-        for entry in _queue_store.list_queue(allowed_root, load_entries_fn=_load_entries)
-        if is_orca_queue_entry(entry)
+        entry for entry in _queue_store.list_queue(allowed_root) if is_orca_queue_entry(entry)
     ]
     if status_filter:
         normalized_filter = normalize_text(status_filter).lower()
@@ -691,7 +678,6 @@ def get_cancel_requested(
     return _queue_store.get_cancel_requested(
         allowed_root,
         queue_id,
-        load_entries_fn=_load_entries,
         lock_timeout_seconds=lock_timeout_seconds,
         accept_entry_fn=lambda current: (
             is_orca_queue_entry(current)
@@ -714,7 +700,6 @@ def clear_terminal(allowed_root: Path, *, keep_last: int = 0) -> int:
         keep_last=keep_last,
         retain_entry_fn=_has_pending_terminal_replay,
         select_entry_fn=is_orca_queue_entry,
-        load_entries_fn=_load_entries,
         save_entries_fn=_queue_store.save_entries,
     )
     logger.info("Cleared %d terminal entries", removed_count)
@@ -734,7 +719,6 @@ def update_metadata(
             allowed_root,
             queue_id,
             metadata_update,
-            load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
                 is_orca_queue_entry(current)
@@ -805,7 +789,6 @@ def update_terminal(
             queue_id,
             update,
             missing_result=False,
-            load_entries_fn=_load_entries,
             save_entries_fn=_queue_store.save_entries,
         )
     )

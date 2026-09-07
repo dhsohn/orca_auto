@@ -22,9 +22,6 @@ from .entries import (
     queue_entry_reaction_dir,
     queue_entry_status,
 )
-from .entries import (
-    load_entries as _load_entries,
-)
 from .terminal_replay import (
     TERMINAL_REPLAY_METADATA_KEY,
     terminal_replay_marker_for_entry,
@@ -157,7 +154,7 @@ def reconcile_orphaned_running_entries(
 
     changed = 0
     with _queue_store.queue_lock(allowed_root):
-        entries = _load_entries(allowed_root)
+        entries = _queue_store.load_entries(allowed_root)
         owned_entries = [entry for entry in entries if entry_matches_engine_identity(entry, "orca")]
         prior_evidence_by_key = _prior_terminal_generation_evidence(owned_entries)
         for index, entry in enumerate(entries):

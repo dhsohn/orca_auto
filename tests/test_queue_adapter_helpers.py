@@ -60,13 +60,13 @@ def _entry(
     }
     if run_id is not None:
         entry["metadata"]["run_id"] = run_id
-    return queue_entries.entry_from_json_payload(entry)
+    return queue_store.entry_from_dict(entry)
 
 
 def _load_entries(root: Path) -> list[QueueEntry]:
     return queue_store.load_entries(
         root,
-        entry_from_dict_fn=queue_entries.entry_from_json_payload,
+        entry_from_dict_fn=queue_store.entry_from_dict,
         corrupt_error=queue_store.QueueStoreCorruptError,
     )
 
@@ -299,7 +299,7 @@ def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> No
 
 
 def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) -> None:
-    entry = queue_entries.entry_from_json_payload(
+    entry = queue_store.entry_from_dict(
         {
             "queue_id": "q_meta",
             "app_name": "orca_auto_orca",
@@ -337,7 +337,7 @@ def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> 
     _save_entries(
         root,
         [
-            queue_entries.entry_from_json_payload(
+            queue_store.entry_from_dict(
                 {
                     "queue_id": "q_backend",
                     "app_name": "orca_auto_orca",

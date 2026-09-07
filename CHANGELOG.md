@@ -27,6 +27,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   calls; the policy copies were a second, unreachable registration that in
   two engines pointed at a different function. Every engine now registers
   each step once. Worker behavior is unchanged.
+- The ORCA queue package no longer wraps the core queue loader.
+  `orca_auto.orca.queue.entries.load_entries` and `entry_from_json_payload`
+  passed `orca_auto.core.queue.store.load_entries` a one-line pass-through of
+  its default parser and the very corrupt-error class it already defaults
+  to, and the ORCA adapter re-injected that wrapper at thirteen call sites.
+  ORCA now calls the core loader directly;
+  queue-row parsing and the corrupt-queue error type are unchanged.
 
 
 ## [4.1.0] - 2026-09-06
