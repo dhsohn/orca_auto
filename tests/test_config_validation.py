@@ -3,8 +3,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
-import yaml
 
+from orca_auto.core.config.files import load_shared_config_mapping
 from orca_auto.core.config.schema import messenger_config_from_mapping
 from orca_auto.orca.config import load_config
 
@@ -389,11 +389,10 @@ class TestConfigValidation:
             assert "Config file not found" in str(exc_info.value)
             assert "orca_auto.yaml.example" in str(exc_info.value)
 
-    def test_shipped_example_config_messenger_matches_current_schema(self) -> None:
+    def test_shipped_example_config_loads_through_shared_validation(self) -> None:
         """bootstrap copies this template verbatim, so it must stay loadable."""
         example = Path(__file__).resolve().parents[1] / "config" / "orca_auto.yaml.example"
-        raw = yaml.safe_load(example.read_text(encoding="utf-8"))
-        assert isinstance(raw, dict)
+        _, raw = load_shared_config_mapping(example)
         messenger = messenger_config_from_mapping(raw.get("messenger"))
         assert messenger.normalized_provider == "discord"
 

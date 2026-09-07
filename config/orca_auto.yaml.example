@@ -75,7 +75,8 @@ messenger:
     retry_backoff_seconds: 0.5
 
 orca:
-  runtime:
+  # Uncomment `runtime:` together with any of the keys below it.
+  # runtime:
     # Shared RAM-backed working root for ORCA and workflow-managed xTB/CREST.
     # Exactly one private attempt runs below /dev/shm. ORCA transactionally
     # publishes surviving non-*.tmp artifacts; workflow xTB/CREST publish their

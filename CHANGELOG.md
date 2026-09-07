@@ -8,6 +8,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- `config/orca_auto.yaml.example` loads again. The empty `orca.runtime:` key
+  left behind by #299 parsed as `null`, so every config loader rejected the
+  shipped template with "orca.runtime section must be a mapping when
+  configured." The key is now commented out beside its optional scratch
+  settings, and the shipped-example test loads the whole template through the
+  shared validator instead of checking only the messenger block.
+
 ## [4.1.0] - 2026-09-06
 
 ### Changed
