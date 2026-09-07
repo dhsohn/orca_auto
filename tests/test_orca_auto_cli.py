@@ -14,18 +14,12 @@ from orca_auto import (
     cli_systemd_restart,
     cli_systemd_status,
 )
-from orca_auto.core.config import discovery
+from tests.config_discovery_helpers import isolate_shared_config_discovery
 
 
 @pytest.fixture(autouse=True)
-def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _explicit_shared_config_path(explicit: str | None) -> str | None:
-        if not explicit:
-            return None
-        return str(Path(explicit).expanduser().resolve())
-
-    monkeypatch.setattr(discovery, "resolve_shared_config_path", _explicit_shared_config_path)
-    monkeypatch.setattr(discovery, "shared_workflow_root_from_config", lambda config_path: None)
+def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
 def test_main_without_command_prints_help(capsys) -> None:

@@ -78,6 +78,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   therefore also catches an error raised by the persistence layer directly.
   Import paths, names and messages are unchanged; the class now reports the
   persistence module as its home in tracebacks and `repr`.
+- The CLI test modules isolate themselves from a developer machine's live
+  `config/orca_auto.yaml` through one shared helper that closes all three
+  discovery fallbacks — `ORCA_AUTO_CONFIG`, the repository config and the
+  `~/orca_auto` home config — in place of three copies of a fixture that
+  patched the resolver on the modules it named. The run-dir CLI tests,
+  which had no fixture and read the live config on such a machine, use the
+  same helper, and a test plants a config and asserts the seal removes it
+  from every binding of the resolver. No source change.
 
 
 ## [4.1.0] - 2026-09-06
