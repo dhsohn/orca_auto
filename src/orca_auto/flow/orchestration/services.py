@@ -4,9 +4,12 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from orca_auto.flow.contracts.workflow import WorkflowStagePayload
+
+if TYPE_CHECKING:
+    from orca_auto.flow.runtime.models import WorkflowJournalWriter
 
 AnyCallable = Callable[..., Any]
 
@@ -103,7 +106,7 @@ class WorkflowClock:
 
 @dataclass(frozen=True)
 class WorkflowEvents:
-    append_workflow_journal_event: AnyCallable
+    append_workflow_journal_event: WorkflowJournalWriter
     notify_phase_summary: AnyCallable
     require_workflow_journal_capacity: AnyCallable
 

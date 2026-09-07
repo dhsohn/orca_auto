@@ -25,8 +25,8 @@ def engine_runtime_paths(config_path: str, *, engine: str | None = None) -> dict
     """Resolve the shared runtime roots every engine anchors on.
 
     All engines share the single runs root (top-level runs_root), so the
-    resolved allowed_root/workflow_root are identical; only the scheduler
-    section may be overridden per engine.
+    resolved allowed_root/workflow_root are identical. Scheduler configuration
+    is also shared at the top level; engine-scoped scheduler keys are rejected.
     """
     path, raw = _load_engine_config(config_path)
     runs_root = runs_root_from_mapping(raw)

@@ -10,6 +10,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- The pre-commit hook checks this checkout's staged imports even when its
+  virtual environment is installed from a sibling worktree. Untracked relative
+  and dangling symlinks are restored after both successful and failed checks.
+- Queue activity cancellation now uses the same shared configuration discovery
+  as listing, including repository-local configuration and explicit/environment
+  overrides. Cancellation can now resolve repository-local jobs already shown
+  by listing.
+- The structural-test audit propagates search failures instead of reporting
+  partial results as a successful audit.
+- Missing or inconsistent internally produced ORCA execution snapshots report
+  `queue_submission_failed`, not `invalid_submission_input`; publication and
+  cleanup behavior are unchanged.
+
 - `config/orca_auto.yaml.example` loads again. The empty `orca.runtime:` key
 
   left behind by #299 parsed as `null`, so every config loader rejected the
@@ -20,6 +33,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
+- Removed unused worker callback slots and their forwarding arguments, plus an
+  uncalled internal artifact reader and its re-exports. The actual queue-entry
+  execution functions and artifact payload builders are unchanged.
+- Removed two uncalled resource/configuration helpers left behind by #299,
+  unreachable parent-worker `once` wiring, a duplicate adapter text normalizer,
+  and a stale type-check suppression. The internal workflow worker still
+  supports `--once`; the public supervisor uses `--max-cycles` for finite runs.
 - `EngineWorkerPolicy` no longer carries `finalize_finished_job`,
   `finalize_child_exit` or `reconcile_orphaned_running`, and
   `EngineQueueWorker` no longer defines the three private dispatchers behind
@@ -45,6 +65,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   transition, notification) is unchanged.
 
 ### Changed
+
+- ORCA adapter runtime loading keeps the existing named context model instead
+  of flattening it into an untyped tuple. Workflow journal injection now checks
+  event keywords and required fields statically; serialized events are unchanged.
 
 - The strict mypy options now apply to the whole `orca_auto` package through
   one override (`orca_auto`, `orca_auto.*`) instead of a hand-maintained list

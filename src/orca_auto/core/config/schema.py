@@ -122,17 +122,6 @@ def explicit_positive_int(value: Any, *, field_name: str) -> int:
     return parsed
 
 
-def explicit_nonnegative_int(value: Any, *, field_name: str) -> int:
-    if isinstance(value, bool):
-        raise ValueError(f"{field_name} must be an integer >= 0.")
-    if isinstance(value, float) and not value.is_integer():
-        raise ValueError(f"{field_name} must be an integer >= 0.")
-    parsed = safe_int(value, default=None)
-    if parsed is None or parsed < 0:
-        raise ValueError(f"{field_name} must be an integer >= 0.")
-    return parsed
-
-
 def normalize_max_concurrent(value: Any, default: int = 4) -> int:
     return max(1, as_int(value, default))
 

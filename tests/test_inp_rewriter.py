@@ -11,7 +11,7 @@ from orca_auto.orca.inp_rewriter import (
     read_resource_request_from_input,
 )
 from orca_auto.orca.input_blocks import ensure_route_keywords, set_block_key_value, set_moinp
-from orca_auto.orca.resource_directives import clamp_maxcore_to_budget, read_maxcore, read_nprocs
+from orca_auto.orca.resource_directives import read_maxcore, read_nprocs
 
 BASE_INP = """! OptTS Freq IRC
 
@@ -267,7 +267,7 @@ class TestInpRewriter(unittest.TestCase):
         self.assertIn('MOInp "new.gbw"', lines[1])
         self.assertFalse(any(line.lower().startswith("%moinp") for line in lines))
 
-    def test_resource_readers_use_maximum_and_maxcore_clamp_collapses_duplicates(self) -> None:
+    def test_resource_readers_use_maximum(self) -> None:
         lines = [
             "%maxcore 1000",
             "# hidden # %maxcore 999999",
@@ -279,9 +279,6 @@ class TestInpRewriter(unittest.TestCase):
 
         self.assertEqual(read_maxcore(lines), 999999)
         self.assertEqual(read_nprocs(lines), 8)
-        self.assertTrue(clamp_maxcore_to_budget(lines, max_memory_gb=4))
-        self.assertEqual(read_maxcore(lines), 512)
-        self.assertEqual(sum(line.startswith("%maxcore") for line in lines), 1)
 
     def test_block_mutator_rejects_duplicate_blocks_and_keys(self) -> None:
         with self.assertRaisesRegex(ValueError, "duplicate %pal blocks"):

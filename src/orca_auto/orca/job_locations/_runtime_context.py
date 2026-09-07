@@ -722,7 +722,7 @@ def load_job_runtime_context(
     queue_id: str = "",
     run_id: str = "",
     reaction_dir: str = "",
-) -> Any:
+) -> JobRuntimeContext:
     inputs = _runtime_inputs(
         index_root,
         target=target,

@@ -237,22 +237,3 @@ def set_maxcore(lines: list[str], value_mb: int) -> bool:
         insert_at = 0
     lines.insert(insert_at, f"%maxcore {value_mb}")
     return True
-
-
-def clamp_maxcore_to_budget(lines: list[str], *, max_memory_gb: int) -> bool:
-    """Cap ``%maxcore`` so per-core memory stays within the per-task budget.
-
-    The per-core ceiling is derived from the input's own ``nprocs`` so
-    ``nprocs * maxcore`` does not exceed the configured budget. Returns ``True``
-    when the input was changed.
-    """
-    if max_memory_gb <= 0:
-        return False
-    current = read_maxcore(lines)
-    if current is None:
-        return False
-    cores = read_nprocs(lines) or 1
-    ceiling = maxcore_mb_per_core(max_memory_gb=max_memory_gb, max_cores=cores)
-    if current <= ceiling:
-        return False
-    return set_maxcore(lines, ceiling)

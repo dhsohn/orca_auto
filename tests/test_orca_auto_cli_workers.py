@@ -13,6 +13,7 @@ from orca_auto import cli_worker_supervision as worker_supervision
 from orca_auto import cli_workers as unified_cli
 from orca_auto import cli_workers as worker_conflicts
 from orca_auto import cli_workers as worker_specs
+from orca_auto.cli_parsers import build_parser
 from orca_auto.core.config import discovery
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
@@ -419,14 +420,22 @@ def test_worker_tail_and_workflow_spec_include_optional_flags() -> None:
     spec = worker_specs._workflow_worker_spec(
         workflow_root="/tmp/workflows",
         config_path="/tmp/orca_auto.yaml",
-        args=argparse.Namespace(
-            no_submit=True,
-            once=True,
-            refresh_registry=True,
-            refresh_each_cycle=True,
-            max_cycles=3,
-            interval_seconds=2.5,
-            lock_timeout_seconds=9,
+        args=build_parser().parse_args(
+            [
+                "queue",
+                "worker",
+                "--app",
+                "workflow",
+                "--no-submit",
+                "--refresh-registry",
+                "--refresh-each-cycle",
+                "--max-cycles",
+                "3",
+                "--interval-seconds",
+                "2.5",
+                "--lock-timeout-seconds",
+                "9",
+            ]
         ),
     )
 
@@ -439,7 +448,6 @@ def test_worker_tail_and_workflow_spec_include_optional_flags() -> None:
         "--orca_auto-config",
         str(Path("/tmp/orca_auto.yaml").resolve()),
         "--no-submit",
-        "--once",
         "--refresh-registry",
         "--refresh-each-cycle",
         "--max-cycles",
@@ -453,15 +461,7 @@ def test_worker_tail_and_workflow_spec_include_optional_flags() -> None:
     default_spec = worker_specs._workflow_worker_spec(
         workflow_root="/tmp/workflows",
         config_path="/tmp/orca_auto.yaml",
-        args=argparse.Namespace(
-            no_submit=False,
-            once=False,
-            refresh_registry=False,
-            refresh_each_cycle=False,
-            max_cycles=0,
-            interval_seconds=0,
-            lock_timeout_seconds=0,
-        ),
+        args=build_parser().parse_args(["queue", "worker", "--app", "workflow"]),
     )
 
     assert default_spec.restart_on_clean_exit is True

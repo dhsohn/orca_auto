@@ -11,7 +11,12 @@ if ! command -v rg >/dev/null 2>&1; then
   exit 1
 fi
 
-matches="$(rg -n "$pattern" tests || true)"
+scan_status=0
+matches="$(rg -n "$pattern" tests)" || scan_status=$?
+if (( scan_status > 1 )); then
+  echo "[audit] ERROR: structural-test search failed (status $scan_status)." >&2
+  exit "$scan_status"
+fi
 count="$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')"
 
 echo "[audit] structural-test-name matches: $count"

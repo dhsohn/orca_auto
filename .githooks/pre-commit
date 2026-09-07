@@ -73,7 +73,7 @@ restore() {
   if [[ -n "$untracked_store" && -d "$untracked_store" ]]; then
     local f
     for f in "${untracked_files[@]}"; do
-      if [[ -e "$untracked_store/$f" ]]; then
+      if [[ -e "$untracked_store/$f" || -L "$untracked_store/$f" ]]; then
         mkdir -p -- "$(dirname -- "$f")"
         mv -- "$untracked_store/$f" "$f" || restore_failed=1
       fi
@@ -128,6 +128,8 @@ echo "[pre-commit] mypy"
 "$PY" -m mypy
 
 echo "[pre-commit] import-linter"
+# A shared venv may be installed from a sibling worktree; inspect this snapshot.
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
 "$VENV_DIR/bin/lint-imports"
 
 echo "[pre-commit] OK"

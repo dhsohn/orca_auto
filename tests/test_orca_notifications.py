@@ -116,7 +116,7 @@ def test_notify_returns_false_when_send_fails() -> None:
     assert len(channel.sent_messages) == 1
 
 
-def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:
     """provider=discord config -> build_channel -> notify_* -> bot embed POST."""
     import json
 

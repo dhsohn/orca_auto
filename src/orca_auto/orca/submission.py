@@ -410,7 +410,7 @@ def create_queued_submission(
     execution_snapshot = queue_metadata.get("execution_snapshot")
     try:
         if not isinstance(execution_snapshot, dict):
-            raise ValueError("ORCA submission has no execution snapshot")
+            raise RuntimeError("ORCA submission has no execution snapshot")
         intent_root = (
             Path(str(execution_snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or ""))
             .expanduser()
@@ -418,7 +418,7 @@ def create_queued_submission(
         )
         intent_token = str(execution_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
         if intent_root != allowed_root or not intent_token:
-            raise ValueError("ORCA submission snapshot intent does not match its queue root")
+            raise RuntimeError("ORCA submission snapshot intent does not match its queue root")
         transition_snapshot_intent(
             intent_root,
             intent_token,

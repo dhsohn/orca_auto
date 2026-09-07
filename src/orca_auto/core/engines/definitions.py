@@ -25,7 +25,6 @@ class EngineQueueFunctions:
 class EngineRunnerCallbacks:
     run_worker_child_job: Callable[..., int]
     build_worker_child_command: Callable[..., list[str]]
-    execute_queue_entry: Callable[..., Any] | None = None
 
 
 @dataclass(frozen=True)

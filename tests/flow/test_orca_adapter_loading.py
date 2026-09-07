@@ -7,8 +7,39 @@ import pytest
 
 from orca_auto.flow.adapters import _orca_local_lookup, _orca_tracking
 from orca_auto.flow.adapters import orca as orca_adapter
+from orca_auto.flow.adapters._orca_contract_context import context_from_runtime
+from orca_auto.orca.job_locations._models import JobArtifactContext, JobRuntimeContext
 from tests.engine_artifact_helpers import orca_artifact_payload
 from tests.flow.artifact_file_helpers import _write_json
+
+
+def test_runtime_context_preserves_named_fields_and_shallow_copy_boundary(tmp_path: Path) -> None:
+    state = {"status": "running", "nested": {"attempt": 1}}
+    report = {"reason": "pending", "nested": {"energy": -1.0}}
+    queue = {"queue_id": "q-1", "metadata": {"run_id": "run-1"}}
+    runtime = JobRuntimeContext(
+        artifact=JobArtifactContext(job_dir=tmp_path / "job", state=state, report=report),
+        artifact_dir=tmp_path / "artifacts",
+        queue_entry=queue,
+    )
+
+    context = context_from_runtime(runtime)
+
+    assert context.tracked_artifact_dir == tmp_path / "artifacts"
+    assert context.tracked_dir == tmp_path / "job"
+    assert context.tracked_record is runtime.artifact.record
+    assert context.state == state and context.state is not state
+    assert context.report == report and context.report is not report
+    assert context.queue_entry == queue and context.queue_entry is not queue
+    assert context.state["nested"] is state["nested"]
+    assert context.report["nested"] is report["nested"]
+    assert context.queue_entry is not None
+    assert context.queue_entry["metadata"] is queue["metadata"]
+
+    empty = context_from_runtime(JobRuntimeContext())
+    assert empty.state == empty.report == {}
+    assert empty.queue_entry is None
+    assert empty.tracked_dir is empty.tracked_artifact_dir is empty.tracked_record is None
 
 
 def _disable_tracking_helpers(monkeypatch: pytest.MonkeyPatch) -> None:

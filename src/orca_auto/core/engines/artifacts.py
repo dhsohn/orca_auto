@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.utils.coercion import safe_int
-from orca_auto.core.utils.persistence import load_json_mapping_file
 
 ENGINE_ARTIFACT_SCHEMA_VERSION = 1
 
@@ -161,17 +160,6 @@ def build_engine_artifact_payload(
     return payload
 
 
-def load_engine_artifact_payload(path: Path) -> dict[str, Any] | None:
-    payload = load_json_mapping_file(path)
-    if payload is None:
-        return None
-    if safe_int(payload.get("schema_version"), default=-1) != ENGINE_ARTIFACT_SCHEMA_VERSION:
-        return None
-    if not _clean_text(payload.get("engine")):
-        return None
-    return payload
-
-
 __all__ = [
     "ENGINE_ARTIFACT_SCHEMA_VERSION",
     "EngineArtifactInput",
@@ -182,5 +170,4 @@ __all__ = [
     "EngineArtifactStatus",
     "EngineArtifactTimestamps",
     "build_engine_artifact_payload",
-    "load_engine_artifact_payload",
 ]

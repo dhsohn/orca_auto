@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.statuses import (
     STATUS_CANCELLED,
@@ -16,6 +16,9 @@ from orca_auto.core.utils.coercion import (
 from orca_auto.core.utils.coercion import (
     normalize_text as _normalize_text,
 )
+
+if TYPE_CHECKING:
+    from orca_auto.flow.runtime.models import WorkflowJournalEventPayload
 
 WORKFLOW_PHASE_FINISHED_EVENT = "workflow_phase_finished"
 BASE_PHASE_DEFINITIONS = ({"phase": "crest", "phase_label": "CREST", "engine": "crest"},)
@@ -269,7 +272,7 @@ def _phase_finished_event_payload(
     workflow_id: str,
     template_name: str,
     worker_session_id: str,
-) -> dict[str, Any]:
+) -> WorkflowJournalEventPayload:
     return {
         "event_type": WORKFLOW_PHASE_FINISHED_EVENT,
         "workflow_id": _normalize_text(workflow_id),
@@ -291,10 +294,10 @@ def phase_transition_event_payloads(
     workflow_id: str,
     template_name: str,
     worker_session_id: str,
-) -> list[dict[str, Any]]:
+) -> list[WorkflowJournalEventPayload]:
     previous_stages = _summary_stage_summaries(previous_summary)
     current_stages = _summary_stage_summaries(current_summary)
-    event_payloads: list[dict[str, Any]] = []
+    event_payloads: list[WorkflowJournalEventPayload] = []
 
     for definition in _phase_definitions(template_name):
         previous_phase = phase_snapshot(previous_stages, engine=definition["engine"])
