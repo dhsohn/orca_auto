@@ -15,8 +15,8 @@ import yaml
 from orca_auto import activity_labels, terminal_table
 from orca_auto import cli_queue as unified_cli
 from orca_auto.core import terminal
-from orca_auto.core.config import discovery
 from orca_auto.core.queue import QueueStoreCorruptError
+from tests.config_discovery_helpers import isolate_shared_config_discovery
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -165,14 +165,8 @@ def test_queue_header_band_respects_terminal_width() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _explicit_shared_config_path(explicit: str | None) -> str | None:
-        if not explicit:
-            return None
-        return str(Path(explicit).expanduser().resolve())
-
-    monkeypatch.setattr(discovery, "resolve_shared_config_path", _explicit_shared_config_path)
-    monkeypatch.setattr(discovery, "shared_workflow_root_from_config", lambda config_path: None)
+def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
 def test_queue_elapsed_prefers_attempt_anchor_metadata() -> None:

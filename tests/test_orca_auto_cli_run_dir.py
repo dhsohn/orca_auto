@@ -13,6 +13,12 @@ from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import discovery
 from orca_auto.flow.run_dir.layout import WorkflowRunDirLayout, inspect_workflow_run_dir
 from orca_auto.orca.queue import adapter as queue_adapter
+from tests.config_discovery_helpers import isolate_shared_config_discovery
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
 def test_discovery_resolves_config_from_explicit_env_and_repo_candidate(
