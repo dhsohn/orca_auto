@@ -41,7 +41,6 @@ class XtbTerminalFinalizationRequest(Generic[OutcomeT]):
     queue_root: Path
     entry: Any
     result: XtbRunResult
-    emit_output: bool
     outcome_cls: Callable[..., OutcomeT]
     previous_state: dict[str, Any] | None = None
     resumed: bool = False
@@ -273,22 +272,6 @@ def _notify_terminal_finished(
     )
 
 
-def _emit_terminal_summary(
-    request: XtbTerminalFinalizationRequest[Any],
-    sync_result: str | None,
-) -> None:
-    result = request.result
-    entry = request.entry
-    print_terminal_summary(
-        TerminalSummary(
-            queue_id=entry.queue_id,
-            job_id=entry.task_id,
-            status=result.status,
-            reason=result.reason,
-        )
-    )
-
-
 def _terminal_sync_actions(
     request: XtbTerminalFinalizationRequest[OutcomeT],
     paths: _XtbTerminalPaths,
@@ -332,7 +315,6 @@ def _terminal_sync_actions(
             dependencies,
             sync_result,
         ),
-        emit_output=lambda sync_result: _emit_terminal_summary(request, sync_result),
         build_outcome=lambda sync_result: request.outcome_cls(
             result=request.result,
         ),
@@ -364,10 +346,7 @@ def finalize_terminal_result(
                 else None
             ),
         )
-    return _engine_execution.sync_terminal_result(
-        actions,
-        emit_output=request.emit_output,
-    )
+    return _engine_execution.sync_terminal_result(actions)
 
 
 def finalize_execution_result(
@@ -376,7 +355,6 @@ def finalize_execution_result(
     queue_root: Path,
     entry: Any,
     result: XtbRunResult,
-    emit_output: bool,
     previous_state: dict[str, Any] | None = None,
     resumed: bool = False,
     outcome_cls: Callable[..., OutcomeT],
@@ -395,7 +373,6 @@ def finalize_execution_result(
             queue_root=queue_root,
             entry=entry,
             result=result,
-            emit_output=emit_output,
             outcome_cls=outcome_cls,
             previous_state=previous_state,
             resumed=resumed,

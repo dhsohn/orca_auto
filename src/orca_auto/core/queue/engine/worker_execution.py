@@ -126,7 +126,6 @@ class EngineWorkerOptions:
     prepare_running_job: Callable[[], None] | None = None
     register_running_job: Callable[[Any | None], None] | None = None
     worker_job_pid: int | None = None
-    emit_output: bool = False
 
 
 EngineContextBuilder = Callable[[Any, Any], Any]
@@ -279,7 +278,6 @@ def run_engine_worker_entry_with_spec_factory_options(
     prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
-    emit_output: bool = False,
 ) -> OutcomeT:
     return run_engine_worker_entry_with_spec(
         cfg,
@@ -292,7 +290,6 @@ def run_engine_worker_entry_with_spec_factory_options(
             prepare_running_job=prepare_running_job,
             register_running_job=register_running_job,
             worker_job_pid=worker_job_pid,
-            emit_output=emit_output,
         ),
     )
 

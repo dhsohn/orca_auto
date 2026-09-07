@@ -35,6 +35,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   to, and the ORCA adapter re-injected that wrapper at thirteen call sites.
   ORCA now calls the core loader directly;
   queue-row parsing and the corrupt-queue error type are unchanged.
+- The `emit_output` switch is gone from the engine worker execution path.
+  It threaded a boolean through `sync_terminal_result`, `EngineWorkerOptions`,
+  the xTB execution, terminal and queue-runtime modules and the CREST
+  execution module, but nothing in production ever set it: the child process
+  has no such parameter, and the xTB parent worker prints the terminal
+  summary itself after the child exits. That parent-worker print is
+  unchanged; the terminal sync order (artifacts, job record, queue
+  transition, notification) is unchanged.
 
 ### Changed
 

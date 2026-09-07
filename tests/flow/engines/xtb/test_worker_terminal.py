@@ -161,7 +161,6 @@ def test_finalize_execution_result_syncs_terminal_side_effects(
         queue_root=queue_root,
         entry=entry,
         result=result,
-        emit_output=False,
     )
 
     assert outcome == worker_terminal.WorkerExecutionOutcome(result=result)
@@ -217,7 +216,6 @@ def test_terminal_generation_replacement_writes_no_artifacts(
         queue_root=queue_root,
         entry=entry,
         result=result,
-        emit_output=False,
     )
 
     assert outcome.result is result
@@ -275,7 +273,6 @@ def test_terminal_completion_racing_cancel_commits_only_cancelled(
         queue_root=queue_root,
         entry=entry,
         result=result,
-        emit_output=False,
     )
 
     assert outcome.result.status == "cancelled"

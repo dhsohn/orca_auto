@@ -676,7 +676,6 @@ def _run_worker_entry_lifecycle(
     prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
-    emit_output: bool = False,
 ) -> WorkerExecutionOutcome:
     return _engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
@@ -690,7 +689,6 @@ def _run_worker_entry_lifecycle(
         prepare_running_job=prepare_running_job,
         register_running_job=register_running_job,
         worker_job_pid=worker_job_pid,
-        emit_output=emit_output,
     )
 
 
@@ -705,7 +703,6 @@ def execute_queue_entry(
     prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
     worker_job_pid: int | None = None,
-    emit_output: bool = False,
 ) -> WorkerExecutionOutcome:
     return _run_worker_entry_lifecycle(
         cfg,
@@ -717,7 +714,6 @@ def execute_queue_entry(
         prepare_running_job=prepare_running_job,
         register_running_job=register_running_job,
         worker_job_pid=worker_job_pid,
-        emit_output=emit_output,
     )
 
 
