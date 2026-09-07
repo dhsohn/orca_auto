@@ -260,11 +260,11 @@ bash scripts/clean_artifacts.sh
 - `ruff format` is the canonical formatter and is gated via
   `ruff format --check`. Line length (`line-length = 100`) is shaped by the
   formatter, so `E501` is intentionally left out of the lint `select`.
-- Mypy remains broadly non-strict at `[tool.mypy]`; strict-style options are
-  intentionally scoped to override-listed modules that have already been
-  hardened. Expand that override list only when the full check still passes, and
-  move strict options to `[tool.mypy]` only after the full `src` + `tests` tree
-  passes the equivalent strict flags.
+- Mypy remains broadly non-strict at `[tool.mypy]`; the strict-style options
+  are applied by one override to the whole `orca_auto` package (`orca_auto`,
+  `orca_auto.*`), which every source module already passes, so a new or moved
+  module is strict by default. Move the options to `[tool.mypy]` only after the
+  full `src` + `tests` tree passes the equivalent strict flags.
 
 ## Test Coupling Policy
 
