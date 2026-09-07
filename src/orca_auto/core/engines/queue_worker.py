@@ -20,11 +20,13 @@ class EngineWorkerPolicy:
     """The engine-owned behaviour a parent queue worker composes in.
 
     Every field is optional; an engine sets only the steps it owns and the
-    shared worker keeps its default for the rest. ORCA installs its terminal
-    replay, publication repair and cancellation policies here, while the
-    internal xTB/CREST engines install their publication-repair gate and
-    orphan reconciliation. The value is immutable so a running worker cannot
-    have its policy swapped underneath it.
+    shared worker keeps its default for the rest. ORCA installs its post-init,
+    reserve gate (terminal replay and publication repair), run, interrupt,
+    queue-id, job-factory and cancellation steps here; the internal xTB/CREST
+    engines install only their post-init step. Child-exit finalization and
+    worker-state reconciliation are pid-file ``hooks``, not policy steps.
+    The value is immutable so a running worker cannot have its policy
+    swapped underneath it.
     """
 
     after_init: WorkerCallback | None = None
@@ -33,9 +35,6 @@ class EngineWorkerPolicy:
     keyboard_interrupt: WorkerCallback | None = None
     running_queue_id: WorkerCallback | None = None
     running_job_factory: WorkerCallback | None = None
-    finalize_finished_job: WorkerCallback | None = None
-    finalize_child_exit: WorkerCallback | None = None
-    reconcile_orphaned_running: WorkerCallback | None = None
     check_cancel_requests: WorkerCallback | None = None
     reserve_gate: ReserveGateCallback | None = None
 
@@ -127,23 +126,6 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
             process=process,
             admission_token=admission_token,
         )
-
-    def _finalize_finished_job(self, queue_id: str, job: Any, *, rc: int) -> None:
-        if self.policy.finalize_finished_job is not None:
-            self.policy.finalize_finished_job(self, queue_id, job, rc=rc)
-            return
-        self._finalize_completed_job(queue_id, job, rc)
-
-    def _finalize_child_exit(self, job: Any, *, rc: int) -> None:
-        if self.policy.finalize_child_exit is None:
-            raise AttributeError("finalize_child_exit callback is not configured")
-        self.policy.finalize_child_exit(self, job, rc=rc)
-
-    def _reconcile_orphaned_running(self) -> None:
-        if self.policy.reconcile_orphaned_running is None:
-            self._reconcile_worker_state()
-            return
-        self.policy.reconcile_orphaned_running(self)
 
     def _check_cancel_requests(self) -> None:
         if self.policy.check_cancel_requests is None:

@@ -502,8 +502,6 @@ def QueueWorker(
         admission_root=_admission_root_for_cfg(cfg),
         policy=EngineWorkerPolicy(
             after_init=_after_crest_worker_init,
-            finalize_child_exit=_finalize_child_exit,
-            reconcile_orphaned_running=_reconcile_orphaned_running,
         ),
     )
 

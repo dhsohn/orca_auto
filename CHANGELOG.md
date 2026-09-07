@@ -17,6 +17,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   settings, and the shipped-example test loads the whole template through the
   shared validator instead of checking only the messenger block.
 
+### Removed
+
+- `EngineWorkerPolicy` no longer carries `finalize_finished_job`,
+  `finalize_child_exit` or `reconcile_orphaned_running`, and
+  `EngineQueueWorker` no longer defines the three private dispatchers behind
+  them. Child-exit finalization and worker-state reconciliation were already
+  registered through the pid-file `hooks`, which is the path the worker loop
+  calls; the policy copies were a second, unreachable registration that in
+  two engines pointed at a different function. Every engine now registers
+  each step once. Worker behavior is unchanged.
+
+
 ## [4.1.0] - 2026-09-06
 
 ### Changed

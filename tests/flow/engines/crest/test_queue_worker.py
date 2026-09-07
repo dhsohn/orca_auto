@@ -883,7 +883,7 @@ def test_queue_worker_reconcile_orphaned_running_requeues_entry_without_live_slo
     )
 
     worker = queue_cmd.QueueWorker(queue_env.cfg, "/tmp/orca_auto.yaml", max_concurrent=2)
-    worker._reconcile_orphaned_running()
+    queue_cmd._reconcile_orphaned_running(worker)
 
     orphan_updated = _find_entry_by_target(
         list_queue(queue_env.allowed_root), orphan_job.entry.queue_id
@@ -917,7 +917,7 @@ def test_queue_worker_reconcile_orphaned_cancel_requested_marks_cancelled(
     monkeypatch.setattr(queue_cmd, "list_slots", lambda root: [])
 
     worker = queue_cmd.QueueWorker(queue_env.cfg, "/tmp/orca_auto.yaml", max_concurrent=2)
-    worker._reconcile_orphaned_running()
+    queue_cmd._reconcile_orphaned_running(worker)
 
     updated = _find_entry_by_target(list_queue(queue_env.allowed_root), job.entry.queue_id)
     assert updated is not None

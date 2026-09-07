@@ -567,7 +567,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
             with self.assertRaisesRegex(OSError, "state write failed"):
-                self.worker._finalize_finished_job(entry.queue_id, job, rc=1)
+                self.worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
         release.assert_not_called()
         self.assertEqual(active_slot_count(self.root), 1)
@@ -738,7 +738,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 side_effect=release,
             ),
         ):
-            self.worker._finalize_finished_job(entry.queue_id, job, rc=0)
+            self.worker._finalize_completed_job(entry.queue_id, job, rc=0)
 
         self.assertEqual(events, ["recover", "mark", "release"])
         self.assertEqual(active_slot_count(self.root), 0)
@@ -822,7 +822,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 side_effect=lambda _token: events.append("release"),
             ),
         ):
-            self.worker._finalize_finished_job(snapshot.queue_id, job, rc=1)
+            self.worker._finalize_completed_job(snapshot.queue_id, job, rc=1)
 
         record_failed.assert_not_called()
         update.assert_not_called()
@@ -864,7 +864,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             patch.object(replay_mod, "record_failed_run_state") as record_failed,
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
-            self.worker._finalize_finished_job(entry.queue_id, job, rc=1)
+            self.worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
         record_failed.assert_not_called()
         release.assert_called_once_with(job.admission_token)
@@ -946,7 +946,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             task_id=entry.task_id,
         )
 
-        self.worker._finalize_finished_job(entry.queue_id, job, rc=1)
+        self.worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
         mock_upsert_terminal.assert_called_once()
         [failed] = list_queue(self.root)
@@ -973,7 +973,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         self.assertIsNotNone(token)
 
-        self.worker._finalize_finished_job(
+        self.worker._finalize_completed_job(
             entry.queue_id,
             _RunningJob(
                 queue_id=entry.queue_id,
@@ -1019,7 +1019,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         self.assertIsNotNone(token)
 
-        worker._finalize_finished_job(
+        worker._finalize_completed_job(
             entry.queue_id,
             _RunningJob(
                 queue_id=entry.queue_id,
@@ -1075,7 +1075,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             task_id=entry.task_id,
         )
 
-        worker._finalize_finished_job(entry.queue_id, job, rc=0)
+        worker._finalize_completed_job(entry.queue_id, job, rc=0)
 
         mock_upsert_terminal.assert_called_once()
         mock_notify.assert_called_once()
@@ -1157,7 +1157,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         self.assertIsNotNone(token)
 
-        self.worker._finalize_finished_job(
+        self.worker._finalize_completed_job(
             entry.queue_id,
             _RunningJob(
                 queue_id=entry.queue_id,
@@ -1222,7 +1222,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             "notify_run_finished_event",
             return_value=True,
         ) as notify:
-            self.worker._finalize_finished_job(entry.queue_id, job, rc=1)
+            self.worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
         terminal = {item.queue_id: item for item in list_queue(self.root)}[entry.queue_id]
         self.assertEqual(terminal.status, QueueStatus.FAILED)
@@ -1271,7 +1271,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         self.assertIsNotNone(token)
 
-        self.worker._finalize_finished_job(
+        self.worker._finalize_completed_job(
             entry.queue_id,
             _RunningJob(
                 queue_id=entry.queue_id,
@@ -2595,7 +2595,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             encoding="utf-8",
         )
 
-        self.worker._reconcile_orphaned_running()
+        self.worker._reconcile_worker_state()
 
         queue_data = json.loads((self.root / "queue.json").read_text(encoding="utf-8"))
         found = next(item for item in queue_data if item["queue_id"] == entry.queue_id)
