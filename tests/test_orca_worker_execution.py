@@ -12,7 +12,6 @@ import pytest
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.utils import lock as lock_utils
 from orca_auto.orca import worker_execution
-from orca_auto.orca.queue import adapter as queue_adapter
 
 
 def test_child_cancellation_probe_skips_contended_queue_lock(
@@ -85,7 +84,7 @@ def test_child_cancellation_probe_propagates_non_lock_timeout(
         "run_engine_worker_entry_with_spec_factory_options",
         fake_run_engine_worker_entry,
     )
-    monkeypatch.setattr(queue_adapter, "_load_entries", timed_out_loader)
+    monkeypatch.setattr(queue_store, "load_entries", timed_out_loader)
 
     outcome = worker_execution.process_dequeued_entry(
         object(),
