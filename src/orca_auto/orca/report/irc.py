@@ -19,7 +19,8 @@ from ..frequencies import (
     mode_summaries,
 )
 from ..input_blocks import file_route_lines
-from ..parser import OrcaResult, parse_opt_progress, parse_orca_output
+from ..orca_opt_progress import parse_opt_progress
+from ..parser import OrcaResult, parse_orca_output
 from ..parser.io import read_orca_text
 from .attempts import (
     AttemptReportRow,
