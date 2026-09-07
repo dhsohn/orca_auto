@@ -55,6 +55,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   re-export is gone; the two report modules and the
   parser tests import from the owning module, and a test imports it in a
   fresh interpreter.
+- The import-linter contract that keeps `core`, `orca` and `flow` from
+  importing the top-level CLI layer now names `orca_auto._process_evidence`
+  as well, and a test compares the contract's list against the modules
+  actually present at the top of the package (`_version` is the one shared
+  module, consumed on both sides of the boundary). The workflow `run-dir`
+  option parser and the workflow worker resolve the shared config through
+  `core.config.discovery` like every other command surface; the duplicate
+  `shared_config_for_args` is gone. Resolution results are unchanged.
 
 
 ## [4.1.0] - 2026-09-06

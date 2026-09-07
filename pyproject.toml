@@ -298,6 +298,7 @@ name = "Domain packages never import the top-level CLI layer"
 type = "forbidden"
 source_modules = ["orca_auto.core", "orca_auto.orca", "orca_auto.flow"]
 forbidden_modules = [
+    "orca_auto._process_evidence",
     "orca_auto.activity_labels",
     "orca_auto.activity_rendering",
     "orca_auto.activity_view",

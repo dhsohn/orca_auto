@@ -239,7 +239,7 @@ def _resolve_required_workflow_root(args: Any, manifest: dict[str, Any]) -> str:
     if not resolved_workflow_root:
         resolved_workflow_root = discovery.resolve_workflow_root(_manifest_workflow_root(manifest))
     if not resolved_workflow_root:
-        config_path = getattr(args, "orca_auto_config", None) or getattr(args, "config", None)
+        config_path = discovery.shared_config_text_from_args(args) or None
         resolved_workflow_root = _cli_workflow_root_for_args(args, config_path=config_path)
     if not resolved_workflow_root:
         raise ValueError(

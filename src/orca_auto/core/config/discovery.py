@@ -62,20 +62,12 @@ def engine_config_for_args(args: Any) -> str | None:
     return str(Path(config_path).expanduser().resolve())
 
 
-def shared_config_for_args(args: Any) -> str | None:
-    explicit = normalize_text(getattr(args, "orca_auto_config", None))
-    if explicit:
-        return str(Path(explicit).expanduser().resolve())
-    return resolve_shared_config_path(None)
-
-
 __all__ = [
     "engine_config_for_args",
     "repo_root",
     "repo_root_for_subprocess",
     "resolve_shared_config_path",
     "resolve_workflow_root",
-    "shared_config_for_args",
     "shared_config_text_from_args",
     "workflow_root_for_args",
 ]

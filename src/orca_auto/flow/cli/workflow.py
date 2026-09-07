@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.discovery import shared_config_for_args, workflow_root_for_args
+from orca_auto.core.config.discovery import engine_config_for_args, workflow_root_for_args
 from orca_auto.core.config.files import config_env_value
 from orca_auto.core.utils import now_utc_iso, timestamped_token
 from orca_auto.core.utils.coercion import normalize_text
@@ -55,7 +55,7 @@ def _workflow_worker_options(args: Any) -> _WorkflowWorkerOptions:
         raise ValueError("--max-cycles must be >= 0")
 
     interval_seconds = float(getattr(args, "interval_seconds", 30.0) or 30.0)
-    shared_config = shared_config_for_args(args)
+    shared_config = engine_config_for_args(args)
     workflow_root = workflow_root_for_args(args, config_path=shared_config)
     if not workflow_root:
         raise ValueError(
