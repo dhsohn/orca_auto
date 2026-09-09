@@ -299,6 +299,34 @@ def add_queue_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     _add_queue_worker_parser(queue_subparsers)
 
 
+def add_index_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    index_parser = subparsers.add_parser(
+        "index",
+        help="Maintain the job location index (job_locations.json) in runs_root.",
+    )
+    index_subparsers = index_parser.add_subparsers(dest="index_command", required=True)
+
+    prune_parser = index_subparsers.add_parser(
+        "prune",
+        help=(
+            "List, and with --apply remove, index rows whose recorded paths are all gone from disk."
+        ),
+    )
+    prune_parser.add_argument(
+        "--orca_auto-config",
+        "--config",
+        dest="orca_auto_config",
+        help="Path to shared orca_auto.yaml",
+    )
+    prune_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Rewrite the index without the listed rows; nothing is written without it",
+    )
+    add_json_argument(prune_parser)
+    prune_parser.set_defaults(func=cli_handlers.cmd_index_prune)
+
+
 def add_systemd_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     systemd_parser = subparsers.add_parser(
         "systemd",
@@ -390,6 +418,7 @@ examples:
   orca_auto run-dir /home/user/orca_runs/sample_rxn
   orca_auto queue list --engine orca
   orca_auto queue cancel <target>
+  orca_auto index prune --apply
   orca_auto service status
 """
 
@@ -423,6 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_run_dir_parser(subparsers)
     add_init_parser(subparsers)
     add_scaffold_parser(subparsers)
+    add_index_parser(subparsers)
     add_systemd_parser(subparsers)
     add_service_parser(subparsers)
     return parser

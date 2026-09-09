@@ -10,6 +10,11 @@ ERROR_TERMINATION_NEEDLES: tuple[str, ...] = (
     "ABORTING THE RUN",
     "ENDED PREMATURELY AND MAY HAVE CRASHED",
     "FATAL ERROR",
+    # An input-block syntax error (a malformed ``%geom`` entry, for example)
+    # makes ORCA 6 print ``... check syntax!`` and ``LEAVING ORCA`` and exit
+    # within a second, without any of the termination banners above.
+    "CHECK SYNTAX",
+    "LEAVING ORCA",
 )
 
 _OPT_CONVERGED_NEEDLES = ("THE OPTIMIZATION HAS CONVERGED", "OPTIMIZATION RUN DONE")

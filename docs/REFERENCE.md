@@ -570,7 +570,29 @@ released plain table.
 
 `queue list clear` prunes completed, failed, and cancelled entries from the unified list.
 
-### 7.5 CLI Output and Global Flags
+### 7.5 `index prune`
+
+```bash
+orca_auto index prune
+orca_auto index prune --apply
+orca_auto index prune --apply --json
+```
+
+`job_locations.json` in `runs_root` keeps one row per submitted job so that
+`run-dir`, `queue cancel`, and the reports can resolve a job id or a path alias
+to its directory. Rows are never dropped automatically, so a run directory
+deleted by hand leaves a row that resolves to nothing. `index prune` lists the
+rows whose every recorded path (`original_run_dir`, `selected_input_xyz`,
+`latest_known_path`) is missing from disk; without `--apply` nothing is
+written. `--apply` rewrites the index without those rows under the index lock.
+A row that records at least one surviving path stays, whatever its status, and
+so does a row that records no absolute path at all (a relative value or a JSON
+`null` cannot be checked against disk). Queue rows and run directories are not
+touched. The text output lists every row it would remove with a per-status
+count, so rows still labelled `running` or `queued` are visible before
+`--apply`.
+
+### 7.6 CLI Output and Global Flags
 
 - Table output is colorized by status when stdout is a terminal. Color is disabled
   automatically when piped or when `NO_COLOR` is set, and can be forced off with
@@ -600,7 +622,7 @@ released plain table.
   in a mixed deployment they appear as `uncompared`. Restart workers in an idle
   window after every deploy that touches code they import.
 
-### 7.6 Long-Running Services
+### 7.7 Long-Running Services
 
 Long-running worker processes are managed through `systemd`.
 The public `systemd install` and `service` commands operate on those units rather
@@ -943,6 +965,10 @@ Queue worker note:
 5. `error_multiplicity_impossible`
 - Cause: Electron count and multiplicity mismatch
 - Action: Manually adjust the input, because orca_auto ORCA does not rewrite charge or multiplicity
+
+6. `error_termination` within a second of starting, output ending in `LEAVING ORCA`
+- Cause: ORCA rejected an input block; the `... check syntax!` line names it (for example `Error in [GEOM] block`)
+- Action: Fix the named block in the `.inp` and resubmit; nothing was computed
 
 ## 14) Testing
 

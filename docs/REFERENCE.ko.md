@@ -537,7 +537,27 @@ orca_auto queue list --limit 20
 
 `queue list clear`는 통합 목록에서 완료/실패/취소 항목을 정리합니다.
 
-### 7.5 CLI 출력 및 전역 플래그
+### 7.5 `index prune`
+
+```bash
+orca_auto index prune
+orca_auto index prune --apply
+orca_auto index prune --apply --json
+```
+
+`runs_root`의 `job_locations.json`은 제출된 작업마다 한 행을 두어 `run-dir`,
+`queue cancel`, 보고서가 job id나 경로 alias를 디렉터리로 해석하게 합니다. 행은
+자동으로 지워지지 않으므로, 손으로 삭제한 실행 디렉터리는 아무 곳도 가리키지 않는
+행을 남깁니다. `index prune`은 기록된 경로(`original_run_dir`, `selected_input_xyz`,
+`latest_known_path`)가 모두 디스크에 없는 행을 나열하며, `--apply` 없이는 아무것도
+쓰지 않습니다. `--apply`는 index lock 아래에서 그 행들을 뺀 index를 다시 씁니다.
+살아 있는 경로를 하나라도 기록한 행은 상태와 무관하게 남고, 절대 경로를 전혀
+기록하지 않은 행도 남습니다(상대 경로나 JSON `null`은 디스크와 대조할 수 없습니다).
+queue 행과 실행 디렉터리는 건드리지 않습니다. 텍스트 출력은 제거 대상 행 전부와
+상태별 개수를 보여 주므로, 아직 `running`이나 `queued`로 표시된 행을 `--apply`
+전에 확인할 수 있습니다.
+
+### 7.6 CLI 출력 및 전역 플래그
 
 - 표 출력은 stdout이 터미널일 때 상태별로 색상이 입혀집니다. 파이프로 연결되거나
   `NO_COLOR`가 설정되면 색상이 자동으로 비활성화되며, `--no-color`로 강제로 끌 수
@@ -565,7 +585,7 @@ orca_auto queue list --limit 20
   판정하지 않고 혼합 배포에서는 `uncompared`로 표시합니다. 워커가 import하는 코드를
   건드린 배포 뒤에는 유휴 창에서 워커를 재시작해야 합니다.
 
-### 7.6 장기 실행 서비스
+### 7.7 장기 실행 서비스
 
 장기 실행 워커 프로세스는 `systemd`로 관리됩니다. 공개 `systemd install`과
 `service` 명령은 관리되지 않는 워커 프로세스를 직접 띄우지 않고 해당 unit을 조작합니다.
@@ -888,6 +908,10 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 5. `error_multiplicity_impossible`
 - 원인: 전자 수와 다중도 불일치
 - 조치: orca_auto ORCA는 전하나 다중도를 다시 쓰지 않으므로 입력을 수동으로 조정
+
+6. 시작 1초 안의 `error_termination`, 출력 끝이 `LEAVING ORCA`
+- 원인: ORCA가 입력 블록을 거부함. `... check syntax!` 줄이 블록을 지목함(예: `Error in [GEOM] block`)
+- 조치: `.inp`의 해당 블록을 고쳐 다시 제출. 계산은 수행되지 않았음
 
 ## 14) 테스트
 

@@ -70,6 +70,7 @@ Supported commands:
 - `orca_auto queue list`
 - `orca_auto queue list clear`
 - `orca_auto queue cancel <target>`
+- `orca_auto index prune`
 - `orca_auto service status`
 - `orca_auto service restart`
 - `orca_auto systemd install --user <name> --repo <path>`
@@ -97,6 +98,14 @@ Behavior:
 - `queue list --limit N` accepts only non-negative integers. `0` leaves the
   listing uncapped. `queue list clear` rejects every listing filter, including
   any non-zero `--limit`, before it mutates durable state.
+- `index prune` lists the `job_locations.json` rows of the configured
+  `runs_root` whose every recorded path (`original_run_dir`,
+  `selected_input_xyz`, `latest_known_path`) is gone from disk, and removes
+  them only with `--apply`. A row that records no absolute path is kept. Queue rows and
+  run directories are never touched. `index prune --json` is its
+  script-friendly surface, and its expected configuration and index failures
+  are the same concise `error:`/`hint:` diagnostics on stderr with a non-zero
+  exit and nothing written.
 
 Non-contract CLI surfaces:
 

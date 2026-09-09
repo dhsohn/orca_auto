@@ -8,8 +8,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Added
+
+- `orca_auto index prune` lists the `job_locations.json` rows whose every
+  recorded path is gone from disk and removes them with `--apply`. The index
+  had no maintenance surface: a run directory deleted by hand left a row that
+  `run-dir` and the reports could still resolve to nothing. A row that keeps any
+  surviving path, and a row that records no absolute path, are never removed;
+  queue rows and run directories are untouched.
+
 ### Fixed
 
+- An ORCA input-block syntax error is classified as `error_termination`
+  (`unknown_failure`) instead of `run_incomplete`. ORCA 6 rejects a malformed
+  block by printing `... check syntax!` and `LEAVING ORCA` and exiting within a
+  second, without the error-termination banner the analyzer looked for, so the
+  report and the notification named an interrupted run rather than a rejected
+  input. The progress card's coarse status follows the same needles.
 - The pre-commit hook checks this checkout's staged imports even when its
   virtual environment is installed from a sibling worktree. Untracked relative
   and dangling symlinks are restored after both successful and failed checks.
