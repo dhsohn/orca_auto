@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +115,50 @@ def _record_paths(record: JobLocationRecord) -> list[Path]:
         if candidate is not None and candidate not in paths:
             paths.append(candidate)
     return paths
+
+
+@dataclass(frozen=True)
+class JobLocationPruneResult:
+    index_path: str
+    total: int
+    pruned: tuple[JobLocationRecord, ...]
+    applied: bool
+
+
+def _record_paths_survive(record: JobLocationRecord) -> bool:
+    """True when the record names no path at all, or any named path still exists."""
+    paths = _record_paths(record)
+    if not paths:
+        return True
+    return any(path.exists() for path in paths)
+
+
+def prune_job_locations(root: str | Path, *, apply: bool) -> JobLocationPruneResult:
+    """Drop the rows whose every recorded path is gone from disk.
+
+    A row that records at least one of ``original_run_dir``,
+    ``selected_input_xyz`` and ``latest_known_path`` and finds none of them on
+    disk can resolve neither a job directory nor a path alias any more; it is
+    reachable by job id only and then leads nowhere. A row that records no path
+    is kept, because nothing on disk can prove it stale. Without ``apply`` the
+    index is left untouched and the result only reports what would go.
+    """
+    resolved_root = resolve_root_path(root)
+    with file_lock(_lock_path(resolved_root)):
+        records = _load_records(resolved_root)
+        kept: list[JobLocationRecord] = []
+        pruned: list[JobLocationRecord] = []
+        for record in records:
+            (kept if _record_paths_survive(record) else pruned).append(record)
+        applied = bool(apply and pruned)
+        if applied:
+            _save_records(resolved_root, kept)
+    return JobLocationPruneResult(
+        index_path=str(_index_path(resolved_root)),
+        total=len(records),
+        pruned=tuple(pruned),
+        applied=applied,
+    )
 
 
 def list_job_locations(root: str | Path) -> list[JobLocationRecord]:

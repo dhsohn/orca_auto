@@ -67,6 +67,7 @@
 - `orca_auto queue list`
 - `orca_auto queue list clear`
 - `orca_auto queue cancel <target>`
+- `orca_auto index prune`
 - `orca_auto service status`
 - `orca_auto service restart`
 - `orca_auto systemd install --user <name> --repo <path>`
@@ -93,6 +94,13 @@
 - `queue list --limit N`은 음수가 아닌 정수만 받습니다. `0`은 목록 개수를 제한하지
   않습니다. `queue list clear`는 durable state를 변경하기 전에 0이 아닌 `--limit`을
   포함한 모든 목록 필터를 거부합니다.
+- `index prune`은 설정된 `runs_root`의 `job_locations.json`에서 기록된 경로
+  (`original_run_dir`, `selected_input_xyz`, `latest_known_path`)가 모두 디스크에서
+  사라진 행을 나열하고, `--apply`가 있을 때만 제거합니다. 경로를 하나도 기록하지
+  않은 행은 유지합니다. queue 행과 실행 디렉터리는 건드리지 않습니다.
+  `index prune --json`이 스크립트용 표면이며, 예상 가능한 설정·index 실패는 같은
+  형식의 간결한 `error:`/`hint:` 진단을 stderr에 출력하고 아무것도 쓰지 않은 채
+  0이 아닌 코드로 종료합니다.
 
 비계약 CLI 표면:
 

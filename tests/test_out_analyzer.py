@@ -458,3 +458,35 @@ def test_not_converged_marker_before_the_tail_window_is_still_a_verdict(tmp_path
 
     assert analysis.status is AnalyzerStatus.GEOM_NOT_CONVERGED
     assert analysis.markers["last_opt_converged"] is False
+
+
+def test_input_block_syntax_abort_is_an_error_termination(tmp_path):
+    # ORCA 6 rejects a malformed input block within a second and prints only
+    # ``check syntax!`` / ``LEAVING ORCA``, never an error-termination banner;
+    # the analyzer used to report that as ``run_incomplete``.
+    out_path = tmp_path / "p11_optts.out"
+    out_path.write_text(
+        "NOTE: MaxCore=4096 MB was set to SCF,MP2,MDCI,CIPSI,MRCI,RASCI and CIS\n"
+        "[file orca_tools/Tool-Scanner/qcscan1.cpp, line 147]: \n"
+        "\t Unknown error in GEOM block - check syntax! \n"
+        "\t LEAVING ORCA\n"
+        "\n"
+        "Error in [GEOM] block - Scan_TSMode - Line 16 (TRUST)\n",
+        encoding="utf-8",
+    )
+
+    analysis = analyze_output(
+        out_path, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS Freq")
+    )
+
+    assert analysis.status is AnalyzerStatus.UNKNOWN_FAILURE
+    assert analysis.reason == "error_termination"
+    assert analysis.markers["generic_error_termination"] is True
+
+
+def test_coarse_status_treats_input_block_syntax_abort_as_failed():
+    from orca_auto.orca.output_status import coarse_orca_status
+
+    text = "\t Unknown error in GEOM block - check syntax! \n\t LEAVING ORCA\n"
+
+    assert coarse_orca_status(text) == "failed"

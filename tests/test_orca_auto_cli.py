@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -140,6 +141,120 @@ def test_build_parser_parses_unified_queue_commands() -> None:
     assert cancel_args.queue_command == "cancel"
     assert cancel_args.target == "xtb-q-1"
     assert cancel_args.func is cli_queue.cmd_queue_cancel
+
+
+def test_build_parser_parses_index_prune() -> None:
+    parser = unified_cli.build_parser()
+
+    args = parser.parse_args(
+        ["index", "prune", "--config", "/tmp/orca_auto.yaml", "--apply", "--json"]
+    )
+    assert args.command == "index"
+    assert args.index_command == "prune"
+    assert args.orca_auto_config == "/tmp/orca_auto.yaml"
+    assert args.apply is True
+    assert args.json is True
+    assert args.func is cli_run_dir.cmd_index_prune
+
+    dry_args = parser.parse_args(["index", "prune"])
+    assert dry_args.apply is False
+    assert dry_args.json is False
+
+
+def _write_index_prune_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    runs_root = tmp_path / "runs"
+    live_dir = runs_root / "live"
+    live_dir.mkdir(parents=True)
+    gone_dir = runs_root / "gone"
+    rows = [
+        {
+            "job_id": "job-live",
+            "app_name": "orca_auto_orca",
+            "job_type": "orca_opt",
+            "status": "completed",
+            "original_run_dir": str(live_dir),
+            "latest_known_path": str(live_dir),
+        },
+        {
+            "job_id": "job-gone",
+            "app_name": "orca_auto_orca",
+            "job_type": "orca_ts",
+            "status": "running",
+            "original_run_dir": str(gone_dir),
+            "latest_known_path": str(gone_dir / "20260423-091429-ab9f5aea"),
+        },
+    ]
+    index_path = runs_root / "job_locations.json"
+    index_path.write_text(json.dumps(rows), encoding="utf-8")
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+    return index_path, config_path
+
+
+def test_cmd_index_prune_dry_run_lists_rows_without_writing(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    index_path, config_path = _write_index_prune_fixture(tmp_path)
+    before = index_path.read_bytes()
+
+    assert unified_cli.main(["index", "prune", "--config", str(config_path)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert f"index: {index_path}" in captured.out
+    assert "rows: 2" in captured.out
+    assert "prunable: 1" in captured.out
+    assert "job-gone" in captured.out
+    assert "job-live" not in captured.out
+    assert "dry run: pass --apply" in captured.out
+    assert index_path.read_bytes() == before
+
+
+def test_cmd_index_prune_apply_rewrites_the_index_and_reports_json(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    index_path, config_path = _write_index_prune_fixture(tmp_path)
+
+    assert (
+        unified_cli.main(["index", "prune", "--config", str(config_path), "--apply", "--json"]) == 0
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["index_path"] == str(index_path)
+    assert payload["total"] == 2
+    assert payload["pruned_count"] == 1
+    assert payload["applied"] is True
+    assert [row["job_id"] for row in payload["pruned"]] == ["job-gone"]
+    remaining = json.loads(index_path.read_text(encoding="utf-8"))
+    assert [row["job_id"] for row in remaining] == ["job-live"]
+
+
+def test_cmd_index_prune_rejects_a_missing_runs_root(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(f"runs_root: {tmp_path / 'absent'}\n", encoding="utf-8")
+
+    assert unified_cli.main(["index", "prune", "--config", str(config_path), "--apply"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "runs_root does not exist" in captured.err
+
+
+def test_cmd_index_prune_reports_a_damaged_index_without_writing(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    index_path, config_path = _write_index_prune_fixture(tmp_path)
+    index_path.write_text("{not valid json", encoding="utf-8")
+
+    assert unified_cli.main(["index", "prune", "--config", str(config_path), "--apply"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "Traceback" not in captured.err
+    assert index_path.read_text(encoding="utf-8") == "{not valid json"
 
 
 @pytest.mark.parametrize("removed_args", [["--watch"], ["--interval", "1"]])

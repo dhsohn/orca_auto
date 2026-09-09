@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import stat
 from collections.abc import Iterator
@@ -9,12 +10,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core import terminal
 from orca_auto.core.commands.run_dir import (
     use_run_dir_publication_guard,
     validate_production_run_dir_target,
 )
-from orca_auto.core.config.discovery import engine_config_for_args
+from orca_auto.core.config.discovery import engine_config_for_args, workflow_root_for_args
 from orca_auto.core.config.files import shared_workflow_root_from_config
+from orca_auto.core.indexing import (
+    JobLocationIndexError,
+    JobLocationPruneResult,
+    prune_job_locations,
+)
 from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.run_dir.layout import inspect_workflow_run_dir
@@ -227,3 +234,75 @@ def cmd_workflow_run_dir(args: argparse.Namespace) -> int:
     if shared_config:
         args.orca_auto_config = shared_config
     return int(_cmd_workflow_run_dir(args))
+
+
+def _index_prune_payload(result: JobLocationPruneResult) -> dict[str, Any]:
+    return {
+        "index_path": result.index_path,
+        "total": result.total,
+        "pruned_count": len(result.pruned),
+        "applied": result.applied,
+        "pruned": [
+            {
+                "job_id": record.job_id,
+                "app_name": record.app_name,
+                "status": record.status,
+                "original_run_dir": record.original_run_dir,
+                "latest_known_path": record.latest_known_path,
+            }
+            for record in result.pruned
+        ],
+    }
+
+
+def _emit_index_prune(result: JobLocationPruneResult, *, json_output: bool) -> int:
+    if json_output:
+        print(json.dumps(_index_prune_payload(result), ensure_ascii=True, indent=2))
+        return 0
+
+    print(f"{terminal.label('index:')} {result.index_path}")
+    print(f"{terminal.label('rows:')} {result.total}")
+    count_label = "pruned:" if result.applied else "prunable:"
+    print(f"{terminal.label(count_label)} {len(result.pruned)}")
+    for record in result.pruned:
+        shown = record.latest_known_path or record.original_run_dir or record.selected_input_xyz
+        print(f"  - {record.job_id} {terminal.status_text(record.status)} {shown}")
+    if not result.pruned:
+        print("nothing to prune.")
+    elif not result.applied:
+        print("dry run: pass --apply to remove these rows.")
+    return 0
+
+
+def cmd_index_prune(args: argparse.Namespace) -> int:
+    root = workflow_root_for_args(args)
+    if not root:
+        emit_error(
+            "runs_root is not configured",
+            hint=(
+                "Pass --config pointing at an orca_auto.yaml with runs_root, "
+                "or run `orca_auto init`."
+            ),
+        )
+        return 1
+    if not Path(root).is_dir():
+        emit_error(
+            f"runs_root does not exist: {root}",
+            hint="Check runs_root in the config; the index lives in that directory.",
+        )
+        return 1
+    try:
+        result = prune_job_locations(root, apply=bool(getattr(args, "apply", False)))
+    except JobLocationIndexError as exc:
+        emit_error(
+            exc,
+            hint=(
+                "Repair or move the damaged job_locations.json before retrying; "
+                "nothing was written."
+            ),
+        )
+        return 1
+    try:
+        return _emit_index_prune(result, json_output=bool(getattr(args, "json", False)))
+    except BrokenPipeError:
+        return 0

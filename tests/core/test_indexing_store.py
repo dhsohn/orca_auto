@@ -14,6 +14,7 @@ from orca_auto.core.indexing.store import (
     _resolve_candidate_path,
     get_job_location,
     list_job_locations,
+    prune_job_locations,
     resolve_job_location,
     upsert_job_location,
 )
@@ -237,3 +238,83 @@ def test_resolve_job_location_path_alias_selects_newest_generation(tmp_path: Pat
 
     assert resolve_job_location(tmp_path, str(job_dir)) == second
     assert resolve_job_location(tmp_path, first.job_id) == first
+
+
+def test_prune_job_locations_dry_run_reports_without_writing(tmp_path: Path) -> None:
+    live_dir = tmp_path / "runs" / "live"
+    live_dir.mkdir(parents=True)
+    live = _record("job-live", status="completed", latest_known_path=str(live_dir))
+    gone = _record(
+        "job-gone",
+        status="running",
+        original_run_dir=str(tmp_path / "runs" / "gone"),
+        latest_known_path=str(tmp_path / "runs" / "gone" / "20260423-091429-ab9f5aea"),
+    )
+    pathless = _record("job-pathless", status="queued")
+    for record in (live, gone, pathless):
+        upsert_job_location(tmp_path, record)
+    before = _index_path(tmp_path).read_bytes()
+
+    result = prune_job_locations(tmp_path, apply=False)
+
+    assert result.index_path == str(_index_path(tmp_path))
+    assert result.total == 3
+    assert result.pruned == (gone,)
+    assert result.applied is False
+    assert _index_path(tmp_path).read_bytes() == before
+
+
+def test_prune_job_locations_apply_keeps_any_row_with_a_surviving_path(tmp_path: Path) -> None:
+    surviving_xyz = tmp_path / "inputs" / "guess.xyz"
+    surviving_xyz.parent.mkdir()
+    surviving_xyz.write_text("1\n\nH 0.0 0.0 0.0\n", encoding="utf-8")
+    only_xyz = _record(
+        "job-xyz",
+        status="running",
+        original_run_dir=str(tmp_path / "missing"),
+        selected_input_xyz=str(surviving_xyz),
+    )
+    gone = _record("job-gone", original_run_dir=str(tmp_path / "missing" / "run"))
+    pathless = _record("job-pathless")
+    for record in (only_xyz, gone, pathless):
+        upsert_job_location(tmp_path, record)
+
+    result = prune_job_locations(tmp_path, apply=True)
+
+    assert result.pruned == (gone,)
+    assert result.applied is True
+    assert list_job_locations(tmp_path) == [only_xyz, pathless]
+
+
+def test_prune_job_locations_apply_without_prunable_rows_leaves_the_bytes(
+    tmp_path: Path,
+) -> None:
+    live_dir = tmp_path / "live"
+    live_dir.mkdir()
+    upsert_job_location(tmp_path, _record("job-live", latest_known_path=str(live_dir)))
+    before = _index_path(tmp_path).read_bytes()
+
+    result = prune_job_locations(tmp_path, apply=True)
+
+    assert result.pruned == ()
+    assert result.applied is False
+    assert _index_path(tmp_path).read_bytes() == before
+
+
+def test_prune_job_locations_missing_index_reports_nothing(tmp_path: Path) -> None:
+    result = prune_job_locations(tmp_path, apply=True)
+
+    assert result.total == 0
+    assert result.pruned == ()
+    assert result.applied is False
+    assert not _index_path(tmp_path).exists()
+
+
+def test_prune_job_locations_corrupt_index_fails_closed(tmp_path: Path) -> None:
+    corrupt_text = "{not valid json"
+    _index_path(tmp_path).write_text(corrupt_text, encoding="utf-8")
+
+    with pytest.raises(JobLocationIndexCorruptError):
+        prune_job_locations(tmp_path, apply=True)
+
+    assert _index_path(tmp_path).read_text(encoding="utf-8") == corrupt_text
