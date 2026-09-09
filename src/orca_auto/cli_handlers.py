@@ -4,25 +4,34 @@ import argparse
 import json
 import os
 import stat
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core import terminal
 from orca_auto.core.commands.run_dir import (
     use_run_dir_publication_guard,
     validate_production_run_dir_target,
 )
-from orca_auto.core.config.discovery import engine_config_for_args, workflow_root_for_args
-from orca_auto.core.config.files import shared_workflow_root_from_config
+from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.discovery import (
+    engine_config_for_args,
+    resolve_shared_config_path,
+    shared_config_text_from_args,
+)
+from orca_auto.core.config.files import (
+    load_shared_config_mapping,
+    shared_workflow_root_from_config,
+    usable_runs_root_from_mapping,
+)
 from orca_auto.core.indexing import (
     JobLocationIndexError,
     JobLocationPruneResult,
     prune_job_locations,
 )
-from orca_auto.core.terminal import emit_error
+from orca_auto.core.terminal import emit_error, label, status_text
 from orca_auto.core.utils import normalize_text
 from orca_auto.flow.run_dir.layout import inspect_workflow_run_dir
 
@@ -260,13 +269,20 @@ def _emit_index_prune(result: JobLocationPruneResult, *, json_output: bool) -> i
         print(json.dumps(_index_prune_payload(result), ensure_ascii=True, indent=2))
         return 0
 
-    print(f"{terminal.label('index:')} {result.index_path}")
-    print(f"{terminal.label('rows:')} {result.total}")
+    print(f"{label('index:')} {result.index_path}")
+    print(f"{label('rows:')} {result.total}")
     count_label = "pruned:" if result.applied else "prunable:"
-    print(f"{terminal.label(count_label)} {len(result.pruned)}")
+    print(f"{label(count_label)} {len(result.pruned)}")
+    if result.pruned:
+        # Rows still labelled running/queued are the ones an operator should
+        # notice before --apply; the per-status counts make them visible even
+        # when the listing is long.
+        counts = Counter(record.status or "-" for record in result.pruned)
+        summary = ", ".join(f"{status} {count}" for status, count in sorted(counts.items()))
+        print(f"{label('by status:')} {summary}")
     for record in result.pruned:
         shown = record.latest_known_path or record.original_run_dir or record.selected_input_xyz
-        print(f"  - {record.job_id} {terminal.status_text(record.status)} {shown}")
+        print(f"  - {record.job_id} {status_text(record.status)} {shown}")
     if not result.pruned:
         print("nothing to prune.")
     elif not result.applied:
@@ -275,8 +291,8 @@ def _emit_index_prune(result: JobLocationPruneResult, *, json_output: bool) -> i
 
 
 def cmd_index_prune(args: argparse.Namespace) -> int:
-    root = workflow_root_for_args(args)
-    if not root:
+    config_path = resolve_shared_config_path(shared_config_text_from_args(args) or None)
+    if not config_path:
         emit_error(
             "runs_root is not configured",
             hint=(
@@ -285,7 +301,25 @@ def cmd_index_prune(args: argparse.Namespace) -> int:
             ),
         )
         return 1
-    if not Path(root).is_dir():
+    try:
+        # Load through the shared validator so a missing or damaged config
+        # names its own failure instead of reading as "not configured".
+        _config, parsed = load_shared_config_mapping(config_path)
+    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
+        emit_error(
+            exc,
+            hint="Check the config path and repair the reported state file before retrying.",
+        )
+        return 1
+    root_text = usable_runs_root_from_mapping(parsed)
+    if not root_text:
+        emit_error(
+            f"runs_root is missing or invalid in {config_path}",
+            hint="Set runs_root to an absolute directory path in the config.",
+        )
+        return 1
+    root = Path(root_text).expanduser().resolve()
+    if not root.is_dir():
         emit_error(
             f"runs_root does not exist: {root}",
             hint="Check runs_root in the config; the index lives in that directory.",
@@ -293,11 +327,13 @@ def cmd_index_prune(args: argparse.Namespace) -> int:
         return 1
     try:
         result = prune_job_locations(root, apply=bool(getattr(args, "apply", False)))
-    except JobLocationIndexError as exc:
+    except (JobLocationIndexError, OSError) as exc:
+        # OSError covers an unreadable recorded path, a read-only runs root
+        # and a contended index lock; in every case the index is untouched.
         emit_error(
             exc,
             hint=(
-                "Repair or move the damaged job_locations.json before retrying; "
+                "Repair the reported path or job_locations.json before retrying; "
                 "nothing was written."
             ),
         )

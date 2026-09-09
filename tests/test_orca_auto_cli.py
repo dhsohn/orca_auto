@@ -204,6 +204,7 @@ def test_cmd_index_prune_dry_run_lists_rows_without_writing(
     assert f"index: {index_path}" in captured.out
     assert "rows: 2" in captured.out
     assert "prunable: 1" in captured.out
+    assert "by status: running 1" in captured.out
     assert "job-gone" in captured.out
     assert "job-live" not in captured.out
     assert "dry run: pass --apply" in captured.out
@@ -240,6 +241,33 @@ def test_cmd_index_prune_rejects_a_missing_runs_root(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "runs_root does not exist" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("config_text", "expected"),
+    [
+        ("runs_root: [unclosed\n", "Invalid YAML"),
+        (None, "No such file"),
+    ],
+)
+def test_cmd_index_prune_names_a_damaged_or_missing_config(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    config_text: str | None,
+    expected: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    if config_text is not None:
+        config_path.write_text(config_text, encoding="utf-8")
+
+    assert unified_cli.main(["index", "prune", "--config", str(config_path), "--apply"]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert expected in captured.err
+    assert "not configured" not in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_cmd_index_prune_reports_a_damaged_index_without_writing(

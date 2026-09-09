@@ -286,6 +286,46 @@ def test_prune_job_locations_apply_keeps_any_row_with_a_surviving_path(tmp_path:
     assert list_job_locations(tmp_path) == [only_xyz, pathless]
 
 
+def test_prune_job_locations_keeps_rows_without_an_absolute_path(tmp_path: Path) -> None:
+    # A JSON null loads as the text "None" and a relative value depends on the
+    # working directory; neither can prove a row stale.
+    rows = [
+        {
+            "job_id": "job-null",
+            "app_name": "app",
+            "job_type": "type",
+            "status": "running",
+            "original_run_dir": None,
+            "latest_known_path": None,
+        },
+        {
+            "job_id": "job-relative",
+            "app_name": "app",
+            "job_type": "type",
+            "status": "queued",
+            "original_run_dir": "runs/relative",
+            "latest_known_path": "",
+        },
+        {
+            "job_id": "job-gone",
+            "app_name": "app",
+            "job_type": "type",
+            "status": "failed",
+            "original_run_dir": str(tmp_path / "missing"),
+            "latest_known_path": "",
+        },
+    ]
+    _index_path(tmp_path).write_text(json.dumps(rows), encoding="utf-8")
+
+    result = prune_job_locations(tmp_path, apply=True)
+
+    assert [record.job_id for record in result.pruned] == ["job-gone"]
+    assert [record.job_id for record in list_job_locations(tmp_path)] == [
+        "job-null",
+        "job-relative",
+    ]
+
+
 def test_prune_job_locations_apply_without_prunable_rows_leaves_the_bytes(
     tmp_path: Path,
 ) -> None:

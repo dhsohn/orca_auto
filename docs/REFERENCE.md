@@ -586,8 +586,11 @@ rows whose every recorded path (`original_run_dir`, `selected_input_xyz`,
 `latest_known_path`) is missing from disk; without `--apply` nothing is
 written. `--apply` rewrites the index without those rows under the index lock.
 A row that records at least one surviving path stays, whatever its status, and
-so does a row that records no path at all. Queue rows and run directories are
-not touched.
+so does a row that records no absolute path at all (a relative value or a JSON
+`null` cannot be checked against disk). Queue rows and run directories are not
+touched. The text output lists every row it would remove with a per-status
+count, so rows still labelled `running` or `queued` are visible before
+`--apply`.
 
 ### 7.6 CLI Output and Global Flags
 

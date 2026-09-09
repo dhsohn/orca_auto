@@ -125,23 +125,46 @@ class JobLocationPruneResult:
     applied: bool
 
 
+def _absolute_record_paths(record: JobLocationRecord) -> list[Path]:
+    """Recorded paths that disk can vouch for: absolute after ``~`` expansion.
+
+    A relative value would be judged against the caller's working directory,
+    and a JSON ``null`` loads as the text ``None``; neither can prove a row
+    stale, so both are left out and cannot make a row prunable.
+    """
+    paths: list[Path] = []
+    for value in (
+        record.original_run_dir,
+        record.selected_input_xyz,
+        record.latest_known_path,
+    ):
+        raw = normalize_index_text(value)
+        if not raw or not Path(raw).expanduser().is_absolute():
+            continue
+        candidate = _resolve_candidate_path(raw)
+        if candidate is not None and candidate not in paths:
+            paths.append(candidate)
+    return paths
+
+
 def _record_paths_survive(record: JobLocationRecord) -> bool:
-    """True when the record names no path at all, or any named path still exists."""
-    paths = _record_paths(record)
+    """True when the record names no absolute path, or any named one still exists."""
+    paths = _absolute_record_paths(record)
     if not paths:
         return True
     return any(path.exists() for path in paths)
 
 
 def prune_job_locations(root: str | Path, *, apply: bool) -> JobLocationPruneResult:
-    """Drop the rows whose every recorded path is gone from disk.
+    """Drop the rows whose every recorded absolute path is gone from disk.
 
-    A row that records at least one of ``original_run_dir``,
-    ``selected_input_xyz`` and ``latest_known_path`` and finds none of them on
+    A row that records at least one absolute ``original_run_dir``,
+    ``selected_input_xyz`` or ``latest_known_path`` and finds none of them on
     disk can resolve neither a job directory nor a path alias any more; it is
-    reachable by job id only and then leads nowhere. A row that records no path
-    is kept, because nothing on disk can prove it stale. Without ``apply`` the
-    index is left untouched and the result only reports what would go.
+    reachable by job id only and then leads nowhere. A row that records no
+    absolute path is kept, because nothing on disk can prove it stale. Without
+    ``apply`` the index is left untouched and the result only reports what
+    would go.
     """
     resolved_root = resolve_root_path(root)
     with file_lock(_lock_path(resolved_root)):

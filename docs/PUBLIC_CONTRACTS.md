@@ -101,7 +101,7 @@ Behavior:
 - `index prune` lists the `job_locations.json` rows of the configured
   `runs_root` whose every recorded path (`original_run_dir`,
   `selected_input_xyz`, `latest_known_path`) is gone from disk, and removes
-  them only with `--apply`. A row that records no path is kept. Queue rows and
+  them only with `--apply`. A row that records no absolute path is kept. Queue rows and
   run directories are never touched. `index prune --json` is its
   script-friendly surface, and its expected configuration and index failures
   are the same concise `error:`/`hint:` diagnostics on stderr with a non-zero

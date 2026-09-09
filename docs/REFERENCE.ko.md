@@ -551,8 +551,11 @@ orca_auto index prune --apply --json
 행을 남깁니다. `index prune`은 기록된 경로(`original_run_dir`, `selected_input_xyz`,
 `latest_known_path`)가 모두 디스크에 없는 행을 나열하며, `--apply` 없이는 아무것도
 쓰지 않습니다. `--apply`는 index lock 아래에서 그 행들을 뺀 index를 다시 씁니다.
-살아 있는 경로를 하나라도 기록한 행은 상태와 무관하게 남고, 경로를 전혀 기록하지
-않은 행도 남습니다. queue 행과 실행 디렉터리는 건드리지 않습니다.
+살아 있는 경로를 하나라도 기록한 행은 상태와 무관하게 남고, 절대 경로를 전혀
+기록하지 않은 행도 남습니다(상대 경로나 JSON `null`은 디스크와 대조할 수 없습니다).
+queue 행과 실행 디렉터리는 건드리지 않습니다. 텍스트 출력은 제거 대상 행 전부와
+상태별 개수를 보여 주므로, 아직 `running`이나 `queued`로 표시된 행을 `--apply`
+전에 확인할 수 있습니다.
 
 ### 7.6 CLI 출력 및 전역 플래그
 

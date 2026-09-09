@@ -14,8 +14,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   recorded path is gone from disk and removes them with `--apply`. The index
   had no maintenance surface: a run directory deleted by hand left a row that
   `run-dir` and the reports could still resolve to nothing. A row that keeps any
-  surviving path, and a row that records no path, are never removed; queue
-  rows and run directories are untouched.
+  surviving path, and a row that records no absolute path, are never removed;
+  queue rows and run directories are untouched.
 
 ### Fixed
 
