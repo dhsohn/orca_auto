@@ -99,9 +99,9 @@ while IFS= read -r name; do
   [[ -n "$name" ]] && unset "$name"
 done <<< "$git_local_env_output"
 
-# A shared venv may be an editable install of a sibling worktree.  Prepending
-# this checkout makes the gate validate the commit that is actually pushed.
-PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+# A shared venv may be an editable install of a sibling worktree. Prepend both
+# source roots so core and workflows come from the commit that is pushed.
+PYTHONPATH="$ROOT/src:$ROOT/extensions/workflows/src${PYTHONPATH:+:$PYTHONPATH}" \
   PYTHON_BIN="$VENV_DIR/bin/python" \
   ORCA_AUTO_CHECK_SKIP_INSTALL=$skip_install \
   exec bash "$ROOT/scripts/check.sh"
