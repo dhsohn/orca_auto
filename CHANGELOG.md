@@ -47,7 +47,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   virtual environment is installed from a sibling worktree. Untracked relative
   and dangling symlinks are restored after both successful and failed checks.
 - The pre-push hook reinstalls both projects when workflow extension metadata
-  changes. Core-only acceptance also reads source `egg-info` metadata during
+  changes and binds both source roots when reusing a sibling worktree's editable
+  environment. Core-only acceptance also reads source `egg-info` metadata during
   source-first hook checks, rather than assuming a wheel's `METADATA` filename.
 - Queue activity cancellation now uses the same shared configuration discovery
   as listing, including repository-local configuration and explicit/environment
