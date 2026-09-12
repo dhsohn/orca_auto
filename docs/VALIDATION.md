@@ -1,6 +1,6 @@
 # Validation and testing
 
-orca_auto validation is split into two honest layers:
+ORCA_auto validation is split into two honest layers:
 
 1. CI and fake-engine checks that can run publicly without licensed chemistry
    binaries.

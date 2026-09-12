@@ -1,4 +1,4 @@
-# orca_auto 개발 노트
+# ORCA_auto 개발 노트
 
 [English](DEVELOPMENT.md) | **한국어**
 

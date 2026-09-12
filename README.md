@@ -1,27 +1,53 @@
-# orca_auto
+<p align="center">
+  <img src="docs/images/banner.svg" alt="ORCA_auto — Submit durably. Supervise every run. Recover explicitly." width="680">
+</p>
 
-[![CI](https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg)](https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/dhsohn/orca_auto)](https://github.com/dhsohn/orca_auto/releases/latest)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform: Linux | WSL](https://img.shields.io/badge/platform-Linux%20%7C%20WSL-lightgrey.svg)](docs/REFERENCE.md#4-required-environment)
-[![Typed: py.typed](https://img.shields.io/badge/typed-py.typed-informational.svg)](src/orca_auto/py.typed)
+<p align="center">
+  <a href="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml"><img src="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/dhsohn/orca_auto/releases/latest"><img src="https://img.shields.io/github/v/release/dhsohn/orca_auto" alt="Release"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
-**English** | [한국어](README.ko.md)
+<p align="center"><b>English</b> · <a href="README.ko.md">한국어</a></p>
 
-orca_auto is a queue-first runner for **standalone ORCA and CREST→xTB→ORCA
-workflows** on Linux/WSL. It submits work durably,
-runs it under supervised `systemd` workers, and records per-job state, recovery,
-and reports — so you always know which calculation failed and what is safe to do next.
+ORCA_auto runs **ORCA calculations and CREST→xTB→ORCA workflows** on Linux/WSL.
+Submit work through the CLI, follow it in a durable queue, and inspect the
+recorded state, recovery decisions, and calculation reports. ORCA input design
+and chemical judgment stay with you.
 
-## Statement of need
+## Part of a local-first chemistry workflow
 
-Computational chemistry outgrows one-shot engine commands and ad-hoc shell loops:
-you need durable submission, supervised execution, explicit recovery, and an
-auditable record of failures. orca_auto covers the CLI / queue / report / recovery
-contracts for repeated ORCA calculations, transition-state searches, and
-reaction or conformer workflows — without adopting a general workflow platform,
-and without replacing chemical judgment or ORCA input design.
+ORCA_auto is a companion to [Chemvas](https://github.com/dhsohn/Chemvas) and
+[LLMdocx](https://github.com/dhsohn/LLMdocx): three independent tools for
+drawing chemistry, running calculations, and working with research documents.
+
+| Stage | Tool | Role |
+| --- | --- | --- |
+| Design | [Chemvas](https://github.com/dhsohn/Chemvas) | Editable chemical drawings, atom mapping, and calculation handoffs. |
+| Execute | **ORCA_auto** | Durable calculation queues, supervised workers, explicit recovery, and reports. |
+| Write | [LLMdocx](https://github.com/dhsohn/LLMdocx) | A local document workspace with executable blocks and calculation-result imports. |
+
+The tools share a versioned `machine.json` observation envelope while keeping
+their own input and output contracts. Connecting them requires explicit
+conversion: Chemvas handoffs must become ORCA inputs or `flow.yaml` workflows,
+and calculation results must be packaged in
+[LLMdocx's results-bundle format](https://github.com/dhsohn/LLMdocx/blob/main/docs/RESULTS_BUNDLE_V1.md).
+These conversions are not built into ORCA_auto.
+
+## Submit durably. Supervise every run. Recover explicitly.
+
+- **Submit durably.** A successful submission records queued work. You can close
+  the submitting terminal while the worker handles execution.
+- **Supervise every run.** `systemd` workers run standalone ORCA jobs and
+  multi-stage reaction or conformer workflows, with queue and service status
+  available from the CLI.
+- **Recover explicitly.** Worker or host interruptions use verified recovery
+  paths. ORCA calculation failures are terminal after one attempt; failure
+  reasons remain available for inspection and deliberate resubmission.
+
+[Public contracts](docs/PUBLIC_CONTRACTS.md) describe recovery and reporting
+boundaries; [project scope](docs/RELATED_WORK.md) explains when this runtime fits.
 
 ## Quickstart (standalone ORCA)
 
@@ -56,7 +82,7 @@ Config keys, path rules, and the config search order →
 ## Services, testing, and full docs
 
 - Supervised runtime (`systemd`, WSL/Linux) → [systemd/README.md](systemd/README.md)
-- `make test` runs ruff, mypy, import-linter, and the coverage-gated pytest suite.
+- `make check` runs Ruff, format checks, mypy, import-linter, and the coverage-gated pytest suite.
   Real-engine ORCA runs and validation
   boundaries are recorded in → [docs/VALIDATION.md](docs/VALIDATION.md)
 - Docs index: [ARCHITECTURE](docs/ARCHITECTURE.md) · [REFERENCE](docs/REFERENCE.md) ·

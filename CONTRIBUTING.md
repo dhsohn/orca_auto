@@ -1,13 +1,13 @@
-# Contributing to orca_auto
+# Contributing to ORCA_auto
 
-Thank you for helping improve orca_auto. This project is not being prepared as a
+Thank you for helping improve ORCA_auto. This project is not being prepared as a
 JOSS submission, but it intentionally borrows JOSS-style open-source operating
 practices: clear motivation, reviewable changes, objective verification, and a
 public development record.
 
 ## Project scope
 
-orca_auto is a queue-first runtime and workflow layer for ORCA-centered
+ORCA_auto is a queue-first runtime and workflow layer for ORCA-centered
 computational chemistry work on Linux and WSL. It should make calculations more
 observable and recoverable without becoming a general workflow engine, an ORCA
 replacement, or a collection of one-off site scripts.

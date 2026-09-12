@@ -1,8 +1,8 @@
-# orca_auto Detailed Reference
+# ORCA_auto Detailed Reference
 
 **English** | [한국어](REFERENCE.ko.md)
 
-orca_auto is a queue-first executor for ORCA and workflow orchestration. ORCA
+ORCA_auto is a queue-first executor for ORCA and workflow orchestration. ORCA
 uses the shared internal-engine queue lifecycle for worker admission, child
 entry execution, terminal side effects, and orphan recovery while preserving
 its public ORCA queue contract. General xTB and CREST run as internal workflow-stage engines. This reference standardizes the shared public CLI and keeps the deeper
@@ -446,7 +446,7 @@ Workflow notes:
   while cross-file overlaps do not duplicate downstream candidates. Non-finite xTB energies and XYZ
   coordinates are unusable and are never materialized for ORCA.
 - CREST receives an absolute immutable input-snapshot path and an explicitly
-  bound xTB executable (`-xnam`). orca_auto does not pass `--scratch`, because
+  bound xTB executable (`-xnam`). ORCA_auto does not pass `--scratch`, because
   CREST 3.0.2's native scratch implementation invokes an unsafe shell path.
   The `gfn2//gfnff` composite emits CREST's required `--legacy` CLI flag;
   charge and UHF are always explicit, including neutral singlet values.
@@ -964,7 +964,7 @@ Queue worker note:
 
 5. `error_multiplicity_impossible`
 - Cause: Electron count and multiplicity mismatch
-- Action: Manually adjust the input, because orca_auto ORCA does not rewrite charge or multiplicity
+- Action: Manually adjust the input, because ORCA_auto ORCA does not rewrite charge or multiplicity
 
 6. `error_termination` within a second of starting, output ending in `LEAVING ORCA`
 - Cause: ORCA rejected an input block; the `... check syntax!` line names it (for example `Error in [GEOM] block`)

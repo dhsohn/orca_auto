@@ -1,6 +1,6 @@
 # Support policy
 
-orca_auto support is best-effort and centered on reproducible project issues.
+ORCA_auto support is best-effort and centered on reproducible project issues.
 The project is maintained as research software, not as a commercial support
 service or a substitute for local computational-chemistry judgment.
 
@@ -9,7 +9,7 @@ service or a substitute for local computational-chemistry judgment.
 Use GitHub Issues for:
 
 - reproducible CLI, queue, worker, report, parser, retry, or documentation bugs;
-- calculation-failure triage when orca_auto classified, retried, resumed, or
+- calculation-failure triage when ORCA_auto classified, retried, resumed, or
   reported a job incorrectly;
 - feature requests that improve reusable ORCA-centered workflows;
 - documentation gaps or stale examples.
@@ -24,7 +24,7 @@ artifacts when available:
 
 - command run and exact output;
 - OS/runtime context such as Linux distribution or WSL version;
-- Python version and orca_auto commit or release;
+- Python version and ORCA_auto commit or release;
 - ORCA/xTB/CREST versions if the issue depends on real engines;
 - selected `.inp` snippet, output tail, and terminal marker;
 - terminal generation `machine.json`, plus relevant sanitized `job_state.json`
@@ -36,7 +36,7 @@ private research data before posting.
 
 ## Scope boundaries
 
-The project can help with orca_auto behavior and documentation. It generally
+The project can help with ORCA_auto behavior and documentation. It generally
 cannot provide support for:
 
 - ORCA licensing or upstream ORCA bugs;

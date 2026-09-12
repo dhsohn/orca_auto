@@ -1,8 +1,8 @@
 # Discord Setup
 
-orca_auto sends one-way outbound notifications to a Discord channel using a bot
+ORCA_auto sends one-way outbound notifications to a Discord channel using a bot
 token. The bot only posts messages; it does not read channel messages or accept
-interactive commands. Create a dedicated application for orca_auto; do not reuse
+interactive commands. Create a dedicated application for ORCA_auto; do not reuse
 the `ollama_bot` token.
 
 ## 1. Create and invite the bot
@@ -16,7 +16,7 @@ the `ollama_bot` token.
 3. Check channel-level permission overrides too. The bot must have those
    permissions in the notification channel.
 
-No privileged gateway intents are required. orca_auto only posts messages
+No privileged gateway intents are required. ORCA_auto only posts messages
 through the authenticated REST API, so the bot never needs Message Content
 Intent or message-read permissions.
 
@@ -32,7 +32,7 @@ shows where the control is.
 
 - `default_channel_id`: destination for queue and worker notifications.
 
-## 3. Configure orca_auto
+## 3. Configure ORCA_auto
 
 Edit the active `orca_auto.yaml` (normally `config/orca_auto.yaml`):
 
@@ -71,7 +71,7 @@ From the repository root:
 .venv/bin/orca_auto service status
 ```
 
-orca_auto posts a notification when a run is queued and again when it reaches a
+ORCA_auto posts a notification when a run is queued and again when it reaches a
 terminal state. The queued card is sent at submission time, so submitting any
 small ORCA input confirms delivery without waiting for the calculation:
 

@@ -1,10 +1,10 @@
-# orca_auto 상세 레퍼런스
+# ORCA_auto 상세 레퍼런스
 
 [English](REFERENCE.md) | **한국어**
 
 > 이 문서는 [REFERENCE.md](REFERENCE.md)(영어판)의 한국어 번역본입니다.
 
-orca_auto는 ORCA와 워크플로우 오케스트레이션을 위한 큐 우선
+ORCA_auto는 ORCA와 워크플로우 오케스트레이션을 위한 큐 우선
 (queue-first) 실행기입니다. ORCA는 공개 ORCA 큐 계약을 보존하면서, 워커 admission, 자식 진입
 실행, 종료 부수효과, 고아(orphan) 복구에 공유 내부 엔진 큐 라이프사이클을 사용합니다.
 일반 xTB와 CREST는 내부 워크플로우 단계 엔진으로
@@ -426,7 +426,7 @@ ORCA 고유 노트:
   않은 xTB 에너지와 XYZ 좌표는 사용할 수 없고 ORCA 입력으로 materialize하지 않습니다.
 - CREST에는 변경 불가능한 입력 snapshot의 절대 경로와 명시적으로 고정한 xTB 실행 파일
   (`-xnam`)을 전달합니다. CREST 3.0.2의 native scratch 구현이 안전하지 않은 shell 경로를
-  호출하므로 orca_auto는 `--scratch`를 전달하지 않습니다. `gfn2//gfnff` 합성 모드는
+  호출하므로 ORCA_auto는 `--scratch`를 전달하지 않습니다. `gfn2//gfnff` 합성 모드는
   CREST가 요구하는 `--legacy` CLI flag를 내며, 중성 singlet 값까지 charge와 UHF를 항상
   명시합니다.
 - `solvent_model`은 `gbsa` 또는 `alpb`여야 하고 `solvent`와 함께 써야 합니다. xTB와 CREST가
@@ -907,7 +907,7 @@ ORCA 핸드오프 계약은 `orca_auto.flow` 같은 다운스트림 도구에 �
 
 5. `error_multiplicity_impossible`
 - 원인: 전자 수와 다중도 불일치
-- 조치: orca_auto ORCA는 전하나 다중도를 다시 쓰지 않으므로 입력을 수동으로 조정
+- 조치: ORCA_auto ORCA는 전하나 다중도를 다시 쓰지 않으므로 입력을 수동으로 조정
 
 6. 시작 1초 안의 `error_termination`, 출력 끝이 `LEAVING ORCA`
 - 원인: ORCA가 입력 블록을 거부함. `... check syntax!` 줄이 블록을 지목함(예: `Error in [GEOM] block`)

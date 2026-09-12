@@ -1,6 +1,6 @@
 # Related work and project scope
 
-orca_auto is a runtime and observability layer around ORCA-centered computational
+ORCA_auto is a runtime and observability layer around ORCA-centered computational
 chemistry workflows. It is not a replacement for ORCA, a general workflow engine,
 or a chemistry toolkit. This page explains the gap it is designed to fill and how
 it relates to neighboring tools.
@@ -12,7 +12,7 @@ single calculation, invoking ORCA directly is often the simplest and clearest
 choice. Many groups then add shell scripts for repeated submission, directory
 layout, and result copying.
 
-orca_auto is useful when that script layer needs durable state:
+ORCA_auto is useful when that script layer needs durable state:
 
 - queue entries that survive terminal restarts;
 - supervised workers instead of foreground-only runs;
@@ -30,7 +30,7 @@ important infrastructure, but they do not by themselves understand ORCA job
 state, execution provenance, selected input files, or chemistry-specific failure
 classification.
 
-orca_auto complements this layer. It can be run under systemd on Linux or WSL,
+ORCA_auto complements this layer. It can be run under systemd on Linux or WSL,
 and it records ORCA/job-level state above the process-manager layer. It does not
 try to become a cluster scheduler or replace local site policy about cores,
 memory, queues, or walltime.
@@ -41,7 +41,7 @@ General engines such as Snakemake, Nextflow, Parsl, FireWorks, and AiiDA provide
 broad workflow abstractions. They are appropriate when a project needs a general
 DAG engine, database-backed provenance framework, or multi-code workflow system.
 
-orca_auto is intentionally narrower. Its public surface is a queue-first CLI,
+ORCA_auto is intentionally narrower. Its public surface is a queue-first CLI,
 configuration file, worker runtime, and report/state contracts tailored to ORCA
 and ORCA-centered reaction/conformer workflows. This smaller scope keeps the
 common local/WSL use case easy to inspect and debug, while still leaving room to
@@ -53,7 +53,7 @@ Libraries such as ASE, RDKit, Open Babel, and cclib occupy adjacent roles:
 structure manipulation, cheminformatics, file conversion, parsing, or analysis.
 They are not direct replacements for a supervised ORCA runtime.
 
-orca_auto may use or interoperate with chemistry tools at the workflow edge, but
+ORCA_auto may use or interoperate with chemistry tools at the workflow edge, but
 its main responsibility is execution orchestration and observable job state, not
 molecular modeling algorithms or post-processing analysis APIs.
 
@@ -65,7 +65,7 @@ route ORCA-centered work.
 
 ## Non-goals
 
-orca_auto is not intended to be:
+ORCA_auto is not intended to be:
 
 - an electronic-structure engine;
 - a replacement for ORCA input design or chemical judgment;

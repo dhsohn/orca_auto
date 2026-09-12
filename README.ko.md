@@ -1,28 +1,50 @@
-# orca_auto
+<p align="center">
+  <img src="docs/images/banner.svg" alt="ORCA_auto — 내구성 있는 제출, 감독되는 실행, 명시적인 복구." width="680">
+</p>
 
-[![CI](https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg)](https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/dhsohn/orca_auto)](https://github.com/dhsohn/orca_auto/releases/latest)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform: Linux | WSL](https://img.shields.io/badge/platform-Linux%20%7C%20WSL-lightgrey.svg)](docs/REFERENCE.ko.md)
-[![Typed: py.typed](https://img.shields.io/badge/typed-py.typed-informational.svg)](src/orca_auto/py.typed)
+<p align="center">
+  <a href="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml"><img src="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/dhsohn/orca_auto/releases/latest"><img src="https://img.shields.io/github/v/release/dhsohn/orca_auto" alt="Release"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+</p>
 
-[English](README.md) | **한국어**
+<p align="center"><a href="README.md">English</a> · <b>한국어</b></p>
 
-> 이 문서는 [README.md](README.md)(영어판)의 한국어 번역본입니다.
+ORCA_auto는 Linux/WSL에서 **ORCA 계산과 CREST→xTB→ORCA 워크플로우**를 실행합니다.
+CLI로 작업을 제출하고, 디스크에 저장된 큐에서 진행 상황을 확인하며, 기록된 상태·복구
+판단·계산 보고서를 살펴볼 수 있습니다. ORCA 입력 설계와 화학적 판단은 사용자가 맡습니다.
 
-orca_auto는 Linux/WSL에서 **단독 ORCA, CREST→xTB→ORCA 워크플로우**를 다루는
-큐 우선(queue-first) 러너입니다. 작업을
-내구성 있게 제출하고, 감독되는 `systemd` 워커 아래에서 실행하며, 작업별 상태·복구·
-리포트를 기록합니다 — 어느 계산이 실패했고 다음에 무엇이 안전한지 항상 알 수 있습니다.
+## 로컬 중심 화학 연구 생태계
 
-## 필요성
+ORCA_auto는 [Chemvas](https://github.com/dhsohn/Chemvas),
+[LLMdocx](https://github.com/dhsohn/LLMdocx)와 같은 생태계의 독립 도구입니다.
+세 프로그램은 화학 구조 그리기, 계산 실행, 연구 문서 작성을 각각 맡습니다.
 
-계산화학 작업은 일회성 엔진 명령과 즉석 shell 루프를 곧 넘어섭니다. 내구성 있는 제출,
-감독되는 실행, 명시적 복구, 그리고 어떤 계산이 실패했는지에 대한 감사 가능한 기록이
-필요합니다. orca_auto는 반복 ORCA 계산, 전이상태 탐색, 반응·형태 이성질체 워크플로우를
-위한 CLI / 큐 / 리포트 / 중단 복구 계약을 제공합니다 — 범용 워크플로우 플랫폼을 도입하지
-않고, 화학적 판단이나 ORCA 입력 설계를 대체하지 않으면서.
+| 단계 | 도구 | 역할 |
+| --- | --- | --- |
+| 설계 | [Chemvas](https://github.com/dhsohn/Chemvas) | 편집 가능한 화학 구조·반응식, 원자 대응, 계산 전달용 산출물. |
+| 실행 | **ORCA_auto** | 디스크에 저장되는 계산 큐, 감독 워커, 명시적인 복구와 보고서. |
+| 작성 | [LLMdocx](https://github.com/dhsohn/LLMdocx) | 실행 가능한 블록과 계산 결과 가져오기를 갖춘 로컬 문서 작업 공간. |
+
+세 도구는 버전이 명시된 `machine.json` 관측 정보의 공통 형식을 공유하며, 각자의
+입출력 계약을 유지합니다. 연결에는 명시적인 변환이 필요합니다. Chemvas 산출물은 ORCA
+입력이나 `flow.yaml` 워크플로우로 준비하고, 계산 결과는
+[LLMdocx의 결과 번들 형식](https://github.com/dhsohn/LLMdocx/blob/main/docs/RESULTS_BUNDLE_V1.md)으로
+묶어야 합니다. 이 변환 기능은 ORCA_auto에 내장되어 있지 않습니다.
+
+## 내구성 있는 제출. 감독되는 실행. 명시적인 복구.
+
+- **내구성 있는 제출.** 제출에 성공하면 작업이 큐에 기록됩니다. 제출한 터미널을 닫아도
+  워커가 실행을 담당합니다.
+- **감독되는 실행.** `systemd` 워커가 단독 ORCA 작업과 다단계 반응·형태 이성질체
+  워크플로우를 실행합니다. CLI에서 큐와 서비스 상태를 확인할 수 있습니다.
+- **명시적인 복구.** 워커나 호스트 중단에는 검증된 복구 경로를 적용합니다. ORCA 계산
+  자체의 실패는 한 번의 시도 뒤 종료되며, 원인을 살펴보고 의도적으로 다시 제출할 수
+  있도록 실패 사유를 남깁니다.
+
+복구·보고서의 범위는 [공개 계약](docs/PUBLIC_CONTRACTS.ko.md)에,
+이 도구가 적합한 용도는 [프로젝트 범위](docs/RELATED_WORK.md)(영어)에 설명되어 있습니다.
 
 ## 빠른 시작 (단독 ORCA)
 
@@ -54,14 +76,10 @@ orca_auto queue list --engine orca
 | **워크플로우** | CREST→xTB→ORCA 형태 이성질체 / 반응 파이프라인 | [ARCHITECTURE](docs/ARCHITECTURE.ko.md) |
 | **메신저** | 단방향 Discord 작업/워크플로우 알림 | [DISCORD_SETUP](docs/DISCORD_SETUP.ko.md) |
 
-각 기능의 정확한 계약 — 자원 상한, generation 디렉터리 레이아웃, scratch 의미론, 엔진
-버전 핀 — 은 [docs/PUBLIC_CONTRACTS.ko.md](docs/PUBLIC_CONTRACTS.ko.md)에 있습니다.
-README는 의도적으로 짧게 유지합니다.
-
 ## 서비스·테스트·전체 문서
 
 - 감독 런타임(`systemd`, WSL/Linux) → [systemd/README.ko.md](systemd/README.ko.md)
-- `make test`는 ruff·mypy·import-linter·커버리지 게이트 pytest를 실행합니다.
+- `make check`는 Ruff·포맷 검사·mypy·import-linter·커버리지 게이트 pytest를 실행합니다.
   실엔진 ORCA 실행 기록과 검증 경계는
   → [docs/VALIDATION.md](docs/VALIDATION.md)
 - 문서 색인: [ARCHITECTURE](docs/ARCHITECTURE.ko.md) · [REFERENCE](docs/REFERENCE.ko.md) ·
