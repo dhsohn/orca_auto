@@ -21,6 +21,7 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_cancel_01",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [
             {
@@ -40,16 +41,16 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
                 "task": {"engine": "crest", "status": "queued"},
             },
             {
-                "stage_id": "stage_xtb_missing_config",
+                "stage_id": "stage_orca_missing_config",
                 "status": "running",
-                "metadata": {"queue_id": "q_xtb"},
-                "task": {"engine": "xtb", "status": "running"},
+                "metadata": {"queue_id": "q_orca"},
+                "task": {"engine": "orca", "status": "running"},
             },
             {
-                "stage_id": "stage_orca_remote",
+                "stage_id": "stage_crest_completed",
                 "status": "submitted",
-                "metadata": {"queue_id": "q_orca"},
-                "task": {"engine": "orca", "status": "submitted"},
+                "metadata": {"queue_id": "q_crest_completed"},
+                "task": {"engine": "crest", "status": "submitted"},
             },
         ],
     }
@@ -60,11 +61,9 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
             "acquire_workflow_lock": lambda workspace_dir, timeout_seconds=5.0: nullcontext(),
             "load_workflow_payload": lambda workspace_dir: payload,
             "crest_cancel_target": lambda **kwargs: {
-                "status": "cancel_requested",
-                "queue_id": kwargs["target"],
-            },
-            "orca_cancel_target": lambda **kwargs: {
-                "status": "cancelled",
+                "status": "cancelled"
+                if kwargs["target"] == "q_crest_completed"
+                else "cancel_requested",
                 "queue_id": kwargs["target"],
             },
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
@@ -76,7 +75,6 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
         target="wf_cancel_01",
         workflow_root=tmp_path,
         crest_config="/tmp/crest.yaml",
-        orca_config="/tmp/orca.yaml",
         services=deps,
     )
 
@@ -84,10 +82,10 @@ def test_cancel_materialized_workflow_mixes_local_remote_and_failed_cancellation
     assert result["cancelled"] == [
         {"stage_id": "stage_local", "mode": "local"},
         {"stage_id": "stage_crest_remote", "status": "cancel_requested"},
-        {"stage_id": "stage_orca_remote", "status": "cancelled"},
+        {"stage_id": "stage_crest_completed", "status": "cancelled"},
     ]
     assert result["failed"] == [
-        {"stage_id": "stage_xtb_missing_config", "reason": "missing_engine_config"},
+        {"stage_id": "stage_orca_missing_config", "reason": "missing_engine_config"},
     ]
     assert payload["stages"][1]["status"] == "cancelled"
     assert payload["stages"][1]["task"]["status"] == "cancelled"
@@ -103,6 +101,7 @@ def test_cancel_refuses_before_any_mutation_when_journal_is_over_limit(
     journal_path.write_bytes(b"x" * (registry.journal.CALLER_EVENT_LOOKUP_MAX_BYTES + 1))
     payload: dict[str, Any] = {
         "workflow_id": "wf_cancel_journal",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [
             {
@@ -203,6 +202,7 @@ def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_p
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_cancel_02",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [
             {
@@ -246,7 +246,7 @@ def test_cancel_materialized_workflow_reports_cancelled_when_no_remote_request_p
         "workflow_root": tmp_path.resolve(),
         "event_type": "workflow_status_changed",
         "workflow_id": "wf_cancel_02",
-        "template_name": "",
+        "template_name": "conformer_screening",
         "previous_status": "running",
         "status": "cancelled",
         "reason": "cancel_requested",
@@ -328,6 +328,7 @@ def test_cancel_materialized_workflow_retries_event_after_registry_sync_failure(
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_cancel_registry_retry",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [],
     }
@@ -381,13 +382,14 @@ def test_cancel_materialized_workflow_preserves_pending_child_status_on_retry(
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_cancel_requested_retry",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [
             {
-                "stage_id": "stage_xtb_pending",
+                "stage_id": "stage_crest_pending",
                 "status": "running",
-                "metadata": {"queue_id": "q_xtb_pending"},
-                "task": {"engine": "xtb", "status": "running"},
+                "metadata": {"queue_id": "q_crest_pending"},
+                "task": {"engine": "crest", "status": "running"},
             }
         ],
     }
@@ -398,7 +400,7 @@ def test_cancel_materialized_workflow_preserves_pending_child_status_on_retry(
     def request_cancel(**_kwargs: Any) -> dict[str, Any]:
         nonlocal cancel_calls
         cancel_calls += 1
-        return {"status": "cancel_requested", "queue_id": "q_xtb_pending"}
+        return {"status": "cancel_requested", "queue_id": "q_crest_pending"}
 
     def sync_once_then_succeed(*_args: Any) -> None:
         nonlocal sync_attempts
@@ -415,7 +417,7 @@ def test_cancel_materialized_workflow_preserves_pending_child_status_on_retry(
             "load_workflow_payload": lambda workspace_dir: payload,
             "write_workflow_payload": lambda workspace_dir, current_payload: None,
             "sync_workflow_registry": sync_once_then_succeed,
-            "xtb_cancel_target": request_cancel,
+            "crest_cancel_target": request_cancel,
             "append_workflow_journal_event": lambda workflow_root, **kwargs: events.append(
                 {"workflow_root": workflow_root, **kwargs}
             ),
@@ -426,7 +428,7 @@ def test_cancel_materialized_workflow_preserves_pending_child_status_on_retry(
         orchestration.cancel_materialized_workflow(
             target="wf_cancel_requested_retry",
             workflow_root=tmp_path,
-            xtb_config="/tmp/xtb.yaml",
+            crest_config="/tmp/crest.yaml",
             services=deps,
         )
 
@@ -434,7 +436,7 @@ def test_cancel_materialized_workflow_preserves_pending_child_status_on_retry(
     result = orchestration.cancel_materialized_workflow(
         target="wf_cancel_requested_retry",
         workflow_root=tmp_path,
-        xtb_config="/tmp/xtb.yaml",
+        crest_config="/tmp/crest.yaml",
         services=deps,
     )
 
@@ -452,6 +454,7 @@ def test_cancel_materialized_workflow_retries_uncertain_journal_append_once(
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_cancel_journal_retry",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [],
     }
@@ -510,6 +513,7 @@ def test_cancel_materialized_workflow_recovers_journal_after_directory_fsync_fai
 
     payload: dict[str, Any] = {
         "workflow_id": "wf_cancel_directory_fsync_retry",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [],
     }
@@ -576,26 +580,27 @@ def test_cancel_materialized_workflow_retries_after_child_cancel_before_payload_
     tmp_path: Path,
 ) -> None:
     from orca_auto.core.queue import QueueStatus, enqueue, list_queue
-    from orca_auto.flow.submitters import xtb as xtb_submitter
+    from orca_auto.flow.submitters import crest as crest_submitter
 
     queue_root = tmp_path / "queue"
     child = enqueue(
         queue_root,
-        app_name="orca_auto_xtb",
-        task_id="xtb-child",
-        task_kind="xtb_opt",
-        engine="xtb",
-        metadata={"job_dir": str(tmp_path / "xtb-child"), "job_type": "opt"},
+        app_name="orca_auto_crest",
+        task_id="crest-child",
+        task_kind="crest_conformer_search",
+        engine="crest",
+        metadata={"job_dir": str(tmp_path / "crest-child"), "mode": "standard"},
     )
     durable_payload: dict[str, Any] = {
         "workflow_id": "wf_child_cancel_payload_retry",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [
             {
-                "stage_id": "stage_xtb",
+                "stage_id": "stage_crest",
                 "status": "queued",
                 "metadata": {"queue_id": child.queue_id},
-                "task": {"engine": "xtb", "status": "queued"},
+                "task": {"engine": "crest", "status": "queued"},
             }
         ],
     }
@@ -611,14 +616,14 @@ def test_cancel_materialized_workflow_retries_after_child_cancel_before_payload_
             raise OSError("parent payload durability barrier failed")
         durable_payload = copy.deepcopy(payload)
 
-    monkeypatch.setattr(xtb_submitter, "load_queue_config", lambda _path: object())
+    monkeypatch.setattr(crest_submitter, "load_queue_config", lambda _path: object())
     monkeypatch.setattr(
-        xtb_submitter,
+        crest_submitter,
         "queue_entries_with_roots",
         lambda _cfg: [(queue_root, current) for current in list_queue(queue_root)],
     )
     monkeypatch.setattr(
-        xtb_submitter,
+        crest_submitter,
         "_before_pending_cancel",
         lambda _entry, *, config_path: None,
     )
@@ -631,7 +636,7 @@ def test_cancel_materialized_workflow_retries_after_child_cancel_before_payload_
             "load_workflow_payload": load_payload,
             "write_workflow_payload": write_once_then_persist,
             "sync_workflow_registry": lambda workflow_root, workspace_dir, payload: None,
-            "xtb_cancel_target": xtb_submitter.cancel_target,
+            "crest_cancel_target": crest_submitter.cancel_target,
         }
     )
 
@@ -639,7 +644,7 @@ def test_cancel_materialized_workflow_retries_after_child_cancel_before_payload_
         orchestration.cancel_materialized_workflow(
             target="wf_child_cancel_payload_retry",
             workflow_root=tmp_path,
-            xtb_config="/tmp/xtb.yaml",
+            crest_config="/tmp/crest.yaml",
             services=deps,
         )
 
@@ -650,13 +655,13 @@ def test_cancel_materialized_workflow_retries_after_child_cancel_before_payload_
     result = orchestration.cancel_materialized_workflow(
         target="wf_child_cancel_payload_retry",
         workflow_root=tmp_path,
-        xtb_config="/tmp/xtb.yaml",
+        crest_config="/tmp/crest.yaml",
         services=deps,
     )
 
     assert result["status"] == "cancelled"
     assert result["failed"] == []
-    assert result["cancelled"] == [{"stage_id": "stage_xtb", "status": "cancelled"}]
+    assert result["cancelled"] == [{"stage_id": "stage_crest", "status": "cancelled"}]
     assert durable_payload["status"] == "cancelled"
     assert durable_payload["stages"][0]["status"] == "cancelled"
     assert durable_payload["stages"][0]["task"]["status"] == "cancelled"
@@ -667,6 +672,7 @@ def test_cancel_materialized_workflow_reports_cancel_failed_when_stage_cancellat
 ) -> None:
     payload: dict[str, Any] = {
         "workflow_id": "wf_failed_cancel",
+        "template_name": "conformer_screening",
         "status": "running",
         "stages": [
             {

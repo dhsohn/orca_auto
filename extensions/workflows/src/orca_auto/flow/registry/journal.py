@@ -150,8 +150,6 @@ def append_workflow_journal_event(
     task_kind: str = "",
     stage_status: str = "",
     previous_stage_status: str = "",
-    reaction_handoff_status: str = "",
-    previous_reaction_handoff_status: str = "",
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     resolved_root = Path(workflow_root).expanduser().resolve()
@@ -175,8 +173,6 @@ def append_workflow_journal_event(
         "task_kind": _normalize_text(task_kind),
         "stage_status": _normalize_text(stage_status),
         "previous_stage_status": _normalize_text(previous_stage_status),
-        "reaction_handoff_status": _normalize_text(reaction_handoff_status),
-        "previous_reaction_handoff_status": _normalize_text(previous_reaction_handoff_status),
         "metadata": _coerce_mapping(metadata),
     }
     existing_event: dict[str, Any] | None = None

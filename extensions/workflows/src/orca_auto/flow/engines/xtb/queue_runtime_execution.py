@@ -34,7 +34,6 @@ class XtbQueueRuntimeWorkerExecutionCallbacks:
     run_xtb_ranking_job: Callable[..., _worker_execution.XtbRunResult]
     start_xtb_job: Callable[..., Any]
     finalize_xtb_job: Callable[..., _worker_execution.XtbRunResult]
-    run_path_search_ts_hessian_followup: Callable[..., _worker_execution.XtbRunResult]
     terminate_process: Callable[..., bool]
     wait_for_cancellable_process: Callable[..., _worker_execution.XtbRunResult]
     sleep: Callable[..., Any]
@@ -54,7 +53,6 @@ class XtbQueueRuntimeWorkerExecutionCallbacks:
                 "run_xtb_ranking_job",
                 "start_xtb_job",
                 "finalize_xtb_job",
-                "run_path_search_ts_hessian_followup",
             ),
         )
 

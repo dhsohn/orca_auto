@@ -287,7 +287,7 @@ def validate_scan_coordinate(value: object, *, atom_count: int) -> str:
     raw = value.strip()
     if _STRICT_SCAN_COORDINATE_RE.fullmatch(raw) is None:
         raise ValueError(
-            "scan_ts_search requires exactly one scan_coordinate like "
+            "relaxed scan requires exactly one scan_coordinate like "
             "'B 20 61 = 1.80, 5.00, 32'. "
             f"got={value!r}"
         )

@@ -22,9 +22,6 @@ if TYPE_CHECKING:
 
 WORKFLOW_PHASE_FINISHED_EVENT = "workflow_phase_finished"
 BASE_PHASE_DEFINITIONS = ({"phase": "crest", "phase_label": "CREST", "engine": "crest"},)
-TEMPLATE_PHASE_DEFINITIONS = {
-    "reaction_ts_search": ({"phase": "xtb", "phase_label": "xTB", "engine": "xtb"},),
-}
 
 
 def _stage_row(stage: Any) -> dict[str, str]:
@@ -49,12 +46,6 @@ def _stage_row(stage: Any) -> dict[str, str]:
             "status": _normalize_text(stage.get("status")).lower(),
             "task_status": _normalize_text(task.get("status")).lower(),
             "reason": _normalize_text(metadata.get("reason")).lower(),
-            "reaction_handoff_status": _normalize_text(
-                metadata.get("reaction_handoff_status")
-            ).lower(),
-            "reaction_handoff_reason": _normalize_text(
-                metadata.get("reaction_handoff_reason")
-            ).lower(),
         }
 
     stage_id = _normalize_text(stage.get("stage_id"))
@@ -66,8 +57,6 @@ def _stage_row(stage: Any) -> dict[str, str]:
         "status": _normalize_text(stage.get("status")).lower(),
         "task_status": _normalize_text(stage.get("task_status")).lower(),
         "reason": _normalize_text(stage.get("reason")).lower(),
-        "reaction_handoff_status": _normalize_text(stage.get("reaction_handoff_status")).lower(),
-        "reaction_handoff_reason": _normalize_text(stage.get("reaction_handoff_reason")).lower(),
     }
 
 
@@ -82,21 +71,10 @@ def _count_values(rows: Iterable[dict[str, str]], key: str) -> dict[str, int]:
 
 
 def stage_row_result(row: dict[str, str]) -> str:
-    """Canonical user-facing result for one terminal stage row.
-
-    The reaction handoff verdict outranks the raw stage status: a stage whose
-    outputs were handed to ORCA succeeded even if a later attempt failed, and a
-    stage whose handoff was refused failed even though the engine process
-    itself completed. A row whose stage and task statuses disagree takes the
-    worst bucket (failed over cancelled over completed), and terminal rows
-    that fit no bucket count as failed.
-    """
-    handoff = _normalize_text(row.get("reaction_handoff_status")).lower()
-    if handoff == "ready":
-        return STATUS_COMPLETED
+    """Use the worst terminal stage/task result (failed, cancelled, completed)."""
     status = _normalize_text(row.get("status")).lower()
     task_status = _normalize_text(row.get("task_status")).lower()
-    if handoff == STATUS_FAILED or is_failed_status(status) or is_failed_status(task_status):
+    if is_failed_status(status) or is_failed_status(task_status):
         return STATUS_FAILED
     if STATUS_CANCELLED in (status, task_status):
         return STATUS_CANCELLED
@@ -117,12 +95,9 @@ def _stage_status_details(rows: Iterable[dict[str, str]]) -> list[dict[str, str]
             "task_status": task_status,
             "result": stage_row_result(row),
         }
-        reason = _normalize_text(row.get("reaction_handoff_reason") or row.get("reason"))
+        reason = _normalize_text(row.get("reason"))
         if reason:
             detail["reason"] = reason
-        handoff_status = _normalize_text(row.get("reaction_handoff_status")).lower()
-        if handoff_status:
-            detail["reaction_handoff_status"] = handoff_status
         details.append(detail)
     return details
 
@@ -169,11 +144,10 @@ def phase_snapshot(stages: Iterable[Any], *, engine: str) -> dict[str, Any]:
         if row and _normalize_text(row.get("engine")).lower() == engine_text
     ]
     terminal_rows = [row for row in rows if _row_is_terminal(row)]
-    handoff_counts = _count_values(rows, "reaction_handoff_status")
     results = [stage_row_result(row) for row in rows]
     failure_reasons: list[str] = []
     for row in rows:
-        reason = _normalize_text(row.get("reaction_handoff_reason") or row.get("reason")).lower()
+        reason = _normalize_text(row.get("reason")).lower()
         if reason and reason not in failure_reasons:
             failure_reasons.append(reason)
     return {
@@ -202,7 +176,6 @@ def phase_snapshot(stages: Iterable[Any], *, engine: str) -> dict[str, Any]:
             STATUS_FAILED: results.count(STATUS_FAILED),
             STATUS_CANCELLED: results.count(STATUS_CANCELLED),
         },
-        "reaction_handoff_status_counts": handoff_counts,
         "failure_reasons": failure_reasons,
         "finished": bool(rows) and len(terminal_rows) == len(rows),
         "outcome": _phase_outcome(rows) if rows else "",
@@ -214,8 +187,7 @@ def phase_finished(stages: Iterable[Any], *, engine: str) -> bool:
 
 
 def _phase_definitions(template_name: str) -> tuple[dict[str, str], ...]:
-    normalized = _normalize_text(template_name).lower()
-    definitions = BASE_PHASE_DEFINITIONS + TEMPLATE_PHASE_DEFINITIONS.get(normalized, ())
+    definitions = BASE_PHASE_DEFINITIONS
     return tuple(dict(definition) for definition in definitions)
 
 
@@ -257,9 +229,6 @@ def _phase_finished_metadata(
         "terminal_stage_ids": list(current_phase.get("terminal_stage_ids") or []),
         "stage_status_counts": dict(current_phase.get("status_counts") or {}),
         "task_status_counts": dict(current_phase.get("task_status_counts") or {}),
-        "reaction_handoff_status_counts": dict(
-            current_phase.get("reaction_handoff_status_counts") or {}
-        ),
         "failure_reasons": list(current_phase.get("failure_reasons") or []),
     }
 

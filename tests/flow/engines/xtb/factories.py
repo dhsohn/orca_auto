@@ -171,7 +171,7 @@ def make_entry(
     queue_id: str = "queue-1",
     job_id: str = "job-1",
     app_name: str = "orca_auto_xtb",
-    job_type: str = "path_search",
+    job_type: str = "opt",
     reaction_key: str = "reaction-1",
     input_summary: dict[str, object] | None = None,
     status: str = "running",
@@ -191,22 +191,7 @@ def make_entry(
         for path in raw_candidate_paths
     ]
     input_snapshots = {"selected": selected_descriptor}
-    secondary_snapshot = ""
-    if job_type == "path_search":
-        secondary_source = job_dir / "product_test.xyz"
-        secondary_source.write_bytes(selected_snapshot.read_bytes())
-        secondary_descriptor = snapshot_input_file(job_dir, secondary_source, role="secondary")
-        input_snapshots["secondary"] = secondary_descriptor
-        secondary_snapshot = str(secondary_descriptor["snapshot_path"])
-        summary.update(
-            {
-                "reactant_xyz": str(selected_snapshot),
-                "product_xyz": secondary_snapshot,
-                "reactant_count": 1,
-                "product_count": 1,
-            }
-        )
-    elif job_type == "ranking":
+    if job_type == "ranking":
         summary.update(
             {
                 "candidate_count": 1,
@@ -242,7 +227,6 @@ def make_entry(
         "manifest": manifest,
         "input_snapshots": {**input_snapshots, "manifest": manifest_descriptor},
         "selected_input_xyz": str(selected_snapshot),
-        "secondary_input_xyz": secondary_snapshot,
         "job_type": job_type,
         "reaction_key": reaction_key,
         "input_summary": summary,
@@ -282,7 +266,7 @@ def make_result(
     *,
     status: str,
     reason: str,
-    job_type: str = "path_search",
+    job_type: str = "opt",
     reaction_key: str = "reaction-1",
     candidate_paths: tuple[str, ...] = (),
 ) -> queue_cmd.XtbRunResult:
@@ -292,14 +276,11 @@ def make_result(
     normalized_candidate_paths = [
         str(Path(path).expanduser().resolve()) for path in candidate_paths
     ]
-    if job_type == "path_search":
+    if job_type == "opt":
         input_summary = {
             "candidate_count": len(normalized_candidate_paths),
             "candidate_paths": normalized_candidate_paths,
-            "reactant_xyz": str(resolved_selected),
-            "product_xyz": str(resolved_selected),
-            "reactant_count": 1,
-            "product_count": 1,
+            "input_xyz": str(resolved_selected),
         }
     elif job_type == "ranking":
         input_summary = {

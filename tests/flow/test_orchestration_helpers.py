@@ -5,14 +5,9 @@ from typing import Any
 
 import pytest
 
-from orca_auto.flow.contracts import WorkflowStageInput
-from orca_auto.flow.contracts.workflow import workflow_stage_metadata
-from orca_auto.flow.contracts.xtb import XtbArtifactContract, XtbCandidateArtifact
 from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.lifecycle import (
-    effective_stage_status_impl,
     recompute_workflow_status_impl,
-    stage_failure_is_recoverable_impl,
     workflow_has_active_children_impl,
     workflow_sync_only_impl,
 )
@@ -29,17 +24,8 @@ from orca_auto.flow.orchestration.stage_runtime.shared import (
 from orca_auto.flow.orchestration.stage_runtime.shared import (
     append_unique_artifact_impl as _append_unique_artifact,
 )
-from orca_auto.flow.orchestration.stage_runtime.xtb_handoff import (
-    xtb_handoff_status_impl as _xtb_handoff_status,
-)
-from orca_auto.flow.orchestration.support import (
-    clear_reaction_xtb_handoff_error_if_recovering_impl as _clear_reaction_xtb_handoff_error_if_recovering,
-)
 from orca_auto.flow.orchestration.support import (
     load_config_root_impl as _load_config_root,
-)
-from orca_auto.flow.orchestration.support import (
-    reaction_ts_guess_error_impl as _reaction_ts_guess_error,
 )
 from orca_auto.flow.orchestration.support import (
     submission_target_impl as _submission_target,
@@ -52,15 +38,8 @@ def _workflow_sync_only(payload: dict[str, Any]) -> bool:
     return workflow_sync_only_impl(payload)
 
 
-def _workflow_has_active_children(
-    payload: dict[str, Any],
-    *,
-    active_downstream: bool = False,
-) -> bool:
-    return workflow_has_active_children_impl(
-        payload,
-        workflow_has_active_downstream_fn=lambda current_payload: active_downstream,
-    )
+def _workflow_has_active_children(payload: dict[str, Any]) -> bool:
+    return workflow_has_active_children_impl(payload)
 
 
 def test_orchestration_services_reject_unknown_override() -> None:
@@ -94,24 +73,11 @@ def test_load_contract_or_none_propagates_corrupt_contract_errors() -> None:
         )
 
 
-def _stage_failure_is_recoverable(stage: dict[str, Any]) -> bool:
-    return stage_failure_is_recoverable_impl(
-        stage,
-        stage_metadata_fn=workflow_stage_metadata,
-    )
-
-
 def _recompute_workflow_status(payload: dict[str, Any]) -> str:
-    return recompute_workflow_status_impl(
-        payload,
-        effective_stage_status_fn=lambda stage: effective_stage_status_impl(
-            stage,
-            stage_failure_is_recoverable_fn=_stage_failure_is_recoverable,
-        ),
-    )
+    return recompute_workflow_status_impl(payload)
 
 
-def test_workflow_sync_only_and_active_children_cover_stage_task_and_downstream() -> None:
+def test_workflow_sync_only_and_active_children_cover_stage_and_task() -> None:
     assert _workflow_sync_only({"status": "completed"}) is True
     assert _workflow_sync_only({"status": "failed"}) is True
     assert _workflow_sync_only({"status": "submission_failed"}) is True
@@ -132,13 +98,6 @@ def test_workflow_sync_only_and_active_children_cover_stage_task_and_downstream(
         is False
     )
 
-    assert (
-        _workflow_has_active_children(
-            {"stages": [{"status": "completed", "task": {"status": "completed"}}]},
-            active_downstream=True,
-        )
-        is True
-    )
     assert _workflow_has_active_children({"stages": [{"status": "running"}]}) is True
     assert (
         _workflow_has_active_children(
@@ -188,144 +147,7 @@ def test_submission_target_and_config_roots_follow_precedence() -> None:
     assert _load_config_root(None) is None
 
 
-def _empty_xtb_contract() -> XtbArtifactContract:
-    return XtbArtifactContract(
-        job_id="",
-        job_type="",
-        status="",
-        reason="",
-        job_dir="",
-        latest_known_path="",
-    )
-
-
-def test_xtb_handoff_status_and_ts_guess_error_cover_ready_and_failure() -> None:
-    ready_input = WorkflowStageInput(
-        source_job_id="xtb_job",
-        source_job_type="path_search",
-        reaction_key="rxn",
-        selected_input_xyz="/tmp/ts.xyz",
-        rank=1,
-        kind="ts_guess",
-        artifact_path="/tmp/ts.xyz",
-        selected=True,
-        metadata={
-            "geometry_valid": True,
-            "geometry_validation": {"valid": True, "reasons": []},
-        },
-    )
-    contract = _empty_xtb_contract()
-
-    deps = orchestration_services(
-        overrides={
-            "select_xtb_downstream_inputs": lambda contract, policy, require_geometry: (
-                ready_input,
-            )
-        }
-    )
-    ready = _xtb_handoff_status(contract, services=deps)
-    assert ready == {
-        "status": "ready",
-        "reason": "",
-        "message": "",
-        "artifact_path": "/tmp/ts.xyz",
-    }
-
-    missing_contract = _empty_xtb_contract()
-    deps = orchestration_services(
-        overrides={"select_xtb_downstream_inputs": lambda contract, policy, require_geometry: ()}
-    )
-    assert _xtb_handoff_status(missing_contract, services=deps) == {
-        "status": "failed",
-        "reason": "xtb_ts_guess_missing",
-        "message": "xTB path_search did not produce a ts_guess candidate (xtbpath_ts.xyz); refusing ORCA handoff.",
-        "artifact_path": "",
-    }
-
-    invalid_contract = XtbArtifactContract(
-        job_id="",
-        job_type="",
-        status="",
-        reason="",
-        job_dir="",
-        latest_known_path="",
-        candidate_details=(
-            XtbCandidateArtifact(
-                rank=1,
-                kind="ts_guess",
-                path="/tmp/xtbpath_ts.xyz",
-                metadata={
-                    "geometry_valid": True,
-                    "geometry_validation": {"valid": True, "reasons": []},
-                },
-            ),
-        ),
-    )
-    deps = orchestration_services(
-        overrides={
-            "choose_orca_geometry_frame": lambda path, candidate_kind: (
-                "",
-                {"selection_reason": "ts_guess_requires_single_frame"},
-            )
-        }
-    )
-    assert _reaction_ts_guess_error(invalid_contract, services=deps) == {
-        "reason": "xtb_ts_guess_not_single_geometry",
-        "message": "xTB produced xtbpath_ts.xyz but it is not a single-geometry TS guess; refusing ORCA handoff.",
-    }
-
-
-def test_stage_failure_helpers_cover_recoverable_paths() -> None:
-    xtb_stage = {
-        "status": "failed",
-        "task": {"engine": "xtb"},
-        "metadata": {"reaction_handoff_status": "ready"},
-    }
-    orca_stage = {
-        "status": "cancel_failed",
-        "task": {"engine": "orca"},
-        "metadata": {},
-    }
-    plain_stage = {"status": "failed", "task": {"engine": "crest"}, "metadata": {}}
-    assert _stage_failure_is_recoverable(xtb_stage) is True
-    assert _stage_failure_is_recoverable(orca_stage) is False
-    assert _stage_failure_is_recoverable(plain_stage) is False
-    assert (
-        effective_stage_status_impl(
-            xtb_stage,
-            stage_failure_is_recoverable_fn=_stage_failure_is_recoverable,
-        )
-        == "completed"
-    )
-    assert (
-        effective_stage_status_impl(
-            {"status": "running"},
-            stage_failure_is_recoverable_fn=_stage_failure_is_recoverable,
-        )
-        == "running"
-    )
-
-
-def test_clear_reaction_xtb_handoff_error_and_unique_artifact_helpers() -> None:
-    payload = {
-        "metadata": {
-            "workflow_error": {
-                "status": "failed",
-                "scope": "reaction_ts_search_xtb_handoff",
-            }
-        },
-        "stages": [
-            {
-                "status": "planned",
-                "task": {"engine": "xtb"},
-                "metadata": {"reaction_handoff_status": "retrying"},
-            }
-        ],
-    }
-
-    _clear_reaction_xtb_handoff_error_if_recovering(payload)
-    assert "workflow_error" not in payload["metadata"]
-
+def test_unique_artifact_helper_deduplicates_kind_and_path() -> None:
     rows = [{"kind": "artifact", "path": "/tmp/a.xyz"}]
     _append_unique_artifact(rows, kind="artifact", path="/tmp/a.xyz")
     _append_unique_artifact(
@@ -453,7 +275,7 @@ def test_recompute_workflow_status_treats_child_failures_by_engine_role() -> Non
     assert (
         _recompute_workflow_status(
             {
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "stages": [
                     {"status": "failed", "task": {"engine": "crest"}},
                     {"status": "running", "task": {"engine": "xtb"}},
@@ -466,7 +288,7 @@ def test_recompute_workflow_status_treats_child_failures_by_engine_role() -> Non
     assert (
         _recompute_workflow_status(
             {
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "stages": [
                     {"status": "failed", "task": {"engine": "xtb"}},
                     {"status": "planned", "task": {"engine": "orca"}},
@@ -479,7 +301,7 @@ def test_recompute_workflow_status_treats_child_failures_by_engine_role() -> Non
     assert (
         _recompute_workflow_status(
             {
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "stages": [
                     {"status": "failed", "task": {"engine": "xtb"}},
                     {"status": "failed", "task": {"engine": "orca"}},

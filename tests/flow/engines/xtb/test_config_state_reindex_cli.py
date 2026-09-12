@@ -221,7 +221,7 @@ def test_mark_recovery_pending_preserves_xtb_schema_fields(
         job_dir,
         job_id="new-job",
         selected_input_xyz=job_dir / "selected.xyz",
-        job_type=" path_search ",
+        job_type=" opt ",
         reaction_key=" rxn-1 ",
         input_summary={"candidate_paths": ["/tmp/from-summary.xyz"]},
         resource_request=None,
@@ -231,7 +231,7 @@ def test_mark_recovery_pending_preserves_xtb_schema_fields(
 
     assert state_mod.load_state(job_dir) == payload
     assert payload["job"]["id"] == "old-job"
-    assert payload["engine_payload"]["job_type"] == "path_search"
+    assert payload["engine_payload"]["job_type"] == "opt"
     assert payload["engine_payload"]["reaction_key"] == "rxn-1"
     assert payload["engine_payload"]["input_summary"] == {
         "candidate_paths": ["/tmp/from-summary.xyz"]

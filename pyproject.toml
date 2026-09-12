@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orca_auto"
-version = "5.0.0"
+version = "6.0.0.dev0"
 description = "ORCA_auto core: durable ORCA queues and supervised execution"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -41,7 +41,7 @@ Repository = "https://github.com/dhsohn/orca_auto"
 Issues = "https://github.com/dhsohn/orca_auto/issues"
 
 [project.optional-dependencies]
-workflows = ["orca_auto_workflows==5.0.0"]
+workflows = ["orca_auto_workflows==6.0.0.dev0"]
 dev = [
     "build>=1.2.2",
     "setuptools>=68.0",

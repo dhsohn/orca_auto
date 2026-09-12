@@ -93,7 +93,6 @@ def workflow_needs_terminal_sync(
     workspace_dir: str | Path,
     *,
     load_workflow_payload_fn: Callable[[str | Path], dict[str, Any]],
-    workflow_has_active_downstream_fn: Callable[[dict[str, Any]], bool],
 ) -> bool:
     try:
         payload = load_workflow_payload_fn(workspace_dir)
@@ -115,7 +114,7 @@ def workflow_needs_terminal_sync(
             and normalize_text(task.get("status")).lower() in ACTIVE_TERMINAL_SYNC_STATUSES
         ):
             return True
-    return workflow_has_active_downstream_fn(payload)
+    return False
 
 
 __all__ = [

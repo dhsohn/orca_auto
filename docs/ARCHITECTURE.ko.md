@@ -340,7 +340,7 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   `output_status.py`가 마지막 명시적 수렴 판정을 소유하며 analyzer·parser·진행 보고서가 공유합니다.
 - **단일 attempt 실행:** 계산 실패의 analyzer reason을 보존하고 종료합니다.
   직접 `ScanTS` route는 generation 생성 전에 거부합니다. `relaxed_scan.py`는
-  일반 scan과 별도 `scan_ts_search` workflow의 좌표 검증·surface 파싱을 소유합니다.
+  일반 단독 relaxed scan의 좌표 검증·surface 파싱을 소유합니다.
 - **재시작/재개:** 중단된 실행을 재개할 때, 일치하는 비어 있지 않은 `.gbw` 체크포인트가
   있으면 `MORead` + `%moinp`로 재시작 입력을 생성합니다. 기존 top-level 또는 `%scf`
   orbital-input 선언을 semantic하게 인식하므로 recovery가 두 번째 source를 주입하지
@@ -372,18 +372,15 @@ ORCA가 다운스트림에 노출하는 필드("계약 동결")는
 ## 7. 워크플로우 오케스트레이션 (`flow/`)
 
 `flow` 패키지는 단일 사용자 제출을 다단계·다중 엔진 파이프라인으로 전개합니다.
-이것이 반응 경로 또는 컨포머 작업을 내부 xTB/CREST 스테이지로 팬아웃한 뒤 ORCA
-자식 작업을 배치(batch)하게 해줍니다.
+지원하는 컨포머 스크리닝은 CREST 생성, ORCA 자식
+작업으로 구성됩니다.
 
 ### 템플릿
 
-`flow/templates.py`는 세 가지 워크플로우 템플릿을 정의합니다:
-
-| 템플릿 id              | CLI 단축어         | 목적                                 |
-|------------------------|--------------------|--------------------------------------|
-| `reaction_ts_search`   | `ts_search`        | 반응물×생성물 TS 탐색                |
-| `conformer_screening`  | `conformer_search` | 컨포머 생성 + 스크리닝               |
-| `scan_ts_search`       | `scan_ts`          | relaxed scan 기반 TS 탐색            |
+`flow/templates.py`는 `conformer_screening` 템플릿 하나를 정의하며,
+`orca_auto scaffold conformer_search <path>`로 생성합니다. 제거된 TS 워크플로우는
+실행하거나 재개할 수 없습니다. [전환 주의사항](RELEASE.md#removing-ts-workflows-in-60)(영어)을
+참고하세요.
 
 워크플로우는 제출된 디렉터리의 `flow.yaml` 매니페스트(`flow/manifest.py`)로부터
 구체화(materialize)됩니다. 실행마다 스캐폴드 안에 타임스탬프 generation
@@ -396,12 +393,11 @@ regular-file manifest 읽기, 중복 없는 key loader, YAML 제한과 공용 �
 owner입니다. Manifest reader는 bounded loader를 직접 import하고, config 정책과 config 오류
 소비자는 필요한 symbol만 직접 재사용하며 forwarding facade를 두지 않습니다. Loader는 작업
 manifest 하나를 1 MiB, YAML alias 32개, 파싱/확장 node 10,000개, 중첩 64단계로 제한하고
-순환/재귀 graph를 거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, xTB/ORCA Hessian
+순환/재귀 graph를 거부합니다. 중앙 geometry 상한은 로컬 작업 10,000원자, ORCA Hessian
 생성 작업 1,000원자입니다.
 
 Workflow ORCA task 역할은 생성, restart, 제출 직전 실제 입력 선택, 완료 결과 수락 때
-materialized input과 다시 대조합니다. Relaxed scan은 각 dynamic stage에서 닫힌 scan
-coordinate 하나를 선택 geometry에 추가로 바인딩합니다.
+materialized input과 다시 대조합니다.
 `flow/orca_stage_validation.py`가 이 검사의 정규 owner이며 materialization과 모든
 lifecycle 소비자는 forwarding facade 없이 이 모듈에 직접 의존합니다. Submitter는 서로 같은 두 durable
 경로 사본을 실제 선택과 묶고 execution snapshot이 바로 그 바이트를 기록·식별하기 전에 최종
@@ -481,13 +477,6 @@ patch합니다. 알 수 없는 서비스 이름은 즉시 실패하므로 오래
 실행하지 않은 채 조용히 통과할 수 없습니다. import-linter는 stage view가 오케스트레이션
 wiring에 역으로 의존하는 것도 막습니다.
 
-### 예시: 반응 TS 탐색
-
-`reaction_ts_search`는 선택된 반응물×생성물 CREST 쌍을 결정론적으로 정렬하고 설정된
-전체 xTB stage 상한까지만 구체화합니다. 그 xTB 페이즈가 종료 상태에 도달할 때까지 기다린
-뒤, 보존된 `ts_guess` 아티팩트에서 일치하는 ORCA OptTS 자식 작업을 설정된 전체 ORCA
-stage 상한까지 배치합니다.
-
 ### 예시: 컨포머 스크리닝
 
 `conformer_screening`은 하나의 CREST 자식 작업으로 시작한 뒤, 다음 워크플로우
@@ -502,9 +491,7 @@ stage 상한까지 배치합니다.
 워크플로우 ORCA 스테이지 작업 디렉터리는 `03_orca` 아래에 있지만 모든 ORCA 큐 행과
 작업 위치 레코드는 runs root의 공유 큐·인덱스에 남으므로, 런타임 루트 탐색
 (`core/indexing/roots.py`)은 `03_orca` 디렉터리를 열거하지 않고 ORCA 워커는 정확히
-하나의 큐 루트만 폴링합니다. ORCA 전용 `scan_ts_search` 템플릿은 엔진
-루트를 쓰지 않습니다: ORCA 스테이지가 워크스페이스 바로 아래 워크플로우 순번
-디렉터리(`01_scan`, `02_scan_maximum`, …)로 생성됩니다.
+하나의 큐 루트만 폴링합니다.
 
 이들의 종료 control-plane metadata는 durable 원본 `job_state.json` 하나만 사용합니다. 내부
 worker, repair 경로, index, adapter, workflow report가 이 상태를 직접 소비하며 중복 JSON이나
@@ -568,7 +555,7 @@ ORCA_auto는 단방향 발신 알림만 전송합니다. 작업 및 워크플로
 
 `core/notifications/`는 엔진별 알림 함수(`engines.py`)를 유지합니다. 제출·실행·종료
 adapter가 해당 queued/started/finished callback을 직접 연결합니다. 워크플로우 알림은 작업별 ORCA 메시지는 유지하되,
-내부 CREST 및 반응 경로 xTB 자식 페이즈는 각각 한 메시지로 요약합니다.
+내부 CREST 페이즈는 종료 후 한 메시지로 요약합니다.
 
 채널은 해당 credential이 완전할 때만 활성화됩니다. Discord에는
 `messenger.discord.bot_token`과 `messenger.discord.default_channel_id`가 필요합니다.
@@ -644,7 +631,7 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 최상위 CLI 모듈을 임포트하지 않습니다(import-linter 계약이 강제). 공개 명령 표면:
 
 - `init` — 공유 설정 생성/갱신
-- `scaffold <ts_search|conformer_search|scan_ts> <path>` — 워크플로우 스캐폴드 작성
+- `scaffold conformer_search <path>` — 컨포머 스크리닝 스캐폴드 작성
 - `run-dir <path>` — 내구성 제출 (ORCA 또는 워크플로우, 자동 라우팅)
 - `queue list` / `queue cancel` / `queue list clear` — 큐 점검/유지보수
 - `service status` / `service restart` — 런타임 상태 (systemd 경유)

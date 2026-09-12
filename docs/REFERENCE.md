@@ -109,13 +109,14 @@ bash scripts/bootstrap_wsl.sh
 - Installs Python dependencies and the ORCA core into `.venv`
 - Seeds `config/orca_auto.yaml` if missing
 
-Since 5.0.0, workflows are installed separately. For workflows, including
-ORCA-only `scan_ts`, add `--with-workflows` to bootstrap or run
+Since 5.0.0, workflows are installed separately. For conformer screening,
+add `--with-workflows` to bootstrap or run
 `python -m pip install -e . -e ./extensions/workflows` in the active environment.
 The optional `orca_auto_workflows` distribution must match the core version
 exactly. The default core install no longer includes workflow implementation;
-public CLI and import names stay unchanged. See [RELEASE.md](RELEASE.md) before
-cutting over a monolithic 4.x environment. Python installation alone does not
+the command and package names stay unchanged. The unreleased 6.0 development
+line removes the two TS workflows without compatibility. See [RELEASE.md](RELEASE.md)
+before upgrading an existing environment. Python installation alone does not
 deploy services; `systemd install` still reads the checkout's `systemd/` assets.
 
 This reference standardizes on `orca_auto ...` for public commands; the
@@ -302,43 +303,12 @@ Workflow notes:
   scaffold directory, which starts a new generation — accepting that its
   CREST/xTB stages re-run.
 - If a directory mixes raw ORCA `*.inp` files with scaffold-style filenames but does not include `flow.yaml`, `run-dir` prefers ORCA direct submission
-- reaction-path and conformer workflows create and submit xTB/CREST stages internally
-- `reaction_ts_search` orders the selected reactant × product CREST pairs
-  deterministically by rank gap, so a capped fallback samples both endpoint
-  ensembles instead of exhausting the first reactant. It expands at most
-  `max_xtb_stages` pairs into xTB child jobs, waits for that xTB phase to reach
-  terminal states, then submits at
-  most `max_orca_stages` total ORCA OptTS candidates, including stages already
-  attempted before a restart. Candidates omitted by either cap are never queued.
+- Conformer screening creates a CREST stage internally and passes its retained
+  conformers to ORCA refinement.
 - `conformer_screening` starts with one CREST child job and then hands off up to 20 retained conformers to ORCA child jobs in the next workflow cycle. The scaffold shortcut is `orca_auto scaffold conformer_search <path>`.
-- `scan_ts_search` starts with an ORCA relaxed scan built from `orca.route_line`
-  plus the required `scan_coordinate` manifest key (ORCA scan syntax, 0-based
-  atom indices). The coordinate is one exact `B`/`A`/`D` instruction with the
-  matching arity, distinct in-bounds atoms, finite unequal endpoints, and at
-  least two points. When the scan completes, one OptTS+Freq child job is chained
-  per interior maximum of the combined profile with prominence above
-  `barrier_threshold_kcal` (default 0.5; endpoints excluded; capped by
-  `max_orca_stages`; route from `orca_optts_route_line`), and the workflow
-  report ranks the candidates. A barrierless profile first gets up to
-  `max_scan_extensions` (default 1) extension scan stages continuing past the
-  previous endpoint (max(6, 20% of the range) extra points each) before the
-  workflow fails with `scan_profile_no_barrier`. When every forward candidate
-  finishes without verifying a TS, a reverse scan stage walks the full range
-  back from the forward endpoint geometry and its interior maxima fan out as a
-  second candidate batch; only when those are exhausted too does the workflow
-  fail with `ts_candidates_exhausted`. Being ORCA-only, its stages live
-  directly under the generation workspace as workflow-ordered directories
-  (`01_scan`, then `02_scan_maximum`/`02_scan_extension`, ... in creation
-  order) with no `03_orca` engine root and no `inputs/` copy of the source
-  geometry. The scaffold shortcut is `orca_auto scaffold scan_ts <path>`.
 - Workflow ORCA routes are role-checked at creation, restart, materialization,
-  pre-submission selection, and completed-result acceptance. Reaction TS routes and
-  `orca_optts_route_line` require the exact active, unquoted `OptTS` token plus
-  `Freq`, `NumFreq`, or `AnFreq`, and reject `ScanTS`/`NEB-TS`; conformer
-  and relaxed-scan routes require a non-TS optimization, and relaxed scans also
-  require exactly one closed `%geom Scan` coordinate block whose atom indices
-  fit the selected geometry. The same strict scan contract is reused during
-  dynamic extension and completed-result acceptance. A route must be a string of
+  pre-submission selection, and completed-result acceptance. Conformer routes
+  require a non-TS optimization. A route must be a string of
   route lines; quoted tokens, marker-prefixed payload tokens, and active
   non-route input are rejected rather than rendered. Tokens
   inside a closed `# ... #` inline comment and after an unmatched `#` marker are
@@ -379,7 +349,7 @@ Workflow notes:
   stage pairs only through a globally unique 1:1 identical-geometry match with
   the same charge/multiplicity. The relative table and populations then use one
   shared energy convention: SP E requires complete coverage at one exact
-  executed provenance, and composite G = E(SP) + [G − E(el)](opt level)
+  executed provenance, and composite `G = E(SP) + [G − E(el)](opt level)`
   additionally requires complete corrections at one exact
   optimization/frequency provenance.
   Exact provenance includes the executed method, basis, solvation, ORCA version,
@@ -425,18 +395,14 @@ Workflow notes:
 - The `flow.yaml`/engine-manifest YAML loader limits (file size, alias, node,
   and nesting bounds) are specified in the
   [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
-- Manifest-controlled input paths (`reactant_xyz`, `product_xyz`, `input_xyz`,
-  and `xtb.xcontrol_file`) default to the submitted workflow directory trust
+- Manifest-controlled `input_xyz` paths default to the submitted workflow directory trust
   boundary: relative paths are resolved from `workflow_dir`, absolute paths or
   `..` escapes must still resolve inside that directory. To intentionally reuse
   trusted local files outside the workflow directory, set
   `allow_external_inputs: true` in `flow.yaml`; CLI-supplied input path overrides
   are treated as an explicit operator action and may point outside. Use
   Linux/WSL POSIX paths, not Windows drive paths such as `C:\\...`.
-- xTB `xcontrol` target names are separate from `xcontrol_file` source paths:
-  `xcontrol_file` names the source file to copy, while `xcontrol` must be a
-  plain file name materialized inside the xTB job directory.
-- The `crest:` and `xtb:` engine mappings are strict at engine submission:
+- The `crest:` mapping and internal xTB job manifests are strict at engine submission:
   unknown option names are rejected instead of ignored. xTB always emits
   explicit `--chrg` and `--uhf` values plus `--norestart`, so a restart file
   cannot silently alter a new generation.
@@ -446,11 +412,10 @@ Workflow notes:
   validation, and the 10,000-atom (1,000 for Hessian/frequency inputs)
   admission caps are specified in the
   [Workflow Contract](PUBLIC_CONTRACTS.md#workflow-contract).
-- xTB exit code 0 alone does not complete an opt, sp, or hess job: the run must
+- xTB exit code 0 alone does not complete an opt or sp job: the run must
   also yield a valid artifact. An optimization without xTB's `.xtboptok` success
-  marker, an SP without a finite energy, and a Hessian without a valid matrix
-  are failed with `xtb_opt_no_valid_geometry`, `xtb_sp_no_finite_energy`, or
-  `xtb_hess_invalid_hessian` respectively.
+  marker and an SP without a finite energy are failed with
+  `xtb_opt_no_valid_geometry` and `xtb_sp_no_finite_energy` respectively.
 - CREST exit code 0 is accepted only when a retained output contains at least
   one strictly valid, finite XYZ frame. Every valid named retained ensemble is
   preserved: geometries found only in later rotamer outputs remain candidates,
@@ -499,11 +464,12 @@ Workflow notes:
   mutually exclusive. `cross: true` keeps CREST 3.0.2's default GC crossing
   without emitting its broken redundant `--cross` flag; `nocross: true` emits
   `--nocross`. Malformed values fail the job closed rather than reaching CREST.
-- xTB ranking admits at most 100 candidate evaluations by default. Local
-  reaction-workflow manifests may set `xtb.max_ranking_evaluations` up to the native candidate
-  cap of 1,000; values above 100 also require
-  `xtb.allow_high_cost_ranking: true`.
-- `scaffold ts_search` and `scaffold conformer_search` write `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed
+- The internal xTB ranking engine admits at most 100 candidate evaluations by
+  default. Its engine-job manifest can set `max_ranking_evaluations` up to
+  1,000; values above 100 require `allow_high_cost_ranking: true`. These are
+  internal engine settings, not `flow.yaml` options: the supported conformer
+  workflow hands CREST conformers directly to ORCA.
+- `scaffold conformer_search` writes `flow.yaml` with `crest_mode: standard` by default; change it to `nci` when needed
 
 There is no public direct-execution mode for new work. `run-dir` is the durable submission path.
 
@@ -557,7 +523,7 @@ orca_auto queue list --limit 20
 `queue list` shows workflow and engine activity in one view, but workflow child simulations
 are rendered underneath their parent workflow with indentation. The text view prints a table
 with `Status`, `Name`, `Detail`, `ID`, and `Elapsed` columns, where the detail field surfaces
-workflow or job intent such as `ts_search(nci)`, `IRC`, or `NEB`. CREST, xTB,
+workflow or job intent such as `conformer_search(nci)`, `IRC`, or `NEB`. CREST, xTB,
 and ORCA child jobs are all expanded beneath workflow parents in the default
 combined text view, so every queued workflow simulation and its current status
 are visible together. The `--engine ... --kind job` filters and `--json` expose
@@ -647,7 +613,7 @@ Behavior:
 - ORCA, xTB, and CREST share the same admission cap. ORCA reserves a slot in
   the parent worker, attaches queue identity metadata after the child starts,
   and lets the ORCA child activate/release that reservation during execution.
-- Workflow notification alerts keep per-job ORCA messages, but summarize internal CREST and reaction-path xTB child phases in one message each after those phases finish
+- Workflow notification alerts keep per-job ORCA messages, but summarize the internal CREST phase in one message after it finishes.
 
 Two environment variables gate workflow journal notifications in the worker's
 environment (set them in the systemd unit or shell that runs the workflow
@@ -775,7 +741,7 @@ Execution policy:
 
 - Every ORCA calculation runs once. Failure preserves the analyzer reason.
 - Direct `ScanTS` is unsupported and rejected before generation/queue publication.
-- Plain relaxed scans and the `scan_ts_search` workflow remain supported.
+- Plain standalone relaxed scans remain supported.
 - Original charge, multiplicity, and input files are never changed automatically.
 - Interrupted worker/host recovery may create a verified `*.resume.inp` checkpoint input.
 - Remove `orca.runtime.default_max_retries` from configuration before upgrading;

@@ -41,7 +41,7 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(
     event = {
         "event_type": "workflow_status_changed",
         "workflow_id": "wf_notify",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "running",
         "previous_status": "planned",
         "worker_session_id": "session-notify",
@@ -58,11 +58,11 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(
         {
             "event_type": "workflow_stage_submitted",
             "workflow_id": "wf_notify",
-            "template_name": "reaction_ts_search",
-            "stage_id": "xtb_path_search_01",
-            "engine": "xtb",
-            "task_kind": "path_search",
-            "metadata": {"engine": "xtb"},
+            "template_name": "conformer_screening",
+            "stage_id": "orca_conformer_01",
+            "engine": "orca",
+            "task_kind": "opt",
+            "metadata": {"engine": "orca"},
         },
         tmp_path,
     )
@@ -70,7 +70,7 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(
         {
             "event_type": "workflow_stage_submitted",
             "workflow_id": "wf_notify",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "stage_id": "orca_ts",
             "engine": "orca",
             "task_kind": "dft",
@@ -82,10 +82,10 @@ def test_maybe_notify_journal_event_sends_message_and_swallows_channel_errors(
         {
             "event_type": "workflow_phase_finished",
             "workflow_id": "wf_notify",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "worker_session_id": "session-notify",
             "metadata": {
-                "phase": "xtb",
+                "phase": "orca",
                 "phase_label": "xTB",
                 "phase_outcome": "completed",
                 "stage_count": 2,
@@ -145,7 +145,7 @@ def test_append_workflow_journal_event_writes_jsonl_and_returns_event(
         tmp_path,
         event_type="workflow_status_changed",
         workflow_id="wf_1",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="running",
         previous_status="planned",
         reason="advanced",
@@ -156,26 +156,25 @@ def test_append_workflow_journal_event_writes_jsonl_and_returns_event(
         tmp_path,
         event_type="workflow_stage_submitted",
         workflow_id="wf_2",
-        template_name="reaction_ts_search",
-        stage_id="xtb_path_search_01",
-        engine="xtb",
-        task_kind="path_search",
+        template_name="conformer_screening",
+        stage_id="orca_conformer_01",
+        engine="orca",
+        task_kind="opt",
         stage_status="queued",
         previous_stage_status="planned",
         worker_session_id="session-stage",
     )
     third = registry.append_workflow_journal_event(
         tmp_path,
-        event_type="workflow_stage_handoff_ready",
+        event_type="workflow_stage_completed",
         workflow_id="wf_2",
-        template_name="reaction_ts_search",
-        stage_id="xtb_path_search_01",
-        engine="xtb",
-        task_kind="path_search",
+        template_name="conformer_screening",
+        stage_id="orca_conformer_01",
+        engine="orca",
+        task_kind="opt",
         stage_status="completed",
-        reaction_handoff_status="ready",
-        previous_reaction_handoff_status="queued",
-        reason="xtb_ts_guess_ready",
+        previous_stage_status="running",
+        reason="normal_termination",
     )
 
     journal_path = registry.workflow_journal_path(tmp_path)
@@ -191,16 +190,16 @@ def test_append_workflow_journal_event_writes_jsonl_and_returns_event(
     assert len(lines) == 3
     assert json.loads(lines[0])["workflow_id"] == "wf_1"
     assert second_raw["workflow_id"] == "wf_2"
-    assert second_raw["stage_id"] == "xtb_path_search_01"
-    assert second_raw["engine"] == "xtb"
-    assert second_raw["task_kind"] == "path_search"
+    assert second_raw["stage_id"] == "orca_conformer_01"
+    assert second_raw["engine"] == "orca"
+    assert second_raw["task_kind"] == "opt"
     assert second_raw["previous_stage_status"] == "planned"
     assert second_raw["stage_status"] == "queued"
-    assert third_raw["reaction_handoff_status"] == "ready"
-    assert third_raw["previous_reaction_handoff_status"] == "queued"
+    assert third_raw["stage_status"] == "completed"
+    assert third_raw["previous_stage_status"] == "running"
     assert notifications[0]["workflow_root"] == str(tmp_path.resolve())
     assert notifications[1]["event"]["stage_status"] == "queued"
-    assert notifications[2]["event"]["reason"] == "xtb_ts_guess_ready"
+    assert notifications[2]["event"]["reason"] == "normal_termination"
 
 
 def test_append_workflow_journal_event_is_idempotent_for_caller_owned_event_id(

@@ -31,7 +31,7 @@ def _entry(job_dir: Path, selected_xyz: Path) -> SimpleNamespace:
         metadata={
             "job_dir": str(job_dir),
             "selected_input_xyz": str(selected_xyz),
-            "job_type": "path_search",
+            "job_type": "opt",
             "reaction_key": "rxn-1",
             "input_summary": {"candidate_count": 1, "candidate_paths": [str(selected_xyz)]},
         },
@@ -49,7 +49,7 @@ def _result(selected_xyz: Path, *, status: str = "completed") -> XtbRunResult:
         stdout_log=str((selected_xyz.parent / "xtb.stdout.log").resolve()),
         stderr_log=str((selected_xyz.parent / "xtb.stderr.log").resolve()),
         selected_input_xyz=str(selected_xyz.resolve()),
-        job_type="path_search",
+        job_type="opt",
         reaction_key="rxn-1",
         input_summary={"candidate_count": 1, "candidate_paths": [str(selected_xyz)]},
         candidate_count=1,
@@ -75,7 +75,7 @@ def test_write_running_state_records_worker_job_pid(tmp_path: Path) -> None:
     assert payload is not None
     assert payload["status"]["state"] == "running"
     assert payload["process"]["worker_pid"] == 4242
-    assert payload["engine_payload"]["job_type"] == "path_search"
+    assert payload["engine_payload"]["job_type"] == "opt"
 
 
 def test_write_execution_artifacts_writes_only_terminal_state(tmp_path: Path) -> None:

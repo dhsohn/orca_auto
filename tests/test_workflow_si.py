@@ -778,7 +778,7 @@ def test_failed_and_scan_stages_are_excluded_with_reasons(tmp_path: Path) -> Non
     assert "ensemble is incomplete" in data.population_note
     reasons = {stage.stage_id: stage.reason for stage in data.excluded}
     assert "orca_failed" in reasons and "stage status: failed" in reasons["orca_failed"]
-    assert "orca_scan" in reasons and "relaxed scan" in reasons["orca_scan"]
+    assert "unsupported" in reasons["orca_scan"]
 
     rendered = render_workflow_si_md(data)
     assert "## Excluded jobs" in rendered
@@ -1253,8 +1253,9 @@ def test_conformer_population_rejects_completed_transition_state_member(tmp_path
     data = collect_workflow_si_data(payload)
 
     kinds = {entry.block.name: entry.block.kind for entry in data.entries}
-    assert kinds == {"min": "min", "ts": "ts"}
-    assert data.populations == (None, None)
+    assert kinds == {"min": "min"}
+    assert any(row.stage_id == "orca_ts" and "unsupported" in row.reason for row in data.excluded)
+    assert data.populations == (None,)
     assert "ensemble is incomplete" in data.population_note
 
 
@@ -1271,36 +1272,11 @@ def test_all_nonminimum_conformer_members_render_population_omission_note(tmp_pa
 
     data = collect_workflow_si_data(_payload([_orca_stage("orca_ts", ts, label="ts")]))
 
-    assert data.populations == (None,)
+    assert data.populations == ()
     assert "ensemble is incomplete" in data.population_note
     rendered = render_workflow_si_md(data)
     assert "## Boltzmann populations" in rendered
     assert "ensemble is incomplete" in rendered
-
-
-def test_nonconformer_population_excludes_transition_state_rows(tmp_path: Path) -> None:
-    minimum = _minimum(tmp_path, "min", energy=-100.0, coords=_COORDS_A)
-    ts = _stage_dir(
-        tmp_path,
-        "ts",
-        route="B3LYP def2-SVP OptTS Freq",
-        energy=-99.9,
-        coords=_COORDS_B,
-        freqs=_ONE_IMAG_FREQS,
-        thermo=True,
-    )
-
-    data = collect_workflow_si_data(
-        _payload(
-            [_orca_stage("orca_min", minimum), _orca_stage("orca_ts", ts)],
-            template_name="reaction_ts_search",
-        )
-    )
-
-    by_kind = {entry.block.kind: data.populations[i] for i, entry in enumerate(data.entries)}
-    assert by_kind["ts"] is None
-    assert by_kind["min"] is not None
-    assert by_kind["min"].population == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize(

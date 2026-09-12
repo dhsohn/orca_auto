@@ -15,6 +15,7 @@ def test_default_worker_execution_hooks_resolve_entry_metadata(tmp_path: Path) -
         metadata={
             "job_dir": str(job_dir),
             "selected_input_xyz": str(selected_xyz),
+            "job_type": "opt",
             "input_summary": {"candidate_count": 2},
         }
     )
@@ -23,7 +24,7 @@ def test_default_worker_execution_hooks_resolve_entry_metadata(tmp_path: Path) -
 
     assert hooks.job_dir(entry) == job_dir.resolve()
     assert hooks.selected_xyz(entry) == selected_xyz.resolve()
-    assert hooks.job_type(entry) == "path_search"
+    assert hooks.job_type(entry) == "opt"
     assert hooks.reaction_key(entry, job_dir) == "screening_batch"
     assert hooks.input_summary(entry) == {"candidate_count": 2}
 
@@ -84,7 +85,7 @@ def test_build_execution_context_rejects_selected_input_outside_job_dir(
     context_deps = SimpleNamespace(
         job_dir=lambda _entry: job_dir,
         selected_xyz=lambda _entry: outside_input,
-        job_type=lambda _entry: "path_search",
+        job_type=lambda _entry: "opt",
         reaction_key=lambda _entry, _job_dir: "rxn-1",
         input_summary=lambda _entry: {},
         entry_resource_request=lambda _cfg, _entry: {},

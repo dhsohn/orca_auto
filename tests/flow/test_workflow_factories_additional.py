@@ -8,7 +8,6 @@ import pytest
 from orca_auto.flow import orchestration
 from orca_auto.flow._orca_stage_materialization import build_materialized_orca_stage
 from orca_auto.flow.contracts import WorkflowStageInput
-from orca_auto.flow.orchestration import template_builders
 from orca_auto.flow.orchestration.stage_builders import new_crest_stage_impl
 
 
@@ -23,7 +22,7 @@ def _write_xyz(path: Path, atoms: list[tuple[str, float, float, float]]) -> None
 def test_new_crest_stage_builds_expected_payload_and_metadata() -> None:
     stage = new_crest_stage_impl(
         workflow_id="wf_crest_01",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         stage_id="crest_reactant_01",
         source_path="/tmp/reactant.xyz",
         input_role="reactant",
@@ -47,7 +46,7 @@ def test_new_crest_stage_builds_expected_payload_and_metadata() -> None:
     assert task["engine"] == "crest"
     assert task["task_kind"] == "conformer_search"
     assert task["resource_request"] == {"max_cores": 4, "max_memory_gb": 12}
-    assert task["payload"]["template_name"] == "reaction_ts_search"
+    assert task["payload"]["template_name"] == "conformer_screening"
     assert task["payload"]["input_role"] == "reactant"
     assert task["payload"]["mode"] == "nci"
     assert task["enqueue_payload"]["priority"] == 7
@@ -76,7 +75,7 @@ def test_new_crest_stage_rejects_non_positive_resources(
     with pytest.raises(ValueError, match=message):
         new_crest_stage_impl(
             workflow_id="wf_crest_01",
-            template_name="reaction_ts_search",
+            template_name="conformer_screening",
             stage_id="crest_reactant_01",
             source_path="/tmp/reactant.xyz",
             input_role="reactant",
@@ -86,136 +85,18 @@ def test_new_crest_stage_rejects_non_positive_resources(
         )
 
 
-def test_create_reaction_ts_search_workflow_rejects_mismatched_atom_order(tmp_path: Path) -> None:
-    reactant_xyz = tmp_path / "reactant_bad.xyz"
-    product_xyz = tmp_path / "product_bad.xyz"
-    _write_xyz(reactant_xyz, [("H", 0.0, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-    _write_xyz(product_xyz, [("O", 0.0, 0.0, 0.96), ("H", 0.0, 0.0, 0.0)])
-
-    with pytest.raises(ValueError, match="identical reactant/product atom order"):
-        orchestration.create_reaction_ts_search_workflow(
-            reactant_xyz=str(reactant_xyz),
-            product_xyz=str(product_xyz),
-            workflow_root=tmp_path,
-        )
-
-
-def test_create_reaction_ts_search_workflow_rejects_invalid_crest_mode(tmp_path: Path) -> None:
-    reactant_xyz = tmp_path / "reactant.xyz"
-    product_xyz = tmp_path / "product.xyz"
-    _write_xyz(reactant_xyz, [("H", 0.0, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-    _write_xyz(product_xyz, [("H", 0.1, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-
-    with pytest.raises(ValueError, match="crest_mode 'standard' or 'nci'"):
-        orchestration.create_reaction_ts_search_workflow(
-            reactant_xyz=str(reactant_xyz),
-            product_xyz=str(product_xyz),
-            workflow_root=tmp_path,
-            crest_mode="weird",
-        )
-
-
-def test_workflow_factories_reject_orca_route_role_mismatches(tmp_path: Path) -> None:
-    reactant_xyz = tmp_path / "route_reactant.xyz"
-    product_xyz = tmp_path / "route_product.xyz"
-    input_xyz = tmp_path / "route_input.xyz"
-    atoms = [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)]
-    _write_xyz(reactant_xyz, atoms)
-    _write_xyz(product_xyz, atoms)
-    _write_xyz(input_xyz, atoms)
-
-    with pytest.raises(ValueError, match="route-role mismatch"):
-        orchestration.create_reaction_ts_search_workflow(
-            reactant_xyz=str(reactant_xyz),
-            product_xyz=str(product_xyz),
-            workflow_root=tmp_path,
-            orca_route_line="! Opt r2scan-3c TightSCF",
-        )
-    with pytest.raises(ValueError, match="route-role mismatch"):
-        orchestration.create_conformer_screening_workflow(
-            input_xyz=str(input_xyz),
-            workflow_root=tmp_path,
-            orca_route_line="! SP r2scan-3c TightSCF",
-        )
-    with pytest.raises(ValueError, match="route-role mismatch"):
-        orchestration.create_scan_ts_search_workflow(
-            input_xyz=str(input_xyz),
-            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
-            workflow_root=tmp_path,
-            orca_route_line="! SP r2scan-3c TightSCF",
-        )
-    with pytest.raises(ValueError, match="route-role mismatch"):
-        orchestration.create_scan_ts_search_workflow(
-            input_xyz=str(input_xyz),
-            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
-            workflow_root=tmp_path,
-            orca_optts_route_line="! Opt r2scan-3c TightSCF",
-        )
-    with pytest.raises(ValueError, match="route-role mismatch"):
-        orchestration.create_reaction_ts_search_workflow(
-            reactant_xyz=str(reactant_xyz),
-            product_xyz=str(product_xyz),
-            workflow_root=tmp_path,
-            orca_route_line="! SP r2scan-3c # OptTS Freq",
-        )
-    with pytest.raises(ValueError, match="route-role mismatch"):
-        orchestration.create_conformer_screening_workflow(
-            input_xyz=str(input_xyz),
-            workflow_root=tmp_path,
-            orca_route_line="! SP r2scan-3c # Opt",
-        )
-
-
 @pytest.mark.parametrize(
-    "route_line",
-    (
-        "! ScanTS Freq r2scan-3c TightSCF",
-        "! NEB-TS Freq r2scan-3c TightSCF",
-        "! OptTS Freq ScanTS r2scan-3c TightSCF",
-    ),
+    "route_line", ("! SP r2scan-3c", "! SP r2scan-3c # Opt", "! OptTS Freq r2scan-3c")
 )
-def test_reaction_factory_requires_exact_optts_freq_route_tokens(
-    tmp_path: Path,
-    route_line: str,
+def test_conformer_factory_rejects_orca_route_role_mismatches(
+    tmp_path: Path, route_line: str
 ) -> None:
-    reactant_xyz = tmp_path / "exact_route_reactant.xyz"
-    product_xyz = tmp_path / "exact_route_product.xyz"
-    atoms = [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)]
-    _write_xyz(reactant_xyz, atoms)
-    _write_xyz(product_xyz, atoms)
-    workflow_root = tmp_path / "workflows"
-
-    with pytest.raises(ValueError, match="requires exact OptTS"):
-        orchestration.create_reaction_ts_search_workflow(
-            reactant_xyz=str(reactant_xyz),
-            product_xyz=str(product_xyz),
-            workflow_root=workflow_root,
-            orca_route_line=route_line,
+    input_xyz = tmp_path / "input.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+    with pytest.raises(ValueError, match="route-role mismatch"):
+        orchestration.create_conformer_screening_workflow(
+            input_xyz=str(input_xyz), workflow_root=tmp_path, orca_route_line=route_line
         )
-
-    assert not workflow_root.exists()
-
-
-@pytest.mark.parametrize("frequency_keyword", ("Freq", "NumFreq", "AnFreq"))
-def test_reaction_factory_accepts_supported_frequency_route_tokens(
-    tmp_path: Path,
-    frequency_keyword: str,
-) -> None:
-    reactant_xyz = tmp_path / f"supported_{frequency_keyword}_reactant.xyz"
-    product_xyz = tmp_path / f"supported_{frequency_keyword}_product.xyz"
-    atoms = [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)]
-    _write_xyz(reactant_xyz, atoms)
-    _write_xyz(product_xyz, atoms)
-
-    payload = orchestration.create_reaction_ts_search_workflow(
-        reactant_xyz=str(reactant_xyz),
-        product_xyz=str(product_xyz),
-        workflow_root=tmp_path / "workflows",
-        workflow_id=f"wf_supported_{frequency_keyword.lower()}",
-        orca_route_line=f"! OptTS {frequency_keyword} r2scan-3c TightSCF",
-    )
-
-    assert payload["workflow_id"] == f"wf_supported_{frequency_keyword.lower()}"
 
 
 def test_materialization_rejects_unknown_orca_task_kind_before_workspace_creation(
@@ -256,72 +137,6 @@ def test_materialization_rejects_unknown_orca_task_kind_before_workspace_creatio
     assert not workspace.exists()
 
 
-def test_scan_workflow_refuses_materialization_without_a_geom_scan_block(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    input_xyz = tmp_path / "scan_input.xyz"
-    _write_xyz(
-        input_xyz,
-        [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)],
-    )
-    monkeypatch.setattr(template_builders, "scan_geom_block", lambda _coordinate: "")
-
-    with pytest.raises(ValueError, match="requires a %geom Scan block"):
-        orchestration.create_scan_ts_search_workflow(
-            input_xyz=str(input_xyz),
-            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
-            workflow_root=tmp_path,
-        )
-
-
-def test_scan_factory_renders_the_same_canonical_commented_multiline_route(
-    tmp_path: Path,
-) -> None:
-    input_xyz = tmp_path / "canonical_route.xyz"
-    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
-    route = "# prefix # ! Opt # hidden # r2scan-3c\n# comment only\n! TightSCF"
-
-    payload = orchestration.create_scan_ts_search_workflow(
-        input_xyz=str(input_xyz),
-        scan_coordinate="B 0 1 = 0.7, 2.0, 8",
-        workflow_root=tmp_path,
-        workflow_id="wf_canonical_route",
-        orca_route_line=route,
-    )
-
-    canonical = "! Opt r2scan-3c\n! TightSCF"
-    parameters = payload["metadata"]["request"]["parameters"]
-    selected_inp = Path(payload["stages"][0]["task"]["payload"]["selected_inp"])
-    assert parameters["orca_route_line"] == canonical
-    assert selected_inp.read_text(encoding="utf-8").splitlines()[:2] == canonical.splitlines()
-
-
-@pytest.mark.parametrize(
-    ("field", "bad_value"),
-    [
-        ("orca_route_line", ["! Opt", "! TightSCF"]),
-        ("orca_optts_route_line", {"route": "! OptTS Freq"}),
-    ],
-)
-def test_scan_factory_rejects_structured_route_fields(
-    tmp_path: Path,
-    field: str,
-    bad_value: object,
-) -> None:
-    input_xyz = tmp_path / f"bad_{field}.xyz"
-    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
-    route_override: dict[str, Any] = {field: bad_value}
-
-    with pytest.raises(ValueError, match="route_line must be a string"):
-        orchestration.create_scan_ts_search_workflow(
-            input_xyz=str(input_xyz),
-            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
-            workflow_root=tmp_path,
-            **route_override,
-        )
-
-
 def test_create_conformer_workflow_accepts_matching_engine_electronic_state(
     tmp_path: Path,
 ) -> None:
@@ -357,143 +172,6 @@ def test_create_conformer_workflow_rejects_conflicting_engine_electronic_state(
             charge=-1,
             multiplicity=2,
             crest_job_manifest={"charge": 0, "uhf": 1},
-        )
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [
-        ({"max_cores": 0}, "max_cores must be >= 1"),
-        ({"max_memory_gb": 0}, "max_memory_gb must be >= 1"),
-        ({"max_crest_candidates": 0}, "max_crest_candidates must be >= 1"),
-        ({"max_crest_candidates": 33}, "max_crest_candidates must be <= 32"),
-        ({"max_xtb_stages": 0}, "max_xtb_stages must be >= 1"),
-        (
-            {"max_xtb_handoff_retries": -1},
-            "max_xtb_handoff_retries must be >= 0",
-        ),
-        (
-            {"max_xtb_handoff_retries": 1.5},
-            "max_xtb_handoff_retries must be an integer >= 0",
-        ),
-        (
-            {"max_xtb_handoff_retries": True},
-            "max_xtb_handoff_retries must be an integer",
-        ),
-        ({"max_orca_stages": 0}, "max_orca_stages must be >= 1"),
-        ({"multiplicity": 0}, "multiplicity must be >= 1"),
-        ({"max_cores": "many"}, "max_cores must be an integer >= 1"),
-        ({"charge": -0.5}, "charge must be an integer"),
-        ({"multiplicity": 2.5}, "multiplicity must be an integer >= 1"),
-        ({"charge": True}, "charge must be an integer"),
-        (
-            {"endpoint_pairing": {"comparison_atoms": [999, 1000]}},
-            "atom indices must be within",
-        ),
-        (
-            {"endpoint_pairing": {"moving_atoms": [999], "max_distance_rmsd": 0.5}},
-            "atom indices must be within",
-        ),
-    ],
-)
-def test_create_reaction_ts_search_workflow_rejects_non_positive_limits(
-    tmp_path: Path,
-    kwargs: dict[str, Any],
-    message: str,
-) -> None:
-    reactant_xyz = tmp_path / "reactant.xyz"
-    product_xyz = tmp_path / "product.xyz"
-    _write_xyz(reactant_xyz, [("H", 0.0, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-    _write_xyz(product_xyz, [("H", 0.1, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-
-    with pytest.raises(ValueError, match=message):
-        orchestration.create_reaction_ts_search_workflow(
-            reactant_xyz=str(reactant_xyz),
-            product_xyz=str(product_xyz),
-            workflow_root=tmp_path,
-            **kwargs,
-        )
-
-
-def test_create_reaction_ts_search_workflow_accepts_zero_handoff_retries(
-    tmp_path: Path,
-) -> None:
-    reactant_xyz = tmp_path / "reactant.xyz"
-    product_xyz = tmp_path / "product.xyz"
-    _write_xyz(reactant_xyz, [("H", 0.0, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-    _write_xyz(product_xyz, [("H", 0.1, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-
-    payload = orchestration.create_reaction_ts_search_workflow(
-        reactant_xyz=str(reactant_xyz),
-        product_xyz=str(product_xyz),
-        workflow_root=tmp_path,
-        max_xtb_handoff_retries=0,
-    )
-
-    assert payload["metadata"]["request"]["parameters"]["max_xtb_handoff_retries"] == 0
-
-
-def test_create_reaction_workflow_rejects_implicit_oversized_endpoint_metric(
-    tmp_path: Path,
-) -> None:
-    coords = [("H", float(index), 0.0, 0.0) for index in range(257)]
-    reactant_xyz = tmp_path / "reactant-large.xyz"
-    product_xyz = tmp_path / "product-large.xyz"
-    _write_xyz(reactant_xyz, coords)
-    _write_xyz(product_xyz, coords)
-
-    with pytest.raises(ValueError, match="comparison atom count exceeds"):
-        orchestration.create_reaction_ts_search_workflow(
-            reactant_xyz=str(reactant_xyz),
-            product_xyz=str(product_xyz),
-            workflow_root=tmp_path,
-            endpoint_pairing={"max_distance_rmsd": 0.5},
-        )
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [
-        (
-            {"barrier_threshold_kcal": float("nan")},
-            "barrier_threshold_kcal must be a positive finite number",
-        ),
-        (
-            {"barrier_threshold_kcal": float("inf")},
-            "barrier_threshold_kcal must be a positive finite number",
-        ),
-        (
-            {"barrier_threshold_kcal": True},
-            "barrier_threshold_kcal must be a positive finite number",
-        ),
-        (
-            {"max_scan_extensions": -1},
-            "max_scan_extensions must be >= 0",
-        ),
-        (
-            {"max_scan_extensions": 1.5},
-            "max_scan_extensions must be an integer >= 0",
-        ),
-        (
-            {"max_scan_extensions": True},
-            "max_scan_extensions must be an integer",
-        ),
-    ],
-)
-def test_create_scan_ts_search_workflow_rejects_lossy_scientific_settings(
-    tmp_path: Path,
-    kwargs: dict[str, Any],
-    message: str,
-) -> None:
-    input_xyz = tmp_path / "scan.xyz"
-    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
-
-    with pytest.raises(ValueError, match=message):
-        orchestration.create_scan_ts_search_workflow(
-            input_xyz=str(input_xyz),
-            scan_coordinate="B 0 1 = 0.7, 2.0, 8",
-            workflow_root=tmp_path,
-            **kwargs,
         )
 
 
@@ -597,58 +275,6 @@ def test_conformer_request_preserves_existing_positional_manifest_slot() -> None
 
     assert request.crest_job_manifest == manifest
     assert request.boltzmann_temperature_k is None
-
-
-@pytest.mark.parametrize("crest_mode", ["standard", "nci"])
-def test_create_reaction_ts_search_workflow_materializes_two_crest_stages(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    crest_mode: str,
-) -> None:
-    reactant_xyz = tmp_path / "reactant.xyz"
-    product_xyz = tmp_path / "product.xyz"
-    _write_xyz(reactant_xyz, [("H", 0.0, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-    _write_xyz(product_xyz, [("H", 0.1, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-    sync_calls: list[str] = []
-
-    monkeypatch.setattr(orchestration, "new_visible_generation_name", lambda: "wf_reaction_extra")
-    monkeypatch.setattr(orchestration, "now_utc_iso", lambda: "2026-04-19T16:10:00+00:00")
-    monkeypatch.setattr(
-        orchestration,
-        "sync_workflow_registry",
-        lambda workflow_root, workspace_dir, payload: sync_calls.append(payload["workflow_id"]),
-    )
-
-    payload = orchestration.create_reaction_ts_search_workflow(
-        reactant_xyz=str(reactant_xyz),
-        product_xyz=str(product_xyz),
-        workflow_root=tmp_path,
-        crest_mode=crest_mode,
-        max_crest_candidates=2,
-        max_xtb_stages=4,
-        max_xtb_handoff_retries=3,
-        max_orca_stages=2,
-        orca_route_line="! custom OptTS Freq route",
-    )
-
-    workspace_dir = tmp_path / "wf_reaction_extra"
-    request = payload["metadata"]["request"]
-    assert payload["template_name"] == "reaction_ts_search"
-    assert [stage["stage_id"] for stage in payload["stages"]] == [
-        "crest_reactant_01",
-        "crest_product_01",
-    ]
-    assert [stage["metadata"]["mode"] for stage in payload["stages"]] == [crest_mode, crest_mode]
-    assert request["parameters"]["crest_mode"] == crest_mode
-    assert request["parameters"]["crest_job_manifest"] == {"rthr": 0.3}
-    assert request["parameters"]["max_xtb_stages"] == 4
-    assert request["parameters"]["max_xtb_handoff_retries"] == 3
-    assert request["parameters"]["max_orca_stages"] == 2
-    assert request["parameters"]["orca_route_line"] == "! custom OptTS Freq route"
-    assert payload["stages"][0]["task"]["payload"]["job_manifest_overrides"] == {"rthr": 0.3}
-    assert payload["stages"][1]["task"]["payload"]["job_manifest_overrides"] == {"rthr": 0.3}
-    assert (workspace_dir / "workflow.json").exists()
-    assert sync_calls == ["wf_reaction_extra"]
 
 
 @pytest.mark.parametrize(
@@ -784,84 +410,25 @@ def test_create_conformer_screening_workflow_defaults_to_twenty_orca_children(
     assert payload["metadata"]["request"]["parameters"]["max_orca_stages"] == 20
 
 
-def test_create_reaction_ts_search_workflow_uses_explicit_workflow_id(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_create_conformer_screening_workflow_uses_explicit_workflow_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    reactant_xyz = tmp_path / "reactant.xyz"
-    product_xyz = tmp_path / "product.xyz"
-    _write_xyz(reactant_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
-    _write_xyz(product_xyz, [("H", 0.1, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
-
-    monkeypatch.setattr(
-        orchestration, "new_visible_generation_name", lambda: "wf_should_not_be_used"
-    )
-    monkeypatch.setattr(orchestration, "now_utc_iso", lambda: "2026-04-24T00:00:00+00:00")
-    monkeypatch.setattr(
-        orchestration, "sync_workflow_registry", lambda workflow_root, workspace_dir, payload: None
-    )
-
-    payload = orchestration.create_reaction_ts_search_workflow(
-        reactant_xyz=str(reactant_xyz),
-        product_xyz=str(product_xyz),
-        workflow_root=tmp_path,
-        workflow_id="manual_rxn_case",
-    )
-
-    assert payload["workflow_id"] == "manual_rxn_case"
-    assert payload["metadata"]["workspace_dir"] == str((tmp_path / "manual_rxn_case").resolve())
-
-
-def test_workflow_factories_preserve_engine_manifest_overrides(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    reactant_xyz = tmp_path / "reactant.yaml.xyz"
-    product_xyz = tmp_path / "product.yaml.xyz"
-    input_xyz = tmp_path / "single.yaml.xyz"
-    _write_xyz(reactant_xyz, [("H", 0.0, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
-    _write_xyz(product_xyz, [("H", 0.1, 0.0, 0.0), ("O", 0.0, 0.0, 0.96)])
+    input_xyz = tmp_path / "input.xyz"
     _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
-
-    manifest_ids = iter(("wf_with_manifest", "wf_conf_with_manifest"))
-    monkeypatch.setattr(orchestration, "new_visible_generation_name", lambda: next(manifest_ids))
-    monkeypatch.setattr(orchestration, "now_utc_iso", lambda: "2026-04-19T17:00:00+00:00")
-    monkeypatch.setattr(
-        orchestration, "sync_workflow_registry", lambda workflow_root, workspace_dir, payload: None
+    monkeypatch.setattr(orchestration, "new_visible_generation_name", lambda: "unused")
+    payload = orchestration.create_conformer_screening_workflow(
+        input_xyz=str(input_xyz), workflow_root=tmp_path, workflow_id="manual_conformer"
     )
+    assert payload["workflow_id"] == "manual_conformer"
+    assert payload["metadata"]["workspace_dir"] == str((tmp_path / "manual_conformer").resolve())
 
-    reaction_payload = orchestration.create_reaction_ts_search_workflow(
-        reactant_xyz=str(reactant_xyz),
-        product_xyz=str(product_xyz),
-        workflow_root=tmp_path,
-        crest_job_manifest={"speed": "squick", "solvent": "water", "gfn": "ff", "no_preopt": True},
-        xtb_job_manifest={"gfn": 1, "opt_level": "tight"},
-    )
-    request_params = reaction_payload["metadata"]["request"]["parameters"]
-    assert request_params["crest_job_manifest"] == {
-        "rthr": 0.3,
-        "speed": "squick",
-        "solvent": "water",
-        "gfn": "ff",
-        "no_preopt": True,
-    }
-    assert request_params["xtb_job_manifest"] == {"gfn": 1, "opt_level": "tight"}
-    assert reaction_payload["stages"][0]["task"]["payload"]["job_manifest_overrides"] == {
-        "rthr": 0.3,
-        "speed": "squick",
-        "solvent": "water",
-        "gfn": "ff",
-        "no_preopt": True,
-    }
 
-    conformer_payload = orchestration.create_conformer_screening_workflow(
-        input_xyz=str(input_xyz),
-        workflow_root=tmp_path,
-        crest_job_manifest={"speed": "mquick", "gfn": "ff"},
+def test_conformer_factory_preserves_engine_manifest_overrides(tmp_path: Path) -> None:
+    input_xyz = tmp_path / "input.xyz"
+    _write_xyz(input_xyz, [("H", 0.0, 0.0, 0.0), ("H", 0.0, 0.0, 0.74)])
+    manifest = {"speed": "mquick", "gfn": "ff", "no_preopt": True}
+    payload = orchestration.create_conformer_screening_workflow(
+        input_xyz=str(input_xyz), workflow_root=tmp_path, crest_job_manifest=manifest
     )
-    conformer_params = conformer_payload["metadata"]["request"]["parameters"]
-    assert conformer_params["crest_job_manifest"] == {"speed": "mquick", "gfn": "ff"}
-    assert conformer_payload["stages"][0]["task"]["payload"]["job_manifest_overrides"] == {
-        "speed": "mquick",
-        "gfn": "ff",
-    }
+    assert payload["metadata"]["request"]["parameters"]["crest_job_manifest"] == manifest
+    assert payload["stages"][0]["task"]["payload"]["job_manifest_overrides"] == manifest

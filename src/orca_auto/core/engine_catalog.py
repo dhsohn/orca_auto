@@ -68,7 +68,7 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         default_supervision_role="with-workflow",
         supervision_order=3,
         activity_order=1,
-        task_kinds=("xtb_path_search", "xtb_opt", "xtb_sp", "xtb_hess", "xtb_ranking"),
+        task_kinds=("xtb_opt", "xtb_sp", "xtb_ranking"),
         requires_workflows=True,
     ),
     EngineCatalogEntry(

@@ -30,9 +30,10 @@ what is documented here is what the project commits to.
 
 Starting with 5.0.0, `orca_auto` installs core by
 default; workflows require the same-version `orca_auto_workflows` extension.
-This intentionally changes the default installation, not the existing workflow
-CLI, config, state, or recovery contracts with that extension installed. Without
-it, standalone ORCA remains usable, but workflow operations and incomplete
+The current unreleased 6.0 development line supports only conformer screening
+in that extension; the two TS workflows are removed without compatibility or
+automatic migration. See the [cutover warning](RELEASE.md#removing-ts-workflows-in-60).
+Without the extension, standalone ORCA remains usable, but workflow operations and incomplete
 inspection/mutation of existing workflow state are refused explicitly. This is
 not a migration or uninstall procedure for a live workflow deployment; restore
 the matching workflow-enabled installation first. See the installation and
@@ -74,9 +75,7 @@ Supported commands:
 
 - `orca_auto init`
 - `orca_auto run-dir <path>`
-- `orca_auto scaffold ts_search <path>`
 - `orca_auto scaffold conformer_search <path>`
-- `orca_auto scaffold scan_ts <path>`
 - `orca_auto queue list`
 - `orca_auto queue list clear`
 - `orca_auto queue cancel <target>`
@@ -176,7 +175,7 @@ Behavior:
 - ORCA calculation failures are terminal after one attempt. The removed
   `orca.runtime.default_max_retries` key is rejected, including zero; it has no alias.
 - Active `ScanTS` route tokens are rejected before generation creation or queue
-  publication. Plain relaxed scans and the `scan_ts_search` workflow remain supported.
+  publication. Plain standalone relaxed scans remain supported.
 - `orca.runtime.scratch_root`, when present, must name a dedicated directory
   below `/dev/shm`; `scratch_min_free_gb` must be a positive integer. ORCA then
   executes one private tmpfs attempt at a time and publishes surviving regular
@@ -584,15 +583,20 @@ Workflow names and IDs must be single path segments and cannot contain `(` or
 ID and artifact paths are tied to that directory; create a new workflow under
 the new name instead.
 
-Supported workflow templates:
+The supported workflow template is `conformer_screening`, scaffolded by
+`orca_auto scaffold conformer_search`. `reaction_ts_search` and `scan_ts_search`
+are removed: their manifests and persisted workflows cannot be submitted,
+resumed, or advanced by this version. Old files remain untouched, with no
+automatic migration or compatibility execution. See
+[the cutover warning](RELEASE.md#removing-ts-workflows-in-60) before deployment.
 
-- `reaction_ts_search`, scaffolded by `orca_auto scaffold ts_search`
-- `conformer_screening`, scaffolded by `orca_auto scaffold conformer_search`
-- `scan_ts_search`, scaffolded by `orca_auto scaffold scan_ts`
+Unknown top-level `flow.yaml` fields are rejected before workflow creation or
+restart; removed TS settings are not silently ignored.
 
 Manifest keys that users may rely on:
 
 - `workflow_type`
+- `input_xyz`
 - `crest_mode`
 - `priority`
 - `resources.max_cores`
@@ -601,15 +605,7 @@ Manifest keys that users may rely on:
 - `orca.charge`
 - `orca.multiplicity`
 - `crest`
-- `xtb`
-- `endpoint_pairing`
-- `max_crest_candidates`
-- `max_xtb_stages`
 - `max_orca_stages`
-- `scan_coordinate`
-- `barrier_threshold_kcal`
-- `max_scan_extensions`
-- `orca_optts_route_line`
 - `boltzmann_temperature_k`
 - `rmsd_dedup.enabled`
 - `rmsd_dedup.rmsd_threshold_angstrom`
@@ -627,13 +623,8 @@ Manifest keys that users may rely on:
 - `interaction_energy.fragments[].label`
 - `allow_external_inputs`
 
-ORCA routes are bound to durable workflow task roles. A
-`reaction_ts_search` route and `scan_ts_search`'s
-`orca_optts_route_line` must contain the exact active, unquoted `OptTS` token
-and one supported active frequency token (`Freq`, `NumFreq`, or `AnFreq`),
-without `ScanTS` or `NEB-TS`. A `conformer_screening` route and the relaxed-scan
-`orca.route_line` must request a non-TS geometry optimization, and a relaxed
-scan input must also carry a valid `%geom Scan` coordinate block. Route values
+ORCA routes are bound to durable workflow task roles. The
+`conformer_screening` route must request a non-TS geometry optimization. Route values
 must be strings containing only route lines; comment-only and blank lines are
 discarded, while quoted tokens, `!`/`%`/`*`/`$`-prefixed payload tokens, and any
 other active ORCA input line are rejected instead of being rendered. Compact
@@ -650,16 +641,6 @@ input bytes at the execution-snapshot boundary before those same bytes are
 written and identity-bound.
 Completed-stage acceptance requires the selected input named by the artifact
 contract itself and does not substitute a pre-submission task-payload path.
-
-`scan_coordinate` is one complete line using `B`, `A`, or `D` with respectively
-two, three, or four distinct zero-based atom indices, two finite unequal
-endpoints, and an integer point count of at least two. Every index must exist in
-the stage's selected XYZ geometry. The input must contain exactly one closed
-`%geom` block with one closed `Scan` sub-block and one active coordinate.
-Trailing commands and multiple coordinates are rejected before a workspace is
-created. Creation, dynamic scan extension, submission, and completed-result
-acceptance reuse this contract. Canonical endpoints use shortest round-trip
-float text, so valid precision is not silently rounded to eight decimal places.
 
 Restart may change non-scientific controls, but once a primary ORCA stage has
 completed it cannot change the durable route, charge, or multiplicity used by
@@ -685,21 +666,14 @@ non-interaction ORCA parent, and valid fragment index when applicable) is
 excluded from primary-stage restart and ranking checks; role metadata alone
 cannot hide a primary stage.
 
-`max_crest_candidates` is capped at 32 per reaction side. Endpoint pairing
-keeps only the requested best pairs while evaluating this bounded Cartesian
-space, rather than materializing and sorting every pair. Geometry-metric pairing
-compares at most 256 effective atoms and loads each candidate ensemble only once
-per selection call.
-
-The `crest` and `xtb` engine-job mappings, `xtb.ts_guess_validation`,
-`rmsd_dedup`, and `interaction_energy` use strict schemas: unknown
+The `crest` engine-job mapping, `rmsd_dedup`, and `interaction_energy`
+use strict schemas: unknown
 keys, malformed booleans, non-integral integer fields, non-string routes, and
 multiline/control/non-printable route or label text are rejected. Workflow
-admission rejects manifest shape, engine input-file paths, `endpoint_pairing`,
+admission validates manifest shape, engine input-file paths,
 `rmsd_dedup`, and `interaction_energy`; an engine-job mapping's own key and
-type schema is checked when that engine job is submitted, so an unknown
-`xtb.ts_guess_validation` key surfaces at the first xTB stage rather than at
-workflow admission. The engine `charge`/`uhf` conflict rule below is checked
+type schema is checked when that engine job is submitted. The engine
+`charge`/`uhf` conflict rule below is checked
 earlier, when the workflow is created. Internal engine submission exceptions
 produce `submission_failed` with the original diagnostic; mentioning a slot or
 admission limit in that text cannot turn a failure into a resource wait.
@@ -708,9 +682,7 @@ Fragment labels are at most 80 characters. An enabled interaction-energy block
 requires 2–8 fragments; each multiplicity is an integer in `[1, 100]`, and
 `sp_route_line` must describe a pure single-point calculation. Fragment indices
 must be a static, gap-free, disjoint partition of every input atom.
-For `reaction_ts_search`, `max_xtb_stages` and `max_orca_stages` are total hard
-caps, including stages already attempted before restart. Endpoint-pairing mode
-does not disable either cap. Workflow `orca.charge`/`orca.multiplicity` is the
+Workflow `orca.charge`/`orca.multiplicity` is the
 authoritative electronic state; conflicting CREST/xTB `charge` or `uhf` values
 are rejected. The exact selected xTB/CREST snapshot must use known elements in
 the current GFN range (atomic numbers 1–86), leave a nonnegative electron count,
@@ -721,8 +693,8 @@ downstream geometry; distinct geometries present only in later valid retained
 files remain candidates. Non-finite coordinates or xTB energies are not valid
 workflow artifacts.
 
-Local geometry admission is capped at 10,000 atoms. xTB Hessian jobs and ORCA
-frequency/Hessian-producing inputs use the stricter 1,000-atom cap.
+Local geometry admission is capped at 10,000 atoms. ORCA frequency/Hessian-producing
+inputs use the stricter 1,000-atom cap.
 
 For trusted local CREST work, an explicit `mdlen` uses a default aggregate
 `max_md_steps` budget of 10,000,000. If `mdlen` is omitted, admission evaluates
@@ -876,10 +848,6 @@ Workflow runtime artifacts:
   rows and job-location records stay in the shared ORCA queue and index at the
   runs root: ORCA is a shared-root engine, and its worker never polls a
   per-workflow root.
-  `scan_ts_search` is ORCA-only and uses no engine root: its stages are
-  workflow-ordered directories directly under the workspace (`01_scan`,
-  `02_scan_maximum`, ...), and no `inputs/` copy of the source geometry is
-  kept — the geometry is materialized straight into the first scan stage.
 
 Workflow and stage statuses use the shared status vocabulary where applicable:
 
@@ -899,17 +867,13 @@ Workflow and stage statuses use the shared status vocabulary where applicable:
 - `submission_failed`
 - `unknown`
 
-Workflow-specific reason strings currently used in public reports or triage
-include `scan_profile_no_barrier`, `ts_candidates_exhausted`,
-`reaction_ts_search_xtb_phase_failed`, `conformers_failed`,
-`xtb_ts_guess_missing`, `xtb_ts_guess_geometry_invalid`, and
-`xtb_ts_guess_geometry_unvalidated`.
+Workflow-specific reason strings used in public reports or triage include
+`conformers_failed`.
 
 A stage rejected before execution records `reason` (the submitter's reason, or
 `queue_submission_failed` when it gives none) and, when the submitter wrote
 anything to stderr or stdout, `submission_error_detail` in its stage metadata,
-truncated to 1,000 characters. The candidates-exhausted workflow error names
-that key as where to read each rejection. A successful resubmission clears both,
+truncated to 1,000 characters. A successful resubmission clears both,
 so a stage retried after `submission_failed` carries no stale failure text.
 
 ## Systemd Contract

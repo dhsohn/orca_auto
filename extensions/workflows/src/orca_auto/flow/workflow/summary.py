@@ -23,34 +23,6 @@ from orca_auto.flow.contracts.workflow import (
 from .store import iter_workflow_workspaces, load_workflow_payload, workflow_file_path
 
 
-def workflow_has_active_downstream(payload: dict[str, Any]) -> bool:
-    metadata = _coerce_mapping(payload.get("metadata"))
-    downstream = _coerce_mapping(metadata.get("downstream_reaction_workflow"))
-    status = _normalize_text(downstream.get("status")).lower()
-    if status in {"planned", "queued", "running", "submitted", "cancel_requested"}:
-        return True
-    if _coerce_bool(downstream.get("final_child_sync_pending")):
-        return True
-    latest_stage = _coerce_mapping(downstream.get("latest_stage"))
-    if _normalize_text(latest_stage.get("status")).lower() in {
-        "planned",
-        "queued",
-        "running",
-        "submitted",
-        "cancel_requested",
-    }:
-        return True
-    if _normalize_text(latest_stage.get("task_status")).lower() in {
-        "planned",
-        "queued",
-        "running",
-        "submitted",
-        "cancel_requested",
-    }:
-        return True
-    return False
-
-
 def _workflow_stage_summary(stage: dict[str, Any]) -> dict[str, Any]:
     stage_status = _normalize_text(stage.get("status")) or "unknown"
     task = _coerce_mapping(stage.get("task"))
@@ -89,10 +61,6 @@ def _workflow_stage_summary(stage: dict[str, Any]) -> dict[str, Any]:
         ),
         "analyzer_status": _normalize_text(stage_metadata.get("analyzer_status")),
         "reason": _normalize_text(stage_metadata.get("reason")),
-        "reaction_handoff_status": _normalize_text(stage_metadata.get("reaction_handoff_status")),
-        "reaction_handoff_reason": _normalize_text(stage_metadata.get("reaction_handoff_reason")),
-        "xtb_handoff_retries_used": stage_metadata.get("xtb_handoff_retries_used"),
-        "xtb_handoff_retry_limit": stage_metadata.get("xtb_handoff_retry_limit"),
         "orca_attempt_count": stage_metadata.get("attempt_count"),
         "completed_at": _normalize_text(stage_metadata.get("completed_at")),
         "output_artifact_count": len(_coerce_sequence(stage.get("output_artifacts"))),
@@ -128,9 +96,6 @@ def workflow_summary(
     status_counts, task_status_counts, stage_summaries = _workflow_stage_summary_rows(stages)
 
     metadata = _coerce_mapping(data.get("metadata"))
-    downstream = _coerce_mapping(metadata.get("downstream_reaction_workflow"))
-    precomplex_handoff = _coerce_mapping(metadata.get("precomplex_handoff"))
-    parent_workflow = _coerce_mapping(metadata.get("parent_workflow"))
     summary = {
         "workflow_id": _normalize_text(data.get("workflow_id")),
         "template_name": _normalize_text(data.get("template_name")),
@@ -145,9 +110,6 @@ def workflow_summary(
         "stage_status_counts": status_counts,
         "task_status_counts": task_status_counts,
         "request_parameters": workflow_request_parameters(data),
-        "downstream_reaction_workflow": downstream,
-        "precomplex_handoff": precomplex_handoff,
-        "parent_workflow": parent_workflow,
         "final_child_sync_pending": _coerce_bool(metadata.get("final_child_sync_pending")),
         "si_publish_pending": _coerce_bool(metadata.get("si_publish_pending")),
         "si_publish_blocked": _coerce_bool(metadata.get("si_publish_blocked")),
@@ -205,6 +167,5 @@ def list_workflow_summaries(workflow_root: str | Path) -> list[dict[str, Any]]:
 
 __all__ = [
     "list_workflow_summaries",
-    "workflow_has_active_downstream",
     "workflow_summary",
 ]

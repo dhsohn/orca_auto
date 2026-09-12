@@ -18,7 +18,7 @@ def _failed_orca_restart_stage(stage_id: str, reaction_dir: Path) -> dict[str, o
         "status": "failed",
         "task": {
             "engine": "orca",
-            "task_kind": "optts_freq",
+            "task_kind": "opt",
             "status": "failed",
             "payload": {
                 "reaction_dir": str(reaction_dir),

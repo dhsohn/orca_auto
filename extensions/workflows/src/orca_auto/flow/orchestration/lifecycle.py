@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from orca_auto.core.statuses import (
@@ -26,8 +25,6 @@ def workflow_sync_only_impl(payload: dict[str, Any]) -> bool:
 
 def workflow_has_active_children_impl(
     payload: dict[str, Any],
-    *,
-    workflow_has_active_downstream_fn: Callable[[dict[str, Any]], bool],
 ) -> bool:
     for raw_stage in payload.get("stages", []):
         if not isinstance(raw_stage, dict):
@@ -41,35 +38,7 @@ def workflow_has_active_children_impl(
         task_status = normalize_text(task.get("status")).lower()
         if is_queue_active_status(task_status):
             return True
-    return workflow_has_active_downstream_fn(payload)
-
-
-def stage_failure_is_recoverable_impl(
-    stage: dict[str, Any],
-    *,
-    stage_metadata_fn: Callable[[dict[str, Any]], dict[str, Any]],
-) -> bool:
-    status = normalize_text(stage.get("status")).lower()
-    if status not in WORKFLOW_FAILED_STATUSES:
-        return False
-    task = stage.get("task")
-    if not isinstance(task, dict):
-        return False
-    engine = normalize_text(task.get("engine"))
-    metadata = stage_metadata_fn(stage)
-    if engine == "xtb":
-        return normalize_text(metadata.get("reaction_handoff_status")) == "ready"
     return False
-
-
-def effective_stage_status_impl(
-    stage: dict[str, Any],
-    *,
-    stage_failure_is_recoverable_fn: Callable[[dict[str, Any]], bool],
-) -> str:
-    if stage_failure_is_recoverable_fn(stage):
-        return "completed"
-    return normalize_text(stage.get("status")).lower()
 
 
 def _workflow_error_is_failed(payload: dict[str, Any]) -> bool:
@@ -88,13 +57,6 @@ def _stage_engine(stage: dict[str, Any]) -> str:
     if not isinstance(task, dict):
         return ""
     return normalize_text(task.get("engine")).lower()
-
-
-def _stage_is_workflow_fatal(stage: dict[str, Any]) -> bool:
-    """A prerequisite stage (e.g. the scan_ts_search relaxed scan) whose failure
-    must fail the whole workflow, unlike ordinary candidate ORCA stages."""
-    metadata = stage.get("metadata")
-    return bool(metadata.get("workflow_fatal")) if isinstance(metadata, dict) else False
 
 
 def _template_name(payload: dict[str, Any]) -> str:
@@ -164,7 +126,7 @@ def _workflow_status_from_stage_statuses(
         return STATUS_RUNNING
     if stages and all(is_stage_terminal_status(status) for status in statuses):
         # A stage-level cancellation must never read as success: cancelled
-        # candidates carry no TS/conformer verdict, and the exhaustion
+        # candidates carry no conformer verdict, and the exhaustion
         # recorders deliberately stand down when cancels are present — so
         # without this, cancelling every candidate ends the workflow
         # COMPLETED. The workflow did not run to its plan; say CANCELLED.
@@ -178,21 +140,19 @@ def _workflow_status_from_stage_statuses(
 
 def recompute_workflow_status_impl(
     payload: dict[str, Any],
-    *,
-    effective_stage_status_fn: Callable[[dict[str, Any]], str],
 ) -> str:
     stages = [stage for stage in payload.get("stages", []) if isinstance(stage, dict)]
     stage_rows = [
-        (stage, effective_stage_status_fn(stage), _stage_engine(stage)) for stage in stages
+        (stage, normalize_text(stage.get("status")).lower(), _stage_engine(stage))
+        for stage in stages
     ]
     statuses = [status for _, status, _ in stage_rows]
     current_status = normalize_text(payload.get("status")).lower()
     if _workflow_error_is_failed(payload):
         return "failed"
     if any(
-        status in WORKFLOW_FAILED_STATUSES
-        and (engine in {"", "crest"} or _stage_is_workflow_fatal(stage))
-        for stage, status, engine in stage_rows
+        status in WORKFLOW_FAILED_STATUSES and engine in {"", "crest"}
+        for _, status, engine in stage_rows
     ):
         return "failed"
     if current_status not in {
@@ -208,9 +168,7 @@ def recompute_workflow_status_impl(
 
 
 __all__ = [
-    "effective_stage_status_impl",
     "recompute_workflow_status_impl",
-    "stage_failure_is_recoverable_impl",
     "workflow_has_active_children_impl",
     "workflow_sync_only_impl",
 ]

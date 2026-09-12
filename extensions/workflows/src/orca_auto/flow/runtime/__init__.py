@@ -24,7 +24,6 @@ from ..state import (
     acquire_workflow_lock,
     load_workflow_payload,
     resolve_workflow_workspace,
-    workflow_has_active_downstream,
     workflow_summary,
     write_workflow_payload,
 )
@@ -92,7 +91,6 @@ def _workflow_needs_terminal_sync(workspace_dir: str | Path) -> bool:
     return workflow_needs_terminal_sync(
         workspace_dir,
         load_workflow_payload_fn=load_workflow_payload,
-        workflow_has_active_downstream_fn=workflow_has_active_downstream,
     )
 
 

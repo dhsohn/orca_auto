@@ -376,7 +376,6 @@ def test_build_parser_parses_unified_init_and_scaffold_commands() -> None:
     parser = unified_cli.build_parser()
 
     init_args = parser.parse_args(["init", "--orca_auto-config", "/tmp/orca_auto.yaml", "--force"])
-    ts_scaffold_args = parser.parse_args(["scaffold", "ts_search", "/tmp/workflow-inputs"])
     shortcut_scaffold_args = parser.parse_args(
         ["scaffold", "conformer_search", "/tmp/conformer-inputs"]
     )
@@ -384,13 +383,6 @@ def test_build_parser_parses_unified_init_and_scaffold_commands() -> None:
     assert init_args.command == "init"
     assert init_args.force is True
     assert init_args.func is cli_run_dir.cmd_init
-
-    assert ts_scaffold_args.command == "scaffold"
-    assert ts_scaffold_args.scaffold_app == "ts_search"
-    assert ts_scaffold_args.root == "/tmp/workflow-inputs"
-    assert ts_scaffold_args.workflow_type == "reaction_ts_search"
-    assert getattr(ts_scaffold_args, "crest_mode", None) is None
-    assert ts_scaffold_args.func is cli_run_dir.cmd_workflow_scaffold
 
     assert shortcut_scaffold_args.command == "scaffold"
     assert shortcut_scaffold_args.scaffold_app == "conformer_search"

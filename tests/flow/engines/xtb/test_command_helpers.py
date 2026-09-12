@@ -67,9 +67,32 @@ def test_load_job_manifest_requires_existing_mapping(tmp_path: Path) -> None:
         _helpers.load_job_manifest(tmp_path)
 
 
-def test_job_type_rejects_unknown_manifest_values() -> None:
-    with pytest.raises(ValueError, match="Unsupported xtb job_type: weird_mode"):
-        _helpers.job_type({"job_type": "weird_mode"})
+@pytest.mark.parametrize("value", ["weird_mode", "path_search", "hess", "", None])
+def test_job_type_rejects_unsupported_or_missing_manifest_values(value: object) -> None:
+    with pytest.raises(ValueError, match="Unsupported xtb job_type"):
+        _helpers.job_type({"job_type": value})
+
+
+@pytest.mark.parametrize("value", ["path_search", "hess", "", None])
+def test_submission_rejects_unsupported_job_before_snapshot_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: object,
+) -> None:
+    reservations: list[object] = []
+    monkeypatch.setattr(
+        xtb_submission,
+        "build_reserved_input_snapshot_submission",
+        lambda *args, **kwargs: reservations.append(args),
+    )
+
+    with pytest.raises(ValueError, match="Unsupported xtb job_type"):
+        xtb_submission._build_submission(
+            SimpleNamespace(), tmp_path, {"job_type": value}, SimpleNamespace()
+        )
+
+    assert reservations == []
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_as_int_new_job_id_and_choose_xyz_error_paths(
@@ -95,35 +118,6 @@ def test_as_int_new_job_id_and_choose_xyz_error_paths(
         _helpers._choose_xyz(tmp_path / "empty", "", label="input")
 
 
-def test_resolve_job_inputs_path_search_prefers_non_excluded_xyz(tmp_path: Path) -> None:
-    job_dir = tmp_path / "Reaction Batch 01"
-    reactants_dir = job_dir / "reactants"
-    products_dir = job_dir / "products"
-    _write_xyz(reactants_dir / "xtb_seed.xyz", "excluded")
-    selected_reactant = _write_xyz(reactants_dir / "Starter Geometry.xyz", "selected reactant")
-    _write_xyz(products_dir / "coord.xyz", "excluded")
-    selected_product = _write_xyz(products_dir / "Product Final.xyz", "selected product")
-    manifest = {
-        "job_type": "path_search",
-        "reaction_key": "SnAr Step 1",
-    }
-
-    resolved = _helpers.resolve_job_inputs(job_dir, manifest)
-
-    assert resolved == {
-        "job_type": "path_search",
-        "reaction_key": "snar_step_1",
-        "selected_input_xyz": selected_reactant.resolve(),
-        "secondary_input_xyz": selected_product.resolve(),
-        "input_summary": {
-            "reactant_xyz": str(selected_reactant.resolve()),
-            "product_xyz": str(selected_product.resolve()),
-            "reactant_count": 2,
-            "product_count": 2,
-        },
-    }
-
-
 def test_resolve_job_inputs_ranking_collects_sorted_candidates(tmp_path: Path) -> None:
     job_dir = tmp_path / "Cyclization Ranking"
     candidates_dir = job_dir / "screening-set"
@@ -141,7 +135,6 @@ def test_resolve_job_inputs_ranking_collects_sorted_candidates(tmp_path: Path) -
         "job_type": "ranking",
         "reaction_key": "cyclization_ranking",
         "selected_input_xyz": selected_candidate.resolve(),
-        "secondary_input_xyz": None,
         "input_summary": {
             "candidates_dir": str(candidates_dir.resolve()),
             "candidate_count": 2,
@@ -191,26 +184,14 @@ def test_submission_validates_electronic_state_on_selected_snapshot(
     assert not intent_root.exists() or not any(intent_root.glob("*.json"))
 
 
-def test_resolve_job_inputs_reports_missing_required_directories_and_candidates(
+def test_resolve_job_inputs_reports_missing_ranking_directories_and_candidates(
     tmp_path: Path,
 ) -> None:
-    path_job_dir = tmp_path / "Path Search"
-
-    with pytest.raises(ValueError, match="Missing reactants directory"):
-        _helpers.resolve_job_inputs(path_job_dir, {"job_type": "path_search"})
-
-    (path_job_dir / "reactants").mkdir(parents=True)
-
-    with pytest.raises(ValueError, match="Missing products directory"):
-        _helpers.resolve_job_inputs(path_job_dir, {"job_type": "path_search"})
-
     ranking_job_dir = tmp_path / "Ranking"
     ranking_job_dir.mkdir()
     with pytest.raises(ValueError, match="Missing ranking candidates directory"):
         _helpers.resolve_job_inputs(ranking_job_dir, {"job_type": "ranking"})
-
-    empty_ranking_dir = ranking_job_dir / "candidates"
-    empty_ranking_dir.mkdir()
+    (ranking_job_dir / "candidates").mkdir()
     with pytest.raises(ValueError, match="No .xyz candidates found in ranking directory"):
         _helpers.resolve_job_inputs(ranking_job_dir, {"job_type": "ranking"})
 
@@ -231,7 +212,6 @@ def test_resolve_job_inputs_opt_respects_explicit_input_xyz(tmp_path: Path) -> N
         "job_type": "opt",
         "reaction_key": "catalyst_variant_a",
         "selected_input_xyz": explicit_input.resolve(),
-        "secondary_input_xyz": None,
         "input_summary": {
             "input_xyz": str(explicit_input.resolve()),
             "input_count": 1,

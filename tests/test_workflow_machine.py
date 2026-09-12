@@ -24,7 +24,7 @@ def _validate_common_machine(path: Path) -> None:
 def _payload(workspace: Path, *, stages: list[dict[str, object]]) -> dict[str, object]:
     return {
         "workflow_id": "wf-machine-01",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "completed",
         "reaction_key": "R01-P01",
         "requested_at": "2026-08-09T12:00:00+00:00",

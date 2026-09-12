@@ -9,10 +9,8 @@ from orca_auto.flow.contracts.workflow import workflow_stage_metadata, workflow_
 from orca_auto.flow.orchestration.stage_view_mutators import (
     WorkflowStageCrestMutationMixin,
     WorkflowStageOrcaMutationMixin,
-    WorkflowStageXtbMutationMixin,
     WorkflowTaskCrestMutationMixin,
     WorkflowTaskOrcaMutationMixin,
-    WorkflowTaskXtbMutationMixin,
 )
 
 
@@ -34,7 +32,6 @@ def _existing_mapping_field(raw: dict[str, Any], key: str) -> dict[str, Any] | N
 class WorkflowTaskView(
     WorkflowTaskOrcaMutationMixin,
     WorkflowTaskCrestMutationMixin,
-    WorkflowTaskXtbMutationMixin,
 ):
     raw: dict[str, Any]
 
@@ -139,7 +136,6 @@ class WorkflowStageStatus:
 class WorkflowStageView(
     WorkflowStageOrcaMutationMixin,
     WorkflowStageCrestMutationMixin,
-    WorkflowStageXtbMutationMixin,
 ):
     raw: dict[str, Any]
 

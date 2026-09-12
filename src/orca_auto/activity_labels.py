@@ -70,9 +70,6 @@ def queue_task_label(task_kind: Any) -> str:
     return {
         "crest_conformer_search": "conformer_search",
         "conformer_search": "conformer_search",
-        "path_search": "TS path",
-        "xtb_path_search": "TS path",
-        "optts_freq": "OptTS+Freq",
         "optts": "OptTS",
         "ts": "TS",
         "opt": "Opt",

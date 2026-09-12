@@ -73,7 +73,7 @@ def test_queue_list_display_rows_groups_children_under_workflow_once() -> None:
     workflow: dict[str, Any] = {
         "activity_id": "wf_1",
         "kind": "workflow",
-        "metadata": {"template_name": "reaction_ts_search"},
+        "metadata": {"template_name": "conformer_screening"},
     }
     visible_items: list[dict[str, Any]] = [
         {

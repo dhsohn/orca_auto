@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -15,7 +14,6 @@ from orca_auto.core.engine_process import (
     ensure_confined_directory,
     require_confined_regular_file,
 )
-from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils import atomic_write_json, normalize_text
 from orca_auto.core.utils.coercion import safe_int
 from orca_auto.orca.resource_directives import maxcore_mb_per_core
@@ -23,7 +21,6 @@ from orca_auto.orca.resource_directives import maxcore_mb_per_core
 from . import _orca_stage_payloads
 from . import orca_stage_validation as _orca_stage_validation
 from .contracts import WorkflowArtifactRef, WorkflowStage, WorkflowStageInput, WorkflowTask
-from .hessian_utils import HessianConversionError, write_orca_hess_from_xtb
 from .manifest import require_int
 from .xyz_utils import write_orca_ready_xyz
 
@@ -48,11 +45,9 @@ def render_orca_input(
     max_cores: int,
     max_memory_gb: int,
     xyz_filename: str,
-    geom_block: str = "",
 ) -> str:
     parsed_charge = require_int(charge, field="charge")
     parsed_multiplicity = _positive_multiplicity(multiplicity)
-    geom_lines = [*geom_block.splitlines(), ""] if geom_block.strip() else []
     return "\n".join(
         [
             _orca_stage_validation.ensure_route_line(route_line),
@@ -62,7 +57,6 @@ def render_orca_input(
             "end",
             f"%maxcore {maxcore_mb_per_core(max_memory_gb=max_memory_gb, max_cores=max_cores)}",
             "",
-            *geom_lines,
             f"* xyzfile {parsed_charge} {parsed_multiplicity} {xyz_filename}",
             "",
         ]
@@ -200,10 +194,7 @@ class OrcaStageMaterializationRequest:
     inp_filename: str = "input.inp"
     source_frame_index: int = 0
     extra_source_payload: dict[str, Any] | None = None
-    geom_block: str = ""
-    inhess_source_path: str = ""
     source_artifact_identity: dict[str, Any] | None = None
-    inhess_source_identity: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -225,8 +216,6 @@ class OrcaStageBuildContext:
     xyz_filename: str
     inp_filename: str
     input_label: str | None = None
-    geom_block: str = ""
-    inhess_source_path: str = ""
 
     @property
     def resource_request(self) -> dict[str, int]:
@@ -243,22 +232,9 @@ class OrcaStageBuildContext:
         self, *, extra_source_payload: dict[str, Any] | None = None
     ) -> OrcaStageMaterializationRequest:
         source_identity_raw = self.candidate.metadata.get("output_identity")
-        hessian_identity_raw = self.candidate.metadata.get("hessian_identity")
-        hessian_provenance = self.candidate.metadata.get("hessian_provenance")
         source_identity = (
             dict(source_identity_raw) if isinstance(source_identity_raw, dict) else None
         )
-        hessian_identity = (
-            dict(hessian_identity_raw) if isinstance(hessian_identity_raw, dict) else None
-        )
-        if isinstance(hessian_provenance, dict) and hessian_provenance.get("status") == "completed":
-            if (
-                source_identity is None
-                or source_identity.get("sha256") != hessian_provenance.get("ts_guess_sha256")
-                or hessian_identity is None
-                or hessian_identity.get("sha256") != hessian_provenance.get("hessian_sha256")
-            ):
-                raise ValueError("TS geometry and Hessian terminal identities do not agree")
         return OrcaStageMaterializationRequest(
             workspace_dir=self.workspace_dir,
             stage_key=self.stage_key,
@@ -273,10 +249,7 @@ class OrcaStageBuildContext:
             inp_filename=self.inp_filename,
             source_frame_index=_candidate_source_frame_index(self.candidate),
             extra_source_payload=extra_source_payload,
-            geom_block=self.geom_block,
-            inhess_source_path=self.inhess_source_path,
             source_artifact_identity=source_identity,
-            inhess_source_identity=hessian_identity,
         )
 
 
@@ -307,25 +280,12 @@ def materialize_orca_stage_from_request(
         source_xyz=source_xyz,
         reaction_dir=reaction_dir,
     )
-    target_hess, hessian_metadata = _materialize_inhess_file(
-        request=request,
-        reaction_dir=reaction_dir,
-        target_xyz=target_xyz,
-    )
-    geom_block = request.geom_block
-    if target_hess is not None:
-        geom_block = "\n".join(
-            block for block in (geom_block, inhess_geom_block(target_hess.name)) if block
-        )
     target_inp = _write_orca_input_file(
         request=request,
         reaction_dir=reaction_dir,
         xyz_filename=target_xyz.name,
-        geom_block=geom_block,
     )
     extra_source_payload = dict(request.extra_source_payload or {})
-    if hessian_metadata:
-        extra_source_payload["hessian_handoff"] = hessian_metadata
     _write_source_candidate_payload(
         stage_dir=stage_dir,
         source_xyz=source_xyz,
@@ -361,71 +321,11 @@ def _materialize_orca_geometry(
     return target_xyz, dict(geometry_metadata)
 
 
-def inhess_geom_block(hess_filename: str) -> str:
-    return "\n".join(
-        [
-            "%geom",
-            "  InHess Read",
-            f'  InHessName "{hess_filename}"',
-            "end",
-        ]
-    )
-
-
-def _materialize_inhess_file(
-    *,
-    request: OrcaStageMaterializationRequest,
-    reaction_dir: Path,
-    target_xyz: Path,
-) -> tuple[Path | None, dict[str, Any]]:
-    """Convert the candidate's xTB Hessian into <inp stem>.inhess.hess, best-effort.
-
-    The basename must stay clear of `<inp stem>.hess`: with a Freq route ORCA
-    writes that name itself, so the execution-snapshot binding rejects it as a
-    runtime-owned output.
-    """
-    source_text = normalize_text(request.inhess_source_path)
-    if not source_text:
-        return None, {}
-    source_path = Path(source_text).expanduser()
-    target_hess = reaction_dir / f"{Path(request.inp_filename).stem}.inhess.hess"
-    try:
-        hessian_payload: bytes | None = None
-        if request.inhess_source_identity is not None:
-            identity = request.inhess_source_identity
-            resolved_source = source_path.resolve()
-            if str(identity.get("path") or "") != str(resolved_source):
-                raise HessianConversionError("xTB Hessian identity names another artifact")
-            hessian_payload = read_stable_regular_file(
-                resolved_source,
-                require_single_link=True,
-            )
-            if (
-                identity.get("size_bytes") != len(hessian_payload)
-                or identity.get("sha256") != hashlib.sha256(hessian_payload).hexdigest()
-            ):
-                raise HessianConversionError(
-                    "xTB Hessian no longer matches its terminal content identity"
-                )
-        write_orca_hess_from_xtb(
-            xtb_hessian_path=source_path,
-            xyz_path=target_xyz,
-            target_path=target_hess,
-            hessian_payload=hessian_payload,
-        )
-    except (HessianConversionError, OSError, ValueError) as exc:
-        if request.inhess_source_identity is not None:
-            raise ValueError("Verified xTB Hessian could not be materialized safely") from exc
-        return None, {"source_path": source_text, "error": str(exc)}
-    return target_hess, {"source_path": source_text, "hess_path": str(target_hess)}
-
-
 def _write_orca_input_file(
     *,
     request: OrcaStageMaterializationRequest,
     reaction_dir: Path,
     xyz_filename: str,
-    geom_block: str | None = None,
 ) -> Path:
     target_inp = reaction_dir / request.inp_filename
     atomic_write_confined_bytes(
@@ -438,7 +338,6 @@ def _write_orca_input_file(
             max_cores=request.max_cores,
             max_memory_gb=request.max_memory_gb,
             xyz_filename=xyz_filename,
-            geom_block=request.geom_block if geom_block is None else geom_block,
         ).encode("utf-8"),
         label="ORCA materialized input",
     )
@@ -481,8 +380,6 @@ def build_materialized_orca_stage(
     xyz_filename: str,
     inp_filename: str,
     input_label: str | None = None,
-    geom_block: str = "",
-    inhess_source_path: str = "",
 ) -> WorkflowStage:
     ctx = OrcaStageBuildContext(
         workflow_id=workflow_id,
@@ -502,8 +399,6 @@ def build_materialized_orca_stage(
         xyz_filename=xyz_filename,
         inp_filename=inp_filename,
         input_label=input_label,
-        geom_block=geom_block,
-        inhess_source_path=inhess_source_path,
     )
     ctx = replace(
         ctx,

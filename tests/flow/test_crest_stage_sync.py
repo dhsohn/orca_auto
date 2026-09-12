@@ -9,12 +9,10 @@ import pytest
 
 from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths
 from orca_auto.flow.orchestration.stage_runtime import crest as crest_runtime
-from orca_auto.flow.orchestration.stage_runtime import xtb_path_jobs
 from orca_auto.flow.orchestration.stage_runtime.crest import (
     ensure_crest_job_dir_impl,
     sync_crest_stage_impl,
 )
-from orca_auto.flow.orchestration.stage_runtime.xtb_path_jobs import ensure_xtb_job_dir_impl
 from tests.flow.orchestration_services import orchestration_services
 from tests.flow.test_xtb_crest_adapters import _write_crest_state, _write_xyz
 
@@ -60,54 +58,6 @@ def test_ensure_crest_job_dir_copies_input_and_populates_manifest(tmp_path: Path
         crest_allowed_root=tmp_path / "crest_allowed",
         workflow_id="wf_ensure_crest",
     ) == str(job_path)
-
-
-def test_ensure_xtb_job_dir_returns_existing_or_generated_job_dir(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    existing_stage = {
-        "task": {
-            "payload": {"job_dir": "/tmp/already_there"},
-        }
-    }
-    assert (
-        ensure_xtb_job_dir_impl(
-            existing_stage,
-            xtb_allowed_root=tmp_path / "xtb_allowed",
-            workflow_id="wf_existing",
-        )
-        == "/tmp/already_there"
-    )
-
-    delegated_stage = {
-        "task": {
-            "payload": {"job_dir": ""},
-        }
-    }
-    calls: list[tuple[str, int]] = []
-
-    def fake_write_xtb_path_job(
-        stage: dict[str, Any],
-        *,
-        xtb_allowed_root: Path,
-        workflow_id: str,
-        attempt_number: int,
-    ) -> str:
-        calls.append((workflow_id, attempt_number))
-        return "/tmp/generated_xtb_job"
-
-    monkeypatch.setattr(xtb_path_jobs, "write_xtb_path_job_impl", fake_write_xtb_path_job)
-
-    assert (
-        ensure_xtb_job_dir_impl(
-            delegated_stage,
-            xtb_allowed_root=tmp_path / "xtb_allowed",
-            workflow_id="wf_generated",
-        )
-        == "/tmp/generated_xtb_job"
-    )
-    assert calls == [("wf_generated", 0)]
 
 
 def test_sync_crest_stage_ignores_non_dict_task_and_non_crest_engine(tmp_path: Path) -> None:

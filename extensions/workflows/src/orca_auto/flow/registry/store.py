@@ -114,12 +114,7 @@ def _coerce_counts(value: Any) -> dict[str, int]:
 def _record_from_summary(summary: dict[str, Any]) -> WorkflowRegistryRecord:
     workspace_dir = _normalize_text(summary.get("workspace_dir"))
     updated_at = now_utc_iso()
-    metadata = {
-        "downstream_reaction_workflow": _coerce_mapping(
-            summary.get("downstream_reaction_workflow")
-        ),
-        "precomplex_handoff": _coerce_mapping(summary.get("precomplex_handoff")),
-        "parent_workflow": _coerce_mapping(summary.get("parent_workflow")),
+    metadata: dict[str, Any] = {
         "final_child_sync_pending": bool(summary.get("final_child_sync_pending")),
     }
     if bool(summary.get("si_publish_pending")):

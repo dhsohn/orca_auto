@@ -147,37 +147,6 @@ def _completed_opt_output_text(
     )
 
 
-def _ts_freq_output_text(
-    *,
-    imaginary: int,
-    energy: float = -1.1,
-    superseded: bool = False,
-    route_line: str = "! HF OptTS Freq",
-) -> str:
-    """A normally terminated output whose last Hessian has ``imaginary`` modes.
-
-    ``superseded`` prints one more final energy after the frequency section:
-    the shape of an OptTS run whose only Hessian belongs to an earlier
-    geometry and therefore characterizes nothing.
-    """
-    modes = [f"   {index}:      {-500.0 - index * 10:.2f} cm**-1" for index in range(imaginary)]
-    modes.append("   9:       412.55 cm**-1")
-    lines = [
-        "Program Version 6.0.1",
-        f"|  1> {route_line}",
-        f"FINAL SINGLE POINT ENERGY     {energy:.12f}",
-        "",
-        "VIBRATIONAL FREQUENCIES",
-        "-----------------------",
-        *modes,
-        "",
-    ]
-    if superseded:
-        lines.append(f"FINAL SINGLE POINT ENERGY     {energy:.12f}")
-    lines.extend(("****ORCA TERMINATED NORMALLY****", ""))
-    return "\n".join(lines)
-
-
 def _orca_stage_dir(
     root: Path,
     name: str,

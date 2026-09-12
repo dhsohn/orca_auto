@@ -29,9 +29,10 @@
 ## 런타임 계약
 
 5.0.0부터 `orca_auto`는 기본으로 본체만 설치하며, 워크플로우에는
-동일 버전의 `orca_auto_workflows` 확장이 필요합니다. 이는 기본 설치 구성을 의도적으로
-바꾸는 것으로, 확장이 있을 때의 기존 워크플로우 CLI·설정·상태·복구 계약을 낮추지
-않습니다. 확장 없이도 단독 ORCA는 사용할 수 있지만, 워크플로우 동작이나 기존
+동일 버전의 `orca_auto_workflows` 확장이 필요합니다. 현재 미출시 6.0 개발 버전의
+확장은 컨포머 스크리닝만 지원하며, 두 TS 워크플로우는 호환 지원이나 자동
+마이그레이션 없이 제거합니다. [전환 주의사항](RELEASE.md#removing-ts-workflows-in-60)(영어)을
+참고하세요. 확장 없이도 단독 ORCA는 사용할 수 있지만, 워크플로우 동작이나 기존
 워크플로우 상태의 불완전한 조회·변경은 명확히 거부합니다. 운영 중인 워크플로우 배포의
 마이그레이션·제거 절차는 아니므로 먼저 동일 버전의 워크플로우 포함 설치를 복원하세요.
 설치와 전환 절차는 [QUICKSTART.ko.md](QUICKSTART.ko.md),
@@ -70,9 +71,7 @@
 
 - `orca_auto init`
 - `orca_auto run-dir <path>`
-- `orca_auto scaffold ts_search <path>`
 - `orca_auto scaffold conformer_search <path>`
-- `orca_auto scaffold scan_ts <path>`
 - `orca_auto queue list`
 - `orca_auto queue list clear`
 - `orca_auto queue cancel <target>`
@@ -167,7 +166,7 @@
 - ORCA 계산 실패는 첫 attempt에서 terminal로 종료합니다. 제거된
   `orca.runtime.default_max_retries` 키는 0을 포함해 거부하며 별칭은 없습니다.
 - 활성 `ScanTS` route token은 generation 생성과 큐 발행 전에 거부합니다.
-  일반 relaxed scan과 `scan_ts_search` 워크플로우는 계속 지원합니다.
+  일반 단독 relaxed scan은 계속 지원합니다.
 - `orca.runtime.scratch_root`를 설정하면 `/dev/shm` 아래의 전용 디렉터리여야 하고,
   `scratch_min_free_gb`는 양의 정수여야 합니다. ORCA는 한 번에 하나의 private tmpfs attempt만
   실행하고 `*.tmp`/`*.tmp.*`를 제외한 남은 일반 파일을 inode로 고정한 durable visible
@@ -535,15 +534,19 @@ execution snapshot schema 3만 실행하며, 이전 큐 제출은 drain/cancel �
 기존 워크플로우 디렉터리는 저장된 ID와 아티팩트 경로가 해당 디렉터리에 연결되어 있으므로
 이름을 바꾸지 말고, 새 이름으로 새 워크플로우를 생성해야 합니다.
 
-지원되는 워크플로우 템플릿:
+지원하는 템플릿은 `conformer_screening`이며 `orca_auto scaffold conformer_search`로
+생성합니다. `reaction_ts_search`와 `scan_ts_search`는 제거되었으므로 이 버전으로 해당
+manifest나 기존 워크플로우를 제출·재개·advance할 수 없습니다. 기존 파일은 건드리지
+않으며 자동 마이그레이션이나 호환 실행 경로도 없습니다. 배포 전에
+[전환 주의사항](RELEASE.md#removing-ts-workflows-in-60)(영어)을 확인하세요.
 
-- `reaction_ts_search`, `orca_auto scaffold ts_search`로 생성
-- `conformer_screening`, `orca_auto scaffold conformer_search`로 생성
-- `scan_ts_search`, `orca_auto scaffold scan_ts`로 생성
+알 수 없는 `flow.yaml` 최상위 필드는 워크플로우 생성·재시작 전에 거부하며,
+제거된 TS 설정을 조용히 무시하지 않습니다.
 
 사용자가 의존할 수 있는 manifest 키:
 
 - `workflow_type`
+- `input_xyz`
 - `crest_mode`
 - `priority`
 - `resources.max_cores`
@@ -552,15 +555,7 @@ execution snapshot schema 3만 실행하며, 이전 큐 제출은 drain/cancel �
 - `orca.charge`
 - `orca.multiplicity`
 - `crest`
-- `xtb`
-- `endpoint_pairing`
-- `max_crest_candidates`
-- `max_xtb_stages`
 - `max_orca_stages`
-- `scan_coordinate`
-- `barrier_threshold_kcal`
-- `max_scan_extensions`
-- `orca_optts_route_line`
 - `boltzmann_temperature_k`
 - `rmsd_dedup.enabled`
 - `rmsd_dedup.rmsd_threshold_angstrom`
@@ -578,12 +573,8 @@ execution snapshot schema 3만 실행하며, 이전 큐 제출은 drain/cancel �
 - `interaction_energy.fragments[].label`
 - `allow_external_inputs`
 
-ORCA route는 durable workflow task 역할에 바인딩됩니다. `reaction_ts_search`의 route와
-`scan_ts_search`의 `orca_optts_route_line`은 active하며 quote되지 않은 정확한 `OptTS` token과
-지원하는 frequency token(`Freq`, `NumFreq`, `AnFreq`) 하나를 포함하고 `ScanTS`와 `NEB-TS`를
-포함하지 않아야 합니다. `conformer_screening` route와 relaxed scan용 `orca.route_line`은
-TS가 아닌 geometry optimization을 요청해야 하며 relaxed scan 입력에는 유효한 `%geom Scan`
-coordinate block도 있어야 합니다. Route 값은 문자열이어야 하고 route line만 포함할 수
+ORCA route는 durable workflow task 역할에 바인딩됩니다. `conformer_screening` route는
+TS가 아닌 geometry optimization을 요청해야 합니다. Route 값은 문자열이어야 하고 route line만 포함할 수
 있습니다. 주석-only/blank line은 버리고 quoted token, `!`/`%`/`*`/`$`로 시작하는 payload
 token, 그 밖의 active ORCA input line은 렌더링하지 않고 거부합니다. `!B3LYP` 같은 compact
 leading 문법은 계속 허용합니다. Closed `# ... #` inline comment 안의 token과 닫히지 않은 `#` marker 뒤의 token은
@@ -594,14 +585,6 @@ input-selection 규칙으로 실제 선택 입력을 구해 durable selected inp
 그 뒤 execution snapshot 경계에서 최종 rewrite된 입력 바이트를 검증하고 바로 그 바이트를
 기록해 identity에 바인딩합니다. 완료 stage 수락은 artifact contract 자체가 지정한
 selected input을 요구하며 제출 전 task payload 경로로 대체하지 않습니다.
-
-`scan_coordinate`는 `B`, `A`, `D`에 각각 2개, 3개, 4개의 서로 다른 0-based atom index와
-유한하고 서로 다른 두 endpoint, 2 이상의 정수 point count를 지정하는 완전한 한 줄이어야
-합니다. 모든 index는 해당 stage가 선택한 XYZ geometry 안에 있어야 합니다. 입력에는 닫힌
-`%geom` block 하나, 그 안에 닫힌 `Scan` sub-block 하나와 active coordinate 하나만 있어야
-합니다. Trailing command나 여러 coordinate는 workspace를 만들기 전에 거부합니다. 생성,
-dynamic scan extension, 제출, 완료 결과 수락이 이 계약을 함께 사용합니다. Endpoint는 shortest
-round-trip float text로 canonicalize하므로 유효한 정밀도를 소수점 여덟 자리로 반올림하지 않습니다.
 
 Restart는 비과학적 control을 바꿀 수 있지만, primary ORCA stage 하나라도 완료된 뒤에는 그
 stage가 사용한 durable route, charge, multiplicity를 바꿀 수 없고, CREST 또는 xTB stage가
@@ -621,18 +604,12 @@ resource-only이므로 이 정체성을 나누지 않습니다. ORCA single poin
 정확한 interaction child 계약만 primary-stage restart와 ranking 검사에서 제외합니다. Role
 metadata만으로 primary stage를 숨길 수 없습니다.
 
-`max_crest_candidates`는 반응물/생성물 각 side마다 최대 32입니다. Endpoint pairing은
-이 제한된 Cartesian 공간을 평가하면서 요청한 최상위 pair만 보존하며, 모든 pair를 메모리에
-구체화해 정렬하지 않습니다. Geometry metric pairing은 effective 비교 원자를 최대 256개로
-제한하고 각 candidate ensemble을 selection 호출당 한 번만 읽습니다.
-
-`crest`와 `xtb` 엔진 작업 mapping, `xtb.ts_guess_validation`, `rmsd_dedup`,
+`crest` 엔진 작업 mapping, `rmsd_dedup`,
 `interaction_energy` 블록은 strict schema를 사용합니다. 알 수 없는 키,
 잘못된 boolean, 정수가 아닌 integer 필드, 문자열이 아닌 route, 여러 줄/제어문자/비인쇄
 문자가 포함된 route 또는 label은 거부합니다. 워크플로우 admission은 manifest 형태, 엔진
-입력 파일 경로, `endpoint_pairing`, `rmsd_dedup`, `interaction_energy`를 거부하고, 엔진 작업
-mapping 자체의 키·타입 스키마는 해당 엔진 작업을 제출할 때 검사합니다 — 그래서 알 수 없는
-`xtb.ts_guess_validation` 키는 워크플로우 admission이 아니라 첫 xTB 스테이지에서 드러납니다.
+입력 파일 경로, `rmsd_dedup`, `interaction_energy`를 검증하고, 엔진 작업
+mapping 자체의 키·타입 스키마는 해당 엔진 작업을 제출할 때 검사합니다.
 아래의 엔진 `charge`/`uhf` 충돌 규칙은 그보다 이른 워크플로우 생성 시점에 검사합니다.
 내부 엔진 제출 예외는 원래 진단을 보존한 `submission_failed`로 처리합니다.
 오류 문구에 slot이나 admission limit이 포함되어도 자원 대기로 바꾸지 않습니다.
@@ -641,9 +618,7 @@ fragment label은 최대 80자입니다.
 활성 interaction-energy 블록은 fragment 2–8개를 요구하고 각 multiplicity는 `[1, 100]`
 정수여야 하며, `sp_route_line`은 순수 single-point 계산만 기술해야 합니다. fragment 인덱스는
 모든 입력 원자를 gap 없이 정적으로 완전 분할해야 합니다.
-`reaction_ts_search`에서 `max_xtb_stages`와 `max_orca_stages`는 재시작 전에 이미 시도한
-stage까지 포함하는 전체 hard cap입니다. endpoint-pairing 모드도 이 상한을 해제하지
-않습니다. 워크플로우 `orca.charge`/`orca.multiplicity`가 정규 전자 상태이며, 충돌하는
+워크플로우 `orca.charge`/`orca.multiplicity`가 정규 전자 상태이며, 충돌하는
 CREST/xTB `charge` 또는 `uhf` 값은 거부합니다. 정확히 선택된 xTB/CREST snapshot은 현재
 GFN 범위(원자번호 1~86)의 알려진 원소만 사용하고 전자 수가 0 이상이어야 하며, UHF
 비짝전자 수는 전체 전자 수 이내이고 parity가 맞아야 합니다. 완료된 CREST stage는 엄격히 유효하고
@@ -652,7 +627,7 @@ downstream geometry를 중복시킬 수 없습니다. 뒤쪽의 유효한 retain
 다른 geometry는 후보로 유지합니다. 유한하지 않은 좌표나 xTB 에너지는 유효한
 워크플로우 artifact가 아닙니다.
 
-로컬 geometry admission 상한은 10,000원자입니다. xTB Hessian 작업과 ORCA
+로컬 geometry admission 상한은 10,000원자입니다. ORCA
 frequency/Hessian 생성 입력에는 더 엄격한 1,000원자 상한을 적용합니다.
 
 신뢰된 로컬 CREST 작업에서 명시적 `mdlen`의 기본 aggregate `max_md_steps` budget은
@@ -777,10 +752,7 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
   워크플로우 단계 디렉터리 아래에 있습니다. 워크플로우 ORCA 스테이지 작업 디렉터리는
   `03_orca` 아래에 있지만, 그 큐 행과 작업 위치 레코드는 runs root의 공유 ORCA 큐·인덱스에
   남습니다. ORCA는 shared-root 엔진이며 그 워커는 워크플로우별 루트를 폴링하지
-  않습니다. `scan_ts_search`는 ORCA 전용이라 엔진
-  루트를 쓰지 않습니다: 단계들이 워크스페이스 바로 아래에 워크플로우 순번 디렉터리
-  (`01_scan`, `02_scan_maximum`, …)로 생성되고, 소스 지오메트리의 `inputs/` 사본도
-  만들지 않습니다 — 지오메트리는 첫 스캔 단계로 바로 materialize됩니다.
+  않습니다.
 
 워크플로우와 stage 상태는 가능한 경우 공용 상태 어휘를 사용합니다:
 
@@ -800,16 +772,13 @@ budget이 필요합니다. 모든 로컬 CREST 작업에는 50,000,000,000 atom-
 - `submission_failed`
 - `unknown`
 
-공개 리포트 또는 triage에서 현재 쓰이는 워크플로우 reason 문자열 예시는
-`scan_profile_no_barrier`, `ts_candidates_exhausted`,
-`reaction_ts_search_xtb_phase_failed`, `conformers_failed`, `xtb_ts_guess_missing`,
-`xtb_ts_guess_geometry_invalid`, `xtb_ts_guess_geometry_unvalidated`입니다.
+공개 리포트 또는 triage에서 쓰이는 워크플로우 reason 문자열 예시는
+`conformers_failed`입니다.
 
 실행 전에 거부된 스테이지는 스테이지 메타데이터에 `reason`(제출기가 제시한
 사유, 없으면 `queue_submission_failed`)을 기록하고, 제출기가 stderr 또는
 stdout에 무언가를 남긴 경우 `submission_error_detail`을 1,000자로 잘라
-함께 기록합니다. 후보 소진 워크플로우 오류 메시지는 각 거부 사유를 읽을
-위치로 이 키를 지목합니다. 재제출이 성공하면 두 값 모두 지워지므로,
+함께 기록합니다. 재제출이 성공하면 두 값 모두 지워지므로,
 `submission_failed` 이후 재시도된 스테이지에는 낡은 실패 문구가 남지 않습니다.
 
 ## systemd 계약

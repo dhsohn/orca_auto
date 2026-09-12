@@ -13,11 +13,10 @@ body:
       label: Calculation or workflow type
       options:
         - ORCA Opt/Freq/single job
-        - scan_ts_search workflow
+        - ORCA relaxed scan
         - ORCA OptTS
         - ORCA IRC
         - ORCA NEB-TS
-        - reaction workflow
         - conformer workflow
         - internal xTB stage
         - internal CREST stage

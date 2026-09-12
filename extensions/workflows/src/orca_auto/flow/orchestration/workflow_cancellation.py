@@ -24,6 +24,7 @@ from orca_auto.flow.orchestration.services import (
 )
 from orca_auto.flow.orchestration.stage_views import WorkflowPayloadView, WorkflowStageView
 from orca_auto.flow.orchestration.support import submission_target_impl
+from orca_auto.flow.templates import normalize_workflow_template_id
 
 if TYPE_CHECKING:
     from orca_auto.flow.runtime.models import WorkflowJournalWriter
@@ -92,17 +93,6 @@ def _cancel_crest_target(
     return services.engines.crest_cancel_target(target=target, config_path=config_path)
 
 
-def _cancel_xtb_target(
-    services: OrchestrationServices,
-    target: str,
-    config: WorkflowEngineOptions,
-) -> dict[str, Any]:
-    config_path = normalize_text(config.xtb.config)
-    if not config_path:
-        return _missing_engine_config_cancel_result()
-    return services.engines.xtb_cancel_target(target=target, config_path=config_path)
-
-
 def _cancel_orca_target(
     services: OrchestrationServices,
     target: str,
@@ -119,7 +109,6 @@ def _cancel_orca_target(
 
 _CANCEL_TARGET_HANDLERS: dict[str, _CancelTargetHandler] = {
     "crest": _cancel_crest_target,
-    "xtb": _cancel_xtb_target,
     "orca": _cancel_orca_target,
 }
 
@@ -243,6 +232,7 @@ def drain_cancellation_transitions(
         return 0
     with acquire_workflow_lock_fn(workspace_path, timeout_seconds=5.0):
         payload = load_workflow_payload_fn(workspace_path)
+        normalize_workflow_template_id(payload.get("template_name"))
         metadata = payload.get("metadata")
         if not isinstance(metadata, dict):
             return 0
@@ -458,6 +448,7 @@ def cancel_materialized_workflow(
         )
         with lock_context:
             payload = resolved.persistence.load_workflow_payload(workspace_dir)
+            normalize_workflow_template_id(payload.get("template_name"))
             # The caller-owned journal append below must read the whole journal
             # to dedupe its stable event id, and that read refuses oversized
             # files. Check capacity before cancelling stages or writing any

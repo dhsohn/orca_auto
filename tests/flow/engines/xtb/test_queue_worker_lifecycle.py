@@ -1274,7 +1274,7 @@ def test_queue_worker_reconcile_worker_state_requeues_stale_running_entries(
             primary_path=str(selected_xyz),
             selected_xyz_path=str(selected_xyz),
             engine_payload={
-                "job_type": "path_search",
+                "job_type": "opt",
                 "reaction_key": "rxn-1",
             },
         )
@@ -1327,7 +1327,7 @@ def test_queue_worker_reconcile_preserves_running_entry_with_live_child_pid(
             primary_path=str(selected_xyz),
             selected_xyz_path=str(selected_xyz),
             engine_payload={
-                "job_type": "path_search",
+                "job_type": "opt",
                 "reaction_key": "rxn-1",
             },
         )

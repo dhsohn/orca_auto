@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import io
-import os
-import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from orca_auto.core.machine_observation import ReceiptDigest
 from orca_auto.core.statuses import FAILED_STATUSES
 from orca_auto.core.utils import mapping_or_empty as _mapping
-from orca_auto.core.utils.persistence import open_pinned_readonly
 from orca_auto.flow.conformer_selection import OrcaSelectedInputScienceIdentity
 from orca_auto.flow.contracts.workflow import (
     is_orca_stage_kind,
@@ -32,7 +27,6 @@ from orca_auto.flow.orca_stage_evidence import (
 from orca_auto.orca.evidence import (
     OrcaStructureEvidence,
 )
-from orca_auto.orca.out_analyzer import scan_ts_lines_for_imag_count
 from orca_auto.orca.parser import KCAL_PER_HARTREE
 from orca_auto.orca.report.attempts import duration_text
 
@@ -40,7 +34,7 @@ from . import report_diagnostics, report_energy_evidence
 from .stage_summary import crest_stage_detail, stage_task_kind, xtb_stage_detail
 
 if TYPE_CHECKING:
-    from _typeshed import WriteableBuffer
+    pass
 
 
 @dataclass(frozen=True)
@@ -97,178 +91,8 @@ class WorkflowReportData:
     consumed_orca_machine_paths: tuple[Path, ...] = ()
 
 
-# Only stationary-point task kinds enter the ranked candidate table, so only
-# they can publish a Nimag; both call sites say what that means for them.
-_CANDIDATE_TASK_KINDS = frozenset({"opt", "optts_freq"})
-
-# The analyzer counts imaginary modes only for a normally terminated TS route
-# and clears the verdict for every other outcome, and these two reasons are
-# exactly what it publishes in that case. They are also the only part of that
-# decision the machine observation carries: ``summary.reason`` is cross-checked
-# against ``final_result`` before a generation is accepted.
-#
-# Only explicit TS verdict reasons authorize a count. Historical terminal
-# reasons without a TS verdict remain readable, but cannot supply Nimag.
-_TS_VERDICT_REASONS = frozenset({"ts_criteria_met", "ts_criteria_failed"})
-
-# How much of the output the recount reads, hashes and decodes at a time.
-# ``open()`` would take this from the file's block size — 4 KB here, and about
-# 25,000 read syscalls for a 100 MB output; reading it in 1 MB chunks is part
-# of why binding the count to the receipt costs no measurable time.
-_OUTPUT_READ_BUFFER_BYTES = 1024 * 1024
-
-
-def _published_report_reason(report_payload: Mapping[str, Any]) -> str:
-    """The reason as the machine observation's ``summary.reason`` pins it."""
-    final_result = _mapping(_mapping(report_payload.get("engine_payload")).get("final_result"))
-    status = _mapping(report_payload.get("status"))
-    return report_diagnostics.normalized_text(final_result.get("reason") or status.get("reason"))
-
-
-class _ReceiptedDescriptorReader(io.RawIOBase):
-    """Hand one open descriptor's bytes on while accumulating their receipt digest.
-
-    Every byte the scanner consumes passes through ``readinto`` — ``read`` and
-    ``readall`` are defined in terms of it — so the digest covers exactly the
-    bytes that produced the count, and covers them once. Hashing here rather
-    than in a pass of its own is what keeps the binding free: the recount
-    already reads the whole output, and a second pass over an ORCA output that
-    can exceed 100 MB would double that read.
-    """
-
-    def __init__(self, descriptor: int, content: ReceiptDigest) -> None:
-        super().__init__()
-        self._descriptor = descriptor
-        self._content = content
-
-    def readable(self) -> bool:
-        return True
-
-    def readinto(self, buffer: WriteableBuffer, /) -> int:
-        view = memoryview(buffer).cast("B")
-        chunk = os.read(self._descriptor, len(view))
-        self._content.update(chunk)
-        view[: len(chunk)] = chunk
-        return len(chunk)
-
-
-def _final_section_imaginary_count(
-    generation_dir: Path,
-    report_payload: Mapping[str, Any],
-    output_receipt: Mapping[str, Any] | None,
-) -> int | None:
-    """Recount one non-completed stage's Nimag from its hash-pinned output.
-
-    The generation was accepted only after every artifact receipt was
-    re-hashed, including the ``orca-output`` one that binds this ``.out``'s
-    size and SHA-256, so the file is evidence the workflow report already
-    stands behind. ``output_receipt`` is that accepted receipt, carried down
-    from the same load, and the count is published only for bytes whose digest
-    equals it. The engine's ``markers`` are not evidence: nothing publishes or
-    re-verifies them, so a hand-edited job state could dictate a Nimag.
-
-    ``None`` means the stage characterizes no stationary point: the analyzer
-    reached no TS verdict, the output is gone or is not a plain file of this
-    generation, or its only frequency section was superseded by a later
-    geometry.
-    """
-    if _published_report_reason(report_payload) not in _TS_VERDICT_REASONS:
-        return None
-    final_result = _mapping(_mapping(report_payload.get("engine_payload")).get("final_result"))
-    out_text = report_diagnostics.normalized_text(final_result.get("last_out_path"))
-    if not out_text:
-        return None
-    out_path = Path(out_text)
-    # ORCA writes a stage's terminal output as a direct child of its
-    # generation. Anything else is not this stage's output: a deeper path, a
-    # sibling generation's, or — for a name that is not absolute — whatever the
-    # report writer's working directory happens to hold under that name.
-    if out_path.parent != generation_dir:
-        return None
-    return _stable_final_section_count(out_path, output_receipt)
-
-
-def _stable_final_section_count(
-    out_path: Path,
-    output_receipt: Mapping[str, Any] | None,
-) -> int | None:
-    """Count one output's final section, refusing anything the receipt misses.
-
-    ``load_report_json_with_output_receipt`` recomputes the ``orca-output``
-    receipt from ``last_out_path`` and rejects the whole generation unless it
-    equals the stored one, then hands that accepted receipt here. Verifying it
-    there and re-opening the path here would prove nothing: an output replaced
-    between the two is observed by every check on this side, so the count could
-    still come from bytes whose SHA-256 is not the observed one. The digest of
-    the bytes actually read is therefore compared against the receipt, which no
-    substitution — before the pre-open stat, between it and the open, or during
-    the scan — can satisfy.
-
-    Everything the receipt cannot bind is refused instead: a receipt that is
-    absent or not ``available``, one recorded against a different name, and the
-    shapes that make a receipt ``invalid`` in the first place — a symlink, a
-    hard link, a non-regular file, or a path that is not its own resolved form.
-    The path checks live on the descriptor, which is also what the sibling
-    energy reader in ``report_energy_evidence`` does; that one opens through a
-    directory descriptor because it accepts an output at any depth under the
-    generation, while this one has its parent pinned to the generation itself.
-    """
-    if not isinstance(output_receipt, Mapping) or output_receipt.get("status") != "available":
-        return None
-    # The receipt's path is the accepted output's path relative to the
-    # generation root, which for a direct child is its name. A receipt taken
-    # for some other file of the generation binds nothing about this one.
-    if output_receipt.get("path") != out_path.name:
-        return None
-    descriptor = -1
-    try:
-        # This stat exists only to pin an inode for the comparison below;
-        # rejecting a symlinked output is O_NOFOLLOW's job, and O_NONBLOCK
-        # keeps a path swapped for a FIFO from blocking the report writer
-        # indefinitely.
-        before = out_path.stat()
-        descriptor = open_pinned_readonly(out_path)
-        opened = os.fstat(descriptor)
-        # The descriptor pins one inode; comparing it against the pre-open
-        # stat rejects anything substituted between the two. A substitution
-        # that happened before that stat is caught by the digest below, not
-        # here: both stats would observe the substituted file and agree.
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or opened.st_nlink != 1
-            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
-        ):
-            return None
-        # A size the receipt never recorded cannot hash to its digest, so this
-        # refuses a replaced output before reading it rather than after.
-        if opened.st_size != output_receipt.get("bytes"):
-            return None
-        content = ReceiptDigest()
-        with io.TextIOWrapper(
-            io.BufferedReader(
-                _ReceiptedDescriptorReader(descriptor, content),
-                buffer_size=_OUTPUT_READ_BUFFER_BYTES,
-            ),
-            encoding="utf-8",
-            errors="ignore",
-            newline=None,
-        ) as handle:
-            count, _irc_found, final_section = scan_ts_lines_for_imag_count(handle)
-        # The receipt binds one (size, sha256). Bytes that moved under the scan
-        # are no longer those bytes, so the count they produced is not the
-        # evidence the observation stands behind. The digest catches a
-        # rewrite the scan read, this catches one it did not reach.
-        after = os.fstat(descriptor)
-        if (opened.st_size, opened.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-            return None
-        if not content.matches(output_receipt):
-            return None
-        return count if final_section else None
-    except (OSError, ValueError):
-        return None
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+# Only conformer optimizations enter the ranked candidate table.
+_CANDIDATE_TASK_KINDS = frozenset({"opt"})
 
 
 def _orca_stage_result(
@@ -290,7 +114,7 @@ def _orca_stage_result(
     attempt_count = 0
     imaginary_count: int | None = None
     stage_completed = report_diagnostics.normalized_text(stage.get("status")).lower() == "completed"
-    report_json_path, report_payload, output_receipt = report_diagnostics.resolve_stage_job_report(
+    report_json_path, report_payload, _output_receipt = report_diagnostics.resolve_stage_job_report(
         stage
     )
     if report_payload is not None:
@@ -310,13 +134,6 @@ def _orca_stage_result(
         imaginary_count = block.imaginary_count
     elif not stage_completed and report_json_path is not None and report_payload is not None:
         generation_dir = report_json_path.parent
-        if candidate_task:
-            # Only a candidate row carries a Nimag into the report, and the
-            # recount reads the stage's terminal output whole. Other task kinds
-            # do not publish a TS-candidate verdict.
-            imaginary_count = _final_section_imaginary_count(
-                generation_dir, report_payload, output_receipt
-            )
         # A reusable job root can retain pre-generation ``*.engrad`` files.
         # Both energy sources must therefore be confined to the generation
         # whose report provenance and workflow-stage identity were verified.

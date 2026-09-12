@@ -21,7 +21,6 @@ from .workflow.store import (
 )
 from .workflow.summary import (
     list_workflow_summaries,
-    workflow_has_active_downstream,
     workflow_summary,
 )
 
@@ -36,7 +35,6 @@ __all__ = [
     "list_workflow_summaries",
     "load_workflow_payload",
     "resolve_workflow_workspace",
-    "workflow_has_active_downstream",
     "workflow_create_lock_path",
     "workflow_lock_path",
     "workflow_file_path",

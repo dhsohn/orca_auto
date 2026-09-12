@@ -6,16 +6,13 @@ from typing import Any, cast
 from orca_auto.flow.contracts import WorkflowStageWithTaskPayload
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
-    ReactionTsSearchWorkflowRequest,
     WorkflowCreationContext,
 )
 from orca_auto.flow.orchestration.template_builders import (
     _conformer_template_build,
-    _reaction_template_build,
 )
 from orca_auto.flow.orchestration.workflow_builders import (
     _ConformerWorkflowInput,
-    _ReactionWorkflowInputs,
     _WorkflowWorkspace,
 )
 
@@ -53,73 +50,6 @@ def _workspace(tmp_path: Path) -> _WorkflowWorkspace:
         workflow_root_path=tmp_path,
         workspace_dir=tmp_path / "wf_1",
         requested_at="2026-05-29T00:00:00+00:00",
-    )
-
-
-def test_reaction_template_build_creates_request_and_role_stages(tmp_path: Path) -> None:
-    stage_calls: list[dict[str, Any]] = []
-    build = _reaction_template_build(
-        ReactionTsSearchWorkflowRequest(
-            reactant_xyz="/unused/reactant.xyz",
-            product_xyz="/unused/product.xyz",
-            workflow_root=tmp_path,
-            crest_mode="nci",
-            priority=4,
-            max_cores=12,
-            max_memory_gb=48,
-            max_crest_candidates=5,
-            max_xtb_stages=2,
-            max_xtb_handoff_retries=1,
-            max_orca_stages=6,
-            orca_route_line="! test",
-            charge=-1,
-            multiplicity=2,
-            xtb_job_manifest={"opt_level": "tight"},
-            endpoint_pairing={"strategy": "nearest"},
-            source_job_id="source_1",
-            source_job_type="imported",
-        ),
-        _workspace(tmp_path),
-        _ReactionWorkflowInputs(
-            reactant_xyz="/copied/reactant.xyz",
-            product_xyz="/copied/product.xyz",
-            reaction_key="reactant_to_product",
-        ),
-        _context(stage_calls),
-        resolved_crest_job_manifest={"rthr": 0.5},
-    )
-
-    assert build.request.template_name == "reaction_ts_search"
-    assert build.request.source_job_id == "source_1"
-    assert build.request.source_job_type == "imported"
-    assert build.request.reaction_key == "reactant_to_product"
-    assert build.request.parameters == {
-        "crest_mode": "nci",
-        "priority": 4,
-        "max_cores": 12,
-        "max_memory_gb": 48,
-        "max_crest_candidates": 5,
-        "max_xtb_stages": 2,
-        "max_xtb_handoff_retries": 1,
-        "max_orca_stages": 6,
-        "orca_route_line": "! test",
-        "charge": -1,
-        "multiplicity": 2,
-        "crest_job_manifest": {"rthr": 0.5},
-        "xtb_job_manifest": {"opt_level": "tight"},
-        "endpoint_pairing": {"strategy": "nearest"},
-    }
-    assert [artifact.kind for artifact in build.request.source_artifacts] == [
-        "reactant_xyz",
-        "product_xyz",
-    ]
-    assert [stage["stage_id"] for stage in build.stages] == [
-        "crest_reactant_01",
-        "crest_product_01",
-    ]
-    assert [call["input_role"] for call in stage_calls] == ["reactant", "product"]
-    assert all(
-        call["manifest_overrides"] == {"charge": -1, "uhf": 1, "rthr": 0.5} for call in stage_calls
     )
 
 

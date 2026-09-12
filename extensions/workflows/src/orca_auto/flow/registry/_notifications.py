@@ -41,24 +41,15 @@ STAGE_STATUS_EVENT_TYPES = frozenset(
         "workflow_stage_status_changed",
     }
 )
-STAGE_HANDOFF_EVENT_TYPES = frozenset(
-    {
-        "workflow_stage_handoff_ready",
-        "workflow_stage_handoff_retrying",
-        "workflow_stage_handoff_failed",
-        "workflow_stage_reaction_handoff_status_changed",
-    }
-)
 _ERROR_EVENT_TYPES = frozenset(
     {
         "workflow_advance_failed",
         "workflow_stage_failed",
-        "workflow_stage_handoff_failed",
         "worker_interrupted",
         "worker_lock_error",
     }
 )
-_SUCCESS_EVENT_TYPES = frozenset({"workflow_stage_completed", "workflow_stage_handoff_ready"})
+_SUCCESS_EVENT_TYPES = frozenset({"workflow_stage_completed"})
 
 
 def event_text(event: dict[str, Any], metadata: dict[str, Any], *keys: str) -> str:
@@ -122,10 +113,6 @@ def title_from_event_type(event_type: str) -> str:
         "workflow_stage_failed": "Stage failed",
         "workflow_stage_cancelled": "Stage cancelled",
         "workflow_stage_status_changed": "Stage status changed",
-        "workflow_stage_handoff_ready": "Handoff ready",
-        "workflow_stage_handoff_retrying": "Handoff retrying",
-        "workflow_stage_handoff_failed": "Handoff failed",
-        "workflow_stage_reaction_handoff_status_changed": "Handoff status changed",
         WORKFLOW_PHASE_FINISHED_EVENT: "Phase finished",
         "worker_started": "Worker started",
         "worker_stopped": "Worker stopped",
@@ -199,10 +186,6 @@ def journal_event_context(event: dict[str, Any], workflow_root: str | Path) -> d
         "previous_stage_status": event_text(
             event, metadata, "previous_stage_status", "previous_status"
         ),
-        "reaction_handoff_status": event_text(event, metadata, "reaction_handoff_status"),
-        "previous_reaction_handoff_status": event_text(
-            event, metadata, "previous_reaction_handoff_status"
-        ),
         "root_text": str(Path(workflow_root).expanduser().resolve()),
     }
 
@@ -255,30 +238,6 @@ def stage_status_event_message(context: dict[str, str]) -> Message:
     return _message(context, *fields)
 
 
-def stage_handoff_event_message(context: dict[str, str]) -> Message:
-    task = f"{context['engine']}/{context['task_kind']}"
-    fields = [
-        field_row("Workflow", code(context["workflow_id"]), inline=True),
-        field_row("Stage", code(context["stage_id"]), inline=True),
-        field_row("Task", code(task), inline=True),
-        field_row("Template", code(context["template_name"])),
-        field_row(
-            "Stage status",
-            *_transition_spans(context["previous_stage_status"], context["stage_status"]),
-        ),
-        field_row(
-            "Reaction handoff",
-            *_transition_spans(
-                context["previous_reaction_handoff_status"], context["reaction_handoff_status"]
-            ),
-        ),
-        field_row("Directory", code(context["directory"])),
-    ]
-    if context["reason"] and context["reason"] != "-":
-        fields.append(field_row("Reason", code(context["reason"])))
-    return _message(context, *fields)
-
-
 def worker_lifecycle_event_message(context: dict[str, str]) -> Message:
     return _message(
         context,
@@ -321,9 +280,6 @@ def _phase_finished_event_message(
         field_row("Stage statuses", code(format_stage_statuses(metadata.get("stage_statuses")))),
         field_row("Directory", code(context["directory"])),
     ]
-    handoff_counts = format_count_mapping(metadata.get("reaction_handoff_status_counts"))
-    if handoff_counts != "-":
-        fields.append(field_row("Reaction handoff counts", code(handoff_counts)))
     failure_reasons = metadata.get("failure_reasons")
     if isinstance(failure_reasons, list):
         joined = ",".join(normalize_text(item) for item in failure_reasons if normalize_text(item))
@@ -343,8 +299,6 @@ def journal_event_message(event: dict[str, Any], workflow_root: str | Path) -> M
         return workflow_advance_failed_event_message(context)
     if event_type in STAGE_STATUS_EVENT_TYPES:
         return stage_status_event_message(context)
-    if event_type in STAGE_HANDOFF_EVENT_TYPES:
-        return stage_handoff_event_message(context)
     if event_type == WORKFLOW_PHASE_FINISHED_EVENT:
         return _phase_finished_event_message(event, metadata, context)
     if event_type in {
@@ -363,7 +317,6 @@ def journal_event_message(event: dict[str, Any], workflow_root: str | Path) -> M
 
 __all__ = [
     "DEFAULT_NOTIFICATION_EVENT_TYPES",
-    "STAGE_HANDOFF_EVENT_TYPES",
     "STAGE_STATUS_EVENT_TYPES",
     "journal_event_message",
     "journal_notification_enabled",

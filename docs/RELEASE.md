@@ -85,8 +85,11 @@ building distributions nor passing their tests publishes them or deploys service
 
 ## Moving from the monolithic 4.x installation
 
-The 5.0 default becomes core-only; install the matching extension to retain
-workflow commands, xTB/CREST stages, and ORCA-only `scan_ts`. Both packages retain
+The 5.0 default became core-only. This section describes the package split;
+the current development extension supports only CREST-to-ORCA conformer
+screening. Its internal xTB engine is separate from that workflow. For the
+additional break in 6.0, read the next section
+before upgrading. Both packages retain
 the existing `orca_auto.*` imports and the `orca_auto` CLI.
 
 Prepare a fresh virtual environment for the split, especially when replacing an
@@ -119,6 +122,33 @@ Systemd deployment remains separate: the installer needs the chosen checkout's
 interpreter, install the units deliberately, and restart only in the idle window.
 Verify the resulting services with `orca_auto service status`. Installing Python
 packages alone neither updates those unit files nor replaces running workers.
+
+## Removing TS workflows in 6.0
+
+The current source is unreleased `6.0.0.dev0`. It removes
+`reaction_ts_search` (`scaffold ts_search`) and `scan_ts_search`
+(`scaffold scan_ts`), their workflow-specific configuration, and automatic TS
+search orchestration. Only `conformer_screening` (`scaffold conformer_search`)
+remains in the optional extension. Core still accepts user-prepared ORCA
+OptTS/Freq, IRC, NEB-TS, and ordinary relaxed-scan jobs; direct ORCA `ScanTS`
+remains unsupported.
+
+This is a hard removal, not deprecation. There are no legacy execution paths,
+aliases, or automatic state migrations. The new version cannot submit, resume,
+or advance the removed workflow types. Existing calculation files and reports
+are not deleted or converted by this source change.
+
+Before a separately approved idle-window deployment, finish or explicitly
+cancel old workflow work under its existing runtime and retain its original
+state and artifacts. Do not point the new workflow worker at a runs root still
+responsible for those workflows. Use a fresh runs root for new work if the old
+root contains unsupported workflow records; this release does not migrate,
+repair, or purge those records. Keep the existing running worker's checkout,
+environment, configuration, and services untouched until that cutover.
+
+The published 5.0.0 assets predate this removal and remain historical release
+artifacts. Neither this development version nor its documentation publishes a
+new release or updates an installed runtime.
 
 ## Tagging
 

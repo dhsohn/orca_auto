@@ -164,24 +164,24 @@ def test_single_completed_candidate_without_science_identity_has_no_numeric_rank
 
 def test_write_workflow_html_report_renders_sections(tmp_path: Path) -> None:
     stage_a = _orca_stage_dir(tmp_path, "orca_a", energy=-100.001, reason="normal_termination")
-    stage_b = _orca_stage_dir(tmp_path, "orca_b", energy=-100.005, reason="ts_criteria_met")
+    stage_b = _orca_stage_dir(tmp_path, "orca_b", energy=-100.005, reason="normal_termination")
     payload = _payload(
         tmp_path,
         [
-            _orca_stage("orca_optts_freq_01", stage_a, status="completed", label="ts_guess_a"),
-            _orca_stage("orca_optts_freq_02", stage_b, status="completed", label="ts_guess_b"),
+            _orca_stage("orca_conformer_01", stage_a, status="completed", label="conformer_a"),
+            _orca_stage("orca_conformer_02", stage_b, status="completed", label="conformer_b"),
         ],
     )
-    payload["template_name"] = "reaction_ts_search"
+    payload["template_name"] = "conformer_screening"
 
     path = write_workflow_html_report(tmp_path, payload)
 
     assert path == tmp_path / "workflow_report.html"
     text = path.read_text(encoding="utf-8")
     assert "workflow report" in text
-    assert "TS candidates" in text
+    assert "ORCA results" in text
     assert "Stage chain" in text
-    assert "ts_guess_a" in text
+    assert "conformer_a" in text
     assert 'href="orca_b' in text
     assert "<circle" in text
     assert "<polyline" not in text
@@ -365,9 +365,9 @@ def test_workflow_error_message_is_primary_and_escaped(tmp_path: Path) -> None:
     payload["status"] = "failed"
     payload["metadata"]["workflow_error"] = {
         "status": "failed",
-        "reason": "no_endpoint_pairs",
-        "message": "No pair passed <endpoint> filters.",
-        "scope": "reaction_ts_search_endpoint_pairing",
+        "reason": "no_conformers",
+        "message": "No geometry passed <conformer> filters.",
+        "scope": "conformer_screening_crest_handoff",
         "stage_id": "crest_pair_01",
     }
 
@@ -375,11 +375,11 @@ def test_workflow_error_message_is_primary_and_escaped(tmp_path: Path) -> None:
 
     assert path is not None
     text = path.read_text(encoding="utf-8")
-    assert "No pair passed &lt;endpoint&gt; filters." in text
-    assert "code: no_endpoint_pairs" in text
+    assert "No geometry passed &lt;conformer&gt; filters." in text
+    assert "code: no_conformers" in text
     assert "stage: crest_pair_01" in text
-    assert "scope: reaction_ts_search_endpoint_pairing" in text
-    assert "No pair passed <endpoint> filters." not in text
+    assert "scope: conformer_screening_crest_handoff" in text
+    assert "No geometry passed <conformer> filters." not in text
 
 
 def test_nonfatal_stage_failure_has_no_workflow_failure_verdict(tmp_path: Path) -> None:

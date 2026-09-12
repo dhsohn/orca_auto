@@ -250,7 +250,7 @@ def test_workflow_child_notifications_are_suppressed(
     monkeypatch.setattr(notifications, "build_channel", lambda _messenger: transport)
     workflow_job_dirs = [
         tmp_path / "wf-1" / "02_xtb" / "job-004",
-        tmp_path / "wf-1" / "02_xtb" / "xtb_path_search_01",
+        tmp_path / "wf-1" / "02_xtb" / "xtb_opt_01",
     ]
 
     for workflow_job_dir in workflow_job_dirs:
@@ -259,7 +259,7 @@ def test_workflow_child_notifications_are_suppressed(
             job_id="job-004",
             queue_id="queue-004",
             job_dir=workflow_job_dir,
-            job_type="path_search",
+            job_type="opt",
             reaction_key="rxn-4",
             selected_xyz=workflow_job_dir / "ts.xyz",
         )
@@ -269,7 +269,7 @@ def test_workflow_child_notifications_are_suppressed(
             queue_id="queue-004",
             status="completed",
             reason="done",
-            job_type="path_search",
+            job_type="opt",
             reaction_key="rxn-4",
             job_dir=workflow_job_dir,
             selected_xyz=workflow_job_dir / "ts.xyz",

@@ -65,7 +65,7 @@ def test_runtime_roots_for_cfg_skips_workflows_without_xtb_stages(tmp_path: Path
         reaction_workspace,
         {
             "workflow_id": "wf_reaction",
-            "stages": [{"stage_id": "xtb_path_search_01", "task": {"engine": "xtb"}}],
+            "stages": [{"stage_id": "xtb_opt_01", "task": {"engine": "xtb"}}],
         },
     )
 
@@ -173,7 +173,7 @@ def test_record_from_artifacts_merges_state_and_existing_values(tmp_path: Path) 
     existing = JobLocationRecord(
         job_id="job-old",
         app_name="orca_auto_xtb",
-        job_type="xtb_path_search",
+        job_type="xtb_opt",
         status="queued",
         original_run_dir="",
         molecule_key="",

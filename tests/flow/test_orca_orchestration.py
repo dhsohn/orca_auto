@@ -13,11 +13,11 @@ from tests.flow.orchestration_services import orchestration_services
 @pytest.mark.parametrize(
     ("route_line", "expected_status"),
     [
-        ("! OptTS Freq r2scan-3c TightSCF", "completed"),
-        ("! Opt r2scan-3c TightSCF", "failed"),
+        ("! Opt Freq r2scan-3c TightSCF", "completed"),
+        ("! SP r2scan-3c TightSCF", "failed"),
         ("! ScanTS Freq r2scan-3c TightSCF", "failed"),
         ("! NEB-TS Freq r2scan-3c TightSCF", "failed"),
-        ("! OptTS NumFreq r2scan-3c TightSCF", "completed"),
+        ("! Opt NumFreq r2scan-3c TightSCF", "completed"),
     ],
 )
 def test_sync_orca_stage_binds_completed_contract_to_durable_task_role(
@@ -28,13 +28,13 @@ def test_sync_orca_stage_binds_completed_contract_to_durable_task_role(
     selected_inp = tmp_path / "candidate.inp"
     selected_inp.write_text(f"{route_line}\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
     stage: dict[str, object] = {
-        "stage_id": "orca_optts_freq_01",
+        "stage_id": "orca_opt_01",
         "stage_kind": "orca_stage",
         "status": "submitted",
         "metadata": {},
         "task": {
             "engine": "orca",
-            "task_kind": "optts_freq",
+            "task_kind": "opt",
             "status": "submitted",
             "payload": {
                 "reaction_dir": str(tmp_path),
@@ -178,15 +178,15 @@ def test_sync_orca_rejects_unknown_task_kind_on_completed_contract(tmp_path: Pat
 @pytest.mark.parametrize(
     "route_line",
     (
-        "! Opt HF",
+        "! SP HF",
         "! ScanTS Freq HF",
         "! NEB-TS Freq HF",
         '! "OptTS" Freq HF',
         '! OptTS "Freq" HF',
-        "!! OptTS Freq HF",
-        "!%pal OptTS Freq HF",
-        "! OptTS Freq %pal nprocs 8 end",
-        "! OptTS Freq * xyz 0 1",
+        "!! Opt Freq HF",
+        "!%pal Opt Freq HF",
+        "! Opt Freq %pal nprocs 8 end",
+        "! Opt Freq * xyz 0 1",
     ),
 )
 def test_sync_orca_stage_rejects_role_mismatch_before_submit(
@@ -199,13 +199,13 @@ def test_sync_orca_stage_rejects_role_mismatch_before_submit(
         encoding="utf-8",
     )
     stage: dict[str, object] = {
-        "stage_id": "orca_optts_freq_pre_submit_mismatch",
+        "stage_id": "orca_opt_pre_submit_mismatch",
         "stage_kind": "orca_stage",
         "status": "planned",
         "metadata": {},
         "task": {
             "engine": "orca",
-            "task_kind": "optts_freq",
+            "task_kind": "opt",
             "status": "planned",
             "payload": {
                 "reaction_dir": str(tmp_path),
@@ -523,11 +523,10 @@ def test_sync_orca_submission_and_lookup_share_canonical_reaction_dir(
     ("task_kind", "selected_input_state", "expected_reason_suffix"),
     [
         ("opt", "missing_selection", "selected input path is missing"),
-        ("optts_freq", "missing_contract_selection", "selected input path is missing"),
-        ("optts_freq", "missing_file", "candidate.inp'"),
-        ("relaxed_scan", "directory", "candidate.inp'"),
+        ("opt", "missing_contract_selection", "selected input path is missing"),
+        ("opt", "missing_file", "candidate.inp'"),
+        ("opt", "directory", "candidate.inp'"),
         ("opt", "no_route", "candidate.inp'"),
-        ("relaxed_scan", "missing_scan_block", "candidate.inp'"),
     ],
 )
 def test_sync_orca_stage_fails_closed_when_route_role_cannot_be_verified(
@@ -544,7 +543,7 @@ def test_sync_orca_stage_fails_closed_when_route_role_cannot_be_verified(
         contract_selected_inp = ""
     elif selected_input_state == "missing_contract_selection":
         selected_inp.write_text(
-            "! OptTS Freq r2scan-3c TightSCF\n* xyz 0 1\nH 0 0 0\n*\n",
+            "! Opt Freq r2scan-3c TightSCF\n* xyz 0 1\nH 0 0 0\n*\n",
             encoding="utf-8",
         )
         contract_selected_inp = ""
@@ -611,83 +610,6 @@ def test_sync_orca_stage_fails_closed_when_route_role_cannot_be_verified(
         if isinstance(artifact, dict)
         and artifact.get("kind") in {"orca_optimized_xyz", "orca_last_out"}
     )
-
-
-@pytest.mark.parametrize(
-    ("coordinate", "expected_reason"),
-    [
-        ("B 0 1 = 1, 2, 1", "points"),
-        ("B 0 99 = 1, 2, 8", "within input XYZ"),
-    ],
-)
-def test_sync_orca_stage_rejects_invalid_relaxed_scan_coordinate_contract(
-    tmp_path: Path,
-    coordinate: str,
-    expected_reason: str,
-) -> None:
-    selected_inp = tmp_path / "invalid_scan.inp"
-    selected_inp.write_text(
-        "\n".join(
-            [
-                "! Opt HF",
-                "%geom",
-                "  Scan",
-                f"    {coordinate}",
-                "  end",
-                "end",
-                "* xyz 0 1",
-                "H 0 0 0",
-                "H 0 0 0.7",
-                "*",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    stage: dict[str, object] = {
-        "stage_id": "orca_relaxed_scan_invalid_contract",
-        "stage_kind": "orca_stage",
-        "status": "submitted",
-        "metadata": {},
-        "task": {
-            "engine": "orca",
-            "task_kind": "relaxed_scan",
-            "status": "submitted",
-            "payload": {
-                "reaction_dir": str(tmp_path),
-                "selected_inp": str(selected_inp),
-            },
-            "enqueue_payload": {"reaction_dir": str(tmp_path), "priority": 10},
-        },
-    }
-    contract = OrcaArtifactContract(
-        run_id="run_invalid_scan_contract",
-        status="completed",
-        reason="normal_termination",
-        state_status="completed",
-        reaction_dir=str(tmp_path),
-        latest_known_path=str(tmp_path),
-        selected_inp=str(selected_inp),
-        analyzer_status="completed",
-    )
-    deps = orchestration_services(
-        overrides={"load_orca_artifact_contract": Mock(return_value=contract)}
-    )
-
-    sync_orca_stage_impl(
-        stage,
-        orca_config=None,
-        submit_ready=False,
-        services=deps,
-    )
-
-    task = stage["task"]
-    metadata = stage["metadata"]
-    assert isinstance(task, dict)
-    assert isinstance(metadata, dict)
-    assert stage["status"] == "failed"
-    assert task["status"] == "failed"
-    assert expected_reason in metadata["reason"]
 
 
 def test_sync_orca_stage_applies_contract_state_metadata_and_artifacts(

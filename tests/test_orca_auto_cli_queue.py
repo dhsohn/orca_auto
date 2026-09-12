@@ -230,7 +230,7 @@ def test_cmd_queue_list_filters_text_output(
                     "source": "orca_auto_xtb",
                     "submitted_at": "2026-04-26T02:00:00+00:00",
                     "updated_at": "2026-04-26T02:30:00+00:00",
-                    "metadata": {"task_kind": "path_search"},
+                    "metadata": {"task_kind": "opt"},
                 },
                 {
                     "activity_id": "crest-q-1",
@@ -272,7 +272,7 @@ def test_cmd_queue_list_filters_text_output(
     )
     assert "▶" in stdout
     assert "xtb-q-1" in stdout
-    assert "TS path" in stdout
+    assert "Opt" in stdout
     assert "01:00:00" in stdout
     assert "crest-q-1" not in stdout
     assert "wf-1" not in stdout
@@ -494,7 +494,7 @@ def test_cmd_queue_list_shows_all_workflow_children_in_default_text_output(
                     "submitted_at": "2026-04-26T01:30:00+00:00",
                     "updated_at": "2026-04-26T02:00:00+00:00",
                     "metadata": {
-                        "template_name": "reaction_ts_search",
+                        "template_name": "conformer_screening",
                         "current_engine": "orca",
                         "request_parameters": {"crest_mode": "nci"},
                     },
@@ -509,9 +509,9 @@ def test_cmd_queue_list_shows_all_workflow_children_in_default_text_output(
                     "submitted_at": "2026-04-26T02:00:00+00:00",
                     "updated_at": "2026-04-26T02:15:00+00:00",
                     "metadata": {
-                        "task_kind": "path_search",
+                        "task_kind": "opt",
                         "workflow_id": "wf-1",
-                        "job_dir": "/tmp/workflows/wf-1/02_xtb/xtb_path_search_01",
+                        "job_dir": "/tmp/workflows/wf-1/02_xtb/xtb_opt_01",
                     },
                 },
                 {
@@ -539,7 +539,7 @@ def test_cmd_queue_list_shows_all_workflow_children_in_default_text_output(
                     "submitted_at": "2026-04-26T02:00:00+00:00",
                     "updated_at": "2026-04-26T02:20:00+00:00",
                     "metadata": {
-                        "task_kind": "optts_freq",
+                        "task_kind": "opt",
                         "workflow_id": "wf-1",
                         "reaction_dir": "/tmp/workflows/wf-1/03_orca/case_001",
                     },
@@ -581,13 +581,13 @@ def test_cmd_queue_list_shows_all_workflow_children_in_default_text_output(
     assert "active_simulations: 3" in stdout
     assert "▶" in stdout
     assert "wf-1" in stdout
-    assert "ts_search(nci)" in stdout
+    assert "conformer_search(nci)" in stdout
     assert "xtb-q-1" in stdout
-    assert "TS path" in stdout
+    assert "Opt" in stdout
     assert "crest-q-1" in stdout
     assert "conformer_search" in stdout
     assert "orca-q-1" in stdout
-    assert "OptTS+Freq" in stdout
+    assert "Opt" in stdout
     assert "orca-q-engine-job" in stdout
     assert "NEB" in stdout
 
@@ -610,7 +610,7 @@ def test_cmd_queue_list_shows_all_workflow_child_jobs(
             "submitted_at": "2026-04-26T02:00:00+00:00",
             "updated_at": "2026-04-26T02:00:00+00:00",
             "metadata": {
-                "task_kind": "optts_freq",
+                "task_kind": "opt",
                 "reaction_dir": f"/tmp/orca/wf-1/03_orca/case_{index:03d}",
             },
         }
@@ -632,7 +632,7 @@ def test_cmd_queue_list_shows_all_workflow_child_jobs(
                     "submitted_at": "2026-04-26T01:00:00+00:00",
                     "updated_at": "2026-04-26T01:00:00+00:00",
                     "metadata": {
-                        "template_name": "reaction_ts_search",
+                        "template_name": "conformer_screening",
                         "current_engine": "orca",
                     },
                 },
@@ -661,7 +661,7 @@ def test_cmd_queue_list_shows_all_workflow_child_jobs(
     assert stdout.count("▶") >= 1
     assert stdout.count("orca-q-") == 9
     assert "wf-1" in stdout
-    assert "ts_search" in stdout
+    assert "conformer_search" in stdout
 
 
 def test_cmd_queue_list_reports_empty_filtered_results(
@@ -683,7 +683,7 @@ def test_cmd_queue_list_reports_empty_filtered_results(
                     "source": "orca_auto_flow",
                     "submitted_at": "2026-04-26T01:00:00+00:00",
                     "updated_at": "2026-04-26T01:00:00+00:00",
-                    "metadata": {"template_name": "reaction_ts_search"},
+                    "metadata": {"template_name": "conformer_screening"},
                 }
             ],
             "sources": {},
@@ -1385,7 +1385,7 @@ def test_cmd_queue_list_json_reports_undrained_cancel_transitions(
     workspace.mkdir(parents=True)
     payload = {
         "workflow_id": "wf-cancel-pending",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "cancelled",
         "requested_at": "2026-08-11T05:00:00+00:00",
         "stages": [],
@@ -1461,7 +1461,7 @@ def _cancel_authority_workflow_root(
     workspace.mkdir(parents=True)
     payload: dict[str, Any] = {
         "workflow_id": workflow_id,
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "cancelled",
         "requested_at": "2026-08-11T05:00:00+00:00",
         "stages": [],
@@ -1686,7 +1686,7 @@ def test_cmd_queue_list_names_a_transition_a_quarantined_twin_cannot_answer_for(
     twin_workspace.mkdir()
     twin_payload: dict[str, Any] = {
         "workflow_id": "wf-cancel-real",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "failed",
         "requested_at": "2026-08-11T05:00:00+00:00",
         "stages": [],

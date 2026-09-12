@@ -49,7 +49,8 @@ def test_engine_submission_uses_one_durable_snapshot_transaction(
     monkeypatch.setattr(submission_module, "index_root_for_path", _unexpected_queue_root)
     monkeypatch.setattr(submission_module, "_build_submission_impl", capture_submission)
 
-    result = submission_module._build_submission(object(), job_dir, {}, object())
+    manifest = {"job_type": "opt"} if submission_module is xtb_submission else {}
+    result = submission_module._build_submission(object(), job_dir, manifest, object())
 
     generation = (job_dir / SNAPSHOT_DIR_NAME / snapshot_namespace).resolve()
     marker = job_dir / ".orca_auto_snapshot_intents" / f"{snapshot_namespace}.json"
@@ -90,7 +91,8 @@ def test_engine_submission_base_exception_removes_snapshot_and_intent(
     monkeypatch.setattr(submission_module, "_build_submission_impl", fail_after_reservation)
 
     with pytest.raises(KeyboardInterrupt) as exc_info:
-        submission_module._build_submission(object(), job_dir, {}, object())
+        manifest = {"job_type": "opt"} if submission_module is xtb_submission else {}
+        submission_module._build_submission(object(), job_dir, manifest, object())
 
     assert exc_info.value is failure
     assert not generation.exists()

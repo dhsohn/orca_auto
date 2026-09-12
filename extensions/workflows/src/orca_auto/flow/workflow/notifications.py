@@ -19,9 +19,6 @@ from orca_auto.core.messaging import (
 )
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
 from orca_auto.core.utils import (
-    coerce_list as _coerce_sequence,
-)
-from orca_auto.core.utils import (
     mapping_or_empty as _coerce_mapping,
 )
 from orca_auto.core.utils import (
@@ -71,12 +68,6 @@ def _raw_stages_by_id(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return stages
 
 
-def _count_output_artifacts(stage: dict[str, Any]) -> int:
-    return len(
-        [item for item in _coerce_sequence(stage.get("output_artifacts")) if isinstance(item, dict)]
-    )
-
-
 def _crest_conformer_count(stage: dict[str, Any]) -> int | None:
     """Conformers CREST actually retained, or ``None`` when unreadable.
 
@@ -87,19 +78,8 @@ def _crest_conformer_count(stage: dict[str, Any]) -> int | None:
     return crest_stage_detail(stage)[1]
 
 
-def _xtb_candidate_count(stage: dict[str, Any]) -> int:
-    metadata = _coerce_mapping(stage.get("metadata"))
-    attempts = [
-        item for item in _coerce_sequence(metadata.get("xtb_attempts")) if isinstance(item, dict)
-    ]
-    if attempts:
-        latest = attempts[-1]
-        return _safe_int(latest.get("candidate_count"), default=0)
-    return _count_output_artifacts(stage)
-
-
 def _phase_label(phase_engine: str) -> str:
-    return {"crest": "CREST", "xtb": "xTB"}.get(phase_engine, phase_engine.upper())
+    return {"crest": "CREST"}.get(phase_engine, phase_engine.upper())
 
 
 def _phase_stage_row(
@@ -131,19 +111,6 @@ def _phase_stage_row(
             stage_label=stage_label,
             result=result,
             metrics=tuple(metrics),
-        )
-    if phase_engine == "xtb":
-        handoff_status = (
-            _normalize_text(snapshot_row.get("reaction_handoff_status")).lower() or "none"
-        )
-        return _PhaseStageRow(
-            stage_label=stage_label,
-            result=result,
-            metrics=(
-                ("Status", status),
-                ("Handoff", handoff_status),
-                ("Candidates", _xtb_candidate_count(raw_stage)),
-            ),
         )
     return _PhaseStageRow(
         stage_label=stage_label,
@@ -220,13 +187,6 @@ def _overview_fields(
             code(_result_count(snapshot, STATUS_CANCELLED)),
         ),
     ]
-    if phase_engine == "xtb":
-        ready_count = sum(
-            1
-            for row in snapshot.get("stage_statuses", [])
-            if _normalize_text(row.get("reaction_handoff_status")).lower() == "ready"
-        )
-        fields.append(field_row("Ready for ORCA", code(ready_count), inline=True))
     return fields
 
 

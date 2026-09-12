@@ -10,8 +10,6 @@ from ..engine_options import WorkflowEngineOptions
 class StageTransitionContext(TypedDict):
     previous_stage_status: str
     current_stage_status: str
-    previous_handoff_status: str
-    current_handoff_status: str
     stage_id: str
     engine: str
     task_kind: str
@@ -32,8 +30,6 @@ class WorkflowJournalEventPayload(TypedDict, total=False):
     task_kind: str
     stage_status: str
     previous_stage_status: str
-    reaction_handoff_status: str
-    previous_reaction_handoff_status: str
     metadata: dict[str, Any]
 
 

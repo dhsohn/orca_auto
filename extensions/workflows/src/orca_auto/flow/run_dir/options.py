@@ -15,7 +15,6 @@ from ..manifest import (
     normalize_interaction_energy_block,
     normalize_rmsd_dedup_block,
     optional_positive_float,
-    require_crest_candidate_count,
     validate_conformer_postprocessing_template,
     validate_interaction_energy_state_balance,
 )
@@ -37,8 +36,6 @@ RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS = (
 class RunDirManifestSections:
     resources: dict[str, Any]
     crest: dict[str, Any]
-    xtb: dict[str, Any]
-    endpoint_pairing: dict[str, Any]
     orca: dict[str, Any]
 
 
@@ -53,8 +50,6 @@ class RunDirWorkflowOptions:
     orca_route_line: str
     charge: int
     multiplicity: int
-    max_crest_candidates: int
-    max_xtb_stages: int
     boltzmann_temperature_k: float | None = None
     interaction_energy: dict[str, Any] | None = None
     rmsd_dedup: dict[str, Any] | None = None
@@ -68,8 +63,6 @@ class RunDirWorkflowConfig:
     workflow_dir: Path
     manifest: dict[str, Any]
     sections: RunDirManifestSections
-    reactant_xyz: str
-    product_xyz: str
     input_xyz: str
     workflow_type: str
 
@@ -77,21 +70,11 @@ class RunDirWorkflowConfig:
     def crest_manifest(self) -> dict[str, Any]:
         return self.sections.crest
 
-    @property
-    def xtb_manifest(self) -> dict[str, Any]:
-        return self.sections.xtb
-
-    @property
-    def endpoint_pairing(self) -> dict[str, Any]:
-        return self.sections.endpoint_pairing
-
 
 @dataclass(frozen=True)
 class _RunDirWorkflowOptionDefaults:
     orca_route_line: str
     max_orca_stages: int
-    max_crest_candidates: int
-    max_xtb_stages: int
 
 
 def _resolve_text_option_with_section(
@@ -341,39 +324,14 @@ def _resolve_run_dir_orca_options(
     }
 
 
-def _resolve_run_dir_stage_options(
-    args: Any,
-    manifest: dict[str, Any],
-    *,
-    defaults: _RunDirWorkflowOptionDefaults,
-) -> dict[str, Any]:
-    max_crest_candidates = _resolve_positive_int_option(
-        getattr(args, "max_crest_candidates", None),
-        manifest,
-        "max_crest_candidates",
-        defaults.max_crest_candidates,
-    )
-    return {
-        "max_crest_candidates": require_crest_candidate_count(max_crest_candidates),
-        "max_xtb_stages": _resolve_positive_int_option(
-            getattr(args, "max_xtb_stages", None),
-            manifest,
-            "max_xtb_stages",
-            defaults.max_xtb_stages,
-        ),
-    }
-
-
 def _resolve_run_dir_interaction_options(
     manifest: dict[str, Any],
     *,
     complex_charge: int | None = None,
     complex_multiplicity: int | None = None,
 ) -> dict[str, Any]:
-    # Validate at admission for EVERY template so a malformed (or misplaced)
-    # block fails closed with a clear error instead of being silently dropped;
-    # only conformer_screening actually consumes the normalized result. The
-    # workflow factory re-normalizes idempotently as the canonical gate.
+    # Validate postprocessing at admission; the workflow factory re-normalizes
+    # idempotently as the canonical gate.
     interaction_energy = normalize_interaction_energy_block(manifest.get("interaction_energy"))
     if complex_charge is not None and complex_multiplicity is not None:
         validate_interaction_energy_state_balance(
@@ -394,16 +352,12 @@ def _resolve_run_dir_workflow_options(
     *,
     default_orca_route_line: str,
     default_max_orca_stages: int,
-    default_max_crest_candidates: int = 3,
-    default_max_xtb_stages: int = 9,
     workflow_root: str | None = None,
     workflow_type: str = "",
 ) -> RunDirWorkflowOptions:
     defaults = _RunDirWorkflowOptionDefaults(
         orca_route_line=default_orca_route_line,
         max_orca_stages=default_max_orca_stages,
-        max_crest_candidates=default_max_crest_candidates,
-        max_xtb_stages=default_max_xtb_stages,
     )
 
     orca_options = _resolve_run_dir_orca_options(args, manifest, sections, defaults=defaults)
@@ -422,7 +376,6 @@ def _resolve_run_dir_workflow_options(
         **_resolve_run_dir_core_options(args, manifest, sections, workflow_root=workflow_root),
         **_resolve_run_dir_resource_options(args, manifest, sections),
         **orca_options,
-        **_resolve_run_dir_stage_options(args, manifest, defaults=defaults),
         **interaction_options,
     )
 
@@ -434,8 +387,6 @@ def _resolve_run_dir_workflow_option_bundle(
     *,
     default_orca_route_line: str,
     default_max_orca_stages: int,
-    default_max_crest_candidates: int = 3,
-    default_max_xtb_stages: int = 9,
     workflow_root: str | None = None,
     workflow_type: str = "",
 ) -> tuple[RunDirWorkflowOptions, dict[str, Any]]:
@@ -445,8 +396,6 @@ def _resolve_run_dir_workflow_option_bundle(
         sections,
         default_orca_route_line=default_orca_route_line,
         default_max_orca_stages=default_max_orca_stages,
-        default_max_crest_candidates=default_max_crest_candidates,
-        default_max_xtb_stages=default_max_xtb_stages,
         workflow_root=workflow_root,
         workflow_type=workflow_type,
     )

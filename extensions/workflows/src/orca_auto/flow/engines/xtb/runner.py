@@ -40,7 +40,6 @@ from orca_auto.flow.engines.scratch import (
     launch_engine_process,
     publish_running_scratch,
 )
-from orca_auto.flow.hessian_utils import parse_xtb_hessian
 
 from . import runner_ranking as _runner_ranking
 from .job_inputs import (
@@ -48,9 +47,7 @@ from .job_inputs import (
     resolve_job_inputs,
 )
 from .runner_artifacts import (
-    _collect_hessian_candidates,
     _collect_opt_candidates,
-    _collect_path_search_candidates,
     _collect_sp_candidates,
     _extract_sp_energy,
 )
@@ -60,7 +57,6 @@ LOGGER = logging.getLogger(__name__)
 _STALE_OUTPUT_NAMES_BY_JOB_TYPE: dict[str, tuple[str, ...]] = {
     "opt": ("xtbopt.xyz", "xtbopt.log", ".xtboptok"),
     "sp": ("xtbout.json", "charges", "wbo", "xtbtopo.mol"),
-    "hess": ("hessian", "vibspectrum", "xtbout.json"),
 }
 
 
@@ -68,8 +64,6 @@ def _publish_xtb_scratch_name(job_type: str, name: str) -> bool:
     if name in {"xtb.stdout.log", "xtb.stderr.log"}:
         return True
     if name in _STALE_OUTPUT_NAMES_BY_JOB_TYPE.get(job_type, ()):
-        return True
-    if job_type == "path_search" and name.startswith("xtbpath") and name.endswith(".xyz"):
         return True
     return False
 
@@ -167,24 +161,12 @@ def _append_xtb_scalar_options(command: list[str], manifest: dict[str, Any]) -> 
         command.extend([option, str(value)])
 
 
-def _append_xtb_optional_text_options(command: list[str], manifest: dict[str, Any]) -> None:
-    xcontrol = str(manifest.get("xcontrol", "")).strip()
-    if xcontrol:
-        command.extend(["--input", xcontrol])
-
-
 def _append_xtb_job_type_options(
     command: list[str],
     *,
     manifest: dict[str, Any],
-    secondary_input_xyz: Path | None,
     job_type: str,
 ) -> None:
-    if job_type == "path_search":
-        if secondary_input_xyz is None:
-            raise ValueError("path_search requires a product/reference structure")
-        command.extend(["--path", str(secondary_input_xyz)])
-        return
     if job_type == "opt":
         opt_level = str(manifest.get("opt_level", "normal")).strip().lower() or "normal"
         if opt_level not in {
@@ -203,9 +185,6 @@ def _append_xtb_job_type_options(
     if job_type == "sp":
         command.append("--sp")
         return
-    if job_type == "hess":
-        command.append("--hess")
-        return
     raise ValueError(f"Unsupported xtb job_type: {job_type}")
 
 
@@ -214,15 +193,10 @@ def _clear_stale_xtb_outputs(
     *,
     job_type: str,
     selected_input_xyz: Path,
-    secondary_input_xyz: Path | None,
 ) -> None:
     protected = {selected_input_xyz.expanduser().resolve()}
-    if secondary_input_xyz is not None:
-        protected.add(secondary_input_xyz.expanduser().resolve())
     candidates = [job_dir / name for name in _STALE_OUTPUT_NAMES_BY_JOB_TYPE.get(job_type, ())]
     candidates.append(job_dir / "xtbrestart")
-    if job_type == "path_search":
-        candidates.extend(job_dir.glob("xtbpath*.xyz"))
     removed = False
     for path in candidates:
         if path.parent.resolve() / path.name in protected:
@@ -241,7 +215,6 @@ def _build_command(
     *,
     manifest: dict[str, Any],
     selected_input_xyz: Path,
-    secondary_input_xyz: Path | None,
     job_type: str,
     resource_request: dict[str, int] | None = None,
 ) -> list[str]:
@@ -260,11 +233,9 @@ def _build_command(
 
     _append_xtb_scalar_options(command, manifest)
     _engine_runner.append_solvent_option(command, manifest)
-    _append_xtb_optional_text_options(command, manifest)
     _append_xtb_job_type_options(
         command,
         manifest=manifest,
-        secondary_input_xyz=secondary_input_xyz,
         job_type=job_type,
     )
 
@@ -280,7 +251,6 @@ def _run_candidate_sp_job(
     candidate_xyz: Path,
     candidate_run_dir: Path,
     manifest: dict[str, Any],
-    job_type: str = "sp",
     should_cancel: Callable[[], bool] | None = None,
     prepare_running_job: Callable[[], None] | None = None,
     on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
@@ -305,10 +275,8 @@ def _run_candidate_sp_job(
         label="xTB ranking candidate input",
     )
     candidate_manifest = dict(manifest)
-    candidate_manifest["job_type"] = job_type
+    candidate_manifest["job_type"] = "sp"
     candidate_manifest["input_xyz"] = "input.xyz"
-    if job_type != "path_search":
-        candidate_manifest.pop("xcontrol", None)
     parent_runtime_identity = candidate_manifest.get("_orca_auto_runtime_identity")
     if parent_runtime_identity is not None:
         candidate_manifest["_orca_auto_runtime_identity"] = (
@@ -378,221 +346,6 @@ def _run_candidate_sp_job(
     )
 
 
-TS_HESSIAN_DIR_NAME = "ts_hess"
-
-
-def _with_ts_hessian_provenance(
-    result: XtbRunResult,
-    provenance: dict[str, Any],
-    *,
-    ts_detail: dict[str, Any] | None = None,
-) -> XtbRunResult:
-    candidate_details = tuple(
-        {**item, "hessian_provenance": dict(provenance)} if item is ts_detail else item
-        for item in result.candidate_details
-    )
-    return dataclasses.replace(
-        result,
-        candidate_details=candidate_details,
-        analysis_summary={
-            **result.analysis_summary,
-            "ts_hessian_provenance": dict(provenance),
-        },
-    )
-
-
-def run_path_search_ts_hessian_followup(
-    cfg: AppConfig,
-    result: XtbRunResult,
-    *,
-    job_dir: Path,
-    should_cancel: Callable[[], bool] | None = None,
-    prepare_running_job: Callable[[], None] | None = None,
-    on_running_job: Callable[[XtbRunningJob | None], None] | None = None,
-    terminate_process: Callable[[subprocess.Popen[str]], bool] | None = None,
-    execution_snapshot: dict[str, Any] | None = None,
-) -> XtbRunResult:
-    """Compute a GFN Hessian for the path-search TS guess and record its path.
-
-    The Hessian seeds the downstream ORCA OptTS stage (``InHess Read``). It is
-    best-effort: a scientific failure leaves the path result usable and records
-    why no Hessian was produced. Cancellation remains cancellation.
-    """
-    if result.status != "completed" or result.job_type != "path_search":
-        return result
-    ts_detail = next(
-        (item for item in result.candidate_details if item.get("kind") == "ts_guess"),
-        None,
-    )
-    if ts_detail is None:
-        return _with_ts_hessian_provenance(
-            result,
-            {"status": "skipped", "reason": "ts_guess_missing"},
-        )
-    if ts_detail.get("geometry_valid") is False:
-        LOGGER.info("TS guess failed geometry validation; skipping Hessian follow-up")
-        return _with_ts_hessian_provenance(
-            result,
-            {"status": "skipped", "reason": "ts_guess_geometry_invalid"},
-            ts_detail=ts_detail,
-        )
-    ts_guess_xyz = Path(str(ts_detail.get("path") or ""))
-    if not ts_guess_xyz.is_file():
-        return _with_ts_hessian_provenance(
-            result,
-            {"status": "skipped", "reason": "ts_guess_missing_on_disk"},
-            ts_detail=ts_detail,
-        )
-    try:
-        ts_guess_bytes = read_stable_regular_file(ts_guess_xyz)
-    except (OSError, ValueError) as exc:
-        return _with_ts_hessian_provenance(
-            result,
-            {
-                "status": "skipped",
-                "reason": "ts_guess_unreadable",
-                "error_type": type(exc).__name__,
-            },
-            ts_detail=ts_detail,
-        )
-    ts_guess_sha256 = hashlib.sha256(ts_guess_bytes).hexdigest()
-    hessian_run_dir = job_dir / TS_HESSIAN_DIR_NAME
-    try:
-        recreate_confined_directory(
-            job_dir,
-            hessian_run_dir,
-            label="xTB Hessian follow-up directory",
-        )
-        manifest = (
-            dict(execution_snapshot.get("manifest") or {})
-            if execution_snapshot is not None
-            else load_job_manifest(job_dir)
-        )
-        hessian_result = _run_candidate_sp_job(
-            cfg,
-            candidate_xyz=ts_guess_xyz,
-            candidate_run_dir=hessian_run_dir,
-            manifest=manifest,
-            job_type="hess",
-            should_cancel=should_cancel,
-            prepare_running_job=prepare_running_job,
-            on_running_job=on_running_job,
-            terminate_process=terminate_process,
-            candidate_payload=ts_guess_bytes,
-        )
-    except _engine_execution.ProcessCleanupError:
-        raise
-    except Exception as exc:
-        LOGGER.exception("TS guess Hessian follow-up crashed; continuing without a Hessian")
-        return _with_ts_hessian_provenance(
-            result,
-            {
-                "status": "failed",
-                "reason": "hessian_followup_exception",
-                "error_type": type(exc).__name__,
-                "ts_guess_sha256": ts_guess_sha256,
-            },
-            ts_detail=ts_detail,
-        )
-    hessian_path = hessian_run_dir / "hessian"
-    attempted_provenance = {
-        "status": hessian_result.status,
-        "reason": hessian_result.reason,
-        "exit_code": hessian_result.exit_code,
-        "command": list(hessian_result.command),
-        "selected_input_xyz": hessian_result.selected_input_xyz,
-        "manifest_path": hessian_result.manifest_path,
-        "resource_request": dict(hessian_result.resource_request),
-        "resource_actual": dict(hessian_result.resource_actual),
-        "started_at": hessian_result.started_at,
-        "finished_at": hessian_result.finished_at,
-        "stdout_log": hessian_result.stdout_log,
-        "stderr_log": hessian_result.stderr_log,
-        "analysis_summary": dict(hessian_result.analysis_summary),
-        "ts_guess_sha256": ts_guess_sha256,
-    }
-    try:
-        executed_ts_bytes = read_stable_regular_file(hessian_run_dir / "input.xyz")
-    except (OSError, ValueError):
-        executed_ts_bytes = b""
-    if hashlib.sha256(executed_ts_bytes).hexdigest() != ts_guess_sha256:
-        return _with_ts_hessian_provenance(
-            result,
-            {
-                **attempted_provenance,
-                "status": "failed",
-                "reason": "ts_guess_changed_before_hessian_execution",
-            },
-            ts_detail=ts_detail,
-        )
-    if hessian_result.status == "cancelled":
-        cancelled = _with_ts_hessian_provenance(
-            result,
-            attempted_provenance,
-            ts_detail=ts_detail,
-        )
-        return dataclasses.replace(
-            cancelled,
-            status="cancelled",
-            reason="cancel_requested",
-            exit_code=hessian_result.exit_code,
-        )
-    if hessian_result.status != "completed" or not hessian_path.is_file():
-        LOGGER.warning(
-            "TS guess Hessian follow-up did not produce a hessian file "
-            "(status=%s, expected=%s); continuing without a Hessian",
-            hessian_result.status,
-            hessian_path,
-        )
-        return _with_ts_hessian_provenance(
-            result,
-            attempted_provenance,
-            ts_detail=ts_detail,
-        )
-    resolved_hessian = str(hessian_path.resolve())
-    try:
-        hessian_bytes = read_stable_regular_file(hessian_path)
-        hessian_matrix = parse_xtb_hessian(hessian_path, payload=hessian_bytes)
-    except (OSError, ValueError):
-        LOGGER.warning("TS guess Hessian became invalid before provenance capture", exc_info=True)
-        return _with_ts_hessian_provenance(
-            result,
-            {
-                **attempted_provenance,
-                "status": "failed",
-                "reason": "hessian_provenance_invalid",
-            },
-            ts_detail=ts_detail,
-        )
-    hessian_provenance = {
-        **attempted_provenance,
-        "hessian_path": resolved_hessian,
-        "hessian_sha256": hashlib.sha256(hessian_bytes).hexdigest(),
-        "hessian_size_bytes": len(hessian_bytes),
-        "hessian_dimension": len(hessian_matrix),
-    }
-    candidate_details = tuple(
-        {
-            **item,
-            "hessian_path": resolved_hessian,
-            "hessian_provenance": hessian_provenance,
-        }
-        if item is ts_detail
-        else item
-        for item in result.candidate_details
-    )
-    analysis_summary = {
-        **result.analysis_summary,
-        "ts_hessian_path": resolved_hessian,
-        "ts_hessian_provenance": hessian_provenance,
-    }
-    return dataclasses.replace(
-        result,
-        candidate_details=candidate_details,
-        analysis_summary=analysis_summary,
-    )
-
-
 def _ranking_deps() -> _runner_ranking.RankingDeps:
     return _runner_ranking.RankingDeps(
         now_utc_iso=now_utc_iso,
@@ -643,7 +396,6 @@ def run_xtb_ranking_job(
             "job_type": str(execution_snapshot.get("job_type") or ""),
             "reaction_key": str(execution_snapshot.get("reaction_key") or ""),
             "selected_input_xyz": execution_snapshot.get("selected_input_xyz"),
-            "secondary_input_xyz": execution_snapshot.get("secondary_input_xyz") or None,
             "input_summary": dict(execution_snapshot.get("input_summary") or {}),
             "manifest_path": str(execution_snapshot.get("manifest_path") or ""),
         }
@@ -693,12 +445,6 @@ def start_xtb_job(
         verified_inputs, manifest = _verified_snapshot_manifest(job_dir, execution_snapshot)
         if verified_inputs.get("selected") != selected_input_xyz.expanduser().resolve():
             raise ValueError("Selected xTB input does not match the queued immutable snapshot")
-        secondary_text = str(execution_snapshot.get("secondary_input_xyz") or "").strip()
-        if secondary_text:
-            if verified_inputs.get("secondary") != Path(secondary_text).expanduser().resolve():
-                raise ValueError("Secondary xTB input does not match the immutable snapshot")
-        elif "secondary" in verified_inputs:
-            raise ValueError("Queued xTB execution snapshot has an unexpected secondary input")
         resource_raw = execution_snapshot.get("resource_request")
         if not isinstance(resource_raw, dict):
             raise ValueError("Queued xTB execution snapshot has no resource request")
@@ -707,7 +453,6 @@ def start_xtb_job(
             "job_type": str(execution_snapshot.get("job_type") or ""),
             "reaction_key": str(execution_snapshot.get("reaction_key") or ""),
             "selected_input_xyz": execution_snapshot.get("selected_input_xyz"),
-            "secondary_input_xyz": execution_snapshot.get("secondary_input_xyz") or None,
             "input_summary": dict(execution_snapshot.get("input_summary") or {}),
         }
     runtime_environment = _engine_runner.verified_runtime_environment_for_job(
@@ -717,15 +462,10 @@ def start_xtb_job(
         display_name="xTB",
     )
     resource_actual = _engine_runner.resource_actual_dict(resource_request)
-    secondary_raw = inputs.get("secondary_input_xyz")
-    secondary_input_xyz = None
-    if secondary_raw:
-        secondary_input_xyz = Path(str(secondary_raw)).expanduser().resolve()
     command = _build_command(
         cfg,
         manifest=manifest,
         selected_input_xyz=selected_input_xyz,
-        secondary_input_xyz=secondary_input_xyz,
         job_type=str(inputs["job_type"]),
         resource_request=resource_request,
     )
@@ -753,7 +493,6 @@ def start_xtb_job(
             job_dir,
             job_type=resolved_job_type,
             selected_input_xyz=selected_input_xyz,
-            secondary_input_xyz=secondary_input_xyz,
         ),
         before_popen=before_popen,
         on_launch_aborted=on_launch_aborted,
@@ -835,7 +574,7 @@ def finalize_xtb_job(
         }
         for detail in candidate_details:
             if isinstance(detail, dict):
-                output_paths.update(str(detail.get(key) or "") for key in ("path", "hessian_path"))
+                output_paths.add(str(detail.get("path") or ""))
         try:
             for output_path in sorted(path for path in output_paths if path):
                 identity = _engine_runner.confined_output_identity(running.job_dir, output_path)
@@ -869,9 +608,6 @@ def finalize_xtb_job(
         elif running.job_type == "sp":
             status = "failed"
             reason = "xtb_sp_no_finite_energy"
-        elif running.job_type == "hess":
-            status = "failed"
-            reason = "xtb_hess_invalid_hessian"
 
     return XtbRunResult(
         status=status,
@@ -909,14 +645,6 @@ def _reason_from_exit_code(exit_code: int) -> str:
 def _collect_candidates(
     running: XtbRunningJob,
 ) -> tuple[int, tuple[str, ...], tuple[dict[str, Any], ...], dict[str, Any]]:
-    if running.job_type == "path_search":
-        job_dir = Path(running.job_dir)
-        return _collect_path_search_candidates(
-            job_dir,
-            running.stdout_log,
-            input_summary=dict(running.input_summary),
-            manifest=dict(running.manifest_snapshot),
-        )
     if running.job_type == "opt":
         return _collect_opt_candidates(
             Path(running.job_dir),
@@ -924,9 +652,4 @@ def _collect_candidates(
         )
     if running.job_type == "sp":
         return _collect_sp_candidates(Path(running.job_dir))
-    if running.job_type == "hess":
-        return _collect_hessian_candidates(
-            Path(running.job_dir),
-            selected_input_xyz=running.selected_input_xyz,
-        )
     return 0, (), (), {}

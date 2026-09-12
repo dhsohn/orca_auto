@@ -19,9 +19,6 @@ from ..manifest import (
     manifest_mapping as _shared_manifest_mapping,
 )
 from ..manifest import (
-    resolve_endpoint_pairing_manifest as _shared_resolve_endpoint_pairing_manifest,
-)
-from ..manifest import (
     resolve_engine_manifest as _shared_resolve_engine_manifest,
 )
 from ..manifest import (
@@ -29,8 +26,6 @@ from ..manifest import (
 )
 from .layout import (
     STANDARD_CONFORMER_INPUT_FILENAME,
-    STANDARD_REACTION_PRODUCT_FILENAME,
-    STANDARD_REACTION_REACTANT_FILENAME,
     WorkflowRunDirLayout,
     inspect_workflow_run_dir,
 )
@@ -86,29 +81,18 @@ def _resolve_run_dir_workflow_type(
         workflow_type_text = normalize_text(manifest.get("workflow_type"))
     if workflow_type_text:
         return normalize_workflow_template_id(normalize_text(workflow_type_text))
-    if workflow_layout.is_ambiguous:
-        raise ValueError(
-            "Ambiguous workflow_dir: found both reaction inputs and conformer input. "
-            "Set workflow_type in flow.yaml to choose one."
-        )
     inferred_workflow_type = workflow_layout.inferred_workflow_type
     if inferred_workflow_type:
         return inferred_workflow_type
-    raise ValueError(
-        "Could not infer workflow type from workflow_dir. "
-        "Expected reactant.xyz + product.xyz or input.xyz."
-    )
+    raise ValueError("Could not infer workflow type from workflow_dir. Expected input.xyz.")
 
 
 def _resolve_run_dir_manifest_sections(
     workflow_dir: Path, manifest: dict[str, Any]
 ) -> RunDirManifestSections:
-    xtb_manifest = _shared_resolve_engine_manifest(workflow_dir, manifest, "xtb")
     return RunDirManifestSections(
         resources=_shared_manifest_mapping(manifest.get("resources")),
         crest=_shared_resolve_engine_manifest(workflow_dir, manifest, "crest"),
-        xtb=xtb_manifest,
-        endpoint_pairing=_shared_resolve_endpoint_pairing_manifest(manifest, xtb_manifest),
         orca=_shared_resolve_engine_manifest(workflow_dir, manifest, "orca"),
     )
 
@@ -124,20 +108,6 @@ def _load_run_dir_workflow_config(args: Any, workflow_dir: Path) -> RunDirWorkfl
         workflow_dir=workflow_dir,
         manifest=manifest,
         sections=sections,
-        reactant_xyz=_resolve_run_dir_path(
-            workflow_dir,
-            explicit=getattr(args, "reactant_xyz", None),
-            manifest=manifest,
-            key="reactant_xyz",
-            default_names=(STANDARD_REACTION_REACTANT_FILENAME,),
-        ),
-        product_xyz=_resolve_run_dir_path(
-            workflow_dir,
-            explicit=getattr(args, "product_xyz", None),
-            manifest=manifest,
-            key="product_xyz",
-            default_names=(STANDARD_REACTION_PRODUCT_FILENAME,),
-        ),
         input_xyz=_resolve_run_dir_path(
             workflow_dir,
             explicit=getattr(args, "input_xyz", None),

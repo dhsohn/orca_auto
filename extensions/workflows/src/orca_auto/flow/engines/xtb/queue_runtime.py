@@ -81,7 +81,6 @@ from .queue_runtime_execution import (
 from .runner import (
     XtbRunResult,
     finalize_xtb_job,
-    run_path_search_ts_hessian_followup,
     run_xtb_ranking_job,
     start_xtb_job,
 )
@@ -132,7 +131,6 @@ def _worker_execution_callbacks() -> XtbQueueRuntimeWorkerExecutionCallbacks:
         run_xtb_ranking_job=run_xtb_ranking_job,
         start_xtb_job=start_xtb_job,
         finalize_xtb_job=finalize_xtb_job,
-        run_path_search_ts_hessian_followup=run_path_search_ts_hessian_followup,
         terminate_process=_terminate_process,
         wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
         sleep=time.sleep,
@@ -532,7 +530,7 @@ def _adopt_terminal_artifacts(cfg: Any, queue_root: Path, entry: Any) -> bool:
         return False
     selected_input_path, artifact_selected_input_path = resolved_inputs
 
-    artifact_job_type = str(_artifact_value(state, "job_type", "path_search") or "path_search")
+    artifact_job_type = str(_artifact_value(state, "job_type", "unknown") or "unknown")
     artifact_reaction_key = str(_artifact_value(state, "reaction_key", record.molecule_key))
     job_type = str(entry_metadata.get("job_type") or "").strip()
     reaction_key = str(entry_metadata.get("reaction_key") or "").strip()

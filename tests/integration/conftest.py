@@ -104,27 +104,6 @@ def smoke_workspace(tmp_path: Path) -> SmokeWorkspace:
         #!/usr/bin/env bash
         set -euo pipefail
 
-        mode="opt"
-        for arg in "$@"; do
-          if [[ "$arg" == "--path" ]]; then
-            mode="path_search"
-            break
-          fi
-        done
-
-        if [[ "$mode" == "path_search" ]]; then
-          cp "$1" xtbpath_ts.xyz
-          : > xtbpath_0.xyz
-          for _ in 1 2 3 4 5 6 7; do cat "$1" >> xtbpath_0.xyz; done
-          printf '{"total energy": -4.2, "electronic energy": -4.4}\\n' > xtbout.json
-          printf 'forward barrier (kcal) : 12.4\\n'
-          printf 'backward barrier (kcal) : 8.6\\n'
-          printf 'reaction energy (kcal) : -3.1\\n'
-          printf 'estimated TS on file xtbpath_ts.xyz\\n'
-          printf 'path 0 taken with 7 points\\n'
-          exit 0
-        fi
-
         cp "$1" xtbopt.xyz
         : > .xtboptok
         printf '{"total energy": -4.2, "electronic energy": -4.4}\\n' > xtbout.json

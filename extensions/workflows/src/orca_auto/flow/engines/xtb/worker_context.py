@@ -13,6 +13,7 @@ from orca_auto.core.queue.engine.input_snapshot import (
     verify_input_snapshots,
 )
 
+from .job_inputs import job_type as manifest_job_type
 from .job_locations import reaction_key_from_job_dir, runtime_roots_for_cfg
 from .state import load_state, state_matches_job
 
@@ -50,8 +51,7 @@ def selected_xyz(entry: Any) -> Path:
 
 
 def job_type(entry: Any) -> str:
-    value = _engine_execution.entry_metadata_text(entry, "job_type").lower()
-    return value or "path_search"
+    return manifest_job_type({"job_type": _engine_execution.entry_metadata_text(entry, "job_type")})
 
 
 def reaction_key(entry: Any, job_dir: Path) -> str:
@@ -158,28 +158,8 @@ def build_execution_context(
             raise ValueError("Queued xTB execution snapshot has a mismatched input summary")
         if snapshot.get("resource_request") != resource_request:
             raise ValueError("Queued xTB execution snapshot has a mismatched resource request")
-        secondary_text = str(snapshot.get("secondary_input_xyz") or "").strip()
-        if secondary_text:
-            if verified_inputs.get("secondary") != Path(secondary_text).expanduser().resolve():
-                raise ValueError("Queued secondary xTB input does not match its immutable snapshot")
-        elif "secondary" in verified_inputs:
-            raise ValueError("Queued xTB execution snapshot has an unexpected secondary input")
-        xcontrol = str(manifest_snapshot.get("xcontrol") or "").strip()
-        if xcontrol and verified_inputs.get("xcontrol") != Path(xcontrol).expanduser().resolve():
-            raise ValueError("Queued xTB xcontrol file does not match its immutable snapshot")
         expected_roles = {"selected", "manifest"}
-        if xcontrol:
-            expected_roles.add("xcontrol")
-        elif "xcontrol" in verified_inputs:
-            raise ValueError("Queued xTB execution snapshot has an unexpected xcontrol file")
-        if resolved_job_type == "path_search":
-            expected_roles.add("secondary")
-            if (
-                str(resolved_input_summary.get("reactant_xyz") or "") != str(resolved_selected_xyz)
-                or str(resolved_input_summary.get("product_xyz") or "") != secondary_text
-            ):
-                raise ValueError("Queued xTB path-search endpoints do not match input snapshots")
-        elif resolved_job_type == "ranking":
+        if resolved_job_type == "ranking":
             candidate_roles = sorted(
                 role for role in verified_inputs if role.startswith("candidate_")
             )

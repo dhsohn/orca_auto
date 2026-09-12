@@ -31,9 +31,11 @@ the environment and run:
 python -m pip install -e . -e ./extensions/workflows
 ```
 
-This includes ORCA-only `scan_ts` as well as CREST/xTB workflows. For an existing
-monolithic installation, use a fresh environment and the cutover guidance in
-[RELEASE.md](RELEASE.md); do not remove workflow support while its state is in use.
+The current development extension supports conformer screening only, with
+CREST generation and ORCA refinement. For an
+existing installation, use a fresh environment and the cutover guidance in
+[RELEASE.md](RELEASE.md), including its TS-workflow removal warning. Do not
+replace a running worker's source or environment.
 
 ## 2) Configure
 

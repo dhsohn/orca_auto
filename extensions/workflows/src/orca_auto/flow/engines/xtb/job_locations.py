@@ -36,7 +36,7 @@ _LOCATION_EXPORTS = EngineJobLocations(
             original_run_dir
         ),
         payload_kind_key="job_type",
-        payload_kind_default="path_search",
+        payload_kind_default="unknown",
         molecule_key_name="reaction_key",
     ),
     load_state_fn=load_state,

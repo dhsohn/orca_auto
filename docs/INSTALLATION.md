@@ -5,8 +5,13 @@
 ## Choose a profile
 
 - **Core** (`orca_auto`): standalone ORCA execution, queues, and reports.
-- **Core + Workflows**: add `orca_auto_workflows` for CREST→xTB→ORCA pipelines
-  and ORCA-only `scan_ts`. The extension requires the exact same Core version.
+- **Core + Workflows**: add `orca_auto_workflows` for CREST-based conformer
+  screening and ORCA refinement. The
+  extension requires the exact same Core version.
+
+The current source is unreleased `6.0.0.dev0` and removes the two TS workflows
+without compatibility support. Read the [cutover warning](RELEASE.md#removing-ts-workflows-in-60)
+before upgrading an existing runtime.
 
 Both profiles use the `orca_auto` command. Python 3.11+ and Linux/WSL2 are
 required. Install ORCA separately; workflow stages using xTB or CREST also need
@@ -16,6 +21,7 @@ those executables. None of these chemistry engines is bundled in the packages.
 
 The [v5.0.0 GitHub release](https://github.com/dhsohn/orca_auto/releases/tag/v5.0.0)
 provides wheels, source distributions, and `SHA256SUMS`, not a PyPI publication.
+These published packages predate the TS-workflow removal described above.
 Download `orca_auto-5.0.0-py3-none-any.whl`. For workflows, also download
 `orca_auto_workflows-5.0.0-py3-none-any.whl` into the same directory.
 
@@ -55,6 +61,8 @@ Keep a running worker's source and environment unchanged. Prepare a fresh
 environment and switch only in an idle maintenance window. Do not remove
 workflow support from an environment still responsible for workflow state.
 Follow the [4.x → 5.x cutover guide](RELEASE.md#moving-from-the-monolithic-4x-installation)
-for package, state, and service boundaries.
+for package, state, and service boundaries, and the
+[6.0 TS-workflow removal warning](RELEASE.md#removing-ts-workflows-in-60) for
+unsupported old workflow state.
 
 [Back to README](../README.md)

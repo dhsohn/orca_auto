@@ -192,7 +192,6 @@ def test_cli_run_dir_rejects_workflow_namespace_replacement_before_payload_commi
     flow_payload = "\n".join(
         (
             "workflow_type: conformer_screening",
-            "max_crest_candidates: 1",
             "max_orca_stages: 1",
             "resources:",
             "  max_cores: 1",
@@ -441,32 +440,15 @@ def test_cmd_run_dir_sets_default_orca_priority(
 
 
 def test_workflow_run_dir_layout_properties_and_manifest_detection(tmp_path: Path) -> None:
-    ambiguous = WorkflowRunDirLayout(
-        has_manifest=False,
-        has_reaction_inputs=True,
-        has_conformer_input=True,
-    )
-    reaction = WorkflowRunDirLayout(
-        has_manifest=False,
-        has_reaction_inputs=True,
-        has_conformer_input=False,
-    )
-    conformer = WorkflowRunDirLayout(
-        has_manifest=False,
-        has_reaction_inputs=False,
-        has_conformer_input=True,
-    )
-
-    assert ambiguous.is_ambiguous is True
-    assert ambiguous.inferred_workflow_type is None
-    assert reaction.inferred_workflow_type == "reaction_ts_search"
+    empty = WorkflowRunDirLayout(has_manifest=False, has_conformer_input=False)
+    conformer = WorkflowRunDirLayout(has_manifest=False, has_conformer_input=True)
+    assert empty.inferred_workflow_type is None
     assert conformer.inferred_workflow_type == "conformer_screening"
 
     target = tmp_path / "workflow"
     target.mkdir()
     (target / "reactant.xyz").write_text("1\nr\nH 0 0 0\n", encoding="utf-8")
     (target / "product.xyz").write_text("1\np\nH 0 0 1\n", encoding="utf-8")
-    layout = inspect_workflow_run_dir(target)
-
-    assert layout.has_reaction_inputs is True
-    assert layout.inferred_workflow_type == "reaction_ts_search"
+    assert inspect_workflow_run_dir(target).inferred_workflow_type is None
+    (target / "input.xyz").write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
+    assert inspect_workflow_run_dir(target).inferred_workflow_type == "conformer_screening"

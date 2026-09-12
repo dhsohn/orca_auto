@@ -45,7 +45,7 @@ def load_job_manifest(job_dir: Path) -> dict[str, Any]:
 
 
 def job_type(manifest: dict[str, Any]) -> str:
-    value = _normalize_text(manifest.get("job_type", "path_search")).lower() or "path_search"
+    value = _normalize_text(manifest.get("job_type")).lower()
     if value not in SUPPORTED_JOB_TYPES:
         raise ValueError(
             f"Unsupported xtb job_type: {value}. supported={sorted(SUPPORTED_JOB_TYPES)}"
@@ -102,55 +102,6 @@ def _single_frame_atom_sequence(path: Path, *, label: str) -> tuple[str, ...]:
     if not atoms:
         raise ValueError(f"{label} must contain at least one atom: {path}")
     return atoms
-
-
-def _resolve_path_search_inputs(
-    resolved_job_dir: Path,
-    manifest: dict[str, Any],
-) -> dict[str, Any]:
-    reaction_key = _normalize_key(
-        _normalize_text(manifest.get("reaction_key")) or resolved_job_dir.name
-    )
-
-    reactants_dir = (resolved_job_dir / "reactants").resolve()
-    products_dir = (resolved_job_dir / "products").resolve()
-    if not reactants_dir.is_relative_to(resolved_job_dir):
-        raise ValueError(f"Reactants directory must stay inside the job directory: {reactants_dir}")
-    if not products_dir.is_relative_to(resolved_job_dir):
-        raise ValueError(f"Products directory must stay inside the job directory: {products_dir}")
-    if not reactants_dir.exists() or not reactants_dir.is_dir():
-        raise ValueError(f"Missing reactants directory: {reactants_dir}")
-    if not products_dir.exists() or not products_dir.is_dir():
-        raise ValueError(f"Missing products directory: {products_dir}")
-
-    reactant_xyz = _choose_xyz(
-        reactants_dir,
-        _normalize_text(manifest.get("reactant_xyz")),
-        label="reactant",
-    )
-    product_xyz = _choose_xyz(
-        products_dir,
-        _normalize_text(manifest.get("product_xyz")),
-        label="product",
-    )
-    reactant_atoms = _single_frame_atom_sequence(reactant_xyz, label="Reactant input")
-    product_atoms = _single_frame_atom_sequence(product_xyz, label="Product input")
-    if reactant_atoms != product_atoms:
-        raise ValueError("xTB path-search endpoints must have identical atom order and elements")
-
-    input_summary = {
-        "reactant_xyz": str(reactant_xyz),
-        "product_xyz": str(product_xyz),
-        "reactant_count": len(_xyz_files(reactants_dir)),
-        "product_count": len(_xyz_files(products_dir)),
-    }
-    return {
-        "job_type": "path_search",
-        "reaction_key": reaction_key,
-        "selected_input_xyz": reactant_xyz,
-        "secondary_input_xyz": product_xyz,
-        "input_summary": input_summary,
-    }
 
 
 def _resolve_ranking_inputs(
@@ -237,7 +188,6 @@ def _resolve_ranking_inputs(
         "job_type": "ranking",
         "reaction_key": molecule_key,
         "selected_input_xyz": candidate_paths[0],
-        "secondary_input_xyz": None,
         "input_summary": input_summary,
     }
 
@@ -260,7 +210,6 @@ def _resolve_single_input_job_inputs(
         "job_type": resolved_type,
         "reaction_key": molecule_key,
         "selected_input_xyz": input_xyz,
-        "secondary_input_xyz": None,
         "input_summary": {
             "input_xyz": str(input_xyz),
             "input_count": 1,
@@ -272,8 +221,6 @@ def resolve_job_inputs(job_dir: Path, manifest: dict[str, Any]) -> dict[str, Any
     resolved_job_dir = job_dir.expanduser().resolve()
     resolved_type = job_type(manifest)
 
-    if resolved_type == "path_search":
-        return _resolve_path_search_inputs(resolved_job_dir, manifest)
     if resolved_type == "ranking":
         return _resolve_ranking_inputs(resolved_job_dir, manifest)
     return _resolve_single_input_job_inputs(
