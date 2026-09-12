@@ -5,6 +5,19 @@ chemistry workflows. It is not a replacement for ORCA, a general workflow engine
 or a chemistry toolkit. This page explains the gap it is designed to fill and how
 it relates to neighboring tools.
 
+## Local-first companion tools
+
+ORCA_auto is a companion to [Chemvas](https://github.com/dhsohn/Chemvas) and
+[LLMdocx](https://github.com/dhsohn/LLMdocx): independent tools for drawing
+chemistry, running calculations, and working with research documents.
+
+The tools share a versioned `machine.json` observation envelope while keeping
+their own input and output contracts. Connecting them requires explicit
+conversion: Chemvas handoffs must become ORCA inputs or `flow.yaml` workflows,
+and calculation results must be packaged in
+[LLMdocx's results-bundle format](https://github.com/dhsohn/LLMdocx/blob/main/docs/RESULTS_BUNDLE_V1.md).
+These conversions are not built into ORCA_auto.
+
 ## Raw ORCA commands and shell scripts
 
 ORCA already provides the electronic-structure engine and input language. For a

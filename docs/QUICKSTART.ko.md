@@ -7,6 +7,9 @@
 이 가이드는 새로 체크아웃한 저장소에서 감독되는 ORCA_auto 엔진 워커까지 가는
 가장 짧은 경로입니다.
 
+릴리스 wheel과 본체 / 본체 + 확장 구성 선택은 [패키지 설치](INSTALLATION.ko.md)를
+참고하세요. 아래 단계는 소스 checkout을 사용합니다.
+
 ## 1) 설치
 
 ```bash
@@ -76,6 +79,8 @@ orca_auto service restart
 guard의 제한은 [Systemd 계약](PUBLIC_CONTRACTS.ko.md#systemd-계약)을 참고하세요.
 
 ## 5) 작업 제출
+
+설정한 `runs_root` 아래 작업 디렉터리에 ORCA `.inp`를 놓은 뒤 제출하세요:
 
 ```bash
 orca_auto run-dir '/home/user/orca_runs/sample_rxn'

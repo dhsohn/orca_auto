@@ -104,7 +104,7 @@ python -m pip install -e . -e ./extensions/workflows
 
 These source-install commands do not require either distribution on a package
 index. For release wheels, download the desired pair from GitHub Releases and
-follow the [README installation instructions](../README.md#installation).
+follow the [package installation instructions](INSTALLATION.md).
 The `workflows` extra selects the exact matching extension when both
 distributions are available to pip; independent version combinations are not
 supported.
