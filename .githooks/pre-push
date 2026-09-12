@@ -34,7 +34,7 @@ dep_files_changed() { # $1 = local sha, $2 = remote sha (may be all zeros)
     base="$(git merge-base "$1" origin/main 2>/dev/null || true)"
     [[ -n "$base" ]] || return 0
   fi
-  [[ -n "$(git diff --name-only "$base" "$1" -- pyproject.toml constraints-dev.txt)" ]]
+  [[ -n "$(git diff --name-only "$base" "$1" -- pyproject.toml extensions/workflows/pyproject.toml constraints-dev.txt)" ]]
 }
 
 # stdin FIRST: "<local_ref> <local_sha> <remote_ref> <remote_sha>" per pushed

@@ -124,7 +124,9 @@ def core_only(tmp_path: Path, core_only_python: Path) -> _CoreOnlyInstallation:
     installed = metadata.distribution("orca_auto")
     dist_info = imports / f"orca_auto-{installed.version}.dist-info"
     dist_info.mkdir()
-    metadata_text = installed.read_text("METADATA")
+    # Source-first hook paths may select egg-info (PKG-INFO), while an installed
+    # wheel uses dist-info (METADATA). Copy either supported layout verbatim.
+    metadata_text = installed.read_text("METADATA") or installed.read_text("PKG-INFO")
     assert metadata_text is not None
     (dist_info / "METADATA").write_text(metadata_text, encoding="utf-8")
 
