@@ -2,7 +2,9 @@
 
 **English** | [한국어](DEVELOPMENT.ko.md)
 
-This repository now uses a monorepo-style package layout under `src/orca_auto`.
+This repository contains two same-version distributions. Core sources live under
+`src/orca_auto`; workflow sources live under
+`extensions/workflows/src/orca_auto/flow`. Both retain `orca_auto.*` imports.
 
 ## Canonical Import Rules
 
@@ -14,14 +16,14 @@ This repository now uses a monorepo-style package layout under `src/orca_auto`.
 New code, tests, and docs should import from `orca_auto.*`.
 
 The domain packages form enforced layers — `flow` → `orca` → `core` — checked
-by import-linter (`lint-imports`, configured in `pyproject.toml` and run by
+by import-linter (`python scripts/check_imports.py`, configured in `pyproject.toml` and run by
 `scripts/check.sh`, so also by CI). Higher layers may import lower ones; the
 reverse fails the build. Cross-layer engine wiring resolves lazy string module
 paths owned by `core/engine_catalog.py` instead of importing engine modules
 directly. `core/engines/registry.py` and `core/queue/worker/admission.py` consume
 that catalog.
 
-The top-level CLI modules (`cli*.py`, `activity_*.py`, `terminal_table.py`,
+The top-level CLI modules (`cli*.py`, `activity/`, `activity_*.py`, `terminal_table.py`,
 `systemd_plan.py`, `_process_evidence.py`) are the outermost layer: they
 compose the domain packages,
 and a second import-linter contract forbids `core`, `orca` and `flow` from
@@ -29,6 +31,54 @@ importing any of them. What command adapters inside the domain packages share
 with the CLI lives in `core` instead — `core/terminal.py` owns ANSI styling and
 the `error:`/`hint:` output format, and `core/config/discovery.py` owns shared
 config and workflow-root resolution from parsed arguments.
+
+### Optional workflows distributions
+
+The root `orca_auto` distribution contains core only. The official
+`orca_auto_workflows` project at `extensions/workflows` owns `orca_auto.flow`,
+including xTB/CREST engines and ORCA-only `scan_ts` workflows. Both projects ship
+as `5.0.0` and require the exact matching version; this is not an independently
+versioned plugin API.
+
+Install both local projects together for development:
+
+```bash
+python -m pip install -e '.[dev]' -e ./extensions/workflows
+```
+
+The root `workflows` extra pins the matching extension. Pass both local projects
+as above so the resolver does not require the extension on a package index;
+5.0.0 distribution files are provided through GitHub releases, not PyPI.
+`bootstrap_wsl.sh` installs core by default;
+add `--with-workflows` for the full profile. The shared check script installs both.
+
+Core-only installations support help, standalone ORCA submission, activity
+list/cancel/clear, and ORCA workers. Workflow commands fail with an actionable
+missing-extension error. A broken installed extension is not silently treated
+as absent.
+
+- `core/extensions.py` owns presence checks for the one official extension;
+  it is not a general plugin registry. Workflow parser options and providers
+  are composed only when available.
+- `activity/` owns unified listing and cancellation outside the domain layers.
+  Workflow collection remains in `flow/activity/`; shared activity models,
+  engine paths and command-result envelopes live in `core`, while standalone
+  ORCA cancellation lives in `orca/direct_cancel.py`. Consumers import the
+  concrete owners; the old modules are not compatibility facades.
+- Persisted engine identities, workflow markers and admission source IDs remain
+  understood without the extension. Existing workflow state (including raw
+  `flow.yaml` scaffolds) must cause a clear
+  refusal before incomplete listing or mutation, never a misleading empty queue
+  or standalone cancellation of a workflow stage.
+- The same queue, execution, recovery and admission implementations are reused.
+  Extraction does not change ORCA scientific verdicts or workflow recipes.
+
+Core and extension wheels have separate source inventories and must not own the
+same installed file. The installer still requires a source checkout with
+`systemd/`; package installation does not deploy services. Existing workflow CLI,
+config and recovery contracts remain committed with the matching extension.
+Moving from monolithic 4.x requires an intentional environment cutover; see
+[RELEASE.md](RELEASE.md).
 
 Within workflow orchestration, inject only the outer persistence, engine,
 clock, and event boundaries through `OrchestrationServices`. Import internal
@@ -176,11 +226,14 @@ package workflow boundary.
 ├── src/
 │   └── orca_auto/
 │       ├── core/
-│       ├── flow/
-│       │   └── engines/
-│       │       ├── xtb/
-│       │       └── crest/
 │       └── orca/
+├── extensions/
+│   └── workflows/
+│       ├── pyproject.toml
+│       └── src/orca_auto/flow/
+│           └── engines/
+│               ├── xtb/
+│               └── crest/
 ├── tests/
 │   ├── core/
 │   ├── flow/
@@ -255,8 +308,8 @@ bash scripts/clean_artifacts.sh
 ## Quality Gates
 
 - `scripts/check.sh` is the shared local and CI entrypoint. It creates or
-  repairs `.venv`, installs `.[dev]`, then runs `ruff check`,
-  `ruff format --check`, `mypy`, `lint-imports`, and pytest with the coverage gate.
+  repairs `.venv`, installs `.[dev]` and `./extensions/workflows`, then runs `ruff check`,
+  `ruff format --check`, `mypy`, `python scripts/check_imports.py`, and pytest with the coverage gate.
 - Ruff explicitly enables import sorting (`I`) and Bugbear (`B`) alongside the
   default Pyflakes/pycodestyle safety rules.
 - `ruff format` is the canonical formatter and is gated via
@@ -266,7 +319,7 @@ bash scripts/clean_artifacts.sh
   are applied by one override to the whole `orca_auto` package (`orca_auto`,
   `orca_auto.*`), which every source module already passes, so a new or moved
   module is strict by default. Move the options to `[tool.mypy]` only after the
-  full `src` + `tests` tree passes the equivalent strict flags.
+  full `src` + `extensions/workflows/src` + `tests` tree passes the equivalent strict flags.
 
 ## Test Coupling Policy
 
@@ -282,7 +335,8 @@ implementation-coupled tests. Treat it as an audit report, not a failure gate.
 ## Package Policy
 
 - `orca_auto.orca` is the only implementation source of truth
-- All supported package imports live under `src/orca_auto`
+- Core sources live under `src/orca_auto`; workflow sources live under
+  `extensions/workflows/src/orca_auto/flow`. Installed imports remain `orca_auto.*`.
 - If a new feature requires code changes in ORCA logic, make them under `src/orca_auto/orca`
 - Shared engine definitions, queue workers, child entrypoints, artifacts, and
   registry helpers live under `orca_auto.core.engines`

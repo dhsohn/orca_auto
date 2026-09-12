@@ -35,10 +35,18 @@ ORCA는 가장 풍부한 리포팅/모니터링 표면을 가진 공개 1급 엔
 
 ## 2. 계층화된 패키지 구조
 
-모든 코드는 `src/orca_auto` 아래에 있으며, 다섯 개 주요 영역으로 나뉩니다:
+본체 소스는 `src/orca_auto`, 동일 버전 선택적 확장 소스는
+`extensions/workflows/src/orca_auto/flow`에 있습니다. 아래 트리는 단일 소스
+디렉터리가 아니라 두 배포물을 설치했을 때의 Python 네임스페이스입니다.
+
+두 배포물은 런타임 조합과 설치 경계를 분리합니다.
+`activity/`가 중립적인 최상위 활동 소유자이며, 확장이 있을 때만 `flow/activity/`가
+워크플로우 기록을 제공합니다. 영속 식별자와 공유 큐·admission은 core에 유지합니다.
+설치·동일 버전 요구·확장 부재 시 동작은
+[배포물 정책](DEVELOPMENT.ko.md#선택적-워크플로우-배포물)을 참고하세요.
 
 ```text
-src/orca_auto/
+orca_auto/               # 두 배포물에 걸친 설치 후 네임스페이스
 ├── cli*.py / activity*.py / terminal_table.py / systemd_plan.py
 │       # 사용자 대상 CLI 표면 (argparse, 핸들러, 렌더링)
 │
@@ -95,7 +103,7 @@ src/orca_auto/
 `orca_auto.orca`는 ORCA 로직의 유일한 구현 진실 공급원입니다. 최상위 별칭
 패키지나 대체 런타임 심(shim)은 존재하지 않습니다.
 
-계층은 방향성이 있으며 import-linter(`lint-imports`, `pyproject.toml`에 설정,
+계층은 방향성이 있으며 import-linter(`python scripts/check_imports.py`, `pyproject.toml`에 설정,
 `scripts/check.sh`와 CI가 실행)로 강제됩니다: `flow`는 `orca`와 `core`를
 임포트할 수 있고, `orca`는 `core`만, `core`는 이 도메인 패키지 중
 어느 것도 임포트하지 않습니다.
@@ -650,11 +658,12 @@ CLI는 argparse 기반(`cli.py` → `cli_parsers.py` → `cli_handlers.py`)이�
 ## 13. 품질 게이트
 
 `scripts/check.sh`가 로컬과 CI 공용 엔트리포인트입니다: `.venv`를 생성/복구하고
-`.[dev]`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
+`.[dev]`와 `./extensions/workflows`를 설치한 뒤 `ruff check`, `ruff format --check`, `mypy`,
+`python scripts/check_imports.py`, 그리고 커버리지
 게이트가 걸린 pytest 스위트를 실행합니다. CI는 추가로 Gitleaks, ShellCheck,
-Python 3.11/3.12/3.13 매트릭스, 휠 타입 메타데이터
-스모크 테스트를 실행합니다. 휠 스모크는 패키징된 Python module 목록이 `src/orca_auto`와
-정확히 같고 root `py.typed` marker가 하나뿐인지도 확인합니다.
+Python 3.11/3.12/3.13 매트릭스와 배포물 검사(로컬 명령: `make check-packages`)를 실행합니다. 패키징 검사는
+본체·확장 배포물을 빌드하고 각각의 소스 목록을 대조하며, 라이선스 엔진 없이
+격리된 설치 프로필을 검증합니다.
 
 테스트는 `tests/core/`, `tests/flow/`, `tests/flow/engines/`, `tests/integration/`,
 최상위 ORCA, CLI, 워크플로우 및 저장소 전반의 회귀 테스트로 구성됩니다. 프로젝트는

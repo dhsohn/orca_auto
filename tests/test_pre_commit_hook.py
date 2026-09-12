@@ -113,39 +113,45 @@ def test_pre_commit_import_linter_checks_staged_tree_not_shared_venv(
     repo, hook, env = _fixture(tmp_path)
     sibling = tmp_path / "sibling"
     for root, broken in [(repo, checked_tree_broken), (sibling, not checked_tree_broken)]:
-        package = root / "src" / "hook_fixture"
+        package = root / "src" / "orca_auto"
         package.mkdir(parents=True)
         (package / "__init__.py").write_text("", encoding="utf-8")
-        (package / "higher.py").write_text("VALUE = 1\n", encoding="utf-8")
+        extension = root / "extensions/workflows/src/orca_auto/flow"
+        extension.mkdir(parents=True)
+        (extension / "__init__.py").write_text("", encoding="utf-8")
+        (extension / "higher.py").write_text("VALUE = 1\n", encoding="utf-8")
         (package / "lower.py").write_text(
-            "from . import higher\n" if broken else "VALUE = 2\n",
+            "from orca_auto.flow import higher\n" if broken else "VALUE = 2\n",
             encoding="utf-8",
         )
+    (repo / "scripts").mkdir()
+    shutil.copy2(HOOK.parents[1] / "scripts/check_imports.py", repo / "scripts/check_imports.py")
     (repo / "pyproject.toml").write_text(
-        '[tool.importlinter]\nroot_packages = ["hook_fixture"]\n'
+        '[tool.importlinter]\nroot_packages = ["orca_auto"]\n'
         '[[tool.importlinter.contracts]]\nname = "lower cannot import higher"\n'
-        'type = "forbidden"\nsource_modules = ["hook_fixture.lower"]\n'
-        'forbidden_modules = ["hook_fixture.higher"]\n',
+        'type = "forbidden"\nsource_modules = ["orca_auto.lower"]\n'
+        'forbidden_modules = ["orca_auto.flow.higher"]\n',
         encoding="utf-8",
     )
     _git(repo, env, "add", ".")
-    # Model the path appended by a sibling editable install's .pth file, but
-    # use the real import-linter against the small, independent fixture package.
+    # Model sibling editable roots; the actual adapter must select both staged
+    # roots, not silently pass by reading either sibling component instead.
     lint_code = (
-        f"import sys; sys.path.append({str(sibling / 'src')!r}); "
-        "import hook_fixture; print('selected source:', hook_fixture.__file__); "
-        "from importlinter.cli import lint_imports_command; "
-        "lint_imports_command(['--no-cache'])"
+        f"import sys, runpy; sys.path.insert(0, {str(sibling / 'src')!r}); "
+        f"sys.path.insert(0, {str(sibling / 'extensions/workflows/src')!r}); "
+        "sys.argv = ['scripts/check_imports.py', '--no-cache']; "
+        "runpy.run_path('scripts/check_imports.py', run_name='__main__')"
     )
-    lint_imports = Path(env["ORCA_AUTO_VENV"]) / "bin" / "lint-imports"
+    python = Path(env["ORCA_AUTO_VENV"]) / "bin" / "python"
     _executable(
-        lint_imports, f"#!/bin/sh\nexec {shlex.quote(sys.executable)} -c {shlex.quote(lint_code)}\n"
+        python,
+        '#!/bin/sh\nif [ "$1" != "scripts/check_imports.py" ]; then exit 0; fi\n'
+        f"exec {shlex.quote(sys.executable)} -c {shlex.quote(lint_code)}\n",
     )
 
     result = _run_hook(repo, hook, env)
 
-    assert f"selected source: {repo / 'src/hook_fixture/__init__.py'}" in result.stdout
-    assert "Analyzed 3 files" in result.stdout
+    assert "Analyzed 4 files" in result.stdout
     assert result.returncode == int(checked_tree_broken), result.stdout + result.stderr
     verdict = "BROKEN" if checked_tree_broken else "KEPT"
     assert f"lower cannot import higher {verdict}" in result.stdout

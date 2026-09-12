@@ -100,7 +100,7 @@ fi
 echo "[check] Using Python: $("$VENV_PY" -c 'import sys; print(sys.executable)')"
 if [[ "${ORCA_AUTO_CHECK_SKIP_INSTALL:-0}" != "1" ]]; then
   "$VENV_PY" -m pip install --upgrade pip
-  "$VENV_PY" -m pip install -c constraints-dev.txt -e '.[dev]'
+  "$VENV_PY" -m pip install -c constraints-dev.txt -e '.[dev]' -e ./extensions/workflows
 fi
 
 echo "[check] Ruff"
@@ -113,7 +113,7 @@ echo "[check] mypy"
 "$VENV_PY" -m mypy
 
 echo "[check] import-linter"
-"$VENV_DIR/bin/lint-imports"
+"$VENV_PY" scripts/check_imports.py
 
 echo "[check] pytest"
 "$VENV_PY" -m pytest --cov --cov-report=term-missing -q "$@"

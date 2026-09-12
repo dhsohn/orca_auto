@@ -16,6 +16,11 @@ Submit work through the CLI, follow it in a durable queue, and inspect the
 recorded state, recovery decisions, and calculation reports. ORCA input design
 and chemical judgment stay with you.
 
+**Version 5.0.0 separates core and workflows into two installable packages.**
+The default `orca_auto` installation contains the standalone ORCA runtime; the optional,
+same-version `orca_auto_workflows` extension adds workflows, including
+ORCA-only `scan_ts`. The CLI name and Python imports remain `orca_auto`.
+
 ## Part of a local-first chemistry workflow
 
 ORCA_auto is a companion to [Chemvas](https://github.com/dhsohn/Chemvas) and
@@ -49,7 +54,28 @@ These conversions are not built into ORCA_auto.
 [Public contracts](docs/PUBLIC_CONTRACTS.md) describe recovery and reporting
 boundaries; [project scope](docs/RELATED_WORK.md) explains when this runtime fits.
 
-## Quickstart (standalone ORCA)
+## Installation
+
+Download `orca_auto-5.0.0-py3-none-any.whl` from the
+[v5.0.0 GitHub release](https://github.com/dhsohn/orca_auto/releases/tag/v5.0.0).
+For workflows, also download `orca_auto_workflows-5.0.0-py3-none-any.whl` into
+the same directory. From that directory, install into a fresh environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install ./orca_auto-5.0.0-py3-none-any.whl
+
+# Optional: add workflows to the core installation
+python -m pip install ./orca_auto_workflows-5.0.0-py3-none-any.whl
+```
+
+This release provides wheels and source distributions on GitHub, not PyPI.
+Python packages do not include the ORCA, xTB, or CREST executables or deploy
+systemd services. For supervised setup, use the source-checkout guide below;
+the service installer needs the checkout's `systemd/` assets.
+
+## Quickstart from a source checkout (standalone ORCA)
 
 ```bash
 # 1. install
@@ -71,12 +97,29 @@ orca_auto queue list --engine orca
 Config keys, path rules, and the config search order →
 [docs/QUICKSTART.md](docs/QUICKSTART.md) and [docs/REFERENCE.md](docs/REFERENCE.md).
 
+For workflows, bootstrap this checkout with
+`bash scripts/bootstrap_wsl.sh --with-workflows`, or install both local projects
+in the same environment:
+
+```bash
+python -m pip install -e . -e ./extensions/workflows
+```
+
+Omitting `--with-workflows` does not remove an extension from a reused `.venv`;
+use a fresh environment for a core-only installation.
+
+The two distributions use one matched version, not independently interchangeable
+releases. Keep an existing runtime unchanged while calculations are running;
+prepare a fresh environment and switch only in an idle maintenance window.
+Installing Python packages alone does not install or restart systemd services;
+see the [upgrade and service boundaries](docs/RELEASE.md).
+
 ## What it runs
 
 | Capability | Use it for | Details |
 |---|---|---|
 | **standalone ORCA** | durable submit/recovery of single ORCA jobs, TS searches | [REFERENCE](docs/REFERENCE.md) |
-| **workflow** | CREST→xTB→ORCA conformer / reaction pipelines | [ARCHITECTURE](docs/ARCHITECTURE.md) |
+| **optional workflows extension** | CREST→xTB→ORCA pipelines and ORCA-only `scan_ts` workflows | [ARCHITECTURE](docs/ARCHITECTURE.md) |
 | **messenger** | one-way Discord job/workflow notifications | [DISCORD_SETUP](docs/DISCORD_SETUP.md) |
 
 ## Services, testing, and full docs

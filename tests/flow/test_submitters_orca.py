@@ -10,6 +10,7 @@ import pytest
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.flow.submitters import orca as orca_submitter
 from orca_auto.orca import config as orca_config
+from orca_auto.orca import direct_cancel as orca_cancellation
 from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.queue import adapter as queue_adapter
 
@@ -328,7 +329,7 @@ def test_cancel_target_uses_direct_queue_adapter(
     monkeypatch.setattr(queue_adapter, "list_queue", fake_list_queue)
     monkeypatch.setattr(queue_adapter, "cancel", fake_cancel)
 
-    result = orca_submitter.cancel_target(
+    result = orca_cancellation.cancel_target(
         target=target,
         config_path=" /tmp/orca.yaml ",
     )
@@ -352,7 +353,7 @@ def test_cancel_target_reports_missing_and_empty_targets(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    result = orca_submitter.cancel_target(target=" ", config_path="/tmp/orca.yaml")
+    result = orca_cancellation.cancel_target(target=" ", config_path="/tmp/orca.yaml")
 
     assert result["status"] == "failed"
     assert result["reason"] == ""
@@ -368,7 +369,7 @@ def test_cancel_target_reports_missing_and_empty_targets(
     )
     monkeypatch.setattr(queue_adapter, "list_queue", lambda _root: [])
 
-    result = orca_submitter.cancel_target(
+    result = orca_cancellation.cancel_target(
         target="missing",
         config_path="/tmp/orca.yaml",
     )
@@ -406,7 +407,7 @@ def test_cancel_target_refuses_foreign_queue_identity(
         lambda *_args: pytest.fail("foreign row must not reach ORCA cancellation"),
     )
 
-    result = orca_submitter.cancel_target(
+    result = orca_cancellation.cancel_target(
         target=foreign.queue_id,
         config_path="/tmp/orca.yaml",
     )
@@ -437,7 +438,7 @@ def test_cancel_target_recovers_committed_cancel_after_save_error(
 
     monkeypatch.setattr(queue_adapter._queue_store, "save_entries", save_then_raise)
 
-    result = orca_submitter.cancel_target(
+    result = orca_cancellation.cancel_target(
         target=entry.queue_id,
         config_path="/tmp/orca.yaml",
     )
@@ -480,7 +481,7 @@ def test_cancel_target_adopts_only_the_same_generation_cancelled_row(
 
     def _cancel_with_reread(current: QueueEntry | None) -> dict[str, Any]:
         monkeypatch.setattr(queue_adapter, "get_entry_by_id", lambda _root, _queue_id: current)
-        return orca_submitter.cancel_target(
+        return orca_cancellation.cancel_target(
             target=entry.queue_id,
             config_path="/tmp/orca.yaml",
         )

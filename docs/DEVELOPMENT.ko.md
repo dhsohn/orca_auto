@@ -4,7 +4,9 @@
 
 > 이 문서는 [DEVELOPMENT.md](DEVELOPMENT.md)(영어판)의 한국어 번역본입니다.
 
-이 저장소는 이제 `src/orca_auto` 아래의 모노레포 스타일 패키지 레이아웃을 사용합니다.
+이 저장소에는 동일 버전으로 유지하는 두 배포물이 있습니다. 본체 소스는
+`src/orca_auto`, 워크플로우 소스는 `extensions/workflows/src/orca_auto/flow`에
+있으며, 두 배포물 모두 기존 `orca_auto.*` 임포트를 유지합니다.
 
 ## 정규 임포트 규칙
 
@@ -16,19 +18,62 @@
 새 코드, 테스트, 문서는 `orca_auto.*`에서 임포트해야 합니다.
 
 도메인 패키지는 강제되는 계층 — `flow` → `orca` → `core` — 을 이룹니다.
-import-linter(`lint-imports`, `pyproject.toml`에 설정, `scripts/check.sh`가
+import-linter(`python scripts/check_imports.py`, `pyproject.toml`에 설정, `scripts/check.sh`가
 실행하므로 CI에서도 검사)가 확인합니다. 상위 계층은 하위 계층을 임포트할 수
 있지만 그 역방향은 빌드 실패입니다. 계층을 넘는 엔진 배선은 엔진 모듈을 직접
 임포트하는 대신 `core/engine_catalog.py`가 소유하는 지연 문자열 모듈 경로를
 해석합니다. `core/engines/registry.py`와 `core/queue/worker/admission.py`는
 이 카탈로그를 소비합니다.
 
-최상위 CLI 모듈(`cli*.py`, `activity_*.py`, `terminal_table.py`,
+최상위 CLI 모듈(`cli*.py`, `activity/`, `activity_*.py`, `terminal_table.py`,
 `systemd_plan.py`, `_process_evidence.py`)은 가장 바깥 계층입니다. 도메인 패키지를 조합할 뿐이며, 두 번째
 import-linter 계약이 `core`·`orca`·`flow`가 이 모듈들을 임포트하는 것을 금지합니다.
 도메인 패키지 안의 명령 어댑터가 CLI와 공유하는 것은 대신 `core`에 둡니다 —
 `core/terminal.py`가 ANSI 스타일링과 `error:`/`hint:` 출력 형식을, `core/config/discovery.py`가
 파싱된 인자로부터의 공유 설정·워크플로우 루트 해석을 소유합니다.
+
+### 선택적 워크플로우 배포물
+
+루트의 `orca_auto` 배포물에는 본체만 들어 있습니다. `extensions/workflows`의
+공식 `orca_auto_workflows` 프로젝트가 `orca_auto.flow`를 소유하며, xTB/CREST 엔진과
+ORCA 전용 `scan_ts` 워크플로우도 여기에 포함됩니다. 두 프로젝트는 `5.0.0`으로
+함께 출시하며, 정확히 같은 버전이 필요합니다.
+독립 버전으로 교환 가능한 범용 플러그인 API가 아닙니다.
+
+개발 환경에는 두 로컬 프로젝트를 함께 설치하세요:
+
+```bash
+python -m pip install -e '.[dev]' -e ./extensions/workflows
+```
+
+루트의 `workflows` extra는 동일 버전 확장을 고정합니다. 패키지 저장소에서 확장을
+찾지 않도록 위 명령에 두 로컬 프로젝트를 명시하세요. 5.0.0 배포 파일은 PyPI가
+아닌 GitHub 릴리스에서 제공합니다.
+`bootstrap_wsl.sh`는 기본으로 본체만 설치하며, `--with-workflows`를 더하면 전체
+프로필을 설치합니다. 공용 검사 스크립트는 두 프로젝트를 설치합니다.
+
+본체만 설치해도 도움말, 단독 ORCA 제출·활동 조회·취소·정리와 ORCA 워커를 사용할 수
+있습니다. 워크플로우 명령은 확장이 필요하다는 오류를 반환하며, 설치됐지만 고장 난
+확장을 단순 미설치로 처리하지 않습니다.
+
+- `core/extensions.py`는 단일 공식 확장의 존재 확인을 소유합니다. 범용 plugin
+  registry가 아니며, 사용 가능할 때만 워크플로우 parser 옵션과 provider를 조합합니다.
+- `activity/`가 도메인 바깥에서 통합 조회·취소를 소유하고, 워크플로우 수집은
+  `flow/activity/`에 남습니다. 공유 활동 모델·엔진 경로·명령 결과 봉투는 `core`,
+  단독 ORCA 취소는 `orca/direct_cancel.py`가 소유합니다. 소비자는 실제 소유자를
+  직접 import하며, 이전 모듈을 호환 facade로 남기지 않습니다.
+- 확장이 없어도 영속 엔진 ID·워크플로우 표식·admission source ID는 유지됩니다.
+  기존 워크플로우 상태(`flow.yaml`만 있는 scaffold 포함)가 있으면 불완전한
+  조회·변경 전에 명확히 거부해야 합니다.
+  빈 큐처럼 보이거나 워크플로우 단계를 단독 작업으로 잘못 취소해서는 안 됩니다.
+- 큐·실행·복구·admission 구현은 그대로 공유합니다. 분리 작업으로 ORCA 과학적
+  판정이나 워크플로우 레시피를 바꾸지 않습니다.
+
+본체와 확장 wheel은 별도 소스 목록을 가지며, 같은 설치 파일을 중복 소유하면 안 됩니다.
+설치기는 여전히 `systemd/`가 있는 소스 checkout을 요구하므로 Python 패키지 설치가
+서비스 배포를 대신하지 않습니다. 동일 버전 확장이 있으면 기존 워크플로우 CLI·설정·
+복구 계약을 유지합니다. 기존 4.x 단일 패키지에서의 전환은 명시적인 환경 교체로
+진행하세요. [RELEASE.md](RELEASE.md)(영어)를 참고하세요.
 
 워크플로우 오케스트레이션 내부에서는 `OrchestrationServices`를 통해 영속화, 엔진,
 시계, 이벤트의 외부 경계만 주입합니다. 내부 stage, materialization, lifecycle 동작은
@@ -157,11 +202,14 @@ stage mutation은 package workflow 경계에서만 조합되는 독립된 siblin
 ├── src/
 │   └── orca_auto/
 │       ├── core/
-│       ├── flow/
-│       │   └── engines/
-│       │       ├── xtb/
-│       │       └── crest/
 │       └── orca/
+├── extensions/
+│   └── workflows/
+│       ├── pyproject.toml
+│       └── src/orca_auto/flow/
+│           └── engines/
+│               ├── xtb/
+│               └── crest/
 ├── tests/
 │   ├── core/
 │   ├── flow/
@@ -234,7 +282,8 @@ bash scripts/clean_artifacts.sh
 ## 품질 게이트
 
 - `scripts/check.sh`는 로컬과 CI가 공유하는 진입점입니다. `.venv`를 생성/복구하고,
-  `.[dev]`를 설치한 뒤, `ruff check`, `ruff format --check`, `mypy`, `lint-imports`, 그리고 커버리지
+  `.[dev]`와 `./extensions/workflows`를 설치한 뒤, `ruff check`, `ruff format --check`, `mypy`,
+  `python scripts/check_imports.py`, 그리고 커버리지
   게이트가 걸린 pytest를 실행합니다.
 - Ruff는 기본 Pyflakes/pycodestyle 안전 규칙과 함께 임포트 정렬(`I`)과 Bugbear(`B`)를
   명시적으로 활성화합니다.
@@ -244,7 +293,7 @@ bash scripts/clean_artifacts.sh
 - Mypy는 `[tool.mypy]`에서 전반적으로 비엄격(non-strict) 상태로 유지됩니다. 엄격 스타일
   옵션은 override 하나로 `orca_auto` 패키지 전체(`orca_auto`, `orca_auto.*`)에 적용되며,
   모든 소스 모듈이 이미 이를 통과하므로 새로 만들거나 옮긴 모듈은 기본으로 엄격 검사를
-  받습니다. 엄격 옵션을 `[tool.mypy]`로 옮기는 것은 전체 `src` + `tests` 트리가 동등한
+  받습니다. 엄격 옵션을 `[tool.mypy]`로 옮기는 것은 전체 `src` + `extensions/workflows/src` + `tests` 트리가 동등한
   엄격 플래그를 통과한 뒤에만 하세요.
 
 ## 테스트 결합 정책
@@ -260,7 +309,8 @@ bash scripts/clean_artifacts.sh
 ## 패키지 정책
 
 - `orca_auto.orca`가 유일한 구현 사실의 원천입니다.
-- 지원되는 모든 패키지 임포트는 `src/orca_auto` 아래에 있습니다.
+- 본체 소스는 `src/orca_auto`, 워크플로우 소스는
+  `extensions/workflows/src/orca_auto/flow`에 있습니다. 설치 후 임포트는 `orca_auto.*`입니다.
 - 새 기능이 ORCA 로직의 코드 변경을 요구하면, `src/orca_auto/orca` 아래에서 변경하세요.
 - 공용 엔진 정의, 큐 워커, 자식 진입점, 아티팩트, 레지스트리 헬퍼는
   `orca_auto.core.engines` 아래에 있습니다.

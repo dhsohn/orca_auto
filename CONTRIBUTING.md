@@ -75,14 +75,22 @@ A good verification section looks like:
 From the repository root:
 
 ```bash
-bash scripts/bootstrap_wsl.sh
+bash scripts/bootstrap_wsl.sh --with-workflows
 source .venv/bin/activate
 make test
 ```
 
 `make test` runs `scripts/check.sh`, which creates or repairs `.venv`, installs
-`.[dev]`, then runs Ruff, Ruff format check, mypy, and the coverage-gated pytest
-suite.
+`.[dev]` and the local `extensions/workflows` project, then runs Ruff, Ruff
+format check, mypy, import-linter, and the coverage-gated pytest suite.
+
+The source tree contains two matched-version distributions: the core at the
+repository root and `orca_auto_workflows` at `extensions/workflows`. For a manual
+development install, use `python -m pip install -e '.[dev]' -e ./extensions/workflows`.
+The default bootstrap installs only core; contributor checks install both to
+exercise the existing workflow contracts as well. The 5.0.0 release provides
+both distributions through GitHub release assets, not PyPI; pass both local
+projects for development so the resolver does not need the extension on an index.
 
 For a narrower loop:
 

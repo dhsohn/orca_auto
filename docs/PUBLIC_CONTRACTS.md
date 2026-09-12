@@ -28,6 +28,16 @@ what is documented here is what the project commits to.
 
 ## Runtime Contract
 
+Starting with 5.0.0, `orca_auto` installs core by
+default; workflows require the same-version `orca_auto_workflows` extension.
+This intentionally changes the default installation, not the existing workflow
+CLI, config, state, or recovery contracts with that extension installed. Without
+it, standalone ORCA remains usable, but workflow operations and incomplete
+inspection/mutation of existing workflow state are refused explicitly. This is
+not a migration or uninstall procedure for a live workflow deployment; restore
+the matching workflow-enabled installation first. See the installation and
+cutover steps in [QUICKSTART.md](QUICKSTART.md) and [RELEASE.md](RELEASE.md).
+
 Supported runtime assumptions:
 
 - Python 3.11 or newer.
@@ -533,6 +543,18 @@ ORCA analyzer statuses:
 - `incomplete`
 - `unknown_failure`
 
+Completion requires consistent termination evidence for the ORCA execution.
+A real error-termination diagnostic prevents `completed` even when a normal
+termination banner appears before or after it. Generic termination errors use
+`unknown_failure` / `error_termination`; more specific failures keep their
+existing classifications. Termination-marker matching excludes echoed input
+lines (`| n> ...`) and raw comment lines.
+
+If an executed attempt otherwise qualifies as `completed` but returns a nonzero
+exit code, it becomes `unknown_failure` / `nonzero_exit_code`. The original
+attempt `return_code` is preserved, and an existing failure classification is
+not replaced. Output-only readers cannot establish a process exit code.
+
 The first failed calculation attempt is terminal and preserves its analyzer reason.
 No retry inputs, budgets, fallback recipes, or retry notifications are generated.
 Worker/host interruption recovery and explicit workflow restart are separate
@@ -977,8 +999,28 @@ Behavior:
   stopping stays that way; supervision is never opted into on the operator's
   behalf. If the workflow worker's state cannot be read, the command changes
   nothing and exits non-zero.
-- Restarting a worker service stops its engine process, so `service restart`
-  ends in-flight ORCA work. Run it in an idle window.
+- Before changing any service, `service restart` verifies that the selected
+  workers' shared admission pools have no active or reserved calculations.
+  It uses the installed service configuration, not the invoking shell's config,
+  and holds the existing admission locks through the target and all worker
+  restarts so a new calculation cannot enter those pools between the check and
+  the restart. ORCA, xTB and CREST slots all count; queued but unadmitted jobs do
+  not. No admission records are pruned or repaired.
+- Unknown configuration/process identity, changed running configuration,
+  missing admission directory or lock, unreadable/corrupt admission state, and
+  lock contention refuse the default restart with a non-zero exit and a diagnostic.
+  The guard supports the
+  installer-generated worker command with an absolute regular config file;
+  unrecognized commands and environment overrides are not guessed. It checks
+  running-process identity and config timestamps but does not reconstruct the
+  old in-memory config. Live config/path changes, clock changes and
+  preserved/backdated timestamps are outside this guard; do not reconfigure
+  running workers.
+- `service restart --force` skips the idle guard and warns that worker restart
+  can interrupt running calculations and consume recovery attempts. Existing
+  unit selection and permission checks still apply. There is no automatic drain,
+  wait-for-idle, or scheduled restart, and no guarantee that a pure workflow
+  orchestration cycle is uninterrupted. Prefer restarting in an idle window.
 - Both service commands address the units of the account that invoked them:
   `SUDO_USER` when it is set and the process is root, otherwise the current
   account.
@@ -991,7 +1033,7 @@ These are outside this document — not documented behavior at all, and never sa
 to depend on:
 
 - Private Python functions and modules, including helper modules under
-  `src/orca_auto`.
+  `src/orca_auto` and `extensions/workflows/src/orca_auto/flow`.
 - Internal worker child command lines.
 - Exact terminal table widths, colors, icons, and wrapping.
 - Exact HTML or Markdown report layout.

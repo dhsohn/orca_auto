@@ -4,6 +4,13 @@
 
 This directory is the single home for long-running ORCA_auto service assets.
 
+The split Python distributions do not install these units automatically. The
+installer still reads this directory from its explicit `--repo` checkout. The
+default core installation supports the ORCA worker; before enabling workflow
+workers, install the same-version `orca_auto_workflows` extension in the worker's
+interpreter. From the checkout, the full source install is
+`python -m pip install -e . -e ./extensions/workflows`.
+
 ## Included units
 
 - `orca_auto-runtime@.target`

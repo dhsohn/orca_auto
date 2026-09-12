@@ -4,10 +4,12 @@ import argparse
 import shutil
 import subprocess
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any
 
 from orca_auto import cli_systemd_units, systemd_plan
+from orca_auto.cli_systemd_restart_guard import guard_service_restart
 from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils.coercion import normalize_text
 
@@ -137,6 +139,7 @@ class ServiceRestartDeps:
     is_root: Callable[[], bool] | None = None
     default_service_user: Callable[[], str] | None = None
     restart_unit_for_user: Callable[..., str] | None = None
+    restart_guard: Callable[..., AbstractContextManager[None]] | None = None
 
 
 def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | None = None) -> int:
@@ -164,6 +167,57 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
         emit_error(exc)
         return 1
 
+    if use_sudo:
+        # Authenticate before blocking admission. Mutation commands must not
+        # prompt while workers are waiting for the shared pool lock.
+        try:
+            authenticated = run(["sudo", "-v"], check=False)
+        except OSError as exc:
+            emit_error(f"sudo authentication failed: {exc}")
+            return 1
+        if authenticated.returncode != 0:
+            return int(authenticated.returncode)
+
+    def mutation_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        if use_sudo and argv[0] == "sudo":
+            argv = [argv[0], "-n", *argv[1:]]
+        return run(argv, **kwargs)
+
+    force = bool(getattr(args, "force", False))
+    if force:
+        print("WARNING: --force can interrupt running calculations and consume recovery attempts.")
+    guard = (
+        nullcontext()
+        if force
+        else (deps.restart_guard or guard_service_restart)(worker_units, run=run)
+    )
+    mutation_started = False
+    try:
+        with guard:
+            mutation_started = True
+            return _restart_selected_units(unit, worker_units, use_sudo=use_sudo, run=mutation_run)
+    except (OSError, ValueError) as exc:
+        detail = str(exc).rstrip(". ")
+        if mutation_started:
+            emit_error(
+                f"Restart failed: {detail}. Some services may have changed; check service status."
+            )
+        else:
+            emit_error(
+                f"Restart refused: {detail}. No services were changed. "
+                "Wait for an idle window and check the installed service configuration. "
+                "Use orca_auto service restart --force only to accept possible calculation interruption."
+            )
+        return 1
+
+
+def _restart_selected_units(
+    unit: str,
+    worker_units: tuple[str, ...],
+    *,
+    use_sudo: bool,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+) -> int:
     for reset_unit in worker_units:
         print(f"Resetting service failure state for {reset_unit}")
         rc = cli_systemd_units._run_command(

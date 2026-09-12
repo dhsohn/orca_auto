@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import re
 from collections.abc import Iterable
 
@@ -16,6 +17,8 @@ ERROR_TERMINATION_NEEDLES: tuple[str, ...] = (
     "CHECK SYNTAX",
     "LEAVING ORCA",
 )
+
+_INPUT_ECHO_RE = re.compile(r"\|\s*\d+>")
 
 _OPT_CONVERGED_NEEDLES = ("THE OPTIMIZATION HAS CONVERGED", "OPTIMIZATION RUN DONE")
 _OPT_NOT_CONVERGED_RE = re.compile(
@@ -44,14 +47,24 @@ def last_optimization_convergence(lines: Iterable[str]) -> bool | None:
     return verdict
 
 
+def termination_line(line: str) -> tuple[bool, bool]:
+    """Normal/error termination evidence, excluding input echoes and comments."""
+    stripped = line.lstrip()
+    if stripped.startswith("#") or _INPUT_ECHO_RE.match(stripped):
+        return False, False
+    upper = stripped.upper()
+    return (
+        any(needle in upper for needle in NORMAL_TERMINATION_NEEDLES),
+        any(needle in upper for needle in ERROR_TERMINATION_NEEDLES),
+    )
+
+
 def has_normal_termination(text: str) -> bool:
-    upper = text.upper()
-    return any(needle in upper for needle in NORMAL_TERMINATION_NEEDLES)
+    return any(termination_line(line)[0] for line in io.StringIO(text, newline=None))
 
 
 def has_error_termination(text: str) -> bool:
-    upper = text.upper()
-    return any(needle in upper for needle in ERROR_TERMINATION_NEEDLES)
+    return any(termination_line(line)[1] for line in io.StringIO(text, newline=None))
 
 
 def coarse_orca_status(
@@ -60,10 +73,10 @@ def coarse_orca_status(
     opt_converged: bool | None = None,
     wall_time_seconds: int | None = None,
 ) -> str:
-    if has_normal_termination(text):
-        return "failed" if opt_converged is False else "completed"
     if has_error_termination(text):
         return "failed"
+    if has_normal_termination(text):
+        return "failed" if opt_converged is False else "completed"
     if wall_time_seconds is not None:
         return "failed"
     return "running"

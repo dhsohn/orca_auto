@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orca_auto_workflows"
+version = "5.0.0"
+description = "Optional CREST, xTB and multi-stage workflow extension for ORCA_auto"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Daehyup Sohn" }]
+dependencies = ["orca_auto==5.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/dhsohn/orca_auto"
+Repository = "https://github.com/dhsohn/orca_auto"
+Issues = "https://github.com/dhsohn/orca_auto/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["orca_auto", "orca_auto.flow", "orca_auto.flow.*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"orca_auto.flow" = ["py.typed"]

@@ -15,8 +15,23 @@ bash scripts/bootstrap_wsl.sh
 source .venv/bin/activate
 ```
 
-부트스트랩 스크립트는 `.venv`를 생성하고, ORCA_auto를 설치하며, 필요할 때 예제
+부트스트랩 스크립트는 `.venv`를 생성하고, ORCA_auto 본체를 설치하며, 필요할 때 예제
 템플릿으로부터 `config/orca_auto.yaml`을 생성합니다.
+본체 전용 구성은 새 환경의 기본값입니다. 기존 `.venv`를 재사용하면 이미 설치된
+워크플로우 확장을 제거하지 않으므로, 본체만 있는 구성이 필요하면 새 환경을 사용하세요.
+
+5.0.0부터 워크플로우는 기본 본체 설치에
+포함되지 않는 동일 버전의 선택적 배포물입니다. 함께 설치하려면 대신
+`bash scripts/bootstrap_wsl.sh --with-workflows`를 사용하거나, 환경을 활성화한 뒤
+다음을 실행하세요:
+
+```bash
+python -m pip install -e . -e ./extensions/workflows
+```
+
+CREST/xTB 워크플로우뿐 아니라 ORCA 전용 `scan_ts`도 확장에 포함됩니다.
+기존 단일 배포물 설치본에서 전환할 때는 새 환경과 [RELEASE.md](RELEASE.md)(영어)의
+절차를 사용하고, 워크플로우 상태를 사용 중인 환경에서 지원 코드를 제거하지 마세요.
 
 ## 2) 설정
 
@@ -35,7 +50,9 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
 이 명령은 런타임 타깃을 활성화하며, 런타임 타깃은 ORCA 엔진 서비스를 시작합니다.
-workflow 제출을 실행하려면 queueing 전후에
+설치기는 여전히 `--repo`로 지정한 checkout의 `systemd/`를 읽습니다. 어느 wheel을
+설치하더라도 그것만으로 서비스가 배포되지는 않습니다. workflow 제출을 실행하려면
+워커가 사용하는 환경에 동일 버전 확장을 설치하고, queueing 전후에
 opt-in workflow unit을 시작하세요:
 
 ```bash
@@ -52,8 +69,11 @@ orca_auto service restart
 `service status`는 런타임과 engine-worker 타깃, 기본 ORCA 엔진 서비스, opt-in workflow 서비스를
 보여줍니다. `service restart`는 런타임 타깃에 이어 워커 서비스 자체를(이미 실행 중이면 workflow
 워커까지) 재시작합니다 — 타깃만 재시작해서는 워커 프로세스가 그대로 남습니다. 워커가 import하는
-코드를 건드린 배포 뒤에 실행하되, 반드시 유휴 창에서 하세요: 워커를 재시작하면 그 워커가
-감독하던 ORCA 계산이 중단됩니다.
+코드를 건드린 배포 뒤에 실행하되, 반드시 유휴 창에서 하세요. 기본적으로 실행 중·예약된
+계산이 있거나 안전 여부를 확인할 수 없으면 재시작을 거부합니다. 진단 원인을 해결한 뒤
+다시 실행하세요. `orca_auto service restart --force`는 이 보호를 의도적으로 생략하여
+계산을 중단시킬 수 있으며, 계산 완료를 기다리는 옵션이 아닙니다.
+guard의 제한은 [Systemd 계약](PUBLIC_CONTRACTS.ko.md#systemd-계약)을 참고하세요.
 
 ## 5) 작업 제출
 

@@ -1371,7 +1371,8 @@ def test_cmd_queue_list_json_reports_undrained_cancel_transitions(
     # End to end over the real registry: a cancel that died before journaling
     # leaves an unclearable row, and `queue list --json` is where an operator
     # finds out why.
-    from orca_auto.flow import activity, registry
+    from orca_auto import activity
+    from orca_auto.flow import registry
     from orca_auto.flow.state import write_workflow_payload
 
     runs_root = tmp_path / "runs"
@@ -1492,7 +1493,7 @@ def _cancel_authority_args(
 def _patch_real_queue_listing(
     monkeypatch: pytest.MonkeyPatch, workflow_root: Path, config_path: Path
 ) -> None:
-    from orca_auto.flow import activity
+    from orca_auto import activity
 
     monkeypatch.setattr(
         unified_cli,

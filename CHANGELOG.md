@@ -6,10 +6,21 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
-## [Unreleased]
+## [5.0.0] - 2026-09-12
 
 ### Added
 
+- Optional workflows boundary: core CLI, standalone ORCA activity
+  operations and workers can run without the `flow` implementation. Existing
+  workflow state fails closed without that extension; bundled workflow commands
+  and recovery contracts remain supported.
+
+- Two same-version distributions: `orca_auto` owns the core; optional
+  `orca_auto_workflows` owns `orca_auto.flow` from `extensions/workflows`.
+  The `workflows` extra requires the exact matching extension version.
+
+- Opt-in real-ORCA acceptance for a combined NH3 `OptTS Freq IRC` run at
+  IRC print levels 1 and 2, covering TS frequency evidence and IRC reporting.
 - `orca_auto index prune` lists the `job_locations.json` rows whose every
   recorded path is gone from disk and removes them with `--apply`. The index
   had no maintenance surface: a run directory deleted by hand left a row that
@@ -19,6 +30,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- ORCA completion rejects a real error-termination diagnostic even when the same
+  output also contains a normal termination banner, in either order. The analyzer
+  and output-only status readers exclude echoed input and raw comment lines from
+  termination-marker matching. An executed attempt with a nonzero exit code can
+  no longer complete solely on successful output: it reports `unknown_failure` /
+  `nonzero_exit_code` while preserving the original `return_code` and existing
+  failure classifications. Historical generation artifacts remain unchanged.
 - An ORCA input-block syntax error is classified as `error_termination`
   (`unknown_failure`) instead of `run_incomplete`. ORCA 6 rejects a malformed
   block by printing `... check syntax!` and `LEAVING ORCA` and exiting within a
@@ -81,6 +99,23 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Refreshed the README, bilingual guides and banner to present ORCA_auto as
+  a companion to ChemVAS while retaining the existing repository, command and
+  Python package names.
+- Default installation now includes only the ORCA core. Install the matching
+  workflows extension for CREST/xTB pipelines and ORCA-only `scan_ts` workflows:
+  use `bash scripts/bootstrap_wsl.sh --with-workflows` or
+  `python -m pip install -e . -e ./extensions/workflows` from the checkout.
+  This is an intentional major-version installation change; the CLI and Python
+  import names remain unchanged. Existing monolithic
+  installations should move to a fresh environment in an idle cutover window;
+  package installation alone does not deploy or restart systemd services.
+
+- `orca_auto service restart` now refuses while calculations are admitted or
+  restart safety cannot be established. It checks the installed worker settings
+  and holds their shared admission locks through the restart sequence.
+  `--force` explicitly permits the previous interrupting behavior; it does not
+  wait for calculations to finish.
 - ORCA adapter runtime loading keeps the existing named context model instead
   of flattening it into an untyped tuple. Workflow journal injection now checks
   event keywords and required fields statically; serialized events are unchanged.
