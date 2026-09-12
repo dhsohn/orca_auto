@@ -1,7 +1,8 @@
 # ORCA_auto workflows
 
 The optional workflow distribution for [ORCA_auto](https://github.com/dhsohn/orca_auto).
-It provides CREST, xTB, conformer pipelines and supervised workflow workers while
+It provides CREST→xTB→ORCA pipelines, ORCA-only `scan_ts` workflows, and
+supervised workflow workers while
 the core distribution owns the `orca_auto` command, shared queue infrastructure
 and standalone ORCA execution. Python imports remain `orca_auto.flow`.
 

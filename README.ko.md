@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="ORCA_auto — 내구성 있는 제출, 감독되는 실행, 명시적인 복구." width="680">
+  <img src="docs/images/banner.svg" alt="ORCA_auto — 제출. 모니터링. 복구." width="680">
 </p>
 
 <p align="center">
@@ -11,121 +11,48 @@
 
 <p align="center"><a href="README.md">English</a> · <b>한국어</b></p>
 
-ORCA_auto는 Linux/WSL에서 **ORCA 계산과 CREST→xTB→ORCA 워크플로우**를 실행합니다.
-CLI로 작업을 제출하고, 디스크에 저장된 큐에서 진행 상황을 확인하며, 기록된 상태·복구
-판단·계산 보고서를 살펴볼 수 있습니다. ORCA 입력 설계와 화학적 판단은 사용자가 맡습니다.
+ORCA_auto는 Linux/WSL에서 **ORCA 계산을 실행하고 모니터링하는 도구**입니다.
+계산을 디스크에 저장되는 큐에 제출하고, 진행 상황과 결과·복구 판단을 확인할 수
+있습니다. 입력 설계와 화학적 판단은 사용자가 맡습니다.
 
-**5.0.0부터 본체와 워크플로우를 선택 설치할 수 있는 두 패키지로 제공합니다.**
-기본 `orca_auto` 설치에는
-단독 ORCA 런타임이 들어 있으며, 같은 버전의 선택적 `orca_auto_workflows` 확장을
-설치하면 ORCA 전용 `scan_ts`를 포함한 워크플로우를 사용할 수 있습니다.
-CLI 이름과 Python 임포트는 계속 `orca_auto`를 사용합니다.
+## 제출. 모니터링. 복구.
 
-## 로컬 중심 화학 연구 생태계
-
-ORCA_auto는 [Chemvas](https://github.com/dhsohn/Chemvas),
-[LLMdocx](https://github.com/dhsohn/LLMdocx)와 같은 생태계의 독립 도구입니다.
-세 프로그램은 화학 구조 그리기, 계산 실행, 연구 문서 작성을 각각 맡습니다.
-
-| 단계 | 도구 | 역할 |
-| --- | --- | --- |
-| 설계 | [Chemvas](https://github.com/dhsohn/Chemvas) | 편집 가능한 화학 구조·반응식, 원자 대응, 계산 전달용 산출물. |
-| 실행 | **ORCA_auto** | 디스크에 저장되는 계산 큐, 감독 워커, 명시적인 복구와 보고서. |
-| 작성 | [LLMdocx](https://github.com/dhsohn/LLMdocx) | 실행 가능한 블록과 계산 결과 가져오기를 갖춘 로컬 문서 작업 공간. |
-
-세 도구는 버전이 명시된 `machine.json` 관측 정보의 공통 형식을 공유하며, 각자의
-입출력 계약을 유지합니다. 연결에는 명시적인 변환이 필요합니다. Chemvas 산출물은 ORCA
-입력이나 `flow.yaml` 워크플로우로 준비하고, 계산 결과는
-[LLMdocx의 결과 번들 형식](https://github.com/dhsohn/LLMdocx/blob/main/docs/RESULTS_BUNDLE_V1.md)으로
-묶어야 합니다. 이 변환 기능은 ORCA_auto에 내장되어 있지 않습니다.
-
-## 내구성 있는 제출. 감독되는 실행. 명시적인 복구.
-
-- **내구성 있는 제출.** 제출에 성공하면 작업이 큐에 기록됩니다. 제출한 터미널을 닫아도
+- **제출한 뒤 터미널을 닫아도 됩니다.** 제출에 성공하면 작업이 디스크에 기록되고,
   워커가 실행을 담당합니다.
-- **감독되는 실행.** `systemd` 워커가 단독 ORCA 작업과 다단계 반응·형태 이성질체
-  워크플로우를 실행합니다. CLI에서 큐와 서비스 상태를 확인할 수 있습니다.
-- **명시적인 복구.** 워커나 호스트 중단에는 검증된 복구 경로를 적용합니다. ORCA 계산
-  자체의 실패는 한 번의 시도 뒤 종료되며, 원인을 살펴보고 의도적으로 다시 제출할 수
-  있도록 실패 사유를 남깁니다.
+- **계산 상황과 결과를 확인합니다.** CLI에서 큐 상태를 확인하고, 저장된 계산 보고서와
+  실패 사유를 살펴볼 수 있습니다.
+- **근거를 확인해 복구합니다.** 워커·호스트 중단에는 검증된 복구 경로를 적용합니다.
+  ORCA 계산 자체의 실패는 자동으로 재시도하지 않습니다.
 
-복구·보고서의 범위는 [공개 계약](docs/PUBLIC_CONTRACTS.ko.md)에,
-이 도구가 적합한 용도는 [프로젝트 범위](docs/RELATED_WORK.md)(영어)에 설명되어 있습니다.
+## 시작하기
 
-## 릴리스 패키지 설치
+**Python 3.11+**, Linux/WSL2와 별도로 설치한 ORCA 엔진이 필요합니다.
+워커는 `systemd`로 실행·관리합니다.
 
-[v5.0.0 GitHub 릴리스](https://github.com/dhsohn/orca_auto/releases/tag/v5.0.0)에서
-`orca_auto-5.0.0-py3-none-any.whl`을 내려받으세요. 워크플로우도 필요하면
-`orca_auto_workflows-5.0.0-py3-none-any.whl`을 같은 디렉터리에 내려받고,
-그 디렉터리에서 새 환경에 설치하세요:
+- **[ORCA_auto 설치](docs/INSTALLATION.ko.md)** — GitHub 릴리스에서 본체
+  패키지를 설치합니다.
+- **[워커 설정과 첫 작업 제출](docs/QUICKSTART.ko.md)** — 소스 checkout에서
+  설정·서비스 시작·큐 확인까지 진행합니다.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install ./orca_auto-5.0.0-py3-none-any.whl
+**업그레이드할 때는** 계산 중인 환경을 유지하고 유휴 시간에만 전환하세요.
+[업그레이드 안내](docs/RELEASE.md#moving-from-the-monolithic-4x-installation)(영어)를 참고하세요.
 
-# 선택 사항: 본체 설치에 워크플로우 추가
-python -m pip install ./orca_auto_workflows-5.0.0-py3-none-any.whl
-```
+## 같은 화학 연구 생태계
 
-이번 릴리스는 PyPI가 아닌 GitHub에서 wheel과 소스 배포본을 제공합니다.
-Python 패키지에는 ORCA·xTB·CREST 실행 파일이 포함되지 않으며 systemd 서비스도
-배포하지 않습니다. 감독 워커 설정은 아래 소스 checkout 가이드를 따르세요.
-서비스 설치기에는 checkout의 `systemd/` 자산이 필요합니다.
+화학 구조를 그리는 [Chemvas](https://github.com/dhsohn/Chemvas),
+계산을 실행하는 **ORCA_auto**, 연구 문서를 작성하는
+[LLMdocx](https://github.com/dhsohn/LLMdocx)는 로컬 중심의 독립적인 동반 도구입니다.
+데이터 전달에는 명시적인 변환이 필요하며, 전 과정이 자동으로 연결되는 구조는 아닙니다.
+[도구 간 연결 방식 →](docs/RELATED_WORK.md#local-first-companion-tools)(영어)
 
-## 소스 checkout에서 빠른 시작 (단독 ORCA)
+## 문서
 
-```bash
-# 1. 설치
-bash scripts/bootstrap_wsl.sh && source .venv/bin/activate
+[명령어](docs/REFERENCE.ko.md) · [런타임 계약](docs/PUBLIC_CONTRACTS.ko.md) ·
+[구조](docs/ARCHITECTURE.ko.md) · [서비스](systemd/README.ko.md) ·
+[Discord 알림](docs/DISCORD_SETUP.ko.md)
 
-# 2. 설정 — runs_root와 orca.paths.orca_executable 지정
-orca_auto init
+[개발](docs/DEVELOPMENT.ko.md) · [검증](docs/VALIDATION.md) ·
+[로드맵](ROADMAP.md) · [변경 이력](CHANGELOG.md)
 
-# 3. 감독 워커 시작 (최초 1회)
-orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
-
-# 4. runs_root 아래 작업 디렉터리에 ORCA .inp를 두고 제출
-orca_auto run-dir '/home/you/runs/my_rxn'
-
-# 5. 확인
-orca_auto queue list --engine orca
-```
-
-설정 키·경로 규칙·설정 검색 순서 → [docs/QUICKSTART.ko.md](docs/QUICKSTART.ko.md),
-[docs/REFERENCE.ko.md](docs/REFERENCE.ko.md).
-
-워크플로우를 사용하려면 `bash scripts/bootstrap_wsl.sh --with-workflows`로
-부트스트랩하거나, 같은 환경에 두 로컬 프로젝트를 함께 설치하세요:
-
-```bash
-python -m pip install -e . -e ./extensions/workflows
-```
-
-기존 `.venv`에서 `--with-workflows`를 생략해도 확장이 제거되지는 않습니다.
-본체만 설치된 구성이 필요하면 새 환경을 사용하세요.
-
-두 배포물의 버전은 함께 맞춰야 하며, 서로 다른 버전을 자유롭게 조합하는 구조가
-아닙니다. 계산 중에는 기존 런타임을 유지하고, 새 환경을 준비한 뒤 유휴 시간에만
-전환하세요.
-Python 패키지 설치만으로 systemd 서비스가 설치·재시작되지는 않습니다.
-[업그레이드와 서비스 경계](docs/RELEASE.md)(영어)를 참고하세요.
-
-## 무엇을 실행하나
-
-| 기능 | 용도 | 상세 |
-|---|---|---|
-| **단독 ORCA** | 단일 ORCA 작업의 내구성 제출/복구, 전이상태 탐색 | [REFERENCE](docs/REFERENCE.ko.md) |
-| **선택적 워크플로우 확장** | CREST→xTB→ORCA 파이프라인과 ORCA 전용 `scan_ts` 워크플로우 | [ARCHITECTURE](docs/ARCHITECTURE.ko.md) |
-| **메신저** | 단방향 Discord 작업/워크플로우 알림 | [DISCORD_SETUP](docs/DISCORD_SETUP.ko.md) |
-
-## 서비스·테스트·전체 문서
-
-- 감독 런타임(`systemd`, WSL/Linux) → [systemd/README.ko.md](systemd/README.ko.md)
-- `make check`는 Ruff·포맷 검사·mypy·import-linter·커버리지 게이트 pytest를 실행합니다.
-  실엔진 ORCA 실행 기록과 검증 경계는
-  → [docs/VALIDATION.md](docs/VALIDATION.md)
-- 문서 색인: [ARCHITECTURE](docs/ARCHITECTURE.ko.md) · [REFERENCE](docs/REFERENCE.ko.md) ·
-  [PUBLIC_CONTRACTS](docs/PUBLIC_CONTRACTS.ko.md) · [DEVELOPMENT](docs/DEVELOPMENT.ko.md) ·
-  [ROADMAP](ROADMAP.md)
-- [Citation](CITATION.cff) · [Support](SUPPORT.md) · [Security](SECURITY.md)
+[인용](CITATION.cff) · [기여](CONTRIBUTING.md) ·
+[지원](SUPPORT.md) · [보안](SECURITY.md)

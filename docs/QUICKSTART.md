@@ -5,6 +5,9 @@
 This guide is the shortest path from a fresh checkout to the supervised
 ORCA_auto engine workers.
 
+For release wheels and the Core / Core + Workflows choice, see
+[package installation](INSTALLATION.md). The steps below use a source checkout.
+
 ## 1) Install
 
 ```bash
@@ -77,6 +80,8 @@ this protection and can interrupt calculations. It does not wait for completion.
 See the [Systemd Contract](PUBLIC_CONTRACTS.md#systemd-contract) for guard limits.
 
 ## 5) Submit Work
+
+Place an ORCA `.inp` in a job directory under the configured `runs_root`, then submit:
 
 ```bash
 orca_auto run-dir '/home/user/orca_runs/sample_rxn'

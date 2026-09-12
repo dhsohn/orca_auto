@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1360" height="270" viewBox="0 0 1360 270" role="img" aria-labelledby="title desc">
   <title id="title">ORCA_auto</title>
-  <desc id="desc">Submit durably. Supervise every run. Recover explicitly. A queue-to-node symbol within a hexagon.</desc>
+  <desc id="desc">Submit. Monitor. Recover. A queue-to-node symbol within a hexagon.</desc>
   <rect width="1360" height="270" fill="#123e39"/>
   <rect y="258" width="1360" height="12" fill="#0d9488"/>
   <g transform="translate(54 46) scale(1.7)" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
@@ -10,6 +10,6 @@
   </g>
   <g font-family="DejaVu Sans, sans-serif">
     <text x="265" y="139" font-size="86" font-weight="700" fill="#ffffff">ORCA<tspan fill="#57cabc">_auto</tspan></text>
-    <text x="268" y="194" font-size="28" fill="#c5e9df">Submit durably. Supervise every run. Recover explicitly.</text>
+    <text x="268" y="194" font-size="28" fill="#c5e9df">Submit. Monitor. Recover.</text>
   </g>
 </svg>
