@@ -10,10 +10,11 @@ SupervisionRole = Literal["default", "with-workflow"]
 
 @dataclass(frozen=True)
 class EngineCatalogEntry:
-    """Import-safe metadata for a built-in engine.
+    """Import-safe metadata for a known engine, including optional implementations.
 
     Module names are strings on purpose: reading the catalog must not import
-    engine implementations from the ORCA or workflow layers.
+    engine implementations from the ORCA or workflow layers. Persisted engine
+    identities remain known when the workflows package is not installed.
     """
 
     engine_id: str
@@ -31,6 +32,7 @@ class EngineCatalogEntry:
     supervision_order: int
     activity_order: int
     task_kinds: tuple[str, ...]
+    requires_workflows: bool = False
 
 
 _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
@@ -67,6 +69,7 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         supervision_order=3,
         activity_order=1,
         task_kinds=("xtb_path_search", "xtb_opt", "xtb_sp", "xtb_hess", "xtb_ranking"),
+        requires_workflows=True,
     ),
     EngineCatalogEntry(
         engine_id="crest",
@@ -84,6 +87,7 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         supervision_order=2,
         activity_order=0,
         task_kinds=("crest_conformer_search",),
+        requires_workflows=True,
     ),
 )
 

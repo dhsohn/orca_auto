@@ -7,12 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from orca_auto import cli_workers
+from orca_auto.activity import _cancel
 from orca_auto.cli import main
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR, ORCA_AUTO_ORCA_APP_NAME
 from orca_auto.core.config import discovery, engines
 from orca_auto.core.queue.persistence import entry_to_dict
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.flow.activity import _cancel
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
 

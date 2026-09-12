@@ -7,6 +7,15 @@ from typing import Any
 
 import pytest
 
+from orca_auto import activity
+from orca_auto.activity import _cancel as _activity_cancel
+from orca_auto.activity import _clear as _activity_clear
+from orca_auto.activity import _collectors as _activity_collectors
+from orca_auto.activity import _list as _activity_list
+from orca_auto.activity import _orca as _activity_orca
+from orca_auto.activity import _queue_records as _activity_queue_records
+from orca_auto.activity import _sources as _activity_sources
+from orca_auto.core import activity as _activity_model
 from orca_auto.core.app_ids import (
     ORCA_AUTO_CONFIG_ENV_VAR,
     ORCA_AUTO_ORCA_SOURCE,
@@ -14,15 +23,8 @@ from orca_auto.core.app_ids import (
 from orca_auto.core.config import discovery
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.flow import activity
-from orca_auto.flow.activity import _cancel as _activity_cancel
-from orca_auto.flow.activity import _clear as _activity_clear
-from orca_auto.flow.activity import _collectors as _activity_collectors
-from orca_auto.flow.activity import _list as _activity_list
-from orca_auto.flow.activity import _model as _activity_model
-from orca_auto.flow.activity import _orca as _activity_orca
-from orca_auto.flow.activity import _queue_records as _activity_queue_records
-from orca_auto.flow.activity import _sources as _activity_sources
+from orca_auto.flow import orchestration as workflow_orchestration
+from orca_auto.flow import registry as workflow_registry
 from orca_auto.flow.activity import _workflow_records as _activity_workflow_records
 
 
@@ -258,7 +260,7 @@ def test_cancel_activity_routes_workflow_targets(monkeypatch) -> None:
         ],
     )
     monkeypatch.setattr(
-        _activity_cancel,
+        workflow_orchestration,
         "cancel_materialized_workflow",
         lambda **kwargs: {"workflow_id": "wf-9", "status": "cancelled", "cancelled": []},
     )
@@ -307,8 +309,10 @@ def test_activity_helper_edges_and_discovery_paths(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert _activity_sources.coerce_mapping({"a": 1}) == {"a": 1}
-    assert _activity_sources.coerce_mapping(["not", "mapping"]) == {}
+    from orca_auto.core.utils import mapping_or_empty
+
+    assert mapping_or_empty({"a": 1}) == {"a": 1}
+    assert mapping_or_empty(["not", "mapping"]) == {}
 
     existing = tmp_path / "config.yaml"
     existing.write_text("workflow:\n  root: /tmp/wf\n", encoding="utf-8")
@@ -856,7 +860,7 @@ def test_clear_activities_clears_workflow_and_engine_terminal_sources(monkeypatc
         return 2
 
     monkeypatch.setattr(
-        _activity_clear, "clear_terminal_workflow_registry", fake_clear_terminal_workflow_registry
+        workflow_registry, "clear_terminal_workflow_registry", fake_clear_terminal_workflow_registry
     )
     monkeypatch.setattr(
         _activity_clear,
@@ -1038,7 +1042,9 @@ def test_cancel_activity_autodiscovers_defaults(monkeypatch) -> None:
         captured.update(kwargs)
         return {"workflow_id": "wf-77", "status": "cancelled"}
 
-    monkeypatch.setattr(_activity_cancel, "cancel_materialized_workflow", fake_cancel_workflow)
+    monkeypatch.setattr(
+        workflow_orchestration, "cancel_materialized_workflow", fake_cancel_workflow
+    )
 
     payload = activity.cancel_activity(target="wf-77")
 

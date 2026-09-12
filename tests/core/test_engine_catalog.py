@@ -12,6 +12,9 @@ import pytest
 
 from orca_auto import cli as unified_cli
 from orca_auto import cli_workers as cli_worker_specs
+from orca_auto.activity import _cancel as activity_cancel
+from orca_auto.activity import _clear as activity_clear
+from orca_auto.activity import _collectors as activity_collectors
 from orca_auto.core.engine_catalog import (
     activity_engine_entries,
     engine_catalog,
@@ -32,9 +35,6 @@ from orca_auto.core.queue.worker.admission import (
     engine_queue_worker_source,
     reserve_engine_queue_worker_slot,
 )
-from orca_auto.flow.activity import _cancel as activity_cancel
-from orca_auto.flow.activity import _clear as activity_clear
-from orca_auto.flow.activity import _collectors as activity_collectors
 from orca_auto.flow.engines.xtb.job_inputs import SUPPORTED_JOB_TYPES
 
 

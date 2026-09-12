@@ -21,10 +21,12 @@ from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
 from orca_auto.orca.engine import ENGINE_DEFINITION
 from orca_auto.orca.evidence import collect_structure_evidence
+from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress
 from orca_auto.orca.parser import parse_orca_output
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
 from orca_auto.orca.queue.worker import QueueWorker
+from orca_auto.orca.report.irc import collect_irc_report_data
 from orca_auto.orca.report.opt import collect_opt_report_data
 from orca_auto.orca.state_reading import (
     load_report_json,
@@ -37,7 +39,8 @@ def _write_fake_orca(
     binary_path: Path,
     counter_path: Path,
     *,
-    normal_termination: bool = True,
+    termination_lines: tuple[str, ...] = ("****ORCA TERMINATED NORMALLY****",),
+    return_code: int = 0,
     scratch_artifacts: bool = False,
 ) -> None:
     lines = [
@@ -76,9 +79,8 @@ def _write_fake_orca(
                 "inp.with_name(inp.stem + '.EIJ.tmp').write_bytes(b'transient')",
             ]
         )
-    if normal_termination:
-        lines.append("print('****ORCA TERMINATED NORMALLY****')")
-    lines.extend(["raise SystemExit(0)", ""])
+    lines.extend(f"print({line!r})" for line in termination_lines)
+    lines.extend([f"raise SystemExit({return_code})", ""])
     binary_path.write_text("\n".join(lines), encoding="utf-8")
     binary_path.chmod(0o755)
 
@@ -470,8 +472,32 @@ def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
     assert not (moved_generation / "job_report.json").exists()
 
 
-def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
+@pytest.mark.parametrize(
+    ("termination_lines", "return_code", "analyzer_status", "reason"),
+    [
+        ((), 0, "incomplete", "run_incomplete"),
+        (
+            ("ORCA TERMINATED NORMALLY", "ORCA FINISHED BY ERROR TERMINATION"),
+            0,
+            "unknown_failure",
+            "error_termination",
+        ),
+        (
+            ("ORCA FINISHED BY ERROR TERMINATION", "ORCA TERMINATED NORMALLY"),
+            0,
+            "unknown_failure",
+            "error_termination",
+        ),
+        (("ORCA TERMINATED NORMALLY",), 42, "unknown_failure", "nonzero_exit_code"),
+    ],
+    ids=["no-normal-marker", "normal-then-error", "error-then-normal", "nonzero-exit"],
+)
+def test_orca_queue_worker_rejects_incomplete_or_conflicting_termination_evidence(
     tmp_path: Path,
+    termination_lines: tuple[str, ...],
+    return_code: int,
+    analyzer_status: str,
+    reason: str,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
     admission_root = tmp_path / "admission"
@@ -482,7 +508,9 @@ def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
 
     counter_path = tmp_path / "fake_orca_counter.txt"
     fake_orca = bin_dir / "fake_orca.py"
-    _write_fake_orca(fake_orca, counter_path, normal_termination=False)
+    _write_fake_orca(
+        fake_orca, counter_path, termination_lines=termination_lines, return_code=return_code
+    )
     config_path = tmp_path / "orca_auto.yaml"
     _write_orca_worker_config(
         config_path,
@@ -523,34 +551,41 @@ def test_orca_queue_worker_rejects_return_code_zero_without_normal_marker(
     raw_output = out_path.read_text(encoding="utf-8")
     assert "Fake ORCA consumed" in raw_output
     assert "TOTAL RUN TIME" in raw_output
-    assert "ORCA TERMINATED NORMALLY" not in raw_output
+    has_normal_marker = "ORCA TERMINATED NORMALLY" in termination_lines
+    assert ("ORCA TERMINATED NORMALLY" in raw_output) is has_normal_marker
+    for line in termination_lines:
+        assert line in raw_output
 
     state = load_state(reaction_dir)
     assert state is not None
     assert state["status"] == "failed"
     assert len(state["attempts"]) == 1
     attempt = state["attempts"][0]
-    assert attempt["return_code"] == 0
-    assert attempt["analyzer_status"] == "incomplete"
-    assert attempt["analyzer_reason"] == "run_incomplete"
-    assert attempt["markers"]["terminated_normally"] is False
+    assert attempt["return_code"] == return_code
+    assert attempt["analyzer_status"] == analyzer_status
+    assert attempt["analyzer_reason"] == reason
+    assert attempt["markers"]["terminated_normally"] is has_normal_marker
     assert state["final_result"] is not None
     assert state["final_result"]["status"] == "failed"
-    assert state["final_result"]["reason"] == "run_incomplete"
+    assert state["final_result"]["reason"] == reason
     assert state["final_result"]["last_out_path"] == str(out_path.resolve())
 
     generation_dir = Path(execution_snapshot["execution_dir"])
     report = load_report_json(generation_dir)
     assert report is not None
     assert report["status"]["state"] == "failed"
-    assert report["status"]["reason"] == "run_incomplete"
+    assert report["status"]["reason"] == reason
     assert report_json_path(generation_dir).exists()
+    machine = json.loads(report_json_path(generation_dir).read_text(encoding="utf-8"))
+    assert machine["lifecycle"]["outcome"] == "failed"
+    assert machine["handoff"]["status"] == "blocked"
+    assert machine["handoff"]["codes"] == [f"orca_auto/{reason}"]
     assert not report_json_path(reaction_dir).exists()
     report_html = generation_dir / RUN_REPORT_HTML_FILE
     assert report_html.exists()
     report_html_text = report_html.read_text(encoding="utf-8")
     assert "retry_limit_reached" not in report_html_text
-    assert "run_incomplete" in report_html_text
+    assert reason in report_html_text
     assert not (generation_dir / SI_BLOCK_MD_FILE).exists()
     assert not (reaction_dir / SI_BLOCK_MD_FILE).exists()
 
@@ -731,3 +766,92 @@ def test_real_orca_water_optimization_acceptance_when_configured(
     else:
         assert evidence is None
         assert not (generation / SI_BLOCK_MD_FILE).exists()
+
+
+@pytest.mark.parametrize("print_level", [1, 2], ids=["default-output", "verbose-output"])
+def test_real_orca_ammonia_ts_irc_acceptance_when_configured(
+    tmp_path: Path, print_level: int
+) -> None:
+    executable_text = os.environ.get("ORCA_REAL_EXECUTABLE", "").strip()
+    if not executable_text:
+        pytest.skip("set ORCA_REAL_EXECUTABLE to run the real ORCA acceptance")
+    executable = Path(executable_text).expanduser().resolve()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        pytest.fail(f"ORCA_REAL_EXECUTABLE is not executable: {executable}")
+
+    allowed_root = tmp_path / "orca_runs"
+    admission_root = tmp_path / "admission"
+    reaction_dir = allowed_root / "real_orca_nh3_inversion"
+    reaction_dir.mkdir(parents=True)
+    config_path = tmp_path / "orca_auto.yaml"
+    _write_orca_worker_config(
+        config_path,
+        allowed_root=allowed_root,
+        admission_root=admission_root,
+        orca_executable=executable,
+    )
+    # Public planar NH3 provides a small inversion TS and two IRC directions.
+    (reaction_dir / "nh3.inp").write_text(
+        "! HF STO-3G TightSCF OptTS Freq IRC\n"
+        "%scf MaxIter 80 end\n"
+        "%geom Calc_Hess true MaxIter 30 end\n"
+        f"%irc MaxIter 40 Direction both PrintLevel {print_level} end\n"
+        "* xyz 0 1\n"
+        "N  0.0000000000  0.0000000000  0.0000000000\n"
+        "H  1.0000000000  0.0000000000  0.0000000000\n"
+        "H -0.5000000000  0.8660254038  0.0000000000\n"
+        "H -0.5000000000 -0.8660254038  0.0000000000\n*\n",
+        encoding="utf-8",
+    )
+    assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker.poll_interval_seconds = 0.05
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+
+    entry = _queue_entry_for_reaction(allowed_root, reaction_dir)
+    assert entry.status == QueueStatus.COMPLETED
+    assert list_slots(admission_root) == []
+    generation = Path(entry.metadata["execution_snapshot"]["execution_dir"])
+    state = load_state(reaction_dir)
+    assert state is not None and state["final_result"] is not None
+    assert state["status"] == "completed"
+    assert state["final_result"]["reason"] == "ts_criteria_met"
+    assert len(state["attempts"]) == 1
+    attempt = state["attempts"][0]
+    assert attempt["return_code"] == 0
+    assert attempt["analyzer_status"] == "completed"
+    assert attempt["markers"]["final_frequency_section"] is True
+    assert attempt["markers"]["imaginary_frequency_count"] == 1
+    assert attempt["markers"]["irc_marker_found"] is True
+
+    out = Path(attempt["out_path"])
+    output = out.read_text(encoding="utf-8")
+    assert "ORCA TERMINATED NORMALLY" in output
+    assert parse_opt_progress(str(out)).is_converged is True
+    forward, backward = output.split("FORWARD IRC", 1)[1].split("BACKWARD IRC", 1)
+    assert "THE IRC HAS CONVERGED" in forward
+    assert "THE IRC HAS CONVERGED" in backward.split("IRC PATH SUMMARY", 1)[0]
+
+    analysis = parse_frequency_analysis(out)
+    assert analysis is not None and analysis.imaginary_count() == 1
+    assert len(analysis.frequencies) == 12
+    assert all(math.isfinite(value) for value in analysis.frequencies)
+    assert [atom[0] for atom in analysis.atoms] == ["N", "H", "H", "H"]
+    assert all(abs(atom[3]) < 1e-3 for atom in analysis.atoms)
+    assert len(analysis.mode_matrix) == 12
+    assert all(len(row) == 12 for row in analysis.mode_matrix.values())
+
+    irc = collect_irc_report_data(reaction_dir, state)
+    assert irc is not None and irc.optimization_converged is True
+    assert irc.imaginary_count == 1
+    assert any(mode.imaginary and mode.top_atoms for mode in irc.mode_summaries)
+    assert len(irc.path_points) >= 3
+    assert all(math.isfinite(point.energy_hartree) for point in irc.path_points)
+    assert any(point.marker == "TS" for point in irc.path_points[1:-1])
+    report = load_report_json(generation, require_consumable_success=True)
+    assert report is not None and report["status"]["state"] == "completed"
+    machine = json.loads(report_json_path(generation).read_text(encoding="utf-8"))
+    assert machine["lifecycle"]["outcome"] == "succeeded"
+    assert machine["handoff"]["status"] == "ready"
+    assert (generation / RUN_REPORT_HTML_FILE).is_file()
+    assert (generation / SI_BLOCK_MD_FILE).is_file()

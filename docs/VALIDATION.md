@@ -20,8 +20,8 @@ The GitHub Actions workflow runs multiple independent checks:
 - ShellCheck for repository shell scripts.
 - Python 3.11, 3.12, and 3.13 checks through `scripts/check.sh`.
 - Ruff, Ruff format check, mypy, and coverage-gated pytest.
-- Wheel smoke check that requires the packaged Python-module inventory to
-  exactly match `src/orca_auto` and verifies the single root typing marker.
+- Distribution checks for separate core and workflows builds, their exact source
+  inventories, and isolated core-only/workflow-enabled installation profiles.
 
 The pytest suite exercises ORCA logic with unit tests,
 sanitized fixtures, and fake-engine integration paths. These checks cover durable queue behavior,
@@ -48,6 +48,7 @@ For normal code changes:
 
 ```bash
 bash scripts/check.sh
+make check-packages
 ```
 
 For focused changes, pass pytest selectors through the shared script:
@@ -153,6 +154,112 @@ produced identical HTML/SI bytes (15 files; plain scan has no SI block).
 Independent review also compared 144 SI lint/provenance combinations byte-for-byte.
 These extraction comparisons do not claim real-engine acceptance for TS, NEB,
 IRC, or scan calculations.
+
+### Combined TS/frequency/IRC evidence check (2026-09-12)
+
+ORCA 6.1.1 on Linux/WSL2, public planar NH3, `HF STO-3G TightSCF
+OptTS Freq IRC`, initial `Calc_Hess true`, default optimization coordinates,
+one core and a 1 GB job budget, isolated temporary queues/admission:
+
+```bash
+ORCA_REAL_EXECUTABLE=/path/to/orca timeout --signal=TERM --kill-after=10s 180s \
+  .venv/bin/python -m pytest -q --no-cov \
+  tests/integration/test_orca_worker_smoke.py -k ammonia_ts_irc
+```
+
+The observed runs at IRC `PrintLevel 1` and `PrintLevel 2` both completed:
+the final TS frequency analysis had one imaginary mode, both IRC directions
+reported convergence, and the analyzer and IRC report retained Nimag = 1.
+The frequency/mode coordinates remained those of the planar TS. The generated
+`machine.json` packages passed the CI-pinned common validator, including artifact
+receipts and producer/payload pins, with `succeeded/complete/ready` decisions.
+Admission slots were released; no production worker was restarted.
+
+These runs did **not** reproduce the proposed loss of TS frequency evidence due
+to a later IRC `FINAL SINGLE POINT ENERGY` line: neither output contained such
+a line after the final frequency section. The verbose case also exercised the
+analyzer's full-file TS scan. No analyzer rule was changed. The existing guard
+against accepting an initial/recalculated optimization Hessian as final TS
+verification remains in place.
+
+This is evidence for the two tested ORCA 6.1.1 output variants, not every
+method, version, or combined route. A synthetic post-frequency energy line can
+invalidate the selected section; an actual affected combined output is needed
+before changing that boundary. An initial Cartesian-optimization probe was
+rejected by ORCA before calculation; the accepted inputs use the default
+optimization coordinates. IRC convergence alone does not prove that its
+endpoints are verified minima.
+
+## Idle-only service restart acceptance (2026-09-12)
+
+The focused, engine-free regression suite is:
+
+```bash
+bash scripts/check.sh tests/test_cli_systemd_restart.py \
+  tests/test_cli_systemd_restart_guard.py --no-cov
+```
+
+It covers installed versus caller configuration, active/reserved and unresolved
+slots, invalid evidence, explicit force bypass, sudo authentication ordering,
+restart failures, and a separate process attempting admission while the entire
+restart sequence holds the shared lock.
+
+A disposable Linux/WSL2 user-manager service additionally exercised the actual
+systemd 249 restart boundary. It ran this checkout's real queue worker with an
+isolated configuration/admission directory and a deliberately waiting **fake**
+ORCA executable on a public H2 input. The test routed service-unit selection and
+systemctl calls to that single temporary user unit; it did not exercise a
+production system target, sudo authentication, or a real ORCA calculation.
+
+- While the fake engine held an admission slot, default restart returned
+  non-zero without `reset-failed` or `restart` calls. Both worker and engine PIDs
+  remained alive and unchanged.
+- After releasing the fake engine and confirming completed queue state and an
+  empty admission pool, default restart succeeded and changed the worker PID.
+- The resulting exact `machine.json` and artifact receipts passed the
+  CI-pinned common validator, with producer `orca_auto` and payload
+  `chemistry/results-bundle` v1 checked separately. Its three decisions were
+  `succeeded`, `complete`, and `ready`; these are fake-engine pipeline evidence,
+  not scientific acceptance.
+- The disposable unit was stopped afterward. The production system worker and
+  its running calculation were not restarted, reconfigured, or source-synced.
+
+## First-stage runtime boundary acceptance (2026-09-12, before the distribution split)
+
+The focused development-profile checks are:
+
+```bash
+.venv/bin/python -m pytest -q --no-cov tests/test_core_without_workflows.py \
+  tests/test_activity_extension_boundary.py tests/test_workflow_worker_boundary.py
+```
+
+The subprocess acceptance copies the package without `flow/` and provides only
+its declared YAML dependency and package metadata. Fresh isolated interpreters
+exercise help/version, ORCA submission/list/cancel/clear, the default worker
+plan, and the real queue worker with a deliberately fake ORCA executable.
+The engine descendant itself asserts that its imported package is the staged
+copy and that no workflow package can be found. This guards against an editable
+installation silently supplying the excluded source.
+
+Explicit workflow commands/filters and retained workflow state are refused
+without mutations. Additional regressions cover malformed/dangling registry
+evidence, scaffold/workspace/stage evidence, unreadable scans, separate engine
+config roots, and retained xTB/CREST admission identities. Completed terminal
+rows can be cleared; cancelled rows awaiting terminal replay remain protected.
+An installed extension with an import failure is not classified as absent.
+
+The actual fake-child output passed the common validator at the CI pin
+`bc252035d01edddf1314e6641689c6d5cb88af92`, with `--machine` artifact byte/hash
+verification, producer `orca_auto`, and payload `chemistry/results-bundle` v1.
+Its independent lifecycle/delivery/handoff decisions were
+`succeeded` / `complete` / `ready`. This proves a core-only pipeline, not a
+scientific ORCA result, a separately built core wheel, or deployment acceptance.
+
+Independent AST comparison preserved the moved ORCA cancellation, result
+envelope, activity-record and engine-path functions. The preceding termination
+and safe-restart fixes were carried forward unchanged in their runtime owners.
+No scientific execution/interpretation policy changed in this boundary
+extraction; the earlier real-engine acceptance remains separately recorded.
 
 ## Recorded real-engine runs
 

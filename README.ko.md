@@ -15,6 +15,12 @@ ORCA_auto는 Linux/WSL에서 **ORCA 계산과 CREST→xTB→ORCA 워크플로우
 CLI로 작업을 제출하고, 디스크에 저장된 큐에서 진행 상황을 확인하며, 기록된 상태·복구
 판단·계산 보고서를 살펴볼 수 있습니다. ORCA 입력 설계와 화학적 판단은 사용자가 맡습니다.
 
+**5.0.0부터 본체와 워크플로우를 선택 설치할 수 있는 두 패키지로 제공합니다.**
+기본 `orca_auto` 설치에는
+단독 ORCA 런타임이 들어 있으며, 같은 버전의 선택적 `orca_auto_workflows` 확장을
+설치하면 ORCA 전용 `scan_ts`를 포함한 워크플로우를 사용할 수 있습니다.
+CLI 이름과 Python 임포트는 계속 `orca_auto`를 사용합니다.
+
 ## 로컬 중심 화학 연구 생태계
 
 ORCA_auto는 [Chemvas](https://github.com/dhsohn/Chemvas),
@@ -46,7 +52,28 @@ ORCA_auto는 [Chemvas](https://github.com/dhsohn/Chemvas),
 복구·보고서의 범위는 [공개 계약](docs/PUBLIC_CONTRACTS.ko.md)에,
 이 도구가 적합한 용도는 [프로젝트 범위](docs/RELATED_WORK.md)(영어)에 설명되어 있습니다.
 
-## 빠른 시작 (단독 ORCA)
+## 릴리스 패키지 설치
+
+[v5.0.0 GitHub 릴리스](https://github.com/dhsohn/orca_auto/releases/tag/v5.0.0)에서
+`orca_auto-5.0.0-py3-none-any.whl`을 내려받으세요. 워크플로우도 필요하면
+`orca_auto_workflows-5.0.0-py3-none-any.whl`을 같은 디렉터리에 내려받고,
+그 디렉터리에서 새 환경에 설치하세요:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install ./orca_auto-5.0.0-py3-none-any.whl
+
+# 선택 사항: 본체 설치에 워크플로우 추가
+python -m pip install ./orca_auto_workflows-5.0.0-py3-none-any.whl
+```
+
+이번 릴리스는 PyPI가 아닌 GitHub에서 wheel과 소스 배포본을 제공합니다.
+Python 패키지에는 ORCA·xTB·CREST 실행 파일이 포함되지 않으며 systemd 서비스도
+배포하지 않습니다. 감독 워커 설정은 아래 소스 checkout 가이드를 따르세요.
+서비스 설치기에는 checkout의 `systemd/` 자산이 필요합니다.
+
+## 소스 checkout에서 빠른 시작 (단독 ORCA)
 
 ```bash
 # 1. 설치
@@ -68,12 +95,28 @@ orca_auto queue list --engine orca
 설정 키·경로 규칙·설정 검색 순서 → [docs/QUICKSTART.ko.md](docs/QUICKSTART.ko.md),
 [docs/REFERENCE.ko.md](docs/REFERENCE.ko.md).
 
+워크플로우를 사용하려면 `bash scripts/bootstrap_wsl.sh --with-workflows`로
+부트스트랩하거나, 같은 환경에 두 로컬 프로젝트를 함께 설치하세요:
+
+```bash
+python -m pip install -e . -e ./extensions/workflows
+```
+
+기존 `.venv`에서 `--with-workflows`를 생략해도 확장이 제거되지는 않습니다.
+본체만 설치된 구성이 필요하면 새 환경을 사용하세요.
+
+두 배포물의 버전은 함께 맞춰야 하며, 서로 다른 버전을 자유롭게 조합하는 구조가
+아닙니다. 계산 중에는 기존 런타임을 유지하고, 새 환경을 준비한 뒤 유휴 시간에만
+전환하세요.
+Python 패키지 설치만으로 systemd 서비스가 설치·재시작되지는 않습니다.
+[업그레이드와 서비스 경계](docs/RELEASE.md)(영어)를 참고하세요.
+
 ## 무엇을 실행하나
 
 | 기능 | 용도 | 상세 |
 |---|---|---|
 | **단독 ORCA** | 단일 ORCA 작업의 내구성 제출/복구, 전이상태 탐색 | [REFERENCE](docs/REFERENCE.ko.md) |
-| **워크플로우** | CREST→xTB→ORCA 형태 이성질체 / 반응 파이프라인 | [ARCHITECTURE](docs/ARCHITECTURE.ko.md) |
+| **선택적 워크플로우 확장** | CREST→xTB→ORCA 파이프라인과 ORCA 전용 `scan_ts` 워크플로우 | [ARCHITECTURE](docs/ARCHITECTURE.ko.md) |
 | **메신저** | 단방향 Discord 작업/워크플로우 알림 | [DISCORD_SETUP](docs/DISCORD_SETUP.ko.md) |
 
 ## 서비스·테스트·전체 문서

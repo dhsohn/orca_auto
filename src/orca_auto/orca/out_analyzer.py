@@ -9,12 +9,7 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
 from .completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1, CompletionMode
-from .output_status import (
-    ERROR_TERMINATION_NEEDLES,
-    NORMAL_TERMINATION_NEEDLES,
-    last_optimization_convergence,
-    optimization_convergence_line,
-)
+from .output_status import optimization_convergence_line, termination_line
 from .statuses import AnalyzerStatus
 
 logger = logging.getLogger(__name__)
@@ -71,13 +66,11 @@ class OutMarkers(TypedDict):
 
 
 _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
-    ("terminated_normally", NORMAL_TERMINATION_NEEDLES),
     ("total_run_time_seen", ("TOTAL RUN TIME",)),
     ("irc_marker_found", ("IRC PATH SUMMARY", "IRC-DRV")),
     ("scf_error", ("SCF NOT CONVERGED", "SCF CONVERGENCE FAILED")),
     ("scfgrad_abort", ("ORCA FINISHED BY ERROR TERMINATION IN SCF GRADIENT",)),
     ("disk_io_error", ("COULD NOT WRITE TO DISK", "NO SPACE LEFT ON DEVICE")),
-    ("generic_error_termination", ERROR_TERMINATION_NEEDLES),
     ("ts_failure_marker", ("NO ACCEPTABLE TS", "FAILED TO FIND TS")),
     ("memory_error", ("OUT OF MEMORY", "INSUFFICIENT MEMORY", "CANNOT ALLOCATE MEMORY")),
     (
@@ -130,6 +123,9 @@ def _marker_is_set(markers: OutMarkers, marker_name: BooleanMarkerName) -> bool:
 
 def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
     upper = line.upper()
+    normal, error = termination_line(line)
+    markers["terminated_normally"] |= normal
+    markers["generic_error_termination"] |= error
     if "MULTIPLICITY" in upper and "IMPOSSIBLE" in upper:
         markers["multiplicity_impossible"] = True
     verdict = optimization_convergence_line(line)
@@ -142,7 +138,7 @@ def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
 
 
 def _scan_text_for_markers(text: str, markers: OutMarkers) -> None:
-    for line in text.splitlines():
+    for line in io.StringIO(text, newline=None):
         _scan_line_for_markers(line, markers)
 
 
@@ -151,14 +147,11 @@ def _interpret_markers(markers: OutMarkers, mode: CompletionMode) -> OutAnalysis
     if error_analysis is not None:
         return error_analysis
 
-    if markers["terminated_normally"]:
-        if mode.kind == "ts":
-            return _interpret_ts_completion(markers, mode)
-        return OutAnalysis(
-            status=AnalyzerStatus.COMPLETED, reason="normal_termination", markers=markers
-        )
-
-    if mode.kind == "ts" and markers["ts_failure_marker"]:
+    if (
+        mode.kind == "ts"
+        and markers["ts_failure_marker"]
+        and (not markers["terminated_normally"] or markers["generic_error_termination"])
+    ):
         return OutAnalysis(
             status=AnalyzerStatus.TS_NOT_FOUND, reason="ts_failure_marker", markers=markers
         )
@@ -166,6 +159,13 @@ def _interpret_markers(markers: OutMarkers, mode: CompletionMode) -> OutAnalysis
     if markers["generic_error_termination"]:
         return OutAnalysis(
             status=AnalyzerStatus.UNKNOWN_FAILURE, reason="error_termination", markers=markers
+        )
+
+    if markers["terminated_normally"]:
+        if mode.kind == "ts":
+            return _interpret_ts_completion(markers, mode)
+        return OutAnalysis(
+            status=AnalyzerStatus.COMPLETED, reason="normal_termination", markers=markers
         )
 
     return OutAnalysis(status=AnalyzerStatus.INCOMPLETE, reason="run_incomplete", markers=markers)
@@ -222,15 +222,26 @@ def _read_tail(out_path: Path, encoding: str, nbytes: int) -> str:
     return raw.decode(encoding, errors="ignore")
 
 
-def _scan_full_for_opt_convergence(out_path: Path, encoding: str) -> bool | None:
-    """Last optimization verdict anywhere in the file, ``None`` when absent.
+def _scan_full_for_verdicts(out_path: Path, encoding: str, markers: OutMarkers) -> None:
+    """Use complete lines for termination and the last optimization verdict.
 
-    Same rule as the whole-text scan of a small file: the last verdict line
-    wins, so a superseded early verdict followed by a cycle that never
-    reached one reads the same whether or not the file exceeds the window.
+    A tail can omit an earlier error, or start inside an echoed input line.
+    Replace its termination flags rather than retaining truncated-line evidence.
     """
+    normal = False
+    error = False
+    last_opt_converged = None
     with out_path.open("r", encoding=encoding, errors="ignore") as handle:
-        return last_optimization_convergence(handle)
+        for line in handle:
+            line_normal, line_error = termination_line(line)
+            normal |= line_normal
+            error |= line_error
+            verdict = optimization_convergence_line(line)
+            if verdict is not None:
+                last_opt_converged = verdict
+    markers["terminated_normally"] = normal
+    markers["generic_error_termination"] = error
+    markers["last_opt_converged"] = last_opt_converged
 
 
 def _read_head(out_path: Path, encoding: str, nbytes: int) -> str:
@@ -335,13 +346,7 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
             tail_text = _read_tail(out_path, encoding, tail_bytes)
             _scan_text_for_markers(tail_text, markers)
 
-            # A small file is scanned whole and its last verdict wins; the
-            # tail window must not change that verdict for a large file (a
-            # not-converged marker followed by a long normal-modes matrix), so
-            # the whole file is scanned with the same last-verdict rule when
-            # the tail holds none. The parser reads the whole file as well.
-            if markers["last_opt_converged"] is None:
-                markers["last_opt_converged"] = _scan_full_for_opt_convergence(out_path, encoding)
+            _scan_full_for_verdicts(out_path, encoding, markers)
 
             # Head scan: multiplicity_impossible typically appears near the top.
             if not markers["multiplicity_impossible"]:

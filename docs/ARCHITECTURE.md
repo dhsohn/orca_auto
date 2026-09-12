@@ -35,10 +35,18 @@ internal **workflow stages** rather than standalone public commands.
 
 ## 2. Layered Package Structure
 
-All code lives under `src/orca_auto`. There are five main areas:
+Core sources live under `src/orca_auto`; the same-version optional extension
+lives under `extensions/workflows/src/orca_auto/flow`. The tree below describes
+their combined installed Python namespace, not one source directory.
+
+The distributions separate runtime composition and installation. `activity/` is the neutral outer activity owner;
+`flow/activity/` supplies workflow records only when the extension is present.
+Core keeps persisted identities and shared queue/admission ownership. See
+[the distribution policy](DEVELOPMENT.md#optional-workflows-distributions)
+for installation, version coupling, and absence behavior.
 
 ```text
-src/orca_auto/
+orca_auto/               # Installed namespace spanning both distributions
 ├── cli*.py / activity*.py / terminal_table.py / systemd_plan.py
 │       # User-facing CLI surface (argparse, handlers, rendering)
 │
@@ -95,7 +103,7 @@ src/orca_auto/
 `orca_auto.orca` is the only implementation source of truth for ORCA logic.
 There are no top-level alias packages or alternate runtime shims.
 
-Layering is directional and enforced by import-linter (`lint-imports`,
+Layering is directional and enforced by import-linter (`python scripts/check_imports.py`,
 configured in `pyproject.toml`, run by `scripts/check.sh` and CI): `flow` may
 import `orca` and `core`; `orca` may import only `core`; `core`
 imports none of those domain packages. Engine wiring resolves lazy string module
@@ -705,11 +713,12 @@ place to add user commands.
 ## 13. Quality Gates
 
 `scripts/check.sh` is the shared local + CI entrypoint: it creates/repairs
-`.venv`, installs `.[dev]`, then runs `ruff check`, `ruff format --check`,
-`mypy`, `lint-imports`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
+`.venv`, installs `.[dev]` and `./extensions/workflows`, then runs `ruff check`, `ruff format --check`,
+`mypy`, `python scripts/check_imports.py`, and the coverage-gated pytest suite. CI additionally runs Gitleaks,
 ShellCheck, a Python 3.11/3.12/3.13 matrix,
-and a wheel smoke that requires the packaged Python-module inventory to exactly match
-`src/orca_auto` with one root `py.typed` marker.
+and distribution checks (`make check-packages` locally). Packaging checks build the core and workflow
+distributions, verify their separate source inventories, and exercise isolated
+installation profiles without licensed engines.
 
 Tests are organized as `tests/core/`, `tests/flow/`, `tests/flow/engines/`,
 `tests/integration/`, and top-level ORCA, CLI, workflow, and repository-wide

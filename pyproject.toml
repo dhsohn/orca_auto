@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orca_auto"
-version = "4.1.0"
-description = "orca_auto monorepo for ORCA, xTB, CREST, and workflow automation"
+version = "5.0.0"
+description = "ORCA_auto core: durable ORCA queues and supervised execution"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -41,7 +41,11 @@ Repository = "https://github.com/dhsohn/orca_auto"
 Issues = "https://github.com/dhsohn/orca_auto/issues"
 
 [project.optional-dependencies]
+workflows = ["orca_auto_workflows==5.0.0"]
 dev = [
+    "build>=1.2.2",
+    "setuptools>=68.0",
+    "wheel>=0.45.1",
     "import-linter>=2.12",
     "mypy>=1.19.1",
     "pytest>=9.0",
@@ -60,6 +64,7 @@ include = ["orca_auto*"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+src = [".", "src", "extensions/workflows/src"]
 
 [tool.ruff.lint]
 # Layout (including line length) is owned by `ruff format`, which
@@ -85,8 +90,8 @@ ignore = ["UP042"]
 
 [tool.mypy]
 python_version = "3.11"
-files = ["src/orca_auto", "tests"]
-mypy_path = "src"
+files = ["src/orca_auto", "extensions/workflows/src/orca_auto/flow", "tests"]
+mypy_path = ["src", "extensions/workflows/src"]
 pretty = true
 show_error_codes = true
 warn_unused_configs = true
@@ -111,8 +116,8 @@ warn_unused_ignores = true
 
 # Layering is enforced by import-linter (`lint-imports`, run by scripts/check.sh
 # and therefore by CI). Engine wiring crosses layers only through lazy string
-# module paths (core/engine_catalog.py); that
-# is the deliberate plugin seam and is invisible to the import graph on purpose.
+# module paths (core/engine_catalog.py). The absent-workflows subprocess tests
+# additionally exercise this dynamic seam, which static import checks cannot see.
 [tool.importlinter]
 root_packages = ["orca_auto"]
 exclude_type_checking_imports = true
@@ -220,6 +225,7 @@ name = "Systemd CLI layers: independent command owners over freshness over units
 type = "layers"
 layers = [
     "orca_auto.cli_systemd_apply | orca_auto.cli_systemd_restart | orca_auto.cli_systemd_status",
+    "orca_auto.cli_systemd_restart_guard",
     "orca_auto.cli_systemd_freshness",
     "orca_auto.cli_systemd_units",
     "orca_auto.systemd_plan",
@@ -299,6 +305,7 @@ type = "forbidden"
 source_modules = ["orca_auto.core", "orca_auto.orca", "orca_auto.flow"]
 forbidden_modules = [
     "orca_auto._process_evidence",
+    "orca_auto.activity",
     "orca_auto.activity_labels",
     "orca_auto.activity_rendering",
     "orca_auto.activity_view",
@@ -309,6 +316,7 @@ forbidden_modules = [
     "orca_auto.cli_systemd_apply",
     "orca_auto.cli_systemd_freshness",
     "orca_auto.cli_systemd_restart",
+    "orca_auto.cli_systemd_restart_guard",
     "orca_auto.cli_systemd_status",
     "orca_auto.cli_systemd_units",
     "orca_auto.cli_worker_supervision",
@@ -318,7 +326,7 @@ forbidden_modules = [
 ]
 
 [tool.coverage.run]
-source = ["src/orca_auto"]
+source = ["src/orca_auto", "extensions/workflows/src/orca_auto/flow"]
 
 [tool.coverage.report]
 fail_under = 80

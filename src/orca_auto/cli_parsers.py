@@ -22,13 +22,10 @@ from orca_auto._version import package_version
 from orca_auto.cli_systemd_apply import cmd_systemd_install
 from orca_auto.cli_systemd_restart import cmd_service_restart
 from orca_auto.cli_systemd_status import cmd_service_status
+from orca_auto.core.commands.worker_options import add_worker_common_cli_options
 from orca_auto.core.engine_catalog import known_engine_ids, supervised_engine_entries
+from orca_auto.core.extensions import workflows_available
 from orca_auto.core.terminal import emit_error
-from orca_auto.flow.cli.worker_options import (
-    WorkflowWorkerOptionConfig,
-    add_workflow_worker_cli_options,
-)
-from orca_auto.flow.templates import WORKFLOW_SCAFFOLD_SHORTCUTS
 from orca_auto.systemd_plan import DEFAULT_SYSTEMD_UNIT_DIR
 
 # Matches argparse's stock invalid-choice message. Older Python quotes each
@@ -179,6 +176,13 @@ def add_scaffold_parser(subparsers: argparse._SubParsersAction[argparse.Argument
         "scaffold",
         help="Create raw input workflow scaffold directories.",
     )
+    if not workflows_available():
+        scaffold_parser.add_argument("workflow_type", nargs="?")
+        scaffold_parser.add_argument("root", nargs="?")
+        scaffold_parser.set_defaults(func=cli_handlers.cmd_workflow_scaffold)
+        return
+    from orca_auto.flow.templates import WORKFLOW_SCAFFOLD_SHORTCUTS
+
     scaffold_subparsers = scaffold_parser.add_subparsers(dest="scaffold_app", required=True)
 
     for name, workflow_type, help_text in WORKFLOW_SCAFFOLD_SHORTCUTS:
@@ -272,12 +276,18 @@ def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
             "workflow explicitly includes its xTB/CREST workers"
         ),
     )
-    add_workflow_worker_cli_options(
-        parser,
-        config=WorkflowWorkerOptionConfig(
-            json_help="Print worker commands as JSON without starting them"
-        ),
-    )
+    json_help = "Print worker commands as JSON without starting them"
+    if workflows_available():
+        from orca_auto.flow.cli.worker_options import (
+            WorkflowWorkerOptionConfig,
+            add_workflow_worker_cli_options,
+        )
+
+        add_workflow_worker_cli_options(
+            parser, config=WorkflowWorkerOptionConfig(json_help=json_help)
+        )
+    else:
+        add_worker_common_cli_options(parser, json_help=json_help)
 
 
 def _add_queue_worker_parser(
@@ -403,7 +413,12 @@ def add_service_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 
     restart_parser = service_subparsers.add_parser(
         "restart",
-        help="Restart the orca_auto runtime or engine-worker target.",
+        help="Restart services only when their calculation admission pools are idle.",
+    )
+    restart_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip the idle safety check; running calculations may be interrupted.",
     )
     restart_parser.set_defaults(func=cmd_service_restart)
 

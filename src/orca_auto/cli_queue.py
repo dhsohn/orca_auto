@@ -10,6 +10,7 @@ from typing import Any
 
 from orca_auto import activity_labels, terminal_table
 from orca_auto import activity_rendering as _activity_rendering
+from orca_auto.activity import cancel_activity, clear_activities, list_activities
 from orca_auto.activity_view import (
     activity_counter_config_path,
     activity_with_parent_hint,
@@ -28,19 +29,25 @@ from orca_auto.core.config.discovery import (
     shared_config_text_from_args,
     workflow_root_for_args,
 )
+from orca_auto.core.extensions import require_workflows, workflows_available
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
 from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
-from orca_auto.flow.activity import cancel_activity, clear_activities, list_activities
-from orca_auto.flow.registry import WorkflowRegistryCorruptError
 
-_QUEUE_STATE_ERRORS = (
+_WORKFLOW_STATE_ERRORS: tuple[type[Exception], ...] = ()
+if workflows_available():
+    from orca_auto.flow.registry import WorkflowRegistryCorruptError
+
+    _WORKFLOW_STATE_ERRORS = (WorkflowRegistryCorruptError,)
+
+_QUEUE_STATE_ERRORS: tuple[type[Exception], ...] = (
     *YAML_CONFIG_LOAD_EXCEPTIONS,
     QueueStoreCorruptError,
     JobLocationIndexError,
-    WorkflowRegistryCorruptError,
+    *_WORKFLOW_STATE_ERRORS,
 )
+_QUEUE_CANCEL_ERRORS: tuple[type[Exception], ...] = (LookupError, *_QUEUE_STATE_ERRORS)
 
 
 @dataclass(frozen=True)
@@ -233,15 +240,23 @@ def _queue_list_text_lines(
 
 
 def _queue_list_request(args: Any) -> _QueueListRequest:
+    engine_values = normalize_activity_filter_values(getattr(args, "engine", None))
+    kind_values = normalize_activity_filter_values(getattr(args, "kind", None))
+    if not workflows_available() and (
+        bool(getattr(args, "refresh", False))
+        or any(engine != "orca" for engine in engine_values)
+        or "workflow" in kind_values
+    ):
+        require_workflows()
     explicit_config = shared_config_text_from_args(args) or None
     return _QueueListRequest(
         # Resolve one effective config up front so activity rows and the global
         # active count use the same checkout and runtime roots.
         shared_config=discovery.resolve_shared_config_path(explicit_config),
         limit=int(getattr(args, "limit", 0) or 0),
-        engine_values=normalize_activity_filter_values(getattr(args, "engine", None)),
+        engine_values=engine_values,
         status_values=normalize_activity_filter_values(getattr(args, "status", None)),
-        kind_values=normalize_activity_filter_values(getattr(args, "kind", None)),
+        kind_values=kind_values,
         json_output=bool(getattr(args, "json", False)),
     )
 
@@ -496,7 +511,7 @@ def cmd_queue_cancel(args: Any) -> int:
             xtb_config=shared_config,
             orca_config=shared_config,
         )
-    except (LookupError, *_QUEUE_STATE_ERRORS) as exc:
+    except _QUEUE_CANCEL_ERRORS as exc:
         emit_error(
             exc,
             hint=(

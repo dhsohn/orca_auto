@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+WITH_WORKFLOWS=0
+for argument in "$@"; do
+  case "$argument" in
+    --with-workflows) WITH_WORKFLOWS=1 ;;
+    --help|-h)
+      echo "Usage: bash scripts/bootstrap_wsl.sh [--with-workflows]"
+      echo "Installs core by default; --with-workflows also installs the local workflow extension."
+      exit 0
+      ;;
+    *) echo "[bootstrap] ERROR: Unknown argument: $argument" >&2; exit 2 ;;
+  esac
+done
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -61,7 +74,11 @@ if ! "$PYTHON_BIN" -m venv .venv >/dev/null 2>&1; then
 fi
 VENV_PY="$ROOT/.venv/bin/python"
 "$VENV_PY" -m pip install --upgrade pip
-"$VENV_PY" -m pip install -e .
+if [[ "$WITH_WORKFLOWS" == "1" ]]; then
+  "$VENV_PY" -m pip install -e . -e ./extensions/workflows
+else
+  "$VENV_PY" -m pip install -e .
+fi
 
 CONFIG="$ROOT/config/orca_auto.yaml"
 if [[ ! -f "$CONFIG" ]]; then

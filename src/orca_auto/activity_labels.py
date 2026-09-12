@@ -7,7 +7,6 @@ from typing import Any
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.statuses import QUEUE_ACTIVE_STATUSES
 from orca_auto.core.utils import normalize_text, parse_iso_utc
-from orca_auto.flow.templates import workflow_template_label
 
 _ORCA_SELECTED_INP_HINTS = (
     ("neb", "NEB"),
@@ -108,6 +107,8 @@ def infer_orca_detail_from_metadata(metadata: dict[str, Any]) -> str:
 
 
 def workflow_detail_text(metadata: dict[str, Any]) -> str:
+    from orca_auto.flow.templates import workflow_template_label
+
     base = workflow_template_label(metadata.get("template_name"))
     request_parameters = metadata.get("request_parameters")
     request_parameters = request_parameters if isinstance(request_parameters, dict) else {}

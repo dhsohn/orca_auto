@@ -20,7 +20,10 @@ def _fake_proc_stat(pid: int, *, start_ticks: int = 123_456) -> bytes:
 
 
 def _process_file_reader(
-    import_sources: dict[int, Path], *, start_ticks: int = 123_456
+    import_sources: dict[int, Path],
+    *,
+    start_ticks: int = 123_456,
+    workflow_sources: dict[int, Path] | None = None,
 ) -> Callable[[str], bytes]:
     def _read(path: str) -> bytes:
         parts = Path(path).parts
@@ -29,7 +32,12 @@ def _process_file_reader(
             return _fake_proc_stat(pid, start_ticks=start_ticks)
         assert parts[-1] == "environ"
         source = import_sources[pid]
-        return f"{_process_evidence.PROCESS_IMPORT_SOURCE_ENV}={source}\0".encode()
+        evidence = f"{_process_evidence.PROCESS_IMPORT_SOURCE_ENV}={source}\0"
+        if workflow_sources and pid in workflow_sources:
+            evidence += (
+                f"{_process_evidence.PROCESS_WORKFLOW_IMPORT_SOURCE_ENV}={workflow_sources[pid]}\0"
+            )
+        return evidence.encode()
 
     return _read
 
@@ -615,6 +623,9 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
     git_import_source.write_text("# editable source\n", encoding="utf-8")
     wheel_import_source.parent.mkdir(parents=True)
     wheel_import_source.write_text("# installed wheel\n", encoding="utf-8")
+    workflow_import_source = wheel_import_source.parent / "flow" / "__init__.py"
+    workflow_import_source.parent.mkdir()
+    workflow_import_source.write_text("# installed workflow wheel\n", encoding="utf-8")
     head_update_epoch = 1_785_747_750
     head_commit_epoch = head_update_epoch - 86_400
     head_sha = "d" * 40
@@ -682,7 +693,10 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
             ),
         ),
         run=_fake_run,
-        read_process_file=_process_file_reader({101: git_import_source, 102: wheel_import_source}),
+        read_process_file=_process_file_reader(
+            {101: git_import_source, 102: wheel_import_source},
+            workflow_sources={102: workflow_import_source},
+        ),
     )
 
     assert verdict is not None
@@ -696,6 +710,24 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
             "source_root": str(wheel_import_source.parent),
             "import_source": str(wheel_import_source),
             "reason": "installed_distribution",
+            "components": {
+                "core": {
+                    "label": "workflow",
+                    "unit": wheel_unit,
+                    "pid": 102,
+                    "source_root": str(wheel_import_source.parent),
+                    "import_source": str(wheel_import_source),
+                    "reason": "installed_distribution",
+                },
+                "workflows": {
+                    "label": "workflow",
+                    "unit": wheel_unit,
+                    "pid": 102,
+                    "source_root": str(workflow_import_source.parent),
+                    "import_source": str(workflow_import_source),
+                    "reason": "installed_distribution",
+                },
+            },
         }
     ]
 

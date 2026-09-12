@@ -66,15 +66,17 @@ Operational consequences:
   src/
     orca_auto/
       core/               # Shared chemistry-platform infrastructure
-      flow/               # Workflow orchestration package
-        engines/
-          xtb/            # Internal xTB workflow-stage engine
-          crest/          # Internal CREST workflow-stage engine
       orca/               # Canonical ORCA implementation
         commands/
         runtime/
         state.py
         ...
+  extensions/workflows/
+    pyproject.toml        # Same-version orca_auto_workflows distribution
+    src/orca_auto/flow/
+      engines/
+        xtb/              # Internal xTB workflow-stage engine
+        crest/            # Internal CREST workflow-stage engine
   systemd/
     orca_auto-runtime@.target
     orca_auto-engine-workers@.target
@@ -104,8 +106,17 @@ bash scripts/bootstrap_wsl.sh
 `bootstrap_wsl.sh`:
 
 - Prepares `.venv`
-- Installs Python dependencies and the repository itself into `.venv`
+- Installs Python dependencies and the ORCA core into `.venv`
 - Seeds `config/orca_auto.yaml` if missing
+
+Since 5.0.0, workflows are installed separately. For workflows, including
+ORCA-only `scan_ts`, add `--with-workflows` to bootstrap or run
+`python -m pip install -e . -e ./extensions/workflows` in the active environment.
+The optional `orca_auto_workflows` distribution must match the core version
+exactly. The default core install no longer includes workflow implementation;
+public CLI and import names stay unchanged. See [RELEASE.md](RELEASE.md) before
+cutting over a monolithic 4.x environment. Python installation alone does not
+deploy services; `systemd install` still reads the checkout's `systemd/` assets.
 
 This reference standardizes on `orca_auto ...` for public commands; the
 supported command list and the default config discovery order are specified in
@@ -727,6 +738,17 @@ The mode is determined from the input route line (`! ...`).
 - TS mode: Contains `OptTS` or `NEB-TS`
 - Opt mode: Everything else
 
+Both modes reject conflicting termination evidence: a real error-termination
+diagnostic prevents completion regardless of its order relative to a normal
+termination banner. Generic errors report `unknown_failure` / `error_termination`
+unless a more specific failure applies. Echoed input (`| n> ...`) and raw comment
+lines do not supply termination markers.
+
+For an executed attempt, a nonzero exit code also prevents an otherwise successful
+completion: the recorded result is `unknown_failure` / `nonzero_exit_code`, with
+the original `return_code` preserved. Existing failure reasons remain unchanged.
+Output-only status readers apply the marker rule but cannot verify the exit code.
+
 TS mode completion:
 
 - `****ORCA TERMINATED NORMALLY****` exists
@@ -763,6 +785,14 @@ Execution policy:
 
 Worker restarts and crash recovery (documented limitation):
 
+- `orca_auto service restart` checks the actual installed workers' admission
+  pools and refuses before service mutation if a calculation is active/reserved
+  or safety is unknown. It holds the admission locks through all restart commands.
+  Resolve the diagnostic and retry in an idle window. Only use
+  `orca_auto service restart --force` when accepting possible interruption;
+  this bypass is not a drain or a wait-for-completion option. See the
+  [Systemd Contract](PUBLIC_CONTRACTS.md#systemd-contract) for configuration and
+  process-evidence limits.
 - A running ORCA job that is interrupted by a worker stop or restart is
   requeued and resumed through the same crash-recovery path as a genuine crash.
   Each such resume consumes one of the three recovery rebinds of that

@@ -26,6 +26,7 @@ from orca_auto.core.config.files import (
     shared_workflow_root_from_config,
     usable_runs_root_from_mapping,
 )
+from orca_auto.core.extensions import require_workflows
 from orca_auto.core.indexing import (
     JobLocationIndexError,
     JobLocationPruneResult,
@@ -33,7 +34,7 @@ from orca_auto.core.indexing import (
 )
 from orca_auto.core.terminal import emit_error, label, status_text
 from orca_auto.core.utils import normalize_text
-from orca_auto.flow.run_dir.layout import inspect_workflow_run_dir
+from orca_auto.core.workflow_identity import is_workflow_run_dir
 
 
 def _configure_orca_logging(args: argparse.Namespace) -> None:
@@ -64,20 +65,25 @@ def cmd_orca_run_dir(args: argparse.Namespace) -> int:
 
 
 def cmd_workflow_scaffold(args: argparse.Namespace) -> int:
+    try:
+        require_workflows()
+    except ValueError as exc:
+        emit_error(exc)
+        return 1
     from orca_auto.flow.scaffold import cmd_scaffold as _cmd_workflow_scaffold
 
     return int(_cmd_workflow_scaffold(args))
 
 
 def _detect_run_dir_app(target: Path) -> str:
-    workflow_layout = inspect_workflow_run_dir(target)
     markers = {
-        "workflow": (target / "workflow.json").is_file() or workflow_layout.has_manifest,
+        "workflow": is_workflow_run_dir(target),
         "orca": any(candidate.is_file() for candidate in target.glob("*.inp")),
     }
     # Workflow inputs legitimately contain engine-specific ``*.inp`` files, so
     # a workflow manifest remains authoritative over a bare ORCA input.
     if markers["workflow"]:
+        require_workflows()
         return "workflow"
     if markers["orca"]:
         return "orca"
@@ -237,6 +243,11 @@ def cmd_run_dir(args: Any) -> int:
 
 
 def cmd_workflow_run_dir(args: argparse.Namespace) -> int:
+    try:
+        require_workflows()
+    except ValueError as exc:
+        emit_error(exc)
+        return 1
     from orca_auto.flow.cli.run_dir import cmd_run_dir as _cmd_workflow_run_dir
 
     shared_config = engine_config_for_args(args)

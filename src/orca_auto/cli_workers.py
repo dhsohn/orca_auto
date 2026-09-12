@@ -21,6 +21,7 @@ from orca_auto.core.config.discovery import (
     workflow_root_for_args,
 )
 from orca_auto.core.engine_catalog import supervised_engine_entries
+from orca_auto.core.extensions import require_workflows
 from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
 
@@ -208,6 +209,8 @@ def _add_workflow_worker_spec(
 def _build_worker_specs(args: Any) -> list[cli_worker_supervision.WorkerSpec]:
     explicit_apps = list(getattr(args, "app", None) or [])
     apps = _selected_worker_apps(explicit_apps)
+    if "workflow" in apps:
+        require_workflows()
     config_path = resolve_shared_config_path(shared_config_text_from_args(args))
     workflow_root = workflow_root_for_args(args)
     workflow_enabled = "workflow" in apps

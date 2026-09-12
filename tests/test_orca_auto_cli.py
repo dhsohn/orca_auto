@@ -438,18 +438,33 @@ def test_build_parser_parses_service_commands() -> None:
     assert restart_args.command == "service"
     assert restart_args.service_command == "restart"
     assert restart_args.func is cli_systemd_restart.cmd_service_restart
+    assert restart_args.force is False
+
+    forced_restart_args = parser.parse_args(["service", "restart", "--force"])
+    assert forced_restart_args.force is True
+    assert forced_restart_args.func is cli_systemd_restart.cmd_service_restart
 
 
-def test_service_help_describes_engine_worker_restart(capsys: pytest.CaptureFixture[str]) -> None:
+def test_service_help_describes_idle_only_restart(capsys: pytest.CaptureFixture[str]) -> None:
     parser = unified_cli.build_parser()
 
     with pytest.raises(SystemExit) as exc_info:
         parser.parse_args(["service", "--help"])
 
     assert exc_info.value.code == 0
-    output = capsys.readouterr().out
-    assert "runtime or engine-worker target" in output
+    output = " ".join(capsys.readouterr().out.split())
+    assert "Restart services only when their calculation admission pools are idle." in output
     assert "queue worker service" not in output
+
+
+def test_service_restart_help_warns_about_force(capsys: pytest.CaptureFixture[str]) -> None:
+    parser = unified_cli.build_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["service", "restart", "--help"])
+    assert exc_info.value.code == 0
+    output = " ".join(capsys.readouterr().out.split())
+    assert "--force" in output
+    assert "running calculations may be interrupted" in output
 
 
 def test_main_dispatches_unified_queue_list(monkeypatch: pytest.MonkeyPatch) -> None:

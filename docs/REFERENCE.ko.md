@@ -66,15 +66,17 @@ CLI, 설정, JSON 산출물, 워크플로우, systemd 표면 중 공개 계약�
   src/
     orca_auto/
       core/               # 공용 화학 플랫폼 인프라
-      flow/               # 워크플로우 오케스트레이션 패키지
-        engines/
-          xtb/            # 내부 xTB 워크플로우 단계 엔진
-          crest/          # 내부 CREST 워크플로우 단계 엔진
       orca/               # 정규 ORCA 구현
         commands/
         runtime/
         state.py
         ...
+  extensions/workflows/
+    pyproject.toml        # 동일 버전 orca_auto_workflows 배포물
+    src/orca_auto/flow/
+      engines/
+        xtb/              # 내부 xTB 워크플로우 단계 엔진
+        crest/            # 내부 CREST 워크플로우 단계 엔진
   systemd/
     orca_auto-runtime@.target
     orca_auto-engine-workers@.target
@@ -104,8 +106,17 @@ bash scripts/bootstrap_wsl.sh
 `bootstrap_wsl.sh`:
 
 - `.venv`를 준비합니다.
-- Python 의존성과 저장소 자체를 `.venv`에 설치합니다.
+- Python 의존성과 ORCA 본체를 `.venv`에 설치합니다.
 - `config/orca_auto.yaml`이 없으면 생성합니다.
+
+5.0.0부터 워크플로우를 별도로 설치합니다. ORCA 전용 `scan_ts`를 포함한
+워크플로우에는 bootstrap에 `--with-workflows`를 추가하거나, 활성 환경에서
+`python -m pip install -e . -e ./extensions/workflows`를 실행하세요.
+선택적 `orca_auto_workflows` 배포물은 본체와 정확히 같은 버전이어야 합니다.
+기본 본체 설치에는 더 이상 워크플로우 구현이 들어 있지 않으며, 공개 CLI·임포트 이름은
+그대로입니다. 기존 4.x 단일 환경을 전환하기 전에 [RELEASE.md](RELEASE.md)(영어)를
+읽으세요. Python 설치만으로 서비스가 배포되지는 않습니다. `systemd install`은
+계속 checkout의 `systemd/` 자산을 읽습니다.
 
 이 레퍼런스는 공개 명령에 대해 `orca_auto ...`로 표준화합니다. 지원되는 명령
 목록과 기본 설정 탐색 순서는 [공개 CLI 계약](PUBLIC_CONTRACTS.ko.md#공개-cli-계약)과
@@ -683,6 +694,16 @@ workflow root가 설정돼 있어도 workflow나 내부 엔진 워커를 암묵�
 - TS 모드: `OptTS` 또는 `NEB-TS` 포함
 - Opt 모드: 그 외 전부
 
+두 모드 모두 종료 근거의 충돌을 거부합니다. 실제 오류 종료 진단이 있으면 정상
+종료 배너와의 순서에 관계없이 완료로 판정하지 않습니다. 더 구체적인 실패가 없다면
+일반 종료 오류는 `unknown_failure` / `error_termination`으로 보고합니다.
+입력 에코(`| n> ...`)와 원시 주석 줄은 종료 마커로 사용하지 않습니다.
+
+실행한 attempt의 종료 코드가 0이 아니면 나머지 완료 조건을 충족하더라도
+`unknown_failure` / `nonzero_exit_code`로 기록하고 원래 `return_code`는 보존합니다.
+기존 실패 reason은 바꾸지 않습니다. 출력 파일만 읽는 상태 판정도 같은 마커 규칙을
+적용하지만 프로세스 종료 코드는 검증할 수 없습니다.
+
 TS 모드 완료:
 
 - `****ORCA TERMINATED NORMALLY****`가 존재
@@ -717,6 +738,13 @@ collapse를 포함합니다).
 
 워커 재시작과 crash recovery (문서화된 제한):
 
+- `orca_auto service restart`는 실제 설치된 워커들의 admission pool을 확인하여 계산이
+  실행 중·예약 상태이거나 안전 여부가 불명확하면 서비스를 변경하기 전에 거부합니다.
+  전체 재시작 명령이 끝날 때까지 admission lock을 유지합니다. 진단 원인을 해결한 뒤
+  유휴 창에서 다시 실행하세요. 계산 중단 가능성을 수용할 때만
+  `orca_auto service restart --force`를 사용하세요. 이는 drain이나 계산 완료 대기 옵션이
+  아닙니다. 설정·프로세스 근거의 제한은
+  [Systemd 계약](PUBLIC_CONTRACTS.ko.md#systemd-계약)을 참고하세요.
 - 워커 stop/restart로 중단된 실행 중 ORCA 작업은 requeue된 뒤 실제 crash와 같은
   crash-recovery 경로로 재개됩니다. 이런 재개는 그 제출의 recovery rebind 3회 중 1회를
   소모하고, 제출된 source 입력과 설정된 resource request를 큐 행과 다시 대조합니다.

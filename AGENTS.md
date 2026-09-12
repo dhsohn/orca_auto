@@ -20,6 +20,12 @@ make check
 Ruff·format·mypy·import-linter·전체 pytest/coverage를 CI와 같은 순서로 실행한다. 작업
 소스가 canonical 운영 checkout과 분리되도록 **isolated worktree에서 실행**한다.
 
+소스 검사 환경은 `.[dev]`와 로컬 `extensions/workflows`를 함께 설치한다.
+패키지 경계·설치 구성을 바꾸면 `make check-packages`도 실행한다. 이 명령은
+`python -m scripts.check_distributions`로 본체·확장 배포물을 빌드하고 격리된 설치
+프로필을 검사하며, `make check`나 실제 서비스 배포를 대신하지 않는다.
+두 소스 루트의 import-linter 진입점은 `python scripts/check_imports.py`다.
+
 ## 고치기 전에 읽을 것
 
 | 무엇을 만지는가 | 원본 |
@@ -44,5 +50,6 @@ pin(`.github/workflows/ci.yml`)을 의도적으로 전진시킨다. private reco
 - **실제 엔진은 CI가 증명하지 않는다.** ORCA/xTB/CREST runtime semantics가 바뀌면
   `docs/VALIDATION.md`에 따른 bounded real-engine acceptance가 별도로 필요하다.
 - **worker는 checkout 변경을 reload하지 않는다.** fast-forward 뒤 해당 interpreter에
-  `.venv/bin/python -m pip install -e .`를 다시 실행하고, worker를 재시작한 다음
+  `.venv/bin/python -m pip install -e .`를 다시 실행한다. 워크플로우 프로필에는
+  같은 명령에 `-e ./extensions/workflows`도 넣는다. worker를 재시작한 다음
   `.venv/bin/python -m orca_auto.cli service status --json`으로 freshness를 확인한다.

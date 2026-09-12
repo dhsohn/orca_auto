@@ -119,6 +119,15 @@ def _run_and_record_attempt(
 
         mode = detect_completion_mode(current_inp)
         analysis = analyze_output(out_path, mode)
+        if analysis.status == AnalyzerStatus.COMPLETED and run_result.return_code != 0:
+            # Preserve specific analyzer failures, but never publish success
+            # over a failed process. Record the reconciled verdict everywhere.
+            analysis.markers["final_frequency_section"] = False
+            analysis = OutAnalysis(
+                status=AnalyzerStatus.UNKNOWN_FAILURE,
+                reason="nonzero_exit_code",
+                markers=analysis.markers,
+            )
         output_identity = confined_output_identity(reaction_dir, out_path)
         if output_identity != output_identity_before:
             raise RuntimeError(f"ORCA output changed while it was analyzed: {out_path}")

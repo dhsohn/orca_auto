@@ -29,7 +29,16 @@ Use the same structure in release PRs and GitHub release notes:
 
 ## Version policy
 
-`pyproject.toml` is the source of truth for the package version.
+The root `pyproject.toml` is the version source of truth. The project at
+`extensions/workflows/pyproject.toml` must carry the same version, and the core
+`workflows` extra and extension dependency must pin that exact pair.
+
+Development versions use an `Unreleased` changelog heading and omit
+`date-released` from `CITATION.cff`. Do not invent a release date or tag merely
+to align development metadata. A release-prep change replaces both project
+versions and dependency pins, dates the changelog and citation, and reruns the
+complete verification below. The `5.0.0` release records `2026-09-12` in both
+release metadata files.
 
 - Patch version: bug fixes, documentation, tests, CI, or narrow execution/reporting
   hardening that preserves public contracts.
@@ -46,16 +55,17 @@ must name every documented behavior a release changes and its cutover impact.
 Create a release-prep issue and branch from `origin/main`, then verify:
 
 - [ ] `CHANGELOG.md` has an entry for the release version and date.
-- [ ] `pyproject.toml` version matches the changelog entry.
+- [ ] Both `pyproject.toml` versions and exact dependency pins match the changelog entry.
 - [ ] `CITATION.cff` `version` and `date-released` match the release
-      (`tests/test_release_metadata.py` gates the version; the date is manual).
+      (`tests/test_release_metadata.py` checks development/release metadata separately).
 - [ ] `README.md`, `docs/REFERENCE.md`, and example docs match current public
       CLI/config/report behavior.
 - [ ] Any behavior changes have tests and a clear cutover note if needed.
 - [ ] `bash scripts/check.sh` passes.
 - [ ] `bash examples/fake_orca_smoke/run.sh` passes.
-- [ ] A wheel can be built with a Python-module inventory exactly matching
-      `src/orca_auto` and one root `orca_auto/py.typed` marker.
+- [ ] Core and workflows distributions build independently with exact source
+      inventories and no overlapping installed files. Packaged installation
+      checks pass for both the core-only and workflow-enabled profiles.
 - [ ] If ORCA runtime semantics changed, at least one manual real-ORCA
       acceptance check is recorded in the PR.
 - [ ] The PR body records Motivation, Changes, and Verification.
@@ -65,29 +75,72 @@ Suggested local commands:
 ```bash
 bash scripts/check.sh
 bash examples/fake_orca_smoke/run.sh
-wheel_dir="$(mktemp -d)"
-python -m pip wheel . --no-deps -w "$wheel_dir"
-python scripts/check_wheel_contents.py "$wheel_dir"/orca_auto-*.whl
+make check-packages
 ```
 
-Run the wheel commands from a fresh checkout or worktree. Setuptools can reuse an
-ignored local `build/` directory; the content checker fails closed if that adds a
-deleted/stale module or omits a current source module. Do not tag a wheel until the
-inventory check passes from a clean source tree.
+`make check-packages` runs `python -m scripts.check_distributions`. To retain its
+isolated build/install workspace, pass `--work-dir <empty-directory>` directly to
+that module. Run packaging checks from a fresh checkout or worktree. Neither
+building distributions nor passing their tests publishes them or deploys services.
+
+## Moving from the monolithic 4.x installation
+
+The 5.0 default becomes core-only; install the matching extension to retain
+workflow commands, xTB/CREST stages, and ORCA-only `scan_ts`. Both packages retain
+the existing `orca_auto.*` imports and the `orca_auto` CLI.
+
+Prepare a fresh virtual environment for the split, especially when replacing an
+installed monolithic wheel that owned `orca_auto/flow` files. Do not overlay or
+remove package files from a live worker environment. From this source checkout,
+install the desired profile in the new environment:
+
+```bash
+# Core only
+python -m pip install -e .
+
+# Core with the matching local workflows extension
+python -m pip install -e . -e ./extensions/workflows
+```
+
+These source-install commands do not require either distribution on a package
+index. For release wheels, download the desired pair from GitHub Releases and
+follow the [README installation instructions](../README.md#installation).
+The `workflows` extra selects the exact matching extension when both
+distributions are available to pip; independent version combinations are not
+supported.
+
+Keep the existing runtime intact until an idle maintenance window. Retain the
+same configuration and durable run state, and do not remove workflow support
+from an environment still responsible for workflow state. A core-only queue view
+refuses incomplete workflow inspection rather than acting as a migration tool.
+
+Systemd deployment remains separate: the installer needs the chosen checkout's
+`systemd/` assets even when invoked from a wheel. Configure the intended worker
+interpreter, install the units deliberately, and restart only in the idle window.
+Verify the resulting services with `orca_auto service status`. Installing Python
+packages alone neither updates those unit files nor replaces running workers.
 
 ## Tagging
 
-After the release PR is merged and `main` is up to date:
+After the release PR is merged and its CI passes, work from the isolated release
+worktree, not a checkout serving active calculations. Fetch and inspect the
+intended merge commit before creating the tag:
 
 ```bash
-git checkout main
-git pull --ff-only origin main
-git tag -a vX.Y.Z -m "orca_auto vX.Y.Z"
+git fetch origin main
+git show --stat origin/main
+git switch --detach origin/main
+git tag -a vX.Y.Z -m "ORCA_auto vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-Then create a GitHub release from the tag. The release body should include the
-same three sections:
+Build and verify both wheels and source distributions from that exact tree with
+`make check-packages`. Attach the four resulting files and `SHA256SUMS` to the
+GitHub release. Verify the uploaded files' digests against the local build, and
+confirm the tag resolves to the intended merge commit. This is a GitHub release,
+not a PyPI upload; package-index publication is a separate action.
+
+The release body should include the same three sections:
 
 ```text
 ## Motivation
@@ -106,8 +159,14 @@ After the tag and GitHub release exist:
 
 - [ ] Confirm the tag points at the intended merge commit.
 - [ ] Confirm GitHub Actions completed for the release commit or tag.
+- [ ] Confirm the four distribution assets and their checksums are downloadable.
+- [ ] Keep publication separate from local deployment. If a runtime must remain
+      unchanged, defer all checkout updates, installations and restarts below
+      until an explicitly approved idle maintenance window.
 - [ ] On each deployment that runs from an editable install, rerun
-      `.venv/bin/python -m pip install -e .` after fast-forwarding: the
+      `.venv/bin/python -m pip install -e .` for core-only, or
+      `.venv/bin/python -m pip install -e . -e ./extensions/workflows` for the full
+      profile, after fast-forwarding in an idle window: the
       editable metadata is frozen at install time, so without the refresh
       `orca_auto --version` keeps reporting the previous release. Refresh every
       interpreter that runs the checkout, not just the one on `PATH`: the

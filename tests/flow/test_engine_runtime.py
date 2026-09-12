@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.flow import engine_runtime
+from orca_auto.core import engine_runtime
 
 
 def test_engine_runtime_paths_reads_top_level_runs_root(tmp_path: Path) -> None:

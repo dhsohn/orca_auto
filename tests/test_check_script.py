@@ -21,6 +21,9 @@ def _copy_check_script(tmp_path: Path) -> tuple[Path, Path]:
     scripts.mkdir(parents=True)
     script = scripts / "check.sh"
     shutil.copy2(CHECK_SCRIPT, script)
+    # This suite tests venv lifecycle, not import graph analysis (covered by the
+    # staged-hook tests). Keep the analyzer stub inside the copied checkout.
+    (scripts / "check_imports.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
     return repo, script
 
 

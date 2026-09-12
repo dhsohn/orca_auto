@@ -128,8 +128,8 @@ echo "[pre-commit] mypy"
 "$PY" -m mypy
 
 echo "[pre-commit] import-linter"
-# A shared venv may be installed from a sibling worktree; inspect this snapshot.
-PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
-"$VENV_DIR/bin/lint-imports"
+# The adapter scans both source roots from this staged snapshot, even with a
+# shared venv installed from a sibling checkout.
+"$PY" scripts/check_imports.py
 
 echo "[pre-commit] OK"

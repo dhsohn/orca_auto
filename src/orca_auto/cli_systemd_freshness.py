@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto import cli_systemd_units
-from orca_auto._process_evidence import PROCESS_IMPORT_SOURCE_ENV
+from orca_auto._process_evidence import (
+    PROCESS_IMPORT_SOURCE_ENV,
+    PROCESS_WORKFLOW_IMPORT_SOURCE_ENV,
+)
 from orca_auto.core.utils.coercion import normalize_text
 
 _WORKER_PROCESS_LABELS = frozenset({"worker", "workflow"})
@@ -234,13 +237,14 @@ def _worker_process_import_evidence(
     pid: int,
     *,
     read_process_file: Callable[[str], bytes] = _read_process_file,
+    source_env_var: str = PROCESS_IMPORT_SOURCE_ENV,
 ) -> _WorkerImportEvidence:
     start_ticks_before = _read_process_start_ticks(pid, read_process_file=read_process_file)
     try:
         raw_environ = read_process_file(f"/proc/{pid}/environ")
     except OSError as exc:
         raise ValueError(f"cannot read /proc/{pid}/environ: {exc}") from exc
-    prefix = f"{PROCESS_IMPORT_SOURCE_ENV}=".encode()
+    prefix = f"{source_env_var}=".encode()
     values = [
         entry[len(prefix) :] for entry in raw_environ.split(b"\0") if entry.startswith(prefix)
     ]
@@ -430,12 +434,13 @@ def _override_root_payload(
     )
 
 
-def _judge_worker(
+def _judge_worker_source(
     status: cli_systemd_units.ServiceUnitStatus,
     *,
     override_root: Path | None,
     run: Callable[..., subprocess.CompletedProcess[Any]],
     read_process_file: Callable[[str], bytes],
+    source_env_var: str = PROCESS_IMPORT_SOURCE_ENV,
 ) -> _WorkerVerdict:
     """Judge one active worker: locate its checkout, snapshot HEAD, compare."""
     base_row: dict[str, Any] = {"label": status.label, "unit": status.unit}
@@ -452,6 +457,7 @@ def _judge_worker(
             import_evidence = _worker_process_import_evidence(
                 pid_before,
                 read_process_file=read_process_file,
+                source_env_var=source_env_var,
             )
             import_source = import_evidence.import_source
             observed_root = _tracked_checkout_for_import_source(import_source, run=run)
@@ -583,6 +589,75 @@ def _judge_worker(
     # timing truncation to produce a false-fresh verdict.
     return _WorkerVerdict(
         "worker", worker_row, stale=started_epoch <= head_evidence.head_update_epoch
+    )
+
+
+def _judge_worker(
+    status: cli_systemd_units.ServiceUnitStatus,
+    *,
+    override_root: Path | None,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+    read_process_file: Callable[[str], bytes],
+) -> _WorkerVerdict:
+    if status.label != "workflow" or override_root is not None:
+        return _judge_worker_source(
+            status,
+            override_root=override_root,
+            run=run,
+            read_process_file=read_process_file,
+        )
+
+    # A workflow supervisor imports core and the separately installed extension.
+    # Bind both source observations to the same process, then keep one unit row.
+    base_row: dict[str, Any] = {"label": status.label, "unit": status.unit}
+    pid = _unit_main_pid(status.unit, run=run)
+    try:
+        start_ticks = _read_process_start_ticks(pid, read_process_file=read_process_file)
+    except ValueError as exc:
+        return _WorkerVerdict("undetermined", {**base_row, "detail": str(exc)})
+    components = {
+        name: _judge_worker_source(
+            status,
+            override_root=None,
+            run=run,
+            read_process_file=read_process_file,
+            source_env_var=source_env_var,
+        )
+        for name, source_env_var in (
+            ("core", PROCESS_IMPORT_SOURCE_ENV),
+            ("workflows", PROCESS_WORKFLOW_IMPORT_SOURCE_ENV),
+        )
+    }
+    evidence = {name: verdict.row for name, verdict in components.items()}
+    detail = _process_identity_race_detail(
+        status.unit,
+        pid=pid,
+        process_start_ticks=start_ticks,
+        run=run,
+        read_process_file=read_process_file,
+    )
+    if not detail and any(verdict.row.get("pid", pid) != pid for verdict in components.values()):
+        detail = "main PID changed between core and workflow source observations"
+    if detail:
+        return _WorkerVerdict(
+            "undetermined", {**base_row, "detail": detail, "components": evidence}
+        )
+    for name, verdict in components.items():
+        if verdict.kind == "undetermined":
+            return _WorkerVerdict(
+                "undetermined",
+                {
+                    **verdict.row,
+                    "detail": f"{name}: {verdict.row.get('detail', 'source cannot be compared')}",
+                    "components": evidence,
+                },
+            )
+    compared = [verdict for verdict in components.values() if verdict.kind == "worker"]
+    selected = compared[0] if compared else components["core"]
+    return _WorkerVerdict(
+        "worker" if compared else "uncompared",
+        {**selected.row, "components": evidence},
+        stale=any(verdict.stale for verdict in compared),
     )
 
 

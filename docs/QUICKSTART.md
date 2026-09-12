@@ -13,8 +13,24 @@ bash scripts/bootstrap_wsl.sh
 source .venv/bin/activate
 ```
 
-The bootstrap script creates `.venv`, installs ORCA_auto, and creates
+The bootstrap script creates `.venv`, installs the ORCA_auto core, and creates
 `config/orca_auto.yaml` from the example template when needed.
+Core-only is the default for a fresh environment. Reusing `.venv` does not
+uninstall an already installed workflows extension; use a fresh environment
+when you need a genuinely core-only profile.
+
+Since 5.0.0, workflows are an optional
+same-version distribution, not part of a default core installation. To include
+them, use `bash scripts/bootstrap_wsl.sh --with-workflows` instead, or activate
+the environment and run:
+
+```bash
+python -m pip install -e . -e ./extensions/workflows
+```
+
+This includes ORCA-only `scan_ts` as well as CREST/xTB workflows. For an existing
+monolithic installation, use a fresh environment and the cutover guidance in
+[RELEASE.md](RELEASE.md); do not remove workflow support while its state is in use.
 
 ## 2) Configure
 
@@ -33,7 +49,9 @@ orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
 ```
 
 This enables the runtime target, which starts the ORCA engine service.
-For a workflow submission,
+The installer still reads `systemd/` from the checkout supplied by `--repo`;
+installing either wheel alone does not deploy services. For a workflow submission,
+install the matching workflows extension in the worker's environment, then
 start the opt-in workflow unit before or after queueing it:
 
 ```bash
@@ -52,8 +70,11 @@ engine service, and the opt-in workflow service.
 `service restart` restarts the runtime target and then the worker services
 themselves, including the workflow worker when it is already running — a target
 restart on its own leaves their processes up. Run it after a deploy that touches
-code the workers import, but only in an idle window: restarting a worker stops
-the ORCA process it is supervising.
+code the workers import, but only in an idle window. By default it refuses when
+calculations are active/reserved or safety cannot be verified. Resolve the
+diagnostic and retry; `orca_auto service restart --force` deliberately skips
+this protection and can interrupt calculations. It does not wait for completion.
+See the [Systemd Contract](PUBLIC_CONTRACTS.md#systemd-contract) for guard limits.
 
 ## 5) Submit Work
 

@@ -6,6 +6,12 @@
 
 이 디렉터리는 장기 실행 ORCA_auto 서비스 자산을 한곳에 모아 둔 곳입니다.
 
+분리된 Python 배포물을 설치해도 이 유닛이 자동 설치되지는 않습니다. 설치기는 계속
+명시한 `--repo` checkout의 이 디렉터리를 읽습니다. 기본 본체 설치는 ORCA 워커를
+지원합니다. 워크플로우 워커를 활성화하려면 워커가 사용하는 interpreter에 동일 버전의
+`orca_auto_workflows` 확장도 설치하세요. checkout에서 전체 소스를 설치하는 명령은
+`python -m pip install -e . -e ./extensions/workflows`입니다.
+
 ## 포함된 유닛
 
 - `orca_auto-runtime@.target`
