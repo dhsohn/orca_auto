@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-message: "If you use orca_auto in research or published work, please cite the software repository or the release you used."
-title: "orca_auto: queue-first ORCA workflow automation for Linux and WSL"
+message: "If you use ORCA_auto in research or published work, please cite the software repository or the release you used."
+title: "ORCA_auto: queue-first ORCA workflow automation for Linux and WSL"
 type: software
 authors:
   - family-names: Sohn
@@ -18,7 +18,7 @@ keywords:
   - workflow automation
   - research software
 abstract: >-
-  orca_auto is a queue-first runtime and observability layer for ORCA-centered
+  ORCA_auto is a queue-first runtime and observability layer for ORCA-centered
   computational chemistry workflows on Linux and WSL. It submits work durably,
   runs jobs under supervised workers, and records per-job state and reports,
   keeping ORCA input files as the chemistry-facing contract.

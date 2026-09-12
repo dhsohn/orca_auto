@@ -1,6 +1,6 @@
-# orca_auto 아키텍처
+# ORCA_auto 아키텍처
 
-이 문서는 orca_auto의 구조와, 런타임에 작업이 시스템을 통해 어떻게 흘러가는지를
+이 문서는 ORCA_auto의 구조와, 런타임에 작업이 시스템을 통해 어떻게 흘러가는지를
 설명합니다. 패키지 레이아웃, 큐/워커 라이프사이클, 공용 엔진 추상화, 워크플로우
 오케스트레이션 계층에 대한 개념 모델이 필요한 개발자와 운영자를 대상으로 합니다.
 
@@ -12,9 +12,9 @@
 
 ---
 
-## 1. orca_auto란
+## 1. ORCA_auto란
 
-orca_auto는 ORCA를 위한 **큐 우선(queue-first)
+ORCA_auto는 ORCA를 위한 **큐 우선(queue-first)
 실행기**이자, Linux 및 WSL 환경에서 다단계 계산화학 작업을 위한 **워크플로우
 오케스트레이터**입니다.
 
@@ -506,7 +506,7 @@ Markdown report를 만들지 않습니다. report-only 작업은 다시 제출�
 
 ## 8. 영속화 & 상태 파일
 
-orca_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반으로 유지합니다.
+ORCA_auto는 scheduling, ownership, 공개 artifact를 모두 디스크 기반으로 유지합니다.
 선택적 ORCA tmpfs scratch는 실행 workspace일 뿐 상태 원본이 아닙니다. 동시성 안전성은
 모든 durable 변경 주위의 파일 락(`core/utils/lock.py`)에서 옵니다. 주요 디스크 아티팩트:
 
@@ -544,7 +544,7 @@ consumer는 표현 계층 아래에 머뭅니다.
 
 ## 9. 알림
 
-orca_auto는 단방향 발신 알림만 전송합니다. 작업 및 워크플로우 알림을 Discord로
+ORCA_auto는 단방향 발신 알림만 전송합니다. 작업 및 워크플로우 알림을 Discord로
 게시하며 수신 명령은 소비하지 않습니다.
 
 `core/messaging/`은 provider-neutral capability 경계를 소유합니다. 불변 semantic

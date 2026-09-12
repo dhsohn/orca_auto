@@ -1,10 +1,10 @@
-# orca_auto 빠른 시작
+# ORCA_auto 빠른 시작
 
 [English](QUICKSTART.md) | **한국어**
 
 > 이 문서는 [QUICKSTART.md](QUICKSTART.md)(영어판)의 한국어 번역본입니다.
 
-이 가이드는 새로 체크아웃한 저장소에서 감독되는 orca_auto 엔진 워커까지 가는
+이 가이드는 새로 체크아웃한 저장소에서 감독되는 ORCA_auto 엔진 워커까지 가는
 가장 짧은 경로입니다.
 
 ## 1) 설치
@@ -15,7 +15,7 @@ bash scripts/bootstrap_wsl.sh
 source .venv/bin/activate
 ```
 
-부트스트랩 스크립트는 `.venv`를 생성하고, orca_auto를 설치하며, 필요할 때 예제
+부트스트랩 스크립트는 `.venv`를 생성하고, ORCA_auto를 설치하며, 필요할 때 예제
 템플릿으로부터 `config/orca_auto.yaml`을 생성합니다.
 
 ## 2) 설정

@@ -1,6 +1,6 @@
 # Fake ORCA smoke example
 
-This example proves the orca_auto queue lifecycle without requiring a licensed
+This example proves the ORCA_auto queue lifecycle without requiring a licensed
 ORCA installation. It is useful for contributor onboarding, release checks, and
 PRs that change project hygiene, docs, queue reporting, or packaging without
 changing true ORCA numerical behavior.

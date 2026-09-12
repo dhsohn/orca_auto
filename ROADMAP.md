@@ -1,6 +1,6 @@
-# orca_auto Roadmap
+# ORCA_auto Roadmap
 
-This roadmap describes the direction of orca_auto as research software. It is
+This roadmap describes the direction of ORCA_auto as research software. It is
 not a date-based promise or a JOSS submission plan. Its purpose is to keep the
 project's public contracts, maintenance priorities, and deliberate non-goals
 visible while the implementation continues to evolve.

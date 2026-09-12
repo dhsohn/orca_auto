@@ -2,7 +2,7 @@
 
 **English** | [한국어](README.ko.md)
 
-This directory is the single home for long-running orca_auto service assets.
+This directory is the single home for long-running ORCA_auto service assets.
 
 ## Included units
 

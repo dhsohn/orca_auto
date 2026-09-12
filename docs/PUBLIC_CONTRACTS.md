@@ -2,7 +2,7 @@
 
 **English** | [한국어](PUBLIC_CONTRACTS.ko.md)
 
-This document names the orca_auto surfaces that users, operators, and future
+This document names the ORCA_auto surfaces that users, operators, and future
 contributors may reasonably depend on. It is intentionally narrower than the
 full implementation: internal modules, private helper functions, and runtime
 plumbing may change when the documented behavior stays intact.
@@ -434,7 +434,7 @@ the generation they describe. The existence of the root `run.lock`
 file alone does not mean its advisory lock is currently owned.
 
 `job_state.json` uses the normalized engine artifact shape below. It is an
-orca_auto implementation detail, not a Hermes handoff contract:
+ORCA_auto implementation detail, not a Hermes handoff contract:
 
 - `schema_version`
 - `engine`

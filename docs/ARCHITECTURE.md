@@ -1,8 +1,8 @@
-# orca_auto Architecture
+# ORCA_auto Architecture
 
 **English** | [한국어](ARCHITECTURE.ko.md)
 
-This document describes how orca_auto is structured and how work flows through
+This document describes how ORCA_auto is structured and how work flows through
 the system at runtime. It is aimed at developers and operators who need a mental
 model of the package layout, the queue/worker lifecycle, the shared engine
 abstraction, and the workflow orchestration layer.
@@ -13,9 +13,9 @@ and [REFERENCE.md](REFERENCE.md). For package and import conventions see
 
 ---
 
-## 1. What orca_auto Is
+## 1. What ORCA_auto Is
 
-orca_auto is a **queue-first executor** for ORCA and a **workflow orchestrator**
+ORCA_auto is a **queue-first executor** for ORCA and a **workflow orchestrator**
 for multi-stage computational chemistry runs on Linux and WSL.
 
 The core design principle is **durable submission, supervised execution**:
@@ -550,7 +550,7 @@ jobs require resubmission.
 
 ## 8. Persistence & State Files
 
-orca_auto keeps all scheduling, ownership, and public artifacts disk-backed.
+ORCA_auto keeps all scheduling, ownership, and public artifacts disk-backed.
 Optional ORCA tmpfs scratch is an execution workspace, never a state source.
 Concurrency safety comes from file locks (`core/utils/lock.py`) around every
 durable mutation. The main on-disk artifacts:
@@ -590,7 +590,7 @@ consume ORCA results without coupling to ORCA internals.
 
 ## 9. Notifications
 
-orca_auto delivers one-way outbound notifications only: it posts job and workflow
+ORCA_auto delivers one-way outbound notifications only: it posts job and workflow
 alerts to Discord and never consumes inbound commands.
 
 `core/messaging/` owns a provider-neutral capability boundary: immutable semantic

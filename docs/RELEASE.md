@@ -4,7 +4,7 @@
 release notes can be mirrored into Korean documentation later when the release
 surface stabilizes.
 
-orca_auto is not currently being prepared for a JOSS submission. This release
+ORCA_auto is not currently being prepared for a JOSS submission. This release
 process intentionally excludes paper drafting and Zenodo archiving while keeping
 the useful open-source software hygiene: issues, focused branches, reviewable
 PRs, changelog entries, tags, and reproducible verification.

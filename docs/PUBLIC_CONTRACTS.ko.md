@@ -4,7 +4,7 @@
 
 > 이 문서는 [PUBLIC_CONTRACTS.md](PUBLIC_CONTRACTS.md)(영어판)의 한국어 번역본입니다.
 
-이 문서는 사용자, 운영자, 미래의 기여자가 의존해도 되는 orca_auto의 표면을 정리합니다.
+이 문서는 사용자, 운영자, 미래의 기여자가 의존해도 되는 ORCA_auto의 표면을 정리합니다.
 구현 전체를 고정하려는 문서가 아닙니다. 내부 모듈, private helper, 런타임 배선은
 문서화된 동작이 유지되는 한 바뀔 수 있습니다.
 
@@ -394,7 +394,7 @@ identity·operation identity·payload provenance가 검증되는 정규
 판정할 수는 없습니다.
 
 `job_state.json`은 아래의 정규화된 엔진 산출물 형태를 사용합니다. 이것은
-orca_auto 내부 구현 상태이며 Hermes handoff 계약이 아닙니다:
+ORCA_auto 내부 구현 상태이며 Hermes handoff 계약이 아닙니다:
 
 - `schema_version`
 - `engine`

@@ -1,9 +1,9 @@
-# orca_auto Quickstart
+# ORCA_auto Quickstart
 
 **English** | [한국어](QUICKSTART.ko.md)
 
 This guide is the shortest path from a fresh checkout to the supervised
-orca_auto engine workers.
+ORCA_auto engine workers.
 
 ## 1) Install
 
@@ -13,7 +13,7 @@ bash scripts/bootstrap_wsl.sh
 source .venv/bin/activate
 ```
 
-The bootstrap script creates `.venv`, installs orca_auto, and creates
+The bootstrap script creates `.venv`, installs ORCA_auto, and creates
 `config/orca_auto.yaml` from the example template when needed.
 
 ## 2) Configure

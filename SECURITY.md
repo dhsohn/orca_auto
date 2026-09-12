@@ -1,6 +1,6 @@
 # Security policy
 
-orca_auto runs local processes, reads configuration files, writes calculation
+ORCA_auto runs local processes, reads configuration files, writes calculation
 artifacts, and can optionally send Discord notifications. Treat credentials,
 private structures, and raw calculation outputs as sensitive unless they are
 explicitly public.
@@ -49,7 +49,7 @@ or posted publicly.
 
 ## Security-relevant areas
 
-The following classes of issues are security-relevant for orca_auto:
+The following classes of issues are security-relevant for ORCA_auto:
 
 - path traversal or writing outside configured runtime roots;
 - unsafe acceptance of Windows, `/mnt/<drive>`, relative, or `.exe` executable
