@@ -16,7 +16,7 @@ ENGINE_CASES = [
     (
         xtb_job_locations,
         "orca_auto_xtb",
-        {"job_type": "xtb_path_search", "molecule_key": "rxn-2"},
+        {"job_type": "xtb_opt", "molecule_key": "rxn-2"},
     ),
     (
         crest_job_locations,

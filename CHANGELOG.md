@@ -6,6 +6,24 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [6.0.0.dev0] - Unreleased
+
+### Removed
+
+- The optional `ts_search` / `reaction_ts_search` and `scan_ts` /
+  `scan_ts_search` workflows, including their scaffolds, path-search and TS
+  candidate machinery. No aliases, migration, or restart/resume compatibility
+  are provided. Existing result files are not deleted; do not upgrade a runtime
+  that is still running one of these workflows.
+- Removed workflow settings are not silently ignored: unknown `flow.yaml`
+  top-level fields are rejected before creation or restart. Internal xTB
+  opt/SP/ranking jobs remain separate from the CREST→ORCA conformer workflow.
+
+### Retained
+
+- Standalone Core ORCA TS, frequency, IRC and relaxed-scan calculations are
+  unchanged. The optional `conformer_search` workflow remains available.
+
 ## [5.0.0] - 2026-09-12
 
 ### Added

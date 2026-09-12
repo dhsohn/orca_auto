@@ -20,7 +20,7 @@ def test_emit_worker_payload_formats_text_and_json(capsys) -> None:
         "workflow_results": [
             {
                 "workflow_id": "wf_1",
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "previous_status": "planned",
                 "status": "running",
                 "advanced": True,
@@ -33,7 +33,7 @@ def test_emit_worker_payload_formats_text_and_json(capsys) -> None:
     stdout = capsys.readouterr().out
     assert "cycle_started_at: 2026-04-19T17:00:00+00:00 worker_session_id=worker_1" in stdout
     assert (
-        "- wf_1 template=reaction_ts_search previous=planned status=running advanced=yes" in stdout
+        "- wf_1 template=conformer_screening previous=planned status=running advanced=yes" in stdout
     )
     assert "reason=submitted" in stdout
 

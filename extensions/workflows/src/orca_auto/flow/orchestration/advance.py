@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.paths.workflow import validate_workflow_workspace_identity
-from orca_auto.core.utils import normalize_text
 from orca_auto.flow.contracts.workflow import workflow_metadata
 from orca_auto.flow.engine_options import WorkflowEngineOptions
 from orca_auto.flow.orchestration.advance_phases import (
@@ -24,6 +23,7 @@ from orca_auto.flow.orchestration.services import (
 from orca_auto.flow.orchestration.workflow_cancellation import (
     cancel_materialized_workflow,
 )
+from orca_auto.flow.templates import normalize_workflow_template_id
 from orca_auto.flow.workflow.machine import (
     SI_PINNED_BY_TERMINAL_OBSERVATION,
     terminal_observation_published,
@@ -152,6 +152,7 @@ def advance_workflow(
     )
     with resolved.persistence.acquire_workflow_lock(workspace_dir):
         payload = resolved.persistence.load_workflow_payload(workspace_dir)
+        template_name = normalize_workflow_template_id(payload.get("template_name"))
         workflow_id = _validate_or_quarantine_workflow_identity(
             payload,
             workspace_dir=workspace_dir,
@@ -164,7 +165,7 @@ def advance_workflow(
             workflow_root_path=workflow_root_path,
             workspace_dir=workspace_dir,
             workflow_id=workflow_id,
-            template_name=normalize_text(payload.get("template_name")),
+            template_name=template_name,
             sync_only=sync_only,
             submit_ready=bool(submit_ready) and not sync_only,
         )

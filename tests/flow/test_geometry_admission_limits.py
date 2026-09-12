@@ -6,12 +6,10 @@ import pytest
 
 from orca_auto.core.geometry_limits import (
     MAX_ADMISSION_ATOMS,
-    MAX_HESSIAN_ADMISSION_ATOMS,
 )
 from orca_auto.flow import xyz_utils
 from orca_auto.flow.engines.crest import submission as crest_submission
 from orca_auto.flow.engines.xtb import job_inputs as xtb_job_inputs
-from orca_auto.flow.engines.xtb import submission as xtb_submission
 from orca_auto.flow.orchestration.workflow_builders import _copy_input_impl
 
 
@@ -64,21 +62,6 @@ def test_crest_admission_rejects_server_atom_cap_before_executable_resolution(
             job_dir,
             {"input_xyz": "input.xyz"},
             object(),
-        )
-
-
-def test_xtb_hessian_admission_uses_stricter_atom_cap(tmp_path: Path) -> None:
-    job_dir = tmp_path / "xtb-hessian"
-    _write_xyz(job_dir / "input.xyz", MAX_HESSIAN_ADMISSION_ATOMS + 1)
-
-    with pytest.raises(ValueError, match="server atom-count limit"):
-        xtb_submission._build_submission_impl(
-            object(),
-            job_dir,
-            {"job_type": "hess", "input_xyz": "input.xyz"},
-            object(),
-            job_id="hessian-limit-test",
-            snapshot_namespace="hessian-limit-test-snapshot",
         )
 
 

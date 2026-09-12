@@ -1030,13 +1030,6 @@ def _classify_workflow_stages(
         stage_id = _text(stage.get("stage_id"))
         label = _stage_label(stage)
         status = _text(stage.get("status"))
-        if stage_task_kind(stage) == "relaxed_scan":
-            out.excluded.append(
-                ExcludedStage(
-                    stage_id, label, "relaxed scan (prerequisite, not a stationary point)"
-                )
-            )
-            continue
         if status != "completed":
             out.excluded.append(
                 ExcludedStage(stage_id, label, f"stage status: {status or 'unknown'}")

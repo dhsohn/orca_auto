@@ -39,7 +39,7 @@ def _shared_config(tmp_path: Path) -> tuple[Path, Path]:
 def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) -> None:
     workflow_record = SimpleNamespace(
         workflow_id="wf-2",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="running",
         source_job_id="",
         source_job_type="",
@@ -108,7 +108,7 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
         queue_id="xtb-q-1",
         app_name="orca_auto_xtb",
         task_id="xtb-job-1",
-        task_kind="xtb_path_search",
+        task_kind="xtb_opt",
         engine="xtb",
         status=QueueStatus.RUNNING,
         priority=5,
@@ -116,7 +116,7 @@ def test_list_activities_merges_workflows_and_standalone_sources(monkeypatch) ->
         started_at="2026-04-20T10:03:00+00:00",
         metadata={
             "job_dir": "/tmp/xtb_root/jobs/rxn-a",
-            "job_type": "path_search",
+            "job_type": "opt",
             "reaction_key": "rxn-a",
             "terminal_repair_blocked_reason": "terminal_artifacts_unrecoverable",
         },
@@ -178,7 +178,7 @@ def test_list_activities_treats_submission_failed_stage_as_terminal_for_current_
 ) -> None:
     workflow_record = SimpleNamespace(
         workflow_id="wf-3",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="running",
         source_job_id="",
         source_job_type="",
@@ -930,10 +930,10 @@ def test_clear_activities_keeps_cleared_terminal_workflows_hidden_from_listing(
         json.dumps(
             {
                 "workflow_id": "wf_completed",
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "status": "completed",
                 "source_job_id": "job-1",
-                "source_job_type": "reaction_ts_search",
+                "source_job_type": "conformer_screening",
                 "reaction_key": "rxn-1",
                 "requested_at": "2026-04-20T10:00:00+00:00",
                 "stages": [],
@@ -1002,8 +1002,7 @@ def test_workspace_display_name_prefers_scaffold_for_generation_workspaces() -> 
     )
     # Non-generation workspace names display as themselves.
     assert (
-        _workspace_display_name("/tmp/orca_runs/wf_reaction_ts8", workflow_root=root)
-        == "wf_reaction_ts8"
+        _workspace_display_name("/tmp/orca_runs/wf_conformer", workflow_root=root) == "wf_conformer"
     )
     assert _workspace_display_name("", workflow_root=root) == ""
 
@@ -1058,7 +1057,7 @@ def test_cancel_activity_autodiscovers_defaults(monkeypatch) -> None:
 def _cancelled_workflow_registry_row(metadata: dict[str, Any]) -> SimpleNamespace:
     return SimpleNamespace(
         workflow_id="wf-cancel-pending",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="cancelled",
         source_job_id="",
         source_job_type="",
@@ -1161,7 +1160,7 @@ def _quarantined_twin_workflow_root(tmp_path: Path) -> tuple[Path, str, str]:
     real_workspace.mkdir(parents=True)
     real_payload: dict[str, Any] = {
         "workflow_id": real_id,
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "cancelled",
         "requested_at": "2026-08-11T05:00:00+00:00",
         "stages": [],
@@ -1183,7 +1182,7 @@ def _quarantined_twin_workflow_root(tmp_path: Path) -> tuple[Path, str, str]:
     twin_workspace.mkdir(parents=True)
     twin_payload: dict[str, Any] = {
         "workflow_id": real_id,
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "failed",
         "requested_at": "2026-08-11T05:00:00+00:00",
         "stages": [],

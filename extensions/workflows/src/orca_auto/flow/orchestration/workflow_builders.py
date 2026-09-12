@@ -27,9 +27,6 @@ from orca_auto.flow.contracts import (
 )
 from orca_auto.flow.orchestration.requests import (
     ConformerScreeningWorkflowRequest,
-    ReactionTsSearchWorkflowCreationContext,
-    ReactionTsSearchWorkflowRequest,
-    ScanTsSearchWorkflowRequest,
     WorkflowCreationContext,
     WorkflowPersistenceContext,
 )
@@ -38,8 +35,6 @@ from orca_auto.flow.workflow.store import (
     acquire_workflow_create_lock,
 )
 from orca_auto.flow.xyz_utils import validated_xyz_atom_count
-
-_REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS: dict[str, Any] = {"rthr": 0.3}
 
 
 @dataclass(frozen=True)
@@ -51,32 +46,9 @@ class _WorkflowWorkspace:
 
 
 @dataclass(frozen=True)
-class _ReactionWorkflowInputs:
-    reactant_xyz: str
-    product_xyz: str
-    reaction_key: str
-
-
-@dataclass(frozen=True)
 class _ConformerWorkflowInput:
     input_xyz: str
     reaction_key: str
-
-
-def _merge_manifest_defaults(
-    defaults: dict[str, Any],
-    overrides: dict[str, Any] | None,
-) -> dict[str, Any]:
-    merged = dict(defaults)
-    for raw_key, value in dict(overrides or {}).items():
-        key = str(raw_key).strip()
-        if not key:
-            continue
-        if value is None or (isinstance(value, str) and not value.strip()):
-            merged.pop(key, None)
-            continue
-        merged[key] = value
-    return merged
 
 
 def _optional_mapping_parameter(name: str, value: dict[str, Any] | None) -> dict[str, Any]:
@@ -304,40 +276,6 @@ def _cleanup_reserved_workflow_workspace(workspace: _WorkflowWorkspace) -> None:
         fsync_directory(resolved_path.parent)
 
 
-def _validate_reaction_atom_sequence(
-    request: ReactionTsSearchWorkflowRequest,
-    context: ReactionTsSearchWorkflowCreationContext,
-) -> None:
-    reactant_sequence = context.load_xyz_atom_sequence_fn(request.reactant_xyz)
-    product_sequence = context.load_xyz_atom_sequence_fn(request.product_xyz)
-    if reactant_sequence == product_sequence:
-        return
-    raise ValueError(
-        "reaction_ts_search requires identical reactant/product atom order for xTB path search; "
-        f"reactant sequence={list(reactant_sequence)}, product sequence={list(product_sequence)}"
-    )
-
-
-def _copy_reaction_inputs(
-    request: ReactionTsSearchWorkflowRequest,
-    workspace: _WorkflowWorkspace,
-    context: WorkflowCreationContext,
-) -> _ReactionWorkflowInputs:
-    input_reactant = context.copy_input_fn(
-        request.reactant_xyz,
-        workspace.workspace_dir / "inputs" / "reactants" / Path(request.reactant_xyz).name,
-    )
-    input_product = context.copy_input_fn(
-        request.product_xyz,
-        workspace.workspace_dir / "inputs" / "products" / Path(request.product_xyz).name,
-    )
-    return _ReactionWorkflowInputs(
-        reactant_xyz=input_reactant,
-        product_xyz=input_product,
-        reaction_key=f"{Path(input_reactant).stem}_to_{Path(input_product).stem}",
-    )
-
-
 def _copy_conformer_input(
     request: ConformerScreeningWorkflowRequest,
     workspace: _WorkflowWorkspace,
@@ -350,23 +288,6 @@ def _copy_conformer_input(
     return _ConformerWorkflowInput(
         input_xyz=copied_input,
         reaction_key=Path(copied_input).stem,
-    )
-
-
-def _resolved_scan_ts_input(request: ScanTsSearchWorkflowRequest) -> _ConformerWorkflowInput:
-    """Validate the scan input in place — no workspace ``inputs/`` copy.
-
-    scan_ts_search materializes the geometry straight into its first ORCA
-    stage at creation time, so an intermediate workspace copy would only
-    duplicate the scaffold source.
-    """
-    src = Path(request.input_xyz).expanduser().resolve()
-    if not src.exists():
-        raise FileNotFoundError(f"Input XYZ not found: {src}")
-    validated_xyz_atom_count(src)
-    return _ConformerWorkflowInput(
-        input_xyz=str(src),
-        reaction_key=src.stem,
     )
 
 
@@ -388,20 +309,14 @@ def _persistence_context(
 
 __all__ = [
     "_ConformerWorkflowInput",
-    "_REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS",
-    "_ReactionWorkflowInputs",
     "_WorkflowWorkspace",
     "_copy_conformer_input",
     "_copy_input_impl",
-    "_copy_reaction_inputs",
-    "_resolved_scan_ts_input",
     "_cleanup_reserved_workflow_workspace",
     "_ensure_new_workflow_workspace",
-    "_merge_manifest_defaults",
     "_optional_mapping_parameter",
     "_persist_workflow",
     "_persistence_context",
-    "_validate_reaction_atom_sequence",
     "_validate_workflow_id_path_segment",
     "_workflow_workspace",
 ]

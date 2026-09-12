@@ -330,7 +330,7 @@ def test_terminal_summary_helpers_cover_status_reason_and_metadata(
     job_dir.mkdir()
     selected_xyz = job_dir / "input.xyz"
     selected_xyz.write_text("3\ncandidate\nH 0 0 0\n", encoding="utf-8")
-    entry = _make_entry(job_dir, selected_xyz, job_type="path_search")
+    entry = _make_entry(job_dir, selected_xyz, job_type="opt")
 
     summary = terminal_mod.load_terminal_summary(
         tmp_path,

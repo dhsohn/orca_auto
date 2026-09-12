@@ -300,7 +300,7 @@ class TestRunInpSubmit(unittest.TestCase):
             reaction_dir = root / "rxn"
             _write_inp(
                 reaction_dir,
-                content="! OptTS NumFreq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                content="! Opt NumFreq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
             )
             durable_inp = (reaction_dir / "rxn.inp").resolve()
 
@@ -309,7 +309,7 @@ class TestRunInpSubmit(unittest.TestCase):
                     root,
                     reaction_dir,
                     expected_selected_inp=str(durable_inp),
-                    workflow_task_kind="optts_freq",
+                    workflow_task_kind="opt",
                 )
             )
 
@@ -317,7 +317,7 @@ class TestRunInpSubmit(unittest.TestCase):
             [entry] = list_queue(root)
             snapshot_inp = Path(queue_entry_metadata(entry)["selected_inp"])
             snapshot_text = snapshot_inp.read_text(encoding="utf-8")
-            self.assertIn("OptTS NumFreq", snapshot_text)
+            self.assertIn("Opt NumFreq", snapshot_text)
             self.assertIn("%pal", snapshot_text)
 
     @patch("orca_auto.orca.submission.load_config")
@@ -331,7 +331,7 @@ class TestRunInpSubmit(unittest.TestCase):
             reaction_dir = root / "rxn"
             _write_inp(
                 reaction_dir,
-                content="! OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                content="! Opt Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
             )
             durable_inp = (reaction_dir / "rxn.inp").resolve()
 
@@ -340,7 +340,7 @@ class TestRunInpSubmit(unittest.TestCase):
                     root,
                     reaction_dir,
                     expected_selected_inp=str(durable_inp),
-                    workflow_task_kind="optts_freq",
+                    workflow_task_kind="opt",
                     bound_selected_validator=None,
                 )
             )
@@ -361,7 +361,7 @@ class TestRunInpSubmit(unittest.TestCase):
             reaction_dir = root / "rxn"
             _write_inp(
                 reaction_dir,
-                content="! OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                content="! Opt Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
             )
             durable_inp = (reaction_dir / "rxn.inp").resolve()
             newer_inp = reaction_dir / "newer.inp"
@@ -381,7 +381,7 @@ class TestRunInpSubmit(unittest.TestCase):
                     root,
                     reaction_dir,
                     expected_selected_inp=str(durable_inp),
-                    workflow_task_kind="optts_freq",
+                    workflow_task_kind="opt",
                 )
             )
 
@@ -401,13 +401,13 @@ class TestRunInpSubmit(unittest.TestCase):
             reaction_dir = root / "rxn"
             _write_inp(
                 reaction_dir,
-                content="! OptTS Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                content="! Opt Freq\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
             )
             durable_inp = (reaction_dir / "rxn.inp").resolve()
 
             def replace_after_selection(_allowed_root: Path, _reaction_dir: Path) -> None:
                 durable_inp.write_text(
-                    "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+                    "! SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
                     encoding="utf-8",
                 )
                 return None
@@ -421,7 +421,7 @@ class TestRunInpSubmit(unittest.TestCase):
                         root,
                         reaction_dir,
                         expected_selected_inp=str(durable_inp),
-                        workflow_task_kind="optts_freq",
+                        workflow_task_kind="opt",
                     )
                 )
 

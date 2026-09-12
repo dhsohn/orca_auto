@@ -5,6 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.core.statuses import (
+    STATUS_CANCEL_FAILED,
+    STATUS_CANCEL_REQUESTED,
+    STATUS_CANCELLED,
+    STATUS_COMPLETED,
+    is_stage_terminal_status,
+)
 from orca_auto.core.utils import mapping_or_empty, normalize_text
 from orca_auto.flow.contracts import CrestDownstreamPolicy
 from orca_auto.flow.contracts.workflow import (
@@ -12,10 +19,6 @@ from orca_auto.flow.contracts.workflow import (
     workflow_request_parameters,
 )
 from orca_auto.flow.orchestration.charge_spin import strict_int
-from orca_auto.flow.orchestration.scan_orca_materialization import (
-    _all_terminal_none_verified,
-    _record_workflow_error,
-)
 from orca_auto.flow.orchestration.services import (
     OrchestrationServices,
     resolve_orchestration_services,
@@ -29,6 +32,49 @@ from orca_auto.flow.orchestration.support import load_config_root_impl, required
 from orca_auto.flow.state import workflow_workspace_internal_engine_paths
 
 _CONFORMER_ORCA_STAGE_DIRNAME = "03_orca"
+
+
+def _stage_status(stage: dict[str, Any]) -> str:
+    return normalize_text(stage.get("status")).lower()
+
+
+_CANCEL_STATUSES = frozenset({STATUS_CANCELLED, STATUS_CANCEL_REQUESTED, STATUS_CANCEL_FAILED})
+
+
+def _all_terminal_none_verified(stages: list[dict[str, Any]]) -> bool:
+    """True when every candidate reached a non-verifying terminal state.
+
+    Cancellation is not a failed optimization; do not record exhaustion while
+    any candidate is cancelled or cancellation is still in progress.
+    """
+    if not stages:
+        return False
+    statuses = [_stage_status(stage) for stage in stages]
+    if any(status in _CANCEL_STATUSES for status in statuses):
+        return False
+    return all(is_stage_terminal_status(status) for status in statuses) and not any(
+        status == STATUS_COMPLETED for status in statuses
+    )
+
+
+def _record_workflow_error(
+    payload: dict[str, Any],
+    *,
+    scope: str,
+    stage_id: str,
+    reason: str,
+    message: str,
+) -> None:
+    metadata = payload.setdefault("metadata", {})
+    if not isinstance(metadata, dict) or isinstance(metadata.get("workflow_error"), dict):
+        return
+    metadata["workflow_error"] = {
+        "status": "failed",
+        "scope": scope,
+        "stage_id": stage_id,
+        "reason": reason,
+        "message": message,
+    }
 
 
 @dataclass(frozen=True)
@@ -120,9 +166,8 @@ def _maybe_record_conformer_orca_exhausted(payload: dict[str, Any]) -> None:
     conformer_screening materializes ORCA ``opt`` stages from the completed CREST
     stage in a single pass. If every one reaches a non-verifying terminal state,
     the run produced no optimized conformer; but a failed ORCA stage is engine-role
-    non-fatal (conformer stages never set ``workflow_fatal``), so recompute reports
-    the workflow COMPLETED. Record a failed workflow_error instead, mirroring the
-    reaction/scan candidate-exhaustion guards. The shared ``_all_terminal_none_verified``
+    non-fatal, so recompute reports the workflow COMPLETED. Record a failed
+    workflow_error instead. ``_all_terminal_none_verified``
     returns False while any conformer is still running or on an in-progress
     cancellation, and when at least one conformer completed (partial success stays
     COMPLETED).

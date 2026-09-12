@@ -86,7 +86,6 @@ def _stage_status_reason(stage: Mapping[str, Any], report: Mapping[str, Any] | N
     task = stage_task(stage)
     report_status = _mapping(report.get("status")) if report is not None else {}
     for value in (
-        metadata.get("reaction_handoff_reason"),
         metadata.get("reason"),
         report_status.get("reason"),
         _mapping(task.get("cancel_result")).get("reason"),
@@ -182,7 +181,7 @@ def collect_stage_diagnostic(
     reason = _stage_status_reason(stage, report)
     if reason == "completed":
         reason = ""
-    explanation = normalized_text(stage_metadata(stage).get("reaction_handoff_message"))
+    explanation = ""
     if not include_job_artifacts:
         return reason, explanation, None
     job_dir = report_path.parent if report_path is not None else None

@@ -135,7 +135,8 @@ def test_load_xyz_frames_parses_scientific_notation_energy_without_truncation(
     assert [frame.energy for frame in frames] == [-100.0, -90.0]
     selected, metadata = xyz_utils.choose_orca_geometry_frame(
         xyz_path,
-        candidate_kind="selected_path",
+        candidate_kind="conformer",
+        source_frame_index=2,
     )
     assert selected is not None and selected.index == 2
     assert metadata["selected_frame_energy"] == -90.0
@@ -156,60 +157,18 @@ def test_load_xyz_atom_sequence_raises_for_invalid_or_multiframe_input(tmp_path:
         xyz_utils.load_xyz_atom_sequence(multiframe)
 
 
-def test_choose_orca_geometry_frame_covers_invalid_single_highest_middle_and_first(
+def test_choose_orca_geometry_frame_rejects_invalid_and_preserves_first_conformer(
     tmp_path: Path,
 ) -> None:
     invalid = tmp_path / "invalid.xyz"
     invalid.write_text("bad\n", encoding="utf-8")
-    ts_multiframe = tmp_path / "ts_multi.xyz"
-    ts_multiframe.write_text(
-        "1\nenergy: 1.0\nH 0 0 0\n1\nenergy: 2.0\nH 0.1 0 0\n",
-        encoding="utf-8",
-    )
-    energetic = tmp_path / "energetic.xyz"
-    energetic.write_text(
-        "1\nenergy: -5.0\nH 0 0 0\n1\nenergy: -1.0\nH 0.1 0 0\n1\nenergy: -3.0\nH 0.2 0 0\n",
-        encoding="utf-8",
-    )
-    no_energy = tmp_path / "no_energy.xyz"
-    no_energy.write_text(
-        "1\nfirst\nH 0 0 0\n1\nsecond\nH 0.1 0 0\n1\nthird\nH 0.2 0 0\n",
-        encoding="utf-8",
-    )
-    multi_default = tmp_path / "multi_default.xyz"
-    multi_default.write_text(
-        "1\nenergy: -4.0\nH 0 0 0\n1\nenergy: -2.0\nH 0.1 0 0\n",
-        encoding="utf-8",
-    )
-
-    frame, metadata = xyz_utils.choose_orca_geometry_frame(invalid, candidate_kind="ts_guess")
+    frame, metadata = xyz_utils.choose_orca_geometry_frame(invalid, candidate_kind="conformer")
     assert frame is None
     assert metadata["selection_reason"] == "invalid_or_empty_xyz"
-
-    frame, metadata = xyz_utils.choose_orca_geometry_frame(ts_multiframe, candidate_kind="ts_guess")
-    assert frame is None
-    assert metadata["selection_reason"] == "ts_guess_requires_single_frame"
-
-    frame, metadata = xyz_utils.choose_orca_geometry_frame(
-        energetic, candidate_kind="selected_path"
-    )
-    assert frame is not None
-    assert frame.index == 2
-    assert metadata["selection_reason"] == "highest_energy_frame"
-    assert metadata["selected_frame_energy"] == -1.0
-
-    frame, metadata = xyz_utils.choose_orca_geometry_frame(
-        no_energy, candidate_kind="selected_path"
-    )
-    assert frame is not None
-    assert frame.index == 2
-    assert metadata["selection_reason"] == "middle_frame_fallback"
-
-    frame, metadata = xyz_utils.choose_orca_geometry_frame(
-        multi_default, candidate_kind="optimized_geometry"
-    )
-    assert frame is not None
-    assert frame.index == 1
+    ensemble = tmp_path / "ensemble.xyz"
+    ensemble.write_text("1\nenergy: -4.0\nH 0 0 0\n1\nenergy: -2.0\nH 0.1 0 0\n", encoding="utf-8")
+    frame, metadata = xyz_utils.choose_orca_geometry_frame(ensemble, candidate_kind="conformer")
+    assert frame is not None and frame.index == 1
     assert metadata["selection_reason"] == "first_frame"
     assert metadata["selected_frame_energy"] == -4.0
 
@@ -227,19 +186,20 @@ def test_write_orca_ready_xyz_materializes_selected_frame_and_raises_on_invalid_
     metadata = xyz_utils.write_orca_ready_xyz(
         source_path=source,
         target_path=target,
-        candidate_kind="selected_path",
+        candidate_kind="conformer",
+        source_frame_index=2,
     )
 
     assert target.exists()
     assert target.read_text(encoding="utf-8").startswith("1\nenergy: -1.0\n")
-    assert metadata["selection_reason"] == "highest_energy_frame"
+    assert metadata["selection_reason"] == "requested_frame"
     assert metadata["materialized_xyz_path"] == str(target.resolve())
 
     with pytest.raises(ValueError, match="No ORCA-ready XYZ geometry found"):
         xyz_utils.write_orca_ready_xyz(
             source_path=tmp_path / "missing.xyz",
             target_path=tmp_path / "out.xyz",
-            candidate_kind="ts_guess",
+            candidate_kind="conformer",
         )
 
 

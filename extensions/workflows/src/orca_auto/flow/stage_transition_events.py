@@ -9,7 +9,6 @@ from orca_auto.core.utils.coercion import normalize_text
 
 from .stage_event_metadata import (
     stage_event_metadata,
-    stage_handoff_event_type,
     stage_key,
     stage_status_event_type,
     stage_transition_context,
@@ -74,28 +73,6 @@ class _StageTransitionEventRequest:
                 "metadata": stage_transition_metadata(
                     self.metadata,
                     self.context,
-                    include_handoff=False,
-                ),
-            }
-        )
-        return payload
-
-    def handoff_payload(self) -> WorkflowJournalEventPayload:
-        payload = self.base_payload()
-        payload.update(
-            {
-                "status": self.context["current_handoff_status"],
-                "previous_status": self.context["previous_handoff_status"],
-                "reason": normalize_text(
-                    self.current_stage.get("reaction_handoff_reason")
-                    or self.current_stage.get("reason")
-                ),
-                "reaction_handoff_status": self.context["current_handoff_status"],
-                "previous_reaction_handoff_status": self.context["previous_handoff_status"],
-                "metadata": stage_transition_metadata(
-                    self.metadata,
-                    self.context,
-                    include_handoff=True,
                 ),
             }
         )
@@ -146,27 +123,6 @@ def status_transition_event_payload(
     ).status_payload()
 
 
-def handoff_transition_event_payload(
-    *,
-    event_type: str,
-    current_stage: dict[str, Any],
-    context: StageTransitionContext,
-    metadata: dict[str, Any],
-    workflow_id: str,
-    template_name: str,
-    worker_session_id: str,
-) -> WorkflowJournalEventPayload:
-    return _stage_transition_event_request(
-        event_type=event_type,
-        current_stage=current_stage,
-        context=context,
-        metadata=metadata,
-        workflow_id=workflow_id,
-        template_name=template_name,
-        worker_session_id=worker_session_id,
-    ).handoff_payload()
-
-
 def stage_transition_event_payloads(
     *,
     previous_summary: dict[str, Any],
@@ -185,12 +141,9 @@ def stage_transition_event_payloads(
     for index, raw_stage in enumerate(current_stages):
         current_stage = dict(raw_stage)
         previous_stage = previous_by_key.get(stage_key(current_stage, index), {})
-        handoff_event_type = stage_handoff_event_type(previous_stage, current_stage)
         status_event_type = stage_status_event_type(
             previous_stage,
             current_stage,
-            suppress_terminal_event=handoff_event_type
-            in {"workflow_stage_handoff_ready", "workflow_stage_handoff_failed"},
         )
         metadata = stage_event_metadata(current_stage)
         context = stage_transition_context(previous_stage, current_stage)
@@ -208,18 +161,6 @@ def stage_transition_event_payloads(
                 )
             )
 
-        if handoff_event_type:
-            event_payloads.append(
-                handoff_transition_event_payload(
-                    event_type=handoff_event_type,
-                    current_stage=current_stage,
-                    context=context,
-                    metadata=metadata,
-                    workflow_id=workflow_id,
-                    template_name=template_name,
-                    worker_session_id=worker_session_id,
-                )
-            )
     return event_payloads
 
 
@@ -297,7 +238,6 @@ __all__ = [
     "_stage_transition_event_request",
     "append_workflow_advance_failed_event",
     "append_workflow_advanced_events",
-    "handoff_transition_event_payload",
     "stage_transition_event_payloads",
     "status_transition_event_payload",
 ]

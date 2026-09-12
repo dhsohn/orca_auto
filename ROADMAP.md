@@ -34,7 +34,17 @@ Experimental surface. Changes to any documented surface are deliberate, tested,
 and recorded in release notes; breaking a documented behavior requires a major
 version.
 
-## 0.1.x: Initial Public Surface (Released)
+## Current Development: Core and Conformer Screening
+
+The unreleased 6.0 development line keeps Core focused on executing
+user-prepared ORCA inputs and removes the two automatic TS-search workflows
+without legacy support. The optional extension retains conformer screening,
+including CREST generation and ORCA refinement.
+Standalone ORCA OptTS/Freq, IRC, NEB-TS, and ordinary relaxed scans remain
+supported. Existing TS-workflow state is not migrated; see the
+[cutover warning](docs/RELEASE.md#removing-ts-workflows-in-60).
+
+## 0.1.x: Initial Public Surface (Historical, Released)
 
 The 0.1 development series established the initial queue-first ORCA and workflow
 surface. Its hardening priorities were:
@@ -53,7 +63,7 @@ surface. Its hardening priorities were:
 - Keep Korean documentation updated for user-facing behavior when English docs
   change substantially.
 
-## 0.2.0: Durable Multi-Engine Runtime (Released)
+## 0.2.0: Durable Multi-Engine Runtime (Historical, Released)
 
 The 0.2.0 release binds queue execution to immutable generation snapshots,
 strengthens cancellation and recovery, and adds standalone xTB-MD as a
@@ -66,7 +76,7 @@ The 0.3.0 release removes the standalone xTB-MD public engine, narrowing the
 supported public surface back to standalone ORCA plus the internal workflow xTB
 and CREST stages.
 
-## 1.0: Stable Public Surface
+## 1.0: Stable Public Surface (Historical, Released)
 
 The 1.0.0 cut closes the stability-readiness track. What it settles:
 
@@ -105,6 +115,7 @@ changes the scope deliberately:
 - Publishing private structures, raw proprietary outputs, credentials, or
   site-specific scheduler policy as fixtures.
 - Reintroducing automatic ORCA calculation-failure retries or direct ScanTS support.
+- Restoring the removed automatic TS-search workflows or their compatibility paths.
 - Adding one-off local lab scripts to the public CLI without a reusable contract.
 
 ## How To Use This Roadmap

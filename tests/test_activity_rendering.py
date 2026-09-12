@@ -109,7 +109,7 @@ def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypat
                 "status": "running",
                 "submitted_at": "2026-05-20T00:00:00+00:00",
                 "metadata": {
-                    "template_name": "reaction_ts_search",
+                    "template_name": "conformer_screening",
                     "workspace_dir": "/tmp/매우긴워크플로우이름_very_long_workflow_name",
                     "request_parameters": {"crest_mode": "nci"},
                 },

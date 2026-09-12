@@ -200,11 +200,11 @@ def test_load_xtb_artifact_contract_parses_candidate_details_from_direct_path_ta
 ) -> None:
     job_dir = tmp_path / "xtb_direct"
     selected_input_xyz = job_dir / "input.xyz"
-    ts_guess = job_dir / "ts_guess.xyz"
+    optimized_geometry = job_dir / "optimized_geometry.xyz"
     optimized = job_dir / "optimized.xyz"
 
     _write_xyz(selected_input_xyz)
-    _write_xyz(ts_guess, comment="energy: -0.5")
+    _write_xyz(optimized_geometry, comment="energy: -0.5")
     _write_xyz(optimized, comment="energy: -1.2")
     _write_xtb_state(
         job_dir,
@@ -213,21 +213,21 @@ def test_load_xtb_artifact_contract_parses_candidate_details_from_direct_path_ta
         selected_input_xyz=selected_input_xyz,
         resource_request={"max_cores": "4"},
         engine_payload={
-            "job_type": "path",
+            "job_type": "ranking",
             "reaction_key": "rxn-1",
             "analysis_summary": {"best_score": -0.5},
             "candidate_details": [
                 {
                     "rank": 2,
-                    "kind": "optimized_geometry",
+                    "kind": "single_point_result",
                     "path": str(optimized),
                     "selected": False,
                     "score": "-1.2",
                 },
                 {
                     "rank": "1",
-                    "kind": "ts_guess",
-                    "path": str(ts_guess),
+                    "kind": "optimized_geometry",
+                    "path": str(optimized_geometry),
                     "selected": "yes",
                     "score": "-0.5",
                     "source": "scan",
@@ -243,24 +243,24 @@ def test_load_xtb_artifact_contract_parses_candidate_details_from_direct_path_ta
     assert contract.job_id == "xtb_direct_1"
     assert contract.job_dir == str(job_dir.resolve())
     assert contract.latest_known_path == str(job_dir.resolve())
-    assert contract.selected_candidate_paths == (str(ts_guess),)
+    assert contract.selected_candidate_paths == (str(optimized_geometry),)
     assert contract.analysis_summary == {"best_score": -0.5}
     assert contract.resource_request == {"max_cores": 4}
     assert contract.resource_actual == {"max_cores": 4}
     assert len(contract.candidate_details) == 2
 
     details_by_kind = {detail.kind: detail for detail in contract.candidate_details}
-    assert details_by_kind["ts_guess"].selected is True
-    assert details_by_kind["ts_guess"].score == pytest.approx(-0.5)
-    assert details_by_kind["ts_guess"].metadata["source"] == "scan"
-    assert details_by_kind["ts_guess"].metadata["output_identity"]["sha256"]
-    assert details_by_kind["optimized_geometry"].selected is False
+    assert details_by_kind["optimized_geometry"].selected is True
+    assert details_by_kind["optimized_geometry"].score == pytest.approx(-0.5)
+    assert details_by_kind["optimized_geometry"].metadata["source"] == "scan"
+    assert details_by_kind["optimized_geometry"].metadata["output_identity"]["sha256"]
+    assert details_by_kind["single_point_result"].selected is False
 
     stage_inputs = select_xtb_downstream_inputs(contract, require_geometry=True)
 
     assert len(stage_inputs) == 1
-    assert stage_inputs[0].artifact_path == str(ts_guess)
-    assert stage_inputs[0].kind == "ts_guess"
+    assert stage_inputs[0].artifact_path == str(optimized_geometry)
+    assert stage_inputs[0].kind == "optimized_geometry"
     assert stage_inputs[0].selected is True
     assert stage_inputs[0].metadata["source"] == "scan"
     assert stage_inputs[0].metadata["output_identity"]["sha256"]
@@ -322,9 +322,11 @@ def test_load_xtb_artifact_contract_ignores_stale_report_when_state_exists(
             job_id="old-job",
             job_dir=str(job_dir),
             engine_payload={
-                "job_type": "path_search",
+                "job_type": "opt",
                 "reaction_key": "old",
-                "candidate_details": [{"rank": 1, "kind": "ts_guess", "path": str(old_candidate)}],
+                "candidate_details": [
+                    {"rank": 1, "kind": "optimized_geometry", "path": str(old_candidate)}
+                ],
             },
         ),
     )
@@ -355,7 +357,7 @@ def test_xtb_and_crest_contracts_reject_existing_artifacts_outside_job_dir(
         job_id="xtb-job",
         engine_payload={
             "candidate_details": [
-                {"rank": 1, "kind": "ts_guess", "path": str(outside), "selected": True}
+                {"rank": 1, "kind": "optimized_geometry", "path": str(outside), "selected": True}
             ]
         },
     )
@@ -756,7 +758,7 @@ def test_completed_xtb_and_crest_artifacts_require_terminal_output_identities(
     tmp_path: Path,
 ) -> None:
     xtb_job_dir = tmp_path / "xtb_missing_identity"
-    xtb_candidate = xtb_job_dir / "ts_guess.xyz"
+    xtb_candidate = xtb_job_dir / "optimized_geometry.xyz"
     _write_xyz(xtb_candidate)
     _write_xtb_state(
         xtb_job_dir,
@@ -766,7 +768,7 @@ def test_completed_xtb_and_crest_artifacts_require_terminal_output_identities(
             "candidate_details": [
                 {
                     "rank": 1,
-                    "kind": "ts_guess",
+                    "kind": "optimized_geometry",
                     "path": str(xtb_candidate),
                     "selected": True,
                 }

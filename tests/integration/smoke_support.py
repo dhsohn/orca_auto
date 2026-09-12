@@ -17,7 +17,7 @@ from orca_auto.flow.runtime import (
     advance_workflow_registry_once,
     workflow_needs_terminal_sync,
 )
-from orca_auto.flow.state import load_workflow_payload, workflow_has_active_downstream
+from orca_auto.flow.state import load_workflow_payload
 from orca_auto.orca.config import load_config as load_orca_config
 from orca_auto.orca.queue import worker as orca_queue_worker
 
@@ -34,7 +34,6 @@ def write_fake_orca(
     path: Path,
     *,
     mode: Literal["success", "nonconverged"] = "success",
-    scan_profile: Literal["barrier", "barrierless"] = "barrier",
 ) -> None:
     script = f"""\
     #!/usr/bin/env python3
@@ -43,26 +42,6 @@ def write_fake_orca(
 
     inp = Path(sys.argv[1]).resolve()
     inp_text = inp.read_text(encoding="utf-8")
-    is_scan = "%geom" in inp_text and "Scan" in inp_text
-
-    if is_scan:
-        energies = (
-            [-100.0, -99.5, -100.2, -100.3]
-            if {scan_profile!r} == "barrier"
-            else [-100.0, -100.1, -100.2, -100.3]
-        )
-        for index in range(1, 5):
-            (Path.cwd() / f"{{inp.stem}}.{{index:03d}}.xyz").write_text(
-                f"2\\nscan point {{index}}\\nH 0 0 0\\nH 0 0 0.74\\n",
-                encoding="utf-8",
-            )
-        print("RELAXED SURFACE SCAN RESULTS")
-        print("The Calculated Surface using the 'Actual Energy'")
-        for coordinate, energy in zip((0.7, 0.8, 0.9, 1.0), energies, strict=True):
-            print(f"   {{coordinate:.8f}} {{energy:.8f}}")
-        print("The Calculated Surface using the SCF energy")
-        print("   0.70000000 -101.00000000")
-
     print("Program Version 6.0.1 - RELEASE -")
     for line_number, line in enumerate(inp_text.splitlines(), start=1):
         print(f"| {{line_number:2d}}> {{line}}")
@@ -72,14 +51,10 @@ def write_fake_orca(
     print(" H 0.000000 0.000000 0.740000")
     print("")
     print("FINAL SINGLE POINT ENERGY -1.100000000000")
-    if {mode!r} == "nonconverged" and "OptTS" not in inp_text:
+    if {mode!r} == "nonconverged":
         print("THE OPTIMIZATION DID NOT CONVERGE")
     elif "Opt" in inp_text:
         print("THE OPTIMIZATION HAS CONVERGED")
-    if "OptTS" in inp_text:
-        print("VIBRATIONAL FREQUENCIES")
-        print("  1: -512.34 cm**-1")
-        print("  2: 120.00 cm**-1")
     print("TOTAL RUN TIME: 0 days 0 hours 0 minutes 1 seconds")
     print("****ORCA TERMINATED NORMALLY****")
     raise SystemExit(0)
@@ -159,7 +134,6 @@ def pump_workflow(
         if workflow_needs_terminal_sync(
             workspace_dir,
             load_workflow_payload_fn=load_workflow_payload,
-            workflow_has_active_downstream_fn=workflow_has_active_downstream,
         ):
             continue
         break

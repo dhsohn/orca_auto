@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from orca_auto.core.engine_process import atomic_write_confined_bytes
-from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
+from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS
 from orca_auto.core.queue.engine.input_snapshot import (
     MAX_INPUT_SNAPSHOT_BYTES,
     read_stable_regular_file,
@@ -369,19 +369,6 @@ def _add_selection_metadata(
         metadata["selected_frame_energy"] = frame.energy
 
 
-def _select_energy_ranked_frame(frames: tuple[XYZFrame, ...]) -> tuple[XYZFrame, str]:
-    energetic = [frame for frame in frames if frame.energy is not None]
-    if energetic:
-        return (
-            max(
-                energetic,
-                key=lambda item: item.energy if item.energy is not None else float("-inf"),
-            ),
-            "highest_energy_frame",
-        )
-    return frames[len(frames) // 2], "middle_frame_fallback"
-
-
 def _select_orca_frame(
     frames: tuple[XYZFrame, ...],
     candidate_kind: str,
@@ -395,14 +382,9 @@ def _select_orca_frame(
             return None, "requested_frame_unavailable"
         return frames[requested_frame_index - 1], "requested_frame"
 
-    normalized_kind = str(candidate_kind).strip().lower()
-    if normalized_kind == "ts_guess" and len(frames) != 1:
-        return None, "ts_guess_requires_single_frame"
     if len(frames) == 1:
         return frames[0], "single_frame"
 
-    if normalized_kind in {"ts_guess", "selected_path"}:
-        return _select_energy_ranked_frame(frames)
     return frames[0], "first_frame"
 
 
@@ -531,7 +513,6 @@ def write_orca_ready_xyz(
 
 __all__ = [
     "MAX_ADMISSION_ATOMS",
-    "MAX_HESSIAN_ADMISSION_ATOMS",
     "XYZFrame",
     "XYZParseResult",
     "choose_orca_geometry_frame",

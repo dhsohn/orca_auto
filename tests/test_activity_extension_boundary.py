@@ -80,7 +80,7 @@ def test_core_only_activity_refuses_workflow_state_before_mutating(
         workspace = root / "workflow"
         workspace.mkdir()
         if evidence == "scaffold_generation":
-            (workspace / "flow.yaml").write_text("template: scan_ts\n", encoding="utf-8")
+            (workspace / "flow.yaml").write_text("template: conformer_search\n", encoding="utf-8")
             workspace = workspace / "20260912-120000-1234abcd"
             workspace.mkdir()
         if evidence == "stage":
@@ -139,7 +139,7 @@ def test_core_only_activity_refuses_a_scaffold_with_unreadable_generations(
     config, root = _standalone_queue(tmp_path)
     scaffold = root / "workflow"
     scaffold.mkdir()
-    (scaffold / "flow.yaml").write_text("template: scan_ts\n", encoding="utf-8")
+    (scaffold / "flow.yaml").write_text("template: conformer_search\n", encoding="utf-8")
     original = (root / "queue.json").read_bytes()
     original_iterdir = Path.iterdir
 

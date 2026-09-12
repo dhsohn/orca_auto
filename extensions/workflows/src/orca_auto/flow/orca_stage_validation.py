@@ -2,28 +2,21 @@
 
 from __future__ import annotations
 
-import math
 import re
 from pathlib import Path
 
-from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca.completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from orca_auto.orca.input_blocks import (
-    GEOM_HEADER_RE,
     active_orca_line_text,
-    geometry_range,
     orca_line_tokens,
     orca_route_line,
     orca_route_tokens,
-    validate_supported_xyz_geometry_syntax,
 )
 from orca_auto.orca.job_type import FREQ_RE
-from orca_auto.orca.relaxed_scan import validate_scan_coordinate_lines
 
 from .contracts.workflow import SUPPORTED_WORKFLOW_ORCA_TASK_KINDS
-from .xyz_utils import validated_xyz_atom_count
 
 _ORCA_ROUTE_MARKER_PREFIXES = ("!", "%", "*", "$")
 _SP_NON_ENERGY_ROUTE_TOKEN_RE = re.compile(r"\A(?:ENGRAD|NUMGRAD|MD)\Z", re.IGNORECASE)
@@ -64,19 +57,7 @@ def validate_workflow_orca_route(*, task_kind: str, route_line: str) -> str:
     )
     has_ts = any(TS_ROUTE_RE.fullmatch(token) is not None for token in route_tokens)
     has_opt = any(OPT_ROUTE_RE.fullmatch(token) is not None for token in route_tokens)
-    has_freq = any(FREQ_RE.fullmatch(token) is not None for token in route_tokens)
-    if normalized_kind == "optts_freq":
-        folded_tokens = {token.casefold() for token in route_tokens}
-        valid = (
-            "optts" in folded_tokens
-            and has_freq
-            and "scants" not in folded_tokens
-            and "neb-ts" not in folded_tokens
-        )
-        requirement = (
-            "exact OptTS and a supported frequency-analysis route token without ScanTS or NEB-TS"
-        )
-    elif normalized_kind == "sp":
+    if normalized_kind == "sp":
         forbidden_tokens = [
             token
             for token in route_tokens
@@ -131,16 +112,6 @@ def _validate_workflow_orca_input_lines(
         )
     route_line = "\n".join(route for route in route_lines if route is not None)
     validated_route = validate_workflow_orca_route(task_kind=task_kind, route_line=route_line)
-    if normalized_kind == "relaxed_scan":
-        try:
-            atom_count = _workflow_orca_input_atom_count(inp_path, input_lines)
-            validate_scan_coordinate_lines(input_lines, atom_count=atom_count)
-        except ValueError as exc:
-            raise ValueError(
-                "workflow ORCA route-role mismatch: "
-                "task_kind='relaxed_scan' requires a %geom Scan block with a valid "
-                f"coordinate: {exc}; inp_path={str(inp_path)!r}"
-            ) from exc
     return validated_route
 
 
@@ -184,54 +155,6 @@ def validate_workflow_orca_input(*, task_kind: str, inp_path: Path | None) -> st
         inp_path=inp_path,
         input_bytes=input_bytes,
     )
-
-
-def _workflow_orca_input_atom_count(inp_path: Path, lines: list[str]) -> int:
-    """Atom count bound to the selected input's one supported XYZ geometry."""
-
-    validate_supported_xyz_geometry_syntax(lines, label="workflow ORCA selected input")
-    header_entry = next(
-        (
-            (line, match)
-            for line in lines
-            if (match := GEOM_HEADER_RE.match(line.strip())) is not None
-        ),
-        None,
-    )
-    if header_entry is None:
-        raise ValueError("selected input must define exactly one supported XYZ geometry")
-    header_line, header = header_entry
-    if header.group(1).lower() == "xyzfile":
-        tokens = orca_line_tokens(header_line)
-        reference = Path(tokens[4].value).expanduser()
-        if not reference.is_absolute():
-            reference = inp_path.parent / reference
-        return validated_xyz_atom_count(reference)
-
-    geometry = geometry_range(lines)
-    if geometry is None:
-        raise ValueError("selected input must define exactly one supported XYZ geometry")
-    start, end, _charge, _multiplicity = geometry
-    atom_rows = [line for line in lines[start + 1 : end - 1] if line.strip()]
-    for atom_row in atom_rows:
-        atom_tokens = atom_row.split()
-        if len(atom_tokens) != 4 or _INLINE_XYZ_ATOM_LABEL_RE.fullmatch(atom_tokens[0]) is None:
-            raise ValueError("inline XYZ geometry contains an invalid atom row")
-        if any(_INLINE_XYZ_COORDINATE_RE.fullmatch(value) is None for value in atom_tokens[1:]):
-            raise ValueError("inline XYZ geometry contains invalid coordinates")
-        coordinates = tuple(
-            float(value.replace("d", "e").replace("D", "E")) for value in atom_tokens[1:]
-        )
-        if not all(math.isfinite(value) for value in coordinates):
-            raise ValueError("inline XYZ geometry contains non-finite coordinates")
-    atom_count = len(atom_rows)
-    if atom_count < 1:
-        raise ValueError("inline XYZ geometry must contain at least one atom")
-    if atom_count > MAX_ADMISSION_ATOMS:
-        raise ValueError(
-            f"ORCA molecule exceeds the server atom-count limit of {MAX_ADMISSION_ATOMS}"
-        )
-    return atom_count
 
 
 def ensure_route_line(route_line: str) -> str:

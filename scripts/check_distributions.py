@@ -253,14 +253,17 @@ def _core_fingerprints(package: Path) -> dict[str, str]:
 
 
 def _scaffold(python: Path, root: Path, *, cwd: Path) -> None:
-    _run([str(python), "-I", "-m", "orca_auto.cli", "scaffold", "scan_ts", str(root)], cwd=cwd)
+    _run(
+        [str(python), "-I", "-m", "orca_auto.cli", "scaffold", "conformer_search", str(root)],
+        cwd=cwd,
+    )
     assert (root / "flow.yaml").is_file()
 
 
 def _refuse_scaffold(python: Path, root: Path, *, cwd: Path, reason: str) -> None:
     assert not root.exists()
     result = subprocess.run(
-        [str(python), "-I", "-m", "orca_auto.cli", "scaffold", "scan_ts", str(root)],
+        [str(python), "-I", "-m", "orca_auto.cli", "scaffold", "conformer_search", str(root)],
         cwd=cwd,
         env=_environment(),
         capture_output=True,

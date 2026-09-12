@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -18,58 +18,6 @@ class MaterializedWorkflowStage(Protocol):
     def to_dict(self) -> WorkflowStagePayload: ...
 
 
-class XtbCandidateArtifactView(Protocol):
-    @property
-    def rank(self) -> int: ...
-
-    @property
-    def kind(self) -> str: ...
-
-    @property
-    def path(self) -> str: ...
-
-    @property
-    def selected(self) -> bool: ...
-
-    @property
-    def score(self) -> float | None: ...
-
-    @property
-    def metadata(self) -> dict[str, Any]: ...
-
-
-class XtbArtifactContractView(Protocol):
-    @property
-    def job_id(self) -> str: ...
-
-    @property
-    def job_type(self) -> str: ...
-
-    @property
-    def status(self) -> str: ...
-
-    @property
-    def reason(self) -> str: ...
-
-    @property
-    def latest_known_path(self) -> str: ...
-
-    @property
-    def reaction_key(self) -> str: ...
-
-    @property
-    def selected_input_xyz(self) -> str: ...
-
-    @property
-    def selected_candidate_paths(self) -> Sequence[str]: ...
-
-    @property
-    def candidate_details(self) -> Sequence[XtbCandidateArtifactView]: ...
-
-    @property
-    def analysis_summary(self) -> Mapping[str, Any]: ...
-
-
 @dataclass(frozen=True)
 class WorkflowPersistenceServices:
     acquire_workflow_lock: AnyCallable
@@ -82,21 +30,15 @@ class WorkflowPersistenceServices:
 @dataclass(frozen=True)
 class WorkflowEngineGateway:
     build_materialized_orca_stage: Callable[..., MaterializedWorkflowStage]
-    choose_orca_geometry_frame: AnyCallable
     crest_cancel_target: Callable[..., dict[str, Any]]
     engine_runtime_paths: Callable[..., dict[str, Path]]
     load_crest_artifact_contract: AnyCallable
     load_orca_artifact_contract: AnyCallable
-    load_xtb_artifact_contract: Callable[..., XtbArtifactContractView]
     orca_cancel_target: Callable[..., dict[str, Any]]
     safe_name: AnyCallable
     select_crest_downstream_inputs: AnyCallable
-    select_endpoint_pairs: AnyCallable
-    select_xtb_downstream_inputs: AnyCallable
     submit_crest_job_dir: AnyCallable
     submit_reaction_dir: AnyCallable
-    submit_xtb_job_dir: Callable[..., dict[str, Any]]
-    xtb_cancel_target: Callable[..., dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -132,11 +74,6 @@ def default_orchestration_services() -> OrchestrationServices:
         select_crest_downstream_inputs,
     )
     from orca_auto.flow.adapters.orca import load_orca_artifact_contract
-    from orca_auto.flow.adapters.xtb import (
-        load_xtb_artifact_contract,
-        select_xtb_downstream_inputs,
-    )
-    from orca_auto.flow.endpoint_pairing import select_endpoint_pairs
     from orca_auto.flow.registry import (
         append_workflow_journal_event,
         require_workflow_journal_capacity,
@@ -155,10 +92,7 @@ def default_orchestration_services() -> OrchestrationServices:
         submit_job_dir as submit_crest_job_dir,
     )
     from orca_auto.flow.submitters.orca import submit_reaction_dir
-    from orca_auto.flow.submitters.xtb import cancel_target as xtb_cancel_target
-    from orca_auto.flow.submitters.xtb import submit_job_dir as submit_xtb_job_dir
     from orca_auto.flow.workflow.notifications import maybe_notify_workflow_phase_summary
-    from orca_auto.flow.xyz_utils import choose_orca_geometry_frame
     from orca_auto.orca.direct_cancel import cancel_target as orca_cancel_target
 
     return OrchestrationServices(
@@ -171,21 +105,15 @@ def default_orchestration_services() -> OrchestrationServices:
         ),
         engines=WorkflowEngineGateway(
             build_materialized_orca_stage=build_materialized_orca_stage,
-            choose_orca_geometry_frame=choose_orca_geometry_frame,
             crest_cancel_target=crest_cancel_target,
             engine_runtime_paths=engine_runtime_paths,
             load_crest_artifact_contract=load_crest_artifact_contract,
             load_orca_artifact_contract=load_orca_artifact_contract,
-            load_xtb_artifact_contract=load_xtb_artifact_contract,
             orca_cancel_target=orca_cancel_target,
             safe_name=safe_name,
             select_crest_downstream_inputs=select_crest_downstream_inputs,
-            select_endpoint_pairs=select_endpoint_pairs,
-            select_xtb_downstream_inputs=select_xtb_downstream_inputs,
             submit_crest_job_dir=submit_crest_job_dir,
             submit_reaction_dir=submit_reaction_dir,
-            submit_xtb_job_dir=submit_xtb_job_dir,
-            xtb_cancel_target=xtb_cancel_target,
         ),
         clock=WorkflowClock(now_utc_iso=now_utc_iso),
         events=WorkflowEvents(
@@ -209,8 +137,6 @@ __all__ = [
     "WorkflowEngineGateway",
     "WorkflowEvents",
     "WorkflowPersistenceServices",
-    "XtbArtifactContractView",
-    "XtbCandidateArtifactView",
     "default_orchestration_services",
     "resolve_orchestration_services",
 ]

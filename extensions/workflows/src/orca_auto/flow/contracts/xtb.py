@@ -82,8 +82,6 @@ class XtbArtifactContract:
 @dataclass(frozen=True)
 class XtbDownstreamPolicy:
     preferred_kinds: tuple[str, ...] = (
-        "ts_guess",
-        "selected_path",
         "optimized_geometry",
         "single_point_result",
     )
@@ -116,23 +114,6 @@ class XtbDownstreamPolicy:
         )
 
 
-def geometry_validation_passed(metadata: dict[str, Any]) -> bool:
-    """True only for an explicit, self-consistent upstream geometry verdict.
-
-    This is the single source for the xTB->ORCA geometry handoff gate: the
-    accepting rule and the refusal-reason reporter must never drift apart, or a
-    candidate rejected by the gate gets explained with the wrong reason.
-    """
-    validation = metadata.get("geometry_validation")
-    return (
-        metadata.get("geometry_valid") is True
-        and isinstance(validation, dict)
-        and validation.get("valid") is True
-        and "error" not in validation
-        and validation.get("reasons") == []
-    )
-
-
 @dataclass(frozen=True)
 class WorkflowStageInput:
     source_job_id: str
@@ -145,11 +126,6 @@ class WorkflowStageInput:
     selected: bool = False
     score: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def geometry_validated(self) -> bool:
-        """True only for an explicit, self-consistent upstream geometry verdict."""
-        return geometry_validation_passed(self.metadata)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -165,5 +141,4 @@ __all__ = [
     "XtbArtifactContract",
     "XtbCandidateArtifact",
     "XtbDownstreamPolicy",
-    "geometry_validation_passed",
 ]

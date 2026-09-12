@@ -53,7 +53,6 @@ from orca_auto.flow.engines.xtb.job_locations import upsert_job_record
 from orca_auto.flow.engines.xtb.runner import (
     XtbRunResult,
     finalize_xtb_job,
-    run_path_search_ts_hessian_followup,
     run_xtb_ranking_job,
     start_xtb_job,
 )
@@ -155,7 +154,6 @@ class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies
     run_xtb_ranking_job: Callable[..., XtbRunResult]
     start_xtb_job: Callable[..., Any]
     finalize_xtb_job: Callable[..., XtbRunResult]
-    run_path_search_ts_hessian_followup: Callable[..., XtbRunResult]
 
 
 @dataclass(frozen=True)
@@ -215,7 +213,6 @@ def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDep
             "run_xtb_ranking_job": run_xtb_ranking_job,
             "start_xtb_job": start_xtb_job,
             "finalize_xtb_job": finalize_xtb_job,
-            "run_path_search_ts_hessian_followup": run_path_search_ts_hessian_followup,
         },
     )
 
@@ -568,18 +565,6 @@ def _run_xtb_job_for_entry(
             ),
             check_cancel_before_poll=True,
         )
-        if context.job_type == "path_search":
-            result = runner_deps.run_path_search_ts_hessian_followup(
-                cfg,
-                result,
-                job_dir=context.job_dir,
-                should_cancel=should_stop_ranking,
-                prepare_running_job=prepare_running_job,
-                on_running_job=register_running_job,
-                terminate_process=runner_deps.terminate_process,
-                execution_snapshot=context.execution_snapshot,
-            )
-            _raise_if_shutdown_requested(context, shutdown_requested)
         return result
     except Exception as exc:
         if isinstance(exc, (_WorkerShutdownRequested, _engine_execution.ProcessCleanupError)):
@@ -629,9 +614,8 @@ def _finalize_processed_entry(
                     output_paths.add(str(evidence["path"]))
         for detail in getattr(result, "candidate_details", ()) if capture_outputs else ():
             if isinstance(detail, dict):
-                for key in ("path", "hessian_path"):
-                    if str(detail.get(key) or "").strip():
-                        output_paths.add(str(detail[key]))
+                if str(detail.get("path") or "").strip():
+                    output_paths.add(str(detail["path"]))
         output_identities: dict[str, dict[str, Any]] = {}
         try:
             for path in sorted(output_paths):
@@ -648,30 +632,11 @@ def _finalize_processed_entry(
             {
                 **detail,
                 "output_identity": output_identities.get(str(detail.get("path") or ""), {}),
-                **(
-                    {"hessian_identity": output_identities[str(detail.get("hessian_path") or "")]}
-                    if str(detail.get("hessian_path") or "") in output_identities
-                    else {}
-                ),
             }
             if isinstance(detail, dict) and str(detail.get("path") or "") in output_identities
             else detail
             for detail in getattr(result, "candidate_details", ())
         )
-        for detail in candidate_details:
-            if not isinstance(detail, dict):
-                continue
-            provenance = detail.get("hessian_provenance")
-            output_identity = detail.get("output_identity")
-            hessian_identity = detail.get("hessian_identity")
-            if isinstance(provenance, dict) and provenance.get("status") == "completed":
-                if (
-                    not isinstance(output_identity, dict)
-                    or output_identity.get("sha256") != provenance.get("ts_guess_sha256")
-                    or not isinstance(hessian_identity, dict)
-                    or hessian_identity.get("sha256") != provenance.get("hessian_sha256")
-                ):
-                    output_identity_matches = False
         analysis_summary = getattr(result, "analysis_summary", {})
         if isinstance(analysis_summary, dict):
             for candidate_result in analysis_summary.get("candidate_results", []):

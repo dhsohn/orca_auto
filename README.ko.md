@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="ORCA_auto — 제출. 모니터링. 복구." width="680">
+  <img src="docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
@@ -11,11 +11,11 @@
 
 <p align="center"><a href="README.md">English</a> · <b>한국어</b></p>
 
-ORCA_auto는 Linux/WSL에서 **ORCA 계산을 실행하고 모니터링하는 도구**입니다.
+ORCA_auto는 Linux/WSL용 **큐 기반 ORCA 실행 도구**입니다.
 계산을 디스크에 저장되는 큐에 제출하고, 진행 상황과 결과·복구 판단을 확인할 수
 있습니다. 입력 설계와 화학적 판단은 사용자가 맡습니다.
 
-## 제출. 모니터링. 복구.
+## 주요 기능
 
 - **제출한 뒤 터미널을 닫아도 됩니다.** 제출에 성공하면 작업이 디스크에 기록되고,
   워커가 실행을 담당합니다.

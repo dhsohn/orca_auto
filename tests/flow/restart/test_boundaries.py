@@ -37,7 +37,7 @@ def test_flow_run_dir_reports_renamed_existing_workflow_without_restarting(
         workspace,
         {
             "workflow_id": "TS8_original",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "failed",
             "stages": [],
             "metadata": {},
@@ -134,7 +134,7 @@ def test_flow_run_dir_restarts_existing_workflow_workspace_without_flow_yaml(
         workspace,
         {
             "workflow_id": "wf_existing",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "failed",
             "requested_at": "2026-04-27T00:00:00+00:00",
             "stages": [

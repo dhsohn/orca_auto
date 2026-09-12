@@ -18,7 +18,7 @@ def _registry_record(
     *,
     workflow_id: str,
     status: str,
-    template_name: str = "reaction_ts_search",
+    template_name: str = "conformer_screening",
     workspace_dir: str = "/tmp/workflow_workspace",
     stage_count: int = 1,
     metadata: dict[str, Any] | None = None,
@@ -97,92 +97,56 @@ def test_workflow_worker_lock_path_expands_home_directory(
     assert lock_path == (tmp_path / "chem_root").resolve() / runtime.WORKFLOW_WORKER_LOCK_NAME
 
 
-def test_stage_transition_event_payloads_emit_start_and_xtb_handoff_events() -> None:
-    previous_summary = _summary_with_stages(
+def test_stage_transition_event_payloads_emit_submission_and_completion_events() -> None:
+    previous = _summary_with_stages(
         {
             "stage_id": "crest_1",
             "status": "planned",
             "task_status": "planned",
             "engine": "crest",
             "task_kind": "conformer_search",
-            "reaction_dir": "/tmp/crest_case",
         },
         {
-            "stage_id": "xtb_retry_1",
-            "status": "failed",
-            "task_status": "failed",
-            "engine": "xtb",
-            "task_kind": "path_search",
-            "reaction_handoff_status": "failed",
-            "reaction_handoff_reason": "ts_not_found",
-            "xtb_handoff_retries_used": 0,
-            "xtb_handoff_retry_limit": 2,
-        },
-        {
-            "stage_id": "xtb_ready_1",
+            "stage_id": "orca_1",
             "status": "running",
             "task_status": "running",
-            "engine": "xtb",
-            "task_kind": "path_search",
+            "engine": "orca",
+            "task_kind": "opt",
         },
     )
-    current_summary = _summary_with_stages(
+    current = _summary_with_stages(
         {
             "stage_id": "crest_1",
             "status": "queued",
             "task_status": "submitted",
-            "submission_status": "submitted",
             "engine": "crest",
             "task_kind": "conformer_search",
             "queue_id": "crest-q-1",
-            "reaction_dir": "/tmp/crest_case",
         },
         {
-            "stage_id": "xtb_retry_1",
-            "status": "queued",
-            "task_status": "submitted",
-            "engine": "xtb",
-            "task_kind": "path_search",
-            "queue_id": "xtb-q-1",
-            "reaction_handoff_status": "retrying",
-            "reaction_handoff_reason": "ts_not_found",
-            "xtb_handoff_retries_used": 1,
-            "xtb_handoff_retry_limit": 2,
-        },
-        {
-            "stage_id": "xtb_ready_1",
+            "stage_id": "orca_1",
             "status": "completed",
             "task_status": "completed",
-            "engine": "xtb",
-            "task_kind": "path_search",
-            "reaction_handoff_status": "ready",
-            "selected_input_xyz": "/tmp/ts_guess.xyz",
+            "engine": "orca",
+            "task_kind": "opt",
         },
     )
-
     events = stage_transition_event_payloads(
-        previous_summary=previous_summary,
-        current_summary=current_summary,
+        previous_summary=previous,
+        current_summary=current,
         workflow_id="wf_stage_events",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         worker_session_id="session-1",
     )
-
-    assert [item["event_type"] for item in events] == [
+    assert [event["event_type"] for event in events] == [
         "workflow_stage_submitted",
-        "workflow_stage_submitted",
-        "workflow_stage_handoff_retrying",
-        "workflow_stage_handoff_ready",
+        "workflow_stage_completed",
     ]
-    assert events[0]["metadata"]["stage_id"] == "crest_1"
-    assert events[1]["metadata"]["stage_id"] == "xtb_retry_1"
-    assert events[1]["metadata"]["xtb_handoff_retries_used"] == 1
-    assert events[2]["reason"] == "ts_not_found"
-    assert events[3]["status"] == "ready"
-    assert all(item["event_type"] != "workflow_stage_completed" for item in events)
+    assert [event["metadata"]["stage_id"] for event in events] == ["crest_1", "orca_1"]
+    assert events[0]["metadata"]["queue_id"] == "crest-q-1"
 
 
-def test_stage_transition_event_payloads_emit_completion_and_failure_without_xtb_handoff() -> None:
+def test_stage_transition_event_payloads_emit_completion_and_failure_for_engine_children() -> None:
     previous_summary = _summary_with_stages(
         {
             "stage_id": "crest_done_1",
@@ -196,7 +160,7 @@ def test_stage_transition_event_payloads_emit_completion_and_failure_without_xtb
             "status": "planned",
             "task_status": "planned",
             "engine": "xtb",
-            "task_kind": "path_search",
+            "task_kind": "opt",
         },
     )
     current_summary = _summary_with_stages(
@@ -212,7 +176,7 @@ def test_stage_transition_event_payloads_emit_completion_and_failure_without_xtb
             "status": "submission_failed",
             "task_status": "submission_failed",
             "engine": "xtb",
-            "task_kind": "path_search",
+            "task_kind": "opt",
             "reason": "submit_failed",
         },
     )
@@ -221,7 +185,7 @@ def test_stage_transition_event_payloads_emit_completion_and_failure_without_xtb
         previous_summary=previous_summary,
         current_summary=current_summary,
         workflow_id="wf_stage_terminal_events",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         worker_session_id="session-2",
     )
 
@@ -257,7 +221,7 @@ def test_stage_transition_event_payloads_emit_running_status_change_event() -> N
         previous_summary=previous_summary,
         current_summary=current_summary,
         workflow_id="wf_stage_running",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         worker_session_id="session-running",
     )
 
@@ -266,111 +230,35 @@ def test_stage_transition_event_payloads_emit_running_status_change_event() -> N
     assert events[0]["previous_stage_status"] == "queued"
 
 
-def test_phase_transition_event_payloads_emit_phase_finished_summaries() -> None:
-    previous_summary = _summary_with_stages(
-        {
-            "stage_id": "crest_reactant_01",
-            "status": "running",
-            "task_status": "running",
-            "engine": "crest",
-            "task_kind": "conformer_search",
-        },
-        {
-            "stage_id": "crest_product_01",
-            "status": "queued",
-            "task_status": "submitted",
-            "engine": "crest",
-            "task_kind": "conformer_search",
-        },
-        {
-            "stage_id": "xtb_path_search_01",
-            "status": "running",
-            "task_status": "running",
-            "engine": "xtb",
-            "task_kind": "path_search",
-        },
-        {
-            "stage_id": "xtb_path_search_02",
-            "status": "queued",
-            "task_status": "submitted",
-            "engine": "xtb",
-            "task_kind": "path_search",
-        },
-    )
-    current_summary = _summary_with_stages(
-        {
-            "stage_id": "crest_reactant_01",
-            "input_role": "reactant",
-            "status": "completed",
-            "task_status": "completed",
-            "engine": "crest",
-            "task_kind": "conformer_search",
-        },
-        {
-            "stage_id": "crest_product_01",
-            "input_role": "product",
-            "status": "completed",
-            "task_status": "completed",
-            "engine": "crest",
-            "task_kind": "conformer_search",
-        },
-        {
-            "stage_id": "xtb_path_search_01",
-            "status": "completed",
-            "task_status": "completed",
-            "engine": "xtb",
-            "task_kind": "path_search",
-            "reaction_handoff_status": "ready",
-        },
-        {
-            "stage_id": "xtb_path_search_02",
-            "status": "completed",
-            "task_status": "completed",
-            "engine": "xtb",
-            "task_kind": "path_search",
-            "reaction_handoff_status": "failed",
-            "reaction_handoff_reason": "xtb_ts_guess_missing",
-        },
-    )
-
+def test_phase_transition_event_payloads_emit_crest_finished_summary() -> None:
+    stage = {
+        "stage_id": "crest_conformer_01",
+        "engine": "crest",
+        "task_kind": "conformer_search",
+        "input_role": "molecule",
+    }
+    previous = _summary_with_stages({**stage, "status": "running", "task_status": "running"})
+    current = _summary_with_stages({**stage, "status": "completed", "task_status": "completed"})
     events = phase_transition_event_payloads(
-        previous_summary=previous_summary,
-        current_summary=current_summary,
+        previous_summary=previous,
+        current_summary=current,
         workflow_id="wf_phase_events",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         worker_session_id="session-phase",
     )
-
-    assert [item["event_type"] for item in events] == [
-        "workflow_phase_finished",
-        "workflow_phase_finished",
-    ]
+    assert len(events) == 1
+    assert events[0]["event_type"] == "workflow_phase_finished"
     assert events[0]["metadata"]["phase"] == "crest"
-    assert events[0]["metadata"]["stage_status_counts"] == {"completed": 2}
+    assert events[0]["metadata"]["stage_status_counts"] == {"completed": 1}
     assert events[0]["metadata"]["stage_statuses"] == [
         {
-            "stage_id": "crest_reactant_01",
-            "label": "reactant",
+            "stage_id": "crest_conformer_01",
+            "label": "molecule",
             "status": "completed",
             "task_status": "completed",
             "result": "completed",
-        },
-        {
-            "stage_id": "crest_product_01",
-            "label": "product",
-            "status": "completed",
-            "task_status": "completed",
-            "result": "completed",
-        },
+        }
     ]
-    assert events[1]["metadata"]["phase"] == "xtb"
-    assert events[1]["metadata"]["reaction_handoff_status_counts"] == {"failed": 1, "ready": 1}
-    assert events[1]["metadata"]["failure_reasons"] == ["xtb_ts_guess_missing"]
-    assert [row["result"] for row in events[1]["metadata"]["stage_statuses"]] == [
-        "completed",
-        "failed",
-    ]
-    assert events[1]["status"] == "mixed"
 
 
 @pytest.mark.parametrize(
@@ -388,11 +276,6 @@ def test_workflow_needs_terminal_sync_returns_false_for_unreadable_payload(
         raise error
 
     monkeypatch.setattr(runtime, "load_workflow_payload", fake_load_workflow_payload)
-    monkeypatch.setattr(
-        runtime,
-        "workflow_has_active_downstream",
-        lambda payload: pytest.fail("downstream activity should not be consulted"),
-    )
 
     assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is False
 
@@ -406,11 +289,6 @@ def test_workflow_needs_terminal_sync_short_circuits_for_final_child_sync_flag(
     }
 
     monkeypatch.setattr(runtime, "load_workflow_payload", lambda workspace_dir: payload)
-    monkeypatch.setattr(
-        runtime,
-        "workflow_has_active_downstream",
-        lambda payload: pytest.fail("downstream activity should not be consulted"),
-    )
 
     assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is True
 
@@ -420,11 +298,6 @@ def test_workflow_needs_terminal_sync_retries_pending_si_publication(
 ) -> None:
     payload = {"metadata": {"si_publish_pending": True}, "stages": []}
     monkeypatch.setattr(runtime, "load_workflow_payload", lambda workspace_dir: payload)
-    monkeypatch.setattr(
-        runtime,
-        "workflow_has_active_downstream",
-        lambda payload: pytest.fail("downstream activity should not be consulted"),
-    )
     assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is True
 
 
@@ -459,7 +332,6 @@ def test_terminal_sync_reconciles_stale_registry_pending_after_payload_success(
         "load_workflow_payload",
         lambda workspace_dir: {"metadata": {"si_publish_pending": False}, "stages": []},
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
     assert runtime._workflow_needs_terminal_child_sync(
         record,
         previous_status="completed",
@@ -484,7 +356,6 @@ def test_terminal_sync_reconciles_stale_failed_registry_after_authoritative_rest
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
 
     assert runtime._workflow_needs_terminal_child_sync(
         record,
@@ -508,7 +379,6 @@ def test_terminal_sync_reconciles_authoritative_blocked_payload_with_stale_regis
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
     assert runtime._workflow_needs_terminal_child_sync(
         record,
         previous_status="completed",
@@ -534,7 +404,6 @@ def test_authoritative_blocked_payload_skips_when_registry_is_already_reconciled
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
 
     assert not runtime._workflow_needs_terminal_child_sync(
         record,
@@ -566,7 +435,6 @@ def test_quarantined_identity_mismatch_does_not_hot_loop_terminal_sync(
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
 
     assert not runtime._workflow_needs_terminal_child_sync(
         record,
@@ -593,7 +461,6 @@ def test_quarantined_identity_reconciles_stale_cached_status_and_marker(
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
 
     assert runtime._workflow_needs_terminal_child_sync(
         record,
@@ -623,7 +490,6 @@ def test_restored_identity_reconciles_stale_cached_quarantine_marker(
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
 
     assert runtime._workflow_needs_terminal_child_sync(
         record,
@@ -656,7 +522,6 @@ def test_quarantined_identity_reconciles_stale_blocked_registry_once(
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
 
     assert runtime._workflow_needs_terminal_child_sync(
         record,
@@ -688,7 +553,6 @@ def test_terminal_sync_reconciles_cleared_authoritative_child_marker(
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
 
     assert runtime._workflow_needs_terminal_child_sync(
         record,
@@ -720,7 +584,6 @@ def test_terminal_sync_reconciles_quarantined_stale_si_pending_marker(
             "stages": [],
         },
     )
-    monkeypatch.setattr(runtime, "workflow_has_active_downstream", lambda payload: False)
 
     assert runtime._workflow_needs_terminal_child_sync(
         record,
@@ -1150,39 +1013,8 @@ def test_workflow_needs_terminal_sync_detects_active_stage_or_task_status(
         "load_workflow_payload",
         lambda workspace_dir: {"metadata": {}, "stages": [stage]},
     )
-    monkeypatch.setattr(
-        runtime,
-        "workflow_has_active_downstream",
-        lambda payload: pytest.fail("downstream activity should not be consulted"),
-    )
 
     assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is True
-
-
-@pytest.mark.parametrize(("downstream_active", "expected"), [(True, True), (False, False)])
-def test_workflow_needs_terminal_sync_falls_back_to_downstream_activity(
-    monkeypatch: pytest.MonkeyPatch,
-    downstream_active: bool,
-    expected: bool,
-) -> None:
-    payload = {
-        "metadata": {},
-        "stages": [{"status": "completed", "task": {"status": "completed"}}],
-    }
-    downstream_checks: list[dict[str, Any]] = []
-
-    monkeypatch.setattr(runtime, "load_workflow_payload", lambda workspace_dir: payload)
-
-    def fake_workflow_has_active_downstream(current_payload: dict[str, Any]) -> bool:
-        downstream_checks.append(current_payload)
-        return downstream_active
-
-    monkeypatch.setattr(
-        runtime, "workflow_has_active_downstream", fake_workflow_has_active_downstream
-    )
-
-    assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is expected
-    assert downstream_checks == [payload]
 
 
 def test_advance_workflow_registry_once_skips_terminal_workflow_without_sync(
@@ -1228,7 +1060,7 @@ def test_advance_workflow_registry_once_skips_terminal_workflow_without_sync(
     assert result["workflow_results"] == [
         {
             "workflow_id": "wf_terminal_skip",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "previous_status": "completed",
             "status": "completed",
             "advanced": False,
@@ -1264,7 +1096,7 @@ def test_advance_workflow_registry_once_runs_terminal_child_sync_when_needed(
         advance_calls.append(kwargs)
         return {
             "workflow_id": "wf_terminal_sync",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "completed",
             "stages": [{"stage_id": "s1"}, {"stage_id": "s2"}],
         }
@@ -1287,7 +1119,7 @@ def test_advance_workflow_registry_once_runs_terminal_child_sync_when_needed(
     assert result["workflow_results"] == [
         {
             "workflow_id": "wf_terminal_sync",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "previous_status": "failed",
             "status": "completed",
             "advanced": True,
@@ -1329,7 +1161,7 @@ def test_advance_workflow_registry_once_advances_non_terminal_workflow(
         advance_calls.append(kwargs)
         return {
             "workflow_id": "wf_running",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "running",
             "stages": [{"stage_id": "s1"}, {"stage_id": "s2"}, {"stage_id": "s3"}],
         }
@@ -1352,7 +1184,7 @@ def test_advance_workflow_registry_once_advances_non_terminal_workflow(
     assert result["workflow_results"] == [
         {
             "workflow_id": "wf_running",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "previous_status": "queued",
             "status": "running",
             "advanced": True,
@@ -1397,7 +1229,7 @@ def test_registry_worker_falls_back_to_workflow_id_when_workspace_path_is_stale(
         advance_calls.append(kwargs)
         return {
             "workflow_id": "wf_moved",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "running",
             "stages": [],
         }
@@ -1450,7 +1282,7 @@ def test_registry_worker_ignores_stale_workspace_copy_with_matching_workflow_id(
         advance_calls.append(kwargs)
         return {
             "workflow_id": "wf_copied",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "running",
             "stages": [],
         }
@@ -1497,7 +1329,7 @@ def test_stale_registry_path_uses_current_workspace_for_terminal_child_sync(
         advance_calls.append(kwargs)
         return {
             "workflow_id": "wf_terminal_moved",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "failed",
             "stages": [],
         }
@@ -1562,7 +1394,7 @@ def test_advance_workflow_registry_once_defers_submission_when_admission_full(
         advance_calls.append(kwargs)
         return {
             "workflow_id": "wf_waiting",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "running",
             "stages": [{"stage_id": "s1"}],
         }
@@ -1634,7 +1466,7 @@ def test_advance_workflow_registry_once_defers_submission_when_admission_check_e
         advance_calls.append(kwargs)
         return {
             "workflow_id": "wf_waiting",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "running",
             "stages": [{"stage_id": "s1"}],
         }
@@ -1682,7 +1514,7 @@ def test_advance_workflow_registry_once_appends_stage_transition_events(
             "status": "running",
             "task_status": "running",
             "engine": "xtb",
-            "task_kind": "path_search",
+            "task_kind": "opt",
         },
     )
     current_summary = _summary_with_stages(
@@ -1699,9 +1531,8 @@ def test_advance_workflow_registry_once_appends_stage_transition_events(
             "status": "completed",
             "task_status": "completed",
             "engine": "xtb",
-            "task_kind": "path_search",
-            "reaction_handoff_status": "ready",
-            "selected_input_xyz": "/tmp/ts_guess.xyz",
+            "task_kind": "opt",
+            "selected_input_xyz": "/tmp/conformer.xyz",
         },
     )
     summaries = iter([previous_summary, current_summary])
@@ -1719,7 +1550,7 @@ def test_advance_workflow_registry_once_appends_stage_transition_events(
         "advance_workflow",
         lambda **kwargs: {
             "workflow_id": "wf_stage_runtime",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "running",
             "stages": [{"stage_id": "crest_1"}, {"stage_id": "xtb_1"}],
         },
@@ -1733,14 +1564,12 @@ def test_advance_workflow_registry_once_appends_stage_transition_events(
 
     assert [call["event_type"] for call in journal_calls] == [
         "workflow_status_changed",
-        "workflow_phase_finished",
         "workflow_stage_submitted",
-        "workflow_stage_handoff_ready",
+        "workflow_stage_completed",
     ]
-    assert journal_calls[1]["metadata"]["phase"] == "xtb"
-    assert journal_calls[2]["metadata"]["stage_id"] == "crest_1"
-    assert journal_calls[3]["status"] == "ready"
-    assert journal_calls[3]["metadata"]["stage_id"] == "xtb_1"
+    assert journal_calls[1]["metadata"]["stage_id"] == "crest_1"
+    assert journal_calls[2]["status"] == "completed"
+    assert journal_calls[2]["metadata"]["stage_id"] == "xtb_1"
 
 
 def test_advance_workflow_registry_once_records_non_terminal_advance_failure(
@@ -1783,7 +1612,7 @@ def test_advance_workflow_registry_once_records_non_terminal_advance_failure(
     assert result["workflow_results"] == [
         {
             "workflow_id": "wf_failure",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "previous_status": "running",
             "status": "advance_failed",
             "advanced": False,
@@ -1830,7 +1659,7 @@ def test_advance_workflow_registry_once_records_terminal_child_sync_failure(
     assert result["workflow_results"] == [
         {
             "workflow_id": "wf_terminal_failure",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "previous_status": "cancelled",
             "status": "advance_failed",
             "advanced": False,

@@ -155,12 +155,9 @@ _SUBMISSION_ERROR_DETAIL_LIMIT = 1000
 def _record_submission_failure_metadata(
     stage_metadata: dict[str, Any], submission: dict[str, Any]
 ) -> None:
-    # A rejected submission must leave its reason on the stage. Regression for
-    # the reaction_ts_search run whose OptTS submissions were rejected by the
-    # execution-snapshot basename gate with no reason recorded anywhere: the
-    # payload kept the stderr on task.submission_result, but the stage summary
-    # row, stage events, and the workflow error message all read stage
-    # metadata, which stayed silent.
+    # A rejected submission must leave its reason on the stage. Stage summary
+    # rows, events, and workflow errors read stage metadata rather than the
+    # stderr retained in task.submission_result.
     stage_metadata["reason"] = (
         str(submission.get("reason", "")).strip() or "queue_submission_failed"
     )

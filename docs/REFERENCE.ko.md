@@ -109,12 +109,13 @@ bash scripts/bootstrap_wsl.sh
 - Python 의존성과 ORCA 본체를 `.venv`에 설치합니다.
 - `config/orca_auto.yaml`이 없으면 생성합니다.
 
-5.0.0부터 워크플로우를 별도로 설치합니다. ORCA 전용 `scan_ts`를 포함한
-워크플로우에는 bootstrap에 `--with-workflows`를 추가하거나, 활성 환경에서
+5.0.0부터 워크플로우를 별도로 설치합니다. 컨포머 스크리닝을 사용하려면
+bootstrap에 `--with-workflows`를 추가하거나, 활성 환경에서
 `python -m pip install -e . -e ./extensions/workflows`를 실행하세요.
 선택적 `orca_auto_workflows` 배포물은 본체와 정확히 같은 버전이어야 합니다.
-기본 본체 설치에는 더 이상 워크플로우 구현이 들어 있지 않으며, 공개 CLI·임포트 이름은
-그대로입니다. 기존 4.x 단일 환경을 전환하기 전에 [RELEASE.md](RELEASE.md)(영어)를
+기본 본체 설치에는 워크플로우 구현이 들어 있지 않으며, 명령·패키지 이름은
+그대로입니다. 미출시 6.0 개발 버전은 두 TS 워크플로우를 호환 지원 없이 제거합니다.
+기존 환경을 업그레이드하기 전에 [RELEASE.md](RELEASE.md)(영어)를
 읽으세요. Python 설치만으로 서비스가 배포되지는 않습니다. `systemd install`은
 계속 checkout의 `systemd/` 자산을 읽습니다.
 
@@ -299,43 +300,14 @@ ORCA 고유 노트:
   것이며, 이때 CREST/xTB 단계가 다시 도는 것을 감수해야 합니다.
 - 디렉터리가 원시 ORCA `*.inp` 파일과 스캐폴드 스타일 파일명을 섞어 두었지만
   `flow.yaml`은 포함하지 않으면, `run-dir`는 ORCA 직접 제출을 선호합니다.
-- 반응 경로(reaction-path) 및 conformer 워크플로우는 내부적으로 xTB/CREST 단계를
-  생성하고 제출합니다.
-- `reaction_ts_search`는 선택된 반응물 × 생성물 CREST 쌍을 rank gap 순서로 결정론적으로
-  정렬해 상한이 있어도 첫 반응물만 소진하지 않고 양쪽 endpoint ensemble을 표집합니다.
-  최대 `max_xtb_stages`개만 xTB 자식 작업으로 펼치고, 그 xTB 단계가 종료 상태에
-  이를 때까지 기다린 다음, 재시작 전에 이미 시도한 stage를 포함하여 전체
-  `max_orca_stages`개까지만 ORCA OptTS 후보를 제출합니다. 어느 상한에서든 생략된
-  후보는 큐에 들어가지 않습니다.
+- 컨포머 스크리닝은 내부 CREST 단계를 생성하고 보존된 컨포머를 ORCA 정밀 계산으로
+  넘깁니다.
 - `conformer_screening`은 하나의 CREST 자식 작업으로 시작한 뒤, 다음 워크플로우
   사이클에서 보존된 conformer를 최대 20개까지 ORCA 자식 작업으로 넘깁니다. 스캐폴드
   단축 명령은 `orca_auto scaffold conformer_search <path>`입니다.
-- `scan_ts_search`는 `orca.route_line`과 필수 manifest 키 `scan_coordinate`
-  (ORCA scan 문법, 0-based 원자 인덱스)로 만든 ORCA relaxed scan으로 시작합니다.
-  Coordinate는 arity가 맞고 atom이 서로 다르며 geometry 범위 안에 있고, endpoint가
-  유한하고 서로 다르며, point가 2개 이상인 정확한 `B`/`A`/`D` instruction 하나여야
-  합니다. scan이 완료되면 결합 프로파일의 내부 maximum마다(prominence ≥
-  `barrier_threshold_kcal`, 기본 0.5; 끝점 제외; `max_orca_stages`로 상한;
-  route는 `orca_optts_route_line`) OptTS+Freq 자식 작업을 하나씩 체인하고,
-  워크플로우 리포트가 후보들을 랭킹합니다. 무장벽 프로파일은 먼저 최대
-  `max_scan_extensions`(기본 1)회까지 이전 끝점 너머로 연장 scan 스테이지를
-  붙이고(각 max(6, 범위의 20%) 포인트), 그 후에야 `scan_profile_no_barrier`로
-  실패합니다. 정방향 후보가 전부 TS 검증에 실패하면 정방향 끝점 지오메트리에서
-  전체 범위를 되짚는 역방향 scan 스테이지가 붙고 그 내부 maximum들이 2차
-  후보로 fan-out됩니다. 그것까지 소진되면 `ts_candidates_exhausted`로
-  실패합니다. ORCA 전용 템플릿이라 스테이지들은 `03_orca` 엔진 루트 없이
-  generation 워크스페이스 바로 아래에 워크플로우 순번 디렉터리(`01_scan`,
-  이후 생성 순서대로 `02_scan_maximum`/`02_scan_extension`, …)로 생성되고,
-  소스 지오메트리의 `inputs/` 사본도 만들지 않습니다. 스캐폴드 단축 명령은
-  `orca_auto scaffold scan_ts <path>`입니다.
 - Workflow ORCA route는 생성·restart·구체화·완료 결과 수락 때 역할을 검사합니다.
   제출 직전 실제 input 선택 때도 같은 검사를 적용합니다.
-  Reaction TS route와 `orca_optts_route_line`은 active하며 quote되지 않은 정확한 `OptTS`와
-  `Freq`/`NumFreq`/`AnFreq`를 요청하고 `ScanTS`/`NEB-TS`를 거부하며, conformer와
-  relaxed-scan route는 TS가 아닌 optimization을 요청해야
-  하며 relaxed scan에는 선택 geometry의 atom 범위에 맞는 닫힌 `%geom Scan` coordinate
-  block이 정확히 하나 필요합니다. 같은 strict scan 계약을 dynamic extension과 완료 결과
-  수락에도 재사용합니다. Route는 route
+  Conformer route는 TS가 아닌 optimization을 요청해야 합니다. Route는 route
   line으로만 된 문자열이어야 하며 quoted token, marker-prefixed payload token, active
   non-route input은 렌더링하지 않고 거부합니다.
   Closed `# ... #` inline comment 안과 닫히지 않은 `#` marker 뒤의 token은 무시합니다.
@@ -370,7 +342,7 @@ ORCA 고유 노트:
   동일하고 charge/multiplicity가 맞는 전역적으로 유일한 1:1 대응일 때만 짝지어집니다.
   상대 에너지 표와 population은 하나의 공통 에너지 규약을 사용합니다. 정확한 실행
   provenance가 하나로 동일한 SP가 전체 구조를 빠짐없이 덮어야 SP E를 사용하고,
-  합성 G = E(SP) + [G − E(el)](opt level)은 correction이 완전하며 정확한
+  합성 `G = E(SP) + [G − E(el)](opt level)`은 correction이 완전하며 정확한
   최적화/주파수 provenance까지 하나로 같아야 사용합니다. 정확한 provenance에는 실제
   실행 method, basis, solvation, ORCA version, route, charge, multiplicity가 포함됩니다.
   최적화/주파수의 실제 실행 route 또는 ORCA version 증거가 빠졌으면 population을
@@ -407,17 +379,13 @@ ORCA 고유 노트:
   `--max-memory-gb`만 받습니다.
 - `flow.yaml`/엔진 manifest YAML loader 제한(파일 크기, alias, node, 중첩 한도)은
   [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어 있습니다.
-- 매니페스트 제어 입력 경로(`reactant_xyz`, `product_xyz`, `input_xyz`,
-  `xtb.xcontrol_file`)는 기본적으로 제출된 워크플로우 디렉터리의 신뢰 경계를 따릅니다.
+- 매니페스트 제어 `input_xyz` 경로는 기본적으로 제출된 워크플로우 디렉터리의 신뢰 경계를 따릅니다.
   상대 경로는 `workflow_dir`에서 해석되고, 절대 경로나 `..` 탈출은 여전히 그 디렉터리
   안으로 해석되어야 합니다. 워크플로우 디렉터리 바깥의 신뢰된 로컬 파일을 의도적으로
   재사용하려면 `flow.yaml`에 `allow_external_inputs: true`를 설정하세요. CLI로 제공된
   입력 경로 재정의는 명시적 운영자 행위로 취급되어 바깥을 가리킬 수 있습니다. `C:\\...`
   같은 Windows 드라이브 경로가 아니라 Linux/WSL POSIX 경로를 사용하세요.
-- xTB `xcontrol` 대상 이름은 `xcontrol_file` 소스 경로와 별개입니다. `xcontrol_file`은
-  복사할 소스 파일을 지정하고, `xcontrol`은 xTB 작업 디렉터리 안에 구체화되는 일반
-  파일명이어야 합니다.
-- `crest:`와 `xtb:` 엔진 mapping은 엔진 제출 시 strict합니다. 알 수 없는 옵션 이름은
+- `crest:` mapping과 내부 xTB 작업 manifest는 엔진 제출 시 strict합니다. 알 수 없는 옵션 이름은
   무시하지 않고 거부합니다. xTB는 항상 명시적 `--chrg`, `--uhf`, `--norestart`를 내므로
   restart 파일이 새 generation을 조용히 바꿀 수 없습니다.
 - CREST 토폴로지 재정의는 `flow.yaml`의 `crest:` 아래에 둘 수 있으며, `gfn: ff`,
@@ -426,10 +394,9 @@ ORCA 고유 노트:
   수/UHF parity 검증, 10,000원자(Hessian/frequency 입력은 1,000원자) admission
   상한은 [워크플로우 계약](PUBLIC_CONTRACTS.ko.md#워크플로우-계약)에 명세되어
   있습니다.
-- xTB 종료 코드 0만으로는 opt·sp·hess 작업이 완료되지 않습니다. 유효한 산출물이
+- xTB 종료 코드 0만으로는 opt·sp 작업이 완료되지 않습니다. 유효한 산출물이
   함께 있어야 합니다: xTB의 `.xtboptok` 성공 마커가 없는 최적화, 유한한 에너지가 없는
-  SP, 유효한 행렬이 없는 Hessian은 각각 `xtb_opt_no_valid_geometry`,
-  `xtb_sp_no_finite_energy`, `xtb_hess_invalid_hessian`으로 실패 처리합니다.
+  SP는 각각 `xtb_opt_no_valid_geometry`, `xtb_sp_no_finite_energy`로 실패 처리합니다.
 - CREST 종료 코드가 0이어도 보존 출력에 엄격히 유효하고 유한한 XYZ frame이 하나 이상
   있어야 성공으로 인정합니다. 유효한 named retained ensemble을 모두 보존하므로 뒤쪽
   rotamer 출력에만 있는 geometry도 후보로 남고, 파일 사이에서 겹치는 geometry만 downstream
@@ -473,10 +440,12 @@ ORCA 고유 노트:
   상호배제입니다. `cross: true`는 CREST 3.0.2의 기본 GC crossing을 유지하되 job type을
   깨뜨리는 불필요한 `--cross` 플래그를 내지 않고, `nocross: true`만 `--nocross`를 냅니다.
   잘못된 값은 CREST에 전달하지 않고 작업을 fail-closed로 실패시킵니다.
-- xTB ranking은 기본적으로 후보 평가를 최대 100개 허용합니다. 로컬 반응 워크플로우 manifest는 native
-  후보 상한 1,000 안에서 `xtb.max_ranking_evaluations`를 정할 수 있고, 100보다 큰 값은
-  `xtb.allow_high_cost_ranking: true`도 필요합니다.
-- `scaffold ts_search`와 `scaffold conformer_search`는 기본적으로 `crest_mode: standard`로
+- 내부 xTB ranking 엔진은 기본적으로 후보 평가를 최대 100개 허용합니다. 엔진 작업
+  manifest에서 `max_ranking_evaluations`를 최대 1,000까지 정할 수 있으며, 100보다
+  큰 값은 `allow_high_cost_ranking: true`도 필요합니다. 이는 내부 엔진 설정이지
+  `flow.yaml` 옵션이 아닙니다. 지원하는 컨포머 워크플로우는 CREST 컨포머를 ORCA로
+  직접 넘깁니다.
+- `scaffold conformer_search`는 기본적으로 `crest_mode: standard`로
   `flow.yaml`을 작성합니다. 필요할 때 `nci`로 변경하세요.
 
 새 작업에 대한 공개 직접 실행 모드는 없습니다. `run-dir`가 내구성 있는 제출
@@ -527,7 +496,7 @@ orca_auto queue list --limit 20
 
 `queue list`는 워크플로우와 엔진 활동을 한 화면에 보여주되, 워크플로우 자식
 시뮬레이션은 부모 워크플로우 아래에 들여쓰기되어 렌더링됩니다. 텍스트 뷰는 `Status`,
-`Name`, `Detail`, `ID`, `Elapsed` 컬럼의 표를 출력하며, detail 필드는 `ts_search(nci)`,
+`Name`, `Detail`, `ID`, `Elapsed` 컬럼의 표를 출력하며, detail 필드는 `conformer_search(nci)`,
 `IRC`, `NEB` 같은 워크플로우/작업 의도를 드러냅니다. CREST, xTB, ORCA 자식 작업은
 기본 통합 텍스트 뷰에서 모두 부모 아래에 펼쳐지므로 각 상세 잡의 진행 상태를 한 번에
 확인할 수 있습니다. `--engine ... --kind job` 필터와 `--json`도 같은 잡들을 제공하며,
@@ -609,8 +578,8 @@ queue 행과 실행 디렉터리는 건드리지 않습니다. 텍스트 출력�
 - ORCA, xTB, CREST는 동일한 admission 상한을 공유합니다. ORCA는 부모 워커에서 슬롯을
   예약하고, 자식이 시작된 뒤 큐 정체성 메타데이터를 붙이며, ORCA 자식이 실행 중에 그
   예약을 활성화/해제하도록 합니다.
-- 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST와 반응 경로 xTB
-  자식 단계는 해당 단계가 끝난 뒤 각각 한 메시지로 요약합니다.
+- 워크플로우 알림은 작업별 ORCA 메시지는 유지하되, 내부 CREST 단계는 종료 후
+  한 메시지로 요약합니다.
 
 워크플로우 journal 알림은 워커 프로세스 환경의 환경변수 2개로 제어합니다
 (워크플로우 워커를 실행하는 systemd unit이나 shell에 설정하며, 단독 ORCA 큐
@@ -728,7 +697,7 @@ collapse를 포함합니다).
 
 - ORCA 계산은 한 번 실행하며 실패 시 analyzer reason을 그대로 보존합니다.
 - 직접 `ScanTS`는 지원하지 않고 generation/큐 발행 전에 거부합니다.
-- 일반 relaxed scan과 `scan_ts_search` 워크플로우는 계속 지원합니다.
+- 일반 단독 relaxed scan은 계속 지원합니다.
 - 원본 전하·다중도·입력 파일은 자동 변경하지 않습니다.
 - worker/host 중단 복구는 검증된 `*.resume.inp` 체크포인트 입력을 생성할 수 있습니다.
 - 업그레이드 전에 설정에서 `orca.runtime.default_max_retries`를 제거해야 합니다.

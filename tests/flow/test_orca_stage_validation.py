@@ -25,15 +25,15 @@ def test_blank_route_line_refuses_instead_of_substituting_a_level_of_theory(
 @pytest.mark.parametrize(
     "route_line",
     (
-        '! "OptTS" Freq r2scan-3c',
-        '! OptTS "Freq" r2scan-3c',
-        '! OptTS "NumFreq" r2scan-3c',
-        '! OptTS "AnFreq" r2scan-3c',
+        '! "Opt" Freq r2scan-3c',
+        '! Opt "Freq" r2scan-3c',
+        '! Opt "NumFreq" r2scan-3c',
+        '! Opt "AnFreq" r2scan-3c',
     ),
 )
 def test_workflow_route_rejects_quoted_program_keywords(route_line: str) -> None:
     with pytest.raises(ValueError, match="quoted tokens"):
-        validate_workflow_orca_route(task_kind="optts_freq", route_line=route_line)
+        validate_workflow_orca_route(task_kind="opt", route_line=route_line)
 
 
 @pytest.mark.parametrize(
@@ -62,8 +62,8 @@ def test_workflow_route_accepts_compact_leading_bang_keyword() -> None:
     ("task_kind", "route_line"),
     (
         ("opt", "! HF fake-Opt TightSCF"),
-        ("optts_freq", "! HF OptTS fake-Freq TightSCF"),
-        ("optts_freq", "! HF OptTS Freq(foo) TightSCF"),
+        ("opt", "! HF fake-Opt TightSCF"),
+        ("opt", "! HF Opt(foo) TightSCF"),
     ),
 )
 def test_workflow_route_requires_full_keyword_tokens(
@@ -93,30 +93,30 @@ def test_workflow_sp_route_does_not_invent_bare_ts_run_type() -> None:
 def test_route_role_validation_matches_multiline_route_rendering() -> None:
     with pytest.raises(ValueError, match="route-role mismatch"):
         validate_workflow_orca_route(
-            task_kind="optts_freq",
-            route_line="SP\nOptTS Freq",
+            task_kind="opt",
+            route_line="SP\nOpt Freq",
         )
 
     assert (
         validate_workflow_orca_route(
-            task_kind="optts_freq",
-            route_line="! SP\n! OptTS Freq",
+            task_kind="opt",
+            route_line="! SP\n! Opt Freq",
         )
-        == "! SP\n! OptTS Freq"
+        == "! SP\n! Opt Freq"
     )
 
 
 @pytest.mark.parametrize(
     "route_line",
     [
-        "! OptTS Freq r2scan-3c\n%geom\n  MaxIter 999\nend",
-        "! OptTS Freq r2scan-3c\n* xyz 0 1\nH 0 0 0\n*",
-        "! OptTS Freq r2scan-3c\nPAL8",
+        "! Opt Freq r2scan-3c\n%geom\n  MaxIter 999\nend",
+        "! Opt Freq r2scan-3c\n* xyz 0 1\nH 0 0 0\n*",
+        "! Opt Freq r2scan-3c\nPAL8",
     ],
 )
 def test_workflow_route_rejects_active_non_route_lines(route_line: str) -> None:
     with pytest.raises(ValueError, match="may contain only active '!' route lines"):
-        validate_workflow_orca_route(task_kind="optts_freq", route_line=route_line)
+        validate_workflow_orca_route(task_kind="opt", route_line=route_line)
 
 
 def test_unknown_task_kind_error_is_exact() -> None:
@@ -124,8 +124,7 @@ def test_unknown_task_kind_error_is_exact() -> None:
         validate_workflow_orca_task_kind(" geometry_opt ")
 
     assert str(exc_info.value) == (
-        "unsupported workflow ORCA task_kind: 'geometry_opt'; "
-        "expected one of ['opt', 'optts_freq', 'relaxed_scan', 'sp']"
+        "unsupported workflow ORCA task_kind: 'geometry_opt'; expected one of ['opt', 'sp']"
     )
 
 
@@ -159,18 +158,6 @@ def test_invalid_utf8_input_reports_the_exact_missing_route_reason(tmp_path: Pat
     )
 
 
-def test_route_role_error_precedes_relaxed_scan_geometry_validation(tmp_path: Path) -> None:
-    with pytest.raises(ValueError) as exc_info:
-        validate_workflow_orca_input_bytes(
-            task_kind="relaxed_scan",
-            inp_path=tmp_path / "invalid_scan.inp",
-            input_bytes=b"! SP HF\n* xyz 0 1\ninvalid geometry\n*\n",
-        )
-
-    assert "requires a non-TS geometry optimization" in str(exc_info.value)
-    assert "requires a %geom Scan block" not in str(exc_info.value)
-
-
 def test_bytes_validator_uses_supplied_bytes_instead_of_disk_input(tmp_path: Path) -> None:
     inp_path = tmp_path / "selected.inp"
     inp_path.write_text("! SP HF\n", encoding="utf-8")
@@ -179,34 +166,6 @@ def test_bytes_validator_uses_supplied_bytes_instead_of_disk_input(tmp_path: Pat
         task_kind="opt",
         inp_path=inp_path,
         input_bytes=b"! Opt HF\n* xyz 0 1\nH 0 0 0\n*\n",
-    )
-
-    assert validated_route == "! Opt HF"
-
-
-def test_bytes_validator_resolves_xyzfile_from_prospective_input_parent(
-    tmp_path: Path,
-) -> None:
-    snapshot_dir = tmp_path / "snapshot"
-    snapshot_dir.mkdir()
-    (snapshot_dir / "geometry.xyz").write_text(
-        "2\ngeometry\nH 0 0 0\nH 0 0 0.74\n",
-        encoding="utf-8",
-    )
-    input_bytes = (
-        b"! Opt HF\n"
-        b"%geom\n"
-        b"  Scan\n"
-        b"    B 0 1 = 0.7, 2.0, 8\n"
-        b"  end\n"
-        b"end\n"
-        b"* xyzfile 0 1 geometry.xyz\n"
-    )
-
-    validated_route = validate_workflow_orca_input_bytes(
-        task_kind="relaxed_scan",
-        inp_path=snapshot_dir / "selected.inp",
-        input_bytes=input_bytes,
     )
 
     assert validated_route == "! Opt HF"

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="ORCA_auto — Submit. Monitor. Recover." width="680">
+  <img src="docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
@@ -11,12 +11,12 @@
 
 <p align="center"><b>English</b> · <a href="README.ko.md">한국어</a></p>
 
-ORCA_auto **runs and monitors your ORCA calculations** on Linux/WSL.
+ORCA_auto is a **queue-first runner for ORCA** on Linux/WSL.
 Submit calculations to a durable queue, follow their progress, and inspect
 recorded results and recovery decisions. Input design and chemical judgment
 stay with you.
 
-## Submit. Monitor. Recover.
+## Features
 
 - **Submit and close the terminal.** A successful submission saves the job to
   disk; a supervised worker handles execution.

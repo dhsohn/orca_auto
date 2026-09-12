@@ -39,7 +39,6 @@ def test_restart_preserves_primary_stage_with_spoofed_interaction_role(
             "interaction_energy_disabled": False,
             "electronic_state_present": False,
             "orca_route_line_present": False,
-            "orca_optts_route_line_present": False,
         },
         restart_allowed_root=tmp_path,
     )
@@ -153,7 +152,7 @@ def test_restart_refuses_corrupt_journal_before_any_mutation(tmp_path: Path) -> 
         workspace,
         {
             "workflow_id": "wf_journal_guard",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "failed",
             "requested_at": "2026-04-27T00:00:00+00:00",
             "stages": [_failed_orca_restart_stage("orca_failed", reaction_dir)],
@@ -391,22 +390,22 @@ def test_restart_with_failed_stages_records_the_pinned_si_publication(tmp_path: 
 
     root = tmp_path / "workflow_runs"
     workspace = root / "wf_si_pinned_failed"
-    (workspace / "old_xtb").mkdir(parents=True)
+    (workspace / "old_crest").mkdir(parents=True)
     payload: dict[str, Any] = {
         "workflow_id": "wf_si_pinned_failed",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "failed",
         "reaction_key": "R01-P01",
         "requested_at": "2026-08-09T12:00:00+00:00",
         "stages": [
             {
-                "stage_id": "xtb_path_01",
+                "stage_id": "crest_conformer_01",
                 "status": "failed",
                 "task": {
-                    "engine": "xtb",
+                    "engine": "crest",
                     "status": "failed",
-                    "payload": {"job_dir": str(workspace / "old_xtb")},
-                    "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                    "payload": {"job_dir": str(workspace / "old_crest")},
+                    "enqueue_payload": {"job_dir": str(workspace / "old_crest")},
                 },
                 "metadata": {},
             },
@@ -445,7 +444,7 @@ def test_restart_failed_workflow_rejects_active_sibling_before_cancellation_fini
     workspace = root / "wf_half_failed"
     original_payload: dict[str, object] = {
         "workflow_id": "wf_half_failed",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "failed",
         "requested_at": "2026-04-27T00:00:00+00:00",
         "stages": [
@@ -504,7 +503,7 @@ def test_restart_rejects_parenthesized_or_renamed_workflow_without_mutation(
     workspace = root / directory_name
     original_payload: dict[str, object] = {
         "workflow_id": workflow_id,
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "failed",
         "stages": [],
         "metadata": {},
@@ -539,12 +538,12 @@ def test_restart_cleans_created_orca_dir_when_workflow_commit_fails(
     (reaction_dir / "input.xyz").write_text("1\nsource\nH 0 0 0\n", encoding="utf-8")
     (reaction_dir / "input.inp").write_text("! OLD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     (workspace / "flow.yaml").write_text(
-        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW OptTS Freq'\n",
+        "workflow_type: conformer_screening\norca:\n  route_line: '! NEW Opt Freq'\n",
         encoding="utf-8",
     )
     original: dict[str, object] = {
         "workflow_id": "wf_commit_failure",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "failed",
         "stages": [_failed_orca_restart_stage("orca_failed", reaction_dir)],
         "metadata": {},
@@ -579,14 +578,14 @@ def test_restart_preserves_orca_dir_when_workflow_commit_visibility_is_unknown(
         encoding="utf-8",
     )
     (workspace / "flow.yaml").write_text(
-        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW OptTS Freq'\n",
+        "workflow_type: conformer_screening\norca:\n  route_line: '! NEW Opt Freq'\n",
         encoding="utf-8",
     )
     _write_workflow(
         workspace,
         {
             "workflow_id": "wf_ambiguous_commit",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "failed",
             "stages": [_failed_orca_restart_stage("orca_failed", reaction_dir)],
             "metadata": {},
@@ -630,12 +629,12 @@ def test_restart_cleans_prior_orca_dirs_when_later_rematerialization_fails(
     (valid_dir / "input.inp").write_text("! OLD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     missing_dir = workspace / "orca_missing"
     (workspace / "flow.yaml").write_text(
-        "workflow_type: reaction_ts_search\norca:\n  route_line: '! NEW OptTS Freq'\n",
+        "workflow_type: conformer_screening\norca:\n  route_line: '! NEW Opt Freq'\n",
         encoding="utf-8",
     )
     original: dict[str, object] = {
         "workflow_id": "wf_later_failure",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "failed",
         "stages": [
             _failed_orca_restart_stage("orca_valid", valid_dir),
@@ -654,22 +653,22 @@ def test_restart_cleans_prior_orca_dirs_when_later_rematerialization_fails(
 
 def _published_restartable_workspace(root: Path, workflow_id: str) -> dict[str, Any]:
     workspace = root / workflow_id
-    (workspace / "old_xtb").mkdir(parents=True)
+    (workspace / "old_crest").mkdir(parents=True)
     payload: dict[str, Any] = {
         "workflow_id": workflow_id,
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "failed",
         "reaction_key": "R01-P01",
         "requested_at": "2026-08-09T12:00:00+00:00",
         "stages": [
             {
-                "stage_id": "xtb_path_01",
+                "stage_id": "crest_conformer_01",
                 "status": "failed",
                 "task": {
-                    "engine": "xtb",
+                    "engine": "crest",
                     "status": "failed",
-                    "payload": {"job_dir": str(workspace / "old_xtb")},
-                    "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                    "payload": {"job_dir": str(workspace / "old_crest")},
+                    "enqueue_payload": {"job_dir": str(workspace / "old_crest")},
                 },
                 "metadata": {},
             },

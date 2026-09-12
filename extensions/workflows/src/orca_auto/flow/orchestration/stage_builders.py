@@ -11,7 +11,6 @@ from orca_auto.flow.contracts import (
 )
 
 _CREST_RUN_DIR_API_NAME = "orca_auto.flow.engines.crest.submission.direct_enqueue"
-_XTB_RUN_DIR_API_NAME = "orca_auto.flow.engines.xtb.submission.direct_enqueue"
 
 
 @dataclass(frozen=True)
@@ -203,16 +202,6 @@ _CREST_STAGE_SPEC = _EngineStageSpec(
     config_placeholder="<crest_config>",
 )
 
-_XTB_STAGE_SPEC = _EngineStageSpec(
-    engine="xtb",
-    task_kind="path_search",
-    stage_kind="xtb_stage",
-    submitter="orca_auto_xtb",
-    app_name="orca_auto_xtb",
-    submit_api_name=_XTB_RUN_DIR_API_NAME,
-    config_placeholder="<xtb_config>",
-)
-
 
 def new_crest_stage_impl(
     *,
@@ -265,122 +254,6 @@ def new_crest_stage_impl(
     )
 
 
-def _xtb_stage_input_artifacts(
-    reactant_input: dict[str, Any],
-    product_input: dict[str, Any],
-) -> tuple[WorkflowArtifactRef, ...]:
-    return (
-        WorkflowArtifactRef(
-            kind="crest_conformer",
-            path=str(reactant_input["artifact_path"]),
-            selected=True,
-            metadata={"role": "reactant", "source_job_id": reactant_input["source_job_id"]},
-        ),
-        WorkflowArtifactRef(
-            kind="crest_conformer",
-            path=str(product_input["artifact_path"]),
-            selected=True,
-            metadata={"role": "product", "source_job_id": product_input["source_job_id"]},
-        ),
-    )
-
-
-def _xtb_stage_sections(
-    *,
-    workflow_id: str,
-    reaction_key: str,
-    reactant_input: dict[str, Any],
-    product_input: dict[str, Any],
-    retry_limit: int,
-    manifest_overrides: dict[str, Any] | None,
-) -> _StagePayloadSections:
-    return _stage_payload_sections(
-        task_payload={
-            "workflow_id": workflow_id,
-            "job_dir": "",
-            "reaction_key": reaction_key,
-            "reactant_source": dict(reactant_input),
-            "product_source": dict(product_input),
-            "selected_input_xyz": "",
-            "secondary_input_xyz": "",
-            "max_handoff_retries": retry_limit,
-        },
-        task_metadata={
-            "reaction_key": reaction_key,
-            "max_handoff_retries": retry_limit,
-        },
-        stage_metadata={
-            "reaction_key": reaction_key,
-            "max_handoff_retries": retry_limit,
-        },
-        manifest_overrides=manifest_overrides,
-    )
-
-
-def _xtb_stage_request(
-    *,
-    workflow_id: str,
-    stage_id: str,
-    reaction_key: str,
-    reactant_input: dict[str, Any],
-    product_input: dict[str, Any],
-    priority: int,
-    max_cores: int,
-    max_memory_gb: int,
-    retry_limit: int,
-    manifest_overrides: dict[str, Any] | None,
-) -> _EngineStageBuildRequest:
-    return _EngineStageBuildRequest(
-        workflow_id=workflow_id,
-        stage_id=stage_id,
-        spec=_XTB_STAGE_SPEC,
-        priority=priority,
-        max_cores=max_cores,
-        max_memory_gb=max_memory_gb,
-        sections=_xtb_stage_sections(
-            workflow_id=workflow_id,
-            reaction_key=reaction_key,
-            reactant_input=reactant_input,
-            product_input=product_input,
-            retry_limit=retry_limit,
-            manifest_overrides=manifest_overrides,
-        ),
-        enqueue_extra={"reaction_key": reaction_key},
-        input_artifacts=_xtb_stage_input_artifacts(reactant_input, product_input),
-    )
-
-
-def new_xtb_stage_impl(
-    *,
-    workflow_id: str,
-    stage_id: str,
-    reaction_key: str,
-    reactant_input: dict[str, Any],
-    product_input: dict[str, Any],
-    priority: int,
-    max_cores: int,
-    max_memory_gb: int,
-    max_handoff_retries: int = 2,
-    manifest_overrides: dict[str, Any] | None = None,
-) -> WorkflowStageWithTaskPayload:
-    retry_limit = max(0, int(max_handoff_retries))
-    return _planned_engine_stage_payload(
-        _xtb_stage_request(
-            workflow_id=workflow_id,
-            stage_id=stage_id,
-            reaction_key=reaction_key,
-            reactant_input=reactant_input,
-            product_input=product_input,
-            priority=priority,
-            max_cores=max_cores,
-            max_memory_gb=max_memory_gb,
-            retry_limit=retry_limit,
-            manifest_overrides=manifest_overrides,
-        )
-    )
-
-
 __all__ = [
     "new_crest_stage_impl",
-    "new_xtb_stage_impl",
 ]

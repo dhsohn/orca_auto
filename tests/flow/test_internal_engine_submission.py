@@ -136,9 +136,7 @@ def test_invalid_crest_manifest_fails_workflow_instead_of_waiting_for_slot(
         submission=result,
     )
     workflow = {"status": "running", "template_name": "conformer_screening", "stages": [stage]}
-    status = recompute_workflow_status_impl(
-        workflow, effective_stage_status_fn=lambda stage: stage["status"]
-    )
+    status = recompute_workflow_status_impl(workflow)
 
     assert result["status"] == "failed"
     assert f"Unknown CREST manifest fields: ['{unknown_key}']" in result["stderr"]

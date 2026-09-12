@@ -21,10 +21,7 @@ from orca_auto.flow.contracts.workflow import (
 )
 from orca_auto.flow.orca_stage_validation import validate_workflow_orca_route
 from orca_auto.flow.orchestration.charge_spin import manifest_with_charge_spin, strict_int
-from orca_auto.flow.orchestration.workflow_builders import (
-    _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS,
-    _merge_manifest_defaults,
-)
+from orca_auto.flow.templates import normalize_workflow_template_id
 from orca_auto.flow.xyz_utils import load_xyz_atom_sequence
 from orca_auto.orca.report.interaction_energy import (
     validate_fragment_electronic_states,
@@ -47,16 +44,13 @@ from ..manifest import (
     normalize_rmsd_dedup_block as _normalize_rmsd_dedup_block,
 )
 from ..manifest import optional_positive_float as _optional_positive_float
-from ..manifest import require_crest_candidate_count as _require_crest_candidate_count
-from ..manifest import (
-    resolve_endpoint_pairing_manifest as _resolve_endpoint_pairing_manifest,
-)
 from ..manifest import (
     resolve_engine_manifest_with_presence as _resolve_engine_manifest,
 )
 from ..manifest import (
     validate_conformer_postprocessing_template as _validate_conformer_postprocessing_template,
 )
+from ..manifest import validate_flow_manifest_fields
 from ..manifest import (
     validate_interaction_energy_state_balance as _validate_interaction_energy_state_balance,
 )
@@ -108,7 +102,12 @@ def _flow_crest_mode(manifest: dict[str, Any], crest_manifest: dict[str, Any]) -
 
 
 def _workflow_template_name(payload: dict[str, Any], manifest: dict[str, Any]) -> str:
-    return _normalize_text(payload.get("template_name") or manifest.get("workflow_type")).lower()
+    # Validate both sources independently: a supported durable record must not
+    # silently absorb a manifest requesting a removed workflow.
+    template_name = normalize_workflow_template_id(payload.get("template_name"))
+    if "workflow_type" in manifest:
+        normalize_workflow_template_id(manifest["workflow_type"])
+    return template_name
 
 
 def _interaction_source_atom_sequence(workspace: Path, payload: dict[str, Any]) -> tuple[str, ...]:
@@ -137,17 +136,6 @@ def _interaction_source_atom_sequence(workspace: Path, payload: dict[str, Any]) 
     raise ValueError(
         "interaction_energy restart cannot validate fragments without the copied input XYZ"
     )
-
-
-def _crest_manifest_with_defaults(
-    *,
-    template_name: str,
-    crest_manifest: dict[str, Any],
-) -> dict[str, Any]:
-    defaults = (
-        _REACTION_TS_SEARCH_CREST_MANIFEST_DEFAULTS if template_name == "reaction_ts_search" else {}
-    )
-    return _merge_manifest_defaults(defaults, crest_manifest)
 
 
 def _request_parameters(payload: dict[str, Any]) -> dict[str, Any]:
@@ -191,31 +179,18 @@ def _apply_restart_request_manifests(
     manifest: dict[str, Any],
     crest_present: bool,
     crest_overrides: dict[str, Any],
-    xtb_present: bool,
-    xtb_overrides: dict[str, Any],
-    endpoint_pairing: dict[str, Any],
 ) -> None:
     if crest_present:
         _set_mapping_field(params, "crest_job_manifest", crest_overrides)
-    if xtb_present:
-        _set_mapping_field(params, "xtb_job_manifest", xtb_overrides)
-    _set_mapping_field(params, "endpoint_pairing", endpoint_pairing)
 
-    for key in (
-        "max_crest_candidates",
-        "max_xtb_stages",
-        "max_xtb_handoff_retries",
-        "max_orca_stages",
-    ):
+    for key in ("max_orca_stages",):
         parsed = _strict_optional_int(
             manifest.get(key),
             field_name=key,
-            minimum=0 if key == "max_xtb_handoff_retries" else 1,
+            minimum=1,
         )
         if parsed is not None:
-            params[key] = (
-                _require_crest_candidate_count(parsed) if key == "max_crest_candidates" else parsed
-            )
+            params[key] = parsed
 
 
 def _manifest_electronic_state(manifest: dict[str, Any]) -> tuple[int | None, int | None]:
@@ -240,14 +215,11 @@ def _apply_orca_request_parameters(
     params: dict[str, Any],
     *,
     route_line: str,
-    optts_route_line: str,
     charge: int | None,
     multiplicity: int | None,
 ) -> None:
     if route_line:
         params["orca_route_line"] = route_line
-    if optts_route_line:
-        params["orca_optts_route_line"] = optts_route_line
     if charge is not None:
         params["charge"] = charge
     if multiplicity is not None:
@@ -270,36 +242,15 @@ def _manifest_orca_route_line(manifest: dict[str, Any]) -> str:
     return ""
 
 
-def _manifest_orca_optts_route_line(manifest: dict[str, Any]) -> str:
-    if "orca_optts_route_line" not in manifest:
-        return ""
-    value = manifest.get("orca_optts_route_line")
-    if not isinstance(value, str):
-        raise ValueError(f"orca_optts_route_line must be a string. got={value!r}")
-    return value.strip()
-
-
 def _validate_manifest_orca_routes(
     template_name: str,
     manifest: dict[str, Any],
-) -> tuple[str, str]:
+) -> str:
+    normalize_workflow_template_id(template_name)
     route_line = _manifest_orca_route_line(manifest)
-    task_kind = {
-        "reaction_ts_search": "optts_freq",
-        "conformer_screening": "opt",
-        "scan_ts_search": "relaxed_scan",
-    }.get(template_name, "")
-    if route_line and task_kind:
-        route_line = validate_workflow_orca_route(task_kind=task_kind, route_line=route_line)
-    optts_route_line = ""
-    if template_name == "scan_ts_search":
-        optts_route_line = _manifest_orca_optts_route_line(manifest)
-        if optts_route_line:
-            optts_route_line = validate_workflow_orca_route(
-                task_kind="optts_freq",
-                route_line=optts_route_line,
-            )
-    return route_line, optts_route_line
+    if route_line:
+        route_line = validate_workflow_orca_route(task_kind="opt", route_line=route_line)
+    return route_line
 
 
 def _durable_interaction_config_fingerprint(payload: dict[str, Any]) -> str:
@@ -325,7 +276,7 @@ def _durable_interaction_config_fingerprint(payload: dict[str, Any]) -> str:
     )
 
 
-_ELECTRONIC_STATE_ENGINES = ("crest", "xtb")
+_ELECTRONIC_STATE_ENGINES = ("crest",)
 
 
 def _stage_manifest_overrides(raw_stage: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
@@ -344,7 +295,7 @@ def _completed_engine_stages_on_other_state(
     charge: int | None,
     multiplicity: int | None,
 ) -> list[str]:
-    """Completed CREST/xTB stages that ran on another electronic state.
+    """Completed CREST stages that ran on another electronic state.
 
     The state a stage actually screened on is the ``charge``/``uhf`` pair in
     its job manifest overrides (absent keys mean the neutral singlet), not the
@@ -427,15 +378,12 @@ def _changed_completed_orca_science_fields(
     *,
     template_name: str,
     route_line: str,
-    optts_route_line: str,
     manifest_charge: int | None,
     manifest_multiplicity: int | None,
 ) -> list[str]:
     params = workflow_request_parameters(payload)
     changed: list[str] = []
     route_updates = [("orca_route_line", route_line)]
-    if template_name == "scan_ts_search":
-        route_updates.append(("orca_optts_route_line", optts_route_line))
     for key, updated in route_updates:
         if not updated:
             continue
@@ -443,13 +391,7 @@ def _changed_completed_orca_science_fields(
         if not isinstance(current, str) or not current.strip():
             changed.append(key)
             continue
-        task_kind = (
-            "optts_freq"
-            if key == "orca_optts_route_line" or template_name == "reaction_ts_search"
-            else "opt"
-            if template_name == "conformer_screening"
-            else "relaxed_scan"
-        )
+        task_kind = "opt"
         try:
             current = validate_workflow_orca_route(task_kind=task_kind, route_line=current)
         except ValueError:
@@ -489,11 +431,7 @@ def _update_request_parameters(
     crest_mode: str,
     crest_present: bool,
     crest_overrides: dict[str, Any],
-    xtb_present: bool,
-    xtb_overrides: dict[str, Any],
-    endpoint_pairing: dict[str, Any],
     route_line: str,
-    optts_route_line: str,
     manifest_charge: int | None,
     manifest_multiplicity: int | None,
 ) -> None:
@@ -510,14 +448,10 @@ def _update_request_parameters(
         manifest=manifest,
         crest_present=crest_present,
         crest_overrides=crest_overrides,
-        xtb_present=xtb_present,
-        xtb_overrides=xtb_overrides,
-        endpoint_pairing=endpoint_pairing,
     )
     _apply_orca_request_parameters(
         params,
         route_line=route_line,
-        optts_route_line=optts_route_line,
         charge=manifest_charge,
         multiplicity=manifest_multiplicity,
     )
@@ -560,6 +494,7 @@ def _update_request_parameters(
 
 def _flow_restart_settings(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     manifest = _load_flow_manifest(workspace)
+    normalize_workflow_template_id(_workflow_template_name(payload, manifest))
     if not manifest:
         return {
             "applied": False,
@@ -575,7 +510,6 @@ def _reject_science_changes_on_completed_stages(
     *,
     template_name: str,
     route_line: str,
-    optts_route_line: str,
     manifest_charge: int | None,
     manifest_multiplicity: int | None,
     persisted_interaction_fingerprint: str,
@@ -594,7 +528,6 @@ def _reject_science_changes_on_completed_stages(
         payload,
         template_name=template_name,
         route_line=route_line,
-        optts_route_line=optts_route_line,
         manifest_charge=manifest_charge,
         manifest_multiplicity=manifest_multiplicity,
     )
@@ -605,7 +538,7 @@ def _reject_science_changes_on_completed_stages(
             f"original settings. fields={changed_science!r}, "
             f"completed_stages={completed_primary_orca!r}"
         )
-    # A completed CREST/xTB stage screened conformers on the electronic state
+    # A completed CREST stage screened conformers on the electronic state
     # its job manifest carried; restarting only the ORCA stages on another
     # charge or multiplicity would feed conformers from one potential-energy
     # surface into ORCA on another, and nothing downstream could tell. Refuse,
@@ -642,7 +575,7 @@ def _reject_science_changes_on_completed_stages(
     )
     if mismatched_engine_stages:
         raise ValueError(
-            "workflow electronic state cannot change while completed CREST/xTB stages "
+            "workflow electronic state cannot change while completed CREST stages "
             "retain prior results; start a new workflow or restore the original "
             f"charge/multiplicity. requested=(charge={effective_charge!r}, "
             f"multiplicity={effective_multiplicity!r}), "
@@ -732,31 +665,14 @@ def _reject_interaction_fingerprint_change(
             )
 
 
-def _optts_route_for_template(
-    template_name: str,
-    *,
-    route_line: str,
-    manifest_optts_route_line: str,
-    params: dict[str, Any],
-) -> tuple[str, bool]:
-    """Resolve the OptTS route line and whether the manifest stated it."""
-    if template_name == "reaction_ts_search":
-        return route_line or _normalize_text(params.get("orca_route_line")), bool(route_line)
-    if template_name == "scan_ts_search":
-        return (
-            manifest_optts_route_line or _normalize_text(params.get("orca_optts_route_line")),
-            bool(manifest_optts_route_line),
-        )
-    return "", False
-
-
 def _flow_restart_settings_from_manifest(
     workspace: Path,
     payload: dict[str, Any],
     manifest: dict[str, Any],
 ) -> dict[str, Any]:
+    validate_flow_manifest_fields(manifest)
     template_name = _workflow_template_name(payload, manifest)
-    route_line, manifest_optts_route_line = _validate_manifest_orca_routes(
+    route_line = _validate_manifest_orca_routes(
         template_name,
         manifest,
     )
@@ -766,18 +682,12 @@ def _flow_restart_settings_from_manifest(
         payload,
         template_name=template_name,
         route_line=route_line,
-        optts_route_line=manifest_optts_route_line,
         manifest_charge=manifest_charge,
         manifest_multiplicity=manifest_multiplicity,
         persisted_interaction_fingerprint=persisted_interaction_fingerprint,
     )
     crest_present, crest_manifest = _resolve_engine_manifest(workspace, manifest, "crest")
-    xtb_present, xtb_manifest = _resolve_engine_manifest(workspace, manifest, "xtb")
-    endpoint_pairing = _resolve_endpoint_pairing_manifest(manifest, xtb_manifest)
-    crest_overrides = _crest_manifest_with_defaults(
-        template_name=template_name,
-        crest_manifest=crest_manifest,
-    )
+    crest_overrides = dict(crest_manifest)
     priority = (
         normalize_queue_priority(manifest.get("priority")) if "priority" in manifest else None
     )
@@ -792,11 +702,7 @@ def _flow_restart_settings_from_manifest(
         crest_mode=crest_mode,
         crest_present=crest_present,
         crest_overrides=crest_overrides,
-        xtb_present=xtb_present,
-        xtb_overrides=xtb_manifest,
-        endpoint_pairing=endpoint_pairing,
         route_line=route_line,
-        optts_route_line=manifest_optts_route_line,
         manifest_charge=manifest_charge,
         manifest_multiplicity=manifest_multiplicity,
     )
@@ -805,9 +711,9 @@ def _flow_restart_settings_from_manifest(
     # whatever overrides a stage carried, so they
     # must re-inject charge/uhf themselves — otherwise restarting a charged
     # or open-shell workflow strips the electronic state from every
-    # rematerialized CREST/xTB stage and screens on the neutral-singlet
+    # rematerialized CREST stage and screens on the neutral-singlet
     # surface. Only the stage-facing overrides are enriched: the request's
-    # crest/xtb manifests keep user-manifest semantics (the stage builders
+    # CREST manifests keep user-manifest semantics (the stage builders
     # inject on append).
     # _update_request_parameters ran just above and, when the manifest states
     # charge/multiplicity, wrote them into the (now always-present) params. Fall
@@ -853,17 +759,11 @@ def _flow_restart_settings_from_manifest(
             persisted_interaction_fingerprint=persisted_interaction_fingerprint,
             interaction_fingerprint=interaction_fingerprint,
         )
-    optts_route_line, optts_route_line_present = _optts_route_for_template(
-        template_name,
-        route_line=route_line,
-        manifest_optts_route_line=manifest_optts_route_line,
-        params=params,
-    )
     return {
         "applied": True,
         "resources": resources,
         "priority": priority,
-        # An electronic-state-only flow.yaml (no crest:/xtb: sections) must
+        # An electronic-state-only flow.yaml (no crest: section) must
         # still reach the engine stages: the apply/rematerialize gates key off
         # this flag too, merging charge/uhf into each stage's existing
         # overrides instead of replacing them with an engine section that was
@@ -887,10 +787,7 @@ def _flow_restart_settings_from_manifest(
         "orca_multiplicity": manifest_multiplicity,
         "orca_route_line_present": bool(route_line),
         "orca_route_line": route_line or _normalize_text(params.get("orca_route_line")),
-        "orca_optts_route_line_present": optts_route_line_present,
-        "orca_optts_route_line": optts_route_line,
         "orca_input_updates": bool(route_line)
-        or bool(manifest_optts_route_line)
         or bool(manifest_charge is not None or manifest_multiplicity is not None)
         or bool(resources),
         "crest_present": crest_present,
@@ -901,15 +798,4 @@ def _flow_restart_settings_from_manifest(
             manifest_overrides=crest_overrides,
         )
         or {},
-        "xtb_present": xtb_present,
-        "xtb_overrides": manifest_with_charge_spin(
-            charge=charge,
-            multiplicity=multiplicity,
-            manifest_overrides=xtb_manifest,
-        )
-        or {},
-        "max_xtb_handoff_retries": (
-            params.get("max_xtb_handoff_retries") if "max_xtb_handoff_retries" in manifest else None
-        ),
-        "endpoint_pairing": endpoint_pairing,
     }

@@ -45,10 +45,10 @@ def test_restart_manifest_rejects_lossy_resource_limits(
 @pytest.mark.parametrize(
     "manifest",
     [
-        {"workflow_type": "reaction_ts_search", "max_crest_candidates": 2.5},
-        {"workflow_type": "reaction_ts_search", "max_crest_candidates": 33},
-        {"workflow_type": "reaction_ts_search", "max_xtb_handoff_retries": True},
-        {"workflow_type": "reaction_ts_search", "max_orca_stages": 0},
+        {"workflow_type": "conformer_screening", "max_orca_stages": 2.5},
+        {"workflow_type": "conformer_screening", "max_orca_stages": -1},
+        {"workflow_type": "conformer_screening", "max_orca_stages": True},
+        {"workflow_type": "conformer_screening", "max_orca_stages": 0},
     ],
 )
 def test_restart_manifest_rejects_lossy_workflow_caps(
@@ -56,7 +56,7 @@ def test_restart_manifest_rejects_lossy_workflow_caps(
     manifest: dict[str, object],
 ) -> None:
     payload = {
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
         "stages": [],
     }
@@ -68,12 +68,10 @@ def test_restart_manifest_rejects_lossy_workflow_caps(
 @pytest.mark.parametrize(
     ("template_name", "manifest"),
     [
-        ("reaction_ts_search", {"orca": {"route_line": "! Opt r2scan-3c"}}),
-        ("reaction_ts_search", {"orca": {"route_line": "! ScanTS Freq r2scan-3c"}}),
-        ("reaction_ts_search", {"orca": {"route_line": "! NEB-TS Freq r2scan-3c"}}),
+        ("conformer_screening", {"orca": {"route_line": "! ScanTS Freq r2scan-3c"}}),
+        ("conformer_screening", {"orca": {"route_line": "! NEB-TS Freq r2scan-3c"}}),
         ("conformer_screening", {"orca": {"route_line": "! SP r2scan-3c"}}),
-        ("scan_ts_search", {"orca": {"route_line": "! SP r2scan-3c"}}),
-        ("scan_ts_search", {"orca_optts_route_line": "! Opt r2scan-3c"}),
+        ("conformer_screening", {"orca": {"route_line": "! SP r2scan-3c"}}),
     ],
 )
 def test_restart_manifest_rejects_orca_route_role_mismatch(
@@ -92,36 +90,11 @@ def test_restart_manifest_rejects_orca_route_role_mismatch(
         restart_settings._flow_restart_settings_from_manifest(tmp_path, payload, manifest)
 
 
-@pytest.mark.parametrize("frequency_keyword", ("Freq", "NumFreq", "AnFreq"))
-def test_restart_manifest_accepts_exact_optts_with_supported_frequency_keyword(
-    tmp_path: Path,
-    frequency_keyword: str,
-) -> None:
-    payload: dict[str, Any] = {
-        "template_name": "reaction_ts_search",
-        "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
-        "stages": [],
-    }
-    route_line = f"! OptTS {frequency_keyword} r2scan-3c"
-
-    settings = restart_settings._flow_restart_settings_from_manifest(
-        tmp_path,
-        payload,
-        {
-            "workflow_type": "reaction_ts_search",
-            "orca": {"route_line": route_line},
-        },
-    )
-
-    assert settings["orca_route_line"] == route_line
-
-
 @pytest.mark.parametrize(
     ("template_name", "manifest"),
     [
-        ("reaction_ts_search", {"orca_route_line": ["! OptTS", "! Freq"]}),
+        ("conformer_screening", {"orca_route_line": ["! Opt", "! Freq"]}),
         ("conformer_screening", {"orca": {"route_line": {"method": "HF"}}}),
-        ("scan_ts_search", {"orca_optts_route_line": ["! OptTS Freq"]}),
     ],
 )
 def test_restart_manifest_rejects_structured_orca_route_fields(
@@ -143,13 +116,13 @@ def test_restart_manifest_rejects_structured_orca_route_fields(
     ("template_name", "parameters", "manifest", "changed_field"),
     [
         (
-            "reaction_ts_search",
+            "conformer_screening",
             {
-                "orca_route_line": "! OLD OptTS Freq",
+                "orca_route_line": "! OLD Opt Freq",
                 "charge": 0,
                 "multiplicity": 1,
             },
-            {"orca": {"route_line": "! NEW OptTS Freq"}},
+            {"orca": {"route_line": "! NEW Opt Freq"}},
             "orca_route_line",
         ),
         (
@@ -159,10 +132,9 @@ def test_restart_manifest_rejects_structured_orca_route_fields(
             "charge",
         ),
         (
-            "scan_ts_search",
+            "conformer_screening",
             {
-                "orca_route_line": "! Opt HF",
-                "orca_optts_route_line": "! OptTS Freq HF",
+                "orca_route_line": "! Opt Freq HF",
                 "charge": 0,
                 "multiplicity": 1,
             },
@@ -170,15 +142,14 @@ def test_restart_manifest_rejects_structured_orca_route_fields(
             "multiplicity",
         ),
         (
-            "scan_ts_search",
+            "conformer_screening",
             {
-                "orca_route_line": "! Opt HF",
-                "orca_optts_route_line": "! OptTS Freq HF",
+                "orca_route_line": "! Opt Freq HF",
                 "charge": 0,
                 "multiplicity": 1,
             },
-            {"orca_optts_route_line": "! OptTS Freq PBE0"},
-            "orca_optts_route_line",
+            {"orca_route_line": "! Opt Freq PBE0"},
+            "orca_route_line",
         ),
     ],
 )
@@ -432,53 +403,6 @@ def test_wrong_interaction_fingerprint_cannot_bypass_completed_primary_science_g
         )
 
 
-@pytest.mark.parametrize("template_name", ["reaction_ts_search", "scan_ts_search"])
-@pytest.mark.parametrize("feature", ["interaction_energy", "rmsd_dedup"])
-def test_restart_rejects_conformer_postprocessing_on_unsupported_template(
-    tmp_path: Path,
-    template_name: str,
-    feature: str,
-) -> None:
-    root = tmp_path / "workflow_runs"
-    workspace = root / f"wf_{template_name}_{feature}"
-    workspace.mkdir(parents=True)
-    if feature == "interaction_energy":
-        feature_yaml = """
-interaction_energy:
-  enabled: true
-  fragments:
-    - atom_indices: [0]
-      charge: 0
-      multiplicity: 2
-      label: atom_a
-    - atom_indices: [1]
-      charge: 0
-      multiplicity: 2
-      label: atom_b
-"""
-    else:
-        feature_yaml = """
-rmsd_dedup:
-  enabled: true
-"""
-    (workspace / "flow.yaml").write_text(
-        f"workflow_type: {template_name}\n{feature_yaml.lstrip()}", encoding="utf-8"
-    )
-    original: dict[str, object] = {
-        "workflow_id": workspace.name,
-        "template_name": template_name,
-        "status": "failed",
-        "stages": [],
-        "metadata": {"request": {"parameters": {"charge": 0, "multiplicity": 1}}},
-    }
-    _write_workflow(workspace, original)
-
-    with pytest.raises(ValueError, match="supported only for conformer_screening"):
-        restart_failed_workflow(workspace_dir=workspace, workflow_root=root)
-
-    assert json.loads((workspace / "workflow.json").read_text(encoding="utf-8")) == original
-
-
 def test_restart_rejects_rmsd_grouping_change_after_interaction_fanout(
     tmp_path: Path,
 ) -> None:
@@ -572,15 +496,15 @@ def test_restart_failed_workflow_rejects_non_mapping_flow_yaml(tmp_path: Path) -
         workspace,
         {
             "workflow_id": "wf_bad_manifest",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "failed",
             "requested_at": "2026-04-27T00:00:00+00:00",
             "stages": [
                 {
-                    "stage_id": "xtb_failed",
+                    "stage_id": "crest_failed",
                     "status": "failed",
                     "task": {
-                        "engine": "xtb",
+                        "engine": "crest",
                         "status": "failed",
                         "payload": {},
                         "enqueue_payload": {},
@@ -727,7 +651,7 @@ def _legacy_payload_without_parameters(
     if overrides is not None:
         task["payload"]["job_manifest_overrides"] = dict(overrides)
     return {
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "metadata": {},
         "stages": [
             {"stage_id": "crest_reactant_01", "status": crest_status, "task": task, "metadata": {}},
@@ -735,7 +659,7 @@ def _legacy_payload_without_parameters(
                 "stage_id": "orca_candidate_01",
                 "stage_kind": "orca_stage",
                 "status": "failed",
-                "task": {"engine": "orca", "task_kind": "optts_freq", "status": "failed"},
+                "task": {"engine": "orca", "task_kind": "opt", "status": "failed"},
                 "metadata": {},
             },
         ],
@@ -814,31 +738,31 @@ def test_restart_accepts_the_state_a_completed_stage_actually_ran_on(tmp_path: P
 def test_restart_end_to_end_records_the_electronic_state_change(tmp_path: Path) -> None:
     root = tmp_path / "workflow_runs"
     workspace = root / "wf_state_change"
-    (workspace / "old_xtb").mkdir(parents=True)
+    (workspace / "old_crest").mkdir(parents=True)
     (workspace / "flow.yaml").write_text(
-        "workflow_type: reaction_ts_search\ncharge: -1\norca:\n  multiplicity: 2\n",
+        "workflow_type: conformer_screening\ncharge: -1\norca:\n  multiplicity: 2\n",
         encoding="utf-8",
     )
     _write_workflow(
         workspace,
         {
             "workflow_id": "wf_state_change",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "failed",
             "requested_at": "2026-04-27T00:00:00+00:00",
             "stages": [
                 {
-                    "stage_id": "xtb_path_01",
+                    "stage_id": "crest_conformer_01",
                     "status": "failed",
                     "task": {
-                        "engine": "xtb",
+                        "engine": "crest",
                         "status": "failed",
                         "payload": {
-                            "job_dir": str(workspace / "old_xtb"),
+                            "job_dir": str(workspace / "old_crest"),
                             "job_manifest_overrides": {"gfn": 1},
                         },
                         "metadata": {"job_manifest_overrides": {"gfn": 1}},
-                        "enqueue_payload": {"job_dir": str(workspace / "old_xtb")},
+                        "enqueue_payload": {"job_dir": str(workspace / "old_crest")},
                     },
                     "metadata": {"job_manifest_overrides": {"gfn": 1}},
                 },

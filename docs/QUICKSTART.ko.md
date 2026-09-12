@@ -32,9 +32,10 @@ source .venv/bin/activate
 python -m pip install -e . -e ./extensions/workflows
 ```
 
-CREST/xTB 워크플로우뿐 아니라 ORCA 전용 `scan_ts`도 확장에 포함됩니다.
-기존 단일 배포물 설치본에서 전환할 때는 새 환경과 [RELEASE.md](RELEASE.md)(영어)의
-절차를 사용하고, 워크플로우 상태를 사용 중인 환경에서 지원 코드를 제거하지 마세요.
+현재 개발 버전의 확장은 컨포머 스크리닝만 지원하며, CREST 생성·ORCA 정밀 계산으로
+구성됩니다. 기존 설치본을 전환할 때는 새 환경과
+[RELEASE.md](RELEASE.md)(영어)의 절차 및 TS 워크플로우 제거 주의사항을 확인하세요.
+실행 중인 워커의 소스나 환경을 교체하지 마세요.
 
 ## 2) 설정
 

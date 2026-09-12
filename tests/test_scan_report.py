@@ -8,10 +8,21 @@ import pytest
 from orca_auto.orca.frequencies import (
     parse_frequency_analysis,
 )
+from orca_auto.orca.relaxed_scan import scan_profile_interior_maxima
 from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.scan import collect_scan_report_data
 from orca_auto.orca.state import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
+
+
+def test_scan_profile_interior_maxima_ranks_and_excludes_endpoints() -> None:
+    # Keep standalone scan profile coverage after removing the TS workflow.
+    energies = [-100.0, -99.5, -100.2, -99.85, -100.3, -99.3]
+    maxima = scan_profile_interior_maxima(energies)
+    assert [idx for idx, _ in maxima] == [1, 3]
+    assert maxima[0][1] > maxima[1][1]
+    assert scan_profile_interior_maxima([-100.0, -100.1, -100.2]) == []
+
 
 _FREQ_BLOCK = """
 -----------------------

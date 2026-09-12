@@ -61,7 +61,7 @@ def test_workflow_root_for_workspace_distinguishes_scaffold_and_root_direct(
     scaffold = workflow_root / "rxn_case"
     nested_workspace = scaffold / "20260717-090000-0a1b2c3d"
     nested_workspace.mkdir(parents=True)
-    (scaffold / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
+    (scaffold / "flow.yaml").write_text("workflow_type: conformer_screening\n", encoding="utf-8")
 
     # Direct API submissions mint generation-named workspaces at root itself.
     root_direct_workspace = workflow_root / "20260717-090001-0a1b2c3e"
@@ -108,7 +108,7 @@ def test_scaffold_nested_and_root_direct_workspaces_are_valid_run_dir_targets(
     scaffold = workflow_root / "rxn_case"
     nested = scaffold / "20260717-091501-0a1b2c3e"
     nested.mkdir(parents=True)
-    (scaffold / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
+    (scaffold / "flow.yaml").write_text("workflow_type: conformer_screening\n", encoding="utf-8")
     (nested / "workflow.json").write_text(
         '{"workflow_id": "20260717-091501-0a1b2c3e"}', encoding="utf-8"
     )

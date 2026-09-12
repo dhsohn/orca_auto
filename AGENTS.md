@@ -6,8 +6,8 @@
 
 ## 이 레포가 무엇인가
 
-Linux/WSL에서 단독 ORCA와 CREST→xTB→ORCA 워크플로우를 durable queue와 supervised
-worker로 실행하는 queue-first 제품이다. 공개 CLI·설정·상태·복구 계약은
+Linux/WSL에서 단독 ORCA를 durable queue와 supervised worker로 실행하는 queue-first
+제품이다. 선택 설치 확장은 conformer_search 워크플로우를 제공한다. 공개 CLI·설정·상태·복구 계약은
 [`docs/PUBLIC_CONTRACTS.md`](docs/PUBLIC_CONTRACTS.md)가 정본이다.
 
 ## 검증

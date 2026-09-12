@@ -36,8 +36,8 @@ import-linter 계약이 `core`·`orca`·`flow`가 이 모듈들을 임포트하�
 
 루트의 `orca_auto` 배포물에는 본체만 들어 있습니다. `extensions/workflows`의
 공식 `orca_auto_workflows` 프로젝트가 `orca_auto.flow`를 소유하며, xTB/CREST 엔진과
-ORCA 전용 `scan_ts` 워크플로우도 여기에 포함됩니다. 두 프로젝트는 `5.0.0`으로
-함께 출시하며, 정확히 같은 버전이 필요합니다.
+컨포머 스크리닝을 포함합니다. 두 프로젝트는 미출시 `6.0.0.dev0`을 사용하며,
+정확히 같은 버전이 필요합니다.
 독립 버전으로 교환 가능한 범용 플러그인 API가 아닙니다.
 
 개발 환경에는 두 로컬 프로젝트를 함께 설치하세요:
@@ -150,7 +150,7 @@ staging, conformer selection, restart rematerialization은 scanner owner를 직�
 Workflow ORCA stage 검증도 하나의 직접 owner를 사용합니다.
 
 - `orca_stage_validation.py`는 durable task kind, route field, route-role,
-  selected input, relaxed scan 검증을 소유합니다.
+  selected input 검증을 소유합니다.
 - `_orca_stage_materialization.py`는 렌더링, payload 조립, confined
   geometry/Hessian/input 쓰기를 소유하고 검증 모듈에 단방향으로 의존합니다.
 
@@ -225,7 +225,7 @@ stage mutation은 package workflow 경계에서만 조합되는 독립된 siblin
 - `orca_auto queue ...`
 - `orca_auto run-dir <path>`
 - `orca_auto init`
-- `orca_auto scaffold <ts_search|conformer_search|scan_ts> <path>`
+- `orca_auto scaffold conformer_search <path>`
 
 장기 실행 서비스는 공개 CLI 표면의 일부가 아닙니다. 사용자는 오직 `systemd/` 유닛을
 통해서만 이를 실행해야 합니다.

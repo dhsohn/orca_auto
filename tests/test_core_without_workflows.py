@@ -309,7 +309,7 @@ def test_explicit_workflows_refuse_before_runtime_mutation(
     command: tuple[str, ...]
     if operation in {"run-dir", "mixed-run-dir"}:
         target.mkdir()
-        (target / "flow.yaml").write_text("workflow_type: scan_ts_search\n", encoding="utf-8")
+        (target / "flow.yaml").write_text("workflow_type: conformer_screening\n", encoding="utf-8")
         if operation == "mixed-run-dir":
             (target / "plausible.inp").write_text(
                 "! HF STO-3G\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"

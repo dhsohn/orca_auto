@@ -297,7 +297,7 @@ INTERACTION_ROLE_PREFIX = "interaction_"
 INTERACTION_COMPLEX_SP_ROLE = "interaction_complex_sp"
 INTERACTION_FRAGMENT_ROLE = "interaction_fragment"
 INTERACTION_CONFIG_FINGERPRINT_KEY = "interaction_config_fingerprint"
-SUPPORTED_WORKFLOW_ORCA_TASK_KINDS = frozenset({"opt", "optts_freq", "relaxed_scan", "sp"})
+SUPPORTED_WORKFLOW_ORCA_TASK_KINDS = frozenset({"opt", "sp"})
 
 
 def is_interaction_role(role: str) -> bool:

@@ -45,7 +45,7 @@ def test_workflow_plan_to_dict_preserves_nested_stage_task_and_artifact_payloads
     )
     plan = WorkflowPlan(
         workflow_id="wf_1",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="planned",
         source_job_id="src_1",
         source_job_type="manual",

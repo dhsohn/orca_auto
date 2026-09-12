@@ -86,26 +86,6 @@ def test_stage_status_render_escapes_special_chars() -> None:
     assert "Event" not in fields
 
 
-def test_handoff_render_has_two_transitions() -> None:
-    embed = _embed(
-        _event(
-            event_type="workflow_stage_handoff_ready",
-            stage_id="s1",
-            metadata={
-                "engine": "xtb",
-                "task_kind": "path",
-                "stage_status": "completed",
-                "previous_stage_status": "running",
-                "reaction_handoff_status": "ready",
-                "previous_reaction_handoff_status": "pending",
-            },
-        )
-    )
-    fields = _fields(embed)
-    assert fields["Stage status"] == "`running` → `completed`"
-    assert fields["Reaction handoff"] == "`pending` → `ready`"
-
-
 def test_worker_lifecycle_render() -> None:
     # The title already names the worker event, so no redundant "Event" field.
     embed = _embed(_event(event_type="worker_started"))
@@ -131,20 +111,18 @@ def test_phase_finished_render_conditionals() -> None:
         _event(
             event_type=WORKFLOW_PHASE_FINISHED_EVENT,
             metadata={
-                "phase_label": "xTB",
+                "phase_label": "CREST",
                 "phase_outcome": "completed",
                 "stage_count": "2",
                 "stage_status_counts": {"completed": 2},
                 "stage_statuses": [{"label": "s1", "status": "completed"}],
-                "reaction_handoff_status_counts": {"ready": 1},
                 "failure_reasons": ["none"],
             },
         )
     )
     fields = _fields(embed)
-    assert fields["Phase"] == "`xTB`"
+    assert fields["Phase"] == "`CREST`"
     assert fields["Stage status counts"] == "`completed:2`"
-    assert fields["Reaction handoff counts"] == "`ready:1`"
     assert fields["Failure reasons"] == "`none`"
 
 
@@ -171,7 +149,7 @@ def test_workflow_event_renders_workspace_directory(tmp_path) -> None:
     scaffold = tmp_path / "rxn_case"
     workspace = scaffold / "20260717-104500-0a1b2c3d"
     workspace.mkdir(parents=True)
-    (scaffold / "flow.yaml").write_text("workflow_type: reaction_ts_search\n", encoding="utf-8")
+    (scaffold / "flow.yaml").write_text("workflow_type: conformer_screening\n", encoding="utf-8")
     (workspace / "workflow.json").write_text(
         '{"workflow_id": "20260717-104500-0a1b2c3d"}', encoding="utf-8"
     )
@@ -208,7 +186,7 @@ def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str)
             {
                 "event_type": "workflow_status_changed",
                 "workflow_id": "wf_1",
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "status": "running",
                 "previous_status": "planned",
                 "worker_session_id": "session-1",
@@ -216,7 +194,7 @@ def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str)
             [
                 "Status changed",
                 "Workflow: `wf_1`",
-                "Template: `reaction_ts_search`",
+                "Template: `conformer_screening`",
                 "Status: `planned` → `running`",
             ],
         ),
@@ -224,7 +202,7 @@ def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str)
             {
                 "event_type": "workflow_advance_failed",
                 "workflow_id": "wf_2",
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "reason": "boom",
                 "worker_session_id": "session-2",
             },
@@ -239,10 +217,10 @@ def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str)
             {
                 "event_type": "workflow_stage_submitted",
                 "workflow_id": "wf_stage",
-                "template_name": "reaction_ts_search",
-                "stage_id": "xtb_path_search_01",
-                "engine": "xtb",
-                "task_kind": "path_search",
+                "template_name": "conformer_screening",
+                "stage_id": "orca_conformer_01",
+                "engine": "orca",
+                "task_kind": "opt",
                 "status": "queued",
                 "previous_status": "planned",
                 "stage_status": "queued",
@@ -252,33 +230,9 @@ def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str)
             [
                 "Stage submitted",
                 "Workflow: `wf_stage`",
-                "Stage: `xtb_path_search_01`",
-                "Task: `xtb/path_search`",
+                "Stage: `orca_conformer_01`",
+                "Task: `orca/opt`",
                 "Stage status: `planned` → `queued`",
-            ],
-        ),
-        (
-            {
-                "event_type": "workflow_stage_handoff_ready",
-                "workflow_id": "wf_stage",
-                "template_name": "reaction_ts_search",
-                "stage_id": "xtb_path_search_01",
-                "engine": "xtb",
-                "task_kind": "path_search",
-                "stage_status": "completed",
-                "reaction_handoff_status": "ready",
-                "previous_reaction_handoff_status": "queued",
-                "reason": "xtb_ts_guess_ready",
-                "worker_session_id": "session-handoff",
-            },
-            [
-                "✅ Handoff ready",
-                "Workflow: `wf_stage`",
-                "Stage: `xtb_path_search_01`",
-                "Task: `xtb/path_search`",
-                "Stage status: `completed`",
-                "Reaction handoff: `queued` → `ready`",
-                "Reason: `xtb_ts_guess_ready`",
             ],
         ),
         (
@@ -297,36 +251,34 @@ def test_worker_cycle_events_keep_their_session(tmp_path: Path, event_type: str)
             {
                 "event_type": "workflow_phase_finished",
                 "workflow_id": "wf_phase",
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "status": "mixed",
                 "worker_session_id": "session-phase",
                 "metadata": {
-                    "phase": "xtb",
-                    "phase_label": "xTB",
+                    "phase": "crest",
+                    "phase_label": "CREST",
                     "phase_outcome": "mixed",
                     "stage_count": 2,
                     "stage_status_counts": {"completed": 2},
                     "stage_statuses": [
                         {
                             "label": "rxn_01",
-                            "stage_id": "xtb_path_search_01",
+                            "stage_id": "orca_conformer_01",
                             "status": "completed",
                         },
-                        {"label": "rxn_02", "stage_id": "xtb_path_search_02", "status": "failed"},
+                        {"label": "rxn_02", "stage_id": "orca_conformer_02", "status": "failed"},
                     ],
-                    "reaction_handoff_status_counts": {"ready": 1, "failed": 1},
-                    "failure_reasons": ["xtb_ts_guess_missing"],
+                    "failure_reasons": ["candidate_rejected"],
                 },
             },
             [
                 "Phase finished",
                 "Workflow: `wf_phase`",
-                "Phase: `xTB`",
+                "Phase: `CREST`",
                 "Phase outcome: `mixed`",
                 "Stage status counts: `completed:2`",
                 "Stage statuses: `rxn_01:completed,rxn_02:failed`",
-                "Reaction handoff counts: `failed:1,ready:1`",
-                "Failure reasons: `xtb_ts_guess_missing`",
+                "Failure reasons: `candidate_rejected`",
             ],
         ),
         (

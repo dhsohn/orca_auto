@@ -26,7 +26,7 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
     record = registry_store._record_from_summary(
         {
             "workflow_id": "wf_1",
-            "template_name": "reaction_ts_search",
+            "template_name": "conformer_screening",
             "status": "planned",
             "source_job_id": "job_1",
             "source_job_type": "xtb_path",
@@ -36,9 +36,6 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
             "stage_count": "2",
             "stage_status_counts": {"planned": "2", "bad": "nan"},
             "task_status_counts": {"submitted": 1},
-            "downstream_reaction_workflow": {"workflow_id": "child_1"},
-            "precomplex_handoff": {"reactant_xyz": "/tmp/reactant.xyz"},
-            "parent_workflow": {"workflow_id": "parent_1"},
             "final_child_sync_pending": 1,
             "last_restarted_at": "2026-04-19T00:45:00+00:00",
             "restart_summary": {"status": "restarted", "restarted_at": "2026-04-19T00:45:00+00:00"},
@@ -52,9 +49,6 @@ def test_record_from_summary_coerces_counts_and_nested_metadata(
     assert record.stage_status_counts == {"planned": 2}
     assert record.task_status_counts == {"submitted": 1}
     assert record.metadata == {
-        "downstream_reaction_workflow": {"workflow_id": "child_1"},
-        "precomplex_handoff": {"reactant_xyz": "/tmp/reactant.xyz"},
-        "parent_workflow": {"workflow_id": "parent_1"},
         "final_child_sync_pending": True,
         "last_restarted_at": "2026-04-19T00:45:00+00:00",
         "restart_summary": {"status": "restarted", "restarted_at": "2026-04-19T00:45:00+00:00"},
@@ -70,10 +64,10 @@ def test_clear_terminal_workflow_registry_removes_only_terminal_rows(
     records = [
         registry.WorkflowRegistryRecord(
             workflow_id="wf-completed",
-            template_name="reaction_ts_search",
+            template_name="conformer_screening",
             status="completed",
             source_job_id="job-1",
-            source_job_type="reaction_ts_search",
+            source_job_type="conformer_screening",
             reaction_key="rxn-1",
             requested_at="2026-04-19T00:00:00+00:00",
             workspace_dir=str(tmp_path / "wf-completed"),
@@ -81,10 +75,10 @@ def test_clear_terminal_workflow_registry_removes_only_terminal_rows(
         ),
         registry.WorkflowRegistryRecord(
             workflow_id="wf-running",
-            template_name="reaction_ts_search",
+            template_name="conformer_screening",
             status="running",
             source_job_id="job-2",
-            source_job_type="reaction_ts_search",
+            source_job_type="conformer_screening",
             reaction_key="rxn-2",
             requested_at="2026-04-19T00:01:00+00:00",
             workspace_dir=str(tmp_path / "wf-running"),
@@ -92,10 +86,10 @@ def test_clear_terminal_workflow_registry_removes_only_terminal_rows(
         ),
         registry.WorkflowRegistryRecord(
             workflow_id="wf-cancelled",
-            template_name="reaction_ts_search",
+            template_name="conformer_screening",
             status="cancelled",
             source_job_id="job-3",
-            source_job_type="reaction_ts_search",
+            source_job_type="conformer_screening",
             reaction_key="rxn-3",
             requested_at="2026-04-19T00:02:00+00:00",
             workspace_dir=str(tmp_path / "wf-cancelled"),
@@ -123,10 +117,10 @@ def test_clear_terminal_workflow_registry_prevents_reindex_resurrection(
     running_workspace.mkdir()
     completed_payload = {
         "workflow_id": "wf-completed",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "completed",
         "source_job_id": "job-1",
-        "source_job_type": "reaction_ts_search",
+        "source_job_type": "conformer_screening",
         "reaction_key": "rxn-1",
         "requested_at": "2026-04-19T00:00:00+00:00",
         "stages": [],
@@ -139,10 +133,10 @@ def test_clear_terminal_workflow_registry_prevents_reindex_resurrection(
         json.dumps(
             {
                 "workflow_id": "wf-running",
-                "template_name": "reaction_ts_search",
+                "template_name": "conformer_screening",
                 "status": "running",
                 "source_job_id": "job-2",
-                "source_job_type": "reaction_ts_search",
+                "source_job_type": "conformer_screening",
                 "reaction_key": "rxn-2",
                 "requested_at": "2026-04-19T00:01:00+00:00",
                 "stages": [],
@@ -578,10 +572,10 @@ def test_sync_skips_cleared_terminal_workflow_until_it_becomes_active(
     workspace.mkdir()
     terminal_payload = {
         "workflow_id": "wf-completed",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "completed",
         "source_job_id": "job-1",
-        "source_job_type": "reaction_ts_search",
+        "source_job_type": "conformer_screening",
         "reaction_key": "rxn-1",
         "requested_at": "2026-04-19T00:00:00+00:00",
         "stages": [],
@@ -611,7 +605,7 @@ def test_workflow_cleared_markers_corrupt_payload_blocks_writes(
     _patch_file_locks(monkeypatch)
     record = registry.WorkflowRegistryRecord(
         workflow_id="wf_completed",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="completed",
         source_job_id="job_completed",
         source_job_type="xtb_path",
@@ -723,7 +717,7 @@ def test_clear_terminal_workflow_registry_empty_status_filter_is_noop(
     _patch_file_locks(monkeypatch)
     record = registry.WorkflowRegistryRecord(
         workflow_id="wf-completed",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="completed",
         source_job_id="job-1",
         source_job_type="xtb_path",
@@ -790,7 +784,7 @@ def test_workflow_registry_writes_reject_corrupt_existing_registry(
     registry_store._registry_path(tmp_path).write_text(registry_payload, encoding="utf-8")
     record = registry.WorkflowRegistryRecord(
         workflow_id="wf_safe",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="planned",
         source_job_id="job_safe",
         source_job_type="xtb_path",
@@ -814,7 +808,7 @@ def test_upsert_list_get_and_resolve_workflow_registry_record(
     _patch_file_locks(monkeypatch)
     record_older = registry.WorkflowRegistryRecord(
         workflow_id="wf_a",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="planned",
         source_job_id="job_a",
         source_job_type="xtb_path",
@@ -836,7 +830,7 @@ def test_upsert_list_get_and_resolve_workflow_registry_record(
     )
     record_updated = registry.WorkflowRegistryRecord(
         workflow_id="wf_a",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="completed",
         source_job_id="job_a",
         source_job_type="xtb_path",
@@ -880,7 +874,7 @@ def test_list_workflow_registry_reindexes_when_missing_and_reindex_skips_bad_wor
     list_result = [
         registry.WorkflowRegistryRecord(
             workflow_id="wf_reindexed",
-            template_name="reaction_ts_search",
+            template_name="conformer_screening",
             status="planned",
             source_job_id="job_reindexed",
             source_job_type="xtb_path",
@@ -963,7 +957,7 @@ def test_clear_terminal_keeps_a_record_with_undrained_cancel_transitions(tmp_pat
     }
     payload = {
         "workflow_id": "wf-cancelled",
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "cancelled",
         "stages": [],
         "metadata": {"cancellation_status_transitions": [transition]},
@@ -974,10 +968,10 @@ def test_clear_terminal_keeps_a_record_with_undrained_cancel_transitions(tmp_pat
         [
             registry.WorkflowRegistryRecord(
                 workflow_id="wf-cancelled",
-                template_name="reaction_ts_search",
+                template_name="conformer_screening",
                 status="cancelled",
                 source_job_id="job-3",
-                source_job_type="reaction_ts_search",
+                source_job_type="conformer_screening",
                 reaction_key="rxn-3",
                 requested_at="2026-04-19T00:02:00+00:00",
                 workspace_dir=str(workspace),
@@ -1011,7 +1005,7 @@ def _cancelled_payload(workflow_id: str, *, transitions: int = 0) -> dict[str, A
 
     payload: dict[str, Any] = {
         "workflow_id": workflow_id,
-        "template_name": "reaction_ts_search",
+        "template_name": "conformer_screening",
         "status": "cancelled",
         "requested_at": "2026-08-11T05:00:00+00:00",
         "stages": [],
@@ -1075,10 +1069,10 @@ def test_summary_counts_a_hand_edited_transition_value_that_still_blocks_the_cle
         [
             registry.WorkflowRegistryRecord(
                 workflow_id="wf-cancel-hand-edited",
-                template_name="reaction_ts_search",
+                template_name="conformer_screening",
                 status="cancelled",
                 source_job_id="job-hand-edited",
-                source_job_type="reaction_ts_search",
+                source_job_type="conformer_screening",
                 reaction_key="rxn-hand-edited",
                 requested_at="2026-08-11T05:00:00+00:00",
                 workspace_dir=str(workspace),
@@ -1106,10 +1100,10 @@ def test_cached_cancel_transitions_metadata_never_blocks_a_drained_clear(
     write_workflow_payload(workspace, _cancelled_payload("wf-cancel-stale-row"))
     stale_row = registry.WorkflowRegistryRecord(
         workflow_id="wf-cancel-stale-row",
-        template_name="reaction_ts_search",
+        template_name="conformer_screening",
         status="cancelled",
         source_job_id="job-stale",
-        source_job_type="reaction_ts_search",
+        source_job_type="conformer_screening",
         reaction_key="rxn-stale",
         requested_at="2026-08-11T05:00:00+00:00",
         workspace_dir=str(workspace),

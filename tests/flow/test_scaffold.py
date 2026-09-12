@@ -9,60 +9,6 @@ import yaml
 from orca_auto.flow import scaffold
 
 
-def test_cmd_scaffold_creates_reaction_workflow_scaffold(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    workflow_dir = tmp_path / "reaction_workflow"
-
-    rc = scaffold.cmd_scaffold(
-        Namespace(
-            root=str(workflow_dir),
-            workflow_type="reaction_ts_search",
-        )
-    )
-
-    output = capsys.readouterr().out
-    flow_text = (workflow_dir / "flow.yaml").read_text(encoding="utf-8")
-    manifest = yaml.safe_load(flow_text)
-    readme = (workflow_dir / "README.md").read_text(encoding="utf-8")
-
-    assert rc == 0
-    assert (workflow_dir / "reactant.xyz").exists()
-    assert (workflow_dir / "product.xyz").exists()
-    assert (workflow_dir / "README.md").exists()
-    assert manifest["workflow_type"] == "reaction_ts_search"
-    assert manifest["crest_mode"] == "standard"
-    assert manifest["max_crest_candidates"] == 3
-    # The template writes the pair-expansion cap explicitly so a default
-    # scaffold explores every 3x3 conformer pairing.
-    assert manifest["max_xtb_stages"] == 9
-    # The ORCA candidate budget is written out with its default so the cap is
-    # visible and adjustable: a TS8-shaped run (5 handed-off candidates,
-    # limit 3) silently dropped 2 candidates its operator expected to run.
-    assert manifest["max_orca_stages"] == 3
-    assert "# Total ORCA OptTS+Freq attempts." in flow_text
-    assert "workflow_type: reaction_ts_search" in output
-    assert "crest_mode: standard" in output
-    assert "created_file: reactant.xyz" in output
-    assert "created_file: product.xyz" in output
-    assert "# crest:" in flow_text
-    assert "#   gfn: ff" in flow_text
-    assert "#   no_preopt: true" in flow_text
-    assert "#   noreftopo: true" in flow_text
-    assert "#   notopo: true" in flow_text
-    assert "#   nocbonds: true" in flow_text
-    assert "#   shake: 2" in flow_text  # verified CREST sampling knobs are advertised
-    assert "#   mddump: 100" in flow_text
-    assert "orca_auto scaffold ts_search" in readme
-    assert "crest_mode: nci" in readme
-    assert "`gfn: ff`, `noreftopo: true`, `notopo: true`, or `nocbonds: true`" in readme
-    assert "Sampling knobs" in readme
-    assert "waits for the xTB phase to finish" in readme
-    # SI Boltzmann populations apply to conformer minima; a TS-search scaffold
-    # intentionally does not advertise the temperature key.
-    assert "boltzmann_temperature_k" not in flow_text
-
-
 def test_cmd_scaffold_is_idempotent_for_conformer_workflow(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -131,7 +77,7 @@ def test_cmd_scaffold_rejects_invalid_crest_mode(
     rc = scaffold.cmd_scaffold(
         Namespace(
             root=str(workflow_dir),
-            workflow_type="reaction_ts_search",
+            workflow_type="conformer_screening",
             crest_mode="fast",
         )
     )
@@ -150,7 +96,7 @@ def test_cmd_scaffold_rejects_parenthesized_workflow_name_before_writing(
     rc = scaffold.cmd_scaffold(
         Namespace(
             root=str(workflow_dir),
-            workflow_type="reaction_ts_search",
+            workflow_type="conformer_screening",
         )
     )
 

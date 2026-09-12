@@ -56,7 +56,7 @@ DAG engine, database-backed provenance framework, or multi-code workflow system.
 
 ORCA_auto is intentionally narrower. Its public surface is a queue-first CLI,
 configuration file, worker runtime, and report/state contracts tailored to ORCA
-and ORCA-centered reaction/conformer workflows. This smaller scope keeps the
+and the optional conformer-screening workflow. This smaller scope keeps the
 common local/WSL use case easy to inspect and debug, while still leaving room to
 export artifacts into broader provenance systems later.
 

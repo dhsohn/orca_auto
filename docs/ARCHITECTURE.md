@@ -366,7 +366,7 @@ logic. Notable pieces:
 - **Single-attempt execution:** calculation failures preserve the original analyzer
   reason and end the run. Direct `ScanTS` routes are rejected before generation
   creation. `relaxed_scan.py` owns coordinate validation and surface parsing for
-  plain scans and the separate `scan_ts_search` workflow.
+  ordinary standalone relaxed scans.
 - **Restart/resume:** for interrupted-run recovery it generates a restart input with
   `MORead` + `%moinp` when a matching non-empty `.gbw` checkpoint exists. An
   existing top-level or `%scf` orbital-input declaration is recognized
@@ -399,18 +399,14 @@ queue and downstream contract field.
 ## 7. Workflow Orchestration (`flow/`)
 
 The `flow` package turns a single user submission into a multi-stage,
-multi-engine pipeline. It is what lets a reaction-path or conformer job fan out
-into internal xTB/CREST stages and then batch ORCA child jobs.
+multi-engine pipeline. The supported conformer-screening workflow uses CREST
+generation and ORCA child jobs.
 
 ### Templates
 
-`flow/templates.py` defines the three workflow templates:
-
-| Template id            | CLI shortcut       | Purpose                              |
-|------------------------|--------------------|--------------------------------------|
-| `reaction_ts_search`   | `ts_search`        | Reactant×product TS search           |
-| `conformer_screening`  | `conformer_search` | Conformer generation + screening     |
-| `scan_ts_search`       | `scan_ts`          | Relaxed-scan TS search               |
+`flow/templates.py` defines one workflow template: `conformer_screening`, exposed
+by `orca_auto scaffold conformer_search <path>`. Removed TS workflow types are
+not executable or resumable; see the [cutover warning](RELEASE.md#removing-ts-workflows-in-60).
 
 A workflow is materialized from a `flow.yaml` manifest (`flow/manifest.py`) in
 the submitted directory: each run mints a timestamped generation workspace
@@ -425,13 +421,12 @@ import the bounded loader directly; config policy and config-error consumers
 directly reuse only the symbols they need, without a forwarding facade. The
 loader caps a job manifest at 1 MiB, 32 YAML aliases, 10,000 parsed/expanded
 nodes, and 64 nesting levels, and rejects cyclic/recursive graphs. Central
-geometry limits cap local work at 10,000 atoms and xTB/ORCA Hessian-producing
+geometry limits cap local work at 10,000 atoms and ORCA Hessian-producing
 work at 1,000.
 
 Workflow ORCA task roles are revalidated against the materialized input at
 creation, restart, actual pre-submission selection, and completed-result
-acceptance. Relaxed scans additionally bind one closed scan coordinate to the
-selected geometry at each dynamic stage. `flow/orca_stage_validation.py` is
+acceptance. `flow/orca_stage_validation.py` is
 the canonical owner of those checks; materialization and every lifecycle
 consumer depend on it directly, without a forwarding facade. The submitter binds equal durable path
 copies to its actual selection and validates the final rewritten bytes before
@@ -521,14 +516,6 @@ immediately, so a stale fake cannot silently stop exercising production code.
 Import-linter also prevents stage views from depending back on orchestration
 wiring.
 
-### Example: reaction TS search
-
-`reaction_ts_search` orders selected reactant×product CREST pairs
-deterministically, materializes at most the configured total xTB-stage cap,
-waits for that xTB phase to reach terminal states, and then batches matching
-ORCA OptTS child jobs from retained `ts_guess` artifacts up to the configured
-total ORCA-stage cap.
-
 ### Example: conformer screening
 
 `conformer_screening` starts with one CREST child job, then hands off up to 20
@@ -545,9 +532,6 @@ under `03_orca`, but every ORCA queue row and job-location record stays in the
 shared queue and index at the runs root, so runtime-root discovery
 (`core/indexing/roots.py`) never enumerates `03_orca` directories and the ORCA
 worker polls exactly one queue root.
-The ORCA-only `scan_ts_search` template uses no engine root: its ORCA stages
-are workflow-ordered directories directly under the workspace (`01_scan`,
-`02_scan_maximum`, ...).
 
 Their terminal control-plane metadata has one durable source: `job_state.json`.
 The internal workers, repair path, index, adapters, and workflow report consume
@@ -617,7 +601,7 @@ failure remains advisory to durable publication.
 `core/notifications/` holds the engine-specific notification functions
 (`engines.py`). Submission, execution, and terminal adapters bind the relevant
 queued/started/finished callbacks directly. Workflow alerts keep per-job ORCA messages but summarize
-internal CREST and reaction-path xTB child phases into one message each.
+the internal CREST phase in one message after it finishes.
 
 The channel is enabled only when its credentials are complete: Discord requires
 `messenger.discord.bot_token` plus `messenger.discord.default_channel_id`.
@@ -699,7 +683,7 @@ and no domain package imports the top-level CLI modules (an import-linter
 contract enforces it). The public command surface:
 
 - `init` — create/update shared config
-- `scaffold <ts_search|conformer_search|scan_ts> <path>` — write workflow scaffolds
+- `scaffold conformer_search <path>` — write a conformer-screening scaffold
 - `run-dir <path>` — durable submission (ORCA or workflow, auto-routed)
 - `queue list` / `queue cancel` / `queue list clear` — inspect/maintain the queue
 - `service status` / `service restart` — runtime status (via systemd)

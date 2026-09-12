@@ -3,9 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -16,7 +14,7 @@ from orca_auto.core.artifacts import (
 )
 from orca_auto.core.engine_runner import confined_output_identity
 from orca_auto.flow.workflow import report_collection as workflow_report_collection
-from orca_auto.flow.workflow import report_diagnostics, report_energy_evidence
+from orca_auto.flow.workflow import report_energy_evidence
 from orca_auto.flow.workflow.machine import write_workflow_machine_observation
 from orca_auto.flow.workflow.report_collection import collect_workflow_report_data
 from orca_auto.flow.workflow.report_rendering import write_workflow_html_report
@@ -29,7 +27,6 @@ from tests.flow.workflow_report_helpers import (
     _orca_stage_dir,
     _payload,
     _publish_orca_machine,
-    _ts_freq_output_text,
     _validate_common_machine,
     _write_multi_xyz,
     _write_orca_generation_report,
@@ -312,29 +309,6 @@ def test_workflow_report_rejects_stationary_task_with_single_point_route(
     assert data.orca_results == ()
 
 
-def test_workflow_report_accepts_authoritative_optts_frequency_candidate(
-    tmp_path: Path,
-) -> None:
-    stage_dir = _orca_stage_dir(
-        tmp_path,
-        "orca_optts_freq",
-        energy=-100.125,
-        reason="normal_termination",
-        route_line="! HF OptTS Freq",
-    )
-    stage = _orca_stage(
-        "orca_optts_freq",
-        stage_dir,
-        status="completed",
-        label="transition state",
-        task_kind="optts_freq",
-    )
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert [entry.energy for entry in data.orca_results] == pytest.approx([-100.125])
-
-
 def test_workflow_report_rejects_completed_stage_with_failed_task_state(
     tmp_path: Path,
 ) -> None:
@@ -359,25 +333,26 @@ def test_workflow_report_rejects_completed_stage_with_failed_task_state(
     assert "stage/task is not durably completed" in data.stage_rows[0].detail
 
 
-def test_relaxed_scan_without_html_is_preserved_in_workflow_lineage(
+def test_single_point_without_html_is_preserved_in_workflow_lineage(
     tmp_path: Path,
 ) -> None:
     generation = _orca_stage_dir(
         tmp_path,
-        "orca_relaxed_scan",
+        "orca_single_point",
         energy=-100.001,
         reason="normal_termination",
+        route_line="! HF SP",
     )
     stage = _orca_stage(
-        "orca_relaxed_scan",
+        "orca_single_point",
         generation,
         status="completed",
-        label="relaxed_scan",
+        label="single_point",
     )
     stage["task"] = {
         "engine": "orca",
         "status": "completed",
-        "task_kind": "relaxed_scan",
+        "task_kind": "sp",
     }
     (generation / "job_report.html").unlink()
     payload = _payload(tmp_path, [stage])
@@ -385,7 +360,7 @@ def test_relaxed_scan_without_html_is_preserved_in_workflow_lineage(
     data = collect_workflow_report_data(tmp_path, payload)
 
     upstream_machine = generation / RUN_REPORT_JSON_FILE
-    assert [row.stage_id for row in data.stage_rows] == ["orca_relaxed_scan"]
+    assert [row.stage_id for row in data.stage_rows] == ["orca_single_point"]
     assert data.orca_results == ()
     assert data.consumed_orca_machine_paths == (upstream_machine,)
     assert write_workflow_html_report(tmp_path, payload) == tmp_path / "workflow_report.html"
@@ -401,7 +376,7 @@ def test_relaxed_scan_without_html_is_preserved_in_workflow_lineage(
     assert observation["lineage"]["upstream"] == [
         {
             "producer": upstream_observation["producer"],
-            "operation_id": "orca_relaxed_scan",
+            "operation_id": "orca_single_point",
             "byte_sha256": hashlib.sha256(upstream_machine.read_bytes()).hexdigest(),
         }
     ]
@@ -728,543 +703,6 @@ def _record_last_out_path(generation: Path, out_path: Path | str) -> None:
     state = json.loads((generation / RUN_STATE_FILE).read_text(encoding="utf-8"))
     state["engine_payload"]["final_result"]["last_out_path"] = str(out_path)
     _publish_orca_machine(generation, state)
-
-
-@pytest.mark.parametrize("imaginary", [0, 2])
-def test_rejected_candidate_counts_its_final_section_from_the_output(
-    tmp_path: Path,
-    imaginary: int,
-) -> None:
-    # A normally terminated OptTS Freq candidate whose final frequency section
-    # has 0 or 2 imaginary modes is rejected (ts_criteria_failed); that count
-    # characterizes the final geometry and explains the rejection. It comes
-    # from the output, so a forged marker cannot dictate a different Nimag.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_rejected_ts",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=imaginary),
-    )
-    stage = _orca_stage(
-        "orca_rejected_ts",
-        generation,
-        status="failed",
-        label="rejected ts",
-        task_kind="optts_freq",
-    )
-    _forge_markers(generation, imaginary_frequency_count=7, final_frequency_section=True)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count == imaginary
-
-
-def test_superseded_frequency_section_publishes_no_imaginary_count(tmp_path: Path) -> None:
-    # The only Hessian sits before the last final energy, so it belongs to an
-    # earlier geometry and verifies nothing.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_superseded_freq",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=1, superseded=True),
-    )
-    stage = _orca_stage(
-        "orca_superseded_freq",
-        generation,
-        status="failed",
-        label="superseded",
-        task_kind="optts_freq",
-    )
-    _forge_markers(generation, imaginary_frequency_count=1, final_frequency_section=True)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_geometry_failure_publishes_no_imaginary_count(tmp_path: Path) -> None:
-    # The analyzer reached no TS verdict, so its count stays a diagnostic: the
-    # geometry the modes were computed for is not the one the run stopped at.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_unconverged_ts",
-        energy=-1.1,
-        reason="geometry_not_converged",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=1),
-    )
-    stage = _orca_stage(
-        "orca_unconverged_ts",
-        generation,
-        status="failed",
-        label="unconverged",
-        task_kind="optts_freq",
-    )
-    _forge_markers(generation, imaginary_frequency_count=1, final_frequency_section=True)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_normally_terminated_non_ts_route_acquires_no_imaginary_count(tmp_path: Path) -> None:
-    # An Opt Freq route prints the same frequency section, but the analyzer
-    # never counts modes outside TS mode. Reading the output must not invent a
-    # Nimag the engine itself would not have recorded.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_non_ts_freq",
-        energy=-1.1,
-        reason="normal_termination",
-        route_line="! HF Opt Freq",
-        output_text=_ts_freq_output_text(imaginary=1, route_line="! HF Opt Freq"),
-    )
-    stage = _orca_stage(
-        "orca_non_ts_freq",
-        generation,
-        status="failed",
-        label="non-ts",
-    )
-    _forge_markers(generation, imaginary_frequency_count=1, final_frequency_section=True)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-@pytest.mark.parametrize(
-    "last_out_name",
-    [None, "never-written.out"],
-    ids=["unrecorded", "absent"],
-)
-def test_unresolvable_terminal_output_publishes_no_imaginary_count(
-    tmp_path: Path,
-    last_out_name: str | None,
-) -> None:
-    # No recorded terminal output, or one that is not on disk: there is no
-    # hash-pinned evidence to count, and the markers are not a substitute.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_absent_output",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=1),
-        last_out_name=last_out_name,
-    )
-    stage = _orca_stage(
-        "orca_absent_output",
-        generation,
-        status="failed",
-        label="absent output",
-        task_kind="optts_freq",
-    )
-    _forge_markers(generation, imaginary_frequency_count=1, final_frequency_section=True)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_terminal_output_below_the_generation_publishes_no_imaginary_count(
-    tmp_path: Path,
-) -> None:
-    # ORCA writes a stage's terminal output as a direct child of its
-    # generation. A deeper path earns a valid receipt all the same, so only the
-    # shape rule keeps a file that is not this stage's output out of the table.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_nested_output",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=1),
-    )
-    nested = generation / "scratch"
-    nested.mkdir()
-    (nested / "orca.out").write_text(_ts_freq_output_text(imaginary=3), encoding="utf-8")
-    stage = _orca_stage(
-        "orca_nested_output",
-        generation,
-        status="failed",
-        label="nested output",
-        task_kind="optts_freq",
-    )
-    _record_last_out_path(generation, nested / "orca.out")
-    _forge_markers(generation, imaginary_frequency_count=7, final_frequency_section=True)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_symlinked_terminal_output_publishes_no_imaginary_count(tmp_path: Path) -> None:
-    # A symlink is never its own resolved path, so ``artifact_receipt`` records
-    # it unavailable and nothing re-hashes it. Counting it would publish a
-    # number the accepted observation never bound.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_symlinked_output",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=1),
-    )
-    target = generation / "recount.out"
-    target.write_text(_ts_freq_output_text(imaginary=3), encoding="utf-8")
-    link = generation / "linked.out"
-    link.symlink_to(target)
-    stage = _orca_stage(
-        "orca_symlinked_output",
-        generation,
-        status="failed",
-        label="symlinked output",
-        task_kind="optts_freq",
-    )
-    _record_last_out_path(generation, link)
-    _forge_markers(generation, imaginary_frequency_count=7, final_frequency_section=True)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_hard_linked_terminal_output_publishes_no_imaginary_count(tmp_path: Path) -> None:
-    # A second link to the same inode is a shape ``artifact_receipt`` refuses
-    # to bind, so nothing re-hashed these bytes and the count would rest on an
-    # unavailable receipt.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_hard_linked_output",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=1),
-    )
-    target = generation / "recount.out"
-    target.write_text(_ts_freq_output_text(imaginary=3), encoding="utf-8")
-    os.link(target, generation / "hard_linked.out")
-    stage = _orca_stage(
-        "orca_hard_linked_output",
-        generation,
-        status="failed",
-        label="hard linked output",
-        task_kind="optts_freq",
-    )
-    _record_last_out_path(generation, generation / "hard_linked.out")
-    _forge_markers(generation, imaginary_frequency_count=7, final_frequency_section=True)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_relative_terminal_output_is_not_read_from_the_working_directory(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A record that never resolved its terminal output to an absolute path
-    # names nothing inside the generation. Resolving it against whatever
-    # directory the report writer happens to be in would count a file the
-    # generation's receipts never saw.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_relative_output",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=2),
-    )
-    stage = _orca_stage(
-        "orca_relative_output",
-        generation,
-        status="failed",
-        label="relative output",
-        task_kind="optts_freq",
-    )
-    _record_last_out_path(generation, "orca.out")
-    _forge_markers(generation, imaginary_frequency_count=7, final_frequency_section=True)
-    decoy = tmp_path / "decoy"
-    decoy.mkdir()
-    (decoy / "orca.out").write_text(_ts_freq_output_text(imaginary=3), encoding="utf-8")
-    monkeypatch.chdir(decoy)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_output_rewritten_under_the_scan_publishes_no_imaginary_count(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The receipt binds one (size, sha256), checked before the scan starts.
-    # Bytes appended while the scan runs are outside it, so the count they
-    # produced is not the evidence the observation stands behind.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_rewritten_output",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=2),
-    )
-    stage = _orca_stage(
-        "orca_rewritten_output",
-        generation,
-        status="failed",
-        label="rewritten output",
-        task_kind="optts_freq",
-    )
-    _forge_markers(generation, imaginary_frequency_count=7, final_frequency_section=True)
-    scan = workflow_report_collection.scan_ts_lines_for_imag_count
-
-    def _scan_then_append(lines: Iterable[str]) -> tuple[int, bool, bool]:
-        result = scan(lines)
-        with (generation / "orca.out").open("a", encoding="utf-8") as handle:
-            handle.write("appended after the receipt was checked\n")
-        return result
-
-    monkeypatch.setattr(
-        workflow_report_collection,
-        "scan_ts_lines_for_imag_count",
-        _scan_then_append,
-    )
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_output_replaced_after_verification_publishes_no_imaginary_count(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # The receipt is verified by the load that resolves the stage report, and
-    # the recount opens the output afterwards. An output substituted in that
-    # window is observed by every check on the reading side — the pre-open
-    # stat, the descriptor's inode, and the size/mtime stability check all see
-    # the replacement and agree with it — so only the digest of the bytes
-    # actually read can show they are not the ones the observation bound.
-    # The replacement is byte-for-byte the same length as the accepted output,
-    # so its size alone tells nothing apart.
-    original = _ts_freq_output_text(imaginary=2)
-    replacement_text = original.replace("-500.00", " 500.00", 1)
-    assert len(replacement_text.encode("utf-8")) == len(original.encode("utf-8"))
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_replaced_output",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=original,
-    )
-    stage = _orca_stage(
-        "orca_replaced_output",
-        generation,
-        status="failed",
-        label="replaced output",
-        task_kind="optts_freq",
-    )
-    replacement = tmp_path / "replacement.out"
-    replacement.write_text(replacement_text, encoding="utf-8")
-    recount = workflow_report_collection._final_section_imaginary_count
-
-    # Forwarded positionally so the substitution is all this stub changes.
-    def _replace_then_recount(*args: Any, **kwargs: Any) -> int | None:
-        os.replace(replacement, generation / "orca.out")
-        return recount(*args, **kwargs)
-
-    monkeypatch.setattr(
-        workflow_report_collection,
-        "_final_section_imaginary_count",
-        _replace_then_recount,
-    )
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count is None
-
-
-def test_recount_refuses_an_output_receipt_that_binds_nothing(tmp_path: Path) -> None:
-    # The recount publishes a count only for bytes an ``available`` receipt
-    # covers. A receipt that is absent, unavailable, taken for another file of
-    # the generation, or recording a different digest binds nothing about the
-    # output being read, and none of them may fall back to counting it anyway.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_unbound_receipt",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=2),
-    )
-    stage = _orca_stage(
-        "orca_unbound_receipt",
-        generation,
-        status="failed",
-        label="unbound receipt",
-        task_kind="optts_freq",
-    )
-    _, payload, receipt = report_diagnostics.resolve_stage_job_report(stage)
-    assert payload is not None
-    assert receipt is not None
-    assert (
-        workflow_report_collection._final_section_imaginary_count(generation, payload, receipt) == 2
-    )
-
-    for variant in (
-        None,
-        {},
-        dict(receipt, status="missing"),
-        dict(receipt, status="invalid"),
-        dict(receipt, path="other.out"),
-        dict(receipt, byte_sha256="0" * 64),
-        dict(receipt, bytes=int(receipt["bytes"]) + 1),
-    ):
-        assert (
-            workflow_report_collection._final_section_imaginary_count(generation, payload, variant)
-            is None
-        )
-
-
-def test_recount_publishes_the_count_the_accepted_receipt_binds(tmp_path: Path) -> None:
-    # The ordinary case: the receipt carried out of the verified load is the
-    # one the machine observation records for this output, it hashes the bytes
-    # on disk, and the row publishes the count read from them.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_receipted_count",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=2),
-    )
-    stage = _orca_stage(
-        "orca_receipted_count",
-        generation,
-        status="failed",
-        label="receipted count",
-        task_kind="optts_freq",
-    )
-    _forge_markers(generation, imaginary_frequency_count=7, final_frequency_section=True)
-    observation = json.loads((generation / RUN_REPORT_JSON_FILE).read_text(encoding="utf-8"))
-    recorded = observation["artifacts"]["orca-output"]
-    assert recorded["status"] == "available"
-    assert (
-        recorded["byte_sha256"]
-        == hashlib.sha256((generation / "orca.out").read_bytes()).hexdigest()
-    )
-
-    _, _payload_ignored, carried = report_diagnostics.resolve_stage_job_report(stage)
-    assert carried == recorded
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count == 2
-
-
-def test_non_candidate_stage_does_not_read_its_output_for_a_count(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A relaxed-scan row never enters the candidate table, so it must not pay
-    # for a whole-output scan whose result is discarded.
-    scanned: list[Path] = []
-    recount = workflow_report_collection._final_section_imaginary_count
-
-    def _record_recount(generation_dir: Path, *args: Any, **kwargs: Any) -> int | None:
-        scanned.append(generation_dir)
-        return recount(generation_dir, *args, **kwargs)
-
-    monkeypatch.setattr(
-        workflow_report_collection, "_final_section_imaginary_count", _record_recount
-    )
-    scan_generation = _orca_stage_dir(
-        tmp_path,
-        "orca_relaxed_scan",
-        energy=-1.1,
-        reason="scf_not_converged",
-        status_state="failed",
-        route_line="! HF Opt",
-        output_text=_ts_freq_output_text(imaginary=2, route_line="! HF Opt"),
-    )
-    candidate_generation = _orca_stage_dir(
-        tmp_path,
-        "orca_candidate",
-        energy=-1.2,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=2),
-    )
-    stages = [
-        _orca_stage(
-            "orca_relaxed_scan",
-            scan_generation,
-            status="failed",
-            label="relaxed scan",
-            task_kind="relaxed_scan",
-        ),
-        _orca_stage(
-            "orca_candidate",
-            candidate_generation,
-            status="failed",
-            label="candidate",
-            task_kind="optts_freq",
-        ),
-    ]
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, stages))
-
-    assert [result.stage_id for result in data.orca_results] == ["orca_candidate"]
-    assert data.orca_results[0].imaginary_count == 2
-    assert scanned == [candidate_generation]
-
-
-def test_generation_without_final_section_marker_still_publishes_count(tmp_path: Path) -> None:
-    # Generations written before the final-section marker existed are still on
-    # disk. Their Nimag now comes from the output, so they read the same as a
-    # generation written today instead of losing the count.
-    generation = _orca_stage_dir(
-        tmp_path,
-        "orca_legacy_markers",
-        energy=-1.1,
-        reason="ts_criteria_failed",
-        status_state="failed",
-        route_line="! HF OptTS Freq",
-        output_text=_ts_freq_output_text(imaginary=2),
-    )
-    stage = _orca_stage(
-        "orca_legacy_markers",
-        generation,
-        status="failed",
-        label="legacy markers",
-        task_kind="optts_freq",
-    )
-    state = json.loads((generation / RUN_STATE_FILE).read_text(encoding="utf-8"))
-    state["engine_payload"]["attempts"][-1]["markers"].pop("final_frequency_section", None)
-    _publish_orca_machine(generation, state)
-
-    data = collect_workflow_report_data(tmp_path, _payload(tmp_path, [stage]))
-
-    assert data.orca_results[0].imaginary_count == 2
 
 
 @pytest.mark.parametrize(

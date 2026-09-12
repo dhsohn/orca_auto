@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orca_auto_workflows"
-version = "5.0.0"
+version = "6.0.0.dev0"
 description = "Optional CREST, xTB and multi-stage workflow extension for ORCA_auto"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Daehyup Sohn" }]
-dependencies = ["orca_auto==5.0.0"]
+dependencies = ["orca_auto==6.0.0.dev0"]
 
 [project.urls]
 Homepage = "https://github.com/dhsohn/orca_auto"

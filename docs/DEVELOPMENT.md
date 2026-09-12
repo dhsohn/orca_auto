@@ -36,8 +36,8 @@ config and workflow-root resolution from parsed arguments.
 
 The root `orca_auto` distribution contains core only. The official
 `orca_auto_workflows` project at `extensions/workflows` owns `orca_auto.flow`,
-including xTB/CREST engines and ORCA-only `scan_ts` workflows. Both projects ship
-as `5.0.0` and require the exact matching version; this is not an independently
+including conformer screening and its internal xTB/CREST engines. Both projects
+use unreleased `6.0.0.dev0` and require the exact matching version; this is not an independently
 versioned plugin API.
 
 Install both local projects together for development:
@@ -171,7 +171,7 @@ compatibility facade.
 Workflow ORCA stage validation likewise has one direct owner:
 
 - `orca_stage_validation.py` owns durable task-kind, route-field, route-role,
-  selected-input, and relaxed-scan validation.
+  and selected-input validation.
 - `_orca_stage_materialization.py` owns rendering, payload assembly, and
   confined geometry/Hessian/input writes, and depends one way on validation.
 
@@ -249,7 +249,7 @@ User-facing docs should standardize on these command forms:
 - `orca_auto queue ...`
 - `orca_auto run-dir <path>`
 - `orca_auto init`
-- `orca_auto scaffold <ts_search|conformer_search|scan_ts> <path>`
+- `orca_auto scaffold conformer_search <path>`
 
 Long-running services are not part of the public CLI surface. Users should run
 them only through the `systemd/` units.

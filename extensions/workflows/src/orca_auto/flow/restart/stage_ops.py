@@ -70,10 +70,8 @@ _STALE_TASK_PAYLOAD_KEYS = frozenset(
         "orca_latest_attempt_out",
     }
 )
-_REMATERIALIZED_ENGINES = frozenset({"crest", "xtb"})
-_REMATERIALIZED_TASK_PAYLOAD_KEYS = frozenset(
-    {"job_dir", "selected_input_xyz", "secondary_input_xyz"}
-)
+_REMATERIALIZED_ENGINES = frozenset({"crest"})
+_REMATERIALIZED_TASK_PAYLOAD_KEYS = frozenset({"job_dir", "selected_input_xyz"})
 
 
 _RESTART_STAGE_CONTEXT = _restart_stages.RestartStageContext(
@@ -284,28 +282,13 @@ def _apply_flow_restart_settings(
             _set_stage_manifest_overrides(stage, _coerce_mapping(settings.get("crest_overrides")))
         elif electronic_state_present:
             _merge_stage_charge_spin(stage, settings)
-    elif engine == "xtb":
-        max_handoff_retries = settings.get("max_xtb_handoff_retries")
-        if isinstance(max_handoff_retries, int) and not isinstance(
-            max_handoff_retries,
-            bool,
-        ):
-            task_view.set_payload_field("max_handoff_retries", max_handoff_retries)
-            task_view.set_metadata_field("max_handoff_retries", max_handoff_retries)
-            stage_view.set_metadata_field("max_handoff_retries", max_handoff_retries)
-        if bool(settings.get("xtb_present")):
-            _set_stage_manifest_overrides(stage, _coerce_mapping(settings.get("xtb_overrides")))
-        elif electronic_state_present:
-            _merge_stage_charge_spin(stage, settings)
     elif engine == "orca":
         resources = _coerce_mapping(settings.get("resources"))
         task_view.update_enqueue_payload(
             {key: int(resources[key]) for key in ("max_cores", "max_memory_gb") if key in resources}
         )
         orca_settings = dict(settings)
-        route_setting = (
-            "orca_optts_route_line" if task_view.kind() == "optts_freq" else "orca_route_line"
-        )
+        route_setting = "orca_route_line"
         route_line_present = bool(settings.get(f"{route_setting}_present"))
         route_line = _normalize_text(settings.get(route_setting))
         if route_line_present:
@@ -352,8 +335,6 @@ def _stage_should_rematerialize(stage: dict[str, Any], settings: dict[str, Any])
             or bool(settings.get("crest_present"))
             or bool(_normalize_text(settings.get("crest_mode")))
         )
-    if engine == "xtb":
-        return has_common_updates or bool(settings.get("xtb_present"))
     return False
 
 
