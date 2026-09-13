@@ -1,0 +1,125 @@
+name: Release ORCA_auto
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  RELEASE_TAG: ${{ github.ref_name }}
+  RELEASE_COMMIT: ${{ github.sha }}
+
+jobs:
+  build:
+    if: github.repository == 'dhsohn/orca_auto' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Checkout selected commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Validate release identity
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          python scripts/release.py guard --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT"
+      - name: Check source
+        env:
+          PYTHON_BIN: python
+        run: make check
+      - name: Build and exercise distributions
+        run: .venv/bin/python -m scripts.check_distributions --work-dir "$RUNNER_TEMP/package-check"
+      - name: Stage only tested release distributions
+        run: |
+          .venv/bin/python scripts/release.py stage --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --work-dir "$RUNNER_TEMP/package-check" --output "$RUNNER_TEMP/release-artifacts"
+          .venv/bin/python -m pip install 'twine>=6.1,<7'
+          .venv/bin/python -m twine check --strict "$RUNNER_TEMP/release-artifacts/dist/"*
+      - name: Retain verified release artifacts
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ github.sha }}
+          path: ${{ runner.temp }}/release-artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/orca-auto/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout release verification helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/release.py
+          sparse-checkout-cone-mode: false
+      - name: Download tested artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release-artifacts
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Verify artifact identity and current tag before publishing
+        run: python3 scripts/release.py verify --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --artifacts release-artifacts
+      - name: Publish the matched distribution pair
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: release-artifacts/dist/
+          skip-existing: false
+          verify-metadata: true
+          attestations: true
+
+  github-release:
+    needs: [build, publish-pypi]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release verification helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts/release.py
+          sparse-checkout-cone-mode: false
+      - name: Download the same tested artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          path: release-artifacts
+          merge-multiple: true
+          digest-mismatch: error
+      - name: Verify PyPI publication and unchanged release tag
+        run: |
+          python3 scripts/release.py pypi-check --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --artifacts release-artifacts
+          python3 scripts/release.py verify --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --artifacts release-artifacts
+      - name: Create GitHub Release without replacing existing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --target "$RELEASE_COMMIT" --title "ORCA_auto $RELEASE_TAG" --notes-file release-artifacts/release-notes.md release-artifacts/dist/* release-artifacts/SHA256SUMS

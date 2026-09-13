@@ -9,7 +9,7 @@
   ORCA 정밀 계산을 사용합니다.
   확장은 본체와 정확히 같은 버전이어야 합니다.
 
-현재 소스는 미출시 `6.0.0.dev0`이며 두 TS 워크플로우를 호환 지원 없이 제거합니다.
+`6.0.0`은 두 TS 워크플로우를 호환 지원 없이 제거합니다.
 기존 런타임을 업그레이드하기 전에 [전환 주의사항](RELEASE.md#removing-ts-workflows-in-60)(영어)을
 읽으세요.
 
@@ -19,25 +19,27 @@ ORCA는 별도로 설치하세요. xTB·CREST를 사용하는 워크플로우 �
 
 ## 릴리스 패키지 설치
 
-[v5.0.0 GitHub 릴리스](https://github.com/dhsohn/orca_auto/releases/tag/v5.0.0)에서
-wheel·소스 배포본·`SHA256SUMS`를 제공합니다. PyPI 배포는 아닙니다.
-이 공개 패키지는 위에서 설명한 TS 워크플로우 제거 이전 버전입니다.
-`orca_auto-5.0.0-py3-none-any.whl`을 내려받으세요. 워크플로우도 필요하면
-`orca_auto_workflows-5.0.0-py3-none-any.whl`을 같은 디렉터리에 내려받으세요.
-
-해당 디렉터리에서 새 환경을 만들고 본체를 설치합니다:
+새 환경을 만들고 PyPI에서 본체를 설치합니다:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./orca_auto-5.0.0-py3-none-any.whl
+python -m pip install orca_auto==6.0.0
 ```
 
 같은 환경에 워크플로우를 추가하려면:
 
 ```bash
-python -m pip install ./orca_auto_workflows-5.0.0-py3-none-any.whl
+python -m pip install 'orca_auto[workflows]==6.0.0'
 ```
+
+또는 [v6.0.0 GitHub 릴리스](https://github.com/dhsohn/orca_auto/releases/tag/v6.0.0)에서
+동일한 wheel·소스 배포본과 `SHA256SUMS`를 받을 수 있습니다.
+`orca_auto-6.0.0-py3-none-any.whl`을 내려받고, Workflows도 필요하면
+`orca_auto_workflows-6.0.0-py3-none-any.whl`을 함께 내려받으세요. 새 환경에 로컬
+wheel 파일을 설치하고 두 배포물의 버전을 정확히 맞추세요.
+과거 [v5.0.0 배포물](https://github.com/dhsohn/orca_auto/releases/tag/v5.0.0)은
+TS 워크플로우 제거 이전 버전이며 GitHub Releases에서만 공개되었습니다.
 
 패키지 설치만으로 계산 엔진을 설정하거나 systemd 서비스를 설치·재시작하지는
 **않습니다**. 서비스 설치기에는 같은 버전의 소스 checkout에 있는 `systemd/` 자산도

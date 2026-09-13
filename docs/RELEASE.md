@@ -37,7 +37,7 @@ Development versions use an `Unreleased` changelog heading and omit
 `date-released` from `CITATION.cff`. Do not invent a release date or tag merely
 to align development metadata. A release-prep change replaces both project
 versions and dependency pins, dates the changelog and citation, and reruns the
-complete verification below. The `5.0.0` release records `2026-09-12` in both
+complete verification below. The `6.0.0` release records `2026-09-13` in both
 release metadata files.
 
 - Patch version: bug fixes, documentation, tests, CI, or narrow execution/reporting
@@ -69,6 +69,9 @@ Create a release-prep issue and branch from `origin/main`, then verify:
 - [ ] Direct and sdist-rebuilt wheels, installed distribution metadata, and
       `orca_auto --version` match the root `pyproject.toml` version
       (`make check-packages` checks this across its installation profiles).
+- [ ] PyPI-facing README images and links use absolute URLs and refer to the
+      intended release. `twine check --strict` checks distribution metadata,
+      not Markdown link reachability or the rendered page.
 - [ ] If ORCA runtime semantics changed, at least one manual real-ORCA
       acceptance check is recorded in the PR.
 - [ ] The PR body records Motivation, Changes, and Verification.
@@ -89,7 +92,7 @@ building distributions nor passing their tests publishes them or deploys service
 ## Moving from the monolithic 4.x installation
 
 The 5.0 default became core-only. This section describes the package split;
-the current development extension supports only CREST-to-ORCA conformer
+the current extension supports only CREST-to-ORCA conformer
 screening. Its internal xTB engine is separate from that workflow. For the
 additional break in 6.0, read the next section
 before upgrading. Both packages retain
@@ -109,7 +112,7 @@ python -m pip install -e . -e ./extensions/workflows
 ```
 
 These source-install commands do not require either distribution on a package
-index. For release wheels, download the desired pair from GitHub Releases and
+index. From 6.0, release packages are published to PyPI and GitHub Releases;
 follow the [package installation instructions](INSTALLATION.md).
 The `workflows` extra selects the exact matching extension when both
 distributions are available to pip; independent version combinations are not
@@ -128,7 +131,7 @@ packages alone neither updates those unit files nor replaces running workers.
 
 ## Removing TS workflows in 6.0
 
-The current source is unreleased `6.0.0.dev0`. It removes
+Version `6.0.0` removes
 `reaction_ts_search` (`scaffold ts_search`) and `scan_ts_search`
 (`scaffold scan_ts`), their workflow-specific configuration, and automatic TS
 search orchestration. Only `conformer_screening` (`scaffold conformer_search`)
@@ -150,10 +153,34 @@ repair, or purge those records. Keep the existing running worker's checkout,
 environment, configuration, and services untouched until that cutover.
 
 The published 5.0.0 assets predate this removal and remain historical release
-artifacts. Neither this development version nor its documentation publishes a
-new release or updates an installed runtime.
+artifacts. Publishing 6.0.0 does not update an installed runtime.
 
-## Tagging
+## One-time Trusted Publishing setup
+
+The two distributions use the same GitHub Actions publisher, without a stored
+PyPI API token. Before the first tag, register two pending publishers on the
+[PyPI account Publishing page](https://pypi.org/manage/account/publishing/):
+
+| Field | Value |
+| --- | --- |
+| PyPI project name | `orca_auto`, then `orca_auto_workflows` |
+| GitHub owner | `dhsohn` |
+| Repository | `orca_auto` |
+| Workflow filename | `release.yml` |
+| Environment | `pypi` |
+
+The account owner completes login, identity checks and publisher registration.
+Do not put credentials in issues, logs or repository files. A pending publisher
+does not reserve a project name; the first successful upload creates the project.
+See [PyPI's pending-publisher guide](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
+
+In the GitHub repository, configure the `pypi` environment to allow only the
+selected **tag** pattern `v*`, with no branch deployment rule. This is different
+from allowing protected branches. The environment name must match the PyPI
+publisher exactly. Tag creation is the maintainer's publication decision;
+there is no additional environment approval step in this setup.
+
+## Tagging and automated publication
 
 After the release PR is merged and its CI passes, work from the isolated release
 worktree, not a checkout serving active calculations. Fetch and inspect the
@@ -162,16 +189,37 @@ intended merge commit before creating the tag:
 ```bash
 git fetch origin main
 git show --stat origin/main
-git switch --detach origin/main
+# Select only the release-prep merge whose CI has passed.
+git switch --detach <verified-release-merge-commit>
 git tag -a vX.Y.Z -m "ORCA_auto vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-Build and verify both wheels and source distributions from that exact tree with
-`make check-packages`. Attach the four resulting files and `SHA256SUMS` to the
-GitHub release. Verify the uploaded files' digests against the local build, and
-confirm the tag resolves to the intended merge commit. This is a GitHub release,
-not a PyPI upload; package-index publication is a separate action.
+Do not move or delete a published tag. The
+[`release.yml` workflow](../.github/workflows/release.yml) runs only for pushed
+`v*` tags. Its release guard accepts only a stable `vX.Y.Z` that matches the
+source versions and points to a commit contained in `main`; development,
+prerelease and mismatched tags stop before publication.
+
+The workflow separates three jobs:
+
+1. **Validate and build** has read-only repository access. It runs the standard
+   checks, builds and exercises the two distributions with
+   `python -m scripts.check_distributions`, checks metadata with
+   `twine check --strict`, and retains the four original wheel/sdist files,
+   checksums and release notes in one Actions artifact.
+2. **Publish to PyPI** downloads that exact artifact ID and verifies its files.
+   Only this job has `id-token: write`, scoped through the `pypi` environment.
+   It does not build or install project code. Only the four distribution files,
+   not the checksum or notes files, are sent to PyPI.
+3. **Create GitHub Release** runs after PyPI publication succeeds. It checks the
+   published PyPI filenames and SHA-256 digests against the retained files,
+   confirms the remote tag still names the release commit, and attaches the
+   same four distributions and `SHA256SUMS`. It has repository write access,
+   but no OIDC publishing permission.
+
+An Actions artifact is an intermediate build result, not proof that a package
+index or GitHub release is complete. Follow the post-release checks below.
 
 The release body should include the same three sections:
 
@@ -186,13 +234,58 @@ The release body should include the same three sections:
 Do not create a Zenodo archive as part of the current process unless the project
 policy changes in a later issue/PR.
 
+## Failed or partial publication
+
+The two PyPI projects and their four files are **not** one atomic transaction.
+The workflow stops on an upload error; it does not silently skip existing files,
+overwrite release assets or rebuild a replacement set. A failing step and its
+Actions run remain the recovery checkpoint. Concurrent runs for the same tag
+do not cancel an in-progress publisher.
+
+Before retrying, retain the original run ID, source commit, Actions artifact ID
+and downloaded files. Compare each expected filename and SHA-256 digest with
+both projects' release JSON endpoints:
+
+- `https://pypi.org/pypi/orca-auto/X.Y.Z/json`
+- `https://pypi.org/pypi/orca-auto-workflows/X.Y.Z/json`
+
+Then choose the matching case:
+
+- **No files accepted:** correct the setup or transient failure and rerun only
+  failed jobs so they consume the original build artifact.
+- **Some files accepted:** stop. A plain rerun will reject duplicate filenames.
+  After confirming every accepted file matches the original artifact, obtain
+  an explicit recovery decision and publish only the missing original files.
+  The initial workflow does not automate this recovery. Never delete accepted
+  files, replace the tag or rebuild files to make the error disappear.
+- **All four files accepted, upload job failed:** the final upload response may
+  have been lost after PyPI accepted the file. Stop for an explicit recovery
+  decision after digest readback. Do not rerun the upload job through duplicate
+  files; its failed dependency also prevents the GitHub job from simply running.
+- **PyPI job succeeded, GitHub step failed:** verify the PyPI digests, then
+  inspect whether a GitHub release or partial asset upload already exists.
+  If no release exists, rerun the failed GitHub job. If one exists, first compare
+  its assets with the retained artifact and complete only missing assets under
+  an explicit recovery decision; do not overwrite assets.
+
+A digest mismatch, expired build artifact, ambiguous remote state or incomplete
+inspection blocks replay. Resolve the discrepancy before publishing anything
+else. This bounded manual recovery is intentional; there is no second upload
+credential or general-purpose reconciliation service.
+
 ## Post-release checks
 
-After the tag and GitHub release exist:
+After publication:
 
 - [ ] Confirm the tag points at the intended merge commit.
 - [ ] Confirm GitHub Actions completed for the release commit or tag.
 - [ ] Confirm the four distribution assets and their checksums are downloadable.
+- [ ] Confirm both PyPI versions expose exactly the expected two files each and
+      their digests equal the retained build and GitHub assets.
+- [ ] From a new temporary environment outside a checkout, install the exact
+      version from PyPI, run `python -m pip check` and `orca_auto --version`,
+      and check the Core-only profile before adding the exact matching
+      `workflows` extra. Inspect both rendered PyPI descriptions and links.
 - [ ] Keep publication separate from local deployment. If a runtime must remain
       unchanged, defer all checkout updates, installations and restarts below
       until an explicitly approved idle maintenance window.

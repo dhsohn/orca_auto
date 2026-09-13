@@ -114,7 +114,7 @@ bootstrap에 `--with-workflows`를 추가하거나, 활성 환경에서
 `python -m pip install -e . -e ./extensions/workflows`를 실행하세요.
 선택적 `orca_auto_workflows` 배포물은 본체와 정확히 같은 버전이어야 합니다.
 기본 본체 설치에는 워크플로우 구현이 들어 있지 않으며, 명령·패키지 이름은
-그대로입니다. 미출시 6.0 개발 버전은 두 TS 워크플로우를 호환 지원 없이 제거합니다.
+그대로입니다. 6.0 릴리스는 두 TS 워크플로우를 호환 지원 없이 제거합니다.
 기존 환경을 업그레이드하기 전에 [RELEASE.md](RELEASE.md)(영어)를
 읽으세요. Python 설치만으로 서비스가 배포되지는 않습니다. `systemd install`은
 계속 checkout의 `systemd/` 자산을 읽습니다.

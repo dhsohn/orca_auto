@@ -30,7 +30,7 @@ what is documented here is what the project commits to.
 
 Starting with 5.0.0, `orca_auto` installs core by
 default; workflows require the same-version `orca_auto_workflows` extension.
-The current unreleased 6.0 development line supports only conformer screening
+The 6.0 release supports only conformer screening
 in that extension; the two TS workflows are removed without compatibility or
 automatic migration. See the [cutover warning](RELEASE.md#removing-ts-workflows-in-60).
 Without the extension, standalone ORCA remains usable, but workflow operations and incomplete

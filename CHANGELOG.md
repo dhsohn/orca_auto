@@ -6,7 +6,13 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
-## [6.0.0.dev0] - Unreleased
+## [6.0.0] - 2026-09-13
+
+### Added
+
+- Tagged matched Core/Workflows releases are built and checked in GitHub Actions,
+  published through PyPI Trusted Publishing, and attached to GitHub Releases as
+  the same distribution files. Package publication does not deploy local services.
 
 ### Removed
 
@@ -36,6 +42,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - Unused CREST/xTB admission-dependency containers and test-only execution
   wrappers. Execution tests use the worker's queue-processing entrypoint;
   shared admission ownership and generation-aware cancellation remain intact.
+- Redundant queue-runtime and worker-callback containers. Callers use the
+  existing queue operations and worker dependency factories directly.
+- Unused optimization-progress gradient/step values, per-item convergence flags,
+  and the coarse running flag, together with their dedicated parsing. Progress
+  retains cycle energies and the final convergence verdict. Malformed values
+  in the unused convergence-table and wall-time fields no longer abort progress
+  extraction; this is not a claim of identical behavior for all malformed output.
 
 ### Changed
 
@@ -52,11 +65,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - NEB reports share decoded output text across NEB, optimization-progress and
   TS-refinement extraction within each attempt. Frequency analysis remains
   separate, retaining its final-geometry evidence checks.
+- Final structure evidence shares decoded output text between result and
+  frequency parsing. Job-location index reads use the shared JSON-list reader.
+- CREST execution uses its existing context dependency to resolve the molecule
+  key, without a second callback path through the worker lifecycle.
+- Workflow advancement checks terminal synchronization against its already-loaded
+  payload instead of reading the workflow file a second time.
+- Distribution checks require the source release version in both built wheel
+  pairs, installed package metadata, and the exact CLI version output.
 
 ### Retained
 
-- Standalone Core ORCA TS, frequency, IRC and relaxed-scan calculations are
-  unchanged. The optional `conformer_search` workflow remains available.
+- Standalone Core ORCA TS, frequency, IRC, NEB-TS and relaxed-scan jobs remain
+  available. The optional `conformer_search` workflow remains available.
 
 ## [5.0.0] - 2026-09-12
 
