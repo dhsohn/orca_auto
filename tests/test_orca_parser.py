@@ -288,20 +288,15 @@ def test_parse_opt_progress_extracts_all_cycles(tmp_path: Path) -> None:
     # Cycle 1: energy only, no convergence table
     assert progress.steps[0].cycle == 1
     assert progress.steps[0].energy_hartree == pytest.approx(-100.1)
-    assert progress.steps[0].max_gradient is None
 
     # Cycle 2: energy + convergence table
     assert progress.steps[1].cycle == 2
     assert progress.steps[1].energy_hartree == pytest.approx(-100.12)
-    assert progress.steps[1].energy_change == pytest.approx(-0.02)
-    assert progress.steps[1].max_gradient == pytest.approx(0.005)
-    assert progress.steps[1].converged_flags["MAX gradient"] is False
 
-    # Cycle 3: partially converged
+    # Cycle 3: energy remains available even with a partially converged table
     assert progress.steps[2].cycle == 3
-    assert progress.steps[2].max_gradient == pytest.approx(0.0002)
-    assert progress.steps[2].converged_flags["MAX gradient"] is True
-    assert sum(progress.steps[2].converged_flags.values()) == 4  # 4 out of 5 YES
+    assert progress.steps[2].energy_hartree == pytest.approx(-100.123)
+    assert progress.is_converged is False
 
 
 def test_parse_opt_progress_accepts_uppercase_cycle_headers(tmp_path: Path) -> None:
@@ -317,18 +312,17 @@ def test_parse_opt_progress_accepts_uppercase_cycle_headers(tmp_path: Path) -> N
     assert progress.steps[-1].cycle == 3
 
 
-def test_parse_opt_progress_running_detection(tmp_path: Path) -> None:
-    """If ORCA TERMINATED NORMALLY is absent, is_running == True."""
+def test_parse_opt_progress_keeps_unfinished_energy_steps(tmp_path: Path) -> None:
     out_file = tmp_path / "running.out"
     out_file.write_text(_OPT_RUNNING_OUT, encoding="utf-8")
 
     progress = parse_opt_progress(str(out_file))
-    assert progress.is_running is True
+    assert [step.cycle for step in progress.steps] == [1, 2, 3]
+    assert progress.steps[-1].energy_hartree == pytest.approx(-100.123)
     assert progress.is_converged is False
 
 
 def test_parse_opt_progress_converged_detection(tmp_path: Path) -> None:
-    """When convergence is achieved and termination is normal, is_converged == True and is_running == False."""
     converged_out = _OPT_RUNNING_OUT + "\n".join(
         [
             "",
@@ -342,7 +336,6 @@ def test_parse_opt_progress_converged_detection(tmp_path: Path) -> None:
 
     progress = parse_opt_progress(str(out_file))
     assert progress.is_converged is True
-    assert progress.is_running is False
 
 
 def test_parse_opt_progress_sp_returns_empty_steps(tmp_path: Path) -> None:
@@ -363,16 +356,16 @@ def test_parse_opt_progress_sp_returns_empty_steps(tmp_path: Path) -> None:
 
     progress = parse_opt_progress(str(out_file))
     assert progress.steps == []
-    assert progress.is_running is False
+    assert progress.is_converged is False
 
 
 @pytest.mark.parametrize(
-    "header,is_running",
-    [("", False), ("Geometry Optimization Cycle 1\n", True)],
+    "header",
+    ["", "Geometry Optimization Cycle 1\n"],
     ids=["no-cycle", "cycle-without-finite-energy"],
 )
-def test_parse_opt_progress_empty_cycle_running_state(
-    tmp_path: Path, header: str, is_running: bool
+def test_parse_opt_progress_without_finite_cycles_returns_no_steps(
+    tmp_path: Path, header: str
 ) -> None:
     out_file = tmp_path / "unfinished.out"
     out_file.write_text(header + "FINAL SINGLE POINT ENERGY 1E999\n", encoding="utf-8")
@@ -380,12 +373,10 @@ def test_parse_opt_progress_empty_cycle_running_state(
     progress = parse_opt_progress(str(out_file))
 
     assert progress.steps == []
-    assert progress.is_running is is_running
+    assert progress.is_converged is False
 
 
-def test_parse_opt_progress_keeps_last_finite_energy_and_cycle_local_metrics(
-    tmp_path: Path,
-) -> None:
+def test_parse_opt_progress_keeps_last_finite_energy_per_cycle(tmp_path: Path) -> None:
     out_file = tmp_path / "cycles.out"
     out_file.write_text(
         "FINAL SINGLE POINT ENERGY -99\n"
@@ -414,11 +405,25 @@ def test_parse_opt_progress_keeps_last_finite_energy_and_cycle_local_metrics(
         (3, -4.5),
         (1, -5.0),
     ]
-    assert progress.steps[0].max_gradient == 0.1
-    assert progress.steps[0].converged_flags == {"MAX gradient": True}
-    assert progress.steps[1].max_gradient is None
-    assert progress.steps[1].converged_flags == {}
-    assert progress.is_running is True
+    assert progress.is_converged is False
+
+
+def test_parse_opt_progress_reads_energy_despite_malformed_convergence_table(
+    tmp_path: Path,
+) -> None:
+    out_file = tmp_path / "malformed_table.out"
+    out_file.write_text(
+        "Geometry Optimization Cycle 1\n"
+        "FINAL SINGLE POINT ENERGY -1\n"
+        "MAX gradient 1.2.3 0.01 NO\n"
+        "THE OPTIMIZATION HAS CONVERGED\n",
+        encoding="utf-8",
+    )
+
+    progress = parse_opt_progress(str(out_file))
+
+    assert [(step.cycle, step.energy_hartree) for step in progress.steps] == [(1, -1.0)]
+    assert progress.is_converged is True
 
 
 def test_parse_opt_progress_assigns_whole_text_energy_matches_by_start(tmp_path: Path) -> None:

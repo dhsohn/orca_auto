@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from ..utils.coercion import normalize_text
 from ..utils.lock import file_lock
-from ..utils.persistence import atomic_write_json, coerce_int, resolve_root_path
+from ..utils.persistence import (
+    atomic_write_json,
+    coerce_int,
+    load_json_list_file,
+    resolve_root_path,
+)
 from .location import JobLocationRecord
 
 JOB_LOCATION_INDEX_FILE_NAME = "job_locations.json"
@@ -67,21 +71,11 @@ def _record_from_dict(raw: dict[str, Any]) -> JobLocationRecord:
 
 
 def _load_records(root: Path) -> list[JobLocationRecord]:
-    path = _index_path(root)
-    if not path.exists():
-        return []
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return []
-    except OSError as exc:
-        raise JobLocationIndexCorruptError(f"Job location index cannot be read: {path}") from exc
-    try:
-        raw = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise JobLocationIndexCorruptError(f"Job location index is not valid JSON: {path}") from exc
-    if not isinstance(raw, list):
-        raise JobLocationIndexCorruptError(f"Job location index must contain a JSON list: {path}")
+    raw = load_json_list_file(
+        _index_path(root),
+        corrupt_error=JobLocationIndexCorruptError,
+        description="Job location index",
+    )
     return [_record_from_dict(item) for item in raw if isinstance(item, dict)]
 
 

@@ -10,7 +10,7 @@ from orca_auto.core.admission import (
     recover_orphaned_engine_slots,
     recover_slot_engine_process,
 )
-from orca_auto.core.commands.queue import QueueRuntime, run_pidfile_queue_worker_command
+from orca_auto.core.commands import queue as queue_commands
 
 from .. import lifecycle as _queue_lifecycle
 from ..dependencies import ChildQueueWorkerDeps
@@ -140,27 +140,21 @@ class EngineQueueRuntime:
     accept_entry_fn: Callable[[Any], bool] | None = None
     queue_entry_by_id_fn: Callable[[str | Path, str], Any | None] | None = None
 
-    def _queue_runtime(
-        self,
-        *,
-        list_queue_fn: Callable[[str | Path], list[Any]] | None = None,
-    ) -> QueueRuntime:
-        return QueueRuntime(
-            load_config_fn=self.load_config,
+    def queue_roots(self, cfg: Any) -> tuple[Path, ...]:
+        return queue_commands.queue_roots(
+            cfg,
             runtime_roots_for_cfg_fn=self.runtime_roots_for_cfg,
-            list_queue_fn=list_queue_fn or self.list_queue,
-            dequeue_next_fn=self.dequeue_next,
-            dequeue_next_across_roots_fn=dequeue_next_across_roots,
-            peek_next_across_roots_fn=peek_next_across_roots,
-            dequeue_entry_if_pending_fn=self.dequeue_entry_if_pending,
-            accept_entry_fn=self.accept_entry_fn,
         )
 
-    def queue_roots(self, cfg: Any) -> tuple[Path, ...]:
-        return self._queue_runtime().queue_roots(cfg)
-
     def peek_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
-        return self._queue_runtime().peek_next_entry(cfg)
+        return queue_commands.peek_next_entry(
+            cfg,
+            queue_roots_fn=self.queue_roots,
+            list_queue_fn=self.list_queue,
+            peek_next_across_roots_fn=peek_next_across_roots,
+            select_all_rows=self.dequeue_entry_if_pending is not None,
+            accept_entry_fn=self.accept_entry_fn,
+        )
 
     def has_admission_capacity(self, cfg: Any) -> bool:
         return admission_has_capacity(cfg)
@@ -171,10 +165,23 @@ class EngineQueueRuntime:
         *,
         list_queue_fn: Callable[[str | Path], list[Any]] | None = None,
     ) -> list[tuple[Path, Any]]:
-        return self._queue_runtime(list_queue_fn=list_queue_fn).queue_entries_with_roots(cfg)
+        return queue_commands.queue_entries_with_roots(
+            cfg,
+            queue_roots_fn=self.queue_roots,
+            list_queue_fn=list_queue_fn or self.list_queue,
+            accept_entry_fn=self.accept_entry_fn,
+        )
 
     def dequeue_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
-        return self._queue_runtime().dequeue_next_entry(cfg)
+        return queue_commands.dequeue_next_entry(
+            cfg,
+            queue_roots_fn=self.queue_roots,
+            list_queue_fn=self.list_queue,
+            dequeue_next_fn=self.dequeue_next,
+            dequeue_entry_if_pending_fn=self.dequeue_entry_if_pending,
+            dequeue_next_across_roots_fn=dequeue_next_across_roots,
+            accept_entry_fn=self.accept_entry_fn,
+        )
 
     def queue_entry_by_id(self, queue_root: Path | str, queue_id: str) -> Any | None:
         if self.queue_entry_by_id_fn is not None:
@@ -368,7 +375,7 @@ class EngineQueueRuntime:
         existing_pid_report_fn: Callable[[int], Any] | None = None,
         max_concurrent_fn: Callable[[Any], int] | None = None,
     ) -> int:
-        return run_pidfile_queue_worker_command(
+        return queue_commands.run_pidfile_queue_worker_command(
             args,
             load_config_fn=load_config_fn or self.load_config,
             config_path_fn=config_path_fn,

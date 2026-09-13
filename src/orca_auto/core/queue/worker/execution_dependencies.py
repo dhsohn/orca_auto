@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Any, TypeVar
 
 from ..engine.worker_execution import (
     EngineWorkerProcessDependencyFactory,
@@ -18,19 +18,6 @@ ProcessResultT = TypeVar("ProcessResultT")
 class WorkerConfigDependencies:
     load_config: Callable[..., Any]
     queue_entry_by_id: Callable[[Path | str, str], Any | None]
-
-
-@dataclass(frozen=True)
-class WorkerProcessDependencyCallbacks(Generic[ProcessResultT]):
-    terminate_process: Callable[..., bool]
-    wait_for_cancellable_process: Callable[..., ProcessResultT]
-    sleep: Callable[..., Any]
-    now_utc_iso: Callable[..., Any]
-    get_cancel_requested: Callable[..., Any]
-    mark_completed: Callable[..., Any]
-    mark_cancelled: Callable[..., Any]
-    mark_failed: Callable[..., Any]
-    engine_runner_dependencies: Mapping[str, Any]
 
 
 def build_worker_config_dependencies(
@@ -85,29 +72,6 @@ def build_worker_process_default_factories(
     }
 
 
-def build_worker_process_default_factories_from_callbacks(
-    callbacks: WorkerProcessDependencyCallbacks[ProcessResultT],
-    *,
-    config_factory: DependencyFactory,
-    runner_dependencies_type: EngineWorkerProcessDependencyFactory[ProcessResultT],
-    cancel_check_interval_seconds: float,
-) -> dict[str, DependencyFactory]:
-    return build_worker_process_default_factories(
-        config_factory=config_factory,
-        runner_dependencies_type=runner_dependencies_type,
-        terminate_process=callbacks.terminate_process,
-        wait_for_cancellable_process=callbacks.wait_for_cancellable_process,
-        sleep=callbacks.sleep,
-        cancel_check_interval_seconds=cancel_check_interval_seconds,
-        now_utc_iso=callbacks.now_utc_iso,
-        get_cancel_requested=callbacks.get_cancel_requested,
-        mark_completed=callbacks.mark_completed,
-        mark_cancelled=callbacks.mark_cancelled,
-        mark_failed=callbacks.mark_failed,
-        engine_runner_dependencies=callbacks.engine_runner_dependencies,
-    )
-
-
 def build_worker_execution_dependency_container(
     container_builder: Callable[..., Any],
     overrides: Mapping[str, Any],
@@ -122,10 +86,8 @@ def build_worker_execution_dependency_container(
 
 __all__ = [
     "WorkerConfigDependencies",
-    "WorkerProcessDependencyCallbacks",
     "build_worker_config_dependencies",
     "build_worker_execution_dependencies_from_groups",
     "build_worker_execution_dependency_container",
     "build_worker_process_default_factories",
-    "build_worker_process_default_factories_from_callbacks",
 ]

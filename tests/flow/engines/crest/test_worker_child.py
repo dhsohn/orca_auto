@@ -78,9 +78,6 @@ def test_run_worker_child_job_wires_canonical_child_runtime(
     assert captured["find_queue_entry_fn"](tmp_path, "queue-1") is entry
     assert captured["dependencies_fn"]() is dependencies
     assert captured["process_dequeued_entry_fn"] is worker_child.process_dequeued_entry
-    assert captured["process_dequeued_entry_kwargs"] == {
-        "molecule_key_resolver": worker_child._molecule_key
-    }
     assert captured["requeue_running_entry_fn"] is worker_child.requeue_running_entry
     assert captured["mark_recovery_pending_context_fn"] is (
         worker_child._mark_recovery_pending_context

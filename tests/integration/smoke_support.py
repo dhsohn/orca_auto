@@ -125,10 +125,7 @@ def pump_workflow(
         status = str(payload.get("status") or "").strip().lower()
         if status not in TERMINAL_WORKFLOW_STATUSES:
             continue
-        if workflow_needs_terminal_sync(
-            workspace_dir,
-            load_workflow_payload_fn=load_workflow_payload,
-        ):
+        if workflow_needs_terminal_sync(payload):
             continue
         break
     else:

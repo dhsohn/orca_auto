@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import textwrap
+import tomllib
 import venv
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
@@ -136,7 +137,14 @@ def _metadata(wheel: Path) -> dict[str, object]:
     }
 
 
-def _assert_pair(core: Path, workflows: Path, core_source: Path, workflow_source: Path) -> None:
+def _assert_pair(
+    core: Path,
+    workflows: Path,
+    core_source: Path,
+    workflow_source: Path,
+    *,
+    expected_version: str,
+) -> None:
     errors = check_wheel_contents(core, core_source)
     errors += check_wheel_contents(
         workflows, workflow_source, package="orca_auto/flow", distribution="orca_auto_workflows"
@@ -144,7 +152,12 @@ def _assert_pair(core: Path, workflows: Path, core_source: Path, workflow_source
     errors += check_disjoint_ownership(core, workflows)
     assert not errors, "\n".join(errors)
     core_metadata, workflow_metadata = _metadata(core), _metadata(workflows)
-    assert core_metadata["version"] == workflow_metadata["version"]
+    assert core_metadata["version"] == workflow_metadata["version"] == expected_version, (
+        "wheel versions do not match source release",
+        expected_version,
+        core_metadata["version"],
+        workflow_metadata["version"],
+    )
     requirements = workflow_metadata["requires"]
     assert isinstance(requirements, list)
     normalized_requires = {
@@ -204,7 +217,14 @@ def _pip(python: Path, wheelhouse: Path, *requirements: str, cwd: Path) -> None:
     _run([str(python), "-m", "pip", "check"], cwd=cwd)
 
 
-def _probe(python: Path, *, cwd: Path, core_source: Path, flow_source: Path | None) -> None:
+def _probe(
+    python: Path,
+    *,
+    cwd: Path,
+    core_source: Path,
+    flow_source: Path | None,
+    expected_version: str,
+) -> None:
     code = """\
     import importlib.metadata
     import importlib.util
@@ -213,11 +233,13 @@ def _probe(python: Path, *, cwd: Path, core_source: Path, flow_source: Path | No
     import orca_auto
 
     expected_core = Path(sys.argv[1]).resolve()
+    expected_version = sys.argv[3]
     assert Path(orca_auto.__file__).resolve().parent == expected_core, orca_auto.__file__
+    assert importlib.metadata.version("orca_auto") == expected_version, "core version does not match source release"
     if sys.argv[2]:
         import orca_auto.flow
         assert Path(orca_auto.flow.__file__).resolve().parent == Path(sys.argv[2]).resolve()
-        assert importlib.metadata.version("orca_auto") == importlib.metadata.version("orca_auto_workflows")
+        assert importlib.metadata.version("orca_auto_workflows") == expected_version, "workflows version does not match source release"
     else:
         assert importlib.util.find_spec("orca_auto.flow") is None
         try:
@@ -228,11 +250,20 @@ def _probe(python: Path, *, cwd: Path, core_source: Path, flow_source: Path | No
             raise AssertionError("uninstalled workflows metadata survived")
     """
     _run(
-        [str(python), "-I", "-c", textwrap.dedent(code), str(core_source), str(flow_source or "")],
+        [
+            str(python),
+            "-I",
+            "-c",
+            textwrap.dedent(code),
+            str(core_source),
+            str(flow_source or ""),
+            expected_version,
+        ],
         cwd=cwd,
     )
     _run([str(python), "-I", "-m", "orca_auto.cli", "--help"], cwd=cwd)
-    _run([str(python.parent / "orca_auto"), "--version"], cwd=cwd)
+    version_output = _run([str(python.parent / "orca_auto"), "--version"], cwd=cwd)
+    assert version_output.stdout == f"orca_auto {expected_version}\n", version_output.stdout
 
 
 def _site_package(python: Path, *, cwd: Path) -> Path:
@@ -380,6 +411,8 @@ def _monolith_upgrade(
     core: Path,
     flow: Path,
     work: Path,
+    *,
+    expected_version: str,
 ) -> None:
     monolith = work / "synthetic-monolith-source"
     _copy_project(core_project, monolith)
@@ -406,12 +439,20 @@ def _monolith_upgrade(
     assert (package / sentinel).is_file() and (package / "flow" / "__init__.py").is_file()
     _pip(python, wheelhouse, str(core), str(flow), cwd=work)
     assert not (package / sentinel).exists()
-    _probe(python, cwd=work, core_source=package, flow_source=package / "flow")
+    _probe(
+        python,
+        cwd=work,
+        core_source=package,
+        flow_source=package / "flow",
+        expected_version=expected_version,
+    )
     _scaffold(python, work / "upgraded-monolith-scaffold", cwd=work)
 
 
 def run_matrix(work: Path) -> dict[str, object]:
     print(f"[distributions] retained workspace: {work}", flush=True)
+    with (REPO_ROOT / "pyproject.toml").open("rb") as source:
+        expected_version = str(tomllib.load(source)["project"]["version"])
     core_project, flow_project = work / "core-source", work / "workflows-source"
     _copy_project(REPO_ROOT, core_project, include_workflows=True)
     _copy_project(REPO_ROOT / "extensions" / "workflows", flow_project)
@@ -420,7 +461,11 @@ def run_matrix(work: Path) -> dict[str, object]:
     assert core_sdist is not None and flow_sdist is not None
     _assert_core_sdist(core_sdist)
     _assert_pair(
-        core, flow, core_project / "src" / "orca_auto", flow_project / "src" / "orca_auto" / "flow"
+        core,
+        flow,
+        core_project / "src" / "orca_auto",
+        flow_project / "src" / "orca_auto" / "flow",
+        expected_version=expected_version,
     )
     core_unpacked = _unpack_sdist(core_sdist, work / "core-sdist")
     flow_unpacked = _unpack_sdist(flow_sdist, work / "workflows-sdist")
@@ -431,6 +476,7 @@ def run_matrix(work: Path) -> dict[str, object]:
         flow_rebuilt,
         core_project / "src" / "orca_auto",
         flow_project / "src" / "orca_auto" / "flow",
+        expected_version=expected_version,
     )
     wheelhouse = work / "wheelhouse"
     wheelhouse.mkdir()
@@ -454,7 +500,9 @@ def run_matrix(work: Path) -> dict[str, object]:
     python = _new_environment(work / "installed", wheelhouse, cwd=work)
     _pip(python, wheelhouse, str(core), cwd=work)
     package = _site_package(python, cwd=work)
-    _probe(python, cwd=work, core_source=package, flow_source=None)
+    _probe(
+        python, cwd=work, core_source=package, flow_source=None, expected_version=expected_version
+    )
     _refuse_scaffold(
         python, work / "core-only-scaffold", cwd=work, reason="workflows extension is not installed"
     )
@@ -462,7 +510,13 @@ def run_matrix(work: Path) -> dict[str, object]:
     print("[distributions] core-only installed fake worker passed", flush=True)
     fingerprints = _core_fingerprints(package)
     _pip(python, wheelhouse, str(flow), cwd=work)
-    _probe(python, cwd=work, core_source=package, flow_source=package / "flow")
+    _probe(
+        python,
+        cwd=work,
+        core_source=package,
+        flow_source=package / "flow",
+        expected_version=expected_version,
+    )
     _scaffold(python, work / "wheel-scaffold", cwd=work)
     worker_plan = _run(
         [
@@ -488,7 +542,9 @@ def run_matrix(work: Path) -> dict[str, object]:
     assert _core_fingerprints(package) == fingerprints
     _run([str(python), "-m", "pip", "uninstall", "-y", "orca_auto_workflows"], cwd=work)
     assert _core_fingerprints(package) == fingerprints
-    _probe(python, cwd=work, core_source=package, flow_source=None)
+    _probe(
+        python, cwd=work, core_source=package, flow_source=None, expected_version=expected_version
+    )
     _refuse_scaffold(
         python,
         work / "uninstalled-scaffold",
@@ -504,11 +560,24 @@ def run_matrix(work: Path) -> dict[str, object]:
     _pip(rebuilt_python, wheelhouse, str(core_rebuilt), str(flow_rebuilt), cwd=work)
     rebuilt_package = _site_package(rebuilt_python, cwd=work)
     _probe(
-        rebuilt_python, cwd=work, core_source=rebuilt_package, flow_source=rebuilt_package / "flow"
+        rebuilt_python,
+        cwd=work,
+        core_source=rebuilt_package,
+        flow_source=rebuilt_package / "flow",
+        expected_version=expected_version,
     )
     _scaffold(rebuilt_python, work / "sdist-scaffold", cwd=work)
     _mismatched_version(rebuilt_python, rebuilt_package, cwd=work)
-    _monolith_upgrade(rebuilt_python, wheelhouse, core_project, flow_project, core, flow, work)
+    _monolith_upgrade(
+        rebuilt_python,
+        wheelhouse,
+        core_project,
+        flow_project,
+        core,
+        flow,
+        work,
+        expected_version=expected_version,
+    )
     # Mixed editable/wheel installs exercise pkgutil namespace path composition
     # in both directions; each transition runs a fresh interpreter.
     _run(
@@ -520,6 +589,7 @@ def run_matrix(work: Path) -> dict[str, object]:
         cwd=work,
         core_source=core_project / "src" / "orca_auto",
         flow_source=package / "flow",
+        expected_version=expected_version,
     )
     _scaffold(python, work / "editable-core-scaffold", cwd=work)
     _run(
@@ -531,6 +601,7 @@ def run_matrix(work: Path) -> dict[str, object]:
         cwd=work,
         core_source=package,
         flow_source=flow_project / "src" / "orca_auto" / "flow",
+        expected_version=expected_version,
     )
     _scaffold(python, work / "editable-workflows-scaffold", cwd=work)
     _run([str(python), "-m", "pip", "uninstall", "-y", "orca_auto"], cwd=work)
@@ -540,10 +611,17 @@ def run_matrix(work: Path) -> dict[str, object]:
         cwd=work,
         core_source=core_project / "src" / "orca_auto",
         flow_source=flow_project / "src" / "orca_auto" / "flow",
+        expected_version=expected_version,
     )
     _scaffold(python, work / "both-editable-scaffold", cwd=work)
     _run([str(python), "-m", "pip", "uninstall", "-y", "orca_auto_workflows"], cwd=work)
-    _probe(python, cwd=work, core_source=core_project / "src" / "orca_auto", flow_source=None)
+    _probe(
+        python,
+        cwd=work,
+        core_source=core_project / "src" / "orca_auto",
+        flow_source=None,
+        expected_version=expected_version,
+    )
     _refuse_scaffold(
         python,
         work / "editable-core-only-scaffold",

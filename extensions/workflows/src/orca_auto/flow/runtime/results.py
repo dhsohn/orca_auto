@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from orca_auto.core.statuses import (
@@ -89,15 +87,7 @@ def workflow_advanced_result(
     return result
 
 
-def workflow_needs_terminal_sync(
-    workspace_dir: str | Path,
-    *,
-    load_workflow_payload_fn: Callable[[str | Path], dict[str, Any]],
-) -> bool:
-    try:
-        payload = load_workflow_payload_fn(workspace_dir)
-    except (FileNotFoundError, ValueError):
-        return False
+def workflow_needs_terminal_sync(payload: dict[str, Any]) -> bool:
     metadata = payload.get("metadata")
     if isinstance(metadata, dict) and bool(metadata.get("final_child_sync_pending")):
         return True

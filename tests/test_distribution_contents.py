@@ -4,22 +4,42 @@ import base64
 import csv
 import hashlib
 import io
+import subprocess
+import sys
 import tarfile
-from importlib import import_module
+from importlib import import_module, metadata, util
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 from zipfile import ZipFile
 
 import pytest
 
-from scripts.check_distributions import _assert_core_sdist, _copy_project, _unpack_sdist
+from scripts.check_distributions import (
+    _assert_core_sdist,
+    _assert_pair,
+    _copy_project,
+    _probe,
+    _unpack_sdist,
+)
 from scripts.check_wheel_contents import check_disjoint_ownership, check_wheel_contents
 
 
-def _wheel(path: Path, payload: dict[str, bytes], *, name: str = "orca_auto") -> Path:
-    metadata = f"{name}-5.0.0.dev0.dist-info"
+def _wheel(
+    path: Path,
+    payload: dict[str, bytes],
+    *,
+    name: str = "orca_auto",
+    version: str = "5.0.0.dev0",
+    requires: tuple[str, ...] = (),
+) -> Path:
+    metadata = f"{name}-{version}.dist-info"
     files = {
         **payload,
-        f"{metadata}/METADATA": f"Metadata-Version: 2.1\nName: {name}\nVersion: 5.0.0.dev0\n".encode(),
+        f"{metadata}/METADATA": (
+            f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+            + "".join(f"Requires-Dist: {value}\n" for value in requires)
+        ).encode(),
         f"{metadata}/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
     }
     output = io.StringIO()
@@ -60,6 +80,124 @@ def test_each_distribution_owns_only_its_source_payload(tmp_path: Path) -> None:
         == []
     )
     assert check_disjoint_ownership(core, flow) == []
+
+
+@pytest.mark.parametrize(
+    "core_version,flow_version,accepted",
+    [("2.3.4", "2.3.4", True), ("2.2.0", "2.2.0", False), ("2.3.4", "2.2.0", False)],
+    ids=["expected-pair", "matching-but-stale-pair", "mismatched-pair"],
+)
+def test_wheel_pair_versions_match_source_release(
+    tmp_path: Path, core_version: str, flow_version: str, accepted: bool
+) -> None:
+    core_payload = {"orca_auto/__init__.py": b"", "orca_auto/py.typed": b""}
+    flow_payload = {"orca_auto/flow/__init__.py": b"", "orca_auto/flow/py.typed": b""}
+    core_source = _source(tmp_path / "core", core_payload, "orca_auto")
+    flow_source = _source(tmp_path / "flow", flow_payload, "orca_auto/flow")
+    core = _wheel(
+        tmp_path / f"orca_auto-{core_version}-py3-none-any.whl",
+        core_payload,
+        version=core_version,
+        requires=(f'orca_auto_workflows=={flow_version}; extra == "workflows"',),
+    )
+    flow = _wheel(
+        tmp_path / f"orca_auto_workflows-{flow_version}-py3-none-any.whl",
+        flow_payload,
+        name="orca_auto_workflows",
+        version=flow_version,
+        requires=(f"orca_auto=={core_version}",),
+    )
+    if accepted:
+        _assert_pair(core, flow, core_source, flow_source, expected_version="2.3.4")
+    else:
+        with pytest.raises(AssertionError):
+            _assert_pair(core, flow, core_source, flow_source, expected_version="2.3.4")
+
+
+@pytest.mark.parametrize(
+    "core_version,flow_version,cli_output,accepted",
+    [
+        ("2.3.4", None, "orca_auto 2.3.4\n", True),
+        ("2.3.4", "2.3.4", "orca_auto 2.3.4\n", True),
+        ("2.2.0", None, "orca_auto 2.3.4\n", False),
+        ("2.2.0", "2.2.0", "orca_auto 2.3.4\n", False),
+        ("2.3.4", "2.2.0", "orca_auto 2.3.4\n", False),
+        ("2.3.4", None, "orca_auto 2.2.0\n", False),
+        ("2.3.4", "2.3.4", "orca_auto 2.2.0\n", False),
+        ("2.3.4", None, "unexpected text\norca_auto 2.3.4\n", False),
+        ("2.3.4", None, "orca_auto 2.3.4\n\n", False),
+    ],
+    ids=[
+        "core-only",
+        "with-workflows",
+        "stale-core-only",
+        "stale-matching-pair",
+        "stale-workflows",
+        "stale-core-cli",
+        "stale-workflows-cli",
+        "extra-cli-text",
+        "extra-cli-newline",
+    ],
+)
+def test_installed_probe_checks_metadata_and_cli_release_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    core_version: str,
+    flow_version: str | None,
+    cli_output: str,
+    accepted: bool,
+) -> None:
+    core_source = tmp_path / "orca_auto"
+    flow_source = core_source / "flow" if flow_version is not None else None
+    core_module = ModuleType("orca_auto")
+    core_module.__file__ = str(core_source / "__init__.py")
+    core_module.__path__ = [str(core_source)]
+    flow_module = ModuleType("orca_auto.flow")
+    flow_module.__file__ = str(core_source / "flow" / "__init__.py")
+    core_module.__dict__["flow"] = flow_module
+
+    def installed_version(name: str) -> str:
+        if name == "orca_auto":
+            return core_version
+        if name == "orca_auto_workflows" and flow_version is not None:
+            return flow_version
+        raise metadata.PackageNotFoundError(name)
+
+    def probe_subprocess(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "-c" in argv:
+            index = argv.index("-c")
+            # Execute the actual isolated probe code against synthetic installed
+            # modules/metadata; no environment is installed or subprocess started.
+            with monkeypatch.context() as isolated:
+                isolated.setattr(sys, "argv", ["-c", *argv[index + 2 :]])
+                isolated.setitem(sys.modules, "orca_auto", core_module)
+                isolated.setitem(sys.modules, "orca_auto.flow", flow_module)
+                isolated.setattr(metadata, "version", installed_version)
+                isolated.setattr(util, "find_spec", lambda name: None)
+                try:
+                    exec(argv[index + 1], {})
+                except AssertionError as exc:
+                    return subprocess.CompletedProcess(argv, 1, "", str(exc))
+        return subprocess.CompletedProcess(argv, 0, cli_output if "--version" in argv else "", "")
+
+    monkeypatch.setattr("scripts.check_distributions.subprocess.run", probe_subprocess)
+    if accepted:
+        _probe(
+            tmp_path / "bin" / "python",
+            cwd=tmp_path,
+            core_source=core_source,
+            flow_source=flow_source,
+            expected_version="2.3.4",
+        )
+    else:
+        with pytest.raises((AssertionError, RuntimeError)):
+            _probe(
+                tmp_path / "bin" / "python",
+                cwd=tmp_path,
+                core_source=core_source,
+                flow_source=flow_source,
+                expected_version="2.3.4",
+            )
 
 
 @pytest.mark.parametrize(

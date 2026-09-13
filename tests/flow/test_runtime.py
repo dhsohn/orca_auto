@@ -81,11 +81,6 @@ def _capture_worker_side_effects(
     return state_calls, journal_calls, registry_calls
 
 
-def _always_false_after_append(sync_checks: list[str], workspace_dir: object) -> bool:
-    sync_checks.append(str(workspace_dir))
-    return False
-
-
 def test_workflow_worker_lock_path_expands_home_directory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -268,7 +263,7 @@ def test_phase_transition_event_payloads_emit_crest_finished_summary() -> None:
         ValueError("workflow invalid"),
     ],
 )
-def test_workflow_needs_terminal_sync_returns_false_for_unreadable_payload(
+def test_terminal_child_sync_returns_false_for_unreadable_payload(
     monkeypatch: pytest.MonkeyPatch,
     error: Exception,
 ) -> None:
@@ -277,28 +272,22 @@ def test_workflow_needs_terminal_sync_returns_false_for_unreadable_payload(
 
     monkeypatch.setattr(runtime, "load_workflow_payload", fake_load_workflow_payload)
 
-    assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is False
+    record = _registry_record(workflow_id="wf_unreadable", status="completed")
+    assert runtime._workflow_needs_terminal_child_sync(record, previous_status="completed") is False
 
 
-def test_workflow_needs_terminal_sync_short_circuits_for_final_child_sync_flag(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_workflow_needs_terminal_sync_short_circuits_for_final_child_sync_flag() -> None:
     payload = {
         "metadata": {"final_child_sync_pending": True},
         "stages": [],
     }
 
-    monkeypatch.setattr(runtime, "load_workflow_payload", lambda workspace_dir: payload)
-
-    assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is True
+    assert runtime.workflow_needs_terminal_sync(payload) is True
 
 
-def test_workflow_needs_terminal_sync_retries_pending_si_publication(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_workflow_needs_terminal_sync_retries_pending_si_publication() -> None:
     payload = {"metadata": {"si_publish_pending": True}, "stages": []}
-    monkeypatch.setattr(runtime, "load_workflow_payload", lambda workspace_dir: payload)
-    assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is True
+    assert runtime.workflow_needs_terminal_sync(payload) is True
 
 
 def test_si_publish_retry_due_tracks_pending_and_blocked_state() -> None:
@@ -317,6 +306,127 @@ def test_si_publish_retry_due_tracks_pending_and_blocked_state() -> None:
         )
         is True
     )
+
+
+@pytest.mark.parametrize("child_pending", [False, True])
+def test_terminal_child_sync_reads_one_payload_per_decision(
+    monkeypatch: pytest.MonkeyPatch,
+    child_pending: bool,
+) -> None:
+    record = _registry_record(
+        workflow_id="wf_one_read",
+        status="completed",
+        workspace_dir="/tmp/wf_one_read",
+    )
+    reads: list[str] = []
+
+    def load_payload(workspace_dir: str | Path) -> dict[str, Any]:
+        reads.append(str(workspace_dir))
+        return {
+            "workflow_id": record.workflow_id,
+            "status": "completed",
+            "metadata": {"final_child_sync_pending": child_pending},
+            "stages": [],
+        }
+
+    monkeypatch.setattr(runtime, "load_workflow_payload", load_payload)
+
+    assert (
+        runtime._workflow_needs_terminal_child_sync(record, previous_status="completed")
+        is child_pending
+    )
+    assert reads == [record.workspace_dir]
+
+
+def test_terminal_child_sync_uses_one_snapshot_and_reloads_next_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = _registry_record(
+        workflow_id="wf_changing_snapshot",
+        status="completed",
+        workspace_dir="/tmp/wf_changing_snapshot",
+    )
+    settled = {"workflow_id": record.workflow_id, "status": "completed", "stages": []}
+    snapshots = iter([settled, {**settled, "stages": [{"status": "running"}]}, settled])
+    reads: list[str] = []
+
+    def load_payload(workspace_dir: str | Path) -> dict[str, Any]:
+        reads.append(str(workspace_dir))
+        return next(snapshots)
+
+    monkeypatch.setattr(runtime, "load_workflow_payload", load_payload)
+
+    # These are individual decisions, not complete worker cycles: resolving a
+    # registry record's location may independently need to read its payload.
+    for count, expected in enumerate([False, True, False], start=1):
+        assert (
+            runtime._workflow_needs_terminal_child_sync(record, previous_status="completed")
+            is expected
+        )
+        assert reads == [record.workspace_dir] * count
+
+
+@pytest.mark.parametrize("previous_status", ["queued", "running", "submitted"])
+def test_non_terminal_child_sync_decision_does_not_load_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    previous_status: str,
+) -> None:
+    record = _registry_record(workflow_id="wf_active", status=previous_status)
+    monkeypatch.setattr(
+        runtime,
+        "load_workflow_payload",
+        lambda workspace_dir: pytest.fail("active decisions must not load terminal state"),
+    )
+
+    assert not runtime._workflow_needs_terminal_child_sync(record, previous_status=previous_status)
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError("missing"), ValueError("invalid")])
+@pytest.mark.parametrize("pending, blocked", [(False, False), (True, False), (True, True)])
+def test_terminal_child_sync_unreadable_payload_preserves_cached_retry_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    pending: bool,
+    blocked: bool,
+) -> None:
+    record = _registry_record(
+        workflow_id="wf_unreadable",
+        status="completed",
+        metadata={"si_publish_pending": pending, "si_publish_blocked": blocked},
+    )
+    reads: list[str] = []
+
+    def load_payload(workspace_dir: str | Path) -> dict[str, Any]:
+        reads.append(str(workspace_dir))
+        raise error
+
+    monkeypatch.setattr(runtime, "load_workflow_payload", load_payload)
+
+    assert runtime._workflow_needs_terminal_child_sync(record, previous_status="completed") is (
+        pending and not blocked
+    )
+    assert reads == [record.workspace_dir]
+
+
+@pytest.mark.parametrize("error", [PermissionError("denied"), TypeError("bad payload")])
+def test_terminal_child_sync_propagates_other_loader_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    record = _registry_record(workflow_id="wf_loader_error", status="completed")
+    reads: list[str] = []
+
+    def load_payload(workspace_dir: str | Path) -> dict[str, Any]:
+        reads.append(str(workspace_dir))
+        raise error
+
+    monkeypatch.setattr(runtime, "load_workflow_payload", load_payload)
+
+    with pytest.raises(type(error)) as caught:
+        runtime._workflow_needs_terminal_child_sync(record, previous_status="completed")
+
+    assert caught.value is error
+    assert reads == [record.workspace_dir]
 
 
 def test_terminal_sync_reconciles_stale_registry_pending_after_payload_success(
@@ -1005,16 +1115,9 @@ def test_previously_cleared_identity_mismatch_stays_hidden_until_quarantined(
     ],
 )
 def test_workflow_needs_terminal_sync_detects_active_stage_or_task_status(
-    monkeypatch: pytest.MonkeyPatch,
     stage: dict[str, Any],
 ) -> None:
-    monkeypatch.setattr(
-        runtime,
-        "load_workflow_payload",
-        lambda workspace_dir: {"metadata": {}, "stages": [stage]},
-    )
-
-    assert runtime._workflow_needs_terminal_sync("/tmp/workflow_workspace") is True
+    assert runtime.workflow_needs_terminal_sync({"metadata": {}, "stages": [stage]}) is True
 
 
 def test_advance_workflow_registry_once_skips_terminal_workflow_without_sync(
@@ -1033,11 +1136,11 @@ def test_advance_workflow_registry_once_skips_terminal_workflow_without_sync(
     )
     sync_checks: list[str] = []
 
-    monkeypatch.setattr(
-        runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: _always_false_after_append(sync_checks, workspace_dir),
-    )
+    def load_payload(workspace_dir: str | Path) -> dict[str, Any]:
+        sync_checks.append(str(workspace_dir))
+        return {"workflow_id": record.workflow_id, "status": "completed", "stages": []}
+
+    monkeypatch.setattr(runtime, "load_workflow_payload", load_payload)
     monkeypatch.setattr(
         runtime,
         "advance_workflow",
@@ -1090,7 +1193,15 @@ def test_advance_workflow_registry_once_runs_terminal_child_sync_when_needed(
     )
     advance_calls: list[dict[str, Any]] = []
 
-    monkeypatch.setattr(runtime, "_workflow_needs_terminal_sync", lambda workspace_dir: True)
+    monkeypatch.setattr(
+        runtime,
+        "load_workflow_payload",
+        lambda workspace_dir: {
+            "workflow_id": record.workflow_id,
+            "metadata": {"final_child_sync_pending": True},
+            "stages": [],
+        },
+    )
 
     def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
         advance_calls.append(kwargs)
@@ -1151,10 +1262,8 @@ def test_advance_workflow_registry_once_advances_non_terminal_workflow(
 
     monkeypatch.setattr(
         runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: pytest.fail(
-            "terminal sync checks should not run for active workflows"
-        ),
+        "workflow_needs_terminal_sync",
+        lambda payload: pytest.fail("terminal sync checks should not run for active workflows"),
     )
 
     def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
@@ -1215,10 +1324,8 @@ def test_registry_worker_falls_back_to_workflow_id_when_workspace_path_is_stale(
 
     monkeypatch.setattr(
         runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: pytest.fail(
-            "terminal sync checks should not run for active workflows"
-        ),
+        "workflow_needs_terminal_sync",
+        lambda payload: pytest.fail("terminal sync checks should not run for active workflows"),
     )
 
     def fake_summary(workspace_dir: str | Path, **kwargs: Any) -> dict[str, Any]:
@@ -1268,10 +1375,8 @@ def test_registry_worker_ignores_stale_workspace_copy_with_matching_workflow_id(
 
     monkeypatch.setattr(
         runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: pytest.fail(
-            "terminal sync checks should not run for active workflows"
-        ),
+        "workflow_needs_terminal_sync",
+        lambda payload: pytest.fail("terminal sync checks should not run for active workflows"),
     )
 
     def fake_summary(workspace_dir: str | Path, **kwargs: Any) -> dict[str, Any]:
@@ -1318,12 +1423,14 @@ def test_stale_registry_path_uses_current_workspace_for_terminal_child_sync(
     _capture_worker_side_effects(monkeypatch, records=[record])
     sync_checks: list[str] = []
     advance_calls: list[dict[str, Any]] = []
+    original_load_payload = runtime.load_workflow_payload
 
-    monkeypatch.setattr(
-        runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: _always_false_after_append(sync_checks, workspace_dir) or True,
-    )
+    def load_payload(workspace_dir: str | Path) -> dict[str, Any]:
+        payload = original_load_payload(workspace_dir)
+        sync_checks.append(str(workspace_dir))
+        return {**payload, "metadata": {"final_child_sync_pending": True}}
+
+    monkeypatch.setattr(runtime, "load_workflow_payload", load_payload)
 
     def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
         advance_calls.append(kwargs)
@@ -1343,7 +1450,10 @@ def test_stale_registry_path_uses_current_workspace_for_terminal_child_sync(
         lease_seconds=0,
     )
 
-    assert sync_checks == [str(current_workspace.resolve())]
+    # Location validation and cancellation bookkeeping may also load the state;
+    # every successful load must use the recovered workspace, not the stale path.
+    assert sync_checks
+    assert set(sync_checks) == {str(current_workspace.resolve())}
     assert advance_calls[0]["target"] == "wf_terminal_moved"
     assert advance_calls[0]["submit_ready"] is False
     assert result["workflow_results"][0]["reason"] == "terminal_child_sync"
@@ -1384,10 +1494,8 @@ def test_advance_workflow_registry_once_defers_submission_when_admission_full(
 
     monkeypatch.setattr(
         runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: pytest.fail(
-            "terminal sync checks should not run for active workflows"
-        ),
+        "workflow_needs_terminal_sync",
+        lambda payload: pytest.fail("terminal sync checks should not run for active workflows"),
     )
 
     def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
@@ -1456,10 +1564,8 @@ def test_advance_workflow_registry_once_defers_submission_when_admission_check_e
     )
     monkeypatch.setattr(
         runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: pytest.fail(
-            "terminal sync checks should not run for active workflows"
-        ),
+        "workflow_needs_terminal_sync",
+        lambda payload: pytest.fail("terminal sync checks should not run for active workflows"),
     )
 
     def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
@@ -1539,10 +1645,8 @@ def test_advance_workflow_registry_once_appends_stage_transition_events(
 
     monkeypatch.setattr(
         runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: pytest.fail(
-            "terminal sync checks should not run for active workflows"
-        ),
+        "workflow_needs_terminal_sync",
+        lambda payload: pytest.fail("terminal sync checks should not run for active workflows"),
     )
     monkeypatch.setattr(runtime, "_safe_workflow_summary", lambda *args, **kwargs: next(summaries))
     monkeypatch.setattr(
@@ -1589,10 +1693,8 @@ def test_advance_workflow_registry_once_records_non_terminal_advance_failure(
 
     monkeypatch.setattr(
         runtime,
-        "_workflow_needs_terminal_sync",
-        lambda workspace_dir: pytest.fail(
-            "terminal sync checks should not run for active workflows"
-        ),
+        "workflow_needs_terminal_sync",
+        lambda payload: pytest.fail("terminal sync checks should not run for active workflows"),
     )
 
     def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
@@ -1640,7 +1742,15 @@ def test_advance_workflow_registry_once_records_terminal_child_sync_failure(
         records=[record],
     )
 
-    monkeypatch.setattr(runtime, "_workflow_needs_terminal_sync", lambda workspace_dir: True)
+    monkeypatch.setattr(
+        runtime,
+        "load_workflow_payload",
+        lambda workspace_dir: {
+            "workflow_id": record.workflow_id,
+            "metadata": {"final_child_sync_pending": True},
+            "stages": [],
+        },
+    )
 
     def fake_advance_workflow(**kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("sync broke")
