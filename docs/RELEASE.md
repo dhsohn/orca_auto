@@ -157,27 +157,34 @@ artifacts. Publishing 6.0.0 does not update an installed runtime.
 
 ## One-time Trusted Publishing setup
 
-The two distributions use the same GitHub Actions publisher, without a stored
-PyPI API token. Before the first tag, register two pending publishers on the
+The two distributions use separate GitHub Actions environments in one release
+workflow, without a stored PyPI API token. Before the first tag, register two
+pending publishers on the
 [PyPI account Publishing page](https://pypi.org/manage/account/publishing/):
 
-| Field | Value |
-| --- | --- |
-| PyPI project name | `orca_auto`, then `orca_auto_workflows` |
-| GitHub owner | `dhsohn` |
-| Repository | `orca_auto` |
-| Workflow filename | `release.yml` |
-| Environment | `pypi` |
+| Field | Core | Workflows |
+| --- | --- | --- |
+| PyPI project name | `orca_auto` | `orca_auto_workflows` |
+| GitHub owner | `dhsohn` | `dhsohn` |
+| Repository | `orca_auto` | `orca_auto` |
+| Workflow filename | `release.yml` | `release.yml` |
+| Environment | `pypi` | `pypi-workflows` |
+
+Pending publishers cannot share an identical owner/repository/workflow/environment
+combination, even for different project names. Keep the environments distinct;
+this initial-registration restriction differs from linking a normal publisher to
+multiple existing projects. See the
+[PyPI publisher model](https://github.com/pypi/warehouse/blob/main/warehouse/oidc/models/github.py).
 
 The account owner completes login, identity checks and publisher registration.
 Do not put credentials in issues, logs or repository files. A pending publisher
 does not reserve a project name; the first successful upload creates the project.
 See [PyPI's pending-publisher guide](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
 
-In the GitHub repository, configure the `pypi` environment to allow only the
+In the GitHub repository, configure both `pypi` and `pypi-workflows` to allow only the
 selected **tag** pattern `v*`, with no branch deployment rule. This is different
-from allowing protected branches. The environment name must match the PyPI
-publisher exactly. Tag creation is the maintainer's publication decision;
+from allowing protected branches. Each environment must match its PyPI
+publisher. Tag creation is the maintainer's publication decision;
 there is no additional environment approval step in this setup.
 
 ## Tagging and automated publication
@@ -201,18 +208,22 @@ Do not move or delete a published tag. The
 source versions and points to a commit contained in `main`; development,
 prerelease and mismatched tags stop before publication.
 
-The workflow separates three jobs:
+The workflow has three job definitions; the PyPI matrix creates one publishing
+job per distribution:
 
 1. **Validate and build** has read-only repository access. It runs the standard
    checks, builds and exercises the two distributions with
    `python -m scripts.check_distributions`, checks metadata with
    `twine check --strict`, and retains the four original wheel/sdist files,
    checksums and release notes in one Actions artifact.
-2. **Publish to PyPI** downloads that exact artifact ID and verifies its files.
-   Only this job has `id-token: write`, scoped through the `pypi` environment.
-   It does not build or install project code. Only the four distribution files,
-   not the checksum or notes files, are sent to PyPI.
-3. **Create GitHub Release** runs after PyPI publication succeeds. It checks the
+2. **Publish to PyPI** downloads that exact artifact ID and verifies its files
+   in each matrix job. Only these jobs have `id-token: write`: Core uses `pypi`,
+   and Workflows uses `pypi-workflows`. Each job selects only its project's exact
+   wheel and sdist into a fresh upload directory, without rebuilding or installing
+   project code. Checksums, notes and the other project's files are not uploaded
+   by that job. Matrix fail-fast is disabled so one failure does not cancel the
+   other publisher mid-upload.
+3. **Create GitHub Release** runs only after both PyPI jobs succeed. It checks the
    published PyPI filenames and SHA-256 digests against the retained files,
    confirms the remote tag still names the release commit, and attaches the
    same four distributions and `SHA256SUMS`. It has repository write access,
@@ -249,20 +260,25 @@ both projects' release JSON endpoints:
 - `https://pypi.org/pypi/orca-auto/X.Y.Z/json`
 - `https://pypi.org/pypi/orca-auto-workflows/X.Y.Z/json`
 
-Then choose the matching case:
+Inspect each publisher separately before choosing a retry. A successful Core
+job need not be repeated when the Workflows job failed without accepting a file
+(or vice versa). Use **Re-run failed jobs**, not a full workflow rerun, to retain
+the original build and avoid replaying a successful publisher. Then choose the
+matching case for every failed publisher:
 
-- **No files accepted:** correct the setup or transient failure and rerun only
-  failed jobs so they consume the original build artifact.
-- **Some files accepted:** stop. A plain rerun will reject duplicate filenames.
+- **Neither of its two files accepted:** correct the setup or transient failure
+  and rerun only failed jobs so they consume the original build artifact.
+- **One of its two files accepted:** stop. A plain rerun will reject duplicate
+  filenames.
   After confirming every accepted file matches the original artifact, obtain
   an explicit recovery decision and publish only the missing original files.
   The initial workflow does not automate this recovery. Never delete accepted
   files, replace the tag or rebuild files to make the error disappear.
-- **All four files accepted, upload job failed:** the final upload response may
+- **Both of its files accepted, upload job failed:** the final upload response may
   have been lost after PyPI accepted the file. Stop for an explicit recovery
   decision after digest readback. Do not rerun the upload job through duplicate
   files; its failed dependency also prevents the GitHub job from simply running.
-- **PyPI job succeeded, GitHub step failed:** verify the PyPI digests, then
+- **Both PyPI jobs succeeded, GitHub step failed:** verify the PyPI digests, then
   inspect whether a GitHub release or partial asset upload already exists.
   If no release exists, rerun the failed GitHub job. If one exists, first compare
   its assets with the retained artifact and complete only missing assets under

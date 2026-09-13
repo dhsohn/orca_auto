@@ -222,6 +222,20 @@ def verify_remote_tag(repo: Path, tag: str, commit: str) -> None:
         raise ValueError("remote tag no longer matches the selected release commit")
 
 
+def select_project(artifacts: Path, tag: str, commit: str, project: str, output: Path) -> None:
+    if project not in PROJECTS:
+        raise ValueError("unknown release project")
+    manifest = verify_artifacts(artifacts, tag, commit)
+    version = manifest["version"]
+    names = {f"{project}-{version}-py3-none-any.whl", f"{project}-{version}.tar.gz"}
+    output.mkdir(parents=True, exist_ok=False)
+    for name in sorted(names):
+        target = output / name
+        shutil.copyfile(artifacts / "dist" / name, target)
+        if hashlib.sha256(target.read_bytes()).hexdigest() != manifest["sha256"][name]:
+            raise ValueError(f"selected upload checksum mismatch: {name}")
+
+
 def check_pypi(artifacts: Path, tag: str, commit: str) -> None:
     manifest = verify_artifacts(artifacts, tag, commit)
     version = manifest["version"]
@@ -247,17 +261,20 @@ def check_pypi(artifacts: Path, tag: str, commit: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("guard", "stage", "verify", "pypi-check"):
+    for name in ("guard", "stage", "verify", "pypi-check", "select-project"):
         command = commands.add_parser(name)
         command.add_argument("--tag", required=True)
         command.add_argument("--commit", required=True)
-        if name != "pypi-check":
+        if name in {"guard", "stage", "verify"}:
             command.add_argument("--repo", type=Path, default=Path.cwd())
         if name == "stage":
             command.add_argument("--work-dir", type=Path, required=True)
             command.add_argument("--output", type=Path, required=True)
-        elif name in {"verify", "pypi-check"}:
+        elif name in {"verify", "pypi-check", "select-project"}:
             command.add_argument("--artifacts", type=Path, required=True)
+        if name == "select-project":
+            command.add_argument("--project", choices=PROJECTS, required=True)
+            command.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "guard":
         print(guard(args.repo, args.tag, args.commit))
@@ -266,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "verify":
         verify_artifacts(args.artifacts, args.tag, args.commit)
         verify_remote_tag(args.repo, args.tag, args.commit)
+    elif args.command == "select-project":
+        select_project(args.artifacts, args.tag, args.commit, args.project, args.output)
     else:
         check_pypi(args.artifacts, args.tag, args.commit)
     return 0

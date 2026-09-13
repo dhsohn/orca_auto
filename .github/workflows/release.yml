@@ -62,9 +62,19 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: orca_auto
+            environment: pypi
+          - project: orca_auto_workflows
+            environment: pypi-workflows
     environment:
-      name: pypi
-      url: https://pypi.org/project/orca-auto/
+      name: ${{ matrix.environment }}
+      url: https://pypi.org/project/${{ matrix.project }}/
+    env:
+      RELEASE_PROJECT: ${{ matrix.project }}
     permissions:
       contents: read
       id-token: write
@@ -83,12 +93,14 @@ jobs:
           path: release-artifacts
           merge-multiple: true
           digest-mismatch: error
+      - name: Select only this project's verified distributions
+        run: python3 scripts/release.py select-project --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --artifacts release-artifacts --project "$RELEASE_PROJECT" --output upload-dist
       - name: Verify artifact identity and current tag before publishing
         run: python3 scripts/release.py verify --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --artifacts release-artifacts
-      - name: Publish the matched distribution pair
+      - name: Publish this project's wheel and source distribution
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
-          packages-dir: release-artifacts/dist/
+          packages-dir: upload-dist/
           skip-existing: false
           verify-metadata: true
           attestations: true

@@ -224,6 +224,96 @@ def test_staged_bundle_contains_only_checked_distributions_and_flat_download_che
         )
 
 
+@pytest.mark.parametrize("project", release.PROJECTS)
+def test_select_project_cli_copies_only_exact_project_pair(
+    bundle: tuple[Path, Path, str], tmp_path: Path, project: str
+) -> None:
+    artifacts, _, commit = bundle
+    output = tmp_path / "upload-dist"
+
+    assert (
+        release.main(
+            [
+                "select-project",
+                "--tag",
+                TAG,
+                "--commit",
+                commit,
+                "--artifacts",
+                str(artifacts),
+                "--project",
+                project,
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    expected = {f"{project}-{VERSION}-py3-none-any.whl", f"{project}-{VERSION}.tar.gz"}
+    assert {path.name for path in output.iterdir()} == expected
+    for name in expected:
+        assert (output / name).read_bytes() == (artifacts / "dist" / name).read_bytes()
+    release.verify_artifacts(artifacts, TAG, commit)
+
+
+@pytest.mark.parametrize("project", ["orca", "orca_auto_extra", "orca-auto", "../orca_auto"])
+def test_select_project_refuses_unknown_project_before_creating_output(
+    bundle: tuple[Path, Path, str], tmp_path: Path, project: str
+) -> None:
+    artifacts, _, commit = bundle
+    output = tmp_path / "unknown-project"
+    with pytest.raises(ValueError, match="unknown release project"):
+        release.select_project(artifacts, TAG, commit, project, output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("occupied", [False, True])
+def test_select_project_refuses_reused_output_without_modifying_it(
+    bundle: tuple[Path, Path, str], tmp_path: Path, occupied: bool
+) -> None:
+    artifacts, _, commit = bundle
+    output = tmp_path / "already-used"
+    output.mkdir()
+    if occupied:
+        (output / "existing.whl").write_bytes(b"prior release evidence")
+    before = {path.name: path.read_bytes() for path in output.iterdir()}
+
+    with pytest.raises(FileExistsError):
+        release.select_project(artifacts, TAG, commit, "orca_auto", output)
+
+    assert {path.name: path.read_bytes() for path in output.iterdir()} == before
+
+
+@pytest.mark.parametrize("tampered_project", release.PROJECTS)
+def test_select_project_checks_full_bundle_even_when_other_project_is_tampered(
+    bundle: tuple[Path, Path, str], tmp_path: Path, tampered_project: str
+) -> None:
+    artifacts, _, commit = bundle
+    (artifacts / "dist" / f"{tampered_project}-{VERSION}.tar.gz").write_bytes(b"tampered")
+    output = tmp_path / "must-not-upload"
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        release.select_project(artifacts, TAG, commit, "orca_auto", output)
+
+    assert not output.exists()
+
+
+def test_select_project_rejects_corruption_during_copy(
+    bundle: tuple[Path, Path, str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts, _, commit = bundle
+    copyfile = release.shutil.copyfile
+
+    def corrupt_copy(source: Path, target: Path) -> None:
+        copyfile(source, target)
+        target.write_bytes(b"corrupted during copy")
+
+    monkeypatch.setattr(release.shutil, "copyfile", corrupt_copy)
+    with pytest.raises(ValueError, match="selected upload checksum mismatch"):
+        release.select_project(artifacts, TAG, commit, "orca_auto", tmp_path / "corrupt-upload")
+
+
 @pytest.mark.parametrize(
     "mutation", ["missing", "extra", "tampered", "symlink", "checksum", "manifest"]
 )
@@ -325,7 +415,22 @@ def test_release_workflow_has_one_trigger_and_scoped_publication_permissions() -
     }
     assert jobs["build"].get("permissions", workflow["permissions"]) == {"contents": "read"}
     assert jobs["publish-pypi"]["permissions"] == {"contents": "read", "id-token": "write"}
-    assert jobs["publish-pypi"]["environment"]["name"] == "pypi"
+    publisher = jobs["publish-pypi"]
+    assert publisher["environment"] == {
+        "name": "${{ matrix.environment }}",
+        "url": "https://pypi.org/project/${{ matrix.project }}/",
+    }
+    assert publisher["env"] == {"RELEASE_PROJECT": "${{ matrix.project }}"}
+    assert publisher["strategy"]["fail-fast"] == "false"
+    assert set(publisher["strategy"]) == {"fail-fast", "matrix"}
+    assert set(publisher["strategy"]["matrix"]) == {"include"}
+    rows = publisher["strategy"]["matrix"]["include"]
+    assert len(rows) == 2
+    assert all(set(row) == {"project", "environment"} for row in rows)
+    assert {(row["project"], row["environment"]) for row in rows} == {
+        ("orca_auto", "pypi"),
+        ("orca_auto_workflows", "pypi-workflows"),
+    }
     assert jobs["publish-pypi"]["needs"] == "build"
     assert jobs["github-release"]["permissions"] == {"contents": "write"}
     assert jobs["github-release"]["needs"] == ["build", "publish-pypi"]
@@ -384,13 +489,28 @@ def test_release_workflow_publishes_only_verified_same_run_artifacts() -> None:
         ]
         assert len(writes) == 1
         assert steps.index(downloads[0]) < steps.index(verifications[0]) < steps.index(writes[0])
+        if job_name == "publish-pypi":
+            selections = [
+                step for step in steps if "release.py select-project" in step.get("run", "")
+            ]
+            assert len(selections) == 1
+            assert "if" not in selections[0]
+            assert (
+                steps.index(downloads[0])
+                < steps.index(selections[0])
+                < steps.index(verifications[0])
+            )
+            assert selections[0]["run"] == (
+                'python3 scripts/release.py select-project --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" '
+                '--artifacts release-artifacts --project "$RELEASE_PROJECT" --output upload-dist'
+            )
         commands = "\n".join(step.get("run", "") for step in steps)
         assert "pip install" not in commands and "make check" not in commands
         assert "release.py verify" in commands
     publish = jobs["publish-pypi"]["steps"][-1]
     assert publish["uses"].startswith("pypa/gh-action-pypi-publish@")
     assert publish["with"] == {
-        "packages-dir": "release-artifacts/dist/",
+        "packages-dir": "upload-dist/",
         "skip-existing": "false",
         "verify-metadata": "true",
         "attestations": "true",
