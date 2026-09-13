@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ._artifacts import (
     load_job_artifact_context,
-    load_job_artifacts,
     resolve_latest_job_dir,
 )
 from ._contract_context import load_orca_contract_payload
@@ -21,7 +20,6 @@ __all__ = [
     "index_root_for_cfg",
     "list_job_location_records",
     "load_job_artifact_context",
-    "load_job_artifacts",
     "load_job_runtime_context",
     "load_orca_contract_payload",
     "record_from_artifacts",

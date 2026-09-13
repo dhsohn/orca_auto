@@ -6,8 +6,6 @@ from typing import Any
 from orca_auto.core.indexing import engines as _engine_locations
 from orca_auto.core.indexing.engine_job_locations import EngineJobLocations
 
-from .state import load_state
-
 
 def job_type_for_mode(mode: str) -> str:
     normalized = _engine_locations.normalize_text(mode).lower()
@@ -40,8 +38,6 @@ _LOCATION_EXPORTS = EngineJobLocations(
         payload_kind_default="standard",
         molecule_key_name="molecule_key",
     ),
-    load_state_fn=load_state,
-    load_report_json_fn=None,
     payload_kind_kwarg="mode",
     molecule_key_kwarg="molecule_key",
     default_payload_kind_kwarg="default_mode",

@@ -130,7 +130,6 @@ class ConformerWorkflowSmokeCase:
     workflow_id: str
     workspace_dir: Path
     crest_root: Path
-    xtb_root: Path
     orca_root: Path
     orca_queue_root: Path
     fake_orca_counter: Path
@@ -178,7 +177,6 @@ def _create_conformer_workflow_smoke_case(
         workflow_id=workflow_id,
         workspace_dir=workspace_dir,
         crest_root=workspace_dir / "01_crest",
-        xtb_root=workspace_dir / "02_xtb",
         orca_root=workspace_dir / "03_orca",
         orca_queue_root=workflow_root,
         fake_orca_counter=fake_orca_counter,
@@ -206,7 +204,6 @@ def _submit_conformer_crest_stage(
         target=case.workflow_id,
         workflow_root=case.workflow_root,
         crest_config=str(smoke_workspace.crest_config_path),
-        xtb_config=str(smoke_workspace.xtb_config_path),
         submit_ready=True,
     )
     crest_stages = _engine_stages(payload, "crest")
@@ -275,7 +272,6 @@ def _submit_conformer_orca_stage(
         target=case.workflow_id,
         workflow_root=case.workflow_root,
         crest_config=str(smoke_workspace.crest_config_path),
-        xtb_config=str(smoke_workspace.xtb_config_path),
         orca_config=str(case.config_path),
         submit_ready=True,
     )
@@ -318,7 +314,6 @@ def _sync_completed_orca_stage(
         target=case.workflow_id,
         workflow_root=case.workflow_root,
         crest_config=str(smoke_workspace.crest_config_path),
-        xtb_config=str(smoke_workspace.xtb_config_path),
         orca_config=str(case.config_path),
         submit_ready=True,
     )

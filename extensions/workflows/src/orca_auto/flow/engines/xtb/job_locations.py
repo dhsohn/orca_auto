@@ -11,8 +11,6 @@ from orca_auto.core.paths.workflow import (
     workflow_workspace_internal_engine_paths,
 )
 
-from .state import load_state
-
 
 def job_type_identifier(job_type: str) -> str:
     normalized = _engine_locations.normalize_text(job_type).lower() or "unknown"
@@ -39,8 +37,6 @@ _LOCATION_EXPORTS = EngineJobLocations(
         payload_kind_default="unknown",
         molecule_key_name="reaction_key",
     ),
-    load_state_fn=load_state,
-    load_report_json_fn=None,
     payload_kind_kwarg="job_type",
     molecule_key_kwarg="reaction_key",
     default_payload_kind_kwarg="default_job_type",

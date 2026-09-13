@@ -12,9 +12,6 @@ from orca_auto.flow.orchestration.lifecycle import (
     workflow_sync_only_impl,
 )
 from orca_auto.flow.orchestration.stage_runtime.crest import (
-    completed_crest_roles_impl as _completed_crest_roles,
-)
-from orca_auto.flow.orchestration.stage_runtime.crest import (
     completed_crest_stage_impl as _completed_crest_stage,
 )
 from orca_auto.flow.orchestration.stage_runtime.shared import (
@@ -159,28 +156,7 @@ def test_unique_artifact_helper_deduplicates_kind_and_path() -> None:
     ]
 
 
-def test_completed_crest_role_and_contract_helpers_use_expected_targets() -> None:
-    payload = {
-        "stages": [
-            {
-                "status": "completed",
-                "metadata": {"input_role": "reactant"},
-                "task": {"engine": "crest"},
-            },
-            {
-                "status": "running",
-                "metadata": {"input_role": "product"},
-                "task": {"engine": "crest"},
-            },
-            {
-                "status": "completed",
-                "metadata": {"input_role": "product"},
-                "task": {"engine": "crest"},
-            },
-        ]
-    }
-    assert set(_completed_crest_roles(payload).keys()) == {"reactant", "product"}
-
+def test_completed_crest_contract_helper_uses_expected_target() -> None:
     crest_calls: list[dict[str, Any]] = []
 
     def fake_load_crest_artifact_contract(*, crest_index_root: Path, target: str) -> str:
@@ -206,30 +182,6 @@ def test_completed_crest_role_and_contract_helpers_use_expected_targets() -> Non
     assert crest_calls == [
         {"crest_index_root": Path("/tmp/crest_allowed"), "target": "/tmp/crest_job"}
     ]
-
-
-def test_completed_crest_roles_ignore_stale_completed_stage_when_newer_stage_is_active() -> None:
-    payload = {
-        "stages": [
-            {
-                "status": "completed",
-                "metadata": {"input_role": "reactant"},
-                "task": {"engine": "crest", "status": "completed"},
-            },
-            {
-                "status": "completed",
-                "metadata": {"input_role": "product"},
-                "task": {"engine": "crest", "status": "completed"},
-            },
-            {
-                "status": "running",
-                "metadata": {"input_role": "product"},
-                "task": {"engine": "crest", "status": "running"},
-            },
-        ]
-    }
-
-    assert set(_completed_crest_roles(payload).keys()) == {"reactant"}
 
 
 @pytest.mark.parametrize(

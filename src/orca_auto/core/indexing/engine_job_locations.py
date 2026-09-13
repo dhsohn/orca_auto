@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -12,8 +11,6 @@ from .roots import (
     index_root_for_cfg,
     index_root_for_path,
     list_job_records_for_cfg,
-    load_job_artifacts,
-    load_job_artifacts_for_cfg,
     resolve_job_location_for_cfg,
     resolve_latest_job_dir,
     runtime_roots_for_cfg,
@@ -33,8 +30,6 @@ class EngineJobLocations:
 
     engine: str
     spec: EngineLocationSpec
-    load_state_fn: Callable[[Path], dict[str, Any] | None]
-    load_report_json_fn: Callable[[Path], dict[str, Any] | None] | None
     payload_kind_kwarg: str
     molecule_key_kwarg: str
     default_payload_kind_kwarg: str
@@ -106,34 +101,6 @@ class EngineJobLocations:
         return resolve_latest_job_dir(
             index_root,
             target,
-            resolve_job_location_fn=resolve_job_location,
-        )
-
-    def load_job_artifacts(
-        self,
-        index_root: str | Path,
-        target: str,
-    ) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None]:
-        return load_job_artifacts(
-            index_root,
-            target,
-            load_state_fn=self.load_state_fn,
-            load_report_json_fn=self.load_report_json_fn,
-            resolve_latest_job_dir_fn=self.resolve_latest_job_dir,
-        )
-
-    def load_job_artifacts_for_cfg(
-        self,
-        cfg: Any,
-        target: str,
-    ) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None, JobLocationRecord | None]:
-        return load_job_artifacts_for_cfg(
-            cfg,
-            target,
-            engine=self.engine,
-            load_state_fn=self.load_state_fn,
-            load_report_json_fn=self.load_report_json_fn,
-            resolve_latest_job_dir_fn=self.resolve_latest_job_dir,
             resolve_job_location_fn=resolve_job_location,
         )
 

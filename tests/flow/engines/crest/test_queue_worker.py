@@ -30,6 +30,7 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
 )
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.flow.engines.crest import execution as worker_execution
 from orca_auto.flow.engines.crest import queue_runtime as queue_cmd
 from orca_auto.flow.engines.crest.runner import CrestRunResult
 from orca_auto.flow.engines.crest.state import (
@@ -214,7 +215,7 @@ def test_worker_adopts_terminal_artifacts_before_orphan_requeue(queue_env: Simpl
         reason="completed",
         retained_names=("crest_conformers.xyz",),
     )
-    queue_cmd._write_execution_artifacts(running, result)
+    worker_execution._write_execution_artifacts(running, result)
 
     assert queue_cmd._adopt_terminal_artifacts(
         queue_env.cfg,
@@ -244,7 +245,7 @@ def test_terminal_adoption_finalizes_racing_cancel_consistently(
         reason="completed",
         retained_names=("crest_conformers.xyz",),
     )
-    queue_cmd._write_execution_artifacts(running, result)
+    worker_execution._write_execution_artifacts(running, result)
     assert (
         request_cancel(
             queue_env.allowed_root,
@@ -540,8 +541,8 @@ def _patch_common(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
     def fake_release_slot(root: str, token: str) -> None:
         calls["released"].append((root, token))
 
-    monkeypatch.setattr(queue_cmd, "notify_job_started", fake_notify_started)
-    monkeypatch.setattr(queue_cmd, "notify_job_finished", fake_notify_finished)
+    monkeypatch.setattr(worker_execution, "notify_job_started", fake_notify_started)
+    monkeypatch.setattr(worker_execution, "notify_job_finished", fake_notify_finished)
     monkeypatch.setattr(queue_cmd, "release_slot", fake_release_slot)
     return calls
 
@@ -565,13 +566,13 @@ def test_process_one_completed_updates_queue_artifacts_index_without_organizing(
     calls = _patch_common(monkeypatch)
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution,
         "start_crest_job",
         lambda cfg, *, job_dir, selected_xyz, execution_snapshot: SimpleNamespace(
             process=FakeProcess(0)
         ),
     )
-    monkeypatch.setattr(queue_cmd, "finalize_crest_job", lambda running: completed_result)
+    monkeypatch.setattr(worker_execution, "finalize_crest_job", lambda running: completed_result)
 
     outcome = process_one_crest_for_test(queue_cmd, queue_env.cfg)
 
@@ -636,7 +637,7 @@ def test_process_one_runner_failure_marks_failed_and_writes_failure_artifacts(
     ) -> SimpleNamespace:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(queue_cmd, "start_crest_job", boom)
+    monkeypatch.setattr(worker_execution, "start_crest_job", boom)
 
     outcome = process_one_crest_for_test(queue_cmd, queue_env.cfg)
 
@@ -698,7 +699,7 @@ def test_process_one_cancel_requested_terminates_and_marks_cancelled(
     finalize_calls: list[tuple[str | None, str | None]] = []
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution,
         "start_crest_job",
         lambda cfg, *, job_dir, selected_xyz, execution_snapshot: SimpleNamespace(process=process),
     )
@@ -719,15 +720,15 @@ def test_process_one_cancel_requested_terminates_and_marks_cancelled(
         finalize_calls.append((forced_status, forced_reason))
         return cancelled_result
 
-    monkeypatch.setattr(queue_cmd, "get_cancel_requested", fake_get_cancel_requested)
+    monkeypatch.setattr(worker_execution, "get_cancel_requested", fake_get_cancel_requested)
 
     def terminate(proc: FakeProcess) -> bool:
         terminate_calls.append(proc)
         proc.exit()
         return True
 
-    monkeypatch.setattr(queue_cmd, "_terminate_process", terminate)
-    monkeypatch.setattr(queue_cmd, "finalize_crest_job", fake_finalize)
+    monkeypatch.setattr(worker_execution, "_terminate_process", terminate)
+    monkeypatch.setattr(worker_execution, "finalize_crest_job", fake_finalize)
 
     outcome = process_one_crest_for_test(queue_cmd, queue_env.cfg)
 

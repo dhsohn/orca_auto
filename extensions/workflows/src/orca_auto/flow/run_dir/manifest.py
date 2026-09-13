@@ -88,12 +88,12 @@ def _resolve_run_dir_workflow_type(
 
 
 def _resolve_run_dir_manifest_sections(
-    workflow_dir: Path, manifest: dict[str, Any]
+    manifest: dict[str, Any],
 ) -> RunDirManifestSections:
     return RunDirManifestSections(
         resources=_shared_manifest_mapping(manifest.get("resources")),
-        crest=_shared_resolve_engine_manifest(workflow_dir, manifest, "crest"),
-        orca=_shared_resolve_engine_manifest(workflow_dir, manifest, "orca"),
+        crest=_shared_resolve_engine_manifest(manifest, "crest"),
+        orca=_shared_resolve_engine_manifest(manifest, "orca"),
     )
 
 
@@ -103,7 +103,7 @@ def _load_run_dir_workflow_config(args: Any, workflow_dir: Path) -> RunDirWorkfl
         raise ValueError("workflow run-dir requires flow.yaml in workflow_dir.")
 
     manifest = _load_run_dir_manifest(workflow_dir)
-    sections = _resolve_run_dir_manifest_sections(workflow_dir, manifest)
+    sections = _resolve_run_dir_manifest_sections(manifest)
     return RunDirWorkflowConfig(
         workflow_dir=workflow_dir,
         manifest=manifest,

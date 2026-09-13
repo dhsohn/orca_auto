@@ -14,6 +14,8 @@ def _print_outcome(entry: Any, outcome: Any) -> None:
 
 
 def process_one_xtb_for_test(queue_cmd: Any, cfg: Any) -> str:
+    from orca_auto.flow.engines.xtb import execution as xtb_worker_execution
+
     # Mirror the production poll order: read admission capacity, look for a
     # claimable row, and only then reserve. A full pool or an idle queue must
     # not write to admission or list more than it has to.
@@ -30,10 +32,10 @@ def process_one_xtb_for_test(queue_cmd: Any, cfg: Any) -> str:
         if dequeued is None:
             return "idle"
         queue_root, entry = dequeued
-        outcome = queue_cmd._execute_queue_entry(
+        outcome = xtb_worker_execution.process_dequeued_entry(
             cfg,
+            entry,
             queue_root=queue_root,
-            entry=entry,
         )
         _print_outcome(entry, outcome)
         return "processed"
@@ -61,8 +63,6 @@ def process_one_crest_for_test(queue_cmd: Any, cfg: Any) -> str:
             cfg,
             entry,
             queue_root=queue_root,
-            molecule_key_resolver=crest_worker_execution._molecule_key,
-            dependencies=queue_cmd._worker_dependencies(),
         )
         _print_outcome(entry, outcome)
         return "processed"

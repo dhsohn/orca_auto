@@ -54,41 +54,6 @@ class EngineProcessRecoveryDeps:
     logger: logging.Logger = LOGGER
 
 
-def _process_identity_alive(
-    pid: int,
-    expected_ticks: int | None,
-    expected_boot_id: str | None,
-    *,
-    deps: EngineProcessRecoveryDeps,
-) -> bool:
-    if pid <= 0:
-        return False
-    if expected_boot_id is not None:
-        observed_boot_id = deps.boot_id()
-        if observed_boot_id is None:
-            # Unknown boot identity cannot prove the owner stale. Retain the
-            # slot so recovery does not advance to process-group signalling.
-            return True
-        if observed_boot_id != expected_boot_id:
-            return False
-    try:
-        deps.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    except OSError as exc:
-        return exc.errno != errno.ESRCH
-    if expected_ticks is None:
-        return True
-    observed_ticks = deps.process_start_ticks(pid)
-    if observed_ticks is None:
-        # PID existence is proven but identity is temporarily unknown. Treat
-        # the owner as live so startup never reaps a possibly active child.
-        return True
-    return observed_ticks == expected_ticks
-
-
 def _recorded_engine_identity_status(
     slot: AdmissionSlot,
     *,
@@ -397,11 +362,13 @@ def recover_slot_engine_process(
     if slot is None or slot.engine_process_state == "idle":
         return False
     if slot.engine_process_state == "pending":
-        if _process_identity_alive(
+        if process_utils.process_identity_alive(
             slot.owner_pid,
             slot.process_start_ticks,
             slot.owner_boot_id,
-            deps=active_deps,
+            kill_fn=active_deps.kill,
+            process_start_ticks_fn=active_deps.process_start_ticks,
+            boot_id_fn=active_deps.boot_id,
         ):
             raise EngineProcessRecordPendingError(
                 f"Admission slot {token} is pending under a live owner"
@@ -466,11 +433,13 @@ def recover_orphaned_engine_slots(
     for slot in list_all_slots(root):
         if allowed_sources is not None and slot.source not in allowed_sources:
             continue
-        if _process_identity_alive(
+        if process_utils.process_identity_alive(
             slot.owner_pid,
             slot.process_start_ticks,
             slot.owner_boot_id,
-            deps=active_deps,
+            kill_fn=active_deps.kill,
+            process_start_ticks_fn=active_deps.process_start_ticks,
+            boot_id_fn=active_deps.boot_id,
         ):
             continue
         orphaned.append(slot)

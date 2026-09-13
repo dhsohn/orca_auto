@@ -14,7 +14,7 @@ from orca_auto.flow.orchestration.stage_runtime.crest import (
     sync_crest_stage_impl,
 )
 from tests.flow.orchestration_services import orchestration_services
-from tests.flow.test_xtb_crest_adapters import _write_crest_state, _write_xyz
+from tests.flow.test_crest_adapters import _write_crest_state, _write_xyz
 
 
 def test_ensure_crest_job_dir_copies_input_and_populates_manifest(tmp_path: Path) -> None:

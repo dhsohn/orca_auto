@@ -18,6 +18,40 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - Removed workflow settings are not silently ignored: unknown `flow.yaml`
   top-level fields are rejected before creation or restart. Internal xTB
   opt/SP/ranking jobs remain separate from the CREST→ORCA conformer workflow.
+- Uncalled scan/TS workflow helpers and their test-only coverage, obsolete
+  xTB configuration forwarding in conformer orchestration, and xTB
+  queue-module execution adapters used only by tests. Conformer smoke tests
+  run the CREST and ORCA workers; internal xTB execution tests use their
+  concrete execution owners.
+- Unused internal `calc_type` metadata and its separate route-keyword taxonomy.
+  Method, basis, input-route and output-evidence parsing remain available.
+- Unused output-parser hash and modification-time bookkeeping, including its
+  extra full-file read. Artifact receipts and input identity hashes remain intact.
+- Test-only CREST execution-dependency assembly and the unused xTB downstream
+  workflow adapter. CREST execution tests use the concrete execution owner;
+  internal xTB engines remain available.
+- Unused workflow helper parameters and phase wrappers.
+- Unused internal artifact-loader methods and constructor wiring. ORCA lookup
+  tests use the live artifact-context API; index and state resolution remain intact.
+- Unused CREST/xTB admission-dependency containers and test-only execution
+  wrappers. Execution tests use the worker's queue-processing entrypoint;
+  shared admission ownership and generation-aware cancellation remain intact.
+
+### Changed
+
+- Admission cleanup and orphan recovery share one owner-process identity
+  predicate, retaining slots when the owner's identity cannot be verified.
+- Optimization progress and NEB TS-refinement reports share cycle-energy
+  extraction; NEB refinement keeps its own post-convergence boundary.
+- SI blocks no longer invent an `sp` route label when the output contains no
+  echoed route. This also applies to the SI section embedded in HTML reports.
+- IRC reports reuse each attempt's parsed IRC output for attempt details and
+  final-result selection, retaining fallback to an earlier nonempty attempt.
+- Conformer run-directory creation uses explicit arguments instead of a
+  single-template dispatch specification, preserving option precedence and validation.
+- NEB reports share decoded output text across NEB, optimization-progress and
+  TS-refinement extraction within each attempt. Frequency analysis remains
+  separate, retaining its final-geometry evidence checks.
 
 ### Retained
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import errno
 import os
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -104,36 +103,6 @@ def _save_slots(root: Path, slots: list[AdmissionSlot]) -> None:
     )
 
 
-def _process_identity_alive(
-    pid: int,
-    expected_ticks: int,
-    expected_boot_id: str,
-) -> bool:
-    if pid <= 0:
-        return False
-    observed_boot_id = _linux_boot_id()
-    if observed_boot_id is None:
-        # An unreadable boot identity is ambiguous. Keep the slot rather than
-        # declaring its owner dead and initiating engine recovery.
-        return True
-    if observed_boot_id != expected_boot_id:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        pass
-    except OSError as exc:
-        return exc.errno != errno.ESRCH
-    observed = _process_start_ticks(pid)
-    if observed is None:
-        # A live PID whose /proc identity is temporarily unreadable is
-        # unknown, not dead. Keep the slot and skip orphan recovery.
-        return True
-    return observed == expected_ticks
-
-
 def _inactive_engine_process_state(value: str) -> str:
     state = str(value or "").strip().lower()
     if state not in {"pending", "idle"}:
@@ -158,10 +127,13 @@ def _updated_inactive_engine_process_state(
 def _slot_owner_process_alive(slot: AdmissionSlot) -> bool:
     if slot.owner_pid <= 0:
         return False
-    return _process_identity_alive(
+    return process_utils.process_identity_alive(
         slot.owner_pid,
         slot.process_start_ticks,
         slot.owner_boot_id,
+        kill_fn=os.kill,
+        process_start_ticks_fn=_process_start_ticks,
+        boot_id_fn=_linux_boot_id,
     )
 
 

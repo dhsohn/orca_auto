@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -26,12 +25,6 @@ from orca_auto.core.engines.queue_worker import (
     EngineWorkerPolicy,
     build_engine_queue_worker_parser,
     build_runtime_engine_queue_worker,
-)
-from orca_auto.core.notifications.engines import (
-    notify_xtb_job_finished as notify_job_finished,
-)
-from orca_auto.core.notifications.engines import (
-    notify_xtb_job_started as notify_job_started,
 )
 from orca_auto.core.queue import (
     execution as _queue_execution,
@@ -61,10 +54,8 @@ from orca_auto.core.statuses import TERMINAL_STATUSES
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils.process import is_process_alive as worker_pid_is_alive
 from orca_auto.flow.engines import queue_runtime_common as _common
-from orca_auto.flow.engines.xtb import artifacts as _queue_artifacts
 from orca_auto.flow.engines.xtb import execution as _worker_execution
 from orca_auto.flow.engines.xtb import terminal as _queue_terminal
-from orca_auto.flow.engines.xtb import worker_terminal as _worker_terminal
 from orca_auto.flow.engines.xtb.worker_context import default_worker_execution_hooks
 
 from .engine import ENGINE_DEFINITION
@@ -73,16 +64,6 @@ from .job_locations import (
     record_from_artifacts,
     resolve_job_location_for_cfg,
     upsert_job_record,
-)
-from .queue_runtime_execution import (
-    XtbQueueRuntimeWorkerExecutionCallbacks,
-    build_queue_runtime_worker_execution_dependencies,
-)
-from .runner import (
-    XtbRunResult,
-    finalize_xtb_job,
-    run_xtb_ranking_job,
-    start_xtb_job,
 )
 from .state import (
     load_state,
@@ -93,7 +74,6 @@ from .submission import _record_queued as _record_queued_submission
 LOGGER = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 5
-CANCEL_CHECK_INTERVAL_SECONDS = 1
 WORKER_SHUTDOWN_GRACE_SECONDS = 10.0
 TERMINAL_REPAIR_SCAN_INTERVAL_SECONDS = 300.0
 _ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
@@ -106,46 +86,6 @@ def _queue_worker_deps() -> Any:
         release_slot_fn=lambda root, token: release_slot(root, token),
         start_background_job_process_fn=lambda **kwargs: _start_background_job_process(**kwargs),
         try_reserve_admission_slot_fn=lambda cfg: _try_reserve_admission_slot(cfg),
-    )
-
-
-def _worker_execution_callbacks() -> XtbQueueRuntimeWorkerExecutionCallbacks:
-    return XtbQueueRuntimeWorkerExecutionCallbacks(
-        activate_reserved_slot=activate_reserved_slot,
-        release_slot=release_slot,
-        load_config=load_config,
-        queue_entry_by_id=_queue_entry_by_id,
-        job_dir=_job_dir,
-        selected_xyz=_selected_xyz,
-        job_type=_job_type,
-        reaction_key=_reaction_key,
-        input_summary=_input_summary,
-        entry_resource_request=_queue_artifacts.entry_resource_request,
-        matching_state=_worker_execution_hooks.matching_state,
-        is_recovery_pending=_worker_execution.is_recovery_pending,
-        write_running_state=_write_running_state,
-        build_terminal_result=_build_terminal_result,
-        finalize_execution_result=_finalize_execution_result,
-        upsert_job_record=upsert_job_record,
-        notify_job_started=notify_job_started,
-        run_xtb_ranking_job=run_xtb_ranking_job,
-        start_xtb_job=start_xtb_job,
-        finalize_xtb_job=finalize_xtb_job,
-        terminate_process=_terminate_process,
-        wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
-        sleep=time.sleep,
-        now_utc_iso=now_utc_iso,
-        get_cancel_requested=get_cancel_requested,
-        mark_completed=mark_completed,
-        mark_cancelled=mark_cancelled,
-        mark_failed=mark_failed,
-    )
-
-
-def _worker_execution_dependencies() -> _worker_execution.WorkerExecutionDependencies:
-    return build_queue_runtime_worker_execution_dependencies(
-        _worker_execution_callbacks(),
-        cancel_check_interval_seconds=CANCEL_CHECK_INTERVAL_SECONDS,
     )
 
 
@@ -168,14 +108,6 @@ def _pid_is_alive(pid: int) -> bool:
 
 _worker_execution_hooks = default_worker_execution_hooks()
 _job_dir = _worker_execution_hooks.job_dir
-_selected_xyz = _worker_execution_hooks.selected_xyz
-_job_type = _worker_execution_hooks.job_type
-_reaction_key = _worker_execution_hooks.reaction_key
-_input_summary = _worker_execution_hooks.input_summary
-
-_write_execution_artifacts = _worker_terminal.write_execution_artifacts
-_write_running_state = _worker_terminal.write_running_state
-_build_terminal_result = _worker_terminal.build_terminal_result
 build_worker_child_command = _worker_execution.build_worker_child_command
 
 
@@ -221,54 +153,6 @@ def _ensure_terminal_queue_status(queue_root: Path, entry: Any, summary: _Termin
         mark_completed_fn=mark_completed,
         mark_cancelled_fn=mark_cancelled,
         mark_failed_fn=mark_failed,
-    )
-
-
-def _finalize_execution_result(
-    cfg: Any,
-    *,
-    queue_root: Path,
-    entry: Any,
-    result: XtbRunResult,
-    previous_state: dict[str, Any] | None = None,
-    resumed: bool = False,
-) -> _worker_execution.WorkerExecutionOutcome:
-    return _queue_terminal.finalize_execution_result(
-        cfg,
-        queue_root=queue_root,
-        entry=entry,
-        result=result,
-        previous_state=previous_state,
-        resumed=resumed,
-        outcome_cls=_worker_execution.WorkerExecutionOutcome,
-        write_execution_artifacts_fn=_write_execution_artifacts,
-        selected_xyz_fn=_selected_xyz,
-        job_dir_fn=_job_dir,
-        mark_completed_fn=mark_completed,
-        mark_cancelled_fn=mark_cancelled,
-        mark_failed_fn=mark_failed,
-        upsert_job_record_fn=upsert_job_record,
-        notify_job_finished_fn=notify_job_finished,
-    )
-
-
-def _execute_queue_entry(
-    cfg: Any,
-    *,
-    queue_root: Path,
-    entry: Any,
-    should_cancel: Callable[[], bool] | None = None,
-    register_running_job: Callable[[Any | None], None] | None = None,
-    worker_job_pid: int | None = None,
-) -> _worker_execution.WorkerExecutionOutcome:
-    return _worker_execution.execute_queue_entry(
-        cfg,
-        queue_root=queue_root,
-        entry=entry,
-        should_cancel=should_cancel,
-        register_running_job=register_running_job,
-        worker_job_pid=worker_job_pid,
-        dependencies=_worker_execution_dependencies(),
     )
 
 

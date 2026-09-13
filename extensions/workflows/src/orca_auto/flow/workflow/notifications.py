@@ -167,7 +167,6 @@ def _result_count(snapshot: dict[str, Any], result: str) -> int:
 def _overview_fields(
     *,
     payload: dict[str, Any],
-    phase_engine: str,
     snapshot: dict[str, Any],
 ) -> list[Any]:
     workflow_id = _normalize_text(payload.get("workflow_id")) or "-"
@@ -208,9 +207,7 @@ def _build_phase_summary_message(
     extra_lines: list[str] | None,
 ) -> Message:
     title = f"{_phase_label(phase_engine)} phase summary"
-    overview = group(
-        *_overview_fields(payload=payload, phase_engine=phase_engine, snapshot=snapshot)
-    )
+    overview = group(*_overview_fields(payload=payload, snapshot=snapshot))
     groups: list[Group] = [overview]
 
     notes = _notes_group(extra_lines)

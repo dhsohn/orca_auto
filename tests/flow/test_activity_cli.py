@@ -1050,7 +1050,7 @@ def test_cancel_activity_autodiscovers_defaults(monkeypatch) -> None:
     assert payload["status"] == "cancelled"
     assert captured["workflow_root"] == "/tmp/workflow_root"
     assert captured["crest_config"] == "/tmp/orca_auto.yaml"
-    assert captured["xtb_config"] == "/tmp/orca_auto.yaml"
+    assert "xtb_config" not in captured
     assert captured["orca_config"] == "/tmp/orca_auto.yaml"
 
 

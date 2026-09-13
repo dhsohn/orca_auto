@@ -739,21 +739,16 @@ def test_process_dequeued_entry_uses_context_dependency_group(tmp_path: Path) ->
     assert started_notifications[0]["mode"] == "nci"
 
 
-def test_run_worker_child_job_uses_dependency_config_and_admission_groups(
+def test_run_worker_child_job_uses_dependency_config_group(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(name="cfg")
     entry = SimpleNamespace(queue_id="queue-1")
-    released: list[tuple[str, str]] = []
     deps = worker_execution.build_worker_execution_dependencies(
         config=worker_execution.WorkerConfigDependencies(
             load_config=lambda path: cfg,
             queue_entry_by_id=lambda root, queue_id: entry,
-        ),
-        admission=worker_execution.WorkerAdmissionDependencies(
-            activate_reserved_slot=lambda *args, **kwargs: object(),
-            release_slot=lambda root, token: released.append((str(root), token)),
         ),
     )
     captured: dict[str, Any] = {}

@@ -8,8 +8,9 @@ import pytest
 from orca_auto.core.commands import queue as shared_queue_cmd
 from orca_auto.core.queue.cancellable import ProcessCleanupError
 from orca_auto.flow.engines.xtb import execution as worker_execution_mod
-from orca_auto.flow.engines.xtb import queue_runtime as queue_cmd
 from orca_auto.flow.engines.xtb import state as state_mod
+from orca_auto.flow.engines.xtb import worker_terminal as worker_terminal_mod
+from orca_auto.flow.engines.xtb.runner import XtbRunResult
 from tests.flow.engines.xtb.factories import (
     make_cfg as _make_cfg,
 )
@@ -78,7 +79,7 @@ def test_queue_display_status(entry: object, expected: str) -> None:
     assert shared_queue_cmd.display_status(entry) == expected
 
 
-def test_execute_queue_entry_processes_completed_job(
+def test_process_dequeued_entry_processes_completed_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -100,30 +101,34 @@ def test_execute_queue_entry_processes_completed_job(
     completed_calls: list[tuple[object, object, object | None]] = []
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "start_xtb_job",
         lambda _cfg, *, job_dir, selected_input_xyz, execution_snapshot: SimpleNamespace(
             process=SimpleNamespace(poll=lambda: 0)
         ),
     )
-    monkeypatch.setattr(queue_cmd, "finalize_xtb_job", lambda running, **kwargs: result)
+    monkeypatch.setattr(worker_execution_mod, "finalize_xtb_job", lambda running, **kwargs: result)
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_completed",
         lambda root, queue_id, metadata_update=None, **kwargs: _record_committed_terminal(
             completed_calls, root, queue_id, metadata_update, **kwargs
         ),
     )
     monkeypatch.setattr(
-        queue_cmd, "mark_failed", lambda *args, **kwargs: pytest.fail("unexpected failure mark")
+        worker_terminal_mod,
+        "mark_failed",
+        lambda *args, **kwargs: pytest.fail("unexpected failure mark"),
     )
     monkeypatch.setattr(
-        queue_cmd, "mark_cancelled", lambda *args, **kwargs: pytest.fail("unexpected cancel mark")
+        worker_terminal_mod,
+        "mark_cancelled",
+        lambda *args, **kwargs: pytest.fail("unexpected cancel mark"),
     )
-    monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
-    monkeypatch.setattr(queue_cmd, "notify_job_finished", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_execution_mod, "notify_job_started", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_terminal_mod, "notify_job_finished", lambda *args, **kwargs: True)
 
-    outcome = queue_cmd._execute_queue_entry(
+    outcome = worker_execution_mod.process_dequeued_entry(
         cfg,
         queue_root=queue_root,
         entry=entry,
@@ -146,7 +151,7 @@ def test_execute_queue_entry_processes_completed_job(
     assert not (job_dir / "job_report.json").exists()
 
 
-def test_execute_queue_entry_marks_runner_errors_failed(
+def test_process_dequeued_entry_marks_runner_errors_failed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -161,20 +166,22 @@ def test_execute_queue_entry_marks_runner_errors_failed(
     failed_calls: list[tuple[object, object, object, object | None]] = []
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "start_xtb_job",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_completed",
         lambda *args, **kwargs: pytest.fail("unexpected completed mark"),
     )
     monkeypatch.setattr(
-        queue_cmd, "mark_cancelled", lambda *args, **kwargs: pytest.fail("unexpected cancel mark")
+        worker_terminal_mod,
+        "mark_cancelled",
+        lambda *args, **kwargs: pytest.fail("unexpected cancel mark"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_failed",
         lambda root, queue_id, error, metadata_update=None, **kwargs: (
             _record_committed_terminal_error(
@@ -182,10 +189,14 @@ def test_execute_queue_entry_marks_runner_errors_failed(
             )
         ),
     )
-    monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
-    monkeypatch.setattr(queue_cmd, "notify_job_finished", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_execution_mod, "notify_job_started", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_terminal_mod, "notify_job_finished", lambda *args, **kwargs: True)
 
-    outcome = queue_cmd._execute_queue_entry(cfg, queue_root=queue_root, entry=entry)
+    outcome = worker_execution_mod.process_dequeued_entry(
+        cfg,
+        queue_root=queue_root,
+        entry=entry,
+    )
 
     assert outcome.result.status == "failed"
     assert outcome.result.reason == "runner_error:boom"
@@ -205,7 +216,7 @@ def test_execute_queue_entry_marks_runner_errors_failed(
     assert not (job_dir / "job_report.json").exists()
 
 
-def test_execute_queue_entry_cancels_running_job(
+def test_process_dequeued_entry_cancels_running_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -224,14 +235,18 @@ def test_execute_queue_entry_cancels_running_job(
     class _Process:
         pid = 12345
         exited = False
+        polls = 0
 
         def poll(self) -> int | None:
+            self.polls += 1
+            if not self.exited and self.polls > 4:
+                pytest.fail("queue cancellation did not terminate the running process")
             return -15 if self.exited else None
 
     terminated: list[_Process] = []
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "start_xtb_job",
         lambda _cfg, *, job_dir, selected_input_xyz, execution_snapshot: SimpleNamespace(
             process=_Process()
@@ -243,25 +258,27 @@ def test_execute_queue_entry_cancels_running_job(
         process.exited = True
         return True
 
-    monkeypatch.setattr(queue_cmd, "_terminate_process", terminate)
+    monkeypatch.setattr(worker_execution_mod, "terminate_process_group", terminate)
 
     def fake_finalize_xtb_job(
         running: object, forced_status: object = None, forced_reason: object = None
-    ) -> queue_cmd.XtbRunResult:
+    ) -> XtbRunResult:
         finalize_calls.append((forced_status, forced_reason))
         return result
 
-    monkeypatch.setattr(queue_cmd, "finalize_xtb_job", fake_finalize_xtb_job)
+    monkeypatch.setattr(worker_execution_mod, "finalize_xtb_job", fake_finalize_xtb_job)
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_completed",
         lambda *args, **kwargs: pytest.fail("unexpected completed mark"),
     )
     monkeypatch.setattr(
-        queue_cmd, "mark_failed", lambda *args, **kwargs: pytest.fail("unexpected failed mark")
+        worker_terminal_mod,
+        "mark_failed",
+        lambda *args, **kwargs: pytest.fail("unexpected failed mark"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_cancelled",
         lambda root, queue_id, error, metadata_update=None, **kwargs: (
             _record_committed_terminal_error(
@@ -269,16 +286,23 @@ def test_execute_queue_entry_cancels_running_job(
             )
         ),
     )
-    monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
-    monkeypatch.setattr(queue_cmd, "notify_job_finished", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_execution_mod, "notify_job_started", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_terminal_mod, "notify_job_finished", lambda *args, **kwargs: True)
 
     cancel_checks = iter([False, True])
 
-    outcome = queue_cmd._execute_queue_entry(
+    def get_cancel_requested(root: object, queue_id: str, **kwargs: object) -> bool:
+        assert Path(str(root)) == queue_root
+        assert queue_id == entry.queue_id
+        assert kwargs == {"expected_entry": entry, "expected_task_id": entry.task_id}
+        return next(cancel_checks, True)
+
+    monkeypatch.setattr(worker_execution_mod, "get_cancel_requested", get_cancel_requested)
+
+    outcome = worker_execution_mod.process_dequeued_entry(
         cfg,
         queue_root=queue_root,
         entry=entry,
-        should_cancel=lambda: next(cancel_checks, True),
     )
 
     assert outcome.result.status == "cancelled"
@@ -300,7 +324,7 @@ def test_execute_queue_entry_cancels_running_job(
     assert not (job_dir / "job_report.json").exists()
 
 
-def test_execute_queue_entry_cancels_before_start_and_updates_terminal_metadata(
+def test_process_dequeued_entry_cancels_before_start_and_updates_terminal_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -320,30 +344,32 @@ def test_execute_queue_entry_cancels_before_start_and_updates_terminal_metadata(
     cancelled_calls: list[tuple[object, object, object, object | None]] = []
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "start_xtb_job",
         lambda *args, **kwargs: pytest.fail("start_xtb_job should not run"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "finalize_xtb_job",
         lambda *args, **kwargs: pytest.fail("finalize_xtb_job should not run"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "run_xtb_ranking_job",
         lambda *args, **kwargs: pytest.fail("ranking runner should not run"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_completed",
         lambda *args, **kwargs: pytest.fail("unexpected completed mark"),
     )
     monkeypatch.setattr(
-        queue_cmd, "mark_failed", lambda *args, **kwargs: pytest.fail("unexpected failed mark")
+        worker_terminal_mod,
+        "mark_failed",
+        lambda *args, **kwargs: pytest.fail("unexpected failed mark"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_cancelled",
         lambda root, queue_id, error, metadata_update=None, **kwargs: (
             _record_committed_terminal_error(
@@ -360,14 +386,21 @@ def test_execute_queue_entry_cancels_before_start_and_updates_terminal_metadata(
         events.append(f"notify_finished:{kwargs['status']}")
         return True
 
-    monkeypatch.setattr(queue_cmd, "notify_job_started", fake_notify_job_started)
-    monkeypatch.setattr(queue_cmd, "notify_job_finished", fake_notify_job_finished)
+    monkeypatch.setattr(worker_execution_mod, "notify_job_started", fake_notify_job_started)
+    monkeypatch.setattr(worker_terminal_mod, "notify_job_finished", fake_notify_job_finished)
 
-    outcome = queue_cmd._execute_queue_entry(
+    def get_cancel_requested(root: object, queue_id: str, **kwargs: object) -> bool:
+        assert Path(str(root)) == queue_root
+        assert queue_id == entry.queue_id
+        assert kwargs == {"expected_entry": entry, "expected_task_id": entry.task_id}
+        return True
+
+    monkeypatch.setattr(worker_execution_mod, "get_cancel_requested", get_cancel_requested)
+
+    outcome = worker_execution_mod.process_dequeued_entry(
         cfg,
         queue_root=queue_root,
         entry=entry,
-        should_cancel=lambda: True,
     )
 
     assert outcome.result.status == "cancelled"
@@ -404,40 +437,39 @@ def test_process_dequeued_entry_uses_queue_cancel_callback(
     cancelled_calls: list[tuple[object, object, object, object | None]] = []
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "get_cancel_requested",
         lambda _root, _queue_id, **_kwargs: True,
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "start_xtb_job",
         lambda *args, **kwargs: pytest.fail("xTB job should not start after cancel request"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_completed",
         lambda *args, **kwargs: pytest.fail("unexpected completed mark"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_failed",
         lambda *args, **kwargs: pytest.fail("unexpected failed mark"),
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_cancelled",
         lambda root, queue_id, error, metadata_update=None, **_kwargs: cancelled_calls.append(
             (root, queue_id, error, metadata_update)
         ),
     )
-    monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
-    monkeypatch.setattr(queue_cmd, "notify_job_finished", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_execution_mod, "notify_job_started", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_terminal_mod, "notify_job_finished", lambda *args, **kwargs: True)
 
     outcome = worker_execution_mod.process_dequeued_entry(
         cfg,
         entry,
         queue_root=queue_root,
-        dependencies=queue_cmd._worker_execution_dependencies(),
     )
 
     assert outcome.result.status == "cancelled"
@@ -452,7 +484,7 @@ def test_process_dequeued_entry_uses_queue_cancel_callback(
     ]
 
 
-def test_execute_queue_entry_processes_ranking_job_without_auto_organizing(
+def test_process_dequeued_entry_processes_ranking_job_without_auto_organizing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -474,25 +506,29 @@ def test_execute_queue_entry_processes_ranking_job_without_auto_organizing(
     finished_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "run_xtb_ranking_job",
         lambda cfg_obj, **kwargs: result,
     )
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "start_xtb_job",
         lambda *args, **kwargs: pytest.fail("start_xtb_job should not be called for ranking"),
     )
-    monkeypatch.setattr(queue_cmd, "mark_completed", _commit_terminal)
-    monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_terminal_mod, "mark_completed", _commit_terminal)
+    monkeypatch.setattr(worker_execution_mod, "notify_job_started", lambda *args, **kwargs: True)
 
     def fake_notify_job_finished(cfg_obj: object, **kwargs: object) -> bool:
         finished_calls.append(kwargs)
         return True
 
-    monkeypatch.setattr(queue_cmd, "notify_job_finished", fake_notify_job_finished)
+    monkeypatch.setattr(worker_terminal_mod, "notify_job_finished", fake_notify_job_finished)
 
-    outcome = queue_cmd._execute_queue_entry(cfg, queue_root=queue_root, entry=entry)
+    outcome = worker_execution_mod.process_dequeued_entry(
+        cfg,
+        queue_root=queue_root,
+        entry=entry,
+    )
 
     assert outcome.result.status == "completed"
     assert finished_calls
@@ -512,18 +548,22 @@ def test_ranking_cleanup_failure_is_not_converted_to_terminal_result(
     entry = _make_entry(job_dir, selected_xyz, job_type="ranking", reaction_key="")
 
     monkeypatch.setattr(
-        queue_cmd,
+        worker_execution_mod,
         "run_xtb_ranking_job",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ProcessCleanupError("ranking process cleanup failed")
         ),
     )
-    monkeypatch.setattr(queue_cmd, "notify_job_started", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker_execution_mod, "notify_job_started", lambda *args, **kwargs: True)
     monkeypatch.setattr(
-        queue_cmd,
+        worker_terminal_mod,
         "mark_failed",
         lambda *args, **kwargs: pytest.fail("cleanup failure must not be terminalized here"),
     )
 
     with pytest.raises(ProcessCleanupError, match="ranking process cleanup failed"):
-        queue_cmd._execute_queue_entry(cfg, queue_root=queue_root, entry=entry)
+        worker_execution_mod.process_dequeued_entry(
+            cfg,
+            queue_root=queue_root,
+            entry=entry,
+        )

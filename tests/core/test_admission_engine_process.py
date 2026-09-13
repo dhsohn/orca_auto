@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import multiprocessing
 import signal
@@ -954,6 +955,45 @@ def test_recover_slot_retains_pending_launch_under_live_owner(
     slot = admission.get_slot(tmp_path, token)
     assert slot is not None
     assert slot.engine_process_state == "pending"
+
+
+@pytest.mark.parametrize("recovery_scope", ["single", "sweep"])
+@pytest.mark.parametrize("unknown_probe", ["boot", "ticks", "pid"])
+def test_pending_recovery_retains_unverifiable_owner_without_signalling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recovery_scope: str,
+    unknown_probe: str,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch, engine_launch_gated=True)
+    pending = admission.prepare_slot_engine_process(tmp_path, token)
+    assert pending is not None
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    recorded = path.read_bytes()
+
+    def probe_pid(pid: int, signum: int) -> None:
+        assert (pid, signum) == (pending.owner_pid, 0)
+        if unknown_probe == "boot":
+            pytest.fail("unknown boot identity must retain the owner before probing its PID")
+        if unknown_probe == "pid":
+            raise OSError(errno.EIO, "unknown process state")
+
+    deps = engine_process.EngineProcessRecoveryDeps(
+        kill=probe_pid,
+        boot_id=lambda: None if unknown_probe == "boot" else pending.owner_boot_id,
+        process_start_ticks=lambda _pid: None if unknown_probe == "ticks" else 9999,
+        killpg=lambda *_args: pytest.fail("unknown owner must not trigger group probing"),
+        secure_signal=lambda *_args: pytest.fail("unknown owner must not trigger signalling"),
+    )
+    if recovery_scope == "single":
+        with pytest.raises(engine_process.EngineProcessRecordPendingError, match="live owner"):
+            engine_process.recover_slot_engine_process(tmp_path, token, deps=deps)
+    else:
+        assert engine_process.recover_orphaned_engine_slots(tmp_path, deps=deps) == 0
+
+    assert path.read_bytes() == recorded
+    slot = admission.get_slot(tmp_path, token)
+    assert slot is not None and slot.engine_process_state == "pending"
 
 
 def test_recover_slot_retains_ungated_pending_launch_left_by_dead_owner(

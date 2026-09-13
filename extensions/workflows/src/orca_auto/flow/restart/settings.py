@@ -376,7 +376,6 @@ def _completed_primary_orca_stage_ids(
 def _changed_completed_orca_science_fields(
     payload: dict[str, Any],
     *,
-    template_name: str,
     route_line: str,
     manifest_charge: int | None,
     manifest_multiplicity: int | None,
@@ -508,7 +507,6 @@ def _flow_restart_settings(workspace: Path, payload: dict[str, Any]) -> dict[str
 def _reject_science_changes_on_completed_stages(
     payload: dict[str, Any],
     *,
-    template_name: str,
     route_line: str,
     manifest_charge: int | None,
     manifest_multiplicity: int | None,
@@ -526,7 +524,6 @@ def _reject_science_changes_on_completed_stages(
     )
     changed_science = _changed_completed_orca_science_fields(
         payload,
-        template_name=template_name,
         route_line=route_line,
         manifest_charge=manifest_charge,
         manifest_multiplicity=manifest_multiplicity,
@@ -680,13 +677,12 @@ def _flow_restart_settings_from_manifest(
     persisted_interaction_fingerprint = _durable_interaction_config_fingerprint(payload)
     previous_electronic_state = _reject_science_changes_on_completed_stages(
         payload,
-        template_name=template_name,
         route_line=route_line,
         manifest_charge=manifest_charge,
         manifest_multiplicity=manifest_multiplicity,
         persisted_interaction_fingerprint=persisted_interaction_fingerprint,
     )
-    crest_present, crest_manifest = _resolve_engine_manifest(workspace, manifest, "crest")
+    crest_present, crest_manifest = _resolve_engine_manifest(manifest, "crest")
     crest_overrides = dict(crest_manifest)
     priority = (
         normalize_queue_priority(manifest.get("priority")) if "priority" in manifest else None

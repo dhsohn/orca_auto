@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+import pytest
 import yaml
 
 from orca_auto.core.indexing import get_job_location
 from orca_auto.core.queue import list_queue
 from orca_auto.flow.engines.crest import queue_runtime as crest_queue_cmd
+from orca_auto.flow.engines.xtb import queue_runtime as xtb_queue_cmd
 from orca_auto.flow.orchestration import (
     advance_workflow,
     create_conformer_screening_workflow,
@@ -284,7 +286,7 @@ def _public_conformer_case(
     created = submit_public_workflow(input_dir, smoke_workspace.config_path, capsys)
     workspace_dir = Path(created["metadata"]["workspace_dir"])
     payload = pump_workflow(
-        workflow_root=smoke_workspace.xtb_allowed_root.parents[1],
+        workflow_root=smoke_workspace.crest_allowed_root.parents[1],
         workspace_dir=workspace_dir,
         config_path=smoke_workspace.config_path,
         admission_root=smoke_workspace.admission_root,
@@ -295,7 +297,12 @@ def _public_conformer_case(
 def test_conformer_screening_workflow_completes_fake_engine_lifecycle(
     smoke_workspace: Any,
     capsys: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    def unexpected_xtb_worker(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("conformer workflow must not initialize an xTB worker")
+
+    monkeypatch.setattr(xtb_queue_cmd, "QueueWorker", unexpected_xtb_worker)
     payload, workspace_dir = _public_conformer_case(
         smoke_workspace,
         capsys,

@@ -64,9 +64,7 @@ def render_si_block_md(block: evidence.OrcaStructureEvidence) -> str:
     result = block.result
     lines = [f"== {block.name} =="]
 
-    route = (
-        result.input_line or " ".join((result.method, result.basis_set, result.calc_type)).strip()
-    )
+    route = result.input_line or " ".join((result.method, result.basis_set)).strip()
     version_note = f"        (ORCA {result.orca_version})" if result.orca_version else ""
     lines.append(f"! {route}{version_note}")
     charge_line = f"Charge {result.charge}, Multiplicity {result.multiplicity}"

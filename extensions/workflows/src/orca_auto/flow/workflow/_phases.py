@@ -182,15 +182,6 @@ def phase_snapshot(stages: Iterable[Any], *, engine: str) -> dict[str, Any]:
     }
 
 
-def phase_finished(stages: Iterable[Any], *, engine: str) -> bool:
-    return bool(phase_snapshot(stages, engine=engine).get("finished"))
-
-
-def _phase_definitions(template_name: str) -> tuple[dict[str, str], ...]:
-    definitions = BASE_PHASE_DEFINITIONS
-    return tuple(dict(definition) for definition in definitions)
-
-
 def _summary_stage_summaries(summary: dict[str, Any]) -> list[Any]:
     return list(_coerce_mapping(summary).get("stage_summaries") or [])
 
@@ -268,7 +259,7 @@ def phase_transition_event_payloads(
     current_stages = _summary_stage_summaries(current_summary)
     event_payloads: list[WorkflowJournalEventPayload] = []
 
-    for definition in _phase_definitions(template_name):
+    for definition in BASE_PHASE_DEFINITIONS:
         previous_phase = phase_snapshot(previous_stages, engine=definition["engine"])
         current_phase = phase_snapshot(current_stages, engine=definition["engine"])
         if not _phase_finished_transition_ready(
@@ -291,7 +282,6 @@ def phase_transition_event_payloads(
 
 __all__ = [
     "WORKFLOW_PHASE_FINISHED_EVENT",
-    "phase_finished",
     "phase_outcome_from_results",
     "phase_snapshot",
     "phase_transition_event_payloads",

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core import engine_runner as _engine_runner
-from orca_auto.core.admission import activate_reserved_slot, release_slot
 from orca_auto.core.config.engines import load_xtb_config as load_config
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.engines.worker_child import (
@@ -115,7 +114,6 @@ _WORKER_CHILD_RUN_SPEC = WorkerChildRunSpec(
 
 
 WorkerConfigDependencies = _worker_dependencies.WorkerConfigDependencies
-WorkerAdmissionDependencies = _worker_dependencies.WorkerAdmissionDependencies
 WorkerTimingDependencies = _engine_execution.EngineWorkerTimingDependencies
 WorkerQueueDependencies = _engine_execution.EngineWorkerQueueDependencies
 
@@ -159,7 +157,6 @@ class WorkerRunnerDependencies(_engine_execution.EngineWorkerProcessDependencies
 @dataclass(frozen=True)
 class WorkerExecutionDependencies:
     config: WorkerConfigDependencies
-    admission: WorkerAdmissionDependencies
     timing: WorkerTimingDependencies
     queue: WorkerQueueDependencies
     context: WorkerContextDependencies
@@ -171,7 +168,6 @@ class WorkerExecutionDependencies:
 def build_worker_execution_dependencies_from_groups(
     *,
     config: WorkerConfigDependencies,
-    admission: WorkerAdmissionDependencies,
     timing: WorkerTimingDependencies,
     queue: WorkerQueueDependencies,
     context: WorkerContextDependencies,
@@ -184,7 +180,6 @@ def build_worker_execution_dependencies_from_groups(
             WorkerExecutionDependencies,
             {
                 "config": config,
-                "admission": admission,
                 "timing": timing,
                 "queue": queue,
                 "context": context,
@@ -229,13 +224,6 @@ def _default_config_dependencies() -> WorkerConfigDependencies:
     )
 
 
-def _default_admission_dependencies() -> WorkerAdmissionDependencies:
-    return _worker_dependencies.build_worker_admission_dependencies(
-        activate_reserved_slot=activate_reserved_slot,
-        release_slot=release_slot,
-    )
-
-
 def _default_context_dependencies() -> WorkerContextDependencies:
     return WorkerContextDependencies(
         job_dir=_job_dir,
@@ -269,7 +257,6 @@ def _worker_execution_default_factories() -> dict[str, Callable[[], Any]]:
         **_worker_dependencies.build_worker_process_default_factories_from_callbacks(
             _worker_process_factory_callbacks(),
             config_factory=_default_config_dependencies,
-            admission_factory=_default_admission_dependencies,
             runner_dependencies_type=WorkerRunnerDependencies,
             cancel_check_interval_seconds=CANCEL_CHECK_INTERVAL_SECONDS,
         ),
@@ -282,7 +269,6 @@ def _worker_execution_default_factories() -> dict[str, Callable[[], Any]]:
 def build_worker_execution_dependencies(
     *,
     config: WorkerConfigDependencies | None = None,
-    admission: WorkerAdmissionDependencies | None = None,
     timing: WorkerTimingDependencies | None = None,
     queue: WorkerQueueDependencies | None = None,
     context: WorkerContextDependencies | None = None,
@@ -295,7 +281,6 @@ def build_worker_execution_dependencies(
             build_worker_execution_dependencies_from_groups,
             {
                 "config": config,
-                "admission": admission,
                 "timing": timing,
                 "queue": queue,
                 "context": context,
@@ -719,10 +704,6 @@ def _finalize_processed_entry(
 def _worker_execution_spec(
     *,
     dependencies: WorkerExecutionDependencies,
-    should_cancel_factory: Callable[
-        [Path, _XtbExecutionContext],
-        Callable[[], bool] | None,
-    ],
 ) -> _engine_execution.EngineWorkerExecutionSpec[WorkerExecutionOutcome, WorkerExecutionOutcome]:
     return _engine_execution.EngineWorkerExecutionSpec(
         build_context=lambda cfg_obj, entry_obj: _build_execution_context(
@@ -741,7 +722,11 @@ def _worker_execution_spec(
             context,
             active_queue_root,
             dependencies=dependencies,
-            should_cancel=should_cancel_factory(active_queue_root, context),
+            should_cancel=_engine_execution.queue_cancel_callback(
+                dependencies.queue,
+                active_queue_root,
+                context.entry,
+            ),
             shutdown_requested=options.shutdown_requested,
             prepare_running_job=options.prepare_running_job,
             register_running_job=options.register_running_job,
@@ -764,14 +749,9 @@ def _run_worker_entry_lifecycle(
     *,
     queue_root: Path | None,
     dependencies: WorkerExecutionDependencies,
-    should_cancel_factory: Callable[
-        [Path, _XtbExecutionContext],
-        Callable[[], bool] | None,
-    ],
     shutdown_requested: Callable[[], bool] | None = None,
     prepare_running_job: Callable[[], None] | None = None,
     register_running_job: Callable[[Any | None], None] | None = None,
-    worker_job_pid: int | None = None,
 ) -> WorkerExecutionOutcome:
     return _engine_execution.run_engine_worker_entry_with_spec_factory_options(
         cfg,
@@ -779,38 +759,10 @@ def _run_worker_entry_lifecycle(
         queue_root=queue_root,
         spec_factory=lambda: _worker_execution_spec(
             dependencies=dependencies,
-            should_cancel_factory=should_cancel_factory,
         ),
         shutdown_requested=shutdown_requested,
         prepare_running_job=prepare_running_job,
         register_running_job=register_running_job,
-        worker_job_pid=worker_job_pid,
-    )
-
-
-def execute_queue_entry(
-    cfg: Any,
-    *,
-    queue_root: Path,
-    entry: Any,
-    should_cancel: Callable[[], bool] | None = None,
-    shutdown_requested: Callable[[], bool] | None = None,
-    prepare_running_job: Callable[[], None] | None = None,
-    register_running_job: Callable[[Any | None], None] | None = None,
-    worker_job_pid: int | None = None,
-    dependencies: WorkerExecutionDependencies | None = None,
-) -> WorkerExecutionOutcome:
-    deps = dependencies or default_worker_execution_dependencies()
-    return _run_worker_entry_lifecycle(
-        cfg,
-        entry,
-        queue_root=queue_root,
-        dependencies=deps,
-        should_cancel_factory=lambda _active_queue_root, _context: should_cancel,
-        shutdown_requested=shutdown_requested,
-        prepare_running_job=prepare_running_job,
-        register_running_job=register_running_job,
-        worker_job_pid=worker_job_pid,
     )
 
 
@@ -830,13 +782,6 @@ def process_dequeued_entry(
         entry,
         queue_root=queue_root,
         dependencies=deps,
-        should_cancel_factory=lambda active_queue_root, context: (
-            _engine_execution.queue_cancel_callback(
-                deps.queue,
-                active_queue_root,
-                context.entry,
-            )
-        ),
         shutdown_requested=shutdown_requested,
         prepare_running_job=prepare_running_job,
         register_running_job=register_running_job,
@@ -880,7 +825,6 @@ __all__ = [
     "build_worker_child_command",
     "build_worker_execution_dependencies",
     "build_worker_execution_dependencies_from_groups",
-    "WorkerAdmissionDependencies",
     "WorkerArtifactDependencies",
     "WorkerConfigDependencies",
     "WorkerContextDependencies",
@@ -891,7 +835,6 @@ __all__ = [
     "WorkerTimingDependencies",
     "WorkerTrackingDependencies",
     "default_worker_execution_dependencies",
-    "execute_queue_entry",
     "process_dequeued_entry",
     "run_worker_job",
     "WORKER_JOB_MODULE",

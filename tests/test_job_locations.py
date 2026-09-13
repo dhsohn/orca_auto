@@ -26,7 +26,6 @@ from orca_auto.orca.job_locations import _runtime_context as _job_location_runti
 from orca_auto.orca.job_locations import (
     index_root_for_cfg,
     load_job_artifact_context,
-    load_job_artifacts,
     load_job_runtime_context,
     load_orca_contract_payload,
     record_from_artifacts,
@@ -380,12 +379,10 @@ def test_upsert_job_record_writes_allowed_root_index_and_resolves_latest_dir() -
         assert len(loaded) == 1
         assert loaded[0]["job_id"] == "job_live_1"
         assert loaded[0]["original_run_dir"] == str(job_dir.resolve())
-        job_path, loaded_state, loaded_report = load_job_artifacts(
-            index_root_for_cfg(cfg), "job_live_1"
-        )
-        assert job_path == job_dir.resolve()
-        assert loaded_state is not None and loaded_state["job_id"] == "job_live_1"
-        assert loaded_report is None
+        context = load_job_artifact_context(index_root_for_cfg(cfg), "job_live_1")
+        assert context.job_dir == job_dir.resolve()
+        assert context.state is not None and context.state["job_id"] == "job_live_1"
+        assert context.report is None
 
 
 def test_record_from_artifacts_uses_run_id_fallback() -> None:
@@ -418,7 +415,7 @@ def test_record_from_artifacts_uses_run_id_fallback() -> None:
         assert record.molecule_key == "H2"
 
 
-def test_resolve_latest_job_dir_and_load_job_artifacts_cover_job_and_path_targets() -> None:
+def test_resolve_latest_job_dir_and_artifact_context_cover_job_and_path_targets() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         allowed_root = root / "runs"
@@ -461,13 +458,13 @@ def test_resolve_latest_job_dir_and_load_job_artifacts_cover_job_and_path_target
 
         for target in ("job_hist_1", "run_hist_1", str(job_dir)):
             assert resolve_latest_job_dir(allowed_root, target) == job_dir.resolve()
-            job_path, loaded_state, loaded_report = load_job_artifacts(allowed_root, target)
-            assert job_path == job_dir.resolve()
-            assert loaded_state is not None and loaded_state["run_id"] == "run_hist_1"
-            assert loaded_report is None
+            context = load_job_artifact_context(allowed_root, target)
+            assert context.job_dir == job_dir.resolve()
+            assert context.state is not None and context.state["run_id"] == "run_hist_1"
+            assert context.report is None
 
 
-def test_load_job_artifacts_resolves_path_target_when_index_lookup_is_missing() -> None:
+def test_artifact_context_resolves_path_target_when_index_lookup_is_missing() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         allowed_root = root / "runs"
@@ -489,10 +486,10 @@ def test_load_job_artifacts_resolves_path_target_when_index_lookup_is_missing() 
         )
 
         assert resolve_latest_job_dir(allowed_root, str(job_dir)) == job_dir.resolve()
-        job_path, loaded_state, loaded_report = load_job_artifacts(allowed_root, str(job_dir))
-        assert job_path == job_dir.resolve()
-        assert loaded_state is not None and loaded_state["job_id"] == "job_hist_2"
-        assert loaded_report is None
+        context = load_job_artifact_context(allowed_root, str(job_dir))
+        assert context.job_dir == job_dir.resolve()
+        assert context.state is not None and context.state["job_id"] == "job_hist_2"
+        assert context.report is None
 
 
 def test_root_report_identity_is_not_a_job_location_lookup_source() -> None:

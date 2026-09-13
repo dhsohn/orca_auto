@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import builtins
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -156,6 +158,36 @@ def test_utf16_completed_output_is_parsed(tmp_path: Path) -> None:
     assert result.method == "B3LYP"
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+def test_parse_orca_output_reads_output_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, encoding: str
+) -> None:
+    out_file = tmp_path / "single_read.out"
+    out_file.write_text(
+        "! B3LYP def2-SVP SP\n"
+        "FINAL SINGLE POINT ENERGY -100.123456\n"
+        "****ORCA TERMINATED NORMALLY****\n",
+        encoding=encoding,
+    )
+    original_open = builtins.open
+    output_opens = 0
+
+    def tracked_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+        nonlocal output_opens
+        if file == str(out_file) or file == out_file:
+            output_opens += 1
+        return original_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", tracked_open)
+
+    result = parse_orca_output(str(out_file))
+
+    assert result.status == "completed"
+    assert result.method == "B3LYP"
+    assert result.energy_hartree == pytest.approx(-100.123456)
+    assert output_opens == 1
+
+
 def test_parse_frequencies_uses_final_vibrational_frequency_block(tmp_path: Path) -> None:
     out_file = tmp_path / "multi_freq.out"
     out_file.write_text(
@@ -252,7 +284,6 @@ def test_parse_opt_progress_extracts_all_cycles(tmp_path: Path) -> None:
     assert progress.formula == "CH"
     assert progress.method == "B3LYP"
     assert progress.basis_set == "def2-SVP"
-    assert progress.calc_type == "opt"
 
     # Cycle 1: energy only, no convergence table
     assert progress.steps[0].cycle == 1
@@ -333,6 +364,75 @@ def test_parse_opt_progress_sp_returns_empty_steps(tmp_path: Path) -> None:
     progress = parse_opt_progress(str(out_file))
     assert progress.steps == []
     assert progress.is_running is False
+
+
+@pytest.mark.parametrize(
+    "header,is_running",
+    [("", False), ("Geometry Optimization Cycle 1\n", True)],
+    ids=["no-cycle", "cycle-without-finite-energy"],
+)
+def test_parse_opt_progress_empty_cycle_running_state(
+    tmp_path: Path, header: str, is_running: bool
+) -> None:
+    out_file = tmp_path / "unfinished.out"
+    out_file.write_text(header + "FINAL SINGLE POINT ENERGY 1E999\n", encoding="utf-8")
+
+    progress = parse_opt_progress(str(out_file))
+
+    assert progress.steps == []
+    assert progress.is_running is is_running
+
+
+def test_parse_opt_progress_keeps_last_finite_energy_and_cycle_local_metrics(
+    tmp_path: Path,
+) -> None:
+    out_file = tmp_path / "cycles.out"
+    out_file.write_text(
+        "FINAL SINGLE POINT ENERGY -99\n"
+        "Geometry Optimization Cycle 3\n"
+        "FINAL SINGLE POINT ENERGY -2\n"
+        "FINAL SINGLE POINT ENERGY -3D0 (SCF not fully converged!)\n"
+        "FINAL SINGLE POINT ENERGY -1E999\n"
+        "MAX gradient 0.2 0.01 NO\n"
+        "MAX gradient 0.1 0.01 YES\n"
+        "Geometry Optimization Cycle 9\n"
+        "FINAL SINGLE POINT ENERGY NaN\n"
+        "MAX gradient 0.9 0.01 NO\n"
+        "GEOMETRY OPTIMIZATION CYCLE 3\n"
+        "FINAL SINGLE POINT ENERGY -4.5d+0\n"
+        "FINAL SINGLE POINT ENERGY -1.2.3\n"
+        "prefix FINAL SINGLE POINT ENERGY -10\n"
+        "Geometry Optimization Cycle 1\n"
+        "FINAL SINGLE POINT ENERGY -5\n",
+        encoding="utf-8",
+    )
+
+    progress = parse_opt_progress(str(out_file))
+
+    assert [(step.cycle, step.energy_hartree) for step in progress.steps] == [
+        (3, -3.0),
+        (3, -4.5),
+        (1, -5.0),
+    ]
+    assert progress.steps[0].max_gradient == 0.1
+    assert progress.steps[0].converged_flags == {"MAX gradient": True}
+    assert progress.steps[1].max_gradient is None
+    assert progress.steps[1].converged_flags == {}
+    assert progress.is_running is True
+
+
+def test_parse_opt_progress_assigns_whole_text_energy_matches_by_start(tmp_path: Path) -> None:
+    out_file = tmp_path / "cycle_boundary.out"
+    out_file.write_text(
+        "Geometry Optimization Cycle 1\n"
+        "FINAL SINGLE POINT ENERGY -1 (Geometry Optimization Cycle 2)\n"
+        "FINAL SINGLE POINT ENERGY -2\n",
+        encoding="utf-8",
+    )
+
+    progress = parse_opt_progress(str(out_file))
+
+    assert [(step.cycle, step.energy_hartree) for step in progress.steps] == [(1, -1.0), (2, -2.0)]
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +774,6 @@ def test_error_banner_is_not_parsed_as_a_route_line(tmp_path: Path) -> None:
     result = parse_orca_output(str(out_path))
 
     assert result.input_line == "B3LYP def2-SVP OptTS Freq"
-    assert result.calc_type == "ts+freq"
     assert "FATAL" not in result.input_line
 
 

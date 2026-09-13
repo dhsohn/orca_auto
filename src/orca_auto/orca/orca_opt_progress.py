@@ -10,14 +10,14 @@ from .output_status import (
     has_normal_termination,
     last_optimization_convergence,
 )
-from .parser.extractors import parse_coordinates, parse_input_line, parse_wall_time
-from .parser.io import read_orca_text
-from .parser.patterns import (
-    _CONVERGENCE_ITEM_RE,
-    _OPT_CYCLE_RE,
-    FINAL_SINGLE_POINT_ENERGY_RE,
-    final_single_point_energy_value,
+from .parser.extractors import (
+    parse_coordinates,
+    parse_input_line,
+    parse_optimization_cycles,
+    parse_wall_time,
 )
+from .parser.io import read_orca_text
+from .parser.patterns import _CONVERGENCE_ITEM_RE
 
 
 @dataclass
@@ -42,7 +42,6 @@ class OptProgress:
     formula: str = ""
     method: str = ""
     basis_set: str = ""
-    calc_type: str = ""
     steps: list[OptStep] = field(default_factory=list)
     is_converged: bool = False
     is_running: bool = False
@@ -60,47 +59,34 @@ def parse_opt_progress(file_path: str) -> OptProgress:
     Raises:
         FileNotFoundError: If the file does not exist
     """
-    text = read_orca_text(file_path)
+    return parse_opt_progress_text(read_orca_text(file_path), source_path=file_path)
 
-    calc_type, method, basis_set, _ = parse_input_line(text)
+
+def parse_opt_progress_text(text: str, *, source_path: str) -> OptProgress:
+    """Extract optimization progress from already-decoded output text."""
+
+    method, basis_set, _ = parse_input_line(text)
     elements = [atom[0] for atom in parse_coordinates(text)]
     formula = build_formula(elements)
 
     progress = OptProgress(
-        source_path=file_path,
+        source_path=source_path,
         formula=formula,
         method=method,
         basis_set=basis_set,
-        calc_type=calc_type,
         is_converged=last_optimization_convergence(text.splitlines()) is True,
     )
 
-    cycle_positions = [(m.start(), int(m.group(1))) for m in _OPT_CYCLE_RE.finditer(text)]
-    if not cycle_positions:
-        return progress
-
-    energy_positions = []
-    for energy_match in FINAL_SINGLE_POINT_ENERGY_RE.finditer(text):
-        try:
-            energy_positions.append(
-                (energy_match.start(), final_single_point_energy_value(energy_match.group(1)))
-            )
-        except ValueError:
-            continue
-
-    for i, (cycle_start, cycle_num) in enumerate(cycle_positions):
-        cycle_end = cycle_positions[i + 1][0] if i + 1 < len(cycle_positions) else len(text)
-        cycle_text = text[cycle_start:cycle_end]
-
-        energy: float | None = None
-        for epos, eval_ in energy_positions:
-            if cycle_start <= epos < cycle_end:
-                energy = eval_
-
+    saw_cycle = False
+    for cycle_num, energy, cycle_text in parse_optimization_cycles(text):
+        saw_cycle = True
         if energy is None:
             continue
 
         progress.steps.append(_parse_opt_step(cycle_num, energy, cycle_text))
+
+    if not saw_cycle:
+        return progress
 
     progress.is_running = (
         not has_normal_termination(text)

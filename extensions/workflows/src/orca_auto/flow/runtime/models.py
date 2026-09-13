@@ -94,7 +94,6 @@ class WorkflowRegistryAdvanceRequest:
         workflow_root: str | Path,
         shared_config: str | None = None,
         crest_config: str | None = None,
-        xtb_config: str | None = None,
         orca_config: str | None = None,
         submit_ready: bool = True,
         refresh_registry: bool = False,
@@ -107,7 +106,6 @@ class WorkflowRegistryAdvanceRequest:
             options=WorkflowEngineOptions.from_values(
                 shared_config=shared_config,
                 crest_config=crest_config,
-                xtb_config=xtb_config,
                 orca_config=orca_config,
             ),
             submit_ready=submit_ready,

@@ -24,7 +24,6 @@ from orca_auto.flow.orchestration.stage_runtime.shared import (
     _workflow_internal_runs_root,
 )
 from orca_auto.flow.orchestration.stage_views import (
-    WorkflowPayloadView,
     WorkflowStageView,
     WorkflowTaskView,
 )
@@ -195,27 +194,6 @@ def sync_crest_stage_impl(
     )
     if contract is not None:
         _apply_crest_contract(stage, task, contract)
-
-
-def completed_crest_roles_impl(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    latest_by_role: dict[str, dict[str, Any]] = {}
-    for stage_view in WorkflowPayloadView(payload).stage_views:
-        task_view = stage_view.existing_task
-        if task_view is None or task_view.engine() != "crest":
-            continue
-        task_payload = task_view.existing_payload()
-        stage_metadata = stage_view.existing_metadata() or {}
-        role = normalize_text(stage_metadata.get("input_role")).lower()
-        if not role and isinstance(task_payload, dict):
-            role = normalize_text(task_payload.get("input_role")).lower()
-        if role:
-            latest_by_role[role] = stage_view.raw
-    rows: dict[str, dict[str, Any]] = {}
-    for role, stage in latest_by_role.items():
-        status = WorkflowStageView(stage).status_pair()
-        if status.stage == "completed" and status.task in {"", "completed"}:
-            rows[role] = stage
-    return rows
 
 
 def completed_crest_stage_impl(

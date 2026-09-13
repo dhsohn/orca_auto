@@ -175,8 +175,9 @@ def collect_irc_report_data(
 
     route_lines = file_route_lines(selected_inp)
     attempts = attempt_dicts(state)
-    rows = _irc_attempt_rows(attempts)
-    parsed = _latest_parsed_irc_output(attempts)
+    parsed_attempts = tuple(_parse_attempt_irc_output(attempt) for attempt in attempts)
+    rows = _irc_attempt_rows(attempts, parsed_attempts)
+    parsed = _latest_parsed_irc_output(parsed_attempts)
     optimization_steps, optimization_converged = _latest_opt_progress(attempts)
 
     out_path = final_out_path(state)
@@ -451,11 +452,13 @@ def _parse_irc_path_summary(text: str) -> tuple[IrcPathPoint, ...]:
     return tuple(points)
 
 
-def _irc_attempt_rows(attempts: Sequence[Mapping[str, Any]]) -> tuple[AttemptReportRow, ...]:
+def _irc_attempt_rows(
+    attempts: Sequence[Mapping[str, Any]],
+    parsed_attempts: Sequence[IrcParsedOutput | None],
+) -> tuple[AttemptReportRow, ...]:
     rows = list(attempt_report_rows(attempts, "initial IRC"))
     detailed: list[AttemptReportRow] = []
-    for row, attempt in zip(rows, attempts, strict=True):
-        parsed = _parse_attempt_irc_output(attempt)
+    for row, parsed in zip(rows, parsed_attempts, strict=True):
         detail = ""
         if parsed is not None:
             parts = []
@@ -492,7 +495,9 @@ def _parse_attempt_irc_output(attempt: Mapping[str, Any]) -> IrcParsedOutput | N
         return None
 
 
-def _latest_parsed_irc_output(attempts: Sequence[Mapping[str, Any]]) -> IrcParsedOutput:
+def _latest_parsed_irc_output(
+    parsed_attempts: Sequence[IrcParsedOutput | None],
+) -> IrcParsedOutput:
     """Latest attempt output that actually contains IRC data.
 
     An execution that died before the IRC driver started (or a trailing Freq-only
@@ -501,8 +506,7 @@ def _latest_parsed_irc_output(attempts: Sequence[Mapping[str, Any]]) -> IrcParse
     earlier attempt's parsed path.
     """
     fallback: IrcParsedOutput | None = None
-    for attempt in reversed(attempts):
-        parsed = _parse_attempt_irc_output(attempt)
+    for parsed in reversed(parsed_attempts):
         if parsed is None:
             continue
         if parsed.path_points or parsed.iterations or parsed.settings:

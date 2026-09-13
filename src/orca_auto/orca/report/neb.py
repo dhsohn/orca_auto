@@ -9,19 +9,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.orca.parser.patterns import (
-    FINAL_SINGLE_POINT_ENERGY_RE,
-    final_single_point_energy_value,
-)
-
 from ..frequencies import (
     ModeSummary,
     find_frequency_analysis,
     mode_summaries,
 )
 from ..input_blocks import file_route_lines
-from ..orca_opt_progress import OptProgress, parse_opt_progress
+from ..orca_opt_progress import OptProgress, parse_opt_progress_text
 from ..parser import KCAL_PER_HARTREE
+from ..parser.extractors import parse_optimization_cycles
 from ..parser.io import read_orca_text
 from .attempts import (
     AttemptReportRow,
@@ -78,7 +74,6 @@ _POSSIBLE_INTERMEDIATE_RE = re.compile(
 )
 _NEB_CONVERGED_RE = re.compile(r"THE\s+NEB\s+OPTIMIZATION\s+HAS\s+CONVERGED", re.I)
 _TS_CONVERGED_RE = re.compile(r"THE\s+TS\s+OPTIMIZATION\s+HAS\s+CONVERGED", re.I)
-_GEOM_CYCLE_RE = re.compile(r"Geometry Optimization Cycle\s+(\d+)", re.I)
 
 
 @dataclass(frozen=True)
@@ -147,8 +142,7 @@ def input_uses_neb_ts(inp_path: Path) -> bool:
     return bool(_NEB_TS_ROUTE_RE.search(" ".join(file_route_lines(inp_path))))
 
 
-def parse_neb_output(out_path: Path) -> NebParsedOutput:
-    text = read_orca_text(str(out_path))
+def _parse_neb_output(text: str) -> NebParsedOutput:
     return NebParsedOutput(
         settings=_parse_neb_settings(text),
         iterations=_parse_neb_iterations(text),
@@ -185,9 +179,7 @@ def collect_neb_report_data(
         else:
             label, _direction = attempt_role(attempt_actions(attempts[position - 1]))
         index = int(attempt.get("index", position + 1) or (position + 1))
-        parsed = _parse_attempt_neb_output(attempt)
-        progress = _parse_attempt_opt_progress(attempt)
-        ts_steps = _parse_attempt_ts_steps(attempt)
+        parsed, progress, ts_steps = _parse_attempt_output(attempt)
         if parsed is not None:
             parsed_attempts.append(parsed)
         if progress is not None:
@@ -266,43 +258,24 @@ def collect_neb_report_data(
     )
 
 
-def _parse_attempt_neb_output(attempt: Mapping[str, Any]) -> NebParsedOutput | None:
+def _parse_attempt_output(
+    attempt: Mapping[str, Any],
+) -> tuple[NebParsedOutput | None, OptProgress | None, tuple[tuple[int, float], ...]]:
     out_raw = str(attempt.get("out_path") or "").strip()
     if not out_raw:
-        return None
+        return None, None, ()
     out_path = Path(out_raw)
     if not out_path.exists():
-        return None
+        return None, None, ()
     try:
-        return parse_neb_output(out_path)
+        text = read_orca_text(str(out_path))
     except OSError:
-        return None
-
-
-def _parse_attempt_opt_progress(attempt: Mapping[str, Any]) -> OptProgress | None:
-    out_raw = str(attempt.get("out_path") or "").strip()
-    if not out_raw:
-        return None
-    out_path = Path(out_raw)
-    if not out_path.exists():
-        return None
-    try:
-        return parse_opt_progress(str(out_path))
-    except OSError:
-        return None
-
-
-def _parse_attempt_ts_steps(attempt: Mapping[str, Any]) -> tuple[tuple[int, float], ...]:
-    out_raw = str(attempt.get("out_path") or "").strip()
-    if not out_raw:
-        return ()
-    out_path = Path(out_raw)
-    if not out_path.exists():
-        return ()
-    try:
-        return _parse_ts_refinement_steps(out_path)
-    except OSError:
-        return ()
+        return None, None, ()
+    return (
+        _parse_neb_output(text),
+        parse_opt_progress_text(text, source_path=str(out_path)),
+        _parse_ts_refinement_steps(text),
+    )
 
 
 def _neb_parse_has_content(parsed: NebParsedOutput) -> bool:
@@ -335,35 +308,16 @@ def _attempt_detail(
     return ", ".join(parts)
 
 
-def _parse_ts_refinement_steps(out_path: Path) -> tuple[tuple[int, float], ...]:
-    text = read_orca_text(str(out_path))
+def _parse_ts_refinement_steps(text: str) -> tuple[tuple[int, float], ...]:
     neb_markers = list(_NEB_CONVERGED_RE.finditer(text))
     if neb_markers:
         text = text[neb_markers[-1].end() :]
 
-    cycle_positions = [
-        (match.start(), int(match.group(1))) for match in _GEOM_CYCLE_RE.finditer(text)
-    ]
-    energy_positions = []
-    for energy_match in FINAL_SINGLE_POINT_ENERGY_RE.finditer(text):
-        try:
-            energy_positions.append(
-                (energy_match.start(), final_single_point_energy_value(energy_match.group(1)))
-            )
-        except ValueError:
-            continue
-    steps: list[tuple[int, float]] = []
-    for position, (cycle_start, cycle_num) in enumerate(cycle_positions):
-        cycle_end = (
-            cycle_positions[position + 1][0] if position + 1 < len(cycle_positions) else len(text)
-        )
-        energy = None
-        for energy_position, energy_value in energy_positions:
-            if cycle_start <= energy_position < cycle_end:
-                energy = energy_value
-        if energy is not None:
-            steps.append((cycle_num, energy))
-    return tuple(steps)
+    return tuple(
+        (cycle_num, energy)
+        for cycle_num, energy, _ in parse_optimization_cycles(text)
+        if energy is not None
+    )
 
 
 def _parse_neb_settings(text: str) -> tuple[ReportSetting, ...]:
@@ -803,5 +757,4 @@ __all__ = [
     "neb_report_badges",
     "neb_report_component",
     "neb_report_meta_html",
-    "parse_neb_output",
 ]

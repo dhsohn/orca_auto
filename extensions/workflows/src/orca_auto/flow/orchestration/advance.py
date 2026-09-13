@@ -133,7 +133,6 @@ def advance_workflow(
     target: str,
     workflow_root: str | Path,
     crest_config: str | None = None,
-    xtb_config: str | None = None,
     orca_config: str | None = None,
     engine_options: WorkflowEngineOptions | None = None,
     submit_ready: bool = True,
@@ -143,7 +142,6 @@ def advance_workflow(
     workflow_root_path = Path(workflow_root).expanduser().resolve()
     config = engine_options or WorkflowEngineOptions.from_values(
         crest_config=crest_config,
-        xtb_config=xtb_config,
         orca_config=orca_config,
     )
     workspace_dir = resolved.persistence.resolve_workflow_workspace(

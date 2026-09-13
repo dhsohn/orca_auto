@@ -105,25 +105,6 @@ _CONVERGENCE_ITEM_RE = re.compile(
     re.MULTILINE,
 )
 
-# Known calculation type keywords (searched in input line). No bare "TS" or
-# "SCAN" entries: ORCA has no `! TS` keyword, and a route-level `SCAN` token is
-# the SCAN density functional — relaxed scans are requested via `%geom Scan`,
-# never the route line.
-_CALC_TYPE_KEYWORDS: dict[str, str] = {
-    "OPTTS": "ts",
-    "OPT": "opt",
-    "FREQ": "freq",
-    "MD": "md",
-    "COPT": "opt",
-    "NEB": "neb",
-    "NEB-TS": "neb",
-    "NEB-CI": "neb",
-    "ZOOM-NEB": "neb",
-    "ZOOM-NEB-TS": "neb",
-    "ZOOM-NEB-CI": "neb",
-    "IRC": "irc",
-}
-
 # Known method keywords
 _METHOD_KEYWORDS: tuple[str, ...] = (
     "CCSD(T)",

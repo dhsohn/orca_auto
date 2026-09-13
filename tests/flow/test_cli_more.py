@@ -59,7 +59,6 @@ def test_cmd_workflow_worker_handles_negative_cycles_and_lock_timeout(monkeypatc
         workflow_root="/tmp/wf",
         no_submit=False,
         crest_config=None,
-        xtb_config=None,
         orca_config=None,
     )
     assert cli_workflow.cmd_workflow_worker(args) == 1
@@ -149,7 +148,6 @@ def test_cmd_workflow_worker_single_cycle_and_keyboard_interrupt(monkeypatch, ca
         workflow_root="/tmp/wf",
         no_submit=True,
         crest_config=None,
-        xtb_config=None,
         orca_config=None,
     )
 

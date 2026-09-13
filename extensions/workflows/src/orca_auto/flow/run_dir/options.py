@@ -19,18 +19,6 @@ from ..manifest import (
     validate_interaction_energy_state_balance,
 )
 
-RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS = (
-    "workflow_root",
-    "crest_mode",
-    "priority",
-    "max_cores",
-    "max_memory_gb",
-    "max_orca_stages",
-    "orca_route_line",
-    "charge",
-    "multiplicity",
-)
-
 
 @dataclass(frozen=True)
 class RunDirManifestSections:
@@ -53,9 +41,6 @@ class RunDirWorkflowOptions:
     boltzmann_temperature_k: float | None = None
     interaction_energy: dict[str, Any] | None = None
     rmsd_dedup: dict[str, Any] | None = None
-
-    def common_kwargs(self) -> dict[str, Any]:
-        return {name: getattr(self, name) for name in RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS}
 
 
 @dataclass(frozen=True)
@@ -380,30 +365,7 @@ def _resolve_run_dir_workflow_options(
     )
 
 
-def _resolve_run_dir_workflow_option_bundle(
-    args: Any,
-    manifest: dict[str, Any],
-    sections: RunDirManifestSections,
-    *,
-    default_orca_route_line: str,
-    default_max_orca_stages: int,
-    workflow_root: str | None = None,
-    workflow_type: str = "",
-) -> tuple[RunDirWorkflowOptions, dict[str, Any]]:
-    options = _resolve_run_dir_workflow_options(
-        args,
-        manifest,
-        sections,
-        default_orca_route_line=default_orca_route_line,
-        default_max_orca_stages=default_max_orca_stages,
-        workflow_root=workflow_root,
-        workflow_type=workflow_type,
-    )
-    return options, options.common_kwargs()
-
-
 __all__ = [
-    "RUN_DIR_COMMON_WORKFLOW_OPTION_FIELDS",
     "RunDirManifestSections",
     "RunDirWorkflowConfig",
     "RunDirWorkflowOptions",

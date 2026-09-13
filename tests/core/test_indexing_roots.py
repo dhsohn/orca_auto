@@ -154,35 +154,3 @@ def test_index_root_for_path_prefers_matching_workflow_runtime_root(
         roots.index_root_for_path(cfg, str(tmp_path / "other"), engine="xtb")
         == (tmp_path / "fallback").resolve()
     )
-
-
-def test_load_job_artifacts_for_cfg_skips_roots_without_resolved_job_dir(
-    tmp_path: Path,
-    monkeypatch: Any,
-) -> None:
-    root_one = tmp_path / "root-one"
-    root_two = tmp_path / "root-two"
-    job_dir = tmp_path / "job"
-    state = {"status": "completed"}
-    report = {"job_id": "job-1"}
-
-    monkeypatch.setattr(
-        roots,
-        "lookup_roots_for_target",
-        lambda _cfg, _target, engine: (root_one, root_two),
-    )
-
-    def resolve_latest(root: str | Path, _target: str) -> Path | None:
-        return job_dir if Path(root) == root_two else None
-
-    result = roots.load_job_artifacts_for_cfg(
-        _cfg(tmp_path / "fallback"),
-        "job-1",
-        engine="xtb",
-        load_state_fn=lambda resolved: state if resolved == job_dir else None,
-        load_report_json_fn=lambda resolved: report if resolved == job_dir else None,
-        resolve_latest_job_dir_fn=resolve_latest,
-        resolve_job_location_fn=lambda _root, _target: None,
-    )
-
-    assert result == (job_dir, state, report, None)

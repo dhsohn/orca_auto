@@ -78,7 +78,6 @@ def cancel_workflow_activity(
         target=record.cancel_target,
         workflow_root=resolved.workflow_root or "",
         crest_config=resolved.crest_config,
-        xtb_config=resolved.xtb_config,
         orca_config=resolved.orca_config,
     )
 

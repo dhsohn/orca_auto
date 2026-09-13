@@ -25,15 +25,6 @@ from orca_auto.core.engines.queue_worker import (
     build_engine_queue_worker_parser,
     build_runtime_engine_queue_worker,
 )
-from orca_auto.core.notifications.engines import (
-    notify_crest_job_finished as notify_job_finished,
-)
-from orca_auto.core.notifications.engines import (
-    notify_crest_job_started as notify_job_started,
-)
-from orca_auto.core.queue import (
-    execution as _queue_execution,
-)
 from orca_auto.core.queue import (
     get_cancel_requested,
     mark_cancelled,
@@ -58,8 +49,6 @@ from orca_auto.flow.engines.crest.execution import (
     _job_dir,
     _mark_recovery_pending_entry,
     _terminate_process,
-    _write_execution_artifacts,
-    _write_running_state,
     build_worker_child_command,
 )
 
@@ -70,11 +59,6 @@ from .job_locations import (
     resolve_job_location_for_cfg,
     upsert_job_record,
 )
-from .queue_runtime_execution import (
-    CrestQueueRuntimeWorkerExecutionCallbacks,
-    build_queue_runtime_worker_execution_dependencies,
-)
-from .runner import finalize_crest_job, start_crest_job
 from .state import (
     load_state,
     write_state,
@@ -109,33 +93,6 @@ def _try_reserve_admission_slot(cfg: Any) -> str | None:
         cfg,
         engine="crest",
         reserve_slot_fn=reserve_slot,
-    )
-
-
-def _worker_execution_callbacks() -> CrestQueueRuntimeWorkerExecutionCallbacks:
-    return CrestQueueRuntimeWorkerExecutionCallbacks(
-        terminate_process=_terminate_process,
-        wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
-        sleep=time.sleep,
-        now_utc_iso=now_utc_iso,
-        get_cancel_requested=get_cancel_requested,
-        mark_completed=mark_completed,
-        mark_cancelled=mark_cancelled,
-        mark_failed=mark_failed,
-        start_crest_job=start_crest_job,
-        finalize_crest_job=finalize_crest_job,
-        write_running_state=_write_running_state,
-        write_execution_artifacts=_write_execution_artifacts,
-        upsert_job_record=upsert_job_record,
-        notify_job_started=notify_job_started,
-        notify_job_finished=notify_job_finished,
-    )
-
-
-def _worker_dependencies() -> Any:
-    return build_queue_runtime_worker_execution_dependencies(
-        _worker_execution_callbacks(),
-        cancel_check_interval_seconds=1,
     )
 
 

@@ -11,7 +11,6 @@ import yaml
 from orca_auto.cli import main as cli_main
 from orca_auto.core.admission import list_slots
 from orca_auto.flow.engines.crest import queue_runtime as crest_queue_runtime
-from orca_auto.flow.engines.xtb import queue_runtime as xtb_queue_runtime
 from orca_auto.flow.runtime import (
     TERMINAL_WORKFLOW_STATUSES,
     advance_workflow_registry_once,
@@ -104,17 +103,12 @@ def pump_workflow(
         str(config_path),
         max_concurrent=1,
     )
-    xtb_worker = xtb_queue_runtime.QueueWorker(
-        xtb_queue_runtime.load_config(str(config_path)),
-        str(config_path),
-        max_concurrent=1,
-    )
     orca_worker = orca_queue_worker.QueueWorker(
         load_orca_config(str(config_path)),
         str(config_path),
         max_concurrent=1,
     )
-    for worker in (crest_worker, xtb_worker, orca_worker):
+    for worker in (crest_worker, orca_worker):
         worker.poll_interval_seconds = 0.01
 
     payload: dict[str, Any] = {}
@@ -125,7 +119,7 @@ def pump_workflow(
             submit_ready=True,
             refresh_registry=False,
         )
-        for worker in (crest_worker, xtb_worker, orca_worker):
+        for worker in (crest_worker, orca_worker):
             assert worker.run_once(idle_message=None, blocked_message=None) == 0
         payload = load_workflow_payload(workspace_dir)
         status = str(payload.get("status") or "").strip().lower()

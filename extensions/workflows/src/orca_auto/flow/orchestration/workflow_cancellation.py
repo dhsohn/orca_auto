@@ -430,7 +430,6 @@ def cancel_materialized_workflow(
     target: str,
     workflow_root: str | Path,
     crest_config: str | None = None,
-    xtb_config: str | None = None,
     orca_config: str | None = None,
     engine_options: WorkflowEngineOptions | None = None,
     services: OrchestrationServices | None = None,
@@ -488,7 +487,6 @@ def cancel_materialized_workflow(
                     metadata.pop("workflow_error", None)
             config = engine_options or WorkflowEngineOptions.from_values(
                 crest_config=crest_config,
-                xtb_config=xtb_config,
                 orca_config=orca_config,
             )
             cancellation = _cancel_active_workflow_stages(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -18,32 +17,6 @@ from ..templates import DEFAULT_CONFORMER_ORCA_ROUTE_LINE
 from . import workflow_output as _workflow_output
 
 
-@dataclass(frozen=True)
-class _RunDirWorkflowCreationSpec:
-    workflow_type: str
-    required_input_kwargs: tuple[tuple[str, str], ...]
-    missing_inputs_error: str
-    default_orca_route_line: str
-    default_max_orca_stages: int
-    option_kwargs: tuple[tuple[str, str], ...] = ()
-    manifest_kwargs: tuple[tuple[str, str], ...] = ()
-
-
-_CONFORMER_RUN_DIR_WORKFLOW_SPEC = _RunDirWorkflowCreationSpec(
-    workflow_type="conformer_screening",
-    required_input_kwargs=(("input_xyz", "input_xyz"),),
-    missing_inputs_error="conformer_screening requires input.xyz (or manifest/CLI override).",
-    default_orca_route_line=DEFAULT_CONFORMER_ORCA_ROUTE_LINE,
-    default_max_orca_stages=20,
-    option_kwargs=(
-        ("boltzmann_temperature_k", "boltzmann_temperature_k"),
-        ("interaction_energy", "interaction_energy"),
-        ("rmsd_dedup", "rmsd_dedup"),
-    ),
-    manifest_kwargs=(("crest_job_manifest", "crest_manifest"),),
-)
-
-
 def _workflow_root_for_existing_run_dir(args: Any, workflow_dir: Path) -> Path:
     raw_root = normalize_text(getattr(args, "workflow_root", None))
     if raw_root:
@@ -51,88 +24,47 @@ def _workflow_root_for_existing_run_dir(args: Any, workflow_dir: Path) -> Path:
     return workflow_root_for_workspace(workflow_dir)
 
 
-def _update_present_kwargs(kwargs: dict[str, Any], values: dict[str, Any]) -> None:
-    for key, value in values.items():
-        if value:
-            kwargs[key] = value
-
-
-def _run_dir_required_input_kwargs(
-    config: _run_dir_options.RunDirWorkflowConfig,
-    spec: _RunDirWorkflowCreationSpec,
-) -> dict[str, Any]:
-    workflow_kwargs: dict[str, Any] = {}
-    for kwarg_name, config_attr in spec.required_input_kwargs:
-        value = getattr(config, config_attr)
-        if not value:
-            raise ValueError(spec.missing_inputs_error)
-        workflow_kwargs[kwarg_name] = value
-    return workflow_kwargs
-
-
-def _run_dir_option_kwargs(
-    options: _run_dir_options.RunDirWorkflowOptions,
-    spec: _RunDirWorkflowCreationSpec,
-) -> dict[str, Any]:
-    return {
-        kwarg_name: getattr(options, option_attr) for kwarg_name, option_attr in spec.option_kwargs
-    }
-
-
-def _run_dir_manifest_kwargs(
-    config: _run_dir_options.RunDirWorkflowConfig,
-    spec: _RunDirWorkflowCreationSpec,
-) -> dict[str, Any]:
-    return {
-        kwarg_name: getattr(config, config_attr) for kwarg_name, config_attr in spec.manifest_kwargs
-    }
-
-
-def _run_dir_workflow_kwargs(
-    args: Any,
-    config: _run_dir_options.RunDirWorkflowConfig,
-    spec: _RunDirWorkflowCreationSpec,
-) -> dict[str, Any]:
-    workflow_kwargs = _run_dir_required_input_kwargs(config, spec)
+def _create_run_dir_workflow(args: Any, workflow_dir: Path) -> dict[str, Any]:
+    config = _run_dir_manifest._load_run_dir_workflow_config(args, workflow_dir)
+    if not config.input_xyz:
+        raise ValueError("conformer_screening requires input.xyz (or manifest/CLI override).")
     workflow_root = _run_dir_options._resolve_required_workflow_root(args, config.manifest)
     if config.workflow_dir == Path(workflow_root).expanduser().resolve():
         raise ValueError(
             "run-dir workflow scaffold cannot be the workflow_root itself; "
             "create the scaffold as a subdirectory of workflow_root"
         )
-    options, common_kwargs = _run_dir_options._resolve_run_dir_workflow_option_bundle(
+    options = _run_dir_options._resolve_run_dir_workflow_options(
         args,
         config.manifest,
         config.sections,
-        default_orca_route_line=spec.default_orca_route_line,
-        default_max_orca_stages=spec.default_max_orca_stages,
+        default_orca_route_line=DEFAULT_CONFORMER_ORCA_ROUTE_LINE,
+        default_max_orca_stages=20,
         workflow_root=workflow_root,
         workflow_type=config.workflow_type,
     )
 
-    workflow_kwargs.update(
-        {
-            # The workflow id is a fresh generation name minted by the
-            # factory; the scaffold hosts the generation workspace inside it.
-            "scaffold_dir": str(config.workflow_dir),
-            **common_kwargs,
-        }
+    crest_kwargs: dict[str, Any] = (
+        {"crest_job_manifest": config.crest_manifest} if config.crest_manifest else {}
     )
-    workflow_kwargs.update(_run_dir_option_kwargs(options, spec))
-    _update_present_kwargs(workflow_kwargs, _run_dir_manifest_kwargs(config, spec))
-    return workflow_kwargs
-
-
-def _create_conformer_run_dir_workflow(
-    args: Any, config: _run_dir_options.RunDirWorkflowConfig
-) -> dict[str, Any]:
-    workflow_kwargs = _run_dir_workflow_kwargs(args, config, _CONFORMER_RUN_DIR_WORKFLOW_SPEC)
-    return create_conformer_screening_workflow(**workflow_kwargs)
-
-
-def _create_run_dir_workflow(args: Any, workflow_dir: Path) -> dict[str, Any]:
-    config = _run_dir_manifest._load_run_dir_workflow_config(args, workflow_dir)
-    return _create_conformer_run_dir_workflow(args, config)
+    return create_conformer_screening_workflow(
+        input_xyz=config.input_xyz,
+        # The factory mints a fresh generation inside the scaffold directory.
+        scaffold_dir=str(config.workflow_dir),
+        workflow_root=options.workflow_root,
+        crest_mode=options.crest_mode,
+        priority=options.priority,
+        max_cores=options.max_cores,
+        max_memory_gb=options.max_memory_gb,
+        max_orca_stages=options.max_orca_stages,
+        orca_route_line=options.orca_route_line,
+        charge=options.charge,
+        multiplicity=options.multiplicity,
+        boltzmann_temperature_k=options.boltzmann_temperature_k,
+        interaction_energy=options.interaction_energy,
+        rmsd_dedup=options.rmsd_dedup,
+        **crest_kwargs,
+    )
 
 
 def _restart_existing_run_dir_workflow(args: Any, workflow_dir: Path) -> dict[str, Any]:

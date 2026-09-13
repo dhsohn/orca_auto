@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 from dataclasses import replace
 from os import PathLike
@@ -210,6 +211,60 @@ def test_slot_owner_identity_is_scoped_to_the_current_boot(
     )
 
     assert store._slot_owner_alive(slot) is False
+
+
+@pytest.mark.parametrize(
+    ("boot_id", "ticks", "kill_error", "retained", "expected_probes"),
+    [
+        (None, 12345, None, True, ["boot"]),
+        ("test-boot-id", None, None, True, ["boot", "pid", "ticks"]),
+        ("test-boot-id", 12345, PermissionError(), True, ["boot", "pid", "ticks"]),
+        ("test-boot-id", 54321, PermissionError(), False, ["boot", "pid", "ticks"]),
+        ("test-boot-id", 54321, OSError(errno.EIO, "unknown"), True, ["boot", "pid"]),
+        ("test-boot-id", 12345, ProcessLookupError(), False, ["boot", "pid"]),
+        ("later-boot-id", 12345, None, False, ["boot"]),
+    ],
+)
+def test_admission_cleanup_preserves_conservative_owner_identity_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boot_id: str | None,
+    ticks: int | None,
+    kill_error: OSError | None,
+    retained: bool,
+    expected_probes: list[str],
+) -> None:
+    _patch_deterministic_liveness(monkeypatch)
+    token = store.reserve_slot(tmp_path, 1, source="queue")
+    assert token is not None
+    path = tmp_path / store.ADMISSION_FILE_NAME
+    recorded = path.read_bytes()
+    probes: list[str] = []
+
+    def observed_boot_id() -> str | None:
+        probes.append("boot")
+        return boot_id
+
+    def observed_ticks(_pid: int) -> int | None:
+        probes.append("ticks")
+        return ticks
+
+    def probe_pid(pid: int, signum: int) -> None:
+        assert (pid, signum) == (4242, 0)
+        probes.append("pid")
+        if kill_error is not None:
+            raise kill_error
+
+    monkeypatch.setattr(store, "_linux_boot_id", observed_boot_id)
+    monkeypatch.setattr(store, "_process_start_ticks", observed_ticks)
+    monkeypatch.setattr(store.os, "kill", probe_pid)
+
+    assert [slot.token for slot in store.list_slots(tmp_path)] == ([token] if retained else [])
+    assert probes == expected_probes
+    if retained:
+        assert path.read_bytes() == recorded
+    else:
+        assert _read_slots_file(tmp_path) == []
 
 
 @pytest.mark.parametrize(
