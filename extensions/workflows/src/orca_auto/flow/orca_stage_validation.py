@@ -25,8 +25,6 @@ _NEB_ROUTE_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 _GOAT_ROUTE_TOKEN_RE = re.compile(r"\AGOAT[A-Z0-9_-]*\Z", re.IGNORECASE)
-_INLINE_XYZ_ATOM_LABEL_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_:+().{}\[\]-]*\Z")
-_INLINE_XYZ_COORDINATE_RE = re.compile(r"\A[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[EeDd][-+]?\d+)?\Z")
 
 
 def validate_workflow_orca_task_kind(task_kind: str) -> str:

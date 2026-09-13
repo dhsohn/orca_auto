@@ -6,6 +6,7 @@ from .workflow import (
     WorkflowPlan,
     WorkflowPlanPayload,
     WorkflowStage,
+    WorkflowStageInput,
     WorkflowStagePayload,
     WorkflowStageWithTaskPayload,
     WorkflowTask,
@@ -13,7 +14,6 @@ from .workflow import (
     WorkflowTemplateRequest,
     WorkflowTemplateRequestPayload,
 )
-from .xtb import WorkflowStageInput, XtbArtifactContract, XtbCandidateArtifact, XtbDownstreamPolicy
 
 __all__ = [
     "CrestArtifactContract",
@@ -31,7 +31,4 @@ __all__ = [
     "WorkflowTemplateRequest",
     "WorkflowTemplateRequestPayload",
     "WorkflowStageInput",
-    "XtbArtifactContract",
-    "XtbCandidateArtifact",
-    "XtbDownstreamPolicy",
 ]

@@ -8,7 +8,7 @@ from orca_auto.core.indexing import resolve_job_location
 from orca_auto.core.utils.coercion import coerce_int_mapping, normalize_text
 
 from ..contracts.crest import CrestArtifactContract, CrestDownstreamPolicy, to_workflow_stage_inputs
-from ..contracts.xtb import WorkflowStageInput
+from ..contracts.workflow import WorkflowStageInput
 from . import _engine_adapter_helpers as _adapter_helpers
 
 

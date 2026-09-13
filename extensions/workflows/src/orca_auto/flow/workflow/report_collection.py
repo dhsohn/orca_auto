@@ -99,7 +99,6 @@ def _orca_stage_result(
     stage: Mapping[str, Any],
     workspace_dir: Path,
     *,
-    candidate_task: bool,
     authoritative_evidence: tuple[
         OrcaStructureEvidence,
         OrcaSelectedInputScienceIdentity | None,
@@ -272,7 +271,6 @@ def collect_workflow_report_data(
                 result = _orca_stage_result(
                     stage,
                     workspace_dir,
-                    candidate_task=candidate_task,
                     authoritative_evidence=authoritative_evidence,
                 )
                 if result.machine_path is not None and (

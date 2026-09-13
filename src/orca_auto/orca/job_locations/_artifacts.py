@@ -124,11 +124,3 @@ def load_job_artifact_context(
         state=state_payload,
         report=None,
     )
-
-
-def load_job_artifacts(
-    index_root: str | Path,
-    target: str,
-) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None]:
-    context = load_job_artifact_context(index_root, target)
-    return context.job_dir, context.state, context.report

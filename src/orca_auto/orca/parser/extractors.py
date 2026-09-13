@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 
 from .patterns import (
     _BASIS_KEYWORDS,
-    _CALC_TYPE_KEYWORDS,
     _COORD_SECTION_RE,
     _COORD_XYZ_LINE_RE,
     _CPCM_TOKEN_RE,
@@ -14,51 +13,69 @@ from .patterns import (
     _FREQ_VALUE_RE,
     _INPUT_LINE_RE,
     _METHOD_KEYWORDS,
+    _OPT_CYCLE_RE,
     _PROGRAM_VERSION_RE,
     _RUNTIME_RE,
     _SMD_SOLVENT_RE,
     _SMD_TRUE_RE,
+    FINAL_SINGLE_POINT_ENERGY_RE,
+    final_single_point_energy_value,
 )
 
 AtomRow = tuple[str, float, float, float]
 
 
-def parse_input_line(text: str) -> tuple[str, str, str, list[str]]:
-    """Extract calc_type, method, and basis_set from the input line.
+def parse_optimization_cycles(text: str) -> Iterator[tuple[int, float | None, str]]:
+    """Yield each cycle's number, last finite energy, and convergence text.
+
+    Keep headers without valid energies so callers can distinguish an unfinished
+    cycle from output with no optimization cycles.
+    """
+    cycle_positions = [
+        (match.start(), int(match.group(1))) for match in _OPT_CYCLE_RE.finditer(text)
+    ]
+    if not cycle_positions:
+        return
+
+    energy_positions = []
+    for energy_match in FINAL_SINGLE_POINT_ENERGY_RE.finditer(text):
+        try:
+            energy_positions.append(
+                (energy_match.start(), final_single_point_energy_value(energy_match.group(1)))
+            )
+        except ValueError:
+            continue
+
+    for position, (cycle_start, cycle_num) in enumerate(cycle_positions):
+        cycle_end = (
+            cycle_positions[position + 1][0] if position + 1 < len(cycle_positions) else len(text)
+        )
+        energy = None
+        for energy_position, energy_value in energy_positions:
+            if cycle_start <= energy_position < cycle_end:
+                energy = energy_value
+        yield cycle_num, energy, text[cycle_start:cycle_end]
+
+
+def parse_input_line(text: str) -> tuple[str, str, list[str]]:
+    """Extract method, basis_set, and tokens from the input line.
 
     Returns:
-        (calc_type, method, basis_set, all_input_tokens)
+        (method, basis_set, all_input_tokens)
     """
     matches = _INPUT_LINE_RE.findall(text)
     if not matches:
-        return ("sp", "", "", [])
+        return ("", "", [])
 
     # There may be multiple input lines; merge them.
     all_tokens: list[str] = []
     for line in matches:
         all_tokens.extend(line.strip().split())
 
-    calc_type = calc_type_from_tokens(all_tokens)
     method = first_known_token(all_tokens, _METHOD_KEYWORDS)
     basis_set = first_known_token(all_tokens, _BASIS_KEYWORDS)
 
-    return (calc_type, method, basis_set, all_tokens)
-
-
-def calc_type_from_tokens(tokens: list[str]) -> str:
-    calc_types = [
-        calc_type
-        for token in tokens
-        for keyword, calc_type in _CALC_TYPE_KEYWORDS.items()
-        if token.upper() == keyword
-    ]
-    if not calc_types:
-        return "sp"
-    if "opt" in calc_types and "freq" in calc_types:
-        return "opt+freq"
-    if "ts" in calc_types and "freq" in calc_types:
-        return "ts+freq"
-    return calc_types[0]
+    return (method, basis_set, all_tokens)
 
 
 def first_known_token(tokens: list[str], known_tokens: Sequence[str]) -> str:

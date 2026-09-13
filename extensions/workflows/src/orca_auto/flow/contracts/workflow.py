@@ -141,6 +141,28 @@ def required_route_line(parameters: Mapping[str, Any], key: str) -> str:
 
 
 @dataclass(frozen=True)
+class WorkflowStageInput:
+    source_job_id: str
+    source_job_type: str
+    reaction_key: str
+    selected_input_xyz: str
+    rank: int
+    kind: str
+    artifact_path: str
+    selected: bool = False
+    score: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        if self.score is None:
+            payload.pop("score", None)
+        if not self.metadata:
+            payload["metadata"] = {}
+        return payload
+
+
+@dataclass(frozen=True)
 class WorkflowArtifactRef:
     kind: str
     path: str
@@ -410,6 +432,7 @@ __all__ = [
     "WorkflowPlan",
     "WorkflowPlanPayload",
     "WorkflowStage",
+    "WorkflowStageInput",
     "WorkflowStagePayload",
     "WorkflowStageWithTaskPayload",
     "WorkflowTask",

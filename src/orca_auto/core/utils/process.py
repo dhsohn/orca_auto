@@ -65,6 +65,44 @@ def is_process_alive(pid: int) -> bool:
     return True
 
 
+def process_identity_alive(
+    pid: int,
+    expected_ticks: int | None,
+    expected_boot_id: str | None,
+    *,
+    kill_fn: Callable[[int, int], None],
+    process_start_ticks_fn: Callable[[int], int | None],
+    boot_id_fn: Callable[[], str | None],
+) -> bool:
+    """Retain a process owner unless the available identity proves it stale."""
+    if pid <= 0:
+        return False
+    if expected_boot_id is not None:
+        observed_boot_id = boot_id_fn()
+        if observed_boot_id is None:
+            # Unknown boot identity cannot prove the owner stale. Retain the
+            # slot so recovery does not advance to process-group signalling.
+            return True
+        if observed_boot_id != expected_boot_id:
+            return False
+    try:
+        kill_fn(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    except OSError as exc:
+        return exc.errno != errno.ESRCH
+    if expected_ticks is None:
+        return True
+    observed_ticks = process_start_ticks_fn(pid)
+    if observed_ticks is None:
+        # PID existence is proven but identity is temporarily unknown. Treat
+        # the owner as live so startup never reaps a possibly active child.
+        return True
+    return observed_ticks == expected_ticks
+
+
 def current_process_start_ticks() -> int | None:
     return process_start_ticks(os.getpid(), proc_root=Path("/proc"))
 

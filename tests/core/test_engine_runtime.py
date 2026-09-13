@@ -26,8 +26,6 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.worker.execution_dependencies import (
     WorkerProcessDependencyCallbacks,
     build_worker_process_default_factories_from_callbacks,
-    build_worker_process_dependency_groups,
-    worker_process_dependency_callbacks_from_attrs,
 )
 
 
@@ -303,82 +301,6 @@ def test_engine_queue_runtime_builds_child_worker_deps(tmp_path: Path) -> None:
     ]
 
 
-def test_worker_process_dependency_callbacks_from_attrs_maps_common_callbacks() -> None:
-    def record(name: str) -> Any:
-        def _call(*_args: Any, **_kwargs: Any) -> str:
-            return name
-
-        return _call
-
-    source = SimpleNamespace(
-        terminate_process=record("terminate"),
-        wait_for_cancellable_process=record("wait"),
-        sleep=record("sleep"),
-        now_utc_iso=lambda: "2026-01-01T00:00:00+00:00",
-        get_cancel_requested=record("cancel"),
-        mark_completed=record("completed"),
-        mark_cancelled=record("cancelled"),
-        mark_failed=record("failed"),
-        run_demo_job=record("run"),
-    )
-
-    callbacks = worker_process_dependency_callbacks_from_attrs(
-        source,
-        engine_runner_dependency_names=("run_demo_job",),
-    )
-    rebuilt = WorkerProcessDependencyCallbacks(
-        terminate_process=callbacks.terminate_process,
-        wait_for_cancellable_process=callbacks.wait_for_cancellable_process,
-        sleep=callbacks.sleep,
-        now_utc_iso=callbacks.now_utc_iso,
-        get_cancel_requested=callbacks.get_cancel_requested,
-        mark_completed=callbacks.mark_completed,
-        mark_cancelled=callbacks.mark_cancelled,
-        mark_failed=callbacks.mark_failed,
-        engine_runner_dependencies=callbacks.engine_runner_dependencies,
-    )
-
-    assert callbacks.terminate_process is source.terminate_process
-    assert callbacks.engine_runner_dependencies["run_demo_job"] is source.run_demo_job
-    assert rebuilt.mark_failed is source.mark_failed
-    assert rebuilt.sleep() == "sleep"
-    assert rebuilt.engine_runner_dependencies["run_demo_job"]() == "run"
-
-
-def test_worker_process_dependency_groups_maps_callback_groups() -> None:
-    calls: list[str] = []
-
-    def record(name: str) -> Any:
-        def _call(*_args: Any, **_kwargs: Any) -> None:
-            calls.append(name)
-
-        return _call
-
-    callbacks = WorkerProcessDependencyCallbacks(
-        terminate_process=record("terminate"),
-        wait_for_cancellable_process=record("wait"),
-        sleep=record("sleep"),
-        now_utc_iso=lambda: "2026-01-01T00:00:00+00:00",
-        get_cancel_requested=record("cancel"),
-        mark_completed=record("completed"),
-        mark_cancelled=record("cancelled"),
-        mark_failed=record("failed"),
-        engine_runner_dependencies={"run_demo_job": record("run")},
-    )
-
-    groups = build_worker_process_dependency_groups(
-        callbacks,
-        runner_dependencies_type=_DemoRunnerDependencies,
-        cancel_check_interval_seconds=6,
-    )
-
-    assert groups["timing"].now_utc_iso() == "2026-01-01T00:00:00+00:00"
-    groups["queue"].mark_completed("root", "queue-1")
-    assert groups["runner"].cancel_check_interval_seconds == 6
-    groups["runner"].run_demo_job()
-    assert calls == ["completed", "run"]
-
-
 def test_worker_process_default_factories_from_callbacks_maps_common_groups() -> None:
     calls: list[str] = []
 
@@ -403,13 +325,11 @@ def test_worker_process_default_factories_from_callbacks_maps_common_groups() ->
     factories = build_worker_process_default_factories_from_callbacks(
         callbacks,
         config_factory=lambda: "config",
-        admission_factory=lambda: "admission",
         runner_dependencies_type=_DemoRunnerDependencies,
         cancel_check_interval_seconds=8,
     )
 
     assert factories["config"]() == "config"
-    assert factories["admission"]() == "admission"
     assert factories["timing"]().now_utc_iso() == "2026-01-01T00:00:00+00:00"
     factories["queue"]().mark_failed("root", "queue-1")
     runner = factories["runner"]()

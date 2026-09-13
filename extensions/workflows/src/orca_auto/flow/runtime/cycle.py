@@ -32,7 +32,6 @@ def start_workflow_cycle_with_deps(
     requested_submit_ready = bool(context.submit_ready)
     cycle_submit_ready = requested_submit_ready and deps.workflow_submission_has_capacity_fn(
         context.options.crest_config,
-        context.options.xtb_config,
         context.options.orca_config,
     )
     admission_blocked = requested_submit_ready and not cycle_submit_ready

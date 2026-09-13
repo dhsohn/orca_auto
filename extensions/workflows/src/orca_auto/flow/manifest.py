@@ -528,7 +528,7 @@ def resolve_manifest_file_value(
     return str(resolved)
 
 
-def resolve_engine_manifest(base_dir: Path, manifest: dict[str, Any], key: str) -> dict[str, Any]:
+def resolve_engine_manifest(manifest: dict[str, Any], key: str) -> dict[str, Any]:
     raw = manifest.get(key)
     if raw is None:
         return {}
@@ -541,13 +541,12 @@ def resolve_engine_manifest(base_dir: Path, manifest: dict[str, Any], key: str) 
 
 
 def resolve_engine_manifest_with_presence(
-    base_dir: Path,
     manifest: dict[str, Any],
     key: str,
 ) -> tuple[bool, dict[str, Any]]:
     if key not in manifest or manifest.get(key) is None:
         return False, {}
-    return True, resolve_engine_manifest(base_dir, manifest, key)
+    return True, resolve_engine_manifest(manifest, key)
 
 
 __all__ = [

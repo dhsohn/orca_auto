@@ -214,6 +214,24 @@ def test_final_out_path_never_substitutes_an_earlier_attempt(tmp_path: Path) -> 
     assert final_out_path({"attempts": [{"index": 1, "out_path": str(earlier)}]}) == earlier
 
 
+def test_missing_output_route_does_not_invent_a_single_point_label(tmp_path: Path) -> None:
+    output = "\n".join(line for line in _out_text().splitlines() if not line.startswith("|  1> !"))
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "missing_route",
+        inp_text=_TS_INP,
+        out_text=output,
+    )
+
+    block = collect_structure_evidence(reaction_dir, state)
+    assert block is not None
+    rendered = render_si_block_md(block)
+
+    assert rendered.splitlines()[1] == "!         (ORCA 6.0.1)"
+    assert "E(el)" in rendered and "-1234.567890 Eh" in rendered
+    assert "Charge 0, Multiplicity 1  (CH)" in rendered
+
+
 def test_ts_block_renders_thermochemistry_mode_and_coordinates(tmp_path: Path) -> None:
     reaction_dir, state = _job_dir(
         tmp_path,

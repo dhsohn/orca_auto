@@ -6,17 +6,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import (
-    BLOCK_START_RE,
-    active_orca_directive_text,
-    active_orca_line_text,
-    find_block_range,
-)
+from .input_blocks import active_orca_line_text, find_block_range
 from .parser import KCAL_PER_HARTREE
 
-# Interior scan-profile maxima below this prominence are endpoint/vdW noise, not
-# a barrier a reverse relaxed scan could locate.
-SCAN_BARRIER_NOISE_KCAL = 0.5
 _FLOAT_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
 _GEOM_SCAN_START_RE = re.compile(r"^\s*scan\s*$", re.IGNORECASE)
 _GEOM_END_RE = re.compile(r"^\s*end\s*$", re.IGNORECASE)
@@ -26,12 +18,6 @@ _SIMPLE_SCAN_COORD_LINE_RE = re.compile(
     rf"(?P<end>{_FLOAT_RE.pattern})(?P<sep2>\s*,\s*)"
     r"(?P<points>\d+)(?P<suffix>.*)$"
 )
-_STRICT_SCAN_COORDINATE_RE = re.compile(
-    rf"\A[ \t]*(?P<kind>[BAD])(?:[ \t]+\d+){{2,4}}[ \t]*=[ \t]*"
-    rf"{_FLOAT_RE.pattern}[ \t]*,[ \t]*{_FLOAT_RE.pattern}[ \t]*,[ \t]*\d+[ \t]*\Z",
-    re.IGNORECASE,
-)
-_SCAN_ATOM_ARITY = {"B": 2, "A": 3, "D": 4}
 
 
 @dataclass(frozen=True)
@@ -205,46 +191,6 @@ def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | Non
     return best * KCAL_PER_HARTREE
 
 
-def _peak_prominence_kcal(energies: Sequence[float], peak: int) -> float:
-    """Topographic prominence of a local maximum: the smaller of the climbs
-    from the lowest valley separating it from higher ground (or the profile
-    edge) on each side."""
-    left_min = energies[peak]
-    idx = peak - 1
-    while idx >= 0 and energies[idx] <= energies[peak]:
-        left_min = min(left_min, energies[idx])
-        idx -= 1
-    right_min = energies[peak]
-    idx = peak + 1
-    while idx < len(energies) and energies[idx] <= energies[peak]:
-        right_min = min(right_min, energies[idx])
-        idx += 1
-    return min(energies[peak] - left_min, energies[peak] - right_min) * KCAL_PER_HARTREE
-
-
-def scan_profile_interior_maxima(
-    energies: Sequence[float],
-    *,
-    threshold_kcal: float = SCAN_BARRIER_NOISE_KCAL,
-) -> list[tuple[int, float]]:
-    """All interior local maxima with prominence above the noise threshold.
-
-    Returns ``(list index, prominence in kcal/mol)`` pairs sorted by
-    descending prominence — every barrier candidate a TS search should try,
-    not just the global maximum (which may be a profile endpoint). Plateaus
-    count once, at their first point.
-    """
-    candidates: list[tuple[int, float]] = []
-    for idx in range(1, len(energies) - 1):
-        if energies[idx] <= energies[idx - 1] or energies[idx] < energies[idx + 1]:
-            continue
-        prominence = _peak_prominence_kcal(energies, idx)
-        if prominence >= threshold_kcal:
-            candidates.append((idx, prominence))
-    candidates.sort(key=lambda item: (-item[1], item[0]))
-    return candidates
-
-
 def parse_scan_coordinate(text: str) -> ScanCoordinateSpec | None:
     """Spec from a bare scan-coordinate string like ``B 0 1 = 1.20, 3.00, 10``."""
     match = _SIMPLE_SCAN_COORD_LINE_RE.match(text.strip())
@@ -266,97 +212,6 @@ def parse_scan_coordinate(text: str) -> ScanCoordinateSpec | None:
     )
 
 
-def format_scan_coordinate(spec: ScanCoordinateSpec) -> str:
-    """The canonical scan-coordinate string ``parse_scan_coordinate`` accepts."""
-    atoms = " ".join(str(atom) for atom in spec.atoms)
-    return (
-        f"{spec.kind} {atoms} = {_format_scan_float(spec.start)}, "
-        f"{_format_scan_float(spec.end)}, {spec.points}"
-    )
-
-
-def validate_scan_coordinate(value: object, *, atom_count: int) -> str:
-    """Return one canonical, executable B/A/D scan coordinate.
-
-    This is the durable relaxed-scan contract shared by workflow creation,
-    dynamic stage growth, submission, and completed-result validation.
-    """
-
-    if not isinstance(value, str):
-        raise ValueError(f"scan_coordinate must be a string. got={value!r}")
-    raw = value.strip()
-    if _STRICT_SCAN_COORDINATE_RE.fullmatch(raw) is None:
-        raise ValueError(
-            "relaxed scan requires exactly one scan_coordinate like "
-            "'B 20 61 = 1.80, 5.00, 32'. "
-            f"got={value!r}"
-        )
-    spec = parse_scan_coordinate(raw)
-    if spec is None:
-        raise ValueError(f"scan_coordinate could not be parsed. got={value!r}")
-    expected_arity = _SCAN_ATOM_ARITY.get(spec.kind)
-    if expected_arity is None or len(spec.atoms) != expected_arity:
-        raise ValueError(
-            f"scan_coordinate {spec.kind or '?'} requires {expected_arity or 'a supported'} "
-            f"atom indices. got={value!r}"
-        )
-    if len(set(spec.atoms)) != len(spec.atoms):
-        raise ValueError("scan_coordinate atom indices must be distinct")
-    if any(atom < 0 or atom >= atom_count for atom in spec.atoms):
-        raise ValueError(
-            "scan_coordinate atom indices must be 0-based and within input XYZ; "
-            f"atom_count={atom_count}, atoms={spec.atoms!r}"
-        )
-    if not math.isfinite(spec.start) or not math.isfinite(spec.end):
-        raise ValueError("scan_coordinate range endpoints must be finite")
-    if spec.start == spec.end:
-        raise ValueError("scan_coordinate range endpoints must differ")
-    if spec.points < 2:
-        raise ValueError("scan_coordinate points must be an integer >= 2")
-    return format_scan_coordinate(spec)
-
-
-def validate_scan_coordinate_lines(lines: list[str], *, atom_count: int) -> str:
-    """Validate the sole active coordinate in already-bound ORCA input lines."""
-
-    geom_block_count = sum(
-        1
-        for line in lines
-        if (match := BLOCK_START_RE.match(active_orca_directive_text(line))) is not None
-        and match.group(1).lower() == "geom"
-    )
-    if geom_block_count != 1:
-        raise ValueError("task_kind='relaxed_scan' requires exactly one active %geom block")
-    block = find_block_range(lines, "geom")
-    if block is None:
-        raise ValueError("task_kind='relaxed_scan' requires a %geom Scan block")
-    start, end, needs_close = block
-    if needs_close:
-        raise ValueError("task_kind='relaxed_scan' requires closed %geom and Scan blocks")
-    scan_blocks = 0
-    coordinate_lines: list[str] = []
-    index = start + 1
-    while index < end:
-        if not _GEOM_SCAN_START_RE.match(active_orca_line_text(lines[index])):
-            index += 1
-            continue
-        scan_blocks += 1
-        scan_end = _scan_subblock_end(lines, index + 1, end)
-        if scan_end > end or not _GEOM_END_RE.match(active_orca_line_text(lines[scan_end - 1])):
-            raise ValueError("task_kind='relaxed_scan' requires a closed Scan block")
-        for line_index in range(index + 1, max(index + 1, scan_end - 1)):
-            active = active_orca_line_text(lines[line_index]).strip()
-            if active:
-                coordinate_lines.append(active)
-        index = scan_end
-    if scan_blocks != 1 or len(coordinate_lines) != 1:
-        raise ValueError(
-            "task_kind='relaxed_scan' requires exactly one active coordinate "
-            "in one %geom Scan block"
-        )
-    return validate_scan_coordinate(coordinate_lines[0], atom_count=atom_count)
-
-
 def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     """Kind, atom indices, and range of the first simple scan coordinate line."""
     try:
@@ -375,15 +230,6 @@ def _scan_subblock_end(lines: list[str], start: int, stop: int) -> int:
         if _GEOM_END_RE.match(active_orca_line_text(lines[idx])):
             return idx + 1
     return stop
-
-
-def _format_scan_float(value: float) -> str:
-    if value == 0.0:
-        return "0"
-    text = repr(value)
-    if text.endswith(".0"):
-        return text[:-2]
-    return text
 
 
 def _simple_scan_coord_line_indices(lines: list[str]) -> list[int]:

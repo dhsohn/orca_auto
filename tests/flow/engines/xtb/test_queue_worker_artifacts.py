@@ -15,6 +15,7 @@ from orca_auto.flow.engines.xtb import state as state_mod
 from orca_auto.flow.engines.xtb import terminal as terminal_mod
 from orca_auto.flow.engines.xtb import worker_terminal as worker_terminal_mod
 from orca_auto.flow.engines.xtb.execution import WorkerExecutionOutcome
+from orca_auto.flow.engines.xtb.runner import XtbRunResult
 from tests.flow.engines.xtb.factories import (
     fake_reserve_slot as _fake_reserve_slot,
 )
@@ -41,7 +42,7 @@ def test_write_execution_artifacts_skips_without_job_dir(
         lambda *args, **kwargs: pytest.fail("write_state should not run"),
     )
 
-    queue_cmd._write_execution_artifacts(entry, result)
+    worker_terminal_mod.write_execution_artifacts(entry, result)
 
 
 def test_write_execution_artifacts_includes_ranking_summary_in_state(tmp_path: Path) -> None:
@@ -59,7 +60,7 @@ def test_write_execution_artifacts_includes_ranking_summary_in_state(tmp_path: P
         enqueued_at="2026-04-19T23:59:00Z",
         metadata={"job_dir": str(job_dir)},
     )
-    result = queue_cmd.XtbRunResult(
+    result = XtbRunResult(
         status="completed",
         reason="completed",
         command=("xtb", str(selected_xyz)),
@@ -85,7 +86,7 @@ def test_write_execution_artifacts_includes_ranking_summary_in_state(tmp_path: P
         resource_actual={"assigned_cores": 4, "memory_limit_gb": 8},
     )
 
-    queue_cmd._write_execution_artifacts(entry, result)
+    worker_terminal_mod.write_execution_artifacts(entry, result)
 
     state = state_mod.load_state(job_dir)
     assert state is not None
@@ -107,7 +108,7 @@ def test_write_running_state_skips_without_job_dir(
         "write_state",
         lambda *args, **kwargs: pytest.fail("write_state should not run"),
     )
-    queue_cmd._write_running_state(cfg, entry)
+    worker_terminal_mod.write_running_state(cfg, entry)
 
 
 def test_write_running_state_records_worker_job_pid(tmp_path: Path) -> None:
@@ -118,7 +119,7 @@ def test_write_running_state_records_worker_job_pid(tmp_path: Path) -> None:
     selected_xyz.write_text("3\ncandidate\nH 0 0 0\n", encoding="utf-8")
     entry = _make_entry(job_dir, selected_xyz)
 
-    queue_cmd._write_running_state(cfg, entry, worker_job_pid=4242)
+    worker_terminal_mod.write_running_state(cfg, entry, worker_job_pid=4242)
 
     state = state_mod.load_state(job_dir)
     assert state is not None
@@ -231,7 +232,7 @@ def test_try_reserve_admission_slot_uses_resolved_values(
     ]
 
 
-def test_run_worker_job_processes_loaded_entry_and_releases_slot(
+def test_run_worker_job_processes_loaded_entry_with_queue_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -242,14 +243,10 @@ def test_run_worker_job_processes_loaded_entry_and_releases_slot(
     selected_xyz = job_dir / "input.xyz"
     selected_xyz.write_text("3\ncandidate\nH 0 0 0\n", encoding="utf-8")
     entry = _make_entry(job_dir, selected_xyz)
-    released: list[tuple[str, str]] = []
     processed: list[dict[str, Any]] = []
 
     monkeypatch.setattr(worker_exec, "load_config", lambda _path=None: cfg)
     monkeypatch.setattr(worker_exec, "list_queue", lambda _root: [entry])
-    monkeypatch.setattr(
-        worker_exec, "release_slot", lambda root, token: released.append((root, token))
-    )
     monkeypatch.setattr(worker_exec, "install_shutdown_signal_handlers", lambda _callback: None)
 
     def fake_process_dequeued_entry(*args: object, **kwargs: object) -> WorkerExecutionOutcome:
@@ -275,24 +272,18 @@ def test_run_worker_job_processes_loaded_entry_and_releases_slot(
     assert exit_code == 0
     assert processed[0]["args"] == (cfg, entry)
     assert processed[0]["kwargs"]["queue_root"] == queue_root.resolve()
-    assert released == []
 
 
-def test_run_worker_job_uses_dependency_config_and_admission_groups(
+def test_run_worker_job_uses_dependency_config_group(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     cfg = SimpleNamespace(name="cfg")
     entry = SimpleNamespace(queue_id="queue-1")
-    released: list[tuple[str, str]] = []
     deps = worker_exec.build_worker_execution_dependencies(
         config=worker_exec.WorkerConfigDependencies(
             load_config=lambda path: cfg,
             queue_entry_by_id=lambda root, queue_id: entry,
-        ),
-        admission=worker_exec.WorkerAdmissionDependencies(
-            activate_reserved_slot=lambda *args, **kwargs: object(),
-            release_slot=lambda root, token: released.append((str(root), token)),
         ),
     )
     captured: dict[str, Any] = {}

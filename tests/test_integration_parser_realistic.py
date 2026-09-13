@@ -348,7 +348,6 @@ class TestParserRealisticOutputs:
         r = parse_orca_output(str(out))
 
         assert r.status == "completed"
-        assert r.calc_type == "opt+freq"
         assert r.method == "B3LYP"
         assert r.basis_set == "6-31G(d)"
         assert r.charge == 0
@@ -365,7 +364,6 @@ class TestParserRealisticOutputs:
         assert r.enthalpy == pytest.approx(-113.834210)
         assert r.gibbs_energy == pytest.approx(-113.862100)
         assert r.wall_time_seconds == 2 * 3600 + 15 * 60 + 30
-        assert r.file_hash != ""
 
     def test_dlpno_single_point(self, tmp_path: Path) -> None:
         """DLPNO-CCSD(T)/cc-pVTZ single point — no opt/freq data."""
@@ -375,7 +373,6 @@ class TestParserRealisticOutputs:
         r = parse_orca_output(str(out))
 
         assert r.status == "completed"
-        assert r.calc_type == "sp"
         assert r.method == "DLPNO-CCSD(T)"
         assert r.basis_set == "cc-pVTZ"
         assert r.formula == "H3N"
@@ -394,7 +391,6 @@ class TestParserRealisticOutputs:
         r = parse_orca_output(str(out))
 
         assert r.status == "completed"
-        assert r.calc_type == "ts+freq"
         assert r.method == "B3LYP"
         assert r.basis_set == "def2-TZVP"
         assert r.formula == "CH4Cl"
@@ -444,7 +440,6 @@ class TestParserRealisticOutputs:
         r = parse_orca_output(str(out))
 
         assert r.status == "failed"
-        assert r.calc_type == "opt"
         assert r.method == "PBE0"
         assert r.basis_set == "def2-SVP"
         assert r.formula == "C2H6"

@@ -6,7 +6,6 @@ from typing import Any
 
 from orca_auto.core.indexing import get_job_location
 from orca_auto.core.queue import list_queue
-from orca_auto.flow.adapters.xtb import load_xtb_artifact_contract
 from orca_auto.flow.engines.xtb import queue_runtime as xtb_queue_cmd
 from orca_auto.flow.submitters import xtb as xtb_submitter
 from tests.engine_artifact_helpers import engine_payload as _engine_payload
@@ -73,14 +72,10 @@ def test_xtb_submitter_roundtrip_smoke(
     assert _engine_payload(state_payload)["candidate_count"] == 1
     assert _engine_payload(state_payload)["analysis_summary"]["optimization_ok"] is True
 
-    contract = load_xtb_artifact_contract(
-        xtb_index_root=smoke_workspace.xtb_allowed_root,
-        target=submission["job_id"],
-    )
-    assert contract.status == "completed"
-    assert contract.job_type == "opt"
-    assert contract.selected_candidate_paths == (str((artifact_dir / "xtbopt.xyz").resolve()),)
-    assert contract.analysis_summary["canonical_result_path"] == str(
+    assert _engine_payload(state_payload)["selected_candidate_paths"] == [
+        str((artifact_dir / "xtbopt.xyz").resolve())
+    ]
+    assert _engine_payload(state_payload)["analysis_summary"]["canonical_result_path"] == str(
         (artifact_dir / "xtbopt.xyz").resolve()
     )
 

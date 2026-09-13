@@ -6,8 +6,6 @@ and coordinates from ORCA calculation results.
 
 from __future__ import annotations
 
-import hashlib
-import os
 import re
 from dataclasses import dataclass, field
 
@@ -74,7 +72,6 @@ class OrcaResult:
     """Calculation results extracted from an ORCA output file."""
 
     source_path: str
-    calc_type: str = ""
     method: str = ""
     basis_set: str = ""
     charge: int = 0
@@ -94,8 +91,6 @@ class OrcaResult:
     thermo_temperature_k: float | None = None
     wall_time_seconds: int | None = None
     status: str = "completed"
-    file_hash: str = ""
-    mtime: float = 0.0
     input_line: str = ""
     orca_version: str = ""
     solvation: str = ""
@@ -109,15 +104,6 @@ class OrcaResult:
 # ---------------------------------------------------------------------------
 # Parser functions
 # ---------------------------------------------------------------------------
-
-
-def _compute_file_hash(file_path: str) -> str:
-    """Return the first 16 characters of the file's SHA-256 hash."""
-    h = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()[:16]
 
 
 def parse_orca_output(file_path: str) -> OrcaResult:
@@ -136,8 +122,6 @@ def parse_orca_output(file_path: str) -> OrcaResult:
     text = _read_orca_text(file_path)
 
     result = OrcaResult(source_path=file_path)
-    result.mtime = os.path.getmtime(file_path)
-    result.file_hash = _compute_file_hash(file_path)
 
     final_energy = _last_final_energy_match(text)
 
@@ -157,8 +141,7 @@ def parse_orca_output(file_path: str) -> OrcaResult:
 
 
 def _populate_input_metadata(result: OrcaResult, text: str) -> None:
-    calc_type, method, basis_set, input_tokens = _parse_input_line(text)
-    result.calc_type = calc_type
+    method, basis_set, input_tokens = _parse_input_line(text)
     result.method = method
     result.basis_set = basis_set
     result.input_line = " ".join(input_tokens)

@@ -154,52 +154,11 @@ def resolve_latest_job_dir(
     return None
 
 
-def load_job_artifacts(
-    index_root: str | Path,
-    target: str,
-    *,
-    load_state_fn: Callable[[Path], dict[str, Any] | None],
-    load_report_json_fn: Callable[[Path], dict[str, Any] | None] | None,
-    resolve_latest_job_dir_fn: Callable[[str | Path, str], Path | None],
-) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None]:
-    job_dir = resolve_latest_job_dir_fn(index_root, target)
-    if job_dir is None:
-        return None, None, None
-    report = load_report_json_fn(job_dir) if load_report_json_fn is not None else None
-    return job_dir, load_state_fn(job_dir), report
-
-
-def load_job_artifacts_for_cfg(
-    cfg: Any,
-    target: str,
-    *,
-    engine: str,
-    load_state_fn: Callable[[Path], dict[str, Any] | None],
-    load_report_json_fn: Callable[[Path], dict[str, Any] | None] | None,
-    resolve_latest_job_dir_fn: Callable[[str | Path, str], Path | None],
-    resolve_job_location_fn: Callable[
-        [str | Path, str], JobLocationRecord | None
-    ] = resolve_job_location,
-) -> tuple[Path | None, dict[str, Any] | None, dict[str, Any] | None, JobLocationRecord | None]:
-    resolved_record: JobLocationRecord | None = None
-    for root in lookup_roots_for_target(cfg, target, engine=engine):
-        record = resolve_job_location_fn(root, target)
-        job_dir = resolve_latest_job_dir_fn(root, target)
-        if job_dir is None:
-            continue
-        resolved_record = record
-        report = load_report_json_fn(job_dir) if load_report_json_fn is not None else None
-        return job_dir, load_state_fn(job_dir), report, resolved_record
-    return None, None, None, resolved_record
-
-
 __all__ = [
     "append_unique_root",
     "index_root_for_cfg",
     "index_root_for_path",
     "list_job_records_for_cfg",
-    "load_job_artifacts",
-    "load_job_artifacts_for_cfg",
     "lookup_roots_for_target",
     "normalize_identifier",
     "normalize_text",

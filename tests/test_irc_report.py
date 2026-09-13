@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.report import write_job_html_report
+from orca_auto.orca.report import irc, write_job_html_report
 from orca_auto.orca.report.irc import collect_irc_report_data, parse_irc_output
 from orca_auto.orca.state import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
@@ -266,6 +266,60 @@ def test_collect_irc_report_data_skips_contentless_final_attempt(tmp_path: Path)
     assert data is not None
     assert len(data.path_points) == 5
     assert data.irc_marker_found
+
+
+@pytest.mark.parametrize(
+    "initial_has_data,trailing_kind",
+    [(True, None), (True, "empty"), (True, "freq"), (True, "missing"), (False, "empty")],
+    ids=["complete", "trailing-empty", "trailing-freq", "trailing-missing", "only-empty"],
+)
+def test_irc_report_reads_each_attempt_once_for_path_details_and_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    initial_has_data: bool,
+    trailing_kind: str | None,
+) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP IRC")
+    out_path = tmp_path / "rxn.out"
+    _write_out(
+        out_path,
+        route="! B3LYP def2-SVP IRC",
+        irc_block=_IRC_BLOCK if initial_has_data else "",
+    )
+    existing_outputs = [str(out_path)]
+    state = _state(tmp_path, out_path)
+    if trailing_kind is not None:
+        trailing_out = tmp_path / "rxn_retry.out"
+        if trailing_kind == "freq":
+            _write_out(trailing_out, route="! B3LYP def2-SVP Freq", freq=True, irc_block="")
+        elif trailing_kind == "empty":
+            trailing_out.write_text(
+                "ORCA crashed before the IRC driver started\n", encoding="utf-8"
+            )
+        if trailing_out.exists():
+            existing_outputs.append(str(trailing_out))
+        state["attempts"].append({"index": 2, "out_path": str(trailing_out)})
+        state["final_result"]["last_out_path"] = str(trailing_out)
+
+    read_paths: list[str] = []
+    original_read = irc.read_orca_text
+
+    def tracked_read(path: str) -> str:
+        read_paths.append(path)
+        return original_read(path)
+
+    monkeypatch.setattr(irc, "read_orca_text", tracked_read)
+
+    data = collect_irc_report_data(tmp_path, state)
+
+    assert data is not None
+    assert len(data.path_points) == (5 if initial_has_data else 0)
+    assert data.irc_marker_found is initial_has_data
+    assert data.attempts[0].detail == ("5 path pts, 5 IRC iter" if initial_has_data else "")
+    if trailing_kind is not None:
+        assert data.attempts[-1].detail == ""
+    assert data.imaginary_count == (1 if trailing_kind == "freq" else None)
+    assert sorted(read_paths) == sorted(existing_outputs)
 
 
 def test_irc_report_html_renders_path_profile(tmp_path: Path) -> None:

@@ -9,7 +9,7 @@ from orca_auto.core.utils.coercion import normalize_text
 
 from ..manifest import require_int
 from ..xyz_utils import load_output_xyz_frames
-from .xtb import WorkflowStageInput
+from .workflow import WorkflowStageInput
 
 # Membership is all this layer needs; the order that decides the handoff
 # belongs to the runner's walk over the same names.

@@ -98,7 +98,6 @@ def test_invalid_crest_manifest_fails_workflow_instead_of_waiting_for_slot(
     tmp_path: Path, unknown_key: str
 ) -> None:
     manifest = resolve_engine_manifest(
-        tmp_path,
         {"workflow_type": "conformer_screening", "crest": {unknown_key: 2}},
         "crest",
     )

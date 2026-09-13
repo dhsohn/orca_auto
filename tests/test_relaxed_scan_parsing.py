@@ -1,4 +1,4 @@
-"""Fail-closed relaxed-scan surface and coordinate parsing."""
+"""Fail-closed relaxed-scan surface parsing and barrier reporting."""
 
 from __future__ import annotations
 
@@ -7,27 +7,9 @@ from pathlib import Path
 import pytest
 
 from orca_auto.orca.relaxed_scan import (
-    _format_scan_float,
     parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
-    validate_scan_coordinate_lines,
 )
-
-
-def _scan_lines(
-    *,
-    route_lines: tuple[str, ...] = ("! Opt B3LYP def2-SVP D3BJ Freq",),
-    directives: tuple[str, ...] = (),
-    scan_lines: tuple[str, ...] | None = ("    B 4 20 = 1.86, 3.40, 32",),
-    geometry: str | None = "* xyzfile 0 1 input.xyz",
-) -> list[str]:
-    lines = [*route_lines, "", *directives, "%geom", "  MaxIter 200"]
-    if scan_lines is not None:
-        lines.extend(["  Scan", *scan_lines, "  end"])
-    lines.extend(["end", ""])
-    if geometry is not None:
-        lines.append(geometry)
-    return lines
 
 
 def test_parse_scan_actual_surface_skips_lines_without_two_floats(tmp_path: Path) -> None:
@@ -53,32 +35,6 @@ def test_parse_scan_actual_surface_skips_lines_without_two_floats(tmp_path: Path
 
     assert [point.index for point in points] == [1, 2]
     assert points[1].energy == pytest.approx(-99.5)
-
-
-def test_strict_scan_coordinate_rejects_unclosed_geom_nesting() -> None:
-    with pytest.raises(ValueError, match="closed"):
-        validate_scan_coordinate_lines(
-            ["%geom", "  Scan", "    B 0 1 = 1.2, 3.0, 10", "  end"],
-            atom_count=2,
-        )
-
-
-def test_strict_scan_coordinate_rejects_duplicate_active_geom_blocks() -> None:
-    lines = _scan_lines()
-    lines[lines.index("* xyzfile 0 1 input.xyz") : lines.index("* xyzfile 0 1 input.xyz")] = [
-        "%geom",
-        "  MaxIter 50",
-        "end",
-    ]
-
-    with pytest.raises(ValueError, match="exactly one active %geom"):
-        validate_scan_coordinate_lines(lines, atom_count=32)
-
-
-def test_format_scan_float_normalizes_negative_zero() -> None:
-    assert _format_scan_float(-0.0) == "0"
-    assert _format_scan_float(-1e-9) == "-1e-09"
-    assert _format_scan_float(1.86) == "1.86"
 
 
 def test_parse_scan_actual_surface_stops_at_the_timing_section(tmp_path: Path) -> None:

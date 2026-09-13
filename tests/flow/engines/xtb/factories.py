@@ -17,7 +17,6 @@ from orca_auto.core.config.engines import (
     WorkflowEnginePathsConfig as PathsConfig,
 )
 from orca_auto.core.queue.engine.input_snapshot import snapshot_input_file, snapshot_input_payload
-from orca_auto.flow.engines.xtb import queue_runtime as queue_cmd
 from orca_auto.flow.engines.xtb import runner as runner_mod
 from orca_auto.flow.engines.xtb.job_locations import reaction_key_from_job_dir
 
@@ -269,7 +268,7 @@ def make_result(
     job_type: str = "opt",
     reaction_key: str = "reaction-1",
     candidate_paths: tuple[str, ...] = (),
-) -> queue_cmd.XtbRunResult:
+) -> runner_mod.XtbRunResult:
     resource_request = {"max_cores": 4, "max_memory_gb": 8}
     resource_actual = {"assigned_cores": 4, "memory_limit_gb": 8}
     resolved_selected = selected_input_xyz.resolve()
@@ -298,7 +297,7 @@ def make_result(
     if status == "completed":
         stdout_log.write_text("completed\n", encoding="utf-8")
         stderr_log.write_text("", encoding="utf-8")
-    return queue_cmd.XtbRunResult(
+    return runner_mod.XtbRunResult(
         status=status,
         reason=reason,
         command=("xtb", str(selected_input_xyz)),

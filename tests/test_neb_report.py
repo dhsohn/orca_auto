@@ -1,14 +1,62 @@
 from __future__ import annotations
 
+import builtins
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from orca_auto.orca.report import write_job_html_report
-from orca_auto.orca.report.neb import NebPathPoint, _path_plot_x, collect_neb_report_data
+from orca_auto.orca.report.neb import (
+    NebPathPoint,
+    _parse_ts_refinement_steps,
+    _path_plot_x,
+    collect_neb_report_data,
+)
 from orca_auto.orca.report.render import ChartSeries, line_chart_svg
 from tests.engine_artifact_helpers import report_generation_target
+
+
+@pytest.mark.parametrize(
+    "markers,expected",
+    [
+        ((), ((1, -1.0), (2, -2.0), (3, -3.0))),
+        ((1,), ((2, -2.0), (3, -3.0))),
+        ((1, 2), ((3, -3.0),)),
+        ((3,), ()),
+    ],
+    ids=["no-marker", "one-marker", "last-marker", "no-refinement-after-marker"],
+)
+def test_ts_refinement_cycles_start_after_last_neb_convergence(
+    markers: tuple[int, ...], expected: tuple[tuple[int, float], ...]
+) -> None:
+    lines = []
+    for cycle in (1, 2, 3):
+        lines.extend(
+            [f"Geometry Optimization Cycle {cycle}", f"FINAL SINGLE POINT ENERGY -{cycle}"]
+        )
+        if cycle in markers:
+            lines.append("the NEB optimization has converged")
+    assert _parse_ts_refinement_steps("\n".join(lines)) == expected
+
+
+def test_ts_refinement_cycles_keep_last_finite_energy_and_skip_empty_cycles() -> None:
+    text = (
+        "THE NEB OPTIMIZATION HAS CONVERGED\n"
+        "FINAL SINGLE POINT ENERGY -99\n"
+        "Geometry Optimization Cycle 1\n"
+        "FINAL SINGLE POINT ENERGY -1\n"
+        "FINAL SINGLE POINT ENERGY -2D0 (SCF not fully converged!)\n"
+        "FINAL SINGLE POINT ENERGY -1E999\n"
+        "GEOMETRY OPTIMIZATION CYCLE 2\n"
+        "FINAL SINGLE POINT ENERGY nan\n"
+        "Geometry Optimization Cycle 1\n"
+        "FINAL SINGLE POINT ENERGY -3\n"
+    )
+
+    assert _parse_ts_refinement_steps(text) == ((1, -2.0), (1, -3.0))
+
 
 _COORDS_BLOCK = """
 ---------------------------------
@@ -224,6 +272,74 @@ def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
             "last_out_path": str(out_path),
         },
     }
+
+
+@pytest.mark.parametrize(
+    "tail,encoding",
+    [("", "utf-8"), ("", "utf-16"), ("empty", "utf-8"), ("freq", "utf-8"), ("missing", "utf-8")],
+    ids=["complete", "utf16", "trailing-empty", "trailing-freq", "trailing-missing"],
+)
+def test_neb_report_reads_one_shared_output_and_separate_frequency_analysis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: str, encoding: str
+) -> None:
+    _write_neb_inp(tmp_path / "rxn.inp")
+    out_path = tmp_path / "rxn.out"
+    _write_neb_out(out_path)
+    if encoding != "utf-8":
+        out_path.write_text(out_path.read_text(encoding="utf-8"), encoding=encoding)
+    state = _state(tmp_path, out_path)
+    expected_reads = {out_path: 2}
+    if tail:
+        tail_path = tmp_path / "tail.out"
+        if tail != "missing":
+            tail_path.write_text(_FREQ_TS_BLOCK if tail == "freq" else "", encoding="utf-8")
+            expected_reads[tail_path] = 2
+        if tail == "freq":
+            expected_reads[out_path] = 1
+        state["attempts"].append({"index": 2, "out_path": str(tail_path)})
+        state["final_result"]["last_out_path"] = str(tail_path)
+    observed_reads: Counter[Path] = Counter()
+    original_open = builtins.open
+
+    def counted_open(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if mode == "rb" and Path(file) in expected_reads:
+            observed_reads[Path(file)] += 1
+        return original_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", counted_open)
+
+    data = collect_neb_report_data(tmp_path, state)
+
+    assert data is not None
+    assert len(data.path_points) == 11
+    assert data.ts_steps == ((1, -343.999), (2, -343.99864))
+    assert data.imaginary_count == 1
+    assert data.frequency_attempt_index == (2 if tail == "freq" else 1)
+    assert observed_reads == expected_reads
+
+
+def test_neb_report_retains_empty_fallback_for_unreadable_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_neb_inp(tmp_path / "rxn.inp")
+    out_path = tmp_path / "rxn.out"
+    _write_neb_out(out_path)
+    original_open = builtins.open
+
+    def unreadable_open(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
+        if mode == "rb" and Path(file) == out_path:
+            raise PermissionError("synthetic unreadable output")
+        return original_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", unreadable_open)
+
+    data = collect_neb_report_data(tmp_path, _state(tmp_path, out_path))
+
+    assert data is not None
+    assert data.path_points == ()
+    assert data.ts_steps == ()
+    assert data.final_energy is None
+    assert data.imaginary_count is None
 
 
 def test_collect_neb_report_data_parses_path_and_iterations(tmp_path: Path) -> None:

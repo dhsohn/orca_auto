@@ -245,26 +245,6 @@ def load_output_xyz_frames(path: str | Path) -> tuple[XYZFrame, ...]:
     return load_xyz_frames(path, max_bytes=MAX_OUTPUT_XYZ_MATERIALIZATION_BYTES)
 
 
-def load_verified_xyz_frames(
-    path: str | Path,
-    identity: Mapping[str, object],
-) -> tuple[XYZFrame, ...]:
-    source = Path(path).expanduser().resolve()
-    if str(identity.get("path") or "") != str(source):
-        raise ValueError("XYZ content identity names another artifact")
-    payload = read_stable_regular_file(
-        source,
-        max_bytes=MAX_OUTPUT_XYZ_MATERIALIZATION_BYTES,
-        require_single_link=True,
-    )
-    if (
-        identity.get("size_bytes") != len(payload)
-        or identity.get("sha256") != hashlib.sha256(payload).hexdigest()
-    ):
-        raise ValueError("XYZ artifact no longer matches its terminal content identity")
-    return _parse_xyz_payload(payload, max_atoms=MAX_ADMISSION_ATOMS).frames
-
-
 def validated_xyz_atom_count(
     path: str | Path,
     *,
@@ -371,7 +351,6 @@ def _add_selection_metadata(
 
 def _select_orca_frame(
     frames: tuple[XYZFrame, ...],
-    candidate_kind: str,
     *,
     requested_frame_index: int = 0,
 ) -> tuple[XYZFrame | None, str]:
@@ -402,7 +381,6 @@ def choose_orca_geometry_frame(
         metadata["requested_frame_index"] = requested_frame_index
     frame, selection_reason = _select_orca_frame(
         parse_result.frames,
-        candidate_kind,
         requested_frame_index=requested_frame_index,
     )
     _add_selection_metadata(metadata, frame, selection_reason)
@@ -492,7 +470,6 @@ def write_orca_ready_xyz(
             metadata["requested_frame_index"] = requested_frame_index
         frame, selection_reason = _select_orca_frame(
             parse_result.frames,
-            candidate_kind,
             requested_frame_index=requested_frame_index,
         )
         _add_selection_metadata(metadata, frame, selection_reason)
@@ -518,7 +495,6 @@ __all__ = [
     "choose_orca_geometry_frame",
     "has_xyz_geometry",
     "load_xyz_frames",
-    "load_verified_xyz_frames",
     "load_output_xyz_frames",
     "load_xyz_atom_sequence",
     "validate_electronic_state",

@@ -17,6 +17,7 @@ from orca_auto.core.queue import (
     list_queue,
     mark_completed,
 )
+from orca_auto.flow.engines.crest import execution as worker_execution
 from orca_auto.flow.engines.crest import queue_runtime as queue_cmd
 from orca_auto.flow.engines.crest import submission as crest_submission
 from orca_auto.flow.engines.crest.runner import CrestRunResult
@@ -99,8 +100,8 @@ def _patch_crest_e2e_notifications(
         return True
 
     monkeypatch.setattr(crest_submission, "notify_job_queued", fake_notify_job_queued)
-    monkeypatch.setattr(queue_cmd, "notify_job_started", fake_notify_job_started)
-    monkeypatch.setattr(queue_cmd, "notify_job_finished", fake_notify_job_finished)
+    monkeypatch.setattr(worker_execution, "notify_job_started", fake_notify_job_started)
+    monkeypatch.setattr(worker_execution, "notify_job_finished", fake_notify_job_finished)
     return queued_notifications, started_notifications, finished_notifications
 
 
@@ -148,8 +149,8 @@ def _patch_crest_e2e_runner(monkeypatch: pytest.MonkeyPatch, job_dir: Path) -> N
             resource_actual={"assigned_cores": 6, "memory_limit_gb": 14},
         )
 
-    monkeypatch.setattr(queue_cmd, "start_crest_job", fake_start_crest_job)
-    monkeypatch.setattr(queue_cmd, "finalize_crest_job", fake_finalize_crest_job)
+    monkeypatch.setattr(worker_execution, "start_crest_job", fake_start_crest_job)
+    monkeypatch.setattr(worker_execution, "finalize_crest_job", fake_finalize_crest_job)
 
 
 def _prepare_crest_e2e_job(job_dir: Path) -> None:
