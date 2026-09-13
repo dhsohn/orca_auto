@@ -34,9 +34,9 @@ Experimental surface. Changes to any documented surface are deliberate, tested,
 and recorded in release notes; breaking a documented behavior requires a major
 version.
 
-## Current Development: Core and Conformer Screening
+## 6.0: Core and Conformer Screening
 
-The unreleased 6.0 development line keeps Core focused on executing
+The 6.0 release keeps Core focused on executing
 user-prepared ORCA inputs and removes the two automatic TS-search workflows
 without legacy support. The optional extension retains conformer screening,
 including CREST generation and ORCA refinement.

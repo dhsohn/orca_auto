@@ -31,7 +31,7 @@ the environment and run:
 python -m pip install -e . -e ./extensions/workflows
 ```
 
-The current development extension supports conformer screening only, with
+The 6.0 extension supports conformer screening only, with
 CREST generation and ORCA refinement. For an
 existing installation, use a fresh environment and the cutover guidance in
 [RELEASE.md](RELEASE.md), including its TS-workflow removal warning. Do not

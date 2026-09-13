@@ -9,7 +9,7 @@
   screening and ORCA refinement. The
   extension requires the exact same Core version.
 
-The current source is unreleased `6.0.0.dev0` and removes the two TS workflows
+Version `6.0.0` removes the two TS workflows
 without compatibility support. Read the [cutover warning](RELEASE.md#removing-ts-workflows-in-60)
 before upgrading an existing runtime.
 
@@ -19,25 +19,27 @@ those executables. None of these chemistry engines is bundled in the packages.
 
 ## Install release packages
 
-The [v5.0.0 GitHub release](https://github.com/dhsohn/orca_auto/releases/tag/v5.0.0)
-provides wheels, source distributions, and `SHA256SUMS`, not a PyPI publication.
-These published packages predate the TS-workflow removal described above.
-Download `orca_auto-5.0.0-py3-none-any.whl`. For workflows, also download
-`orca_auto_workflows-5.0.0-py3-none-any.whl` into the same directory.
-
-From that directory, create a fresh environment and install Core:
+Create a fresh environment and install Core from PyPI:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install ./orca_auto-5.0.0-py3-none-any.whl
+python -m pip install orca_auto==6.0.0
 ```
 
 To add Workflows in that environment:
 
 ```bash
-python -m pip install ./orca_auto_workflows-5.0.0-py3-none-any.whl
+python -m pip install 'orca_auto[workflows]==6.0.0'
 ```
+
+Alternatively, the [v6.0.0 GitHub release](https://github.com/dhsohn/orca_auto/releases/tag/v6.0.0)
+provides the same wheels and source distributions, plus `SHA256SUMS`.
+Download `orca_auto-6.0.0-py3-none-any.whl`; for Workflows, also download
+`orca_auto_workflows-6.0.0-py3-none-any.whl`. Install the local wheel files in a
+fresh environment, keeping both distributions at exactly the same version.
+The historical [v5.0.0 artifacts](https://github.com/dhsohn/orca_auto/releases/tag/v5.0.0)
+predate the TS-workflow removal and were published only on GitHub Releases.
 
 Package installation does **not** configure engines or install/restart systemd
 services. The service installer also needs a matching source checkout's

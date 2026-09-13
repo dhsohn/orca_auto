@@ -37,7 +37,7 @@ config and workflow-root resolution from parsed arguments.
 The root `orca_auto` distribution contains core only. The official
 `orca_auto_workflows` project at `extensions/workflows` owns `orca_auto.flow`,
 including conformer screening and its internal xTB/CREST engines. Both projects
-use unreleased `6.0.0.dev0` and require the exact matching version; this is not an independently
+use `6.0.0` and require the exact matching version; this is not an independently
 versioned plugin API.
 
 Install both local projects together for development:
@@ -47,8 +47,9 @@ python -m pip install -e '.[dev]' -e ./extensions/workflows
 ```
 
 The root `workflows` extra pins the matching extension. Pass both local projects
-as above so the resolver does not require the extension on a package index;
-5.0.0 distribution files are provided through GitHub releases, not PyPI.
+as above so the resolver uses the local extension source rather than a released
+package from PyPI. Stable releases are available on PyPI and GitHub Releases;
+the historical 5.0.0 artifacts remain on GitHub Releases only.
 `bootstrap_wsl.sh` installs core by default;
 add `--with-workflows` for the full profile. The shared check script installs both.
 

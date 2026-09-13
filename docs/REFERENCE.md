@@ -114,8 +114,8 @@ add `--with-workflows` to bootstrap or run
 `python -m pip install -e . -e ./extensions/workflows` in the active environment.
 The optional `orca_auto_workflows` distribution must match the core version
 exactly. The default core install no longer includes workflow implementation;
-the command and package names stay unchanged. The unreleased 6.0 development
-line removes the two TS workflows without compatibility. See [RELEASE.md](RELEASE.md)
+the command and package names stay unchanged. The 6.0 release
+removes the two TS workflows without compatibility. See [RELEASE.md](RELEASE.md)
 before upgrading an existing environment. Python installation alone does not
 deploy services; `systemd install` still reads the checkout's `systemd/` assets.
 
