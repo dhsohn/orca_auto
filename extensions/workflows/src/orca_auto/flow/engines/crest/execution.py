@@ -185,32 +185,24 @@ def build_worker_execution_dependencies_from_groups(
     return dependencies
 
 
-def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDependencyCallbacks[
-    CrestRunResult
-]:
-    return _worker_dependencies.WorkerProcessDependencyCallbacks(
-        terminate_process=_terminate_process,
-        wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
-        sleep=time.sleep,
-        now_utc_iso=now_utc_iso,
-        get_cancel_requested=get_cancel_requested,
-        mark_completed=mark_completed,
-        mark_cancelled=mark_cancelled,
-        mark_failed=mark_failed,
-        engine_runner_dependencies={
-            "start_crest_job": start_crest_job,
-            "finalize_crest_job": finalize_crest_job,
-        },
-    )
-
-
 def _worker_execution_default_factories() -> dict[str, Callable[[], Any]]:
     return {
-        **_worker_dependencies.build_worker_process_default_factories_from_callbacks(
-            _worker_process_factory_callbacks(),
+        **_worker_dependencies.build_worker_process_default_factories(
             config_factory=_default_config_dependencies,
             runner_dependencies_type=WorkerRunnerDependencies,
             cancel_check_interval_seconds=CANCEL_CHECK_INTERVAL_SECONDS,
+            terminate_process=_terminate_process,
+            wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
+            sleep=time.sleep,
+            now_utc_iso=now_utc_iso,
+            get_cancel_requested=get_cancel_requested,
+            mark_completed=mark_completed,
+            mark_cancelled=mark_cancelled,
+            mark_failed=mark_failed,
+            engine_runner_dependencies={
+                "start_crest_job": start_crest_job,
+                "finalize_crest_job": finalize_crest_job,
+            },
         ),
         "context": _default_context_dependencies,
         "artifacts": _default_artifact_dependencies,
@@ -377,14 +369,12 @@ def _build_execution_context(
     entry: Any,
     *,
     dependencies: WorkerExecutionDependencies,
-    molecule_key_resolver: Callable[[Any, Path, Path], str] | None = None,
     verify_execution_snapshot: bool = True,
 ) -> ExecutionContext:
     return _build_worker_execution_context(
         cfg,
         entry,
         context_deps=dependencies.context,
-        molecule_key_resolver=molecule_key_resolver,
         verify_execution_snapshot=verify_execution_snapshot,
     )
 
@@ -601,7 +591,6 @@ def _finalize_processed_entry(
 
 def _worker_execution_spec(
     *,
-    molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
 ) -> _engine_execution.EngineWorkerExecutionSpec[Path | None, WorkerExecutionOutcome]:
     return _engine_execution.EngineWorkerExecutionSpec(
@@ -609,7 +598,6 @@ def _worker_execution_spec(
             cfg_obj,
             entry_obj,
             dependencies=dependencies,
-            molecule_key_resolver=molecule_key_resolver,
         ),
         mark_running=lambda cfg_obj, context, _options: _mark_job_running(
             cfg_obj,
@@ -648,7 +636,6 @@ def _run_worker_entry_lifecycle(
     entry: Any,
     *,
     queue_root: Path | None,
-    molecule_key_resolver: Callable[[Any, Path, Path], str],
     dependencies: WorkerExecutionDependencies,
     shutdown_requested: Callable[[], bool] | None = None,
     prepare_running_job: Callable[[], None] | None = None,
@@ -659,7 +646,6 @@ def _run_worker_entry_lifecycle(
         entry,
         queue_root=queue_root,
         spec_factory=lambda: _worker_execution_spec(
-            molecule_key_resolver=molecule_key_resolver,
             dependencies=dependencies,
         ),
         shutdown_requested=shutdown_requested,
@@ -673,7 +659,6 @@ def process_dequeued_entry(
     entry: Any,
     *,
     queue_root: Path | None = None,
-    molecule_key_resolver: Callable[[Any, Path, Path], str] | None = None,
     dependencies: WorkerExecutionDependencies | None = None,
     shutdown_requested: Callable[[], bool] | None = None,
     prepare_running_job: Callable[[], None] | None = None,
@@ -684,7 +669,6 @@ def process_dequeued_entry(
         cfg,
         entry,
         queue_root=queue_root,
-        molecule_key_resolver=molecule_key_resolver or deps.context.molecule_key,
         dependencies=deps,
         shutdown_requested=shutdown_requested,
         prepare_running_job=prepare_running_job,
@@ -726,5 +710,4 @@ def run_worker_child_job(
         dependencies_fn=lambda: deps,
         requeue_running_entry_fn=requeue_running_entry,
         mark_recovery_pending_context_fn=_mark_recovery_pending_context,
-        process_dequeued_entry_kwargs={"molecule_key_resolver": _molecule_key},
     )

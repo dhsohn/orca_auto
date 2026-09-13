@@ -71,6 +71,16 @@ class ModeSummary:
 
 def parse_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
     """Last frequency/mode/geometry blocks of one out file; ``None`` without freqs."""
+    try:
+        # Use the same ORCA-aware decoding as the result parser, including UTF-16.
+        text = read_orca_text(str(out_path))
+    except OSError:
+        return None
+    return parse_frequency_analysis_text(text)
+
+
+def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
+    """Last final-geometry frequency/mode/geometry blocks of decoded ORCA output."""
     freqs: list[float] | None = None
     modes: dict[int, dict[int, float]] | None = None
     coords: list[tuple[str, float, float, float]] | None = None
@@ -92,14 +102,6 @@ def parse_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
             coords = list(current_coords)
         section = ""
         started = False
-
-    try:
-        # Decode via the ORCA-aware reader so UTF-16 outputs (which
-        # ``parse_orca_output`` already handles) yield frequencies too; a plain
-        # UTF-8 open would drop every mode and mislabel the structure.
-        text = read_orca_text(str(out_path))
-    except OSError:
-        return None
 
     for line in text.splitlines():
         stripped = line.strip()

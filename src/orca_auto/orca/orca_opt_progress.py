@@ -5,33 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .orca_chemistry import build_formula
-from .output_status import (
-    has_error_termination,
-    has_normal_termination,
-    last_optimization_convergence,
-)
+from .output_status import last_optimization_convergence
 from .parser.extractors import (
     parse_coordinates,
     parse_input_line,
     parse_optimization_cycles,
-    parse_wall_time,
 )
 from .parser.io import read_orca_text
-from .parser.patterns import _CONVERGENCE_ITEM_RE
 
 
 @dataclass
 class OptStep:
-    """Convergence data for a single optimization cycle."""
+    """Energy for a single optimization cycle."""
 
     cycle: int
     energy_hartree: float
-    energy_change: float | None = None
-    max_gradient: float | None = None
-    rms_gradient: float | None = None
-    max_step: float | None = None
-    rms_step: float | None = None
-    converged_flags: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass
@@ -44,7 +32,6 @@ class OptProgress:
     basis_set: str = ""
     steps: list[OptStep] = field(default_factory=list)
     is_converged: bool = False
-    is_running: bool = False
 
 
 def parse_opt_progress(file_path: str) -> OptProgress:
@@ -77,42 +64,10 @@ def parse_opt_progress_text(text: str, *, source_path: str) -> OptProgress:
         is_converged=last_optimization_convergence(text.splitlines()) is True,
     )
 
-    saw_cycle = False
-    for cycle_num, energy, cycle_text in parse_optimization_cycles(text):
-        saw_cycle = True
+    for cycle_num, energy, _ in parse_optimization_cycles(text):
         if energy is None:
             continue
 
-        progress.steps.append(_parse_opt_step(cycle_num, energy, cycle_text))
-
-    if not saw_cycle:
-        return progress
-
-    progress.is_running = (
-        not has_normal_termination(text)
-        and not has_error_termination(text)
-        and parse_wall_time(text) is None
-    )
+        progress.steps.append(OptStep(cycle=cycle_num, energy_hartree=energy))
 
     return progress
-
-
-_OPT_STEP_ATTRS = {
-    "Energy change": "energy_change",
-    "MAX gradient": "max_gradient",
-    "RMS gradient": "rms_gradient",
-    "MAX step": "max_step",
-    "RMS step": "rms_step",
-}
-
-
-def _parse_opt_step(cycle_num: int, energy: float, cycle_text: str) -> OptStep:
-    step = OptStep(cycle=cycle_num, energy_hartree=energy)
-    for item_match in _CONVERGENCE_ITEM_RE.finditer(cycle_text):
-        name = item_match.group(1)
-        value = float(item_match.group(2))
-        step.converged_flags[name] = item_match.group(3) == "YES"
-        attr_name = _OPT_STEP_ATTRS.get(name)
-        if attr_name is not None:
-            setattr(step, attr_name, value)
-    return step

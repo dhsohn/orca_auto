@@ -192,26 +192,6 @@ def build_worker_execution_dependencies_from_groups(
     return dependencies
 
 
-def _worker_process_factory_callbacks() -> _worker_dependencies.WorkerProcessDependencyCallbacks[
-    XtbRunResult
-]:
-    return _worker_dependencies.WorkerProcessDependencyCallbacks(
-        terminate_process=terminate_process_group,
-        wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
-        sleep=time.sleep,
-        now_utc_iso=now_utc_iso,
-        get_cancel_requested=get_cancel_requested,
-        mark_completed=mark_completed,
-        mark_cancelled=mark_cancelled,
-        mark_failed=mark_failed,
-        engine_runner_dependencies={
-            "run_xtb_ranking_job": run_xtb_ranking_job,
-            "start_xtb_job": start_xtb_job,
-            "finalize_xtb_job": finalize_xtb_job,
-        },
-    )
-
-
 _queue_entry_by_id = build_queue_entry_lookup(
     list_queue_fn=lambda root: list_queue(root),
 )
@@ -254,11 +234,23 @@ def _default_tracking_dependencies() -> WorkerTrackingDependencies:
 
 def _worker_execution_default_factories() -> dict[str, Callable[[], Any]]:
     return {
-        **_worker_dependencies.build_worker_process_default_factories_from_callbacks(
-            _worker_process_factory_callbacks(),
+        **_worker_dependencies.build_worker_process_default_factories(
             config_factory=_default_config_dependencies,
             runner_dependencies_type=WorkerRunnerDependencies,
             cancel_check_interval_seconds=CANCEL_CHECK_INTERVAL_SECONDS,
+            terminate_process=terminate_process_group,
+            wait_for_cancellable_process=_queue_execution.wait_for_cancellable_process,
+            sleep=time.sleep,
+            now_utc_iso=now_utc_iso,
+            get_cancel_requested=get_cancel_requested,
+            mark_completed=mark_completed,
+            mark_cancelled=mark_cancelled,
+            mark_failed=mark_failed,
+            engine_runner_dependencies={
+                "run_xtb_ranking_job": run_xtb_ranking_job,
+                "start_xtb_job": start_xtb_job,
+                "finalize_xtb_job": finalize_xtb_job,
+            },
         ),
         "context": _default_context_dependencies,
         "artifacts": _default_artifact_dependencies,

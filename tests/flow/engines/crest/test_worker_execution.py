@@ -3,7 +3,7 @@ from __future__ import annotations
 import signal
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -184,6 +184,7 @@ def _record_committed_terminal(
 
 def _dependencies(**overrides: Callable[..., Any]) -> worker_execution.WorkerExecutionDependencies:
     defaults: dict[str, Any] = {
+        "molecule_key": worker_execution._molecule_key,
         "now_utc_iso": lambda: "2026-04-19T09:15:00+00:00",
         "get_cancel_requested": lambda *args, **kwargs: False,
         "start_crest_job": _noop,
@@ -203,6 +204,10 @@ def _dependencies(**overrides: Callable[..., Any]) -> worker_execution.WorkerExe
     }
     defaults.update(overrides)
     return worker_execution.build_worker_execution_dependencies(
+        context=replace(
+            worker_execution.default_worker_execution_dependencies().context,
+            molecule_key=defaults["molecule_key"],
+        ),
         timing=worker_execution.WorkerTimingDependencies(
             now_utc_iso=defaults["now_utc_iso"],
         ),
@@ -300,6 +305,7 @@ class ProcessDequeuedEntrySpy:
 
     def dependencies(self) -> worker_execution.WorkerExecutionDependencies:
         return _dependencies(
+            molecule_key=self.molecule_key,
             get_cancel_requested=self.get_cancel_requested,
             start_crest_job=lambda cfg, *, job_dir, selected_xyz, execution_snapshot: self.running,
             finalize_crest_job=self.finalize,
@@ -660,7 +666,12 @@ def test_sync_job_tracking_never_organizes_for_crest(tmp_path: Path) -> None:
     assert upsert_calls[0]["molecule_key"] == "fixed-key"
 
 
-def test_process_dequeued_entry_uses_context_dependency_group(tmp_path: Path) -> None:
+@pytest.mark.parametrize("via_worker_child", [False, True])
+def test_process_dequeued_entry_uses_context_dependency_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    via_worker_child: bool,
+) -> None:
     cfg = _cfg(tmp_path)
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -728,7 +739,33 @@ def test_process_dequeued_entry_uses_context_dependency_group(tmp_path: Path) ->
         ),
     )
 
-    outcome = worker_execution.process_dequeued_entry(cfg, entry, dependencies=deps)
+    if via_worker_child:
+        outcomes: list[worker_execution.WorkerExecutionOutcome] = []
+
+        def run_child_entry(**kwargs: Any) -> int:
+            outcomes.append(
+                kwargs["process_dequeued_entry_fn"](
+                    cfg,
+                    entry,
+                    dependencies=kwargs["dependencies_fn"](),
+                    **kwargs.get("process_dequeued_entry_kwargs", {}),
+                )
+            )
+            return 0
+
+        monkeypatch.setattr(worker_execution, "run_engine_worker_child_job", run_child_entry)
+        assert (
+            worker_execution.run_worker_child_job(
+                config_path="/tmp/orca_auto.yaml",
+                queue_root=tmp_path,
+                queue_id=entry.queue_id,
+                dependencies=deps,
+            )
+            == 0
+        )
+        [outcome] = outcomes
+    else:
+        outcome = worker_execution.process_dequeued_entry(cfg, entry, dependencies=deps)
 
     assert outcome.job_dir == job_dir.resolve()
     assert outcome.selected_xyz == selected_xyz.resolve()
@@ -798,7 +835,6 @@ def test_process_dequeued_entry_polls_sleeps_and_completes(
     outcome = worker_execution.process_dequeued_entry(
         cfg,
         entry,
-        molecule_key_resolver=spy.molecule_key,
         dependencies=spy.dependencies(),
     )
 
@@ -876,6 +912,7 @@ def test_process_dequeued_entry_terminates_and_forces_cancelled_result(
 
     deps = _dependencies(
         get_cancel_requested=lambda *args, **kwargs: True,
+        molecule_key=lambda entry, selected_xyz, job_dir: "cancel-key",
         start_crest_job=lambda cfg, *, job_dir, selected_xyz, execution_snapshot: running,
         finalize_crest_job=fake_finalize,
         terminate_process=terminate,
@@ -888,7 +925,6 @@ def test_process_dequeued_entry_terminates_and_forces_cancelled_result(
     outcome = worker_execution.process_dequeued_entry(
         cfg,
         entry,
-        molecule_key_resolver=lambda entry, selected_xyz, job_dir: "cancel-key",
         dependencies=deps,
     )
 
@@ -936,6 +972,7 @@ def test_process_dequeued_entry_builds_failed_result_when_runner_raises(
 
     deps = _dependencies(
         now_utc_iso=lambda: failure_time,
+        molecule_key=lambda entry, selected_xyz, job_dir: "failure-key",
         start_crest_job=lambda cfg, *, job_dir, selected_xyz, execution_snapshot: (
             _ for _ in ()
         ).throw(RuntimeError("boom")),
@@ -955,7 +992,6 @@ def test_process_dequeued_entry_builds_failed_result_when_runner_raises(
     outcome = worker_execution.process_dequeued_entry(
         cfg,
         entry,
-        molecule_key_resolver=lambda entry, selected_xyz, job_dir: "failure-key",
         dependencies=deps,
     )
 
@@ -992,6 +1028,7 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_before_start(
     entry = _entry(job_dir, selected_xyz, molecule_key="shutdown-key")
 
     deps = _dependencies(
+        molecule_key=lambda entry, selected_xyz, job_dir: "shutdown-key",
         write_running_state=lambda *args, **kwargs: pytest.fail(
             "running state should not be written"
         ),
@@ -1004,7 +1041,6 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_before_start(
         worker_execution.process_dequeued_entry(
             cfg,
             entry,
-            molecule_key_resolver=lambda entry, selected_xyz, job_dir: "shutdown-key",
             dependencies=deps,
             shutdown_requested=lambda: True,
         )
@@ -1038,6 +1074,7 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_after_start(
 
     deps = _dependencies(
         get_cancel_requested=lambda *args, **kwargs: False,
+        molecule_key=lambda entry, selected_xyz, job_dir: "shutdown-key",
         start_crest_job=lambda cfg, *, job_dir, selected_xyz, execution_snapshot: running,
         terminate_process=terminate,
         finalize_crest_job=lambda *args, **kwargs: pytest.fail("finalize should not run"),
@@ -1057,7 +1094,6 @@ def test_process_dequeued_entry_raises_worker_shutdown_requested_after_start(
         worker_execution.process_dequeued_entry(
             cfg,
             entry,
-            molecule_key_resolver=lambda entry, selected_xyz, job_dir: "shutdown-key",
             dependencies=deps,
             shutdown_requested=lambda: next(shutdown_checks),
         )

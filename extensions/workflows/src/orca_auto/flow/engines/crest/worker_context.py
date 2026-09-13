@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -46,7 +45,6 @@ def build_execution_context(
     entry: Any,
     *,
     context_deps: Any,
-    molecule_key_resolver: Callable[[Any, Path, Path], str] | None = None,
     verify_execution_snapshot: bool = True,
 ) -> ExecutionContext:
     job_dir = _engine_execution.require_path_within_roots(
@@ -59,7 +57,6 @@ def build_execution_context(
         job_dir,
         label="Queue metadata 'selected_input_xyz'",
     )
-    resolve_molecule_key = molecule_key_resolver or context_deps.molecule_key
     resource_request = context_deps.entry_resource_request(cfg, entry)
     snapshot = _engine_execution.entry_metadata_dict(entry, "execution_snapshot")
     if verify_execution_snapshot and snapshot.get("version") != 1:
@@ -71,7 +68,7 @@ def build_execution_context(
     ):
         raise ValueError("Queue metadata 'execution_snapshot' is incomplete")
     resolved_mode = context_deps.mode(entry)
-    resolved_molecule_key = resolve_molecule_key(entry, selected_xyz, job_dir)
+    resolved_molecule_key = context_deps.molecule_key(entry, selected_xyz, job_dir)
     if verify_execution_snapshot:
         assert isinstance(input_snapshots, dict)
         verified_inputs = verify_input_snapshots(job_dir, input_snapshots)

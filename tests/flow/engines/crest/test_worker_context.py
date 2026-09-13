@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +10,7 @@ from orca_auto.flow.engines.crest import execution as worker_execution
 from orca_auto.flow.engines.crest import worker_context
 
 
-def _default_context_deps() -> object:
+def _default_context_deps() -> worker_execution.WorkerContextDependencies:
     return worker_execution.default_worker_execution_dependencies().context
 
 
@@ -53,10 +54,12 @@ def test_build_execution_context_resolves_entry_metadata(tmp_path: Path) -> None
     context = worker_context.build_execution_context(
         cfg,
         entry,
-        context_deps=_default_context_deps(),
-        molecule_key_resolver=lambda actual_entry, actual_selected, actual_job_dir: (
-            f"{actual_entry is entry}:{actual_selected == selected_xyz.resolve()}:"
-            f"{actual_job_dir == job_dir.resolve()}"
+        context_deps=replace(
+            _default_context_deps(),
+            molecule_key=lambda actual_entry, actual_selected, actual_job_dir: (
+                f"{actual_entry is entry}:{actual_selected == selected_xyz.resolve()}:"
+                f"{actual_job_dir == job_dir.resolve()}"
+            ),
         ),
         verify_execution_snapshot=False,
     )
@@ -91,5 +94,4 @@ def test_build_execution_context_rejects_job_outside_runtime_roots(tmp_path: Pat
             cfg,
             entry,
             context_deps=_default_context_deps(),
-            molecule_key_resolver=lambda *_args: "unused",
         )

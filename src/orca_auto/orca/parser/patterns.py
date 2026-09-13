@@ -98,13 +98,6 @@ _CHARGE_MULT_RE = re.compile(r"(?:\|\s*\d+>\s*)?\*\s*xyz(?:file)?\s+([-\d]+)\s+(
 # Optimization cycle header
 _OPT_CYCLE_RE = re.compile(r"Geometry Optimization Cycle\s+(\d+)", re.IGNORECASE)
 
-# Convergence table items (Energy change, MAX gradient, RMS gradient, MAX step, RMS step)
-_CONVERGENCE_ITEM_RE = re.compile(
-    r"^\s*(Energy change|MAX gradient|RMS gradient|MAX step|RMS step)"
-    r"\s+([-\d.eE+]+)\s+[-\d.eE+]+\s+(YES|NO)\s*$",
-    re.MULTILINE,
-)
-
 # Known method keywords
 _METHOD_KEYWORDS: tuple[str, ...] = (
     "CCSD(T)",

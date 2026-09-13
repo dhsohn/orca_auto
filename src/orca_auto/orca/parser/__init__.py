@@ -59,6 +59,7 @@ __all__ = [
     "AtomRow",
     "OrcaResult",
     "parse_orca_output",
+    "parse_orca_output_text",
 ]
 
 
@@ -119,9 +120,12 @@ def parse_orca_output(file_path: str) -> OrcaResult:
         FileNotFoundError: If the file does not exist
         UnicodeDecodeError: If there is a file encoding issue
     """
-    text = _read_orca_text(file_path)
+    return parse_orca_output_text(_read_orca_text(file_path), source_path=file_path)
 
-    result = OrcaResult(source_path=file_path)
+
+def parse_orca_output_text(text: str, *, source_path: str) -> OrcaResult:
+    """Parse decoded ORCA output while retaining its source-file provenance."""
+    result = OrcaResult(source_path=source_path)
 
     final_energy = _last_final_energy_match(text)
 

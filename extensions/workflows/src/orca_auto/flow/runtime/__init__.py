@@ -87,13 +87,6 @@ def _workflow_is_terminal_status(status: Any) -> bool:
     return normalize_text(status).lower() in TERMINAL_WORKFLOW_STATUSES
 
 
-def _workflow_needs_terminal_sync(workspace_dir: str | Path) -> bool:
-    return workflow_needs_terminal_sync(
-        workspace_dir,
-        load_workflow_payload_fn=load_workflow_payload,
-    )
-
-
 def _workflow_needs_terminal_child_sync(
     record: Any,
     *,
@@ -103,9 +96,6 @@ def _workflow_needs_terminal_child_sync(
     if not _workflow_is_terminal_status(previous_status):
         return False
     resolved_workspace = workspace_dir or record.workspace_dir
-    payload_needs_sync = _workflow_needs_terminal_sync(resolved_workspace)
-    if payload_needs_sync:
-        return True
     try:
         payload = load_workflow_payload(resolved_workspace)
     except (FileNotFoundError, ValueError):
@@ -113,6 +103,8 @@ def _workflow_needs_terminal_child_sync(
         payload_loaded = False
     else:
         payload_loaded = True
+        if workflow_needs_terminal_sync(payload):
+            return True
     payload_status = normalize_text(payload.get("status")).lower()
     payload_workflow_id = normalize_text(payload.get("workflow_id"))
     record_workflow_id = normalize_text(getattr(record, "workflow_id", ""))

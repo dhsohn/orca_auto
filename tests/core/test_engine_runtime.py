@@ -24,8 +24,7 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_KEY,
 )
 from orca_auto.core.queue.worker.execution_dependencies import (
-    WorkerProcessDependencyCallbacks,
-    build_worker_process_default_factories_from_callbacks,
+    build_worker_process_default_factories,
 )
 
 
@@ -147,6 +146,77 @@ def test_engine_queue_runtime_combines_roots_entries_and_next_entry(
         (root_b, entry_b),
     ]
     assert runtime.dequeue_next_entry(SimpleNamespace()) == (root_b, entry_b)
+
+
+@pytest.mark.parametrize("override_listing", [False, True])
+def test_engine_queue_runtime_listing_filters_missing_roots_and_foreign_entries(
+    tmp_path: Path, override_listing: bool
+) -> None:
+    queue_root = tmp_path / "queue"
+    queue_root.mkdir()
+    own_entry = _internal_entry("demo", "own")
+    foreign_entry = _internal_entry("crest", "foreign")
+    seen: list[tuple[str, Path | str]] = []
+
+    def list_queue(root: Path | str) -> list[Any]:
+        seen.append(("default", root))
+        return [foreign_entry, own_entry]
+
+    def override(root: Path | str) -> list[Any]:
+        seen.append(("override", root))
+        return [own_entry, foreign_entry]
+
+    runtime = EngineQueueRuntime(
+        load_config=lambda value: value,
+        runtime_roots_for_cfg=lambda _cfg: (tmp_path / "missing", queue_root),
+        list_queue=list_queue,
+        dequeue_next=lambda _root: None,
+        worker_pid_file_name="worker.pid",
+        accept_entry_fn=own_engine_accept_entry("demo"),
+    )
+
+    assert runtime.queue_entries_with_roots(
+        object(), list_queue_fn=override if override_listing else None
+    ) == [(queue_root, own_entry)]
+    assert seen == [("override" if override_listing else "default", queue_root)]
+    assert not (tmp_path / "missing").exists()
+
+
+@pytest.mark.parametrize("dequeue_by_id", [False, True])
+def test_engine_queue_runtime_peek_preserves_selection_without_dequeuing(
+    tmp_path: Path, dequeue_by_id: bool
+) -> None:
+    root_a, root_b = tmp_path / "a", tmp_path / "b"
+    root_a.mkdir()
+    root_b.mkdir()
+    foreign_entry = _internal_entry("crest", "foreign")
+    own_entry = _internal_entry("demo", "own")
+    own_entry.priority = -1
+    fallback_entry = _internal_entry("demo", "fallback")
+    fallback_entry.priority = 5
+    seen: list[Path | str] = []
+
+    def list_queue(root: Path | str) -> list[Any]:
+        seen.append(root)
+        return {root_a: [foreign_entry, own_entry], root_b: [fallback_entry]}[Path(root)]
+
+    def unexpected_dequeue(*_args: Any, **_kwargs: Any) -> Any:
+        pytest.fail("preview must not dequeue a row")
+
+    runtime = EngineQueueRuntime(
+        load_config=lambda value: value,
+        runtime_roots_for_cfg=lambda _cfg: (tmp_path / "missing", root_a, root_b),
+        list_queue=list_queue,
+        dequeue_next=unexpected_dequeue,
+        dequeue_entry_if_pending=unexpected_dequeue if dequeue_by_id else None,
+        worker_pid_file_name="worker.pid",
+        accept_entry_fn=own_engine_accept_entry("demo"),
+    )
+
+    expected = (root_a, own_entry) if dequeue_by_id else (root_b, fallback_entry)
+    assert runtime.peek_next_entry(object()) == expected
+    assert seen == [root_a, root_b]
+    assert own_entry.status.value == fallback_entry.status.value == "pending"
 
 
 def test_engine_queue_runtime_common_accessors(tmp_path: Path) -> None:
@@ -301,7 +371,7 @@ def test_engine_queue_runtime_builds_child_worker_deps(tmp_path: Path) -> None:
     ]
 
 
-def test_worker_process_default_factories_from_callbacks_maps_common_groups() -> None:
+def test_worker_process_default_factories_maps_common_groups() -> None:
     calls: list[str] = []
 
     def record(name: str) -> Any:
@@ -310,7 +380,11 @@ def test_worker_process_default_factories_from_callbacks_maps_common_groups() ->
 
         return _call
 
-    callbacks = WorkerProcessDependencyCallbacks(
+    engine_runner_dependencies = {"run_demo_job": record("run")}
+    factories = build_worker_process_default_factories(
+        config_factory=lambda: "config",
+        runner_dependencies_type=_DemoRunnerDependencies,
+        cancel_check_interval_seconds=8,
         terminate_process=record("terminate"),
         wait_for_cancellable_process=record("wait"),
         sleep=record("sleep"),
@@ -319,14 +393,7 @@ def test_worker_process_default_factories_from_callbacks_maps_common_groups() ->
         mark_completed=record("completed"),
         mark_cancelled=record("cancelled"),
         mark_failed=record("failed"),
-        engine_runner_dependencies={"run_demo_job": record("run")},
-    )
-
-    factories = build_worker_process_default_factories_from_callbacks(
-        callbacks,
-        config_factory=lambda: "config",
-        runner_dependencies_type=_DemoRunnerDependencies,
-        cancel_check_interval_seconds=8,
+        engine_runner_dependencies=engine_runner_dependencies,
     )
 
     assert factories["config"]() == "config"
@@ -334,7 +401,7 @@ def test_worker_process_default_factories_from_callbacks_maps_common_groups() ->
     factories["queue"]().mark_failed("root", "queue-1")
     runner = factories["runner"]()
     assert runner.cancel_check_interval_seconds == 8
-    assert runner.run_demo_job is callbacks.engine_runner_dependencies["run_demo_job"]
+    assert runner.run_demo_job is engine_runner_dependencies["run_demo_job"]
     assert calls == ["failed"]
 
 

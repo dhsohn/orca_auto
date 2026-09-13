@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
-from .frequencies import FrequencyAnalysis, parse_frequency_analysis
+from .frequencies import FrequencyAnalysis, parse_frequency_analysis_text
 from .input_blocks import file_route_lines
-from .parser import OrcaResult, parse_orca_output
+from .parser import OrcaResult, parse_orca_output_text
+from .parser.io import read_orca_text
 from .relaxed_scan import first_scan_coordinate_spec
 
 # Route families whose final geometry is not a stationary point: path methods
@@ -86,9 +87,10 @@ def structure_kind(selected_inp: Path) -> str | None:
 def _parsed_output_cached(
     out_path_text: str, mtime_ns: int, size: int
 ) -> tuple[OrcaResult, FrequencyAnalysis | None]:
+    text = read_orca_text(out_path_text)
     return (
-        parse_orca_output(out_path_text),
-        parse_frequency_analysis(Path(out_path_text)),
+        parse_orca_output_text(text, source_path=out_path_text),
+        parse_frequency_analysis_text(text),
     )
 
 

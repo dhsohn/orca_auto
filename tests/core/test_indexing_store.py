@@ -56,8 +56,10 @@ def test_list_job_locations_invalid_json_raises_corrupt_error(tmp_path: Path) ->
     corrupt_text = "{not valid json"
     _index_path(tmp_path).write_text(corrupt_text, encoding="utf-8")
 
-    with pytest.raises(JobLocationIndexCorruptError):
+    with pytest.raises(JobLocationIndexCorruptError) as failure:
         list_job_locations(tmp_path)
+    assert str(failure.value) == f"Job location index is not valid JSON: {_index_path(tmp_path)}"
+    assert isinstance(failure.value.__cause__, json.JSONDecodeError)
     with pytest.raises(JobLocationIndexCorruptError):
         resolve_job_location(tmp_path, "anything")
     with pytest.raises(JobLocationIndexCorruptError):
@@ -69,13 +71,86 @@ def test_list_job_locations_non_list_json_raises_corrupt_error(tmp_path: Path) -
     corrupt_text = '{"job_id": "job-1"}'
     _index_path(tmp_path).write_text(corrupt_text, encoding="utf-8")
 
-    with pytest.raises(JobLocationIndexCorruptError):
+    with pytest.raises(JobLocationIndexCorruptError) as failure:
         list_job_locations(tmp_path)
+    assert (
+        str(failure.value)
+        == f"Job location index must contain a JSON list: {_index_path(tmp_path)}"
+    )
+    assert failure.value.__cause__ is None
     with pytest.raises(JobLocationIndexCorruptError):
         resolve_job_location(tmp_path, "job-1")
     with pytest.raises(JobLocationIndexCorruptError):
         upsert_job_location(tmp_path, _record("job-1"))
     assert _index_path(tmp_path).read_text(encoding="utf-8") == corrupt_text
+
+
+@pytest.mark.parametrize("disappeared", [False, True])
+def test_list_job_locations_preserves_read_error_behavior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, disappeared: bool
+) -> None:
+    path = _index_path(tmp_path)
+    original_bytes = b'[{"job_id":"job-1"}]'
+    path.write_bytes(original_bytes)
+    original_stat = path.stat()
+    error = FileNotFoundError("index disappeared") if disappeared else OSError("read failed")
+    original_read_text = Path.read_text
+
+    def failing_read_text(
+        target: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
+        if target == path:
+            raise error
+        return original_read_text(target, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", failing_read_text)
+
+    if disappeared:
+        assert list_job_locations(tmp_path) == []
+    else:
+        with pytest.raises(JobLocationIndexCorruptError) as failure:
+            list_job_locations(tmp_path)
+        assert str(failure.value) == f"Job location index cannot be read: {path}"
+        assert failure.value.__cause__ is error
+    assert path.read_bytes() == original_bytes
+    assert path.stat().st_mtime_ns == original_stat.st_mtime_ns
+
+
+def test_list_job_locations_preserves_invalid_utf8_error_and_bytes(tmp_path: Path) -> None:
+    path = _index_path(tmp_path)
+    original_bytes = b"\xff"
+    path.write_bytes(original_bytes)
+    original_stat = path.stat()
+
+    with pytest.raises(UnicodeDecodeError):
+        list_job_locations(tmp_path)
+
+    assert path.read_bytes() == original_bytes
+    assert path.stat().st_mtime_ns == original_stat.st_mtime_ns
+
+
+def test_list_job_locations_filters_non_records_without_rewriting_index(tmp_path: Path) -> None:
+    path = _index_path(tmp_path)
+    original_bytes = json.dumps(
+        [
+            None,
+            7,
+            "ignored",
+            {"job_id": " job-1 ", "molecule_key": None},
+            False,
+            {"job_id": "job-2", "resource_request": {"cores": "8", "gpu": None}},
+        ]
+    ).encode("utf-8")
+    path.write_bytes(original_bytes)
+    original_stat = path.stat()
+
+    records = list_job_locations(tmp_path)
+
+    assert [record.job_id for record in records] == ["job-1", "job-2"]
+    assert records[0].molecule_key == "None"
+    assert records[1].resource_request == {"cores": 8, "gpu": 0}
+    assert path.read_bytes() == original_bytes
+    assert path.stat().st_mtime_ns == original_stat.st_mtime_ns
 
 
 def test_get_job_location_blank_id_returns_none(tmp_path: Path) -> None:

@@ -66,6 +66,9 @@ Create a release-prep issue and branch from `origin/main`, then verify:
 - [ ] Core and workflows distributions build independently with exact source
       inventories and no overlapping installed files. Packaged installation
       checks pass for both the core-only and workflow-enabled profiles.
+- [ ] Direct and sdist-rebuilt wheels, installed distribution metadata, and
+      `orca_auto --version` match the root `pyproject.toml` version
+      (`make check-packages` checks this across its installation profiles).
 - [ ] If ORCA runtime semantics changed, at least one manual real-ORCA
       acceptance check is recorded in the PR.
 - [ ] The PR body records Motivation, Changes, and Verification.
