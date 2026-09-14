@@ -12,18 +12,23 @@
 <p align="center"><b>English</b> · <a href="https://github.com/dhsohn/orca_auto/blob/v6.0.0/README.ko.md">한국어</a></p>
 
 ORCA_auto is a **queue-first runner for ORCA** on Linux/WSL.
-Submit calculations to a durable queue, follow their progress, and inspect
-recorded results and recovery decisions. Input design and chemical judgment
-stay with you.
+It provides a **durable execution layer for AI agents** to delegate
+quantum-chemistry calculations through a public CLI, track progress, and
+inspect recorded outcomes.
 
-## Features
+## Built for agent-driven calculations
 
-- **Submit and close the terminal.** A successful submission saves the job to
-  disk; a supervised worker handles execution.
-- **See what happened.** Check queue status from the CLI and inspect saved
-  calculation reports and failure reasons.
-- **Recover with evidence.** Worker or host interruptions follow verified
+- **Delegate beyond the session.** A successful submission saves the job to
+  disk; a supervised worker executes it independently of the submitting agent
+  session.
+- **Read structured evidence.** Use `orca_auto queue list --json` and
+  `orca_auto service status --json` for status checks. Terminal `machine.json`
+  records provide calculation outcomes and artifact receipts for downstream tools.
+- **Recover explicitly.** Worker or host interruptions follow verified
   recovery paths. Failed ORCA calculations are not automatically retried.
+
+ORCA_auto manages execution, not chemical judgment. You remain responsible for
+input design and scientific validation.
 
 ## Get started
 
