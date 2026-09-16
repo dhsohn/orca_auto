@@ -41,6 +41,13 @@ _PUBLICATION_BACKUP_NAME_RE = re.compile(r"^\.orca_auto_backup\.[0-9a-f]{32}$")
 _CLEANUP_TOMBSTONE_PREFIX = ".orca_auto_cleanup."
 _CLEANUP_TOMBSTONE_NAME_RE = re.compile(rf"^{re.escape(_CLEANUP_TOMBSTONE_PREFIX)}[0-9a-f]{{32}}$")
 _TRANSIENT_FILE_RE = re.compile(r"(?:^|\.)tmp(?:\.|$)", re.IGNORECASE)
+# v2 adds max_task_memory_bytes so concurrent workspaces can be summed into the
+# launch guard; older manifests are treated as unresolved ownership.
+_WORKSPACE_MANIFEST_SCHEMA_VERSION = 2
+# Concurrent attempts wait on the root lock while a peer stages inputs or
+# hashes committed publication targets; the default 10 s would fail an
+# admissible attempt instead of queueing it.
+_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS = 300.0
 _SCRATCH_CONTROL_FILE_NAMES = frozenset(
     {
         SCRATCH_MANIFEST_FILE_NAME,
@@ -213,6 +220,7 @@ class EngineScratchWorkspace:
                 root_fd,
                 _SCRATCH_ROOT_LOCK_FILE_NAME,
                 display_path=root / _SCRATCH_ROOT_LOCK_FILE_NAME,
+                timeout_seconds=_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS,
             ):
                 _require_directory_path_identity(
                     root,
@@ -235,7 +243,7 @@ class EngineScratchWorkspace:
                         output_dir,
                         durable_dir_identity,
                     )
-                    _assert_scratch_root_available(root, root_fd)
+                    live_task_memory_bytes = _sweep_scratch_root(root, root_fd)
                     captured_inputs = _capture_input_closure(
                         input_dir_fd,
                         durable.parent,
@@ -254,15 +262,22 @@ class EngineScratchWorkspace:
                             f"free={free_bytes}, required_inputs={required_bytes}, "
                             f"minimum_free={policy.min_free_bytes}"
                         )
+                    # Live workspaces may still grow to their own task-memory
+                    # caps after this snapshot, so those caps count in full;
+                    # the tmpfs pool is shared and counts once.
                     available_memory_bytes = _linux_available_memory_bytes()
                     required_memory_bytes = (
-                        policy.max_task_memory_bytes + free_bytes + policy.min_free_bytes
+                        live_task_memory_bytes
+                        + policy.max_task_memory_bytes
+                        + free_bytes
+                        + policy.min_free_bytes
                     )
                     if available_memory_bytes < required_memory_bytes:
                         raise EngineScratchError(
                             "engine scratch cannot guarantee RAM headroom without swap: "
                             f"available_memory={available_memory_bytes}, "
                             f"task_memory_limit={policy.max_task_memory_bytes}, "
+                            f"live_task_memory_limits={live_task_memory_bytes}, "
                             f"scratch_free={free_bytes}, host_reserve={policy.min_free_bytes}"
                         )
                     os.mkdir(workspace.name, mode=0o700, dir_fd=root_fd)
@@ -275,6 +290,7 @@ class EngineScratchWorkspace:
                     _write_workspace_manifest(
                         output_dir,
                         workspace_dir_fd=workspace_dir_fd,
+                        max_task_memory_bytes=policy.max_task_memory_bytes,
                     )
                     staged = _stage_input_closure(
                         durable,
@@ -389,6 +405,7 @@ class EngineScratchWorkspace:
                 root_fd,
                 _SCRATCH_ROOT_LOCK_FILE_NAME,
                 display_path=self.policy.root / _SCRATCH_ROOT_LOCK_FILE_NAME,
+                timeout_seconds=_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS,
             ):
                 _remove_owned_workspace_at(
                     root_fd,
@@ -634,17 +651,19 @@ def _write_workspace_manifest(
     durable_dir: Path,
     *,
     workspace_dir_fd: int,
+    max_task_memory_bytes: int,
 ) -> None:
     boot_id = process_utils.linux_boot_id(proc_root=Path("/proc"))
     owner_ticks = process_utils.current_process_start_ticks()
     if not boot_id or owner_ticks is None:
         raise EngineScratchError("Cannot bind engine scratch ownership to this boot and process")
     payload = {
-        "schema_version": 1,
+        "schema_version": _WORKSPACE_MANIFEST_SCHEMA_VERSION,
         "owner_pid": os.getpid(),
         "owner_process_start_ticks": owner_ticks,
         "owner_boot_id": boot_id,
         "durable_dir": str(durable_dir.resolve()),
+        "max_task_memory_bytes": max_task_memory_bytes,
     }
     _atomic_write_bytes_at(
         workspace_dir_fd,
@@ -654,28 +673,40 @@ def _write_workspace_manifest(
     )
 
 
-def _manifest_owner_is_live(payload: dict[str, Any]) -> bool:
+def _manifest_owner_state(payload: dict[str, Any]) -> str:
+    """Classify a workspace owner as "live", "stale" or "unknown".
+
+    Only a proven-live owner may be counted toward the launch guard; an
+    unknown owner must block, because admitting it would let an unverifiable
+    workspace pin tmpfs forever.
+    """
     owner_pid = payload.get("owner_pid")
     owner_ticks = payload.get("owner_process_start_ticks")
     owner_boot = payload.get("owner_boot_id")
     if type(owner_pid) is not int or owner_pid <= 0:
-        return True
+        return "unknown"
     if type(owner_ticks) is not int or owner_ticks <= 0 or not isinstance(owner_boot, str):
-        return True
+        return "unknown"
     current_boot = process_utils.linux_boot_id(proc_root=Path("/proc"))
     if not current_boot:
-        return True
+        return "unknown"
     if current_boot != owner_boot:
-        return False
+        return "stale"
     if not process_utils.is_process_alive(owner_pid):
-        return False
+        return "stale"
     observed_ticks = process_utils.process_start_ticks(owner_pid)
     if observed_ticks is None:
-        return True
-    return observed_ticks == owner_ticks
+        return "unknown"
+    return "live" if observed_ticks == owner_ticks else "stale"
 
 
-def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
+def _sweep_scratch_root(root: Path, root_fd: int) -> int:
+    """Finish interrupted cleanups and return the summed task-memory caps of live workspaces.
+
+    Any workspace whose ownership cannot be resolved, or whose owner is gone,
+    is preserved for inspection and blocks the new launch.
+    """
+    live_task_memory_bytes = 0
     for name in os.listdir(root_fd):
         if _CLEANUP_TOMBSTONE_NAME_RE.fullmatch(name):
             # A tombstone is a workspace renamed for deletion whose rmtree was
@@ -715,16 +746,29 @@ def _assert_scratch_root_available(root: Path, root_fd: int) -> None:
                 payload = None
         finally:
             os.close(workspace_fd)
-        if payload is None or payload.get("schema_version") != 1:
+        task_memory = payload.get("max_task_memory_bytes") if payload is not None else None
+        if (
+            payload is None
+            or payload.get("schema_version") != _WORKSPACE_MANIFEST_SCHEMA_VERSION
+            or type(task_memory) is not int
+            or task_memory < 1
+        ):
             raise EngineScratchError(
                 f"engine scratch contains an unresolved workspace without valid ownership: {candidate}"
             )
-        if _manifest_owner_is_live(payload):
-            raise EngineScratchError(f"Another engine scratch attempt is active: {candidate}")
-        raise EngineScratchError(
-            "engine scratch contains a stale workspace with uncertain child ownership; "
-            f"preserving it for inspection: {candidate}"
-        )
+        owner_state = _manifest_owner_state(payload)
+        if owner_state == "stale":
+            raise EngineScratchError(
+                "engine scratch contains a stale workspace with uncertain child ownership; "
+                f"preserving it for inspection: {candidate}"
+            )
+        if owner_state != "live":
+            raise EngineScratchError(
+                "engine scratch contains a workspace whose owner cannot be verified; "
+                f"preserving it for inspection: {candidate}"
+            )
+        live_task_memory_bytes += task_memory
+    return live_task_memory_bytes
 
 
 def _read_stable_regular_file_at(

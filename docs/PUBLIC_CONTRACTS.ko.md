@@ -168,16 +168,18 @@
 - 활성 `ScanTS` route token은 generation 생성과 큐 발행 전에 거부합니다.
   일반 단독 relaxed scan은 계속 지원합니다.
 - `orca.runtime.scratch_root`를 설정하면 `/dev/shm` 아래의 전용 디렉터리여야 하고,
-  `scratch_min_free_gb`는 양의 정수여야 합니다. ORCA는 한 번에 하나의 private tmpfs attempt만
-  실행하고 `*.tmp`/`*.tmp.*`를 제외한 남은 일반 파일을 inode로 고정한 durable visible
+  `scratch_min_free_gb`는 양의 정수여야 합니다. ORCA는 attempt마다 자기만의 private tmpfs
+  workspace에서 실행하고 `*.tmp`/`*.tmp.*`를 제외한 남은 일반 파일을 inode로 고정한 durable visible
   generation에 저널 기반 transaction으로 게시합니다. runtime state artifact 이름은 게시할 수
   없습니다. staging dependency는 basename-relative이고 byte-identical 상태를 유지해야 하며,
   선택 working copy에는 누락된 마지막 줄바꿈만 추가할 수 있습니다. 해석할 수 없거나 stale인 scratch
-  workspace가 있으면 fail-closed합니다. 현재 host 가용 메모리가 설정된 task memory 상한, tmpfs
-  여유 공간, `scratch_min_free_gb` host reserve 합계를 감당해야 시작합니다. 완료 attempt의 게시
+  workspace가 있으면 fail-closed합니다. 현재 host 가용 메모리가 설정된 task memory 상한, 살아
+  있는 모든 scratch workspace에 기록된 task memory 상한, tmpfs 여유 공간,
+  `scratch_min_free_gb` host reserve 합계를 감당해야 시작합니다. 그 밖의 동시 attempt 수 제한은
+  `scheduler.max_active_simulations`뿐입니다. 완료 attempt의 게시
   메타데이터는 `scratch_provenance`에, commit 뒤 중단/exception 경로의 게시 근거는
   `scratch_publications`에 기록하며 고정 execution-snapshot provenance에는 넣지 않습니다.
-  workflow xTB/CREST도 같은 설정 root와 단일-workspace admission을 사용합니다. 변경 불가능한
+  workflow xTB/CREST도 같은 설정 root와 시작 gate를 사용합니다. 변경 불가능한
   입력 snapshot은 durable하게 유지하고 tmpfs에서 실행한 뒤 canonical 결과/evidence allowlist만
   transaction으로 게시합니다. 생략한 work tree와 transient 항목은 `scratch_provenance`에
   기록하며 CREST 자체의 `--scratch` 옵션은 계속 사용하지 않습니다.

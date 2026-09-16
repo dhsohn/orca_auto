@@ -78,7 +78,7 @@ orca:
   # Uncomment `runtime:` together with any of the keys below it.
   # runtime:
     # Shared RAM-backed working root for ORCA and workflow-managed xTB/CREST.
-    # Exactly one private attempt runs below /dev/shm. ORCA transactionally
+    # Each attempt runs in its own private workspace below /dev/shm. ORCA transactionally
     # publishes surviving non-*.tmp artifacts; workflow xTB/CREST publish their
     # canonical result/evidence allowlists and omit engine work trees and
     # transient files.
@@ -87,7 +87,8 @@ orca:
     # scratch_root: /dev/shm/orca_auto
     # Refuse a new attempt unless this much tmpfs space remains in addition to
     # its bound input snapshot. Launch also requires current MemAvailable to
-    # cover the per-task memory cap, all remaining tmpfs space, and this reserve.
+    # cover the per-task memory cap, the per-task caps of every attempt still
+    # running, all remaining tmpfs space, and this reserve.
     # These are admission guards, not a per-job quota or a no-swap guarantee.
     # scratch_min_free_gb: 8
   paths:

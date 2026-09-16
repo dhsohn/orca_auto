@@ -278,11 +278,12 @@ def test_stale_workspace_is_preserved_and_blocks_new_attempt(
     (stale / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "owner_pid": 999999,
                 "owner_process_start_ticks": 1,
                 "owner_boot_id": "old-boot",
                 "durable_dir": str(selected.parent),
+                "max_task_memory_bytes": 1,
             }
         )
     )
@@ -308,11 +309,12 @@ def test_unrelated_stale_workspace_is_preserved_and_blocks_new_attempt(
     manifest.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "owner_pid": 999999,
                 "owner_process_start_ticks": 1,
                 "owner_boot_id": "00000000-0000-0000-0000-000000000001",
                 "durable_dir": str(unrelated_durable.resolve()),
+                "max_task_memory_bytes": 1,
             },
             sort_keys=True,
         )
@@ -338,13 +340,48 @@ def test_alive_owner_with_unreadable_start_ticks_is_preserved(
     monkeypatch.setattr(scratch_mod.process_utils, "is_process_alive", lambda _pid: True)
     monkeypatch.setattr(scratch_mod.process_utils, "process_start_ticks", lambda _pid: None)
 
-    assert scratch_mod._manifest_owner_is_live(
-        {
-            "owner_pid": os.getpid(),
-            "owner_process_start_ticks": 123,
-            "owner_boot_id": "boot",
-        }
+    assert (
+        scratch_mod._manifest_owner_state(
+            {
+                "owner_pid": os.getpid(),
+                "owner_process_start_ticks": 123,
+                "owner_boot_id": "boot",
+            }
+        )
+        == "unknown"
     )
+
+
+def test_unverifiable_owner_blocks_new_attempt_instead_of_being_counted(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    monkeypatch.setattr(scratch_mod.process_utils, "linux_boot_id", lambda **_kwargs: "boot")
+    monkeypatch.setattr(scratch_mod.process_utils, "is_process_alive", lambda _pid: True)
+    monkeypatch.setattr(scratch_mod.process_utils, "process_start_ticks", lambda _pid: None)
+    unverifiable = root / "attempt-unverifiable"
+    unverifiable.mkdir()
+    (unverifiable / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "owner_pid": os.getpid(),
+                "owner_process_start_ticks": 123,
+                "owner_boot_id": "boot",
+                "durable_dir": str(selected.parent),
+                "max_task_memory_bytes": 1,
+            }
+        )
+    )
+
+    with pytest.raises(EngineScratchError, match="owner cannot be verified"):
+        EngineScratchWorkspace.create(policy, selected)
+
+    assert unverifiable.exists()
+    assert _scratch_attempts(policy.root) == [unverifiable]
 
 
 def test_invalid_workspace_manifest_is_preserved_and_blocks_new_attempt(
@@ -444,22 +481,83 @@ def test_prepared_journal_never_deletes_unverified_target(
     assert selected.read_bytes() == original
 
 
-def test_only_one_scratch_attempt_can_exist(
+def test_concurrent_scratch_attempts_share_the_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
     first = EngineScratchWorkspace.create(policy, selected)
+    second = EngineScratchWorkspace.create(policy, selected)
 
-    with pytest.raises(EngineScratchError, match="attempt is active"):
+    assert first.path != second.path
+    assert len(_scratch_attempts(policy.root)) == 2
+    for workspace in (first, second):
+        manifest = json.loads(
+            (workspace.path / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).read_text(encoding="utf-8")
+        )
+        assert manifest["schema_version"] == scratch_mod._WORKSPACE_MANIFEST_SCHEMA_VERSION
+        assert manifest["max_task_memory_bytes"] == policy.max_task_memory_bytes
+
+    first.publish()
+    first.cleanup()
+    assert _scratch_attempts(policy.root) == [second.path]
+    second.publish()
+    second.cleanup()
+    assert _scratch_attempts(policy.root) == []
+
+
+def test_live_workspace_task_memory_caps_count_toward_headroom_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    shm = tmp_path / "shm"
+    shm.mkdir()
+    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(scratch_mod, "_filesystem_free_bytes", lambda _descriptor: 100)
+    policy = OrcaScratchPolicy(root=shm / "orca_auto", min_free_bytes=1, max_task_memory_bytes=10)
+    selected = _durable_input(tmp_path)
+    # One workspace needs 10 + 100 + 1; a second one additionally carries the
+    # live workspace's full cap: 10 + 10 + 100 + 1.
+    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: 115)
+    first = EngineScratchWorkspace.create(policy, selected)
+
+    with pytest.raises(EngineScratchError, match="live_task_memory_limits=10"):
         EngineScratchWorkspace.create(policy, selected)
+    assert _scratch_attempts(policy.root) == [first.path]
 
     first.publish()
     first.cleanup()
     second = EngineScratchWorkspace.create(policy, selected)
     second.publish()
     second.cleanup()
+
+
+def test_workspace_manifest_without_task_memory_cap_blocks_new_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    legacy = root / "attempt-legacy"
+    legacy.mkdir()
+    (legacy / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "owner_pid": os.getpid(),
+                "owner_process_start_ticks": 1,
+                "owner_boot_id": "boot",
+                "durable_dir": str(selected.parent),
+            }
+        )
+    )
+
+    with pytest.raises(EngineScratchError, match="without valid ownership"):
+        EngineScratchWorkspace.create(policy, selected)
+
+    assert legacy.exists()
 
 
 def test_input_capture_is_not_rebound_between_preflight_and_staging(
