@@ -321,9 +321,10 @@ logic. Notable pieces:
   directory descriptors remain pinned through execution and publication; ORCA
   enters the workspace through the pinned descriptor rather than reopening its
   pathname.
-  A scratch-root lock admits exactly one workspace, and unresolved or stale
-  workspaces are preserved and block new launches until an operator inspects
-  them or the tmpfs is reset. The shared admission process record stays
+  A scratch-root lock serializes workspace admission; each workspace manifest
+  records its task-memory cap so concurrent launches are guarded together, and
+  unresolved or stale workspaces are preserved and block new launches until an
+  operator inspects them or the tmpfs is reset. The shared admission process record stays
   durable outside scratch; queue, run state, and locks remain in durable
   storage. After the process tree exits, surviving regular files are staged
   and committed back to the inode-pinned generation as one journaled file-set
@@ -335,8 +336,9 @@ logic. Notable pieces:
   exception or worker shutdown after a committed publication records the same
   evidence in `scratch_publications`, separately from immutable
   execution-snapshot provenance. Launch is rejected unless current
-  `MemAvailable` can cover the configured task-memory limit, all free space in
-  the scratch tmpfs, and the configured host reserve.
+  `MemAvailable` can cover the configured task-memory limit, the recorded
+  task-memory limits of every live workspace, all free space in the scratch
+  tmpfs, and the configured host reserve.
   The scratch workspace and journal implementation is owned by
   `core.engine_scratch`; ORCA contributes only its flat input-dependency scanner,
   canonically owned by `orca.input_references`. ORCA input tokenization, shared

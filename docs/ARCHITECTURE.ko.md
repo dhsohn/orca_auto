@@ -304,7 +304,8 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   input byte는 용량 admission 전에 한 번만 capture하고 root/workspace directory descriptor는
   실행과 게시가 끝날 때까지 고정합니다. ORCA는 pathname을 다시 여는 대신 고정 descriptor를 통해
   workspace에 진입합니다.
-  scratch-root lock은 workspace를 정확히 하나만 허용하고, 해석할 수 없거나 stale인 workspace는
+  scratch-root lock은 workspace admission을 직렬화하고, 각 workspace manifest는 자기 task memory
+  상한을 기록해 동시 시작을 함께 gate합니다. 해석할 수 없거나 stale인 workspace는
   운영자가 검사하거나 tmpfs를 초기화할 때까지 보존하면서 새 시작을 막습니다. 공유 admission
   process record는 scratch 밖에서 durable하며 queue, run state, lock도 durable storage에
   유지합니다. process tree가 종료되면 남은 일반 파일을 staging한 다음 inode로 고정한
@@ -314,8 +315,8 @@ canonical `core.queue.engine.child` 계약을 직접 사용합니다.
   non-temporary output도 보존합니다. staging input은 변경 불가능합니다. 완료 attempt는
   `scratch_provenance`에, commit 후 exception이나 worker shutdown은 `scratch_publications`에 게시
   근거를 기록하며 고정 execution-snapshot provenance와 분리합니다. 현재 `MemAvailable`이 설정된
-  task memory 상한, scratch tmpfs의 전체 여유 공간, 설정한 host reserve 합계를 감당하지 못하면
-  시작을 거부합니다. worker/host crash는 아직 게시하지 않은
+  task memory 상한, 살아 있는 모든 workspace에 기록된 task memory 상한, scratch tmpfs의 전체
+  여유 공간, 설정한 host reserve 합계를 감당하지 못하면 시작을 거부합니다. worker/host crash는 아직 게시하지 않은
   tmpfs checkpoint를 잃을 수 있으며, 이때 기존 durable recovery가
   이미 게시된 근거부터 재개합니다.
   scratch workspace와 journal 구현의 단일 소유자는 `core.engine_scratch`이고 ORCA는

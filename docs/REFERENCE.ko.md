@@ -200,8 +200,13 @@ orca:
   clamp, tmpfs scratch closure 동작, `MemAvailable` 시작 gate, 알 수 없는 키의
   fail-closed 검증, Windows 경로/실행 파일 경로 거부 규칙 — 은
   [설정 계약](PUBLIC_CONTRACTS.ko.md#설정-계약)에 명세되어 있습니다.
-- RAM scratch를 활성화했다면 shared scheduler 상한을 보수적으로 유지하고
-  `/dev/shm`을 허용할 최대 계산에 맞추세요. 보수적인 시작 시점 메모리 snapshot은
+- RAM scratch를 활성화했다면 `/dev/shm`을 허용할 최대 계산에 맞추고, 동시 실행 수는
+  시작 gate가 제한한다고 보세요. 새 attempt는 `MemAvailable`이 자기 task memory 상한과
+  실행 중인 모든 attempt에 기록된 상한(`max_memory_gb_per_task` 또는 workflow 자체의
+  `resources.max_memory_gb`), tmpfs 여유 공간, `scratch_min_free_gb`의 합을 감당할 때만
+  시작합니다. 기본값(상한 32 GiB, reserve 8 GiB)에 tmpfs가 RAM의 절반인 host라면 RAM이 대략
+  144 GiB 미만일 때 attempt는 많아야 하나(대략 80 GiB 미만이면 0개)만 허용되므로, 더
+  돌리려면 `max_memory_gb_per_task`를 낮추거나 tmpfs를 줄이세요. 보수적인 시작 시점 메모리 snapshot은
   swap 압력을 줄이지만 이후 system activity나 tmpfs swap 자체를 막지는 못하며,
   `scratch_min_free_gb`는 시작 gate이지 디렉터리 quota가 아닙니다.
 - `workflow.paths.xtb_executable` 또는 `workflow.paths.crest_executable`을 비워

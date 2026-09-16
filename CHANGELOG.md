@@ -6,6 +6,23 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [Unreleased]
+
+### Changed
+
+- RAM scratch no longer admits exactly one workspace. Each workspace manifest
+  (schema 2) records its task-memory cap, and a new attempt launches only while
+  `MemAvailable` covers its own cap, the caps of every live workspace, the free
+  tmpfs space and `scratch_min_free_gb`; concurrency is otherwise bounded by
+  `scheduler.max_active_simulations`. A schema-1 manifest, or one whose owner
+  cannot be verified, is treated as unresolved ownership and blocks launches
+  until inspected. Cutover: a deployment that already set
+  `max_active_simulations` above 1 with RAM scratch enabled previously failed
+  the second concurrent attempt as `runner_exception`; it now runs both under
+  the guard. Keep `max_active_simulations: 1` to retain serial execution. The
+  scratch-root lock wait is 300 s so a peer's staging or publication recovery
+  queues an attempt instead of failing it.
+
 ## [6.0.0] - 2026-09-13
 
 ### Added

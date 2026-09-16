@@ -196,11 +196,18 @@ Notes:
   mechanics, the `MemAvailable` launch guard, unknown-key fail-closed
   validation, and the Windows-path/executable-path rejection rules — is
   specified in the [Config Contract](PUBLIC_CONTRACTS.md#config-contract).
-- When RAM scratch is enabled, keep the shared scheduler cap conservative and
-  size `/dev/shm` for the largest accepted calculation: the conservative
-  launch-time memory snapshot reduces swap pressure but cannot prevent later
-  system activity or tmpfs swap, and `scratch_min_free_gb` is a launch guard,
-  not a directory quota.
+- When RAM scratch is enabled, size `/dev/shm` for the largest accepted
+  calculation and expect the launch guard to bound concurrency: a new attempt
+  starts only while `MemAvailable` covers its own task-memory cap plus the
+  recorded caps of every running attempt (`max_memory_gb_per_task`, or a
+  workflow's own `resources.max_memory_gb`), the free tmpfs space and
+  `scratch_min_free_gb`. With the shipped defaults (32 GiB cap, 8 GiB reserve)
+  on a host whose tmpfs is half of RAM, that admits at most one attempt below
+  roughly 144 GiB of RAM (none below roughly 80 GiB); lower
+  `max_memory_gb_per_task` or shrink the tmpfs to run more. The conservative
+  launch-time memory snapshot
+  reduces swap pressure but cannot prevent later system activity or tmpfs
+  swap, and `scratch_min_free_gb` is a launch guard, not a directory quota.
 - If `workflow.paths.xtb_executable` or `workflow.paths.crest_executable` is
   left blank, submission resolves it from PATH and binds that executable
   identity to the queued generation.

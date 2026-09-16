@@ -178,19 +178,21 @@ Behavior:
   publication. Plain standalone relaxed scans remain supported.
 - `orca.runtime.scratch_root`, when present, must name a dedicated directory
   below `/dev/shm`; `scratch_min_free_gb` must be a positive integer. ORCA then
-  executes one private tmpfs attempt at a time and publishes surviving regular
+  executes each attempt in its own private tmpfs workspace and publishes surviving regular
   files other than `*.tmp`/`*.tmp.*` as a journaled transaction to the
   inode-pinned durable visible generation. Runtime state artifact names cannot
   be published. Dependencies must be basename-relative and remain
   byte-identical; the selected working copy may receive only a missing final
   newline. Unresolved scratch workspaces fail closed. Launch requires current
-  host available memory to cover the configured task-memory cap, free tmpfs,
-  and `scratch_min_free_gb` host reserve. Completed-attempt metadata is recorded
+  host available memory to cover the configured task-memory cap, the recorded
+  task-memory caps of every live scratch workspace, free tmpfs, and the
+  `scratch_min_free_gb` host reserve; the number of concurrent attempts is
+  otherwise bounded only by `scheduler.max_active_simulations`. Completed-attempt metadata is recorded
   in `scratch_provenance`; committed output from an interrupted/exception path
   is recorded in `scratch_publications`, never in immutable execution-snapshot
   provenance.
   Workflow xTB/CREST use the same configured root and
-  one-workspace admission. They keep immutable input snapshots durable, execute in tmpfs, and
+  launch guard. They keep immutable input snapshots durable, execute in tmpfs, and
   transactionally publish only their canonical result/evidence allowlists;
   omitted work trees and transient entries are recorded in
   `scratch_provenance`. CREST's native `--scratch` option remains unused.
