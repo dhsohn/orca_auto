@@ -46,7 +46,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   the tracked job, and left its admission slot to stale-slot reconciliation.
   Such a row is now skipped until the exit has been finalized; rows behind it
   stay eligible, and a poll that finds only such rows does not touch the
-  admission file.
+  admission file. If finalizing that exit keeps failing, the row stays pending
+  until the worker is restarted, with the failure logged on every poll; an
+  ORCA worker already paused all admission in that state.
 - Re-executing an interrupted or failed generation no longer reports
   `completed` over its recorded failed attempt. When a worker died after an
   attempt record was saved and before its final result was, a restart adopted

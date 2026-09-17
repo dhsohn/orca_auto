@@ -39,8 +39,8 @@ def _deps(calls: list[str]) -> SimpleNamespace:
         release_slot=lambda _root, _token: None,
         reserve_dequeued_entry=reserve_dequeued_entry,
         has_admission_capacity=lambda _cfg: True,
-        peek_next_entry=lambda _cfg: None,
-        dequeue_next_entry=lambda _cfg: None,
+        peek_next_entry=lambda _cfg, **_kwargs: None,
+        dequeue_next_entry=lambda _cfg, **_kwargs: None,
         start_background_job_process=lambda **_kwargs: None,
         try_reserve_admission_slot=lambda _cfg: None,
     )

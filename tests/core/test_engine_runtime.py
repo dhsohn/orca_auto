@@ -219,6 +219,59 @@ def test_engine_queue_runtime_peek_preserves_selection_without_dequeuing(
     assert own_entry.status.value == fallback_entry.status.value == "pending"
 
 
+def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(tmp_path: Path) -> None:
+    root = tmp_path / "queue"
+    root.mkdir()
+    tracked = _internal_entry("demo", "queue-tracked")
+    behind = _internal_entry("demo", "queue-behind")
+    foreign = _internal_entry("crest", "queue-foreign")
+    claimed: list[tuple[str, Any]] = []
+
+    def dequeue_by_id(_root: Path, queue_id: str, *, expected_entry: Any) -> Any:
+        claimed.append((queue_id, expected_entry))
+        return expected_entry
+
+    runtime = EngineQueueRuntime(
+        load_config=lambda value: value,
+        runtime_roots_for_cfg=lambda _cfg: (root,),
+        list_queue=lambda _root: [foreign, tracked, behind],
+        dequeue_next=lambda _root: pytest.fail("a skipped head row must not be claimed"),
+        dequeue_entry_if_pending=dequeue_by_id,
+        worker_pid_file_name="worker.pid",
+        accept_entry_fn=own_engine_accept_entry("demo"),
+    )
+
+    def skip(entry: Any) -> bool:
+        # The engine filter runs first, so a foreign row never reaches it.
+        assert entry is not foreign
+        return entry is tracked
+
+    assert runtime.peek_next_entry(object(), skip_entry_fn=skip) == (root, behind)
+    assert runtime.dequeue_next_entry(object(), skip_entry_fn=skip) == (root, behind)
+    assert claimed == [("queue-behind", behind)]
+    assert runtime.peek_next_entry(object(), skip_entry_fn=lambda _entry: True) is None
+    assert runtime.peek_next_entry(object()) == (root, tracked)
+
+
+def test_skip_predicate_is_ignored_by_a_runtime_that_claims_its_head_row(tmp_path: Path) -> None:
+    # Such a runtime cannot claim around a row, so filtering only the preview
+    # would disagree with what the dequeue then claims.
+    root = tmp_path / "queue"
+    root.mkdir()
+    head = _internal_entry("demo", "queue-head")
+    runtime = EngineQueueRuntime(
+        load_config=lambda value: value,
+        runtime_roots_for_cfg=lambda _cfg: (root,),
+        list_queue=lambda _root: [head],
+        dequeue_next=lambda _root: head,
+        worker_pid_file_name="worker.pid",
+        accept_entry_fn=own_engine_accept_entry("demo"),
+    )
+
+    assert runtime.peek_next_entry(object(), skip_entry_fn=lambda _entry: True) == (root, head)
+    assert runtime.dequeue_next_entry(object(), skip_entry_fn=lambda _entry: True) == (root, head)
+
+
 def test_engine_queue_runtime_common_accessors(tmp_path: Path) -> None:
     entry = SimpleNamespace(queue_id="queue-1")
     runtime = _runtime(tmp_path, entries={tmp_path / "a": [entry]})

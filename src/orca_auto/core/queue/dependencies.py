@@ -11,7 +11,11 @@ class SleepTimer(Protocol):
 
 
 class QueueEntrySelector(Protocol):
-    """Preview or claim the next row, never one that ``skip_entry_fn`` names."""
+    """Preview or claim the next row, passing over rows ``skip_entry_fn`` names.
+
+    A runtime can honor the filter only when it claims rows by id; one that
+    claims its root's head row ignores it.
+    """
 
     def __call__(
         self,
@@ -22,8 +26,6 @@ class QueueEntrySelector(Protocol):
     ) -> tuple[Path, Any] | None: ...
 
 
-QueueEntryDequeuer = QueueEntrySelector
-QueueEntryPeeker = QueueEntrySelector
 AdmissionCapacityCheck = Callable[[Any], bool]
 AdmissionReserver = Callable[[Any], str | None]
 
@@ -66,8 +68,8 @@ class ChildQueueWorkerDeps:
     release_slot: SlotReleaser
     reserve_dequeued_entry: DequeuedEntryReserver
     has_admission_capacity: AdmissionCapacityCheck
-    peek_next_entry: QueueEntryPeeker
-    dequeue_next_entry: QueueEntryDequeuer
+    peek_next_entry: QueueEntrySelector
+    dequeue_next_entry: QueueEntrySelector
     try_reserve_admission_slot: AdmissionReserver
 
 
@@ -76,8 +78,6 @@ __all__ = [
     "ChildQueueWorkerDeps",
     "BackgroundJobProcessStarter",
     "DequeuedEntryReserver",
-    "QueueEntryDequeuer",
-    "QueueEntryPeeker",
     "QueueEntrySelector",
     "SleepTimer",
     "SlotReleaser",

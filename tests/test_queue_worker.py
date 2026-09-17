@@ -2710,9 +2710,10 @@ class TestFillSlots(unittest.TestCase):
 
     def test_fill_slots_does_not_reclaim_a_row_whose_previous_job_is_still_tracked(self) -> None:
         # A child stopped by an external SIGTERM requeues its own row for resume
-        # and only then exits. Until the parent has seen that exit and released
-        # the slot, the row must not start a second job under the same queue id:
-        # that would replace the tracked job and strand its admission slot.
+        # and only then exits; the requeue is applied directly here. Until the
+        # parent has seen that exit and released the slot, the row must not start
+        # a second job under the same queue id: that would replace the tracked
+        # job and strand its admission slot.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)

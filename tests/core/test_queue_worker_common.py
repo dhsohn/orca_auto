@@ -688,7 +688,7 @@ def test_hooked_pidfile_child_worker_runs_engine_hooks(
         admission_root=lambda _cfg: str(tmp_path / "admission"),
         release_slot=lambda _root, _token: None,
         reserve_dequeued_entry=lambda *args, **kwargs: ("idle", None),
-        dequeue_next_entry=lambda _cfg: None,
+        dequeue_next_entry=lambda _cfg, **_kwargs: None,
         start_background_job_process=lambda **_kwargs: None,
         try_reserve_admission_slot=lambda _cfg: None,
     )
@@ -913,7 +913,7 @@ def test_pidfile_child_worker_run_once_returns_error_when_singleton_lock_held(
         admission_root=lambda _cfg: str(tmp_path / "admission"),
         release_slot=lambda _root, _token: None,
         reserve_dequeued_entry=lambda *args, **kwargs: ("idle", None),
-        dequeue_next_entry=lambda _cfg: None,
+        dequeue_next_entry=lambda _cfg, **_kwargs: None,
         start_background_job_process=lambda **_kwargs: None,
         try_reserve_admission_slot=lambda _cfg: None,
     )
@@ -989,7 +989,7 @@ def test_child_worker_rejected_attach_terminates_and_marks_start_error(tmp_path:
         admission_root=lambda _cfg: str(tmp_path / "admission"),
         release_slot=lambda _root, _token: None,
         reserve_dequeued_entry=lambda *args, **kwargs: ("idle", None),
-        dequeue_next_entry=lambda _cfg: None,
+        dequeue_next_entry=lambda _cfg, **_kwargs: None,
         start_background_job_process=lambda **_kwargs: process,
         try_reserve_admission_slot=lambda _cfg: None,
     )
