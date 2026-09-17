@@ -1014,8 +1014,11 @@ def test_queue_worker_starts_up_to_max_concurrent_children(
         "_queue_worker_deps",
         lambda: replace(
             real_deps,
-            peek_next_entry=lambda _cfg: (queue_root, entries[0]),
-            dequeue_next_entry=lambda _cfg: (queue_root, _dequeued_running_entry(next(dequeued))),
+            peek_next_entry=lambda _cfg, **_kwargs: (queue_root, entries[0]),
+            dequeue_next_entry=lambda _cfg, **_kwargs: (
+                queue_root,
+                _dequeued_running_entry(next(dequeued)),
+            ),
         ),
     )
 
@@ -1215,8 +1218,11 @@ def test_queue_worker_run_once_waits_for_child_completion_and_prints_summary(
         "_queue_worker_deps",
         lambda: replace(
             real_deps,
-            peek_next_entry=lambda _cfg: (queue_root, entry),
-            dequeue_next_entry=lambda _cfg: (queue_root, _dequeued_running_entry(entry)),
+            peek_next_entry=lambda _cfg, **_kwargs: (queue_root, entry),
+            dequeue_next_entry=lambda _cfg, **_kwargs: (
+                queue_root,
+                _dequeued_running_entry(entry),
+            ),
         ),
     )
     monkeypatch.setattr(

@@ -10,8 +10,20 @@ class SleepTimer(Protocol):
     def sleep(self, seconds: float) -> None: ...
 
 
-QueueEntryDequeuer = Callable[[Any], tuple[Path, Any] | None]
-QueueEntryPeeker = Callable[[Any], tuple[Path, Any] | None]
+class QueueEntrySelector(Protocol):
+    """Preview or claim the next row, never one that ``skip_entry_fn`` names."""
+
+    def __call__(
+        self,
+        cfg: Any,
+        /,
+        *,
+        skip_entry_fn: Callable[[Any], bool] | None = None,
+    ) -> tuple[Path, Any] | None: ...
+
+
+QueueEntryDequeuer = QueueEntrySelector
+QueueEntryPeeker = QueueEntrySelector
 AdmissionCapacityCheck = Callable[[Any], bool]
 AdmissionReserver = Callable[[Any], str | None]
 
@@ -27,9 +39,9 @@ class DequeuedEntryReserver(Protocol):
         *,
         admission_root: str | Path,
         has_capacity_fn: AdmissionCapacityCheck,
-        peek_next_fn: QueueEntryPeeker,
+        peek_next_fn: Callable[[Any], tuple[Path, Any] | None],
         reserve_slot_fn: AdmissionReserver,
-        dequeue_next_fn: QueueEntryDequeuer,
+        dequeue_next_fn: Callable[[Any], tuple[Path, Any] | None],
         release_slot_fn: SlotReleaser,
     ) -> tuple[str, Any | None]: ...
 
@@ -66,6 +78,7 @@ __all__ = [
     "DequeuedEntryReserver",
     "QueueEntryDequeuer",
     "QueueEntryPeeker",
+    "QueueEntrySelector",
     "SleepTimer",
     "SlotReleaser",
 ]
