@@ -26,10 +26,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 ### Fixed
 
 - Re-executing an interrupted or failed generation no longer reports
-  `completed` over its recorded failed attempt. When a worker died after an attempt record was saved and
-  before its final result was, a restart adopted the output's completion marker
-  as `existing_out_completed` without consulting the record, so an attempt
-  already recorded as `nonzero_exit_code` became a success. An interrupted
+  `completed` over its recorded failed attempt. When a worker died after an
+  attempt record was saved and before its final result was, a restart adopted
+  the output's completion marker as `existing_out_completed` without consulting
+  the record, so an attempt already recorded as `nonzero_exit_code` became a
+  success. An interrupted
   generation with a recorded attempt now settles from that record's analyzer
   verdict: a failed one keeps its recorded reason, and a successful one
   completes with its recorded reason, `resumed: true` and the usual finished
