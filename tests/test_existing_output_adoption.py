@@ -124,7 +124,7 @@ def test_recorded_nonzero_exit_outranks_completed_looking_output(
     assert [attempt["return_code"] for attempt in state["attempts"]] == [17]
 
 
-def test_settled_failure_is_republished_instead_of_replaced(
+def test_settled_failure_is_kept_untouched_instead_of_replaced(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -142,19 +142,52 @@ def test_settled_failure_is_republished_instead_of_replaced(
     )
     settled = load_state(reaction_dir)
     assert settled is not None
-    settled["final_result"] = {
-        "status": "failed",
-        "reason": "nonzero_exit_code",
-        "analyzer_status": "unknown_failure",
-    }
+    settled["final_result"] = cast(
+        Any,
+        {
+            "status": "failed",
+            "reason": "runner_exception",
+            "analyzer_status": "incomplete",
+            "runner_error": "disk full",
+            "finished_notification_sent_at": "2026-01-01T00:11:00+00:00",
+        },
+    )
     save_state(reaction_dir, settled)
+    published = load_state(reaction_dir)
+    assert published is not None
+
+    exit_code = _execute(reaction_dir, inp, monkeypatch)
+
+    state = load_state(reaction_dir)
+    assert exit_code == 1
+    assert state == published
+
+
+def test_failed_state_without_a_final_result_settles_from_the_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # load_or_create_state clears a resumable final result as it loads; a crash
+    # right after leaves a failed state that is no longer resumable.
+    reaction_dir = tmp_path / "rxn"
+    inp = _write_generation(
+        reaction_dir,
+        status="failed",
+        attempt={
+            "return_code": 17,
+            "analyzer_status": "unknown_failure",
+            "analyzer_reason": "nonzero_exit_code",
+        },
+    )
+    before = load_state(reaction_dir)
+    assert before is not None
 
     exit_code = _execute(reaction_dir, inp, monkeypatch)
 
     state = load_state(reaction_dir)
     assert state is not None
     assert exit_code == 1
-    assert state["run_id"] == settled["run_id"]
+    assert state["run_id"] == before["run_id"]
     assert state["status"] == "failed"
     final_result = state["final_result"]
     assert final_result is not None

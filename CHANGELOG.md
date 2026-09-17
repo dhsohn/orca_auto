@@ -25,8 +25,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
-- Re-executing a generation no longer reports `completed` over a recorded
-  failed attempt. When a worker died after an attempt record was saved and
+- Re-executing an interrupted or failed generation no longer reports
+  `completed` over its recorded failed attempt. When a worker died after an attempt record was saved and
   before its final result was, a restart adopted the output's completion marker
   as `existing_out_completed` without consulting the record, so an attempt
   already recorded as `nonzero_exit_code` became a success. An interrupted
@@ -34,9 +34,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   verdict: a failed one keeps its recorded reason, and a successful one
   completes with its recorded reason, `resumed: true` and the usual finished
   notification instead of `existing_out_completed` / `skipped_execution`. A
-  generation already settled as failed from a failed attempt republishes that
-  verdict instead of being replaced by an adopted success. An output with no
-  recorded attempt is adopted as before.
+  generation already settled as failed whose recorded attempt failed keeps its
+  published result untouched instead of being replaced by an adopted success.
+  An output with no recorded attempt is adopted as before.
 
 ## [6.0.0] - 2026-09-13
 

@@ -335,7 +335,9 @@ def _state_with_recorded_attempt(reaction_dir: Path, selected_inp: Path) -> RunS
 
 
 def _recorded_attempt_failed(state: RunState) -> bool:
-    recorded = parse_analyzer_status(str(state["attempts"][-1].get("analyzer_status") or ""))
+    recorded = parse_analyzer_status(
+        str(state["attempts"][-1].get("analyzer_status") or "").strip()
+    )
     return recorded != AnalyzerStatus.COMPLETED
 
 
@@ -363,8 +365,15 @@ def existing_completed_exit(
             # The ordinary resume path settles from the record.
             return None
         if recorded.get("status") == RunStatus.FAILED.value and _recorded_attempt_failed(recorded):
-            # Already settled as failed: republish that verdict instead of
-            # replacing the state, which would erase the attempt record.
+            # Loading this state would replace it and erase the attempt record.
+            if isinstance(recorded.get("final_result"), dict):
+                # Already settled: keep its reason, diagnostics and
+                # notification marker exactly as published.
+                logger.warning(
+                    "Keeping the settled failed result in %s over a completed-looking output",
+                    reaction_dir,
+                )
+                return 1
             return resume_terminal_decision(
                 reaction_dir=reaction_dir,
                 selected_inp=selected_inp,
