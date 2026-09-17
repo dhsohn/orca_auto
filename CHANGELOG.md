@@ -25,14 +25,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
-- Crash recovery no longer reports `completed` for a generation whose recorded
-  attempt had already failed. When a worker died after an attempt record was
-  saved and before its final result was, a restart adopted the output's
-  completion marker as `existing_out_completed` without consulting the recorded
-  exit code, so a non-zero exit became a success. A recorded attempt now
-  settles the generation: a failed one keeps its recorded reason such as
-  `nonzero_exit_code`, and a successful one completes with its recorded reason
-  instead of `existing_out_completed` / `skipped_execution`. An output with no
+- Re-executing a generation no longer reports `completed` over a recorded
+  failed attempt. When a worker died after an attempt record was saved and
+  before its final result was, a restart adopted the output's completion marker
+  as `existing_out_completed` without consulting the record, so an attempt
+  already recorded as `nonzero_exit_code` became a success. An interrupted
+  generation with a recorded attempt now settles from that record's analyzer
+  verdict: a failed one keeps its recorded reason, and a successful one
+  completes with its recorded reason, `resumed: true` and the usual finished
+  notification instead of `existing_out_completed` / `skipped_execution`. A
+  generation already settled as failed from a failed attempt republishes that
+  verdict instead of being replaced by an adopted success. An output with no
   recorded attempt is adopted as before.
 
 ## [6.0.0] - 2026-09-13

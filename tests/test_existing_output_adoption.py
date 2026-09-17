@@ -124,6 +124,44 @@ def test_recorded_nonzero_exit_outranks_completed_looking_output(
     assert [attempt["return_code"] for attempt in state["attempts"]] == [17]
 
 
+def test_settled_failure_is_republished_instead_of_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A terminal failed state is not resumable, so loading it would start a
+    # fresh state and drop the attempt record before adopting the output.
+    reaction_dir = tmp_path / "rxn"
+    inp = _write_generation(
+        reaction_dir,
+        status="failed",
+        attempt={
+            "return_code": 17,
+            "analyzer_status": "unknown_failure",
+            "analyzer_reason": "nonzero_exit_code",
+        },
+    )
+    settled = load_state(reaction_dir)
+    assert settled is not None
+    settled["final_result"] = {
+        "status": "failed",
+        "reason": "nonzero_exit_code",
+        "analyzer_status": "unknown_failure",
+    }
+    save_state(reaction_dir, settled)
+
+    exit_code = _execute(reaction_dir, inp, monkeypatch)
+
+    state = load_state(reaction_dir)
+    assert state is not None
+    assert exit_code == 1
+    assert state["run_id"] == settled["run_id"]
+    assert state["status"] == "failed"
+    final_result = state["final_result"]
+    assert final_result is not None
+    assert final_result["reason"] == "nonzero_exit_code"
+    assert [attempt["return_code"] for attempt in state["attempts"]] == [17]
+
+
 def test_recorded_successful_attempt_settles_as_an_executed_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

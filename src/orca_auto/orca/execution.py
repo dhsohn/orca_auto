@@ -21,6 +21,8 @@ from orca_auto.core.messaging import build_channel
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, run_lock_status
 
 from .attempt.engine import _exit_with_result, run_attempts
+from .attempt.reporting import last_out_path_from_state
+from .attempt.resume import resume_terminal_decision
 from .completion_rules import detect_completion_mode
 from .config import load_config
 from .notifications import (
@@ -37,10 +39,12 @@ from .state_machine import (
     RESUMABLE_RUN_STATUSES,
     is_resumable_state,
     load_or_create_state,
+    parse_analyzer_status,
     state_matches_selected,
 )
 from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
+from .types import RunState
 
 ORCA_GENERATED_INP_RE = re.compile(
     r"\.(scfgrad|scfhess|cis|autoci|cipsi|mrci|mdci|eprnmr|loc|nbo|compound|hess)"
@@ -316,18 +320,23 @@ def run_with_state(
     )
 
 
-def _resumable_state_has_recorded_attempt(reaction_dir: Path, selected_inp: Path) -> bool:
+def _state_with_recorded_attempt(reaction_dir: Path, selected_inp: Path) -> RunState | None:
     # Read-only: load_or_create_state clears the resumable final result as it
     # loads, so a second load would no longer recognize the state as resumable.
     state = load_state(reaction_dir)
     if not state or not state_matches_selected(
         state, selected_inp, to_resolved_local=_to_resolved_local
     ):
-        return False
-    if not is_resumable_state(state):
-        return False
+        return None
     attempts = state.get("attempts")
-    return isinstance(attempts, list) and bool(attempts) and isinstance(attempts[-1], dict)
+    if not isinstance(attempts, list) or not attempts or not isinstance(attempts[-1], dict):
+        return None
+    return state
+
+
+def _recorded_attempt_failed(state: RunState) -> bool:
+    recorded = parse_analyzer_status(str(state["attempts"][-1].get("analyzer_status") or ""))
+    return recorded != AnalyzerStatus.COMPLETED
 
 
 def existing_completed_exit(
@@ -345,11 +354,26 @@ def existing_completed_exit(
     done = existing_completed_out(selected_inp)
     if done is None:
         return None
-    if _resumable_state_has_recorded_attempt(reaction_dir, selected_inp):
-        # The interrupted run already recorded this output's verdict together
-        # with the process exit code. The resume path settles from that record;
-        # the completion marker alone must not publish success over it.
-        return None
+    recorded = _state_with_recorded_attempt(reaction_dir, selected_inp)
+    if recorded is not None:
+        # The run already recorded its analyzer verdict for this generation, and
+        # that verdict was reconciled with the process exit code when it was
+        # saved. The completion marker alone must not publish success over it.
+        if is_resumable_state(recorded):
+            # The ordinary resume path settles from the record.
+            return None
+        if recorded.get("status") == RunStatus.FAILED.value and _recorded_attempt_failed(recorded):
+            # Already settled as failed: republish that verdict instead of
+            # replacing the state, which would erase the attempt record.
+            return resume_terminal_decision(
+                reaction_dir=reaction_dir,
+                selected_inp=selected_inp,
+                state=recorded,
+                resumed=True,
+                last_out_path_from_state=last_out_path_from_state,
+                exit_with_result=_exit_with_result,
+                emit=_emit,
+            )
 
     state, resumed = load_or_create_state(
         reaction_dir,
