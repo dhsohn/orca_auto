@@ -25,6 +25,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- `queue list` now shows why an ORCA job waits for RAM scratch capacity. The
+  change below recorded the refusal on the queue row and logged it, but ORCA
+  activity rows are built by their own source, which did not carry it: the
+  documented `admission_deferral_reason` metadata key and the
+  `(waiting for resources)` detail were missing from the command's output. They
+  are now reported for a pending ORCA row. The key is no longer added to
+  xTB/CREST rows, which are never deferred.
 - An ORCA job that the RAM scratch launch guard refuses before ORCA starts is
   no longer failed. With `scheduler.max_active_simulations` above 1, a job
   admitted by the slot count but not by current memory ended as `failed` /

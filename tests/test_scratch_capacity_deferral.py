@@ -10,8 +10,6 @@ from typing import Any, cast
 
 import pytest
 
-from orca_auto.activity._queue_records import _engine_queue_record
-from orca_auto.activity_labels import queue_detail_text
 from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.core.config import CommonResourceConfig
 from orca_auto.core.engine_scratch import (
@@ -676,23 +674,63 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
 # --- what an operator sees ------------------------------------------------------------------
 
 
-def test_waiting_reason_is_reported_for_a_pending_row_only(tmp_path: Path) -> None:
-    metadata = {"reaction_dir": str(tmp_path / "rxn"), **admission_deferral_update(_REFUSAL)}
-    pending = _engine_queue_record(
-        _entry(metadata), app_name="orca_auto_orca", engine="orca", allowed_root=tmp_path
-    )
-    running = _engine_queue_record(
-        _entry(metadata, status=QueueStatus.RUNNING),
-        app_name="orca_auto_orca",
-        engine="orca",
-        allowed_root=tmp_path,
-    )
+def test_queue_list_shows_why_an_orca_row_waits(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Through the real command: ORCA rows are built by their own activity
+    # source, so checking a record builder in isolation proves nothing here.
+    import json
 
-    assert pending.metadata["admission_deferral_reason"] == _REFUSAL
-    assert running.metadata["admission_deferral_reason"] == ""
-    assert queue_detail_text(
-        {"kind": "job", "engine": "orca", "metadata": pending.metadata}
-    ).endswith("(waiting for resources)")
-    assert "waiting" not in queue_detail_text(
-        {"kind": "job", "engine": "orca", "metadata": running.metadata}
+    from orca_auto.cli import main
+    from orca_auto.orca.queue.adapter import requeue_running_entry
+
+    runs_root = tmp_path / "orca_runs"
+    job_dir = runs_root / "benzene"
+    job_dir.mkdir(parents=True)
+    (job_dir / "benzene.inp").write_text(
+        "! SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
     )
+    fake_orca = tmp_path / "fake-orca"
+    fake_orca.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_orca.chmod(0o755)
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "runs_root": str(runs_root),
+                "scheduler": {"max_active_simulations": 2},
+                "orca": {"runtime": {}, "paths": {"orca_executable": str(fake_orca)}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert main(["run-dir", str(job_dir), "--config", str(config)]) == 0
+    claimed = dequeue_next(runs_root)
+    assert claimed is not None
+    assert requeue_running_entry(
+        runs_root, claimed.queue_id, expected_entry=claimed, admission_deferral_reason=_REFUSAL
+    )
+    capsys.readouterr()
+
+    def listed() -> tuple[dict[str, Any], str]:
+        assert main(["queue", "list", "--json", "--config", str(config)]) == 0
+        payload = json.loads(capsys.readouterr().out)
+        [row] = [a for a in payload["activities"] if a["metadata"]["queue_id"] == claimed.queue_id]
+        assert main(["queue", "list", "--config", str(config)]) == 0
+        return row, capsys.readouterr().out
+
+    row, text = listed()
+    assert row["status"] == "pending"
+    assert row["metadata"]["admission_deferral_reason"] == _REFUSAL
+    assert "(waiting for resources)" in text
+
+    # Claimed again: the row no longer waits, and says so.
+    import orca_auto.core.queue.store as store_mod
+
+    monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
+    assert dequeue_next(runs_root) is not None
+    row, text = listed()
+    assert row["metadata"]["admission_deferral_reason"] == ""
+    assert "(waiting for resources)" not in text
