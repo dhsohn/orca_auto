@@ -211,10 +211,11 @@ def _build_execution_context(
     ):
         raise ValueError("Queued ORCA entry has no resource request")
     # A generation whose bound input already has a completed, analyzer-verified
-    # output legitimately carries runtime files: allow them so the run's
-    # completed-adoption path can claim the finished result instead of dying
-    # on the pristine check (the crash landed after ORCA finished but before
-    # the queue row turned terminal).
+    # output legitimately carries runtime files: allow them so the run can
+    # settle the finished generation in place instead of dying on the pristine
+    # check (the crash landed after ORCA finished but before the queue row
+    # turned terminal). The run settles from a recorded attempt verdict when
+    # one exists, which may be a failure, and adopts the output otherwise.
     selected_inp_path = Path(selected_inp) if selected_inp else None
     completed_adoption = bool(
         selected_inp_path is not None
@@ -418,7 +419,8 @@ def _maybe_rebind_recovery_generation(
         bound_selected = Path(bound_selected_text)
         if bound_selected.is_file() and _completed_out_or_none(bound_selected) is not None:
             # ORCA finished before the crash reached the queue row. Keep the
-            # generation: the ordinary claim path adopts the completed output
+            # generation: the ordinary claim path settles it in place (from
+            # its recorded attempt verdict, else by adopting the output)
             # instead of re-running the whole calculation in a rebind.
             return entry
     if get_cancel_requested(queue_root, str(entry.queue_id), expected_entry=entry):
