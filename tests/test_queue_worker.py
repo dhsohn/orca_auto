@@ -646,7 +646,34 @@ class TestQueueWorkerMethods(unittest.TestCase):
         [replayed] = list_queue(self.root)
         self.assertIsNone(replayed.metadata.get("orca_terminal_replay"))
 
-    def test_terminal_side_effect_failure_blocks_forced_successor_until_replay(self) -> None:
+    def _insert_pending_successor(self, reaction_dir: Path, *, queue_id: str) -> QueueEntry:
+        # The enqueue fence refuses a same-directory successor while the prior
+        # generation is unpublished; the worker gate is the second barrier for
+        # the windows that fence does not cover, so the row is written directly.
+        rows = list_queue(self.root)
+        template = next(row for row in rows if queue_entry_reaction_dir(row) == str(reaction_dir))
+        successor = replace(
+            template,
+            queue_id=queue_id,
+            task_id=f"task-{queue_id}",
+            status=QueueStatus.PENDING,
+            started_at="",
+            finished_at="",
+            error="",
+            cancel_requested=False,
+            metadata={
+                **{
+                    key: value
+                    for key, value in template.metadata.items()
+                    if key != "orca_terminal_replay"
+                },
+                **_current_orca_queue_metadata(reaction_dir),
+            },
+        )
+        save_entries_core(self.root, [*rows, successor])
+        return successor
+
+    def test_terminal_side_effect_failure_withholds_only_the_same_directory(self) -> None:
         rxn = self.root / "mol_terminal_replay_barrier"
         rxn.mkdir()
         entry = enqueue(self.root, str(rxn), task_id="task-a")
@@ -671,6 +698,14 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         self.worker.max_concurrent = 2
         self.worker._running[entry.queue_id] = job
+        unrelated = self.root / "mol_unrelated"
+        unrelated.mkdir()
+
+        def started_process(*_args: Any, **_kwargs: Any) -> MagicMock:
+            started = MagicMock()
+            started.pid = os.getpid()
+            started.poll.return_value = None
+            return started
 
         with (
             patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
@@ -680,6 +715,10 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 side_effect=[False, True],
             ) as upsert,
             patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
+            patch(
+                "orca_auto.orca.queue.worker.start_background_process",
+                side_effect=started_process,
+            ) as start,
         ):
             self.worker._check_completed_jobs()
 
@@ -690,21 +729,279 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 pending_replay.metadata.get("orca_terminal_replay"),
                 dict,
             )
-            # Capacity remains at max_concurrent=2, so this is the explicit replay
-            # admission barrier rather than ordinary slot exhaustion.
-            self.assertEqual(self.worker._fill_slots(), "blocked")
             with self.assertRaises(DuplicateEntryError):
                 enqueue(self.root, str(rxn), force=True, task_id="task-b")
+            # One of two slots is free, so what holds the successor back is the
+            # replay barrier, not capacity. With nothing else pending the poll
+            # is idle and leaves the admission file alone.
+            successor = self._insert_pending_successor(rxn, queue_id="q_forced_successor")
+            admission_file = self.root / "admission_slots.json"
+            before = admission_file.stat()
+            with self.assertLogs("orca_auto.orca.queue.worker", level="WARNING") as logs:
+                self.assertEqual(self.worker._fill_slots(), "idle")
+            after = admission_file.stat()
+            self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+            self.assertTrue(any(str(rxn.resolve()) in line for line in logs.output))
+            start.assert_not_called()
+
+            # An unrelated job queued behind the withheld row is admitted.
+            other = enqueue(
+                self.root,
+                str(unrelated),
+                task_id="task-unrelated",
+                metadata=_current_orca_queue_metadata(unrelated),
+            )
+            self.assertEqual(self.worker._fill_slots(), "processed")
+            self.assertIn(other.queue_id, self.worker._running)
+            self.assertNotIn(successor.queue_id, self.worker._running)
+            statuses = {row.queue_id: row.status for row in list_queue(self.root)}
+            self.assertEqual(statuses[successor.queue_id], QueueStatus.PENDING)
+            self.assertEqual(statuses[other.queue_id], QueueStatus.RUNNING)
+            self.assertEqual(start.call_count, 1)
 
             self.worker._check_completed_jobs()
 
-        self.assertEqual(upsert.call_count, 2)
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        self.assertEqual(active_slot_count(self.root), 0)
-        [replayed] = list_queue(self.root)
-        self.assertIsNone(replayed.metadata.get("orca_terminal_replay"))
-        successor = enqueue(self.root, str(rxn), force=True, task_id="task-b")
-        self.assertEqual(successor.status, QueueStatus.PENDING)
+            self.assertEqual(upsert.call_count, 2)
+            self.assertNotIn(entry.queue_id, self.worker._running)
+            replayed = next(row for row in list_queue(self.root) if row.queue_id == entry.queue_id)
+            self.assertIsNone(replayed.metadata.get("orca_terminal_replay"))
+            # The previous generation is published: its successor may start.
+            self.assertEqual(self.worker._fill_slots(), "processed")
+            self.assertIn(successor.queue_id, self.worker._running)
+            self.assertEqual(start.call_count, 2)
+
+    def test_pending_replay_without_a_slot_does_not_pause_unrelated_jobs(self) -> None:
+        # A replay found by reconciliation holds no slot and retries only every
+        # minute; it used to pause the whole queue for as long as it lasted.
+        self.worker.max_concurrent = 1
+        withheld_dir = self.root / "mol_replay_pending"
+        unrelated = self.root / "mol_replay_unrelated"
+        withheld_row = enqueue(
+            self.root,
+            str(withheld_dir),
+            task_id="task-withheld",
+            metadata=_current_orca_queue_metadata(withheld_dir),
+        )
+        other = enqueue(
+            self.root,
+            str(unrelated),
+            task_id="task-unrelated",
+            metadata=_current_orca_queue_metadata(unrelated),
+        )
+        item = replay_mod.TerminalReplayWorkItem(
+            queue_root=self.root,
+            queue_id="q_closed_generation",
+            reaction_dir=str(withheld_dir),
+            reaction_key=str(withheld_dir.resolve()),
+            task_id="task-closed",
+            observed_status="failed",
+            selected_inp="",
+            error="",
+        )
+        replay_mod.get_replay_state(self.worker).pending_replays[item.key] = item
+
+        with patch("orca_auto.orca.queue.worker.start_background_process") as start:
+            started = MagicMock()
+            started.pid = os.getpid()
+            started.poll.return_value = None
+            start.return_value = started
+            self.assertEqual(self.worker._fill_slots(), "processed")
+
+        self.assertEqual(list(self.worker._running), [other.queue_id])
+        statuses = {row.queue_id: row.status for row in list_queue(self.root)}
+        self.assertEqual(statuses[withheld_row.queue_id], QueueStatus.PENDING)
+
+    def test_unpublished_generation_without_a_directory_pauses_all_admission(self) -> None:
+        unrelated = self.root / "mol_unknown_key_unrelated"
+        other = enqueue(
+            self.root,
+            str(unrelated),
+            task_id="task-unrelated",
+            metadata=_current_orca_queue_metadata(unrelated),
+        )
+        process = MagicMock()
+        process.poll.return_value = None
+        job = _RunningJob(
+            queue_id="q_unknown_directory",
+            reaction_dir="",
+            process=process,
+            admission_token="slot_unknown_directory",
+        )
+        job.__dict__[replay_mod.TERMINAL_FINALIZE_RETRY_ATTR] = True
+        self.worker.max_concurrent = 2
+        self.worker._running[job.queue_id] = job
+
+        with patch("orca_auto.orca.queue.worker.start_background_process") as start:
+            self.assertEqual(self.worker._fill_slots(), "blocked")
+
+        start.assert_not_called()
+        [row] = list_queue(self.root)
+        self.assertEqual((row.queue_id, row.status), (other.queue_id, QueueStatus.PENDING))
+
+    def test_publication_repair_failure_still_pauses_all_admission(self) -> None:
+        unrelated = self.root / "mol_repair_failure_unrelated"
+        enqueue(
+            self.root,
+            str(unrelated),
+            task_id="task-unrelated",
+            metadata=_current_orca_queue_metadata(unrelated),
+        )
+
+        with (
+            patch.object(
+                queue_worker_mod.publication_repair,
+                "repair_queue_publications",
+                return_value=False,
+            ),
+            patch("orca_auto.orca.queue.worker.start_background_process") as start,
+        ):
+            self.assertEqual(self.worker._fill_slots(), "blocked")
+
+        start.assert_not_called()
+
+    def test_withheld_directory_is_matched_through_a_symlinked_spelling(self) -> None:
+        withheld_dir = self.root / "mol_symlink_target"
+        withheld_dir.mkdir()
+        alias = self.root / "mol_symlink_alias"
+        alias.symlink_to(withheld_dir, target_is_directory=True)
+        state = replay_mod.get_replay_state(self.worker)
+        state.admission_withheld_keys = frozenset({str(withheld_dir.resolve())})
+
+        def row(reaction_dir: str) -> QueueEntry:
+            return QueueEntry(
+                queue_id="q_candidate",
+                app_name="orca_auto_orca",
+                task_id="task-candidate",
+                task_kind="orca_run_inp",
+                engine="orca",
+                metadata={"reaction_dir": reaction_dir},
+            )
+
+        self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, row(str(alias))))
+        self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, row("")))
+        self.assertFalse(
+            replay_mod.entry_waits_for_terminal_replay(self.worker, row(str(self.root / "other")))
+        )
+        state.admission_withheld_keys = frozenset()
+        self.assertFalse(replay_mod.entry_waits_for_terminal_replay(self.worker, row("")))
+
+    def test_row_whose_directory_cannot_be_resolved_is_withheld_while_any_is(self) -> None:
+        state = replay_mod.get_replay_state(self.worker)
+        state.admission_withheld_keys = frozenset({str(self.root / "mol_withheld")})
+        candidate = QueueEntry(
+            queue_id="q_unresolvable",
+            app_name="orca_auto_orca",
+            task_id="task-unresolvable",
+            task_kind="orca_run_inp",
+            engine="orca",
+            metadata={"reaction_dir": str(self.root / "mol_elsewhere")},
+        )
+
+        with patch.object(replay_mod, "reaction_generation_key", side_effect=OSError("loop")):
+            self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, candidate))
+            state.admission_withheld_keys = frozenset()
+            self.assertFalse(replay_mod.entry_waits_for_terminal_replay(self.worker, candidate))
+
+    def test_withheld_keys_follow_a_directory_retargeted_after_the_replay_item_was_built(
+        self,
+    ) -> None:
+        # The item froze its key when it was built. If the path is moved and the
+        # old spelling becomes a symlink, a successor submitted through that
+        # spelling resolves to the new location, which must be withheld as well.
+        moved = self.root / "proj_moved" / "job"
+        moved.mkdir(parents=True)
+        (self.root / "proj").symlink_to(self.root / "proj_moved", target_is_directory=True)
+        item = replay_mod.TerminalReplayWorkItem(
+            queue_root=self.root,
+            queue_id="q_retargeted",
+            reaction_dir=str(self.root / "proj" / "job"),
+            reaction_key=str(self.root / "proj" / "job"),
+            task_id="task-retargeted",
+            observed_status="failed",
+            selected_inp="",
+            error="",
+        )
+        replay_mod.get_replay_state(self.worker).pending_replays[item.key] = item
+
+        self.assertEqual(
+            replay_mod.unresolved_terminal_reaction_keys(self.worker),
+            frozenset({str(self.root / "proj" / "job"), str(moved.resolve())}),
+        )
+
+    def test_exited_job_awaiting_finalize_retry_withholds_its_directory_without_an_item(
+        self,
+    ) -> None:
+        # Finalization failed before any replay item existed (for example engine
+        # process recovery raised): only the retry flag and the job's own
+        # directory identify what must be withheld.
+        retained_dir = self.root / "mol_retry_only"
+        unrelated = self.root / "mol_retry_only_unrelated"
+        same_dir_row = enqueue(
+            self.root,
+            str(retained_dir),
+            task_id="task-same-dir",
+            metadata=_current_orca_queue_metadata(retained_dir),
+        )
+        other = enqueue(
+            self.root,
+            str(unrelated),
+            task_id="task-unrelated",
+            metadata=_current_orca_queue_metadata(unrelated),
+        )
+        process = MagicMock()
+        process.poll.return_value = 1
+        job = _RunningJob(
+            queue_id="q_retry_only",
+            reaction_dir=str(retained_dir),
+            process=process,
+            admission_token="slot_retry_only",
+        )
+        job.__dict__[replay_mod.TERMINAL_FINALIZE_RETRY_ATTR] = True
+        self.worker.max_concurrent = 2
+        self.worker._running[job.queue_id] = job
+
+        with patch("orca_auto.orca.queue.worker.start_background_process") as start:
+            started = MagicMock()
+            started.pid = os.getpid()
+            started.poll.return_value = None
+            start.return_value = started
+            self.assertEqual(self.worker._fill_slots(), "processed")
+
+        self.assertIn(other.queue_id, self.worker._running)
+        self.assertNotIn(same_dir_row.queue_id, self.worker._running)
+        statuses = {row.queue_id: row.status for row in list_queue(self.root)}
+        self.assertEqual(statuses[same_dir_row.queue_id], QueueStatus.PENDING)
+
+    def test_withheld_directories_are_logged_when_the_set_changes_not_on_every_poll(
+        self,
+    ) -> None:
+        withheld_dir = self.root / "mol_logged_once"
+        withheld_dir.mkdir()
+        item = replay_mod.TerminalReplayWorkItem(
+            queue_root=self.root,
+            queue_id="q_logged_once",
+            reaction_dir=str(withheld_dir),
+            reaction_key=str(withheld_dir.resolve()),
+            task_id="task-logged-once",
+            observed_status="failed",
+            selected_inp="",
+            error="",
+        )
+        state = replay_mod.get_replay_state(self.worker)
+        state.pending_replays[item.key] = item
+
+        with self.assertLogs("orca_auto.orca.queue.worker", level="INFO") as logs:
+            for _ in range(3):
+                self.worker._fill_slots()
+            state.pending_replays.clear()
+            for _ in range(3):
+                self.worker._fill_slots()
+
+        self.assertEqual(
+            [record.levelname for record in logs.records],
+            ["WARNING", "INFO"],
+        )
+        self.assertIn(str(withheld_dir.resolve()), logs.records[0].getMessage())
 
     def test_finalize_clears_active_engine_record_before_mark_and_release(self) -> None:
         rxn = self.root / "mol_active_engine_finalize"
@@ -1862,7 +2159,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         upsert.assert_called_once()
         notify.assert_called_once()
 
-    def test_cancel_side_effect_failure_blocks_admission_until_strict_replay(self) -> None:
+    def test_cancel_side_effect_failure_withholds_its_directory_until_strict_replay(self) -> None:
         rxn = self.root / "mol_cancel_replay_barrier"
         rxn.mkdir()
         entry = enqueue(self.root, str(rxn), task_id="task-cancel-a")
@@ -1913,15 +2210,22 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 pending_replay.metadata.get("orca_terminal_replay"),
                 dict,
             )
-            self.assertEqual(self.worker._fill_slots(), "blocked")
+            successor = self._insert_pending_successor(rxn, queue_id="q_cancel_successor")
+            self.assertEqual(
+                replay_mod.unresolved_terminal_reaction_keys(self.worker),
+                frozenset({str(rxn.resolve())}),
+            )
+            self.assertEqual(self.worker._fill_slots(), "idle")
+            self.assertNotIn(successor.queue_id, self.worker._running)
 
             self.worker._check_completed_jobs()
 
         self.assertEqual(upsert.call_count, 2)
         self.assertNotIn(entry.queue_id, self.worker._running)
         self.assertEqual(active_slot_count(self.root), 0)
-        [replayed] = list_queue(self.root)
+        replayed = next(row for row in list_queue(self.root) if row.queue_id == entry.queue_id)
         self.assertIsNone(replayed.metadata.get("orca_terminal_replay"))
+        self.assertEqual(replay_mod.unresolved_terminal_reaction_keys(self.worker), frozenset())
 
     def test_cancel_recovery_failure_retains_queue_slot_and_skips_mark(self) -> None:
         rxn = self.root / "mol_cancel_recovery_failure"

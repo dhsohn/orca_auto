@@ -357,8 +357,9 @@ packages should expose an `EngineDefinition`; parent workers use
 `EngineQueueWorker` composed from three values — the shared `deps`, the
 pid-file `hooks`, and one immutable `EngineWorkerPolicy` naming only the
 lifecycle steps the engine owns (ORCA's post-init, reserve gate for
-publication repair and terminal replay, run, interrupt, queue-id, job-factory
-and cancellation steps; the xTB/CREST post-init step). Child-exit finalization and worker-state
+publication repair and terminal replay, row filter that withholds rows of a
+directory with an unfinished terminal replay, run, interrupt, queue-id,
+job-factory and cancellation steps; the xTB/CREST post-init step). Child-exit finalization and worker-state
 reconciliation are `hooks`, registered once per engine — and children use
 `python -m orca_auto.core.engines.worker_child --engine <orca|xtb|crest> --config <path> --queue-root <path> --queue-id <id> --admission-token <token>`.
 Build parent-worker infrastructure from `EngineDefinition.build_queue_runtime()`

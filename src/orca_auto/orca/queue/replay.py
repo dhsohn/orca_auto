@@ -162,6 +162,9 @@ class OrcaWorkerReplayState:
     blocked_marker_keys: set[tuple[str, str]] = field(default_factory=set)
     generation_owners: dict[str, tuple[str, str]] = field(default_factory=dict)
     generation_owner_active: dict[str, bool] = field(default_factory=dict)
+    # Kept current by the reserve gate, which runs before every reservation;
+    # read by the row filter inside that reservation.
+    admission_withheld_keys: frozenset[str] = frozenset()
 
 
 def get_replay_state(worker: Any) -> OrcaWorkerReplayState:
@@ -177,15 +180,50 @@ def job_pending_replay_item(job: Any) -> TerminalReplayWorkItem | None:
     return item if isinstance(item, TerminalReplayWorkItem) else None
 
 
-def terminal_replay_blocks_new_generation(worker: Any) -> bool:
-    if get_replay_state(worker).pending_replays:
-        return True
+def unresolved_terminal_reaction_keys(worker: Any) -> frozenset[str] | None:
+    """Reaction directories whose last generation has unpublished terminal state.
+
+    A new generation must not start in any of them. ``None`` means one such
+    generation cannot be tied to a directory, so nothing may be admitted.
+    """
+    items = list(get_replay_state(worker).pending_replays.values())
+    reaction_dirs: list[str] = []
     for _queue_id, job in worker._running_jobs():
-        if job_pending_replay_item(job) is not None:
-            return True
-        if bool(getattr(job, TERMINAL_FINALIZE_RETRY_ATTR, False)):
-            return True
-    return False
+        job_item = job_pending_replay_item(job)
+        if job_item is not None:
+            items.append(job_item)
+        elif bool(getattr(job, TERMINAL_FINALIZE_RETRY_ATTR, False)):
+            reaction_dirs.append(str(getattr(job, "reaction_dir", "") or ""))
+    keys: set[str] = set()
+    for item in items:
+        if not item.reaction_key:
+            return None
+        # The item's key was resolved when the item was built. Candidate rows
+        # are resolved now, so a path retargeted since then must match too.
+        keys.add(item.reaction_key)
+        reaction_dirs.append(item.reaction_dir)
+    for reaction_dir in reaction_dirs:
+        try:
+            key = _reaction_key_for_dir(reaction_dir)
+        except (OSError, RuntimeError):
+            return None
+        if not key:
+            return None
+        keys.add(key)
+    return frozenset(keys)
+
+
+def entry_waits_for_terminal_replay(worker: Any, entry: Any) -> bool:
+    """Whether claiming *entry* would start a generation in a withheld directory."""
+    withheld = get_replay_state(worker).admission_withheld_keys
+    if not withheld:
+        return False
+    try:
+        key = reaction_generation_key(entry)
+    except (OSError, RuntimeError):
+        return True
+    # A row that cannot be tied to a directory is not provably unrelated.
+    return key is None or key in withheld
 
 
 def queue_entry_by_id(queue_root: Any, target_queue_id: str) -> QueueEntry | None:
@@ -197,11 +235,14 @@ def queue_entry_by_id(queue_root: Any, target_queue_id: str) -> QueueEntry | Non
     return None
 
 
-def reaction_generation_key(entry: Any) -> str | None:
-    reaction_dir = queue_entry_reaction_dir(entry)
+def _reaction_key_for_dir(reaction_dir: str) -> str | None:
     if not reaction_dir:
         return None
     return str(Path(reaction_dir).expanduser().resolve())
+
+
+def reaction_generation_key(entry: Any) -> str | None:
+    return _reaction_key_for_dir(queue_entry_reaction_dir(entry))
 
 
 def _expected_queue_entry(queue_root: Any, queue_id: str) -> QueueEntry | None:
@@ -1381,5 +1422,6 @@ __all__ = [
     "record_failed_run_state",
     "get_replay_state",
     "strictly_finish_terminal_replay",
-    "terminal_replay_blocks_new_generation",
+    "entry_waits_for_terminal_replay",
+    "unresolved_terminal_reaction_keys",
 ]
