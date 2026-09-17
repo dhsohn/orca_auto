@@ -306,6 +306,42 @@ The CI-pinned common validator accepted all three generated `machine.json`
 files and their artifact receipts. These checks cover the stated runtime paths,
 not untested calculation types or a scientific TS-search acceptance.
 
+## Concurrent RAM scratch acceptance (2026-09-17)
+
+Covers the change that replaced the one-workspace scratch rule with the summed
+live-cap launch guard (#345). Unit tests prove the guard arithmetic; this
+records the first real-engine execution of two attempts sharing the tmpfs.
+
+- Real ORCA acceptance: passed
+  - ORCA version: 6.1.1 (Linux x86-64, shared OpenMPI 4.1.8, AVX2)
+  - OS/runtime: WSL2 Ubuntu 20.04, 16 physical cores, 102 GiB RAM; queue
+    worker from the canonical `.venv` at `2d6cfa7a`, `max_active_simulations: 2`,
+    `orca.runtime.scratch_root: /dev/shm/orca_auto`, `scratch_min_free_gb: 8`,
+    tmpfs resized to 16 GiB before the second pair
+  - command: two `orca_auto run-dir <dir> --priority 10 --json` submissions four
+    seconds apart, executed by the supervised worker
+  - calculation type: two 66-atom relaxed surface scans (25 points each, one
+    bond coordinate, B3LYP-D3BJ/def2-SVP/CPCM, 8 cores, `%maxcore 2048`)
+  - generated state/report files: both generations received `job_state.json`,
+    `machine.json`, `job_report.html`, `si_block.md`, the ORCA output and the
+    per-point `.xyz`/`.gbw` set; `scratch_provenance.publication_status` is
+    `committed` in both
+  - observed terminal marker: `ORCA TERMINATED NORMALLY` in both outputs;
+    `machine.json` lifecycle `finished`/`succeeded`, delivery `complete`,
+    handoff `ready` (validated with the pinned machine-observation validator)
+- Concurrency evidence: both queue rows `running` at once with two scratch
+  workspaces under the root (schema-2 manifests recording 16 GiB caps), two
+  ORCA main processes, engine RSS about 3 GiB in total and `MemAvailable`
+  about 99 GB; the shorter scan finished after 5 h 26 min while the other kept
+  running, and the second finished after 8 h 21 min. A third attempt with a
+  32 GiB cap was later admitted beside a running 16 GiB attempt under the
+  16 GiB tmpfs, as the guard arithmetic predicts.
+- Negative control (before the change, same host, 52 GiB tmpfs): with
+  `max_active_simulations: 2` the second submission failed before launch with
+  `Another engine scratch attempt is active`.
+- Not covered: workflow xTB/CREST stages, more than two concurrent attempts,
+  and any claim about the chemistry of the scans themselves.
+
 ## Fixture and artifact policy
 
 - Keep fixtures minimal, sanitized, and deterministic.
