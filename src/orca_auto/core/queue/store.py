@@ -13,7 +13,7 @@ from ..utils.persistence import (
     timestamped_token,
 )
 from . import persistence as _queue_persistence
-from .deferral import queue_entry_admission_is_deferred
+from .deferral import ADMISSION_DEFERRAL_METADATA_KEY, queue_entry_admission_is_deferred
 from .generation import queue_entries_same_generation
 from .priority import normalize_queue_priority
 from .publication import (
@@ -515,6 +515,22 @@ def enqueue(
     )
 
 
+def _claimed(entry: QueueEntry) -> QueueEntry:
+    # A claim answers the deferral. Dropping it here keeps it from describing
+    # a row that later returns to pending for another reason.
+    metadata = {
+        key: value
+        for key, value in entry.metadata.items()
+        if key != ADMISSION_DEFERRAL_METADATA_KEY
+    }
+    return replace(
+        entry,
+        status=QueueStatus.RUNNING,
+        started_at=now_utc_iso(),
+        metadata=metadata,
+    )
+
+
 def dequeue_next(
     root: str | Path,
     *,
@@ -539,7 +555,7 @@ def dequeue_next(
         if not pending:
             return None, False
         _, index, current = min(pending, key=lambda item: (item[0], item[1]))
-        updated = replace(current, status=QueueStatus.RUNNING, started_at=now_utc_iso())
+        updated = _claimed(current)
         entries[index] = updated
         return updated, True
 
@@ -571,7 +587,7 @@ def dequeue_entry_if_pending(
             or queue_entry_admission_is_deferred(entry)
         ):
             return None, None
-        updated = replace(entry, status=QueueStatus.RUNNING, started_at=now_utc_iso())
+        updated = _claimed(entry)
         return updated, updated
 
     return QueueStore.for_root(

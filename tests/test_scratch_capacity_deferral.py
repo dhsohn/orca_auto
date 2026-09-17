@@ -262,6 +262,41 @@ def test_deferred_row_is_skipped_until_due_and_does_not_block_the_row_behind_it(
     assert due is not None and due.queue_id == big.queue_id
 
 
+def test_claim_removes_the_deferral_so_a_later_requeue_is_not_mislabelled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from orca_auto.orca.queue.adapter import requeue_running_entry
+
+    queue_root = tmp_path / "queue"
+    rxn = queue_root / "rxn"
+    entry = enqueue(
+        queue_root,
+        str(rxn),
+        force=True,
+        task_id="task-relabel",
+        metadata=_bound_orca_metadata(tmp_path, rxn),
+    )
+    first_claim = dequeue_next(queue_root)
+    assert first_claim is not None
+    _run_child_with(monkeypatch, tmp_path, queue_root, entry.queue_id, _refuse)
+    import orca_auto.core.queue.store as store_mod
+
+    monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
+
+    reclaimed = dequeue_next(queue_root)
+
+    assert reclaimed is not None
+    assert ADMISSION_DEFERRAL_METADATA_KEY not in reclaimed.metadata
+    assert queue_entry_generation_token(reclaimed) == queue_entry_generation_token(first_claim)
+    # ORCA started this time and the worker was then shut down: the row is
+    # pending again, but no longer because it waits for resources.
+    assert requeue_running_entry(queue_root, entry.queue_id, expected_entry=reclaimed)
+    [requeued] = list_queue(queue_root)
+    assert requeued.status == QueueStatus.PENDING
+    assert queue_entry_admission_deferral_reason(requeued) == ""
+
+
 def test_cancel_requested_while_deferring_wins_over_the_requeue(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -440,6 +475,55 @@ def test_admitted_run_launches_in_the_workspace_it_reserved_before_writing_state
     assert len(_ManagedRunner.launches) == 1
     state = load_state(reaction_dir)
     assert state is not None and state["status"] == "completed"
+    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+
+
+def test_reserved_workspace_is_removed_when_the_run_fails_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # A workspace left behind by a live owner that then exits would make every
+    # later scratch attempt fail closed as stale.
+    _reaction_dir, scratch_root, _notifications, context = _scratch_run(
+        monkeypatch, tmp_path, available_memory_bytes=2**63
+    )
+
+    def unreadable_state(*_args: Any, **_kwargs: Any) -> Any:
+        assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")]
+        raise OSError("state directory is unreadable")
+
+    monkeypatch.setattr(run_inp_execution, "load_or_create_state", unreadable_state)
+
+    with pytest.raises(OSError, match="unreadable"):
+        run_inp_execution.execute_locked_run(
+            SimpleNamespace(force=False), context, runner_cls=_ManagedRunner
+        )
+
+    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+    assert _ManagedRunner.launches == []
+
+
+def test_workspace_reserved_for_another_input_is_never_used_to_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    reaction_dir, scratch_root, _notifications, context = _scratch_run(
+        monkeypatch, tmp_path, available_memory_bytes=2**63
+    )
+    derived = reaction_dir / "rxn_resume.inp"
+    derived.write_text("! SP\n* xyz 0 1\nHe 0 0 0\n*\n", encoding="utf-8")
+    runner = _ManagedRunner("/bin/true")
+    runner.set_scratch_policy(
+        run_inp_execution.OrcaScratchPolicy(
+            root=scratch_root, min_free_bytes=1024**3, max_task_memory_bytes=1024**3
+        )
+    )
+
+    runner.prepare(context.selected_inp)
+    result = runner.run(derived)
+
+    assert [path.name for path in _ManagedRunner.launches] == ["rxn_resume.inp"]
+    assert Path(result.out_path) == derived.with_suffix(".out")
     assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
 
 

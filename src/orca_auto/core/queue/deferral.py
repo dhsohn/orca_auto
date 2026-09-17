@@ -2,8 +2,8 @@
 
 A worker child records it when a resource the engine needs was refused before
 the engine started, together with the requeue that returns its row to pending.
-It is lifecycle metadata, not submission identity, and is never cleared: it is
-inert once its time has passed and on any row that is not pending.
+It is lifecycle metadata, not submission identity. It is inert once its time
+has passed, and the next claim of the row removes it.
 """
 
 from __future__ import annotations

@@ -307,7 +307,7 @@ class OrcaRunner:
         self._prepared_workspace = None
         try:
             workspace.discard_unlaunched()
-        except BaseException:
+        except Exception:
             logger.exception(
                 "Unused ORCA scratch workspace could not be removed; "
                 "future scratch runs will remain fail-closed until it is inspected: %s",

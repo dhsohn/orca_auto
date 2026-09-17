@@ -148,7 +148,8 @@ def _engine_queue_record(
             "allowed_root": str(allowed_root),
             "priority": int(entry.priority),
             "repair_blocked_reason": repair_blocked_reason,
-            # The deferral is never cleared, so it describes only a pending row.
+            # A claim removes the deferral; a terminal row written by another
+            # path must not advertise one either.
             "admission_deferral_reason": (
                 queue_entry_admission_deferral_reason(entry)
                 if entry.status == QueueStatus.PENDING

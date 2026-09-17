@@ -602,8 +602,9 @@ def execute_orca_run(
         # ownership is reconciled independently through the admission store.
         return execute_locked_run(args, context, runner_cls=runner_cls)
     except EngineScratchCapacityError:
-        # Raised only before the run wrote any state; the queue child decides
-        # whether the job waits. It must not become an ordinary failure here.
+        # Raised only by the preparation that precedes this run's first state
+        # write; the queue child decides whether the job waits. It must not
+        # become an ordinary failure here.
         _release_reservation_if_needed(context.admission_root, context.reservation_token)
         raise
     except AdmissionLimitReachedError as exc:
