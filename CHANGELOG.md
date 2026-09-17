@@ -23,6 +23,18 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   scratch-root lock wait is 300 s so a peer's staging or publication recovery
   queues an attempt instead of failing it.
 
+### Fixed
+
+- Crash recovery no longer reports `completed` for a generation whose recorded
+  attempt had already failed. When a worker died after an attempt record was
+  saved and before its final result was, a restart adopted the output's
+  completion marker as `existing_out_completed` without consulting the recorded
+  exit code, so a non-zero exit became a success. A recorded attempt now
+  settles the generation: a failed one keeps its recorded reason such as
+  `nonzero_exit_code`, and a successful one completes with its recorded reason
+  instead of `existing_out_completed` / `skipped_execution`. An output with no
+  recorded attempt is adopted as before.
+
 ## [6.0.0] - 2026-09-13
 
 ### Added

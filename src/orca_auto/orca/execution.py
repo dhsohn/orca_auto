@@ -33,7 +33,12 @@ from .run_context import RunExecutionContext, resolve_execution_context
 from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy
 from .state import save_state
-from .state_machine import RESUMABLE_RUN_STATUSES, load_or_create_state
+from .state_machine import (
+    RESUMABLE_RUN_STATUSES,
+    is_resumable_state,
+    load_or_create_state,
+    state_matches_selected,
+)
 from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
 
@@ -311,6 +316,20 @@ def run_with_state(
     )
 
 
+def _resumable_state_has_recorded_attempt(reaction_dir: Path, selected_inp: Path) -> bool:
+    # Read-only: load_or_create_state clears the resumable final result as it
+    # loads, so a second load would no longer recognize the state as resumable.
+    state = load_state(reaction_dir)
+    if not state or not state_matches_selected(
+        state, selected_inp, to_resolved_local=_to_resolved_local
+    ):
+        return False
+    if not is_resumable_state(state):
+        return False
+    attempts = state.get("attempts")
+    return isinstance(attempts, list) and bool(attempts) and isinstance(attempts[-1], dict)
+
+
 def existing_completed_exit(
     *,
     reaction_dir: Path,
@@ -325,6 +344,11 @@ def existing_completed_exit(
     del admission_root, reservation_token
     done = existing_completed_out(selected_inp)
     if done is None:
+        return None
+    if _resumable_state_has_recorded_attempt(reaction_dir, selected_inp):
+        # The interrupted run already recorded this output's verdict together
+        # with the process exit code. The resume path settles from that record;
+        # the completion marker alone must not publish success over it.
         return None
 
     state, resumed = load_or_create_state(
