@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from orca_auto.core.activity import ActivityRecord, path_aliases, timestamp_metadata, unique_texts
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
 from orca_auto.core.engine_runtime import engine_runtime_paths
+from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
 from orca_auto.core.statuses import (
     STATUS_PENDING,
     STATUS_RETRYING,
@@ -111,6 +112,7 @@ def queue_record(
     snapshot_name = snapshot.name if snapshot is not None else ""
     snapshot_completed_at = snapshot.completed_at if snapshot is not None else ""
     snapshot_updated_at = snapshot.updated_at if snapshot is not None else ""
+    status = queue_entry_status(queue_adapter, entry, snapshot)
     label = (
         normalize_text(snapshot_name)
         or normalize_text(Path(reaction_dir).name if reaction_dir else "")
@@ -131,7 +133,7 @@ def queue_record(
         activity_id=queue_id or run_id or task_id or label,
         kind="job",
         engine="orca",
-        status=queue_entry_status(queue_adapter, entry, snapshot),
+        status=status,
         label=label,
         source=ORCA_AUTO_ORCA_SOURCE,
         submitted_at=submitted_at,
@@ -151,6 +153,11 @@ def queue_record(
             "reaction_dir": reaction_dir,
             "allowed_root": str(allowed_root),
             "priority": queue_adapter.queue_entry_priority(entry),
+            # A claim removes the deferral; a row that left pending by another
+            # path must not advertise one either.
+            "admission_deferral_reason": (
+                queue_entry_admission_deferral_reason(entry) if status == STATUS_PENDING else ""
+            ),
             **timestamp_metadata(
                 enqueued_at=submitted_at, started_at=started_at, finished_at=finished_at
             ),

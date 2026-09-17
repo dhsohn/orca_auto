@@ -342,6 +342,50 @@ records the first real-engine execution of two attempts sharing the tmpfs.
 - Not covered: workflow xTB/CREST stages, more than two concurrent attempts,
   and any claim about the chemistry of the scans themselves.
 
+## RAM scratch capacity wait acceptance (2026-09-17)
+
+Covers the change that leaves an ORCA job queued when the RAM scratch launch
+guard refuses it before ORCA starts (#348), where it previously failed as
+`runner_exception`. Unit tests prove the refusal classification, the requeue
+and the claim filter; this records the first real-engine run in which a
+submission waited and then ran.
+
+- Real ORCA acceptance: passed
+  - ORCA version: 6.1.1 (Linux x86-64, shared OpenMPI 4.1.8, AVX2)
+  - OS/runtime: WSL2 Ubuntu 20.04, 102 GiB RAM, 16 GiB tmpfs; queue worker from
+    the canonical `.venv` at `3f7258dd`, `max_active_simulations: 2`,
+    `orca.runtime.scratch_root: /dev/shm/orca_auto`, `scratch_min_free_gb: 4`
+  - command: two `orca_auto run-dir <dir> --priority 10 --json` submissions one
+    second apart, executed by the supervised worker
+  - calculation type: two identical benzene `Opt Freq` jobs
+    (B3LYP-D3BJ/def2-SVP, 8 cores, `%maxcore 6000`, so each records a 47 GiB
+    task-memory cap and two cannot pass the guard together on this host)
+  - generated state/report files: both generations received `job_state.json`,
+    `machine.json`, `job_report.html`, `si_block.md`, the ORCA output and the
+    `.gbw`/`.hess`/`.xyz` set
+  - observed terminal marker: `ORCA TERMINATED NORMALLY` in both outputs;
+    `machine.json` lifecycle `finished`/`succeeded`, delivery `complete`,
+    handoff `ready`
+- Wait evidence: the first job started at once. The second was refused with
+  `engine scratch cannot guarantee RAM headroom without swap`
+  (`available_memory` 107.0 GB against its own 50.5 GB cap, the running job's
+  50.5 GB cap, 17.1 GB free tmpfs and the 4.3 GB reserve). Its queue row
+  returned to `pending` with an `admission_deferral` record, no error, no
+  `job_state.json`, one generation directory and no second scratch workspace,
+  and the worker logged that the job was not started and waits in the queue.
+  About a minute later, after the first job had finished, the same generation
+  was claimed again, ran for 34 s and completed. Neither row carries a
+  `recovery_rebind_count`, the deferral record was gone after the claim, and
+  the scratch root held only its lock afterwards.
+- Display: at `3f7258dd` `queue list` did not show the waiting reason, which
+  this acceptance exposed. With the fix that accompanies this record, the same
+  command run read-only against a second real deferral on the same host showed
+  `Opt (waiting for resources)` for the pending row and the refusal in
+  `admission_deferral_reason`, and nothing for the running and completed rows.
+- Not covered: a refusal for lack of tmpfs space or a busy scratch root (both
+  take the same path after the refusal), more than two submissions, a job that
+  can never fit, and workflow xTB/CREST stages, which still fail on a refusal.
+
 ## Fixture and artifact policy
 
 - Keep fixtures minimal, sanitized, and deterministic.
