@@ -47,8 +47,21 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   Such a row is now skipped until the exit has been finalized; rows behind it
   stay eligible, and a poll that finds only such rows does not touch the
   admission file. If finalizing that exit keeps failing, the row stays pending
-  until the worker is restarted, with the failure logged on every poll; an
-  ORCA worker already paused all admission in that state.
+  until the worker is restarted, with the failure logged on every poll.
+- One ORCA job whose terminal replay or exit finalization is unresolved no
+  longer pauses admission of every other job. The pause existed to keep a new
+  generation from starting in a reaction directory whose previous generation
+  has unpublished terminal state, but it was queue-wide: a replay that held no
+  slot and retried once a minute stopped all new starts for as long as it
+  lasted. The worker now withholds only rows in the affected reaction
+  directories (compared by resolved path, including where a replay's recorded
+  path resolves now), logs those directories when the set changes, and admits
+  unrelated jobs. It still pauses all admission when such a generation cannot
+  be tied to a directory and when queued-publication repair fails. A poll that
+  finds only withheld rows reports no pending jobs instead of
+  `waiting_for_slot`. Periodic reconciliation stays suspended, as before,
+  while an exited job awaits a finalization retry; jobs are now admitted in
+  that state, and the retry failure is still logged on every poll.
 - Re-executing an interrupted or failed generation no longer reports
   `completed` over its recorded failed attempt. When a worker died after an
   attempt record was saved and before its final result was, a restart adopted

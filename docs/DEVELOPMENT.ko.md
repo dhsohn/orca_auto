@@ -326,8 +326,9 @@ bash scripts/clean_artifacts.sh
 xTB, CREST, ORCA는 모두 공통 엔진 런타임을 통해 실행됩니다. 엔진 로컬 패키지는
 `EngineDefinition`을 노출해야 하며, 부모 워커는 세 값 — 공유 `deps`, pid 파일 `hooks`,
 그리고 엔진이 소유한 생명주기 단계만 이름 붙인 불변 `EngineWorkerPolicy` 하나(ORCA의
-post-init, publication-repair·terminal-replay reserve 게이트, run·interrupt·queue-id·
-job-factory·취소 단계, xTB/CREST의 post-init 단계) — 로 조합한 `EngineQueueWorker`를
+post-init, publication-repair·terminal-replay reserve 게이트, terminal replay가 끝나지 않은
+디렉터리의 행을 보류하는 행 필터, run·interrupt·queue-id·job-factory·취소 단계,
+xTB/CREST의 post-init 단계) — 로 조합한 `EngineQueueWorker`를
 사용합니다. child-exit
 finalization과 워커 상태 정합은 정책 단계가 아니라 엔진마다 한 번 등록하는 `hooks`입니다.
 자식은

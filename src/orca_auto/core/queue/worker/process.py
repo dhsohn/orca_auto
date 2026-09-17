@@ -134,16 +134,17 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
             self.cfg,
             admission_root=self.admission_root,
             has_capacity_fn=deps.has_admission_capacity,
-            peek_next_fn=lambda cfg: deps.peek_next_entry(cfg, skip_entry_fn=self._tracks_entry),
+            peek_next_fn=lambda cfg: deps.peek_next_entry(cfg, skip_entry_fn=self._skip_entry),
             reserve_slot_fn=deps.try_reserve_admission_slot,
             dequeue_next_fn=lambda cfg: deps.dequeue_next_entry(
-                cfg, skip_entry_fn=self._tracks_entry
+                cfg, skip_entry_fn=self._skip_entry
             ),
             release_slot_fn=deps.release_slot,
         )
         return reserved
 
-    def _tracks_entry(self, entry: Any) -> bool:
+    def _skip_entry(self, entry: Any) -> bool:
+        """Rows this worker must not claim now; rows behind them stay eligible."""
         # A child can return its own row to pending and only then exit. Until
         # that exit has been finalized here, starting the row again would
         # replace the tracked job and strand its admission slot.

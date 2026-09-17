@@ -302,7 +302,12 @@ worker가 기록한 유효한 미완료 replay marker가 있거나, 현재 worke
 side effect가 필요한 terminal writer는 해당 marker와 queue 전이를 원자적으로 저장하며,
 명시적인 administrative publication fence는 replay하지 않습니다. Marker가 남아 있는 동안
 cleanup은 queue generation과 run state를 모두 보존합니다. 유효하지 않거나 지원하지 않는 marker는
-replay하지 않고 오류를 기록하며, clear와 강제 후속 제출을 막은 채 보수적으로 보존합니다. Replay와
+replay하지 않고 오류를 기록하며, clear와 강제 후속 제출을 막은 채 보수적으로 보존합니다. Worker가
+어떤 reaction directory의 끝나지 않은 terminal replay를 들고 있거나 그 디렉터리의 종료한 작업을
+아직 finalize하지 못한 동안에는 그 디렉터리의 행을 claim하지 않고, 다른 디렉터리의 작업은 계속
+admit합니다. 그런 미게시 generation을 디렉터리에 연결할 수 없을 때에만 모든 admission을 멈춥니다.
+같은 디렉터리의 후속 제출을 거부하는 것은 이 worker 쪽 보류가 아니라
+[공개 CLI 계약](#공개-cli-계약)의 제출 차단입니다. Replay와
 fence marker는 내부 구현 상태이므로 client가 편집하면 안 됩니다.
 
 xTB/CREST 큐 산출물에는 내부 immutable-generation fingerprint가 기록되고, 새

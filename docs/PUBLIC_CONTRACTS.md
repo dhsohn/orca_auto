@@ -326,7 +326,13 @@ Side-effect-bearing terminal writers store that marker atomically with the queue
 transition; explicit administrative publication fences are excluded from replay.
 While a marker is pending, cleanup preserves both its queue generation and run
 state. Invalid or unsupported markers fail closed: they are logged and retained
-as clear/forced-successor barriers rather than replayed. Replay and fence markers
+as clear/forced-successor barriers rather than replayed. While a worker holds
+an unfinished terminal replay for a reaction directory, or has yet to finalize
+a job of it that exited, it claims no row for that directory and keeps
+admitting jobs in other directories; it pauses all admission only when such an
+unpublished generation cannot be tied to a directory. The submission barrier
+in the [Public CLI Contract](#public-cli-contract), not this worker-side hold,
+is what refuses a same-directory successor. Replay and fence markers
 are internal implementation state and must not be edited by clients.
 
 xTB/CREST queue artifacts carry an internal immutable-generation fingerprint,

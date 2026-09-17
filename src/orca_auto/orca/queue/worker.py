@@ -227,11 +227,28 @@ def _after_orca_worker_init(worker: EngineQueueWorker) -> None:
 
 def _orca_reserve_gate(worker: EngineQueueWorker) -> tuple[str, Any | None] | None:
     # A failed terminal side effect retains its completed job and durable marker.
-    # Gate admission itself (not merely slot release): max_concurrent > 1 and
-    # multi-root queues could otherwise start a forced successor in another slot.
-    if replay.terminal_replay_blocks_new_generation(worker):
-        logger.warning("Queue admission paused until durable ORCA terminal replay completes")
+    # Until it is replayed, no new generation may start in that reaction
+    # directory: max_concurrent > 1 could otherwise start a forced successor in
+    # another slot. The row filter withholds exactly those rows; unrelated jobs
+    # are admitted. Only a generation that cannot be tied to a directory pauses
+    # admission altogether.
+    withheld = replay.unresolved_terminal_reaction_keys(worker)
+    if withheld is None:
+        logger.warning(
+            "Queue admission paused: an unpublished ORCA terminal generation "
+            "cannot be tied to a reaction directory"
+        )
         return "blocked", None
+    replay_state = replay.get_replay_state(worker)
+    if withheld != replay_state.admission_withheld_keys:
+        if withheld:
+            logger.warning(
+                "ORCA admission withheld for reaction dir(s) until terminal replay completes: %s",
+                ", ".join(sorted(withheld)),
+            )
+        else:
+            logger.info("ORCA admission is no longer withheld for any reaction dir")
+        replay_state.admission_withheld_keys = withheld
     if not publication_repair.repair_queue_publications(worker):
         logger.warning("Queue admission paused until ORCA queued publication repair succeeds")
         return "blocked", None
@@ -306,6 +323,7 @@ def QueueWorker(
             running_job_factory=_make_orca_running_job,
             check_cancel_requests=_check_orca_cancel_requests,
             reserve_gate=_orca_reserve_gate,
+            skip_entry=replay.entry_waits_for_terminal_replay,
         ),
     )
     return worker

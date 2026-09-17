@@ -13,6 +13,7 @@ QUEUE_WORKER_MODULE = "orca_auto.core.engines.queue_worker"
 
 WorkerCallback = Callable[..., Any]
 ReserveGateCallback = Callable[[Any], tuple[str, Any | None] | None]
+SkipEntryCallback = Callable[[Any, Any], bool]
 
 
 @dataclass(frozen=True)
@@ -21,8 +22,9 @@ class EngineWorkerPolicy:
 
     Every field is optional; an engine sets only the steps it owns and the
     shared worker keeps its default for the rest. ORCA installs its post-init,
-    reserve gate (terminal replay and publication repair), run, interrupt,
-    queue-id, job-factory and cancellation steps here; the internal xTB/CREST
+    reserve gate (terminal replay and publication repair), row filter (rows
+    withheld by an unfinished terminal replay), run, interrupt, queue-id,
+    job-factory and cancellation steps here; the internal xTB/CREST
     engines install only their post-init step. Child-exit finalization and
     worker-state reconciliation are pid-file ``hooks``, not policy steps.
     The value is immutable so a running worker cannot have its policy
@@ -37,6 +39,7 @@ class EngineWorkerPolicy:
     running_job_factory: WorkerCallback | None = None
     check_cancel_requests: WorkerCallback | None = None
     reserve_gate: ReserveGateCallback | None = None
+    skip_entry: SkipEntryCallback | None = None
 
 
 class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
@@ -98,6 +101,11 @@ class EngineQueueWorker(HookedPidFileChildProcessQueueWorker):
             if gated is not None:
                 return gated
         return super()._reserve_next_entry()
+
+    def _skip_entry(self, entry: Any) -> bool:
+        if super()._skip_entry(entry):
+            return True
+        return self.policy.skip_entry is not None and bool(self.policy.skip_entry(self, entry))
 
     def _running_queue_id(self, entry: Any) -> str:
         if self.policy.running_queue_id is not None:
