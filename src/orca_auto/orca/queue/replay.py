@@ -14,6 +14,7 @@ from orca_auto.core.admission import (
     update_slot_metadata,
 )
 from orca_auto.core.engines import entry_matches_engine_identity
+from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
 from orca_auto.core.queue.lifecycle import (
     EngineQueueProcessLifecycleHooks,
     EngineQueueProcessReconcileHooks,
@@ -35,6 +36,7 @@ from orca_auto.core.statuses import (
     STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_FAILED,
+    STATUS_PENDING,
     STATUS_RUNNING,
 )
 from orca_auto.orca.worker_execution import BackgroundRunJobProcess
@@ -393,6 +395,17 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: RunningJob, *, rc: i
             raise RuntimeError(
                 "terminal queue mark did not update the running entry; "
                 f"retaining retry ownership for {queue_id}"
+            )
+        deferral_reason = (
+            queue_entry_admission_deferral_reason(current_after_mark)
+            if normalized_entry_status(current_after_mark) == STATUS_PENDING
+            else ""
+        )
+        if deferral_reason:
+            logger.warning(
+                "ORCA job %s was not started and waits in the queue: %s",
+                queue_id,
+                deferral_reason,
             )
         marker = (
             terminal_replay_marker_from_entry(current_after_mark)

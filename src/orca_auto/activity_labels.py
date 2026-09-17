@@ -143,7 +143,12 @@ def queue_detail_text(item: dict[str, Any]) -> str:
     if kind == "workflow":
         return workflow_detail_text(metadata)
     if detail_text := _QUEUE_ENGINE_DETAIL_TEXT.get(engine):
-        return detail_text(metadata)
+        detail = detail_text(metadata)
+        if normalize_text(metadata.get("admission_deferral_reason")):
+            # The full reason is in the JSON record; the table only says why
+            # a pending row is not being started.
+            return f"{detail} (waiting for resources)"
+        return detail
     return normalize_text(item.get("label")) or normalize_text(item.get("source")) or "-"
 
 

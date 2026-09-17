@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .deferral import ADMISSION_DEFERRAL_METADATA_KEY
 from .types import QueueEntry
 
 VISIBLE_GENERATION_NAME_RE = re.compile(r"\A\d{8}-\d{6}-[0-9a-f]{8}\Z", re.ASCII)
@@ -67,6 +68,7 @@ def new_visible_generation_name() -> str:
 # fields may opt out, so unknown or newly added submission fields fail closed.
 _MUTABLE_LIFECYCLE_METADATA_KEYS = frozenset(
     {
+        ADMISSION_DEFERRAL_METADATA_KEY,
         "attempt",
         "candidate_count",
         "execution_dir",

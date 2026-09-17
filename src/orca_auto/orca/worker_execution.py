@@ -12,6 +12,7 @@ from typing import Any
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_APP_NAME
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.engine_scratch import (
+    EngineScratchCapacityError,
     attach_scratch_provenance_mapping_to_exception,
     scratch_provenance_from_exception,
 )
@@ -86,6 +87,8 @@ from .submission import mark_orca_snapshot_owned
 
 logger = logging.getLogger(__name__)
 
+# EX_TEMPFAIL: the child returned its row to the queue before ORCA started.
+ADMISSION_DEFERRED_EXIT_CODE = 75
 RECOVERY_REBIND_LIMIT = 3
 RECOVERY_REBIND_COUNT_METADATA_KEY = "recovery_rebind_count"
 RECOVERY_REBIND_CLAIM_METADATA_KEY = "recovery_rebind_claim"
@@ -276,6 +279,23 @@ def _run_orca_job_for_entry(
             )
             self.set_shutdown_requested(stop_requested)
 
+        def prepare(self, inp_path: Path) -> None:
+            # Staging reads the generation, so keep run()'s verify-before-stage
+            # order. A snapshot that fails here is left for run() to report.
+            try:
+                verify_orca_execution_snapshot(
+                    context.reaction_dir,
+                    context.execution_snapshot,
+                    expected_selected_inp=context.selected_inp,
+                    expected_source_selected_inp=context.source_selected_inp,
+                    expected_selected_input_xyz=context.selected_input_xyz,
+                    expected_resource_request=context.resource_request,
+                    allow_runtime_outputs=False,
+                )
+            except Exception:  # noqa: BLE001
+                return
+            super().prepare(inp_path)
+
         def run(self, inp_path: Path) -> Any:
             current_input = require_confined_regular_file(
                 Path(context.execution_snapshot["execution_dir"]),
@@ -361,6 +381,8 @@ def _run_orca_job_for_entry(
             queue_generation=queue_entry_generation_token(context.entry),
             runner_cls=ShutdownAwareOrcaRunner,
         )
+    except EngineScratchCapacityError as exc:
+        return _defer_admission(context, _queue_root, reason=str(exc))
     except WorkerShutdownInterrupt as exc:
         if cancel_requested():
             state = load_state(Path(context.reaction_dir))
@@ -378,6 +400,39 @@ def _run_orca_job_for_entry(
                     final_result=cancelled_result,
                 )
         raise _WorkerShutdownRequested(context) from exc
+
+
+def _defer_admission(
+    context: OrcaWorkerExecutionContext,
+    queue_root: Path,
+    *,
+    reason: str,
+) -> int:
+    """Return a job that never started to the queue instead of failing it.
+
+    The refusal was raised before the run wrote any state, so the generation is
+    still pristine and the next claim reuses it without a recovery rebind. This
+    re-asks for a resource; it never reruns a calculation.
+    """
+    queue_id = queue_entry_id(context.entry)
+    requeued = requeue_running_entry(
+        queue_root,
+        queue_id,
+        expected_entry=context.entry,
+        admission_deferral_reason=reason,
+    )
+    if requeued:
+        logger.warning("ORCA job %s waits for RAM scratch capacity: %s", queue_id, reason)
+    else:
+        logger.error(
+            "ORCA job %s could not be returned to the queue after a RAM scratch "
+            "capacity refusal: %s",
+            queue_id,
+            reason,
+        )
+    # Never zero: if the requeue was fenced out the row is still running, and
+    # the parent must mark it failed rather than completed.
+    return ADMISSION_DEFERRED_EXIT_CODE
 
 
 def _maybe_rebind_recovery_generation(

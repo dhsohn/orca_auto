@@ -13,6 +13,7 @@ from ..utils.persistence import (
     timestamped_token,
 )
 from . import persistence as _queue_persistence
+from .deferral import ADMISSION_DEFERRAL_METADATA_KEY, queue_entry_admission_is_deferred
 from .generation import queue_entries_same_generation
 from .priority import normalize_queue_priority
 from .publication import (
@@ -514,6 +515,22 @@ def enqueue(
     )
 
 
+def _claimed(entry: QueueEntry) -> QueueEntry:
+    # A claim answers the deferral. Dropping it here keeps it from describing
+    # a row that later returns to pending for another reason.
+    metadata = {
+        key: value
+        for key, value in entry.metadata.items()
+        if key != ADMISSION_DEFERRAL_METADATA_KEY
+    }
+    return replace(
+        entry,
+        status=QueueStatus.RUNNING,
+        started_at=now_utc_iso(),
+        metadata=metadata,
+    )
+
+
 def dequeue_next(
     root: str | Path,
     *,
@@ -532,12 +549,13 @@ def dequeue_next(
             if entry.status == QueueStatus.PENDING
             and not entry.cancel_requested
             and queue_entry_is_claimable(entry)
+            and not queue_entry_admission_is_deferred(entry)
             and (accept_entry_fn is None or accept_entry_fn(entry))
         ]
         if not pending:
             return None, False
         _, index, current = min(pending, key=lambda item: (item[0], item[1]))
-        updated = replace(current, status=QueueStatus.RUNNING, started_at=now_utc_iso())
+        updated = _claimed(current)
         entries[index] = updated
         return updated, True
 
@@ -566,9 +584,10 @@ def dequeue_entry_if_pending(
             or entry.status != QueueStatus.PENDING
             or entry.cancel_requested
             or not queue_entry_is_claimable(entry)
+            or queue_entry_admission_is_deferred(entry)
         ):
             return None, None
-        updated = replace(entry, status=QueueStatus.RUNNING, started_at=now_utc_iso())
+        updated = _claimed(entry)
         return updated, updated
 
     return QueueStore.for_root(
@@ -785,6 +804,7 @@ def requeue_running_entry(
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
     cancel_metadata_update_fn: _MetadataUpdateFn | None = None,
+    requeue_metadata_update: Mapping[str, Any] | None = None,
 ) -> QueueEntry | None:
     def requeue(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
         for index, entry in enumerate(entries):
@@ -829,6 +849,7 @@ def requeue_running_entry(
                 started_at="",
                 cancel_requested=False,
                 error="",
+                metadata=_merged_metadata(entry, metadata_update=requeue_metadata_update),
             )
             entries[index] = updated
             return updated, True

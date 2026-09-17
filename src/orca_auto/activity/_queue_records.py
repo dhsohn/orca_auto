@@ -24,7 +24,8 @@ from orca_auto.core.paths.workflow import (
     workflow_workspace_internal_engine_paths,
 )
 from orca_auto.core.queue import list_queue
-from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
+from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import normalize_text
 
 from . import _orca
@@ -147,6 +148,13 @@ def _engine_queue_record(
             "allowed_root": str(allowed_root),
             "priority": int(entry.priority),
             "repair_blocked_reason": repair_blocked_reason,
+            # A claim removes the deferral; a terminal row written by another
+            # path must not advertise one either.
+            "admission_deferral_reason": (
+                queue_entry_admission_deferral_reason(entry)
+                if entry.status == QueueStatus.PENDING
+                else ""
+            ),
             "queue_error": normalize_text(getattr(entry, "error", "")),
             **timestamp_metadata(
                 enqueued_at=enqueued_at,

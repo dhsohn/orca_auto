@@ -12,6 +12,10 @@ from typing import Any
 from orca_auto.core.artifacts import QUEUE_FILE as QUEUE_FILE_NAME
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
+from orca_auto.core.queue.deferral import (
+    ADMISSION_DEFERRAL_METADATA_KEY,
+    admission_deferral_update,
+)
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -330,6 +334,7 @@ def _immutable_publication_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         QUEUE_RECORD_SYNC_OWNER_START_KEY,
         QUEUE_RECORD_SYNC_TOKEN_KEY,
         TERMINAL_REPLAY_METADATA_KEY,
+        ADMISSION_DEFERRAL_METADATA_KEY,
         "run_id",
     }
     return {key: value for key, value in metadata.items() if key not in lease_keys}
@@ -575,8 +580,13 @@ def requeue_running_entry(
     *,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
+    admission_deferral_reason: str | None = None,
 ) -> bool:
-    """Return a running queue entry back to pending during worker shutdown.
+    """Return a running queue entry back to pending.
+
+    Worker shutdown requeues it for resume. A pre-launch admission deferral
+    passes its reason, which is recorded with the requeue so the row is not
+    claimed again before the deferral interval passes.
 
     If a cancel was requested for the entry, it is marked cancelled instead of
     requeued so a cancelled job is not resumed (see core queue store).
@@ -585,6 +595,11 @@ def requeue_running_entry(
         _queue_store.requeue_running_entry(
             allowed_root,
             queue_id,
+            requeue_metadata_update=(
+                admission_deferral_update(admission_deferral_reason)
+                if admission_deferral_reason is not None
+                else None
+            ),
             cancel_metadata_update_fn=_terminal_metadata_update_fn(
                 status=QueueStatus.CANCELLED,
                 error="cancel_requested",

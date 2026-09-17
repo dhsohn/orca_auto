@@ -176,10 +176,17 @@
   workspace가 있으면 fail-closed합니다. 현재 host 가용 메모리가 설정된 task memory 상한, 살아
   있는 모든 scratch workspace에 기록된 task memory 상한, tmpfs 여유 공간,
   `scratch_min_free_gb` host reserve 합계를 감당해야 시작합니다. 그 밖의 동시 attempt 수 제한은
-  `scheduler.max_active_simulations`뿐입니다. 완료 attempt의 게시
+  `scheduler.max_active_simulations`뿐입니다. 시작하기 전에 이 gate가 거부한 ORCA 작업(메모리
+  또는 tmpfs 공간 부족, 다른 workspace 때문에 계속 사용 중인 scratch root)은 실패로 처리하지
+  않습니다. queue 행은 run state, attempt, 알림, recovery rebind를 하나도 쓰지 않은 채
+  `pending`으로 돌아가고, 60초 동안 다시 claim되지 않으며 그동안 뒤의 행은 계속 claim할 수
+  있습니다. 따라서 상한이 host에 결코 들어갈 수 없는 작업은 취소할 때까지 대기합니다. 이것은
+  자원을 다시 묻는 것이지 계산을 다시 실행하는 것이 아닙니다. run이 state를 기록한 뒤의 같은
+  거부와 그 밖의 모든 scratch 실패는 종료된 failed attempt입니다. 완료 attempt의 게시
   메타데이터는 `scratch_provenance`에, commit 뒤 중단/exception 경로의 게시 근거는
   `scratch_publications`에 기록하며 고정 execution-snapshot provenance에는 넣지 않습니다.
-  workflow xTB/CREST도 같은 설정 root와 시작 gate를 사용합니다. 변경 불가능한
+  workflow xTB/CREST도 같은 설정 root와 시작 gate를 사용하지만, 거기서의 거부는 여전히 그
+  stage를 실패시킵니다. 변경 불가능한
   입력 snapshot은 durable하게 유지하고 tmpfs에서 실행한 뒤 canonical 결과/evidence allowlist만
   transaction으로 게시합니다. 생략한 work tree와 transient 항목은 `scratch_provenance`에
   기록하며 CREST 자체의 `--scratch` 옵션은 계속 사용하지 않습니다.
@@ -282,6 +289,10 @@ note로 출력합니다.
 필수 same-generation terminal 근거를 재구성할 수
 없는 종료 행은 무한히 복구를 반복하지 않고 `repair_blocked` activity로 노출하며,
 `repair_blocked_reason`과 `queue_error` metadata를 제공합니다.
+
+시작하기 전에 RAM scratch 용량을 거부당한 `pending` ORCA 행은 그 거부 사유를
+`admission_deferral_reason` metadata에 담습니다. 다른 모든 행에서는 이 키가 비어 있습니다.
+plain `queue list` table은 그런 행의 detail column에 `(waiting for resources)`를 표시합니다.
 
 ORCA worker가 처음 관측할 때 이미 종료 상태인 행은 닫힌 이력으로 취급합니다. Worker를
 시작하거나 재시작해도 해당 행의 state/report를 다시 만들거나 `run_id`, `finished_at`,
