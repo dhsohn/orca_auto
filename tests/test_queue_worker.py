@@ -2708,6 +2708,81 @@ class TestFillSlots(unittest.TestCase):
                 worker._fill_slots()
                 self.assertEqual(len(worker._running), 1)
 
+    def test_fill_slots_does_not_reclaim_a_row_whose_previous_job_is_still_tracked(self) -> None:
+        # A child stopped by an external SIGTERM requeues its own row for resume
+        # and only then exits; the requeue is applied directly here. Until the
+        # parent has seen that exit and released the slot, the row must not start
+        # a second job under the same queue id: that would replace the tracked
+        # job and strand its admission slot.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = _make_cfg(tmp)
+            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
+            rxn = root / "mol_requeued"
+            rxn.mkdir()
+            entry = enqueue(root, str(rxn), metadata=_current_orca_queue_metadata(rxn))
+            behind = root / "mol_behind"
+            behind.mkdir()
+
+            with patch(
+                "orca_auto.orca.queue.worker.start_background_process"
+            ) as mock_start_background_process:
+                first_proc = MagicMock()
+                first_proc.pid = 4201
+                first_proc.poll.return_value = None
+                behind_proc = MagicMock()
+                behind_proc.pid = 4202
+                behind_proc.poll.return_value = None
+                mock_start_background_process.side_effect = [first_proc, behind_proc]
+                worker._fill_slots()
+                tracked = worker._running[entry.queue_id]
+                self.assertTrue(replay_mod.requeue_running_entry(root, entry.queue_id))
+                behind_entry = enqueue(
+                    root, str(behind), metadata=_current_orca_queue_metadata(behind)
+                )
+
+                worker._fill_slots()
+
+                self.assertEqual(mock_start_background_process.call_count, 2)
+
+            self.assertIs(worker._running[entry.queue_id], tracked)
+            statuses = {row.queue_id: row.status.value for row in list_queue(root)}
+            self.assertEqual(statuses[entry.queue_id], "pending")
+            # The row behind it is unaffected and takes the free slot.
+            self.assertEqual(statuses[behind_entry.queue_id], "running")
+            self.assertIs(worker._running[behind_entry.queue_id].process, behind_proc)
+
+    def test_fill_slots_with_only_a_tracked_pending_row_leaves_admission_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = _make_cfg(tmp)
+            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
+            rxn = root / "mol_requeued_only"
+            rxn.mkdir()
+            entry = enqueue(root, str(rxn), metadata=_current_orca_queue_metadata(rxn))
+
+            with patch(
+                "orca_auto.orca.queue.worker.start_background_process"
+            ) as mock_start_background_process:
+                proc = MagicMock()
+                proc.pid = 4301
+                proc.poll.return_value = None
+                mock_start_background_process.return_value = proc
+                worker._fill_slots()
+                self.assertTrue(replay_mod.requeue_running_entry(root, entry.queue_id))
+                admission_file = root / "admission_slots.json"
+                before = admission_file.stat()
+
+                status = worker._fill_slots()
+
+                after = admission_file.stat()
+                self.assertEqual(mock_start_background_process.call_count, 1)
+
+            self.assertEqual(status, "idle")
+            self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
+            [row] = list_queue(root)
+            self.assertEqual(row.status.value, "pending")
+
     def test_fill_slots_attaches_queue_identity_to_reserved_slot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

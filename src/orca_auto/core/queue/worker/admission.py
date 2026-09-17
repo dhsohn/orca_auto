@@ -9,7 +9,7 @@ from orca_auto.core.engine_catalog import find_engine_catalog_entry
 
 from ..child.execution import find_queue_entry_by_id
 from ..deferral import queue_entry_admission_is_deferred
-from ..dependencies import ChildQueueWorkerDeps
+from ..dependencies import ChildQueueWorkerDeps, QueueEntrySelector
 from ..priority import normalize_queue_priority
 from ..publication import queue_entry_is_claimable
 from .models import ReservedQueueEntry
@@ -274,8 +274,8 @@ def make_child_queue_worker_deps(
     release_slot_fn: Callable[[str | Path, str], object],
     admission_root_fn: Callable[[Any], str],
     has_admission_capacity_fn: Callable[[Any], bool],
-    peek_next_entry_fn: Callable[[Any], tuple[Path, Any] | None],
-    dequeue_next_entry_fn: Callable[[Any], tuple[Path, Any] | None],
+    peek_next_entry_fn: QueueEntrySelector,
+    dequeue_next_entry_fn: QueueEntrySelector,
     start_background_job_process_fn: Callable[..., Any],
     try_reserve_admission_slot_fn: Callable[[Any], str | None],
 ) -> ChildQueueWorkerDeps:

@@ -10,8 +10,22 @@ class SleepTimer(Protocol):
     def sleep(self, seconds: float) -> None: ...
 
 
-QueueEntryDequeuer = Callable[[Any], tuple[Path, Any] | None]
-QueueEntryPeeker = Callable[[Any], tuple[Path, Any] | None]
+class QueueEntrySelector(Protocol):
+    """Preview or claim the next row, passing over rows ``skip_entry_fn`` names.
+
+    A runtime can honor the filter only when it claims rows by id; one that
+    claims its root's head row ignores it.
+    """
+
+    def __call__(
+        self,
+        cfg: Any,
+        /,
+        *,
+        skip_entry_fn: Callable[[Any], bool] | None = None,
+    ) -> tuple[Path, Any] | None: ...
+
+
 AdmissionCapacityCheck = Callable[[Any], bool]
 AdmissionReserver = Callable[[Any], str | None]
 
@@ -27,9 +41,9 @@ class DequeuedEntryReserver(Protocol):
         *,
         admission_root: str | Path,
         has_capacity_fn: AdmissionCapacityCheck,
-        peek_next_fn: QueueEntryPeeker,
+        peek_next_fn: Callable[[Any], tuple[Path, Any] | None],
         reserve_slot_fn: AdmissionReserver,
-        dequeue_next_fn: QueueEntryDequeuer,
+        dequeue_next_fn: Callable[[Any], tuple[Path, Any] | None],
         release_slot_fn: SlotReleaser,
     ) -> tuple[str, Any | None]: ...
 
@@ -54,8 +68,8 @@ class ChildQueueWorkerDeps:
     release_slot: SlotReleaser
     reserve_dequeued_entry: DequeuedEntryReserver
     has_admission_capacity: AdmissionCapacityCheck
-    peek_next_entry: QueueEntryPeeker
-    dequeue_next_entry: QueueEntryDequeuer
+    peek_next_entry: QueueEntrySelector
+    dequeue_next_entry: QueueEntrySelector
     try_reserve_admission_slot: AdmissionReserver
 
 
@@ -64,8 +78,7 @@ __all__ = [
     "ChildQueueWorkerDeps",
     "BackgroundJobProcessStarter",
     "DequeuedEntryReserver",
-    "QueueEntryDequeuer",
-    "QueueEntryPeeker",
+    "QueueEntrySelector",
     "SleepTimer",
     "SlotReleaser",
 ]

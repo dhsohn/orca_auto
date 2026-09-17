@@ -39,6 +39,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   re-asks for a resource and is not a retry: the same refusal after the run
   wrote its state, and every other scratch failure, still fails the attempt.
   Workflow xTB/CREST stages are unchanged and still fail on a refusal.
+- A queue worker no longer starts a row again while it still tracks that row's
+  previous job. A child that is stopped from outside (for example by a manual
+  `SIGTERM`) returns its own row to `pending` and only then exits; a worker
+  with a free slot that polled in that instant claimed the row again, replaced
+  the tracked job, and left its admission slot to stale-slot reconciliation.
+  Such a row is now skipped until the exit has been finalized; rows behind it
+  stay eligible, and a poll that finds only such rows does not touch the
+  admission file. If finalizing that exit keeps failing, the row stays pending
+  until the worker is restarted, with the failure logged on every poll; an
+  ORCA worker already paused all admission in that state.
 - Re-executing an interrupted or failed generation no longer reports
   `completed` over its recorded failed attempt. When a worker died after an
   attempt record was saved and before its final result was, a restart adopted

@@ -146,14 +146,38 @@ class EngineQueueRuntime:
             runtime_roots_for_cfg_fn=self.runtime_roots_for_cfg,
         )
 
-    def peek_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
+    def _accept_unless_skipped(
+        self,
+        skip_entry_fn: Callable[[Any], bool] | None,
+    ) -> Callable[[Any], bool] | None:
+        if skip_entry_fn is None or self.dequeue_entry_if_pending is None:
+            # Without a by-id dequeue the root claims its own head row, which a
+            # selection filter cannot steer. Engine definitions always supply a
+            # by-id dequeue, so only hand-built runtimes take this branch.
+            return self.accept_entry_fn
+        accept_entry_fn = self.accept_entry_fn
+
+        def accept(entry: Any) -> bool:
+            if accept_entry_fn is not None and not accept_entry_fn(entry):
+                return False
+            return not skip_entry_fn(entry)
+
+        return accept
+
+    def peek_next_entry(
+        self,
+        cfg: Any,
+        /,
+        *,
+        skip_entry_fn: Callable[[Any], bool] | None = None,
+    ) -> tuple[Path, Any] | None:
         return queue_commands.peek_next_entry(
             cfg,
             queue_roots_fn=self.queue_roots,
             list_queue_fn=self.list_queue,
             peek_next_across_roots_fn=peek_next_across_roots,
             select_all_rows=self.dequeue_entry_if_pending is not None,
-            accept_entry_fn=self.accept_entry_fn,
+            accept_entry_fn=self._accept_unless_skipped(skip_entry_fn),
         )
 
     def has_admission_capacity(self, cfg: Any) -> bool:
@@ -172,7 +196,13 @@ class EngineQueueRuntime:
             accept_entry_fn=self.accept_entry_fn,
         )
 
-    def dequeue_next_entry(self, cfg: Any) -> tuple[Path, Any] | None:
+    def dequeue_next_entry(
+        self,
+        cfg: Any,
+        /,
+        *,
+        skip_entry_fn: Callable[[Any], bool] | None = None,
+    ) -> tuple[Path, Any] | None:
         return queue_commands.dequeue_next_entry(
             cfg,
             queue_roots_fn=self.queue_roots,
@@ -180,7 +210,7 @@ class EngineQueueRuntime:
             dequeue_next_fn=self.dequeue_next,
             dequeue_entry_if_pending_fn=self.dequeue_entry_if_pending,
             dequeue_next_across_roots_fn=dequeue_next_across_roots,
-            accept_entry_fn=self.accept_entry_fn,
+            accept_entry_fn=self._accept_unless_skipped(skip_entry_fn),
         )
 
     def queue_entry_by_id(self, queue_root: Path | str, queue_id: str) -> Any | None:
