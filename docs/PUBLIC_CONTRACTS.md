@@ -187,12 +187,21 @@ Behavior:
   host available memory to cover the configured task-memory cap, the recorded
   task-memory caps of every live scratch workspace, free tmpfs, and the
   `scratch_min_free_gb` host reserve; the number of concurrent attempts is
-  otherwise bounded only by `scheduler.max_active_simulations`. Completed-attempt metadata is recorded
+  otherwise bounded only by `scheduler.max_active_simulations`. An ORCA job
+  that this guard refuses before it has started — too little memory or tmpfs
+  space, or a scratch root that stayed busy with a peer workspace — is not
+  failed: its queue row returns to `pending` with no run state, attempt,
+  notification, or recovery rebind spent, and it is not claimed again for 60
+  seconds, during which rows behind it stay eligible. A job whose cap can never
+  fit the host therefore waits until it is cancelled. This re-asks for a
+  resource and never reruns a calculation: the same refusal after the run
+  wrote its state, and every other scratch failure, is a terminal failed
+  attempt. Completed-attempt metadata is recorded
   in `scratch_provenance`; committed output from an interrupted/exception path
   is recorded in `scratch_publications`, never in immutable execution-snapshot
   provenance.
   Workflow xTB/CREST use the same configured root and
-  launch guard. They keep immutable input snapshots durable, execute in tmpfs, and
+  launch guard, but a refusal there still fails the stage. They keep immutable input snapshots durable, execute in tmpfs, and
   transactionally publish only their canonical result/evidence allowlists;
   omitted work trees and transient entries are recorded in
   `scratch_provenance`. CREST's native `--scratch` option remains unused.
@@ -301,6 +310,11 @@ A terminal row
 whose required same-generation terminal evidence cannot be reconstructed is
 exposed as `repair_blocked` activity with `repair_blocked_reason` and
 `queue_error` metadata instead of being retried indefinitely.
+
+A `pending` ORCA row that was refused RAM scratch capacity before it started
+carries the refusal in `admission_deferral_reason` metadata; the key is empty
+for every other row. The plain `queue list` table marks such a row
+`(waiting for resources)` in its detail column.
 
 An ORCA row that is already terminal when a worker first observes it is treated
 as closed history. Starting or restarting the worker does not regenerate that

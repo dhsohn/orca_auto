@@ -8,6 +8,7 @@ import pytest
 
 from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.core.engine_scratch import (
+    EngineScratchCapacityError,
     EngineScratchError,
     EngineScratchPolicy,
     EngineScratchWorkspace,
@@ -244,7 +245,7 @@ def test_scratch_capacity_guard_removes_unowned_new_workspace(
         lambda _descriptor: 0,
     )
 
-    with pytest.raises(EngineScratchError, match="insufficient free space"):
+    with pytest.raises(EngineScratchCapacityError, match="insufficient free space"):
         EngineScratchWorkspace.create(policy, selected)
     assert _scratch_attempts(policy.root) == []
 
@@ -261,9 +262,113 @@ def test_scratch_memory_headroom_guard_removes_unowned_new_workspace(
         lambda: 1,
     )
 
-    with pytest.raises(EngineScratchError, match="cannot guarantee RAM headroom"):
+    with pytest.raises(EngineScratchCapacityError, match="cannot guarantee RAM headroom"):
         EngineScratchWorkspace.create(policy, selected)
     assert _scratch_attempts(policy.root) == []
+
+
+def test_scratch_reserve_lost_while_staging_is_a_capacity_refusal_without_leftovers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    selected = _durable_input(tmp_path)
+    readings = iter([2**40, 0])
+    monkeypatch.setattr(scratch_mod, "_filesystem_free_bytes", lambda _descriptor: next(readings))
+
+    with pytest.raises(EngineScratchCapacityError, match="while staging"):
+        EngineScratchWorkspace.create(policy, selected)
+    assert _scratch_attempts(policy.root) == []
+
+
+def test_scratch_capacity_refusal_that_leaves_a_workspace_needs_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    selected = _durable_input(tmp_path)
+    readings = iter([2**40, 0])
+    monkeypatch.setattr(scratch_mod, "_filesystem_free_bytes", lambda _descriptor: next(readings))
+
+    def refuse_removal(*_args: object) -> None:
+        raise OSError("busy")
+
+    monkeypatch.setattr(scratch_mod, "_remove_owned_workspace", refuse_removal)
+
+    with pytest.raises(EngineScratchError, match="could not be removed") as raised:
+        EngineScratchWorkspace.create(policy, selected)
+    assert not isinstance(raised.value, EngineScratchCapacityError)
+
+
+def test_scratch_root_lock_timeout_is_a_capacity_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from contextlib import contextmanager
+
+    from orca_auto.core.utils.lock import FileLockTimeoutError
+
+    policy = _policy(monkeypatch, tmp_path)
+    selected = _durable_input(tmp_path)
+
+    @contextmanager
+    def contended(*_args: object, **_kwargs: object):
+        raise FileLockTimeoutError("Timed out acquiring lock")
+        yield
+
+    monkeypatch.setattr(scratch_mod, "file_lock_at", contended)
+
+    with pytest.raises(EngineScratchCapacityError, match="stayed busy"):
+        EngineScratchWorkspace.create(policy, selected)
+    assert _scratch_attempts(policy.root) == []
+
+
+def test_unreadable_available_memory_is_not_a_capacity_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    selected = _durable_input(tmp_path)
+
+    def unreadable() -> int:
+        raise EngineScratchError("Cannot determine available host memory for engine scratch")
+
+    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", unreadable)
+
+    with pytest.raises(EngineScratchError) as raised:
+        EngineScratchWorkspace.create(policy, selected)
+    assert not isinstance(raised.value, EngineScratchCapacityError)
+
+
+def test_discard_unlaunched_removes_the_workspace_and_touches_nothing_durable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    selected = _durable_input(tmp_path)
+    before = sorted(path.name for path in selected.parent.iterdir())
+    workspace = EngineScratchWorkspace.create(policy, selected)
+
+    workspace.discard_unlaunched()
+
+    assert _scratch_attempts(policy.root) == []
+    assert sorted(path.name for path in selected.parent.iterdir()) == before
+    # The root is reusable immediately: nothing stale was left to block the sweep.
+    EngineScratchWorkspace.create(policy, selected).discard_unlaunched()
+
+
+def test_discard_unlaunched_refuses_a_published_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    selected = _durable_input(tmp_path)
+    workspace = EngineScratchWorkspace.create(policy, selected)
+    workspace.publish()
+
+    with pytest.raises(EngineScratchError, match="already published"):
+        workspace.discard_unlaunched()
+    workspace.cleanup()
 
 
 def test_stale_workspace_is_preserved_and_blocks_new_attempt(

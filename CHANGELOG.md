@@ -25,6 +25,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Fixed
 
+- An ORCA job that the RAM scratch launch guard refuses before ORCA starts is
+  no longer failed. With `scheduler.max_active_simulations` above 1, a job
+  admitted by the slot count but not by current memory ended as `failed` /
+  `runner_exception` after a "started" notification although ORCA never ran.
+  The workspace is now reserved before the run writes any state; on a capacity
+  refusal (memory, tmpfs space, or a scratch root busy past the 300 s lock
+  wait) the queue row returns to `pending` with no run state, attempt record,
+  notification, or recovery rebind spent. It is not claimed again for 60
+  seconds, rows behind it stay eligible, and `queue list` shows it as
+  `(waiting for resources)` with the refusal in `admission_deferral_reason`.
+  A job whose cap can never fit the host waits until it is cancelled. This
+  re-asks for a resource and is not a retry: the same refusal after the run
+  wrote its state, and every other scratch failure, still fails the attempt.
+  Workflow xTB/CREST stages are unchanged and still fail on a refusal.
 - Re-executing an interrupted or failed generation no longer reports
   `completed` over its recorded failed attempt. When a worker died after an
   attempt record was saved and before its final result was, a restart adopted

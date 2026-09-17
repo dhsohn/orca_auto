@@ -13,6 +13,7 @@ from ..utils.persistence import (
     timestamped_token,
 )
 from . import persistence as _queue_persistence
+from .deferral import queue_entry_admission_is_deferred
 from .generation import queue_entries_same_generation
 from .priority import normalize_queue_priority
 from .publication import (
@@ -532,6 +533,7 @@ def dequeue_next(
             if entry.status == QueueStatus.PENDING
             and not entry.cancel_requested
             and queue_entry_is_claimable(entry)
+            and not queue_entry_admission_is_deferred(entry)
             and (accept_entry_fn is None or accept_entry_fn(entry))
         ]
         if not pending:
@@ -566,6 +568,7 @@ def dequeue_entry_if_pending(
             or entry.status != QueueStatus.PENDING
             or entry.cancel_requested
             or not queue_entry_is_claimable(entry)
+            or queue_entry_admission_is_deferred(entry)
         ):
             return None, None
         updated = replace(entry, status=QueueStatus.RUNNING, started_at=now_utc_iso())
@@ -785,6 +788,7 @@ def requeue_running_entry(
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
     cancel_metadata_update_fn: _MetadataUpdateFn | None = None,
+    requeue_metadata_update: Mapping[str, Any] | None = None,
 ) -> QueueEntry | None:
     def requeue(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
         for index, entry in enumerate(entries):
@@ -829,6 +833,7 @@ def requeue_running_entry(
                 started_at="",
                 cancel_requested=False,
                 error="",
+                metadata=_merged_metadata(entry, metadata_update=requeue_metadata_update),
             )
             entries[index] = updated
             return updated, True

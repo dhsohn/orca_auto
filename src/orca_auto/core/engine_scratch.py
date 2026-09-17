@@ -9,6 +9,7 @@ import secrets
 import shutil
 import stat
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Self
@@ -22,7 +23,7 @@ from orca_auto.core.artifacts import (
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.utils import process as process_utils
-from orca_auto.core.utils.lock import file_lock_at
+from orca_auto.core.utils.lock import FileLockTimeoutError, file_lock_at
 from orca_auto.core.utils.persistence import open_pinned_readonly
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 
@@ -70,6 +71,15 @@ _COPY_CHUNK_BYTES = 1024 * 1024
 
 class EngineScratchError(RuntimeError):
     """Raised when a RAM scratch workspace cannot be used or published safely."""
+
+
+class EngineScratchCapacityError(EngineScratchError):
+    """Raised when the scratch root is safe but cannot admit a workspace right now.
+
+    Only `EngineScratchWorkspace.create` raises it, and only with no workspace
+    left behind, so a caller that has not started its engine may wait and ask
+    again. Every other scratch failure needs inspection and stays the base type.
+    """
 
 
 @dataclass(frozen=True)
@@ -216,12 +226,21 @@ class EngineScratchWorkspace:
             expected_identity=root_identity,
         )
         try:
-            with file_lock_at(
-                root_fd,
-                _SCRATCH_ROOT_LOCK_FILE_NAME,
-                display_path=root / _SCRATCH_ROOT_LOCK_FILE_NAME,
-                timeout_seconds=_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS,
-            ):
+            with ExitStack() as root_lock:
+                try:
+                    root_lock.enter_context(
+                        file_lock_at(
+                            root_fd,
+                            _SCRATCH_ROOT_LOCK_FILE_NAME,
+                            display_path=root / _SCRATCH_ROOT_LOCK_FILE_NAME,
+                            timeout_seconds=_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS,
+                        )
+                    )
+                except FileLockTimeoutError as exc:
+                    raise EngineScratchCapacityError(
+                        "engine scratch root stayed busy with a peer workspace for "
+                        f"{_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS:.0f} s"
+                    ) from exc
                 _require_directory_path_identity(
                     root,
                     root_fd,
@@ -257,7 +276,7 @@ class EngineScratchWorkspace:
                     )
                     free_bytes = _filesystem_free_bytes(root_fd)
                     if free_bytes < policy.min_free_bytes + required_bytes:
-                        raise EngineScratchError(
+                        raise EngineScratchCapacityError(
                             "engine scratch has insufficient free space: "
                             f"free={free_bytes}, required_inputs={required_bytes}, "
                             f"minimum_free={policy.min_free_bytes}"
@@ -273,7 +292,7 @@ class EngineScratchWorkspace:
                         + policy.min_free_bytes
                     )
                     if available_memory_bytes < required_memory_bytes:
-                        raise EngineScratchError(
+                        raise EngineScratchCapacityError(
                             "engine scratch cannot guarantee RAM headroom without swap: "
                             f"available_memory={available_memory_bytes}, "
                             f"task_memory_limit={policy.max_task_memory_bytes}, "
@@ -299,7 +318,7 @@ class EngineScratchWorkspace:
                         normalize_primary_newline=policy.normalize_primary_newline,
                     )
                     if _filesystem_free_bytes(root_fd) < policy.min_free_bytes:
-                        raise EngineScratchError(
+                        raise EngineScratchCapacityError(
                             "engine scratch fell below its minimum free-space reserve while staging"
                         )
                     _require_directory_path_identity(
@@ -329,7 +348,7 @@ class EngineScratchWorkspace:
                         workspace_identity=workspace_identity,
                         workspace_dir_fd=workspace_dir_fd,
                     )
-                except BaseException:
+                except BaseException as create_error:
                     if input_dir_fd >= 0:
                         os.close(input_dir_fd)
                     if durable_dir_fd >= 0:
@@ -344,8 +363,13 @@ class EngineScratchWorkspace:
                                 workspace.name,
                                 workspace_identity,
                             )
-                        except (EngineScratchError, OSError):
-                            pass
+                        except (EngineScratchError, OSError) as removal_error:
+                            if isinstance(create_error, EngineScratchCapacityError):
+                                # A capacity refusal promises that nothing was left behind.
+                                raise EngineScratchError(
+                                    "engine scratch workspace could not be removed after a "
+                                    f"capacity refusal: {workspace}"
+                                ) from removal_error
                     raise
         finally:
             os.close(root_fd)
@@ -394,6 +418,19 @@ class EngineScratchWorkspace:
     def cleanup(self) -> None:
         if not self._published:
             raise EngineScratchError("Refusing to remove unpublished engine scratch workspace")
+        self._remove_workspace()
+
+    def discard_unlaunched(self) -> None:
+        """Remove a workspace whose engine was never started.
+
+        It holds only staged copies of durable inputs, so there is nothing to
+        publish. The caller owns the guarantee that no engine ran in it.
+        """
+        if self._published:
+            raise EngineScratchError("engine scratch workspace was already published")
+        self._remove_workspace()
+
+    def _remove_workspace(self) -> None:
         self._require_open()
         root_fd, _observed_identity = _open_pinned_directory(
             self.policy.root,
@@ -1543,6 +1580,7 @@ def _remove_owned_workspace_at(
 
 
 __all__ = [
+    "EngineScratchCapacityError",
     "EngineScratchError",
     "EngineScratchPolicy",
     "EngineScratchWorkspace",

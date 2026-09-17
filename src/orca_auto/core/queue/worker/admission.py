@@ -8,6 +8,7 @@ from orca_auto.core.admission import read_active_slot_count, reserve_slot
 from orca_auto.core.engine_catalog import find_engine_catalog_entry
 
 from ..child.execution import find_queue_entry_by_id
+from ..deferral import queue_entry_admission_is_deferred
 from ..dependencies import ChildQueueWorkerDeps
 from ..priority import normalize_queue_priority
 from ..publication import queue_entry_is_claimable
@@ -94,6 +95,9 @@ def _select_next_claimable_entry(
                 continue
             if not queue_entry_is_claimable(entry):
                 continue
+            if queue_entry_admission_is_deferred(entry):
+                # Waiting for a resource, not for queue order: rows behind it stay eligible.
+                continue
             if accept_entry_fn is not None and not accept_entry_fn(entry):
                 if not select_all_rows:
                     break
@@ -145,13 +149,18 @@ def peek_next_across_roots(
     cancellation, and the dequeue then reports that. On the single-root fast
     path the root's own ``dequeue_next`` owns the eligibility rule, so the
     preview only requires what every queue store requires — a pending,
-    uncancelled row — and leaves the rest to the dequeue.
+    uncancelled row whose admission is not deferred — and leaves the rest to
+    the dequeue.
     """
     if len(roots) == 1 and accept_entry_fn is None:
         for entry in list_queue_fn(roots[0]):
             status_value = getattr(getattr(entry, "status", None), "value", None)
             status = str(status_value).strip().lower()
-            if status == "pending" and not getattr(entry, "cancel_requested", False):
+            if (
+                status == "pending"
+                and not getattr(entry, "cancel_requested", False)
+                and not queue_entry_admission_is_deferred(entry)
+            ):
                 return roots[0], entry
         return None
     return _select_next_claimable_entry(

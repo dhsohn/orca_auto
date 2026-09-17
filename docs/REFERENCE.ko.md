@@ -206,7 +206,11 @@ orca:
   `resources.max_memory_gb`), tmpfs 여유 공간, `scratch_min_free_gb`의 합을 감당할 때만
   시작합니다. 기본값(상한 32 GiB, reserve 8 GiB)에 tmpfs가 RAM의 절반인 host라면 RAM이 대략
   144 GiB 미만일 때 attempt는 많아야 하나(대략 80 GiB 미만이면 0개)만 허용되므로, 더
-  돌리려면 `max_memory_gb_per_task`를 낮추거나 tmpfs를 줄이세요. 보수적인 시작 시점 메모리 snapshot은
+  돌리려면 `max_memory_gb_per_task`를 낮추거나 tmpfs를 줄이세요. 시작하기 전에 gate가 거부한
+  ORCA 작업은 실패하지 않습니다. queue에서 대기하며 `queue list`에 `(waiting for resources)`로
+  표시되고, 60초 뒤에 다시 시도하며 그동안 뒤에 있는 더 작은 작업이 먼저 시작할 수 있습니다.
+  결코 들어갈 수 없는 작업은 취소할 때까지 대기합니다. workflow xTB/CREST stage는 거부되면
+  여전히 실패합니다. 보수적인 시작 시점 메모리 snapshot은
   swap 압력을 줄이지만 이후 system activity나 tmpfs swap 자체를 막지는 못하며,
   `scratch_min_free_gb`는 시작 gate이지 디렉터리 quota가 아닙니다.
 - `workflow.paths.xtb_executable` 또는 `workflow.paths.crest_executable`을 비워

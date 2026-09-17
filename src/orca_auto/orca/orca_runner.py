@@ -23,6 +23,7 @@ from orca_auto.core.engine_runner import (
     open_pinned_executable,
 )
 from orca_auto.core.engine_scratch import (
+    EngineScratchCapacityError,
     EngineScratchWorkspace,
     ScratchPublication,
     attach_scratch_provenance_to_exception,
@@ -146,6 +147,7 @@ class OrcaRunner:
         self._bound_executable_identity: dict[str, Any] = {}
         self._bound_durable_directory_identity: tuple[int, int] | None = None
         self._scratch_policy: OrcaScratchPolicy | None = None
+        self._prepared_workspace: EngineScratchWorkspace | None = None
 
     def set_running_job_registrar(
         self,
@@ -272,6 +274,59 @@ class OrcaRunner:
                 label="ORCA normalized input",
             )
 
+    def prepare(self, inp_path: Path) -> None:
+        """Reserve the RAM scratch workspace before any run state is written.
+
+        Only a capacity refusal propagates: nothing has started, so the caller
+        may leave the job waiting. Any other failure is left for `run` to raise
+        again, where it is recorded as a failed attempt.
+        """
+        if self._scratch_policy is None or self._prepared_workspace is not None:
+            return
+        try:
+            durable_input = require_confined_regular_file(
+                inp_path.parent,
+                inp_path,
+                label="ORCA selected input",
+            )
+            self._prepared_workspace = EngineScratchWorkspace.create(
+                self._scratch_policy,
+                durable_input,
+                expected_durable_dir_identity=self._bound_durable_directory_identity,
+            )
+        except EngineScratchCapacityError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.debug("ORCA scratch preparation failed; run will retry it", exc_info=True)
+
+    def release_prepared(self) -> None:
+        """Remove a prepared workspace that `run` never took."""
+        workspace = self._prepared_workspace
+        if workspace is None:
+            return
+        self._prepared_workspace = None
+        try:
+            workspace.discard_unlaunched()
+        except BaseException:
+            logger.exception(
+                "Unused ORCA scratch workspace could not be removed; "
+                "future scratch runs will remain fail-closed until it is inspected: %s",
+                workspace.path,
+            )
+        finally:
+            workspace.close()
+
+    def _take_prepared_workspace(self, durable_input: Path) -> EngineScratchWorkspace | None:
+        workspace = self._prepared_workspace
+        if workspace is None:
+            return None
+        if workspace.durable_input != durable_input:
+            # A resumed run executes a derived input instead of the prepared one.
+            self.release_prepared()
+            return None
+        self._prepared_workspace = None
+        return workspace
+
     def run(self, inp_path: Path) -> RunResult:
         if self._prepare_running_job is None or self._register_running_job is None:
             raise RuntimeError("ORCA execution requires managed admission callbacks")
@@ -282,11 +337,13 @@ class OrcaRunner:
         )
         if self._scratch_policy is None:
             return self._run_in_place(durable_input)
-        workspace = EngineScratchWorkspace.create(
-            self._scratch_policy,
-            durable_input,
-            expected_durable_dir_identity=self._bound_durable_directory_identity,
-        )
+        workspace = self._take_prepared_workspace(durable_input)
+        if workspace is None:
+            workspace = EngineScratchWorkspace.create(
+                self._scratch_policy,
+                durable_input,
+                expected_durable_dir_identity=self._bound_durable_directory_identity,
+            )
         publication: ScratchPublication | None = None
         try:
             try:

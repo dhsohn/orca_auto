@@ -88,7 +88,8 @@ orca:
     # Refuse a new attempt unless this much tmpfs space remains in addition to
     # its bound input snapshot. Launch also requires current MemAvailable to
     # cover the per-task memory cap, the per-task caps of every attempt still
-    # running, all remaining tmpfs space, and this reserve.
+    # running, all remaining tmpfs space, and this reserve. An ORCA job refused
+    # before it starts stays queued and is tried again later; it is not failed.
     # These are admission guards, not a per-job quota or a no-swap guarantee.
     # scratch_min_free_gb: 8
   paths:

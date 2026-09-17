@@ -204,7 +204,12 @@ Notes:
   `scratch_min_free_gb`. With the shipped defaults (32 GiB cap, 8 GiB reserve)
   on a host whose tmpfs is half of RAM, that admits at most one attempt below
   roughly 144 GiB of RAM (none below roughly 80 GiB); lower
-  `max_memory_gb_per_task` or shrink the tmpfs to run more. The conservative
+  `max_memory_gb_per_task` or shrink the tmpfs to run more. An ORCA job the
+  guard refuses before it starts is not failed: it waits in the queue, shown
+  as `(waiting for resources)` by `queue list`, and is tried again after 60
+  seconds while smaller jobs behind it may start first. A job that can never
+  fit waits until it is cancelled. Workflow xTB/CREST stages still fail on a
+  refusal. The conservative
   launch-time memory snapshot
   reduces swap pressure but cannot prevent later system activity or tmpfs
   swap, and `scratch_min_free_gb` is a launch guard, not a directory quota.

@@ -457,6 +457,52 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(len(self.worker._running), 0)
         self.assertEqual(active_slot_count(self.root), 0)
 
+    def test_check_completed_jobs_leaves_a_deferred_child_pending(self) -> None:
+        # The child was refused RAM scratch before ORCA started, returned its
+        # own row to the queue and exited non-zero. That exit code must not
+        # fail the pending row, and the slot must become reusable.
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 75
+        rxn = self.root / "mol_deferred"
+        rxn.mkdir()
+        entry = enqueue(self.root, str(rxn))
+        token = reserve_slot(
+            self.root,
+            self.worker.max_concurrent,
+            work_dir=str(rxn),
+            queue_id=entry.queue_id,
+            source="queue_worker",
+            state="reserved",
+        )
+        self.assertIsNotNone(token)
+        dequeue_next(self.root)
+        self.assertTrue(
+            replay_mod.requeue_running_entry(
+                self.root,
+                entry.queue_id,
+                admission_deferral_reason="engine scratch cannot guarantee RAM headroom",
+            )
+        )
+        self.worker._running[entry.queue_id] = _RunningJob(
+            queue_id=entry.queue_id,
+            reaction_dir=str(rxn),
+            process=mock_proc,
+            admission_token=token or "",
+        )
+
+        with self.assertLogs("orca_auto.orca.queue.replay", level="WARNING") as logs:
+            self.worker._check_completed_jobs()
+
+        self.assertEqual(len(self.worker._running), 0)
+        self.assertEqual(active_slot_count(self.root), 0)
+        [updated] = list_queue(self.root)
+        self.assertEqual(updated.status.value, "pending")
+        self.assertEqual(updated.error, "")
+        self.assertTrue(
+            any("waits in the queue" in line and "RAM headroom" in line for line in logs.output)
+        )
+        self.assertFalse((rxn / "job_state.json").exists())
+
     def test_check_completed_jobs_failure(self) -> None:
         mock_proc = MagicMock()
         mock_proc.poll.return_value = 1

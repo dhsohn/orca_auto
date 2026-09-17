@@ -17,6 +17,7 @@ from orca_auto.core.admission import (
 )
 from orca_auto.core.admission import activate_reserved_slot as _activate_reserved_slot
 from orca_auto.core.engine_process import require_confined_regular_file
+from orca_auto.core.engine_scratch import EngineScratchCapacityError
 from orca_auto.core.messaging import build_channel
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, run_lock_status
 
@@ -270,18 +271,13 @@ def notification_callbacks(cfg: Any) -> tuple[Any, Any]:
     return notify_started, notify_finished
 
 
-def run_with_state(
+def _build_runner(
     *,
     cfg: Any,
-    reaction_dir: Path,
-    selected_inp: Path,
     runner_cls: type[Any],
-    resumed: bool,
-    state: Any,
-    admission_root: Path | None = None,
-    reservation_token: str | None = None,
-) -> int:
-    notify_started, notify_finished = notification_callbacks(cfg)
+    admission_root: Path | None,
+    reservation_token: str | None,
+) -> Any:
     runner = runner_cls(cfg.paths.orca_executable)
     if cfg.scratch.enabled:
         set_scratch_policy = getattr(runner, "set_scratch_policy", None)
@@ -307,6 +303,29 @@ def run_with_state(
                 admission_root,
                 reservation_token,
             ),
+        )
+    return runner
+
+
+def run_with_state(
+    *,
+    cfg: Any,
+    reaction_dir: Path,
+    selected_inp: Path,
+    runner_cls: type[Any],
+    resumed: bool,
+    state: Any,
+    admission_root: Path | None = None,
+    reservation_token: str | None = None,
+    runner: Any | None = None,
+) -> int:
+    notify_started, notify_finished = notification_callbacks(cfg)
+    if runner is None:
+        runner = _build_runner(
+            cfg=cfg,
+            runner_cls=runner_cls,
+            admission_root=admission_root,
+            reservation_token=reservation_token,
         )
     return run_attempts(
         reaction_dir,
@@ -464,39 +483,82 @@ def execute_locked_run(
                 if existing_exit is not None:
                     return existing_exit
 
-            state, resumed = load_or_create_state(
-                context.reaction_dir,
-                context.selected_inp,
-                to_resolved_local=_to_resolved_local,
-            )
-            state_changed = False
-            if context_provenance and state.get("execution_provenance") != dict(context_provenance):
-                state["execution_provenance"] = dict(context_provenance)
-                state_changed = True
-            if context.admission_task_id and state.get("job_id") != context.admission_task_id:
-                state["job_id"] = context.admission_task_id
-                state_changed = True
-            if context_queue_id and state.get("queue_id") != context_queue_id:
-                state["queue_id"] = context_queue_id
-                state_changed = True
-            if (
-                context_queue_generation
-                and state.get("queue_generation") != context_queue_generation
-            ):
-                state["queue_generation"] = context_queue_generation
-                state_changed = True
-            if state_changed:
-                save_state(context.reaction_dir, state)
-            return run_with_state(
-                cfg=context.cfg,
-                reaction_dir=context.reaction_dir,
-                selected_inp=context.selected_inp,
-                runner_cls=runner_cls,
-                resumed=resumed,
-                state=state,
-                admission_root=context.admission_root,
-                reservation_token=context.reservation_token,
-            )
+            with _prepared_scratch_runner(context, runner_cls=runner_cls) as runner:
+                return _load_state_and_run(
+                    context,
+                    runner_cls=runner_cls,
+                    runner=runner,
+                    execution_provenance=context_provenance,
+                    queue_id=context_queue_id,
+                    queue_generation=context_queue_generation,
+                )
+
+
+@contextmanager
+def _prepared_scratch_runner(context: RunExecutionContext, *, runner_cls: type[Any]) -> Any:
+    """Reserve RAM scratch before the run writes its first state.
+
+    A capacity refusal raised here leaves no state, attempt record,
+    notification or generation artifact, so the job was never started and may
+    wait for admission again. Once state exists the same refusal is a failed
+    attempt, which is never rerun.
+    """
+    if not getattr(getattr(context.cfg, "scratch", None), "enabled", False):
+        yield None
+        return
+    runner = _build_runner(
+        cfg=context.cfg,
+        runner_cls=runner_cls,
+        admission_root=context.admission_root,
+        reservation_token=context.reservation_token,
+    )
+    try:
+        runner.prepare(context.selected_inp)
+        yield runner
+    finally:
+        runner.release_prepared()
+
+
+def _load_state_and_run(
+    context: RunExecutionContext,
+    *,
+    runner_cls: type[Any],
+    runner: Any | None,
+    execution_provenance: Mapping[str, Any] | None,
+    queue_id: str,
+    queue_generation: str,
+) -> int:
+    state, resumed = load_or_create_state(
+        context.reaction_dir,
+        context.selected_inp,
+        to_resolved_local=_to_resolved_local,
+    )
+    state_changed = False
+    if execution_provenance and state.get("execution_provenance") != dict(execution_provenance):
+        state["execution_provenance"] = dict(execution_provenance)
+        state_changed = True
+    if context.admission_task_id and state.get("job_id") != context.admission_task_id:
+        state["job_id"] = context.admission_task_id
+        state_changed = True
+    if queue_id and state.get("queue_id") != queue_id:
+        state["queue_id"] = queue_id
+        state_changed = True
+    if queue_generation and state.get("queue_generation") != queue_generation:
+        state["queue_generation"] = queue_generation
+        state_changed = True
+    if state_changed:
+        save_state(context.reaction_dir, state)
+    return run_with_state(
+        cfg=context.cfg,
+        reaction_dir=context.reaction_dir,
+        selected_inp=context.selected_inp,
+        runner_cls=runner_cls,
+        resumed=resumed,
+        state=state,
+        admission_root=context.admission_root,
+        reservation_token=context.reservation_token,
+        runner=runner,
+    )
 
 
 def execute_orca_run(
@@ -539,6 +601,11 @@ def execute_orca_run(
         # Run-state recovery stays inside the reaction lock. Engine-process
         # ownership is reconciled independently through the admission store.
         return execute_locked_run(args, context, runner_cls=runner_cls)
+    except EngineScratchCapacityError:
+        # Raised only before the run wrote any state; the queue child decides
+        # whether the job waits. It must not become an ordinary failure here.
+        _release_reservation_if_needed(context.admission_root, context.reservation_token)
+        raise
     except AdmissionLimitReachedError as exc:
         _release_reservation_if_needed(context.admission_root, context.reservation_token)
         logger.error("%s", exc)
