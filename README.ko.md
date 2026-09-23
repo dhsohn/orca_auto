@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v7.0.0/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
+  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v7.0.1/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
   <a href="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml"><img src="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/dhsohn/orca_auto/releases/latest"><img src="https://img.shields.io/github/v/release/dhsohn/orca_auto" alt="Release"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
-  <a href="https://github.com/dhsohn/orca_auto/blob/v7.0.0/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://github.com/dhsohn/orca_auto/blob/v7.0.1/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-<p align="center"><a href="https://github.com/dhsohn/orca_auto/blob/v7.0.0/README.md">English</a> · <b>한국어</b></p>
+<p align="center"><a href="https://github.com/dhsohn/orca_auto/blob/v7.0.1/README.md">English</a> · <b>한국어</b></p>
 
 ORCA_auto는 Linux 및 WSL 환경을 위한 **큐 기반 ORCA 자동 실행 및 관리 도구**입니다.
 작업 큐와 백그라운드 워커를 통해 양자화학 계산을 안정적으로 실행하고, CLI 및 구조화된 데이터(`--json`, `machine.json`)로 진행 상황과 결과를 손쉽게 관리할 수 있습니다.
@@ -26,13 +26,13 @@ ORCA_auto는 Linux 및 WSL 환경을 위한 **큐 기반 ORCA 자동 실행 및 
 워커 프로세스는 `systemd`로 관리합니다.
 
 ```bash
-python -m pip install orca_auto==7.0.0
+python -m pip install orca_auto==7.0.1
 ```
 
-- **[설치 상세 안내](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/INSTALLATION.ko.md)** — 독립 ORCA 실행용 PyPI 패키지 설치
-- **[빠른 시작 가이드](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/QUICKSTART.ko.md)** — 기본 환경 설정, 워커 서비스 등록 및 첫 계산 제출
+- **[설치 상세 안내](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/INSTALLATION.ko.md)** — 독립 ORCA 실행용 PyPI 패키지 설치
+- **[빠른 시작 가이드](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/QUICKSTART.ko.md)** — 기본 환경 설정, 워커 서비스 등록 및 첫 계산 제출
 
-기존 환경 업그레이드는 [업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/RELEASE.md#upgrading-to-70)(영어)를 참고하세요.
+기존 환경 업그레이드는 [업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/RELEASE.md#upgrading-to-70)(영어)를 참고하세요.
 
 ## 계산화학 도구 생태계
 
@@ -41,16 +41,16 @@ python -m pip install orca_auto==7.0.0
 - [LLMdocx](https://github.com/dhsohn/LLMdocx): 연구 보고서 및 논문 문서화 도구
 
 각 도구는 독립적으로 동작하는 로컬 중심(Local-first) 연구 도구이며, 표준 형식(`machine.json`, 결과 번들 등)을 통해 유기적으로 연계해 사용할 수 있습니다.
-[도구 간 연결 방식 →](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/RELATED_WORK.md#local-first-companion-tools)(영어)
+[도구 간 연결 방식 →](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/RELATED_WORK.md#local-first-companion-tools)(영어)
 
 ## 문서
 
-[명령어 레퍼런스](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/REFERENCE.ko.md) · [공개 인터페이스 규격](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/PUBLIC_CONTRACTS.ko.md) ·
-[아키텍처 설계](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/ARCHITECTURE.ko.md) · [systemd 서비스](https://github.com/dhsohn/orca_auto/blob/v7.0.0/systemd/README.ko.md) ·
-[Discord 알림 설정](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DISCORD_SETUP.ko.md)
+[명령어 레퍼런스](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/REFERENCE.ko.md) · [공개 인터페이스 규격](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/PUBLIC_CONTRACTS.ko.md) ·
+[아키텍처 설계](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/ARCHITECTURE.ko.md) · [systemd 서비스](https://github.com/dhsohn/orca_auto/blob/v7.0.1/systemd/README.ko.md) ·
+[Discord 알림 설정](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/DISCORD_SETUP.ko.md)
 
-[개발 가이드](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DEVELOPMENT.ko.md) · [검증](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/VALIDATION.md) ·
-[로드맵](https://github.com/dhsohn/orca_auto/blob/v7.0.0/ROADMAP.md) · [변경 이력](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CHANGELOG.md)
+[개발 가이드](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/DEVELOPMENT.ko.md) · [검증](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/VALIDATION.md) ·
+[로드맵](https://github.com/dhsohn/orca_auto/blob/v7.0.1/ROADMAP.md) · [변경 이력](https://github.com/dhsohn/orca_auto/blob/v7.0.1/CHANGELOG.md)
 
-[인용](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CITATION.cff) · [기여](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CONTRIBUTING.md) ·
-[지원](https://github.com/dhsohn/orca_auto/blob/v7.0.0/SUPPORT.md) · [보안](https://github.com/dhsohn/orca_auto/blob/v7.0.0/SECURITY.md)
+[인용](https://github.com/dhsohn/orca_auto/blob/v7.0.1/CITATION.cff) · [기여](https://github.com/dhsohn/orca_auto/blob/v7.0.1/CONTRIBUTING.md) ·
+[지원](https://github.com/dhsohn/orca_auto/blob/v7.0.1/SUPPORT.md) · [보안](https://github.com/dhsohn/orca_auto/blob/v7.0.1/SECURITY.md)

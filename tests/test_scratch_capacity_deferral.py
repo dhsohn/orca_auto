@@ -217,6 +217,10 @@ def test_deferred_row_is_skipped_until_due_and_does_not_block_the_row_behind_it(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    import orca_auto.core.queue.deferral as deferral_mod
+
+    clock = SimpleNamespace(now=datetime(2026, 1, 1, tzinfo=UTC))
+    monkeypatch.setattr(deferral_mod, "datetime", SimpleNamespace(now=lambda _tz: clock.now))
     queue_root = tmp_path / "queue"
     big = enqueue(
         queue_root,
@@ -255,9 +259,10 @@ def test_deferred_row_is_skipped_until_due_and_does_not_block_the_row_behind_it(
     for accept_entry_fn in (None, lambda _entry: True):
         assert peek(accept_entry_fn) is None
 
-    import orca_auto.core.queue.store as store_mod
-
-    monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
+    clock.now += timedelta(seconds=ADMISSION_DEFERRAL_INTERVAL_SECONDS)
+    for accept_entry_fn in (None, lambda _entry: True):
+        peeked = peek(accept_entry_fn)
+        assert peeked is not None and peeked[1].queue_id == big.queue_id
     due = dequeue_next(queue_root)
     assert due is not None and due.queue_id == big.queue_id
 
