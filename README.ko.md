@@ -16,9 +16,9 @@ ORCA_auto는 Linux 및 WSL 환경을 위한 **큐 기반 ORCA 자동 실행 및 
 
 ## 주요 기능
 
-- **안전한 백그라운드 실행**: 작업을 큐에 등록하면 터미널 세션이 종료되어도 systemd 워커 데몬이 백그라운드에서 계산을 안정적으로 완료합니다.
+- **안전한 백그라운드 실행**: 작업을 큐에 등록하면 터미널 창을 닫거나 세션이 끊겨도 systemd 워커 데몬이 백그라운드에서 계산을 안정적으로 지속합니다.
 - **구조화된 결과 및 상태 조회**: `orca_auto queue list --json`과 `orca_auto service status --json`으로 진행 상황을 모니터링할 수 있으며, 계산 종료 시 생성되는 `machine.json`을 통해 후속 도구 및 자동화 스크립트와 쉽게 연계할 수 있습니다.
-- **예측 가능한 복구**: 워커나 시스템이 중단되어도 검증된 복구 절차를 따르며, 실패한 계산을 무분별하게 자동 재시도하지 않아 자원 낭비를 방지합니다.
+- **예측 가능한 장애 복구**: 비정상 중단이 발생해도 명확한 복구 경로를 따르며, 화학 수렴에 실패한 계산을 맹목적으로 무한 재시도하지 않아 서버 자원을 낭비하지 않습니다.
 
 ## 시작하기
 
@@ -45,11 +45,11 @@ python -m pip install orca_auto==7.0.0
 
 ## 문서
 
-[명령어](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/REFERENCE.ko.md) · [런타임 계약](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/PUBLIC_CONTRACTS.ko.md) ·
-[구조](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/ARCHITECTURE.ko.md) · [서비스](https://github.com/dhsohn/orca_auto/blob/v7.0.0/systemd/README.ko.md) ·
-[Discord 알림](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DISCORD_SETUP.ko.md)
+[명령어 레퍼런스](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/REFERENCE.ko.md) · [공개 인터페이스 규격](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/PUBLIC_CONTRACTS.ko.md) ·
+[아키텍처 설계](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/ARCHITECTURE.ko.md) · [systemd 서비스](https://github.com/dhsohn/orca_auto/blob/v7.0.0/systemd/README.ko.md) ·
+[Discord 알림 설정](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DISCORD_SETUP.ko.md)
 
-[개발](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DEVELOPMENT.ko.md) · [검증](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/VALIDATION.md) ·
+[개발 가이드](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DEVELOPMENT.ko.md) · [검증](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/VALIDATION.md) ·
 [로드맵](https://github.com/dhsohn/orca_auto/blob/v7.0.0/ROADMAP.md) · [변경 이력](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CHANGELOG.md)
 
 [인용](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CITATION.cff) · [기여](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CONTRIBUTING.md) ·
