@@ -3,7 +3,7 @@
 [English](REFERENCE.md) | **한국어**
 
 ORCA_auto 7.0의 CLI 명령어, 옵션 플래그, 큐 상태 전이 모델 및 산출물 규격을 설명합니다.
-공개 동작에 대한 정식 규격은 [공개 계약(PUBLIC_CONTRACTS.ko.md)](PUBLIC_CONTRACTS.ko.md)을 참고하세요.
+공개 동작에 대한 정식 규격은 [공개 인터페이스 규격(PUBLIC_CONTRACTS.ko.md)](PUBLIC_CONTRACTS.ko.md)을 참고하세요.
 
 ---
 
@@ -77,7 +77,7 @@ orca_auto service restart [--config PATH] [--force]
 | 상태 | 설명 |
 | :--- | :--- |
 | `pending` | 작업이 큐에 안전하게 등록되어 가용 워커와 실행 슬롯을 기다리는 상태 |
-| `running` | 워커가 슬롯을 예약하고 독립 실행 회차 디렉터리에서 ORCA를 구동 중인 상태 |
+| `running` | 워커가 슬롯을 예약하고 독립 실행 디렉터리(`generation`)에서 ORCA를 구동 중인 상태 |
 | `completed` | 계산이 정상 종료되고 에너지 수렴 검증까지 통과한 상태 |
 | `failed` | 수렴 실패, 프로세스 비정상 종료 등으로 계산이 종료된 상태 (자동 재시도 없음) |
 | `cancelled` | 사용자가 명시적으로 취소한 상태 |
@@ -87,13 +87,13 @@ orca_auto service restart [--config PATH] [--force]
 
 ## 3. 작업 디렉터리 산출물 구조
 
-각 실행은 작업 디렉터리 내 고유한 회차(generation)에 결과물을 기록합니다:
+각 실행은 작업 디렉터리 내 고유한 `generation` 디렉터리에 결과물을 기록합니다:
 ```text
 water/
 ├── water.inp               # 원본 입력 파일
 ├── job.out                 # ORCA 표준 출력 원본 로그
 ├── job_state.json          # 실행 내부 상태 및 복구용 메타데이터
-├── machine.json            # v1 엔벨로프 규격의 표준 기계 가독 결과
+├── machine.json            # v1 엔벨로프(Envelope) 규격의 구조화된 실행 결과
 └── report.html             # (옵션) Supporting Information 및 계산 요약 리포트
 ```
 

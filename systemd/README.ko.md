@@ -20,7 +20,7 @@ orca_auto-runtime@USER.target          # 런타임 최상위 관리 타깃
 - **`orca_auto-engine-workers@USER.target`**: 엔진 워커 서비스를 묶어 관리하는 타깃입니다.
 - **`orca_auto-runtime@USER.target`**: 런타임 전체의 기동 및 종료를 총괄하는 상위 타깃입니다.
 
-> **참고**: 7.0부터 워크플로우가 은퇴함에 따라 `orca_auto-workflow-worker@.service`는 더 이상 제공되지 않습니다.
+> **참고**: 7.0부터 워크플로우 기능이 제거됨에 따라 `orca_auto-workflow-worker@.service`는 더 이상 제공되지 않습니다.
 
 ---
 
