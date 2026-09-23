@@ -1,62 +1,68 @@
-# Architecture
+# Architecture and Design Principles
 
 **English** | [한국어](ARCHITECTURE.ko.md)
 
-ORCA_auto validates and durably queues standalone ORCA input directories. Supervised
-workers claim eligible jobs, reserve shared admission slots, execute isolated
-generations, and publish verified terminal observations.
+ORCA_auto is a queue runner and execution supervisor designed for durable execution and observable monitoring of standalone ORCA quantum chemistry calculations on Linux and WSL.
 
-## Ownership
+---
+
+## 1. Core Principles
+
+1. **Durable Queueing**: Submissions are committed atomically to disk. Calculation state is preserved across terminal disconnects and host reboots.
+2. **Generation Isolation**: Resubmitting within a job directory creates a fresh, isolated generation directory instead of overwriting prior attempts.
+3. **Explicit Recovery**: Calculation failures are triaged and permanently recorded. ORCA_auto never modifies inputs or blindly retries failed quantum calculations.
+4. **Authoritative Source of Truth**: On-disk persistent JSON files (`job_state.json`, `queue.json`) serve as the source of truth. The SQLite activity index is a projection that can be rebuilt deterministically from disk at any time.
+
+---
+
+## 2. Layering and Boundaries
+
+Dependencies flow strictly in one direction: **`CLI / UI` → `orca` (domain) → `core` (infrastructure)**. The domain and core layers never import CLI code.
+
+```mermaid
+graph TD
+    CLI["CLI Layer (cli*.py, activity/)"]
+    ORCA["ORCA Domain (orca/)"]
+    CORE["Core Infrastructure (core/)"]
+
+    CLI --> ORCA
+    CLI --> CORE
+    ORCA --> CORE
+```
 
 | Component | Responsibility |
-| --- | --- |
-| `cli*.py`, `activity/` | User commands, queue views, cancellation and service inspection |
-| `orca/` | ORCA input, execution, recovery policy, analysis and reports |
-| `core/` | Durable queues, admission, process supervision, paths and storage |
+| :--- | :--- |
+| **`cli*.py`, `activity/`** | Command parsing, terminal formatting, queue querying, service status, and job cancellation interfaces |
+| **`orca/`** | ORCA input (`.inp`) parsing, resource extraction, execution workspace setup, output log analysis, convergence verification, and result reporting (`machine.json`) |
+| **`core/`** | Disk queue store, concurrency admission slots, process supervision, systemd integration, and filesystem locks |
 
-Imports follow `orca` → `core`; domain code does not import CLI commands.
-`core/engine_catalog.py` registers ORCA alone. Version 7 has no extension loader
-or workflow implementation.
+> **ORCA_auto 7.0 Structure**: Workflows, conformer scaffolds, and xTB/CREST engines (`flow/`) were retired in 7.0. The engine catalog contains only standalone `orca`, significantly simplifying the runtime architecture.
 
-## Submission and execution
+---
 
-`orca/submission.py` prepares input resources and explicitly creates the execution
-snapshot. Metadata assembly is pure. The submitter owns cleanup until durable
-enqueue transfers ownership; an uncertain commit is resolved before cleanup.
+## 3. Submission & Execution Lifecycle
 
-The worker validates queue identity and the immutable input/executable binding
-before launch. It tracks every live child, including a child whose row already
-returned to pending. One unsettled terminal generation blocks its own directory;
-unresolved directory identity or queued-publication failure can block the queue.
-Capacity refusal before execution defers a job without recording a calculation failure.
+### 1. Submission
+- `orca_auto run-dir <PATH>` reads the newest eligible `.inp` and resource directives (`%pal`, `%maxcore`).
+- `orca/submission.py` constructs input snapshots, persists the queue entry atomically, and returns immediately.
 
-Cancellation observations reuse unchanged queue snapshots. Terminal notification
-dispatch has a durable claim and bounded background sends; notification delivery
-is best effort and does not retain execution admission slots.
+### 2. Dequeue & Admission
+- The background resident worker polls the queue for pending jobs.
+- When an eligible job is found, the worker checks available execution slots (`scheduler.max_active_simulations`) and host memory capacity (when RAM Scratch is enabled).
+- If resources are sufficient, the worker claims the slot and launches the calculation in an isolated generation workspace. If memory is temporarily constrained, the job is deferred in `waiting for resources` state without failing.
 
-## State, evidence and reports
+### 3. Supervision & Clean Exit
+- The worker tracks child process status and guarantees clean shutdown upon external signals (`SIGTERM`).
+- Interrupted or failed executions retain their specific failure causes in both the queue entry and generation state.
 
-`orca/state.py` owns state mutation. `orca/state_reading.py` is a read-only consumer;
-`orca/report/publication.py` publishes machine observations. They share the pure
-`orca/report_fields.py` projection for ORCA-owned summary/results fields.
+### 4. Convergence & Publication
+- Upon calculation exit, `orca/out_analyzer.py` verifies termination banners and scans output lines for error or convergence failures (ignoring comments and input echoes).
+- A verified observation payload (`machine.json` adhering to the v1 envelope contract) and human-readable HTML/SI reports are published.
 
-A report read verifies state, generation ownership, artifact paths and receipts.
-It hashes each distinct file once per read, hashes the selected input after
-ownership and other artifacts, then rechecks file identities before returning.
-Receipt reuse is local to that read. Scientific evidence comes from validated
-engine output; HTML and SI presentation are not evidence sources.
+---
 
-## Queue views and deployment
+## 4. Operational Architecture
 
-Durable JSON/state remains authoritative. `core/activity_index.py` supplies a
-rebuildable SQLite projection for ordered/filterable queries; durable invalidation
-tickets keep published state changes visible. `--refresh` discovers unindexed
-runs. Initial builds and recovery still read source history.
-
-Production can use a verified, immutable wheel runtime with external config and
-state. Service status compares the installed unit with the actual process build.
-See [RUNTIME](RUNTIME.md) for preparation and idle cutover.
-
-Retired workflow directory markers are read only to reject execution and protect
-historical files from standalone discovery/cleanup. Historical admission fields
-remain readable so old reservations cannot disappear from capacity accounting.
+- **SQLite Activity Projection**: High-performance querying is provided by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The `--refresh` flag scans for unindexed runs.
+- **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation to eliminate risks associated with running directly out of mutable development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
+- **Historical Data Protection**: Retired workflow directories from previous versions are protected as read-only to ensure historical calculations are preserved without risk of accidental overwrite.

@@ -30,8 +30,7 @@ python -m pip install orca_auto==7.0.0
 ```
 
 - **[Installation details](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/INSTALLATION.md)** — install the standalone ORCA package.
-- **[Set up workers and submit your first job](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/QUICKSTART.md)** — configure a
-  source checkout, start services, and inspect the queue.
+- **[Quickstart guide](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/QUICKSTART.md)** — configure settings, start background services, and submit your first calculation.
 
 **Upgrading?** See the [upgrade guide](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/RELEASE.md#upgrading-to-70).
 
@@ -46,11 +45,11 @@ These are independent, local-first companion tools that connect through standard
 
 ## Documentation
 
-[Command reference](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/REFERENCE.md) · [Runtime contracts](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/PUBLIC_CONTRACTS.md) ·
-[Architecture](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/ARCHITECTURE.md) · [Services](https://github.com/dhsohn/orca_auto/blob/v7.0.0/systemd/README.md) ·
+[Command reference](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/REFERENCE.md) · [Public contracts](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/PUBLIC_CONTRACTS.md) ·
+[Architecture](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/ARCHITECTURE.md) · [systemd services](https://github.com/dhsohn/orca_auto/blob/v7.0.0/systemd/README.md) ·
 [Discord notifications](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DISCORD_SETUP.md)
 
-[Development](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DEVELOPMENT.md) · [Validation](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/VALIDATION.md) ·
+[Development guide](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/DEVELOPMENT.md) · [Validation](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/VALIDATION.md) ·
 [Roadmap](https://github.com/dhsohn/orca_auto/blob/v7.0.0/ROADMAP.md) · [Changelog](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CHANGELOG.md)
 
 [Citation](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CITATION.cff) · [Contributing](https://github.com/dhsohn/orca_auto/blob/v7.0.0/CONTRIBUTING.md) ·

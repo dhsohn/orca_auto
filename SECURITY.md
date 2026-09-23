@@ -27,7 +27,7 @@ Please include:
 
 - affected commit or release;
 - operating system/runtime context;
-- the vulnerable command, configuration key, or workflow surface;
+- the vulnerable command, configuration key, or runtime surface;
 - minimal reproduction steps using sanitized paths and dummy credentials;
 - impact assessment, such as credential exposure, path traversal, unsafe process
   execution, or unsafe publication of private artifacts.

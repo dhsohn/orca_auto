@@ -1,6 +1,6 @@
 # Related Work and Project Scope
 
-ORCA_auto provides a reliable runtime and observability layer for ORCA-centered computational chemistry workflows on Linux and WSL. This page explains how ORCA_auto fits into the broader computational chemistry ecosystem.
+ORCA_auto provides a reliable runtime and observability layer for ORCA-centered computational chemistry calculations on Linux and WSL. This page explains how ORCA_auto fits into the broader computational chemistry ecosystem.
 
 ## Local-first Companion Tools
 
