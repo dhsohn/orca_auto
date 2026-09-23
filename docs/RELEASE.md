@@ -1,13 +1,6 @@
-# Release process
+# Release Process
 
-**English only for now.** This file describes the repository operating process;
-release notes can be mirrored into Korean documentation later when the release
-surface stabilizes.
-
-ORCA_auto is not currently being prepared for a JOSS submission. This release
-process intentionally excludes paper drafting and Zenodo archiving while keeping
-the useful open-source software hygiene: issues, focused branches, reviewable
-PRs, changelog entries, tags, and reproducible verification.
+This document describes the release workflow, versioning policy, and checklist for ORCA_auto.
 
 ## Release goals
 

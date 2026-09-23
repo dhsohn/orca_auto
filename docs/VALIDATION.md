@@ -1,16 +1,9 @@
-# Validation and testing
+# Validation and Testing
 
-ORCA_auto validation is split into two honest layers:
+ORCA_auto validation is organized into two layers:
 
-1. CI and fake-engine checks that can run publicly without licensed chemistry
-   binaries.
-2. Opt-in manual acceptance checks that use a real
-   ORCA/xTB/CREST deployment when a change depends on engine runtime semantics.
-
-This split is intentional. The public test suite should prove the queue,
-configuration, parser, execution-policy, reporting, packaging, and fake-engine
-integration contracts without requiring private credentials or licensed binaries.
-Real-engine checks should be recorded explicitly when they are needed.
+1. **Automated CI and Fake-Engine Tests**: Fast, hermetic checks that run in GitHub Actions without requiring licensed quantum-chemistry binaries.
+2. **Real-Engine Acceptance**: Manual verification using real ORCA, xTB, or CREST binaries when changes affect engine execution semantics.
 
 ## What CI proves
 
