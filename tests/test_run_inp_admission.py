@@ -1,12 +1,12 @@
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orca_auto.core.admission import active_slot_count
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution import execute_orca_run
+from orca_auto.orca.run_context import RunExecutionContext, configured_admission_root
 from orca_auto.orca.state_reading import state_path
 
 
@@ -31,32 +31,26 @@ def _write_inp(reaction_dir: Path) -> None:
     )
 
 
-def _make_args(root: Path, reaction_dir: Path, **overrides) -> SimpleNamespace:
-    defaults = {
-        "config": str(root / "orca_auto.yaml"),
-        "reaction_dir": str(reaction_dir),
-        "force": False,
-    }
-    defaults.update(overrides)
-    return SimpleNamespace(**defaults)
-
-
 class TestRunInpAdmission(unittest.TestCase):
-    @patch("orca_auto.orca.execution.load_config")
     @patch("orca_auto.orca.execution.run_attempts", return_value=0)
     def test_internal_run_rejects_without_queue_reservation(
         self,
         mock_run_attempts: MagicMock,
-        mock_load_config: MagicMock,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            mock_load_config.return_value = cfg
             reaction_dir = root / "rxn"
             _write_inp(reaction_dir)
 
-            rc = execute_orca_run(_make_args(root, reaction_dir))
+            rc = execute_orca_run(
+                RunExecutionContext(
+                    cfg=cfg,
+                    reaction_dir=reaction_dir,
+                    selected_inp=reaction_dir / "rxn.inp",
+                    admission_root=configured_admission_root(cfg),
+                )
+            )
 
             self.assertEqual(rc, 1)
             self.assertFalse(mock_run_attempts.called)

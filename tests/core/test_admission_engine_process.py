@@ -7,7 +7,7 @@ import signal
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -15,7 +15,6 @@ from orca_auto.core import admission
 from orca_auto.core.admission import engine_process, store
 from orca_auto.core.queue.cancellable import run_cancellable_engine_process
 from orca_auto.core.queue.engine.child import (
-    ChildWorkerEntrypointJob,
     await_parent_admission_handoff,
 )
 from orca_auto.orca.orca_runner import OrcaRunner
@@ -732,10 +731,6 @@ def test_parent_handoff_waits_until_slot_owner_matches_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    job = cast(
-        ChildWorkerEntrypointJob,
-        SimpleNamespace(admission_root=lambda: tmp_path),
-    )
     slots = iter(
         [
             SimpleNamespace(owner_pid=99),
@@ -747,7 +742,7 @@ def test_parent_handoff_waits_until_slot_owner_matches_child(
     monkeypatch.setattr("orca_auto.core.queue.engine.child.os.getpid", lambda: 123)
 
     assert await_parent_admission_handoff(
-        job,
+        tmp_path,
         "slot",
         timeout_seconds=1,
         monotonic_fn=lambda: 0,

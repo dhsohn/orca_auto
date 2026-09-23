@@ -3,21 +3,23 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, MutableMapping
-from typing import Any, TypeVar
+from typing import Generic, TypeVar
 
 from ..processes import install_shutdown_signal_handlers
-from .models import SlotFillResult
+from .models import ReserveStatus, SlotFillResult
 
 LOGGER = logging.getLogger(__name__)
 
 T = TypeVar("T")
+JobT = TypeVar("JobT")
+ReservedT = TypeVar("ReservedT")
 
 
 def fill_worker_slots(
     *,
     running_count: Callable[[], int],
     max_concurrent: int,
-    reserve_next: Callable[[], tuple[str, T | None]],
+    reserve_next: Callable[[], tuple[ReserveStatus, T | None]],
     start_reserved: Callable[[T], bool | None],
     max_new_jobs: int | None = None,
 ) -> SlotFillResult:
@@ -76,7 +78,7 @@ def pop_completed_worker_jobs(
     return len(completed)
 
 
-class QueueWorkerLoop:
+class QueueWorkerLoop(Generic[JobT, ReservedT]):
     def __init__(
         self,
         *,
@@ -87,7 +89,7 @@ class QueueWorkerLoop:
         self.max_concurrent = max(1, int(max_concurrent))
         self.poll_interval_seconds = float(poll_interval_seconds)
         self._sleep_fn = sleep_fn or time.sleep
-        self._running: dict[str, Any] = {}
+        self._running: dict[str, JobT] = {}
         self._shutdown_requested = False
 
     def run(self) -> int:
@@ -174,7 +176,7 @@ class QueueWorkerLoop:
             retained_completed_ids=retained_completed_ids,
         )
 
-    def _on_finalize_error(self, queue_id: str, job: Any, rc: int, exc: Exception) -> bool:
+    def _on_finalize_error(self, queue_id: str, job: JobT, rc: int, exc: Exception) -> bool:
         del job
         LOGGER.error(
             "worker job finalize failed; keeping job for retry: queue_id=%s rc=%s",
@@ -184,7 +186,7 @@ class QueueWorkerLoop:
         )
         return False
 
-    def _running_jobs(self) -> list[tuple[str, Any]]:
+    def _running_jobs(self) -> list[tuple[str, JobT]]:
         return list(self._running.items())
 
     def _discard_running_job(self, queue_id: str) -> None:
@@ -199,16 +201,16 @@ class QueueWorkerLoop:
 
         install_shutdown_signal_handlers(request_shutdown)
 
-    def _reserve_next_entry(self) -> tuple[str, Any | None]:
+    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedT | None]:
         raise NotImplementedError
 
-    def _start_reserved(self, reserved: Any) -> bool | None:
+    def _start_reserved(self, reserved: ReservedT) -> bool | None:
         raise NotImplementedError
 
-    def _poll_job(self, job: Any) -> int | None:
+    def _poll_job(self, job: JobT) -> int | None:
         raise NotImplementedError
 
-    def _finalize_completed_job(self, queue_id: str, job: Any, rc: int) -> None:
+    def _finalize_completed_job(self, queue_id: str, job: JobT, rc: int) -> None:
         raise NotImplementedError
 
     def _shutdown_all(self) -> None:

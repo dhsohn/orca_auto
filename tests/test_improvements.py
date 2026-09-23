@@ -10,9 +10,11 @@ from unittest.mock import patch
 
 from orca_auto.core.admission import reserve_slot
 from orca_auto.orca.completion_rules import CompletionMode
+from orca_auto.orca.config import load_config
 from orca_auto.orca.execution import execute_orca_run
 from orca_auto.orca.orca_runner import RunResult
 from orca_auto.orca.out_analyzer import analyze_output
+from orca_auto.orca.run_context import RunExecutionContext, configured_admission_root
 from orca_auto.orca.state import save_state
 from orca_auto.orca.state_machine import (
     RESUMABLE_FAILED_REASONS,
@@ -185,17 +187,15 @@ class TestCrashRecovery(unittest.TestCase):
                     source="queue_worker",
                     state="reserved",
                 )
+                cfg = load_config(str(config))
                 rc = execute_orca_run(
-                    type(
-                        "Args",
-                        (),
-                        {
-                            "config": str(config),
-                            "reaction_dir": str(reaction),
-                            "force": False,
-                        },
-                    )(),
-                    reservation_token=token,
+                    RunExecutionContext(
+                        cfg=cfg,
+                        reaction_dir=reaction,
+                        selected_inp=inp,
+                        admission_root=configured_admission_root(cfg),
+                        reservation_token=token,
+                    ),
                 )
             saved = load_state(reaction)
 

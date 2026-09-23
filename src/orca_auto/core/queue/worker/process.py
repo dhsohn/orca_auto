@@ -4,10 +4,8 @@ import contextlib
 import logging
 import sys
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Generic
 
 from orca_auto.core.queue.engine.snapshot_intent import (
     finalize_queued_snapshot_intent,
@@ -16,36 +14,22 @@ from orca_auto.core.queue.engine.snapshot_intent import (
 )
 from orca_auto.core.utils.lock import file_lock
 
+from ..dependencies import ChildQueueWorkerDeps, ConfigT, QueueEntryFailureMarker
 from ..processes import (
+    ManagedProcess,
     remove_worker_pid_file,
     terminate_process_group,
     worker_pid_file_path,
     write_worker_pid_file,
 )
+from ..types import QueueEntry
+from .admission import reserve_dequeued_entry
 from .loop import QueueWorkerLoop
-from .models import BackgroundRunningJob
+from .models import JobT, ReservedQueueEntry, ReserveStatus
 
 logger = logging.getLogger(__name__)
 _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
 _WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
-
-
-class _PollableProcess(Protocol):
-    def poll(self) -> int | None: ...
-
-
-class _ProcessBackedJob(Protocol):
-    process: _PollableProcess
-
-
-@dataclass(frozen=True)
-class PidFileChildProcessQueueWorkerHooks:
-    handle_worker_start_error: Callable[[Any, Path, Any, str, OSError], None]
-    on_worker_process_started: Callable[[Any, Path, Any, Any, str], bool]
-    finalize_completed_job: Callable[[Any, str, Any, int], None]
-    shutdown_running_job: Callable[[Any, str, Any], None]
-    reconcile_worker_state: Callable[[Any], None]
-    before_shutdown_all: Callable[[Any, int], None] | None = None
 
 
 class QueueWorkerPidFileMixin:
@@ -66,25 +50,27 @@ class QueueWorkerPidFileMixin:
         remove_worker_pid_file(self.allowed_root, self.worker_pid_file_name)
 
 
-class ChildProcessQueueWorker(QueueWorkerLoop):
+class ChildProcessQueueWorker(
+    QueueWorkerLoop[JobT, ReservedQueueEntry[QueueEntry]], Generic[ConfigT, JobT]
+):
     def __init__(
         self,
-        cfg: Any,
+        cfg: ConfigT,
         *,
         config_path: str,
         max_concurrent: int | None = None,
-        deps: Any,
+        deps: ChildQueueWorkerDeps[ConfigT],
     ) -> None:
         configured_max = cfg.runtime.max_concurrent if max_concurrent is None else max_concurrent
         super().__init__(
             max_concurrent=max(1, int(configured_max)),
             poll_interval_seconds=deps.poll_interval_seconds,
-            sleep_fn=lambda seconds: deps.time.sleep(seconds),
+            sleep_fn=deps.sleep,
         )
         self.cfg = cfg
         self.config_path = config_path
-        self.admission_root: str | Path = deps.admission_root(cfg)
-        self.deps: Any = deps
+        self.admission_root: str | Path = cfg.runtime.resolved_admission_root
+        self.deps: ChildQueueWorkerDeps[ConfigT] = deps
 
     def _before_run(self) -> None:
         self._reconcile_worker_state_now()
@@ -128,29 +114,31 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
             blocked_message=blocked_message,
         )
 
-    def _reserve_next_entry(self) -> tuple[str, Any | None]:
+    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedQueueEntry[QueueEntry] | None]:
         deps = self.deps
-        reserved: tuple[str, Any | None] = deps.reserve_dequeued_entry(
-            self.cfg,
-            admission_root=self.admission_root,
-            has_capacity_fn=deps.has_admission_capacity,
-            peek_next_fn=lambda cfg: deps.peek_next_entry(cfg, skip_entry_fn=self._skip_entry),
-            reserve_slot_fn=deps.try_reserve_admission_slot,
-            dequeue_next_fn=lambda cfg: deps.dequeue_next_entry(
-                cfg, skip_entry_fn=self._skip_entry
-            ),
-            release_slot_fn=deps.release_slot,
+        reserved: tuple[ReserveStatus, ReservedQueueEntry[QueueEntry] | None] = (
+            reserve_dequeued_entry(
+                self.cfg,
+                admission_root=self.admission_root,
+                has_capacity_fn=deps.has_admission_capacity,
+                peek_next_fn=lambda cfg: deps.peek_next_entry(cfg, skip_entry_fn=self._skip_entry),
+                reserve_slot_fn=deps.try_reserve_admission_slot,
+                dequeue_next_fn=lambda cfg: deps.dequeue_next_entry(
+                    cfg, skip_entry_fn=self._skip_entry
+                ),
+                release_slot_fn=deps.release_slot,
+            )
         )
         return reserved
 
-    def _skip_entry(self, entry: Any) -> bool:
+    def _skip_entry(self, entry: QueueEntry) -> bool:
         """Rows this worker must not claim now; rows behind them stay eligible."""
         # A child can return its own row to pending and only then exit. Until
         # that exit has been finalized here, starting the row again would
         # replace the tracked job and strand its admission slot.
         return self._running_queue_id(entry) in self._running
 
-    def _start_reserved(self, reserved: Any) -> bool:
+    def _start_reserved(self, reserved: ReservedQueueEntry[QueueEntry]) -> bool:
         try:
             # Retire the journal before execution so even a very fast terminal
             # job cannot lose its queue row while an ENQUEUEING intent remains.
@@ -169,7 +157,7 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
             admission_token=reserved.admission_token,
         )
 
-    def _start_job(self, queue_root: Path, entry: Any, *, admission_token: str) -> bool:
+    def _start_job(self, queue_root: Path, entry: QueueEntry, *, admission_token: str) -> bool:
         deps = self.deps
         try:
             proc = deps.start_background_job_process(
@@ -223,7 +211,7 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
         )
         return True
 
-    def _terminate_untracked_process(self, process: Any) -> None:
+    def _terminate_untracked_process(self, process: ManagedProcess) -> None:
         terminate = getattr(process, "terminate", None)
         if callable(terminate):
             with contextlib.suppress(Exception):
@@ -232,7 +220,7 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
     def _handle_worker_start_error(
         self,
         queue_root: Path,
-        entry: Any,
+        entry: QueueEntry,
         admission_token: str,
         exc: OSError,
     ) -> None:
@@ -241,33 +229,28 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
     def _on_worker_process_started(
         self,
         queue_root: Path,
-        entry: Any,
+        entry: QueueEntry,
         *,
-        process: Any,
+        process: ManagedProcess,
         admission_token: str,
     ) -> bool:
         del queue_root, entry, process, admission_token
         return True
 
-    def _running_queue_id(self, entry: Any) -> str:
+    def _running_queue_id(self, entry: QueueEntry) -> str:
         return str(entry.queue_id)
 
     def _make_running_job(
         self,
         *,
         queue_root: Path,
-        entry: Any,
-        process: Any,
+        entry: QueueEntry,
+        process: ManagedProcess,
         admission_token: str,
-    ) -> Any:
-        return BackgroundRunningJob(
-            queue_root=queue_root,
-            entry=entry,
-            process=process,
-            admission_token=admission_token,
-        )
+    ) -> JobT:
+        raise NotImplementedError
 
-    def _poll_job(self, job: _ProcessBackedJob) -> int | None:
+    def _poll_job(self, job: JobT) -> int | None:
         return job.process.poll()
 
     def _release_admission_slot(self, admission_token: str) -> object:
@@ -277,11 +260,11 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
     def _mark_entry_failed_and_release(
         self,
         queue_root: Path,
-        entry: Any,
+        entry: QueueEntry,
         admission_token: str,
         *,
         error: str,
-        mark_failed_fn: Callable[..., Any],
+        mark_failed_fn: QueueEntryFailureMarker,
     ) -> None:
         try:
             mark_failed_fn(
@@ -293,7 +276,7 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
         finally:
             self._release_admission_slot(admission_token)
 
-    def _finalize_completed_job(self, _queue_id: str, job: Any, rc: int) -> None:
+    def _finalize_completed_job(self, _queue_id: str, job: JobT, rc: int) -> None:
         raise NotImplementedError
 
     def _shutdown_all(self) -> None:
@@ -327,7 +310,7 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
                 self._stop_child_as_last_resort(queue_id, job)
             self._discard_running_job(queue_id)
 
-    def _stop_child_as_last_resort(self, queue_id: str, job: Any) -> None:
+    def _stop_child_as_last_resort(self, queue_id: str, job: JobT) -> None:
         process = getattr(job, "process", None)
         if process is None:
             return
@@ -347,23 +330,43 @@ class ChildProcessQueueWorker(QueueWorkerLoop):
     def _before_shutdown_all(self, running_count: int) -> None:
         del running_count
 
-    def _shutdown_running_job(self, queue_id: str, job: Any) -> None:
+    def _shutdown_running_job(self, queue_id: str, job: JobT) -> None:
         raise NotImplementedError
 
     def _reconcile_worker_state(self) -> None:
-        raise NotImplementedError
+        now = time.monotonic()
+        last_reconcile = self.__dict__.get("_snapshot_intent_last_reconcile_monotonic")
+        if (
+            last_reconcile is None
+            or now - float(last_reconcile) >= _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS
+        ):
+            self.__dict__["_snapshot_intent_last_reconcile_monotonic"] = now
+            try:
+                removed = reconcile_orphaned_snapshot_generations(
+                    snapshot_runtime_roots_for_cfg(self.cfg)
+                )
+            except Exception:
+                logger.exception("Snapshot orphan reconciliation failed; retaining all candidates")
+            else:
+                if removed:
+                    logger.info(
+                        "Removed %d abandoned pre-enqueue snapshot intent(s)",
+                        removed,
+                    )
 
 
-class PidFileChildProcessQueueWorker(QueueWorkerPidFileMixin, ChildProcessQueueWorker):
+class PidFileChildProcessQueueWorker(
+    QueueWorkerPidFileMixin, ChildProcessQueueWorker[ConfigT, JobT]
+):
     """Child-process queue worker with standard orca_auto pid-file lifecycle."""
 
     def __init__(
         self,
-        cfg: Any,
+        cfg: ConfigT,
         *,
         config_path: str,
         max_concurrent: int | None = None,
-        deps: Any,
+        deps: ChildQueueWorkerDeps[ConfigT],
         allowed_root: str | Path | None = None,
         admission_root: str | Path | None = None,
     ) -> None:
@@ -420,101 +423,8 @@ class PidFileChildProcessQueueWorker(QueueWorkerPidFileMixin, ChildProcessQueueW
         self._remove_pid_file()
 
 
-class HookedPidFileChildProcessQueueWorker(PidFileChildProcessQueueWorker):
-    """Pid-file queue worker whose engine-specific behavior is supplied as hooks."""
-
-    def __init__(
-        self,
-        cfg: Any,
-        *,
-        config_path: str,
-        max_concurrent: int | None = None,
-        deps: Any,
-        hooks: PidFileChildProcessQueueWorkerHooks,
-        worker_pid_file_name: str | None = None,
-        allowed_root: str | Path | None = None,
-        admission_root: str | Path | None = None,
-    ) -> None:
-        if worker_pid_file_name is not None:
-            self.worker_pid_file_name = worker_pid_file_name
-        self.hooks = hooks
-        super().__init__(
-            cfg,
-            config_path=config_path,
-            max_concurrent=max_concurrent,
-            deps=deps,
-            allowed_root=allowed_root,
-            admission_root=admission_root,
-        )
-
-    def _handle_worker_start_error(
-        self,
-        queue_root: Path,
-        entry: Any,
-        admission_token: str,
-        exc: OSError,
-    ) -> None:
-        self.hooks.handle_worker_start_error(
-            self,
-            queue_root,
-            entry,
-            admission_token,
-            exc,
-        )
-
-    def _on_worker_process_started(
-        self,
-        queue_root: Path,
-        entry: Any,
-        *,
-        process: Any,
-        admission_token: str,
-    ) -> bool:
-        return self.hooks.on_worker_process_started(
-            self,
-            queue_root,
-            entry,
-            process,
-            admission_token,
-        )
-
-    def _finalize_completed_job(self, queue_id: str, job: Any, rc: int) -> None:
-        self.hooks.finalize_completed_job(self, queue_id, job, rc)
-
-    def _before_shutdown_all(self, running_count: int) -> None:
-        if self.hooks.before_shutdown_all is not None:
-            self.hooks.before_shutdown_all(self, running_count)
-
-    def _shutdown_running_job(self, queue_id: str, job: Any) -> None:
-        self.hooks.shutdown_running_job(self, queue_id, job)
-
-    def _reconcile_worker_state(self) -> None:
-        now = time.monotonic()
-        last_reconcile = self.__dict__.get("_snapshot_intent_last_reconcile_monotonic")
-        if (
-            last_reconcile is None
-            or now - float(last_reconcile) >= _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS
-        ):
-            self.__dict__["_snapshot_intent_last_reconcile_monotonic"] = now
-            try:
-                removed = reconcile_orphaned_snapshot_generations(
-                    snapshot_runtime_roots_for_cfg(self.cfg)
-                )
-            except Exception:
-                logger.exception("Snapshot orphan reconciliation failed; retaining all candidates")
-            else:
-                if removed:
-                    logger.info(
-                        "Removed %d abandoned pre-enqueue snapshot intent(s)",
-                        removed,
-                    )
-        self.hooks.reconcile_worker_state(self)
-
-
 __all__ = [
     "ChildProcessQueueWorker",
-    "HookedPidFileChildProcessQueueWorker",
     "PidFileChildProcessQueueWorker",
-    "PidFileChildProcessQueueWorkerHooks",
     "QueueWorkerPidFileMixin",
 ]

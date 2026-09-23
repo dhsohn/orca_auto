@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING
 
-from orca_auto.core.engines.queue_worker import EngineQueueWorker
-from orca_auto.core.queue.lifecycle import cancel_running_process_job
 from orca_auto.core.statuses import STATUS_RUNNING
 
 from . import replay
@@ -13,38 +10,51 @@ from .entries import queue_entry_reaction_dir
 from .models import OrcaRunningJob
 from .terminal_replay import terminal_replay_marker_from_entry
 
+if TYPE_CHECKING:
+    from .worker import OrcaQueueWorker
+
 logger = logging.getLogger(__name__)
 
 
-def cancel_running_job(worker: EngineQueueWorker, queue_id: str, job: OrcaRunningJob) -> bool:
-    hooks = replay.orca_worker_lifecycle_hooks()
-    queue_root = replay.job_queue_root(worker, job)
-
-    def terminate_child_and_recover(process: Any) -> bool:
-        terminated = hooks.terminate_process_fn(process)
-        if terminated is True and process.poll() is not None:
+def cancel_running_job(worker: OrcaQueueWorker, queue_id: str, job: OrcaRunningJob) -> bool:
+    queue_root = replay.job_queue_root(job)
+    logger.info("Cancelling running job: %s", queue_id)
+    try:
+        terminated = replay.terminate_process(job.process)
+        if terminated is True and job.process.poll() is not None:
             job.terminal_finalize_pending = True
             replay.recover_slot_engine_process(worker.admission_root, job.admission_token)
-        return terminated
-
-    try:
-        cancelled = cancel_running_process_job(
-            worker,
+    except Exception:
+        logger.exception(
+            "Failed to terminate running job %s; retaining queue and admission ownership",
             queue_id,
-            job,
-            hooks=replace(
-                hooks,
-                terminate_process_fn=terminate_child_and_recover,
-            ),
-            release_admission_slot=False,
         )
+        return False
+    try:
+        process_exited = job.process.poll() is not None
+    except Exception:  # noqa: BLE001
+        process_exited = False
+    if terminated is not True or not process_exited:
+        logger.error(
+            "Running job %s did not fully stop; retaining queue entry and admission slot %s",
+            queue_id,
+            job.admission_token,
+        )
+        return False
+    try:
+        current = replay.queue_entry_by_id(queue_root, queue_id)
+        if current is None or not replay.mark_cancelled(
+            queue_root,
+            queue_id,
+            expected_entry=current,
+            expected_task_id=job.task_id or None,
+        ):
+            return False
     except Exception:
         logger.exception(
             "Failed to durably mark cancelled ORCA job %s; retaining retry ownership",
             queue_id,
         )
-        return False
-    if not cancelled:
         return False
     terminal_entry = replay.queue_entry_by_id(queue_root, queue_id)
     if replay.normalized_entry_status(terminal_entry) == STATUS_RUNNING:

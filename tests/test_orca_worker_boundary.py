@@ -33,7 +33,7 @@ from orca_auto import cli_workers
 from orca_auto.core.admission import read_active_slot_count, reserve_slot
 from orca_auto.core.engine_catalog import known_engine_ids
 from orca_auto.core.engines.registry import get_engine_definition
-from orca_auto.core.queue.worker.admission import engine_queue_worker_source
+from orca_auto.core.engine_catalog import get_engine_catalog_entry
 
 assert Path(orca_auto.__file__).parent == Path(sys.argv[1]) / 'orca_auto'
 assert get_engine_definition('orca').engine == 'orca'
@@ -51,7 +51,7 @@ for engine in ('xtb', 'crest'):
         app_name=f'orca_auto_{engine}',
     )
 assert read_active_slot_count(admission_root) == 2
-assert reserve_slot(admission_root, 2, source=engine_queue_worker_source('orca')) is None
+assert reserve_slot(admission_root, 2, source=get_engine_catalog_entry('orca').admission_source) is None
 assert not any(name == 'orca_auto.flow' or name.startswith('orca_auto.flow.') for name in sys.modules)
 print(json.dumps({'worker_apps': [spec.app for spec in specs], 'workflows_available': False}))
 """

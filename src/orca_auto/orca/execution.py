@@ -25,14 +25,13 @@ from .attempt.engine import _exit_with_result, run_attempts
 from .attempt.reporting import last_out_path_from_state
 from .attempt.resume import resume_terminal_decision
 from .completion_rules import detect_completion_mode
-from .config import load_config
 from .notifications import (
     notify_run_finished_event,
     notify_run_started_event,
 )
 from .orca_runner import OrcaRunner
 from .out_analyzer import analyze_output
-from .run_context import RunExecutionContext, resolve_execution_context
+from .run_context import RunExecutionContext
 from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy
 from .state import save_state
@@ -446,7 +445,6 @@ def existing_completed_exit(
 
 
 def execute_locked_run(
-    args: Any,
     context: RunExecutionContext,
     *,
     runner_cls: type[Any],
@@ -460,38 +458,22 @@ def execute_locked_run(
             admission_app_name=context.admission_app_name,
             admission_task_id=context.admission_task_id,
         ):
-            context_provenance = getattr(context, "execution_provenance", None)
-            context_queue_id = str(getattr(context, "queue_id", "") or "").strip()
-            context_queue_generation = str(getattr(context, "queue_generation", "") or "").strip()
-            if not getattr(args, "force", False):
-                existing_kwargs: dict[str, Any] = {
-                    "reaction_dir": context.reaction_dir,
-                    "selected_inp": context.selected_inp,
-                    "admission_root": context.admission_root,
-                    "reservation_token": context.reservation_token,
-                    "admission_task_id": context.admission_task_id,
-                }
-                if context_provenance:
-                    existing_kwargs["execution_provenance"] = context_provenance
-                if context_queue_id:
-                    existing_kwargs["queue_id"] = context_queue_id
-                if context_queue_generation:
-                    existing_kwargs["queue_generation"] = context_queue_generation
+            if not context.force:
                 existing_exit = existing_completed_exit(
-                    **existing_kwargs,
+                    reaction_dir=context.reaction_dir,
+                    selected_inp=context.selected_inp,
+                    admission_root=context.admission_root,
+                    reservation_token=context.reservation_token,
+                    admission_task_id=context.admission_task_id,
+                    execution_provenance=context.execution_provenance,
+                    queue_id=context.queue_id or "",
+                    queue_generation=context.queue_generation or "",
                 )
                 if existing_exit is not None:
                     return existing_exit
 
             with _prepared_scratch_runner(context, runner_cls=runner_cls) as runner:
-                return _load_state_and_run(
-                    context,
-                    runner_cls=runner_cls,
-                    runner=runner,
-                    execution_provenance=context_provenance,
-                    queue_id=context_queue_id,
-                    queue_generation=context_queue_generation,
-                )
+                return _load_state_and_run(context, runner_cls=runner_cls, runner=runner)
 
 
 @contextmanager
@@ -524,9 +506,6 @@ def _load_state_and_run(
     *,
     runner_cls: type[Any],
     runner: Any | None,
-    execution_provenance: Mapping[str, Any] | None,
-    queue_id: str,
-    queue_generation: str,
 ) -> int:
     state, resumed = load_or_create_state(
         context.reaction_dir,
@@ -534,17 +513,19 @@ def _load_state_and_run(
         to_resolved_local=_to_resolved_local,
     )
     state_changed = False
-    if execution_provenance and state.get("execution_provenance") != dict(execution_provenance):
-        state["execution_provenance"] = dict(execution_provenance)
+    if context.execution_provenance and state.get("execution_provenance") != dict(
+        context.execution_provenance
+    ):
+        state["execution_provenance"] = dict(context.execution_provenance)
         state_changed = True
     if context.admission_task_id and state.get("job_id") != context.admission_task_id:
         state["job_id"] = context.admission_task_id
         state_changed = True
-    if queue_id and state.get("queue_id") != queue_id:
-        state["queue_id"] = queue_id
+    if context.queue_id and state.get("queue_id") != context.queue_id:
+        state["queue_id"] = context.queue_id
         state_changed = True
-    if queue_generation and state.get("queue_generation") != queue_generation:
-        state["queue_generation"] = queue_generation
+    if context.queue_generation and state.get("queue_generation") != context.queue_generation:
+        state["queue_generation"] = context.queue_generation
         state_changed = True
     if state_changed:
         save_state(context.reaction_dir, state)
@@ -562,45 +543,18 @@ def _load_state_and_run(
 
 
 def execute_orca_run(
-    args: Any,
+    context: RunExecutionContext,
     *,
     runner_cls: type[Any] = OrcaRunner,
-    cfg: Any | None = None,
-    reaction_dir: Path | None = None,
-    selected_inp: Path | None = None,
-    reservation_token: str | None = None,
-    admission_app_name: str | None = None,
-    admission_task_id: str | None = None,
-    execution_provenance: Mapping[str, Any] | None = None,
-    queue_id: str | None = None,
-    queue_generation: str | None = None,
     logger: logging.Logger | None = None,
 ) -> int:
     logger = logger or logging.getLogger(__name__)
-    context = resolve_execution_context(
-        args,
-        cfg=cfg,
-        reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
-        reservation_token=reservation_token,
-        admission_app_name=admission_app_name,
-        admission_task_id=admission_task_id,
-        execution_provenance=execution_provenance,
-        queue_id=queue_id,
-        queue_generation=queue_generation,
-        load_config_fn=load_config,
-        select_latest_inp_fn=select_latest_inp,
-        logger=logger,
-    )
-    if context is None:
-        return 1
-
     logger.info("Selected input: %s", context.selected_inp)
 
     try:
         # Run-state recovery stays inside the reaction lock. Engine-process
         # ownership is reconciled independently through the admission store.
-        return execute_locked_run(args, context, runner_cls=runner_cls)
+        return execute_locked_run(context, runner_cls=runner_cls)
     except EngineScratchCapacityError:
         # Raised only by the preparation that precedes this run's first state
         # write; the queue child decides whether the job waits. It must not

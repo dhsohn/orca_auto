@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
+from typing import NoReturn
 
 import pytest
 
@@ -10,6 +10,7 @@ from orca_auto.cli import main
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.worker.process import PidFileChildProcessQueueWorker
 from orca_auto.orca.queue import adapter
+from tests.core.test_queue_worker_common import _cfg, _worker_deps
 from tests.test_orca_worker_execution import _queued_submission
 
 
@@ -57,15 +58,11 @@ def test_worker_body_timeout_is_not_duplicate_worker(
         def _shutdown_all(self) -> None:
             pass
 
-        def _reserve_next_entry(self) -> tuple[str, object]:
+        def _reserve_next_entry(self) -> NoReturn:
             raise QueueLockTimeoutError("actual queue lock timed out")
 
-    deps = SimpleNamespace(
-        poll_interval_seconds=0,
-        time=SimpleNamespace(sleep=lambda _seconds: None),
-        admission_root=lambda _cfg: str(tmp_path),
-    )
-    cfg = SimpleNamespace(runtime=SimpleNamespace(max_concurrent=1, allowed_root=str(tmp_path)))
+    deps = _worker_deps(poll_interval_seconds=0)
+    cfg = _cfg(allowed_root=str(tmp_path), max_concurrent=1)
     worker = Worker(cfg, config_path="unused", deps=deps)
     with pytest.raises(QueueLockTimeoutError, match="actual queue lock"):
         getattr(worker, method)()

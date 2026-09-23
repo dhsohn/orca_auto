@@ -1,132 +1,189 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
-from orca_auto.orca.queue import worker_runtime as queue_worker_runtime
+import pytest
+
+from orca_auto.core.queue.store import QueueLockTimeoutError
+from orca_auto.core.queue.types import QueueEntry
+from orca_auto.orca.queue import cancellation, replay, worker_runtime
+from orca_auto.orca.queue.models import OrcaRunningJob
+from orca_auto.orca.queue.worker import OrcaQueueWorker
+from tests.process_helpers import FakeManagedProcess
+from tests.queue_worker_helpers import make_queue_worker_cfg
 
 
-def test_make_running_job_attaches_queue_root(tmp_path: Path) -> None:
-    entry = SimpleNamespace(queue_id="queue-1", task_id="task-1", reaction_dir="/tmp/rxn")
+def _worker(root: Path) -> OrcaQueueWorker:
+    return OrcaQueueWorker(make_queue_worker_cfg(str(root)), str(root / "config.yaml"))
 
-    running = queue_worker_runtime.make_running_job(
-        queue_root=tmp_path / "queue",
-        entry=entry,
-        process="process",
-        admission_token="slot-1",
-        queue_entry_id_fn=lambda item: item.queue_id,
-        queue_entry_reaction_dir_fn=lambda item: item.reaction_dir,
-        queue_entry_task_id_fn=lambda item: item.task_id,
+
+def _job(root: Path, queue_id: str, *, exited: bool = False) -> OrcaRunningJob:
+    return OrcaRunningJob(
+        queue_root=root,
+        queue_id=queue_id,
+        reaction_dir=str(root / queue_id),
+        process=FakeManagedProcess(poll_result=0 if exited else None),
+        admission_token="slot-" + queue_id,
+        task_id="task-" + queue_id,
     )
 
-    assert running.queue_id == "queue-1"
-    assert running.reaction_dir == "/tmp/rxn"
-    assert running.task_id == "task-1"
-    assert running.process == "process"
-    assert running.admission_token == "slot-1"
-    assert running.queue_root == tmp_path / "queue"
 
-
-def test_check_cancel_requests_cancels_and_discards_matching_jobs(tmp_path: Path) -> None:
-    job = SimpleNamespace(
-        queue_root=tmp_path / "queue",
-        task_id="task-1",
-        process=SimpleNamespace(poll=lambda: None),
+def test_running_job_retains_queue_generation_and_process(tmp_path: Path) -> None:
+    worker = _worker(tmp_path)
+    process = FakeManagedProcess()
+    entry = QueueEntry(
+        "queue-1",
+        "orca_auto_orca",
+        "task-1",
+        "orca_run_inp",
+        "orca",
+        metadata={"reaction_dir": str(tmp_path / "run")},
     )
-    cancelled: list[tuple[str, Any]] = []
-    discarded: list[str] = []
-    cancel_checks: list[tuple[Path, Mapping[str, str | None]]] = []
-    worker = SimpleNamespace(
-        _running_jobs=lambda: [("queue-1", job), ("queue-2", job)],
-        _discard_running_job=lambda queue_id: discarded.append(queue_id),
+    job = worker._make_running_job(
+        queue_root=tmp_path, entry=entry, process=process, admission_token="slot-1"
     )
-
-    def cancel_running_job(_worker: Any, queue_id: str, job_obj: Any) -> bool:
-        cancelled.append((queue_id, job_obj))
-        return True
-
-    def cancel_requested_ids(root: Path, tasks: Mapping[str, str | None]) -> set[str]:
-        cancel_checks.append((root, tasks))
-        return {"queue-1"}
-
-    queue_worker_runtime.check_cancel_requests(
-        worker,
-        cancel_requested_ids_fn=cancel_requested_ids,
-        job_queue_root_fn=lambda _worker, job_obj: job_obj.queue_root,
-        cancel_running_job_fn=cancel_running_job,
+    assert (job.queue_root, job.queue_id, job.task_id, job.reaction_dir) == (
+        tmp_path,
+        "queue-1",
+        "task-1",
+        str(tmp_path / "run"),
     )
-
-    assert cancelled == [("queue-1", job)]
-    assert discarded == ["queue-1"]
-    assert cancel_checks == [
-        (tmp_path / "queue", {"queue-1": "task-1", "queue-2": "task-1"}),
-    ]
+    assert job.process is process
+    assert job.admission_token == "slot-1"
 
 
-def test_check_cancel_requests_skips_completed_retained_child(tmp_path: Path) -> None:
-    job = SimpleNamespace(
-        queue_root=tmp_path / "queue",
-        process=SimpleNamespace(poll=lambda: 0),
-    )
+def test_cancel_requests_discard_only_successfully_cancelled_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = _worker(tmp_path)
+    worker._running = {qid: _job(tmp_path, qid) for qid in ("1", "2")}
     cancelled: list[str] = []
-    discarded: list[str] = []
-    worker = SimpleNamespace(
-        _running_jobs=lambda: [("queue-1", job)],
-        _discard_running_job=discarded.append,
-    )
-
-    def cancel_running_job(_worker: Any, queue_id: str, _job: Any) -> bool:
-        cancelled.append(queue_id)
-        return True
-
-    queue_worker_runtime.check_cancel_requests(
-        worker,
-        cancel_requested_ids_fn=lambda *_args: {"queue-1"},
-        job_queue_root_fn=lambda _worker, job_obj: job_obj.queue_root,
-        cancel_running_job_fn=cancel_running_job,
-    )
-
-    assert cancelled == []
-    assert discarded == []
-
-
-def test_busy_root_does_not_delay_cancellation_at_another_root(tmp_path: Path) -> None:
-    from orca_auto.core.queue.store import QueueLockTimeoutError
-
-    jobs = [
-        (
-            str(i),
-            SimpleNamespace(
-                queue_root=tmp_path / str(i // 2),
-                task_id=str(i),
-                process=SimpleNamespace(poll=lambda: None),
-            ),
-        )
-        for i in range(4)
-    ]
-    calls: list[tuple[Path, Mapping[str, str | None]]] = []
-    cancelled: list[str] = []
-    discarded: list[str] = []
-    worker = SimpleNamespace(_running_jobs=lambda: jobs, _discard_running_job=discarded.append)
+    checks: list[tuple[Path, Mapping[str, str | None]]] = []
 
     def requested(root: Path, tasks: Mapping[str, str | None]) -> set[str]:
-        calls.append((root, tasks))
+        checks.append((root, tasks))
+        return {"1"}
+
+    def cancel(_worker: OrcaQueueWorker, qid: str, _job: OrcaRunningJob) -> bool:
+        cancelled.append(qid)
+        return True
+
+    monkeypatch.setattr(worker_runtime, "cancel_requested_ids", requested)
+    monkeypatch.setattr(cancellation, "cancel_running_job", cancel)
+    worker._check_cancel_requests()
+    assert cancelled == ["1"]
+    assert list(worker._running) == ["2"]
+    assert checks == [(tmp_path, {"1": "task-1", "2": "task-2"})]
+
+
+def test_cancel_requests_never_signal_retained_completed_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = _worker(tmp_path)
+    worker._running = {"1": _job(tmp_path, "1", exited=True)}
+    monkeypatch.setattr(
+        worker_runtime,
+        "cancel_requested_ids",
+        lambda *_args: pytest.fail("completed child must not be considered for cancellation"),
+    )
+    worker._check_cancel_requests()
+    assert list(worker._running) == ["1"]
+
+
+def test_busy_root_does_not_delay_cancellation_at_another_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = _worker(tmp_path)
+    worker._running = {str(i): _job(tmp_path / str(i // 2), str(i)) for i in range(4)}
+    cancelled: list[str] = []
+    checks: list[Path] = []
+
+    def requested(root: Path, _tasks: Mapping[str, str | None]) -> set[str]:
+        checks.append(root)
         if root == tmp_path / "0":
             raise QueueLockTimeoutError("busy")
         return {"2", "3"}
 
-    def cancel(_worker: Any, queue_id: str, _job: Any) -> bool:
-        cancelled.append(queue_id)
-        return queue_id == "2"
+    def cancel(_worker: OrcaQueueWorker, qid: str, _job: OrcaRunningJob) -> bool:
+        cancelled.append(qid)
+        return qid == "2"
 
-    queue_worker_runtime.check_cancel_requests(
-        worker,
-        cancel_requested_ids_fn=requested,
-        job_queue_root_fn=lambda _worker, job: job.queue_root,
-        cancel_running_job_fn=cancel,
-    )
-    assert calls == [(tmp_path / "0", {"0": "0", "1": "1"}), (tmp_path / "1", {"2": "2", "3": "3"})]
+    monkeypatch.setattr(worker_runtime, "cancel_requested_ids", requested)
+    monkeypatch.setattr(cancellation, "cancel_running_job", cancel)
+    worker._check_cancel_requests()
+    assert checks == [tmp_path / "0", tmp_path / "1"]
     assert cancelled == ["2", "3"]
-    assert discarded == ["2"]
+    assert list(worker._running) == ["0", "1", "3"]
+
+
+def test_replay_state_is_initialized_once_and_is_owned_by_each_worker(tmp_path: Path) -> None:
+    first, second = _worker(tmp_path), _worker(tmp_path)
+    first.replay_state.blocked_marker_keys.add(("root", "queue"))
+    assert second.replay_state.blocked_marker_keys == set()
+    assert first.replay_state.reconcile_statuses is None
+
+
+def test_injected_process_and_sleep_are_used_by_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = make_queue_worker_cfg(str(tmp_path))
+    process = FakeManagedProcess()
+    starts: list[dict[str, object]] = []
+    sleeps: list[float] = []
+    seed = _worker(tmp_path)
+
+    def start(**kwargs: object) -> FakeManagedProcess:
+        starts.append(kwargs)
+        return process
+
+    worker = OrcaQueueWorker(
+        cfg,
+        "config.yaml",
+        deps=replace(seed.deps, sleep=sleeps.append, start_background_job_process=start),
+    )
+    monkeypatch.setattr(replay, "on_worker_process_started", lambda *_args: True)
+    monkeypatch.setattr(worker, "_reconcile_worker_state", lambda: None)
+    entry = QueueEntry(
+        "q",
+        "orca_auto_orca",
+        "task",
+        "orca_run_inp",
+        "orca",
+        metadata={"reaction_dir": str(tmp_path)},
+    )
+    assert worker._start_job(tmp_path, entry, admission_token="slot")
+    worker._sleep()
+    assert worker._running["q"].process is process
+    assert starts == [
+        {
+            "config_path": "config.yaml",
+            "queue_root": tmp_path,
+            "entry": entry,
+            "admission_token": "slot",
+        }
+    ]
+    assert sleeps == [worker.poll_interval_seconds]
+
+
+def test_running_identity_prevents_reclaiming_normalized_queue_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    worker = _worker(tmp_path)
+    process = FakeManagedProcess()
+    worker.deps = replace(worker.deps, start_background_job_process=lambda **_kwargs: process)
+    monkeypatch.setattr(replay, "on_worker_process_started", lambda *_args: True)
+    entry = QueueEntry(
+        " queue-1 ",
+        "orca_auto_orca",
+        "task-1",
+        "orca_run_inp",
+        "orca",
+        metadata={"reaction_dir": str(tmp_path)},
+    )
+    assert worker._start_job(tmp_path, entry, admission_token="slot-1")
+    assert list(worker._running) == ["queue-1"]
+    assert worker._running["queue-1"].queue_id == "queue-1"
+    assert worker._skip_entry(entry)
+    assert worker._skip_entry(replace(entry, queue_id="queue-1"))

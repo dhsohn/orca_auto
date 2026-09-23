@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.admission import (
     list_slots,
@@ -14,18 +14,9 @@ from orca_auto.core.admission import (
     update_slot_metadata,
 )
 from orca_auto.core.engines import entry_matches_engine_identity
+from orca_auto.core.queue.child.process import entry_status_is_running
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
-from orca_auto.core.queue.lifecycle import (
-    EngineQueueProcessLifecycleHooks,
-    EngineQueueProcessReconcileHooks,
-    EngineQueueProcessShutdownHooks,
-    EngineQueueTerminalSideEffectHooks,
-    attach_started_process_metadata,
-    mark_terminal_process_queue_entry_with_result,
-    reconcile_orphaned_process_entries,
-    shutdown_running_process_job,
-)
-from orca_auto.core.queue.lifecycle import job_queue_root as _lifecycle_job_queue_root
+from orca_auto.core.queue.processes import ManagedProcess
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker import (
     live_queue_slot_keys_for_slots,
@@ -38,7 +29,6 @@ from orca_auto.core.statuses import (
     STATUS_PENDING,
     STATUS_RUNNING,
 )
-from orca_auto.orca.worker_execution import BackgroundRunJobProcess
 
 from ..attempt.reporting import build_final_result, last_out_path_from_state
 from ..config import AppConfig
@@ -66,7 +56,6 @@ from .adapter import (
     queue_entry_reaction_dir,
     queue_entry_task_id,
     reconcile_orphaned_running_entries,
-    requeue_running_entry,
     update_terminal,
 )
 from .adapter import update_metadata as update_queue_metadata
@@ -84,6 +73,9 @@ from .terminal_replay import (
     terminal_status_from_run_state,
 )
 
+if TYPE_CHECKING:
+    from .worker import OrcaQueueWorker
+
 logger = logging.getLogger(__name__)
 
 ACTIVE_QUEUE_STATUSES = frozenset({"pending", "running"})
@@ -94,7 +86,7 @@ def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
     return ENGINE_RUNTIME.queue_roots(cfg)
 
 
-def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, Any]]:
+def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
     return ENGINE_RUNTIME.queue_entries_with_roots(
         cfg,
         list_queue_fn=lambda root: [
@@ -105,7 +97,7 @@ def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, Any]]:
     )
 
 
-def terminate_process(process: Any) -> bool:
+def terminate_process(process: ManagedProcess) -> bool:
     return terminate_process_group(process)
 
 
@@ -154,8 +146,7 @@ class TerminalReplayWorkItem:
 class OrcaWorkerReplayState:
     """The worker's terminal-replay bookkeeping, in one typed place.
 
-    ``_after_orca_worker_init`` attaches one instance per worker;
-    ``replay_state`` is the only accessor. ``reconcile_statuses`` stays
+    ``OrcaQueueWorker`` creates one instance during construction. ``reconcile_statuses`` stays
     ``None`` until the first reconcile pass seeds the startup cursor, so a
     terminal row first seen after startup is treated as closed history rather
     than a fresh active-to-terminal transition.
@@ -171,28 +162,20 @@ class OrcaWorkerReplayState:
     admission_withheld_keys: frozenset[str] = frozenset()
 
 
-def get_replay_state(worker: Any) -> OrcaWorkerReplayState:
-    state = getattr(worker, "engine_state", None)
-    if not isinstance(state, OrcaWorkerReplayState):
-        state = OrcaWorkerReplayState()
-        worker.engine_state = state
-    return state
-
-
-def release_terminal_job(worker: Any, job: RunningJob) -> None:
+def release_terminal_job(worker: OrcaQueueWorker, job: RunningJob) -> None:
     """Release capacity before clearing the state needed to retry a failed release."""
     worker._release_admission_slot(job.admission_token)
     job.pending_terminal_replay = None
     job.terminal_finalize_pending = False
 
 
-def unresolved_terminal_reaction_keys(worker: Any) -> frozenset[str] | None:
+def unresolved_terminal_reaction_keys(worker: OrcaQueueWorker) -> frozenset[str] | None:
     """Reaction directories whose last generation has unpublished terminal state.
 
     A new generation must not start in any of them. ``None`` means one such
     generation cannot be tied to a directory, so nothing may be admitted.
     """
-    items = list(get_replay_state(worker).pending_replays.values())
+    items = list(worker.replay_state.pending_replays.values())
     reaction_dirs: list[str] = []
     for _queue_id, job in worker._running_jobs():
         job_item = job.pending_terminal_replay
@@ -219,9 +202,9 @@ def unresolved_terminal_reaction_keys(worker: Any) -> frozenset[str] | None:
     return frozenset(keys)
 
 
-def entry_waits_for_terminal_replay(worker: Any, entry: Any) -> bool:
+def entry_waits_for_terminal_replay(worker: OrcaQueueWorker, entry: Any) -> bool:
     """Whether claiming *entry* would start a generation in a withheld directory."""
-    withheld = get_replay_state(worker).admission_withheld_keys
+    withheld = worker.replay_state.admission_withheld_keys
     if not withheld:
         return False
     try:
@@ -232,7 +215,7 @@ def entry_waits_for_terminal_replay(worker: Any, entry: Any) -> bool:
     return key is None or key in withheld
 
 
-def queue_entry_by_id(queue_root: Any, target_queue_id: str) -> QueueEntry | None:
+def queue_entry_by_id(queue_root: Path, target_queue_id: str) -> QueueEntry | None:
     for entry in list_queue(Path(queue_root)):
         if queue_entry_id(entry) == target_queue_id and entry_matches_engine_identity(
             entry, "orca"
@@ -251,102 +234,89 @@ def reaction_generation_key(entry: Any) -> str | None:
     return _reaction_key_for_dir(queue_entry_reaction_dir(entry))
 
 
-def _expected_queue_entry(queue_root: Any, queue_id: str) -> QueueEntry | None:
-    return queue_entry_by_id(queue_root, queue_id)
+@dataclass(frozen=True)
+class TerminalQueueMarkResult:
+    """Stable context captured while deciding and applying a terminal queue mark."""
+
+    marked: bool
+    status: str | None
+    expected_job_id: str | None
+    current_entry: QueueEntry | None
+    queue_root: Path
+    run_id: str | None = None
 
 
-def _mark_failed_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
-    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
-    return bool(
-        expected is not None
-        and mark_failed(queue_root, queue_id, expected_entry=expected, **kwargs)
-    )
-
-
-def _mark_cancelled_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
-    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
-    return bool(
-        expected is not None
-        and mark_cancelled(queue_root, queue_id, expected_entry=expected, **kwargs)
-    )
-
-
-def _mark_completed_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
-    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
-    return bool(
-        expected is not None
-        and mark_completed(queue_root, queue_id, expected_entry=expected, **kwargs)
-    )
-
-
-def _cancel_requested_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
-    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
-    return bool(
-        expected is not None
-        and get_cancel_requested(queue_root, queue_id, expected_entry=expected, **kwargs)
-    )
-
-
-def _requeue_running_expected(queue_root: Any, queue_id: str, **kwargs: Any) -> bool:
-    expected = kwargs.pop("expected_entry", None) or _expected_queue_entry(queue_root, queue_id)
-    return bool(
-        expected is not None
-        and requeue_running_entry(queue_root, queue_id, expected_entry=expected, **kwargs)
-    )
-
-
-def orca_worker_lifecycle_hooks() -> EngineQueueProcessLifecycleHooks:
-    return EngineQueueProcessLifecycleHooks(
-        queue_entry_id_fn=queue_entry_id,
-        queue_entry_app_name_fn=queue_entry_app_name,
-        queue_entry_task_id_fn=queue_entry_task_id,
-        update_slot_metadata_fn=update_slot_metadata,
-        terminate_process_fn=terminate_process,
-        mark_failed_fn=_mark_failed_expected,
-        upsert_running_job_record_fn=worker_tracking.upsert_running_job_record,
-        get_run_id_from_state_fn=worker_tracking.get_run_id_from_state,
-        get_cancel_requested_fn=_cancel_requested_expected,
-        mark_cancelled_fn=_mark_cancelled_expected,
-        mark_completed_fn=_mark_completed_expected,
-        upsert_terminal_job_record_fn=worker_tracking.upsert_terminal_job_record,
-        notify_terminal_job_from_state_fn=worker_tracking.notify_terminal_job_from_state,
-        find_queue_entry_fn=queue_entry_by_id,
-        on_completed_fn=None,
-        terminal_side_effect_hooks=EngineQueueTerminalSideEffectHooks(
-            upsert_terminal_job_record_fn=worker_tracking.upsert_terminal_job_record,
-            notify_terminal_job_from_state_fn=worker_tracking.notify_terminal_job_from_state,
-        ),
-    )
-
-
-def shutdown_running_job(
-    worker: Any,
+def mark_terminal_queue_entry(
     queue_id: str,
-    job: Any,
+    job: RunningJob,
     *,
-    terminate_process_fn: Callable[[Any], Any],
-) -> None:
-    shutdown_running_process_job(
-        worker,
-        queue_id,
-        job,
-        hooks=EngineQueueProcessShutdownHooks(
-            terminate_process_fn=terminate_process_fn,
-            requeue_running_entry_fn=_requeue_running_expected,
-            finalize_completed_fn=finalize_completed_job,
-            child_concluded_fn=child_run_concluded,
-        ),
+    rc: int,
+) -> TerminalQueueMarkResult:
+    queue_root = job_queue_root(job)
+    current = queue_entry_by_id(queue_root, queue_id)
+    current_task_id = queue_entry_task_id(current) if current is not None else None
+    expected_job_id = current_task_id or job.task_id
+    if current is None or not entry_status_is_running(current):
+        logger.info("Skipping terminal mark for %s; entry is no longer running", queue_id)
+        return TerminalQueueMarkResult(False, None, expected_job_id, current, queue_root)
+    if job.task_id and current_task_id and job.task_id != current_task_id:
+        logger.error("Skipping terminal mark for %s; running queue generation changed", queue_id)
+        return TerminalQueueMarkResult(False, None, job.task_id, current, queue_root)
+    run_id = worker_tracking.get_run_id_from_state(
+        job.reaction_dir, expected_job_id=expected_job_id
+    )
+    if get_cancel_requested(
+        queue_root, queue_id, expected_entry=current, expected_task_id=expected_job_id
+    ):
+        status = STATUS_CANCELLED
+        logger.info("Job cancelled: %s (rc=%d)", queue_id, rc)
+        marked = mark_cancelled(
+            queue_root, queue_id, expected_entry=current, expected_task_id=expected_job_id
+        )
+    elif rc == 0:
+        status = STATUS_COMPLETED
+        logger.info("Job completed: %s (rc=%d)", queue_id, rc)
+        marked = mark_completed(
+            queue_root,
+            queue_id,
+            run_id=run_id,
+            expected_entry=current,
+            expected_task_id=expected_job_id,
+        )
+    else:
+        status = STATUS_FAILED
+        logger.warning("Job failed: %s (rc=%d)", queue_id, rc)
+        marked = mark_failed(
+            queue_root,
+            queue_id,
+            error=f"exit_code={rc}",
+            run_id=run_id,
+            expected_entry=current,
+            expected_task_id=expected_job_id,
+        )
+    if not marked:
+        logger.info(
+            "Skipping terminal finalization for %s; terminal mark did not update the entry",
+            queue_id,
+        )
+    return TerminalQueueMarkResult(
+        marked=bool(marked),
+        status=status if marked else None,
+        expected_job_id=expected_job_id,
+        current_entry=current,
+        queue_root=queue_root,
+        run_id=run_id,
     )
 
 
-def child_run_concluded(worker: Any, queue_id: str, job: Any) -> bool:
+def child_run_concluded(queue_id: str, job: RunningJob) -> bool:
     """True when the child's row is no longer running or its run state is terminal.
 
     A child that exits non-negatively with a still-running row and a
     non-terminal run state (for example one whose self-requeue write raised
     while it handled the stop) did not conclude; it keeps the resume path.
     """
-    current = queue_entry_by_id(job_queue_root(worker, job), queue_id)
+    current = queue_entry_by_id(job_queue_root(job), queue_id)
     if current is None or normalized_entry_status(current) != STATUS_RUNNING:
         return True
     reaction_dir = str(getattr(job, "reaction_dir", "") or "").strip()
@@ -365,14 +335,14 @@ def child_run_concluded(worker: Any, queue_id: str, job: Any) -> bool:
     )
 
 
-def job_queue_root(worker: Any, job: Any) -> Path:
-    return _lifecycle_job_queue_root(worker, job)
+def job_queue_root(job: RunningJob) -> Path:
+    return job.queue_root.expanduser().resolve()
 
 
 def handle_worker_start_error(
-    worker: Any,
+    worker: OrcaQueueWorker,
     queue_root: Path,
-    entry: Any,
+    entry: QueueEntry,
     admission_token: str,
     exc: OSError,
 ) -> None:
@@ -388,23 +358,57 @@ def handle_worker_start_error(
 
 
 def on_worker_process_started(
-    worker: Any,
+    worker: OrcaQueueWorker,
     queue_root: Path,
-    entry: Any,
-    process: BackgroundRunJobProcess[str],
+    entry: QueueEntry,
+    process: ManagedProcess,
     admission_token: str,
 ) -> bool:
-    return attach_started_process_metadata(
-        worker,
-        queue_root,
-        entry,
-        process=process,
-        admission_token=admission_token,
-        hooks=orca_worker_lifecycle_hooks(),
+    queue_id = queue_entry_id(entry)
+    metadata = queue_entry_metadata(entry)
+    work_dir = next(
+        (
+            value
+            for key in ("job_dir", "reaction_dir")
+            if (value := str(metadata.get(key, "") or "").strip())
+        ),
+        None,
     )
+    attached = update_slot_metadata(
+        worker.admission_root,
+        admission_token,
+        state="active",
+        queue_id=queue_id,
+        app_name=queue_entry_app_name(entry),
+        task_id=queue_entry_task_id(entry),
+        owner_pid=process.pid,
+        work_dir=work_dir,
+    )
+    if not attached:
+        logger.error(
+            "Failed to attach queue identity to admission slot %s for job %s",
+            admission_token,
+            queue_id,
+        )
+        terminate_process(process)
+        worker._mark_entry_failed_and_release(
+            queue_root,
+            entry,
+            admission_token,
+            error="admission_slot_missing",
+            mark_failed_fn=mark_failed,
+        )
+        return False
+    try:
+        worker_tracking.upsert_running_job_record(worker.cfg, entry)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to update running job location for %s: %s", queue_id, exc)
+    return True
 
 
-def _finalize_finished_job(worker: Any, queue_id: str, job: RunningJob, *, rc: int) -> None:
+def _finalize_finished_job(
+    worker: OrcaQueueWorker, queue_id: str, job: RunningJob, *, rc: int
+) -> None:
     # A child can exit while its engine process is still recorded as active.  Do
     # not publish a terminal queue state (or make the capacity reusable) until
     # that identity has been recovered.  Raising here deliberately leaves the
@@ -422,13 +426,7 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: RunningJob, *, rc: i
                 release_terminal_job(worker, job)
         return
 
-    mark_result = mark_terminal_process_queue_entry_with_result(
-        worker,
-        queue_id,
-        job,
-        rc=rc,
-        hooks=orca_worker_lifecycle_hooks(),
-    )
+    mark_result = mark_terminal_queue_entry(queue_id, job, rc=rc)
     release_slot_after_finalize = False
     try:
         # A no-op is benign only when another actor already moved or removed the
@@ -483,11 +481,13 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: RunningJob, *, rc: i
             release_terminal_job(worker, job)
 
 
-def finalize_completed_job(worker: Any, queue_id: str, job: Any, rc: int) -> None:
+def finalize_completed_job(
+    worker: OrcaQueueWorker, queue_id: str, job: RunningJob, rc: int
+) -> None:
     _finalize_finished_job(worker, queue_id, job, rc=rc)
 
 
-def finalize_child_exit(worker: Any, job: RunningJob, *, rc: int) -> None:
+def finalize_child_exit(worker: OrcaQueueWorker, job: RunningJob, *, rc: int) -> None:
     _finalize_finished_job(worker, job.queue_id, job, rc=rc)
 
 
@@ -669,7 +669,7 @@ def _prepare_terminal_replay_work_item(
 
 
 def _run_terminal_replay_side_effects(
-    worker: Any,
+    worker: OrcaQueueWorker,
     item: TerminalReplayWorkItem,
 ) -> None:
     if not str(item.reaction_dir or "").strip():
@@ -718,7 +718,7 @@ def _clear_terminal_replay_marker_or_confirm_absent(item: TerminalReplayWorkItem
 
 
 def strictly_finish_terminal_replay(
-    worker: Any,
+    worker: OrcaQueueWorker,
     job: RunningJob,
     item: TerminalReplayWorkItem,
 ) -> None:
@@ -797,7 +797,7 @@ def _pending_replay_state_is_superseded(item: TerminalReplayWorkItem) -> bool:
 
 
 def _collect_durable_terminal_replays(
-    after_entries: list[tuple[Path, Any]],
+    after_entries: list[tuple[Path, QueueEntry]],
     pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
     previously_blocked_markers: set[tuple[str, str]],
 ) -> set[tuple[str, str]]:
@@ -865,7 +865,7 @@ def _drop_superseded_terminal_replays(
 
 
 def _select_replay_generation_owners(
-    after_entries: list[tuple[Path, Any]],
+    after_entries: list[tuple[Path, QueueEntry]],
     before_by_key: Mapping[tuple[str, str], Any],
     pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
     replay_state: OrcaWorkerReplayState,
@@ -951,8 +951,8 @@ def _select_replay_generation_owners(
 
 
 def _replay_current_terminal_entries(
-    worker: Any,
-    after_entries: list[tuple[Path, Any]],
+    worker: OrcaQueueWorker,
+    after_entries: list[tuple[Path, QueueEntry]],
     before_by_key: Mapping[tuple[str, str], Any],
     previous_statuses: Mapping[tuple[str, str], str],
     pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
@@ -1079,7 +1079,7 @@ def _replay_current_terminal_entries(
 
 
 def _retry_terminal_replays_without_queue_entries(
-    worker: Any,
+    worker: OrcaQueueWorker,
     pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
     current_generation_keys: set[tuple[str, str]],
     latest_generation_by_reaction: Mapping[str, tuple[str, str]],
@@ -1119,14 +1119,14 @@ def _retry_terminal_replays_without_queue_entries(
             pending_replays.pop(key, None)
 
 
-def _reconcile_orphaned_running(worker: Any) -> None:
+def _reconcile_orphaned_running(worker: OrcaQueueWorker) -> None:
     recover_orphaned_engine_slots(worker.admission_root, strict=False)
     before_entries = queue_entries_with_roots(worker.cfg)
     before_by_key = {
         (str(Path(root).expanduser().resolve()), queue_entry_id(entry)): entry
         for root, entry in before_entries
     }
-    replay_state = get_replay_state(worker)
+    replay_state = worker.replay_state
     previous_statuses = replay_state.reconcile_statuses
     if previous_statuses is None:
         # Process startup has no observed status edge.  Treat the first queue
@@ -1142,19 +1142,14 @@ def _reconcile_orphaned_running(worker: Any) -> None:
         worker.admission_root,
         list_slots_fn=list_slots,
     )
-    reconcile_orphaned_process_entries(
-        worker,
-        hooks=EngineQueueProcessReconcileHooks(
-            queue_roots_fn=queue_roots,
-            reconcile_stale_slots_fn=reconcile_stale_slots,
-            reconcile_orphaned_running_entries_fn=reconcile_orphaned_running_entries,
-            reconcile_orphaned_running_entries_kwargs={
-                "ignore_worker_pid": True,
-                "protected_queue_keys": protected_queue_keys,
-                "protected_queue_ids": protected_queue_ids,
-            },
-        ),
-    )
+    reconcile_stale_slots(worker.admission_root)
+    for root in queue_roots(worker.cfg):
+        reconcile_orphaned_running_entries(
+            root,
+            ignore_worker_pid=True,
+            protected_queue_keys=protected_queue_keys,
+            protected_queue_ids=protected_queue_ids,
+        )
     # Reconciliation can terminalize a job whose original parent died, and an
     # old child can also honor cancellation directly. Replay the normal
     # terminal side effects idempotently so job-location records and one-shot
@@ -1196,7 +1191,7 @@ def _reconcile_orphaned_running(worker: Any) -> None:
     replay_state.reconcile_statuses = after_statuses
 
 
-def reconcile_worker_state(worker: Any) -> None:
+def reconcile_worker_state(worker: OrcaQueueWorker) -> None:
     _reconcile_orphaned_running(worker)
 
 
@@ -1414,16 +1409,13 @@ __all__ = [
     "finalize_completed_job",
     "handle_worker_start_error",
     "job_queue_root",
-    "shutdown_running_job",
     "new_terminal_replay_work_item",
     "normalized_entry_status",
     "on_worker_process_started",
-    "orca_worker_lifecycle_hooks",
     "reaction_generation_key",
     "reconcile_worker_state",
     "record_cancelled_run_state",
     "record_failed_run_state",
-    "get_replay_state",
     "strictly_finish_terminal_replay",
     "entry_waits_for_terminal_replay",
     "unresolved_terminal_reaction_keys",

@@ -1,1 +1,1 @@
-"""Engine-facing queue runtime (admission, execution, lifecycle hooks)."""
+"""Engine-facing queue selection, child execution and snapshot recovery."""

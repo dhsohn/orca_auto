@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,11 +8,6 @@ from typing import Any
 from orca_auto.core.config.schema import normalize_max_concurrent
 from orca_auto.core.paths import is_subpath
 from orca_auto.core.paths.retired import path_is_retired_workflow_owned
-from orca_auto.orca.admission_env import (
-    ADMISSION_APP_NAME_ENV_VAR,
-    ADMISSION_TASK_ID_ENV_VAR,
-    ADMISSION_TOKEN_ENV_VAR,
-)
 from orca_auto.orca.config import AppConfig
 
 
@@ -45,13 +39,11 @@ class RunExecutionContext:
     cfg: AppConfig
     reaction_dir: Path
     selected_inp: Path
-    allowed_root: Path
     admission_root: Path
-    max_concurrent: int
-    admission_limit: int
-    reservation_token: str | None
-    admission_app_name: str | None
-    admission_task_id: str | None
+    reservation_token: str | None = None
+    admission_app_name: str | None = None
+    admission_task_id: str | None = None
+    force: bool = False
     execution_provenance: dict[str, Any] | None = None
     queue_id: str | None = None
     queue_generation: str | None = None
@@ -153,65 +145,6 @@ def resolve_submission_context(
     )
 
 
-def _explicit_or_env(value: str | None, env_var: str) -> str | None:
-    if value is not None:
-        return value
-    return (os.getenv(env_var, "") or "").strip() or None
-
-
-def resolve_execution_context(
-    args: Any,
-    *,
-    cfg: AppConfig | None,
-    reaction_dir: Path | None,
-    selected_inp: Path | None,
-    reservation_token: str | None,
-    admission_app_name: str | None,
-    admission_task_id: str | None,
-    execution_provenance: Mapping[str, Any] | None = None,
-    queue_id: str | None = None,
-    queue_generation: str | None = None,
-    load_config_fn: Callable[[Any], AppConfig],
-    select_latest_inp_fn: Callable[[Path], Path],
-    logger: Any,
-) -> RunExecutionContext | None:
-    if cfg is None:
-        cfg = load_config_fn(args.config)
-    if reaction_dir is None or selected_inp is None:
-        reaction_dir_raw = reaction_dir_arg(args)
-        if reaction_dir_raw is None:
-            logger.error("job directory path is required")
-            return None
-        target = resolve_run_target_or_log(
-            cfg,
-            reaction_dir_raw,
-            select_latest_inp_fn=select_latest_inp_fn,
-            logger=logger,
-        )
-        if target is None:
-            return None
-        reaction_dir = target.reaction_dir
-        selected_inp = target.selected_inp
-
-    return RunExecutionContext(
-        cfg=cfg,
-        reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
-        allowed_root=Path(cfg.runtime.allowed_root).expanduser().resolve(),
-        admission_root=configured_admission_root(cfg),
-        max_concurrent=configured_max_concurrent(cfg),
-        admission_limit=configured_admission_limit(cfg),
-        reservation_token=_explicit_or_env(reservation_token, ADMISSION_TOKEN_ENV_VAR),
-        admission_app_name=_explicit_or_env(admission_app_name, ADMISSION_APP_NAME_ENV_VAR),
-        admission_task_id=_explicit_or_env(admission_task_id, ADMISSION_TASK_ID_ENV_VAR),
-        execution_provenance=(
-            dict(execution_provenance) if isinstance(execution_provenance, Mapping) else None
-        ),
-        queue_id=str(queue_id or "").strip() or None,
-        queue_generation=str(queue_generation or "").strip() or None,
-    )
-
-
 __all__ = [
     "ResolvedRunTarget",
     "RunExecutionContext",
@@ -221,7 +154,6 @@ __all__ = [
     "configured_admission_root",
     "configured_max_concurrent",
     "reaction_dir_arg",
-    "resolve_execution_context",
     "resolve_run_target",
     "resolve_run_target_or_log",
     "resolve_submission_context",

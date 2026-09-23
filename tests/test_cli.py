@@ -20,6 +20,7 @@ from orca_auto.orca.cli_logging import (
 from orca_auto.orca.cli_logging import (
     remove_managed_handlers as _remove_managed_handlers,
 )
+from orca_auto.orca.config import load_config
 from orca_auto.orca.execution import (
     _emit,
     execute_orca_run,
@@ -27,6 +28,7 @@ from orca_auto.orca.execution import (
     select_latest_inp,
 )
 from orca_auto.orca.orca_runner import RunResult, WorkerShutdownInterrupt
+from orca_auto.orca.run_context import RunExecutionContext, configured_admission_root
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import save_state
 from orca_auto.orca.state_reading import load_state, state_path
@@ -90,13 +92,16 @@ class TestCli(unittest.TestCase):
             state="reserved",
         )
         self.assertIsNotNone(token)
+        cfg = load_config(str(config))
         return execute_orca_run(
-            Namespace(
-                config=str(config),
-                reaction_dir=str(reaction_dir),
+            RunExecutionContext(
+                cfg=cfg,
+                reaction_dir=reaction_dir.resolve(),
+                selected_inp=select_latest_inp(reaction_dir),
+                admission_root=configured_admission_root(cfg),
+                reservation_token=token,
                 force=force,
             ),
-            reservation_token=token,
         )
 
     def test_rejects_outside_allowed_root(self) -> None:

@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from orca_auto.core.config import CommonResourceConfig
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
@@ -20,6 +19,7 @@ from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import execution_binding as binding_mod
 from orca_auto.orca import worker_execution as worker_job
+from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
     orca_execution_started_evidence,
@@ -735,17 +735,11 @@ def test_recovery_build_rejects_changed_source_input(tmp_path: Path) -> None:
         _build(job_dir, selected, executable, recovery_from=crashed)
 
 
-@dataclass(frozen=True)
-class _WorkerResources:
-    max_cores_per_task: int = 1
-    max_memory_gb_per_task: int = 1
-
-
-def _worker_cfg(queue_root: Path, executable: Path) -> Any:
-    return SimpleNamespace(
-        runtime=SimpleNamespace(allowed_root=str(queue_root)),
-        resources=_WorkerResources(),
-        paths=SimpleNamespace(orca_executable=str(executable)),
+def _worker_cfg(queue_root: Path, executable: Path) -> AppConfig:
+    return AppConfig(
+        runtime=OrcaRuntimeConfig(allowed_root=str(queue_root)),
+        resources=CommonResourceConfig(max_cores_per_task=1, max_memory_gb_per_task=1),
+        paths=PathsConfig(orca_executable=str(executable)),
     )
 
 
@@ -891,11 +885,11 @@ def test_worker_child_runs_the_replacement_generation(
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _cb: None)
 
-    def fake_execute_run_job(*args: Any, **kwargs: Any) -> int:
-        calls["kwargs"] = kwargs
+    def fake_execute_orca_run(*args: Any, **kwargs: Any) -> int:
+        calls["context"] = args[0]
         return 0
 
-    monkeypatch.setattr(worker_job, "execute_run_job", fake_execute_run_job)
+    monkeypatch.setattr(worker_job, "execute_orca_run", fake_execute_orca_run)
 
     rc = worker_job.run_worker_child_job(
         config_path="/tmp/config.yaml",
@@ -911,7 +905,7 @@ def test_worker_child_runs_the_replacement_generation(
     assert replacement["generation_name"] != snapshot["generation_name"]
     # The child executes the replacement generation's bound input, not the
     # crashed generation's.
-    assert calls["kwargs"]["selected_inp"] == replacement["selected_inp"]
+    assert str(calls["context"].selected_inp) == replacement["selected_inp"]
 
 
 def test_rebind_consumes_budget_before_building(
@@ -1180,8 +1174,9 @@ def test_rebind_rejects_boolean_count_with_pending_claim_without_mutation(
     ] == [old_generation]
 
 
-def test_recovering_finder_records_the_rejection_on_the_failed_queue_row(
+def test_child_recovery_records_the_rejection_on_the_failed_queue_row(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     queue_root, running, snapshot, _executable = _claimed_mutable_entry(tmp_path)
     old_generation = _crash_generation(snapshot)
@@ -1194,10 +1189,14 @@ def test_recovering_finder_records_the_rejection_on_the_failed_queue_row(
         {worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: True},
         expected_entry=running,
     )
-    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+    monkeypatch.setattr(
+        worker_job, "load_config", lambda _path: _worker_cfg(queue_root, _executable)
+    )
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
-        find(queue_root, str(running.queue_id))
+        worker_job.run_worker_child_job(
+            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+        )
 
     (row,) = list_queue(queue_root)
     assert row.status is QueueStatus.FAILED
@@ -1211,7 +1210,7 @@ def test_recovering_finder_records_the_rejection_on_the_failed_queue_row(
     ] == [old_generation]
 
 
-def test_recovering_finder_records_a_rejection_raised_after_the_claim_reservation(
+def test_child_recovery_records_a_rejection_raised_after_the_claim_reservation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1229,10 +1228,11 @@ def test_recovering_finder_records_a_rejection_raised_after_the_claim_reservatio
         expected_entry=running,
     )
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
-    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
 
     with pytest.raises(ValueError, match="submission source input path"):
-        find(queue_root, str(running.queue_id))
+        worker_job.run_worker_child_job(
+            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+        )
 
     (row,) = list_queue(queue_root)
     assert row.status is QueueStatus.FAILED
@@ -1248,7 +1248,7 @@ def test_recovering_finder_records_a_rejection_raised_after_the_claim_reservatio
 
 
 @pytest.mark.parametrize("redequeued", [False, True], ids=["requeued", "redequeued"])
-def test_recovering_finder_leaves_a_requeued_row_alone(
+def test_child_recovery_leaves_a_requeued_row_alone(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     redequeued: bool,
@@ -1267,17 +1267,21 @@ def test_recovering_finder_leaves_a_requeued_row_alone(
         raise ValueError("ORCA crash recovery found an invalid durable rebind count")
 
     monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", requeue_then_reject)
-    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+    monkeypatch.setattr(
+        worker_job, "load_config", lambda _path: _worker_cfg(queue_root, _executable)
+    )
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
-        find(queue_root, str(running.queue_id))
+        worker_job.run_worker_child_job(
+            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+        )
 
     (row,) = list_queue(queue_root)
     assert row.status is (QueueStatus.RUNNING if redequeued else QueueStatus.PENDING)
     assert row.error == ""
 
 
-def test_recovering_finder_fences_the_failure_write_to_its_own_dequeue(
+def test_child_recovery_fences_the_failure_write_to_its_own_dequeue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1304,10 +1308,14 @@ def test_recovering_finder_fences_the_failure_write_to_its_own_dequeue(
 
     monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", reject)
     monkeypatch.setattr(worker_job, "_queue_entry_by_id", lookup_then_lose_the_row)
-    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+    monkeypatch.setattr(
+        worker_job, "load_config", lambda _path: _worker_cfg(queue_root, _executable)
+    )
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
-        find(queue_root, str(running.queue_id))
+        worker_job.run_worker_child_job(
+            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+        )
 
     assert lookups == 2
     (row,) = list_queue(queue_root)
@@ -1316,7 +1324,7 @@ def test_recovering_finder_fences_the_failure_write_to_its_own_dequeue(
     assert row.error == ""
 
 
-def test_recovering_finder_does_not_overwrite_a_racing_cancellation(
+def test_child_recovery_does_not_overwrite_a_racing_cancellation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1329,10 +1337,14 @@ def test_recovering_finder_does_not_overwrite_a_racing_cancellation(
         raise ValueError("ORCA crash recovery found an invalid durable rebind count")
 
     monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", cancel_then_reject)
-    find = worker_job._recovering_queue_entry_by_id("/nonexistent/orca_auto.yaml")
+    monkeypatch.setattr(
+        worker_job, "load_config", lambda _path: _worker_cfg(queue_root, _executable)
+    )
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
-        find(queue_root, str(running.queue_id))
+        worker_job.run_worker_child_job(
+            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+        )
 
     (row,) = list_queue(queue_root)
     assert row.status is QueueStatus.RUNNING
@@ -1791,11 +1803,10 @@ def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> Non
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
     # The ordinary context build accepts the finished generation so the
     # completed-adoption path can claim the result.
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(queue_root)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(queue_root)))
     context = worker_job._build_execution_context(
         cfg,
         result,
-        worker_config_path="/tmp/config.yaml",
         admission_token=None,
     )
     assert context.execution_snapshot["generation_name"] == snapshot["generation_name"]

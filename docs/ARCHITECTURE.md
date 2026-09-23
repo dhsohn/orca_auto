@@ -59,6 +59,34 @@ graph TD
 - Upon calculation exit, `orca/out_analyzer.py` verifies termination banners and scans output lines for error or convergence failures (ignoring comments and input echoes).
 - A verified observation payload (`machine.json` adhering to the v1 envelope contract) and human-readable HTML/SI reports are published.
 
+### Worker ownership and child execution
+
+`OrcaQueueWorker` owns ORCA cancellation, shutdown, recovery and its replay state.
+Its common base owns process supervision, admission and the PID-file lifecycle.
+The worker composes its typed dependencies once; tests can substitute process
+creation and sleep directly. `EngineDefinition[AppConfig]` preserves configuration
+and queue-entry types through the runtime, including the keyword-only
+`expected_entry` comparison when claiming a selected generation.
+
+Cancellation observations reuse unchanged queue snapshots. Terminal notification
+dispatch has a durable claim and bounded background sends; notification delivery
+is best effort and does not retain execution admission slots.
+
+The worker CLI loads config, checks the PID file, then constructs and runs the
+ORCA worker directly. `EngineQueueRuntime` owns root selection, queue lookup and
+admission preview; it has no child-start or terminal policy callbacks. ORCA
+attaches admission metadata and marks terminal generations in `queue/replay.py`,
+stops/requeues children in `queue/worker.py`, and finalizes cancellation in
+`queue/cancellation.py`. These paths call concrete adapters with the selected
+entry and task identity. Terminal replay must finish before admission release.
+
+The ORCA child directly resolves its queue entry, recovers a crashed generation,
+waits for parent admission handoff, and runs that generation. The parent retains
+final admission-release ownership on success, shutdown and exceptions. Validated
+inputs, resources and queue identity form one `RunExecutionContext`, which is
+passed directly into execution without reconstructing CLI arguments or installing
+empty lifecycle callbacks.
+
 ---
 
 ## 4. Operational Architecture

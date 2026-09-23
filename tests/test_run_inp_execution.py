@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
-from typing import cast
 
 import pytest
 
 from orca_auto.orca import execution as run_inp_execution
+from orca_auto.orca.config import AppConfig
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import save_state
 from orca_auto.orca.state_reading import load_state
@@ -100,7 +101,6 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
     # State recovery runs after the reaction lock and before admission/execution.
     # Engine ownership has already been reconciled through the admission store.
     from contextlib import contextmanager
-    from types import SimpleNamespace
 
     events: list[str] = []
 
@@ -139,23 +139,18 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
     )
     monkeypatch.setattr(run_inp_execution, "save_state", lambda *_a, **_k: None)
     monkeypatch.setattr(run_inp_execution, "run_with_state", fake_run_with_state)
-    context = cast(
-        RunExecutionContext,
-        SimpleNamespace(
-            reaction_dir=tmp_path / "rxn",
-            selected_inp=tmp_path / "rxn.inp",
-            admission_root=None,
-            reservation_token=None,
-            admission_app_name=None,
-            admission_task_id="",
-            cfg=None,
-        ),
+    context = RunExecutionContext(
+        reaction_dir=tmp_path / "rxn",
+        selected_inp=tmp_path / "rxn.inp",
+        admission_root=(tmp_path / "rxn").parent / ".admission",
+        reservation_token=None,
+        admission_app_name=None,
+        admission_task_id="",
+        cfg=AppConfig(),
     )
 
     exit_code = run_inp_execution.execute_locked_run(
-        SimpleNamespace(force=True),
-        context,
-        runner_cls=object,
+        replace(context, force=True), runner_cls=object
     )
 
     assert exit_code == 0
@@ -175,7 +170,6 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
 ) -> None:
     """Existing-output replay must retain the queue generation's task ID."""
     from contextlib import contextmanager
-    from types import SimpleNamespace
 
     reaction_dir = tmp_path / "rxn"
     selected_inp = reaction_dir / "rxn.inp"
@@ -223,23 +217,18 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
         lambda _reaction_dir, current_state: saved_states.append(dict(current_state)),
     )
     monkeypatch.setattr(run_inp_execution, "_exit_with_result", exit_with_result)
-    context = cast(
-        RunExecutionContext,
-        SimpleNamespace(
-            reaction_dir=reaction_dir,
-            selected_inp=selected_inp,
-            admission_root=tmp_path,
-            reservation_token=None,
-            admission_app_name=None,
-            admission_task_id="queue-task-id",
-            cfg=None,
-        ),
+    context = RunExecutionContext(
+        reaction_dir=reaction_dir,
+        selected_inp=selected_inp,
+        admission_root=tmp_path,
+        reservation_token=None,
+        admission_app_name=None,
+        admission_task_id="queue-task-id",
+        cfg=AppConfig(),
     )
 
     exit_code = run_inp_execution.execute_locked_run(
-        SimpleNamespace(force=False),
-        context,
-        runner_cls=object,
+        replace(context, force=False), runner_cls=object
     )
 
     assert exit_code == 0

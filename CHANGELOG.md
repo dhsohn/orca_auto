@@ -6,6 +6,16 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [7.0.1] - 2026-09-24
+
+### Changed
+
+- Make the ORCA worker own cancellation, shutdown, recovery and terminal replay directly, while shared infrastructure handles process supervision and admission.
+- Preserve concrete configuration and queue-entry types across engine registration and worker construction; remove redundant callback and dependency forwarding layers.
+- Pass validated inputs, resources and queue identity through one `RunExecutionContext` instead of rebuilding command-line arguments and execution state.
+- Simplify child execution and remove unused helpers and no-op lifecycle callbacks while preserving parent admission ownership, generation fencing and cancellation handling.
+- Expand regressions for admission handoff, shutdown before launch and exception cleanup; update architecture and operational documentation.
+
 ## [7.0.0] - 2026-09-23
 
 ### Removed

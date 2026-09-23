@@ -1,19 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from orca_auto.core.queue.engine import execution as engine_execution
-from orca_auto.core.queue.engine.worker_execution import WorkerShutdownRequested
-
-
-@dataclass(frozen=True)
-class _EngineTaggedProcessDependencies(engine_execution.EngineWorkerProcessDependencies[str]):
-    engine: str
+from orca_auto.core.queue import cancellable, metadata, resource_requests
 
 
 def test_object_attribute_fields_extracts_named_context_values() -> None:
@@ -23,7 +16,7 @@ def test_object_attribute_fields_extracts_named_context_values() -> None:
         input_summary={"candidate_count": 3},
     )
 
-    assert engine_execution.object_attribute_fields(
+    assert metadata.object_attribute_fields(
         context,
         "job_type",
         "reaction_key",
@@ -35,378 +28,6 @@ def test_object_attribute_fields_extracts_named_context_values() -> None:
     }
 
 
-@pytest.mark.parametrize("shutdown_check", [1, 2])
-def test_run_engine_worker_entry_stops_at_shutdown_checkpoint(
-    tmp_path: Path,
-    shutdown_check: int,
-) -> None:
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
-    context = SimpleNamespace()
-    calls: list[str] = []
-    checks = 0
-
-    def shutdown_requested() -> bool:
-        nonlocal checks
-        checks += 1
-        calls.append("check")
-        return checks == shutdown_check
-
-    def build_context(_cfg: Any, _entry: Any) -> SimpleNamespace:
-        calls.append("build")
-        return context
-
-    spec = engine_execution.EngineWorkerExecutionSpec(
-        build_context=build_context,
-        mark_running=lambda *_args: calls.append("mark"),
-        run_job=lambda *_args: calls.append("run"),
-        finalize_entry=lambda *_args: calls.append("finalize"),
-        build_outcome=lambda *_args: calls.append("outcome"),
-    )
-
-    with pytest.raises(WorkerShutdownRequested) as caught:
-        engine_execution.run_engine_worker_entry_with_spec(
-            cfg,
-            SimpleNamespace(queue_id="q-1"),
-            queue_root=None,
-            spec=spec,
-            options=engine_execution.EngineWorkerOptions(shutdown_requested=shutdown_requested),
-        )
-
-    assert caught.value.context is context
-    assert calls == (
-        ["build", "check"] if shutdown_check == 1 else ["build", "check", "mark", "check"]
-    )
-
-
-def test_run_engine_worker_entry_with_spec_raises_shutdown_with_context(
-    tmp_path: Path,
-) -> None:
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
-    entry = SimpleNamespace(queue_id="q-1")
-    context = SimpleNamespace(entry=entry)
-    spec = engine_execution.EngineWorkerExecutionSpec(
-        build_context=lambda _cfg, _entry: context,
-        mark_running=lambda *_args: None,
-        run_job=lambda *_args: "result",
-        finalize_entry=lambda *_args: "finalized",
-    )
-
-    try:
-        engine_execution.run_engine_worker_entry_with_spec(
-            cfg,
-            entry,
-            queue_root=tmp_path / "queue",
-            spec=spec,
-            options=engine_execution.EngineWorkerOptions(
-                shutdown_requested=lambda: True,
-            ),
-        )
-    except WorkerShutdownRequested as exc:
-        assert exc.context is context
-        assert str(exc) == "worker_shutdown"
-    else:
-        raise AssertionError("expected shutdown")
-
-
-def test_run_engine_worker_entry_with_spec_runs_lifecycle(tmp_path: Path) -> None:
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
-    entry = SimpleNamespace(queue_id="q-1")
-    calls: list[tuple[str, Any]] = []
-
-    def run_job(
-        _cfg: Any,
-        _context: Any,
-        queue_root: Path,
-        _options: engine_execution.EngineWorkerOptions,
-    ) -> str:
-        calls.append(("run", queue_root))
-        return "result"
-
-    def finalize_entry(
-        _cfg: Any,
-        _context: Any,
-        result: str,
-        _queue_root: Path,
-        options: engine_execution.EngineWorkerOptions,
-    ) -> str:
-        calls.append(("finalize", options.worker_job_pid))
-        return f"{result}:finalized"
-
-    def build_outcome(_context: Any, result: str, finalized: str) -> str:
-        calls.append(("outcome", result))
-        return finalized
-
-    spec = engine_execution.EngineWorkerExecutionSpec(
-        build_context=lambda cfg_obj, entry_obj: SimpleNamespace(
-            cfg=cfg_obj,
-            entry=entry_obj,
-        ),
-        mark_running=lambda _cfg, _context, options: calls.append(("mark", options.worker_job_pid)),
-        run_job=run_job,
-        finalize_entry=finalize_entry,
-        build_outcome=build_outcome,
-    )
-
-    outcome = engine_execution.run_engine_worker_entry_with_spec(
-        cfg,
-        entry,
-        queue_root=tmp_path / "queue",
-        spec=spec,
-        options=engine_execution.EngineWorkerOptions(worker_job_pid=101),
-    )
-
-    assert outcome == "result:finalized"
-    assert calls == [
-        ("mark", 101),
-        ("run", tmp_path / "queue"),
-        ("finalize", 101),
-        ("outcome", "result"),
-    ]
-
-
-def test_run_engine_worker_entry_with_spec_factory_options_builds_options(
-    tmp_path: Path,
-) -> None:
-    cfg = object()
-    entry = SimpleNamespace(queue_id="q-1")
-    running_process = object()
-    calls: list[tuple[str, Any]] = []
-
-    def register_running_job(process: object | None) -> None:
-        calls.append(("register", process))
-
-    spec = engine_execution.EngineWorkerExecutionSpec(
-        build_context=lambda _cfg, current_entry: SimpleNamespace(entry=current_entry),
-        mark_running=lambda _cfg, _context, options: calls.append(("mark", options.worker_job_pid)),
-        run_job=lambda _cfg, _context, _queue_root, options: (
-            (
-                options.register_running_job(running_process)
-                if options.register_running_job is not None
-                else None
-            )
-            or {
-                "should_cancel": None if options.should_cancel is None else options.should_cancel(),
-                "shutdown_requested": None
-                if options.shutdown_requested is None
-                else options.shutdown_requested(),
-            }
-        ),
-        finalize_entry=lambda _cfg, _context, result, _queue_root, _options: dict(result),
-    )
-
-    outcome = engine_execution.run_engine_worker_entry_with_spec_factory_options(
-        cfg,
-        entry,
-        queue_root=tmp_path / "queue",
-        spec_factory=lambda: spec,
-        should_cancel=lambda: True,
-        shutdown_requested=lambda: False,
-        register_running_job=register_running_job,
-        worker_job_pid=101,
-    )
-
-    assert outcome == {
-        "should_cancel": True,
-        "shutdown_requested": False,
-    }
-    assert calls == [("mark", 101), ("register", running_process)]
-
-
-def test_run_engine_worker_entry_with_spec_factory_options_builds_once(
-    tmp_path: Path,
-) -> None:
-    cfg = object()
-    entry = SimpleNamespace(queue_id="q-1")
-    calls: list[str] = []
-
-    def build_spec() -> engine_execution.EngineWorkerExecutionSpec:
-        calls.append("build")
-        return engine_execution.EngineWorkerExecutionSpec(
-            build_context=lambda _cfg, current_entry: SimpleNamespace(entry=current_entry),
-            mark_running=lambda *_args: calls.append("mark"),
-            run_job=lambda *_args: "result",
-            finalize_entry=lambda *_args: "finalized",
-        )
-
-    outcome = engine_execution.run_engine_worker_entry_with_spec_factory_options(
-        cfg,
-        entry,
-        queue_root=tmp_path / "queue",
-        spec_factory=build_spec,
-        worker_job_pid=101,
-    )
-
-    assert outcome == "finalized"
-    assert calls == ["build", "mark"]
-
-
-def test_raise_if_shutdown_requested_uses_engine_context() -> None:
-    context = SimpleNamespace(job_dir="/tmp/job")
-
-    try:
-        engine_execution.raise_if_shutdown_requested(
-            context,
-            engine_execution.EngineWorkerOptions(shutdown_requested=lambda: True),
-        )
-    except WorkerShutdownRequested as exc:
-        assert exc.context is context
-    else:
-        raise AssertionError("expected shutdown")
-
-
-def test_raise_if_shutdown_callback_requested_uses_engine_context() -> None:
-    context = SimpleNamespace(job_dir="/tmp/job")
-
-    with pytest.raises(WorkerShutdownRequested) as exc_info:
-        engine_execution.raise_if_shutdown_callback_requested(
-            context,
-            lambda: True,
-        )
-
-    assert exc_info.value.context is context
-
-
-def test_queue_cancel_callback_uses_normalized_queue_root_and_entry_id() -> None:
-    calls: list[tuple[str, str, dict[str, object]]] = []
-
-    def get_cancel_requested(
-        root: str,
-        queue_id: str,
-        **kwargs: object,
-    ) -> bool:
-        calls.append((root, queue_id, kwargs))
-        return True
-
-    queue_deps = engine_execution.EngineWorkerQueueDependencies(
-        get_cancel_requested=get_cancel_requested,
-        mark_completed=lambda *args, **kwargs: None,
-        mark_cancelled=lambda *args, **kwargs: None,
-        mark_failed=lambda *args, **kwargs: None,
-    )
-
-    callback = engine_execution.queue_cancel_callback(
-        queue_deps,
-        Path("/tmp/queue"),
-        SimpleNamespace(queue_id="queue-1", task_id="task-1"),
-    )
-
-    assert callback() is True
-    assert calls == [
-        (
-            "/tmp/queue",
-            "queue-1",
-            {
-                "expected_entry": SimpleNamespace(queue_id="queue-1", task_id="task-1"),
-                "expected_task_id": "task-1",
-            },
-        )
-    ]
-
-
-def test_sync_terminal_result_runs_common_terminal_sequence() -> None:
-    calls: list[str] = []
-
-    def sync_job_record() -> str:
-        calls.append("sync")
-        return "organized"
-
-    def mark_queue_terminal(before_update: Any) -> bool:
-        before_update()
-        calls.append("mark")
-        return True
-
-    outcome = engine_execution.sync_terminal_result(
-        engine_execution.TerminalSyncActions(
-            write_artifacts=lambda: calls.append("write"),
-            mark_queue_terminal=mark_queue_terminal,
-            sync_job_record=sync_job_record,
-            notify_finished=lambda sync_result: calls.append(f"notify:{sync_result}"),
-            build_outcome=lambda sync_result: ("outcome", sync_result),
-        ),
-    )
-
-    assert calls == ["write", "sync", "mark", "notify:organized"]
-    assert outcome == ("outcome", "organized")
-
-
-def test_sync_terminal_result_leaves_queue_replayable_when_index_sync_fails() -> None:
-    calls: list[str] = []
-
-    def fail_sync() -> str:
-        calls.append("sync")
-        raise OSError("index fsync failed")
-
-    def mark_queue_terminal(before_update: Any) -> bool:
-        before_update()
-        calls.append("mark")
-        return True
-
-    with pytest.raises(OSError, match="index fsync failed"):
-        engine_execution.sync_terminal_result(
-            engine_execution.TerminalSyncActions(
-                write_artifacts=lambda: calls.append("write"),
-                sync_job_record=fail_sync,
-                mark_queue_terminal=mark_queue_terminal,
-                notify_finished=lambda _result: calls.append("notify"),
-                build_outcome=lambda result: result,
-            )
-        )
-
-    assert calls == ["write", "sync"]
-
-
-def test_sync_terminal_result_does_not_write_for_rejected_generation() -> None:
-    calls: list[str] = []
-
-    def handle_rejected() -> str:
-        calls.append("fallback")
-        return "rejected"
-
-    outcome = engine_execution.sync_terminal_result(
-        engine_execution.TerminalSyncActions(
-            write_artifacts=lambda: calls.append("write"),
-            sync_job_record=lambda: calls.append("sync"),
-            mark_queue_terminal=lambda _before_update: None,
-            notify_finished=lambda _result: calls.append("notify"),
-            build_outcome=lambda _result: "default",
-            handle_uncommitted_terminal=handle_rejected,
-        )
-    )
-
-    assert outcome == "rejected"
-    assert calls == ["fallback"]
-
-
-def test_mark_result_terminal_status_passes_result_fields() -> None:
-    calls: list[dict[str, Any]] = []
-    expected_entry = SimpleNamespace(queue_id="queue-1", task_id="task-1")
-
-    engine_execution.mark_result_terminal_status(
-        "/tmp/queue",
-        "queue-1",
-        SimpleNamespace(status="completed", reason="ok"),
-        metadata_update={"kind": "demo"},
-        mark_terminal_status_fn=lambda *args, **kwargs: calls.append(
-            {"args": args, "kwargs": kwargs}
-        ),
-        mark_completed_fn=lambda *args, **kwargs: None,
-        mark_cancelled_fn=lambda *args, **kwargs: None,
-        mark_failed_fn=lambda *args, **kwargs: None,
-        expected_entry=expected_entry,
-        expected_task_id="task-1",
-    )
-
-    assert calls[0]["args"] == ("/tmp/queue", "queue-1")
-    assert calls[0]["kwargs"]["status"] == "completed"
-    assert calls[0]["kwargs"]["reason"] == "ok"
-    assert calls[0]["kwargs"]["metadata_update"] == {"kind": "demo"}
-    assert callable(calls[0]["kwargs"]["mark_completed_fn"])
-    assert callable(calls[0]["kwargs"]["mark_cancelled_fn"])
-    assert callable(calls[0]["kwargs"]["mark_failed_fn"])
-    assert calls[0]["kwargs"]["expected_entry"] is expected_entry
-    assert calls[0]["kwargs"]["expected_task_id"] == "task-1"
-
-
 def test_default_entry_resource_request_uses_common_resource_caps() -> None:
     cfg = SimpleNamespace(
         resources=SimpleNamespace(max_cores_per_task=8, max_memory_gb_per_task=32),
@@ -416,13 +37,13 @@ def test_default_entry_resource_request_uses_common_resource_caps() -> None:
     from orca_auto.core.indexing.engine_records import resource_dict
 
     def caps(config: Any) -> dict[str, int]:
-        return engine_execution.engine_resource_caps(config, resource_dict_fn=resource_dict)
+        return resource_requests.engine_resource_caps(config, resource_dict_fn=resource_dict)
 
     assert caps(cfg) == {
         "max_cores": 8,
         "max_memory_gb": 32,
     }
-    assert engine_execution.entry_resource_request(cfg, entry, resource_caps_fn=caps) == {
+    assert resource_requests.entry_resource_request(cfg, entry, resource_caps_fn=caps) == {
         "max_cores": 4
     }
 
@@ -436,8 +57,8 @@ def test_run_cancellable_process_execution_waits_and_clears_running_job() -> Non
         wait_calls.append((actual_running, kwargs))
         return "completed"
 
-    outcome = engine_execution.run_cancellable_process_execution(
-        engine_execution.CancellableProcessExecution(
+    outcome = cancellable.run_cancellable_process_execution(
+        cancellable.CancellableProcessExecution(
             start_job=lambda: running,
             finalize_job=lambda *_args, **_kwargs: "finalized",
             terminate_process=lambda _proc: True,
@@ -459,8 +80,8 @@ def test_run_cancellable_process_execution_waits_and_clears_running_job() -> Non
 
 
 def test_run_cancellable_process_execution_builds_failure_result() -> None:
-    outcome = engine_execution.run_cancellable_process_execution(
-        engine_execution.CancellableProcessExecution(
+    outcome = cancellable.run_cancellable_process_execution(
+        cancellable.CancellableProcessExecution(
             start_job=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
             finalize_job=lambda *_args, **_kwargs: "finalized",
             terminate_process=lambda _proc: True,
@@ -483,8 +104,8 @@ def test_finalizer_failure_after_group_exit_does_not_terminate_reaped_process() 
         terminated.append(proc)
         return True
 
-    outcome = engine_execution.run_cancellable_process_execution(
-        engine_execution.CancellableProcessExecution(
+    outcome = cancellable.run_cancellable_process_execution(
+        cancellable.CancellableProcessExecution(
             start_job=lambda: running,
             finalize_job=lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("finalize failed")
@@ -526,8 +147,8 @@ def test_run_cancellable_process_execution_terminates_after_wait_error(
         actual_process.exited = True
         return True
 
-    outcome = engine_execution.run_cancellable_process_execution(
-        engine_execution.CancellableProcessExecution(
+    outcome = cancellable.run_cancellable_process_execution(
+        cancellable.CancellableProcessExecution(
             start_job=lambda: running,
             finalize_job=lambda *_args, **_kwargs: "finalized",
             terminate_process=terminate,
@@ -549,7 +170,7 @@ def test_entry_metadata_resolved_path_rejects_unsafe_values(value: Any) -> None:
     entry = SimpleNamespace(metadata={"job_dir": value})
 
     with pytest.raises(ValueError, match="Queue metadata 'job_dir'"):
-        engine_execution.entry_metadata_resolved_path(entry, "job_dir")
+        metadata.entry_metadata_resolved_path(entry, "job_dir")
 
 
 def test_require_path_within_roots_rejects_symlink_escape(tmp_path: Path) -> None:
@@ -561,72 +182,11 @@ def test_require_path_within_roots_rejects_symlink_escape(tmp_path: Path) -> Non
     escape.symlink_to(outside_root, target_is_directory=True)
 
     with pytest.raises(ValueError, match="must be under an allowed root"):
-        engine_execution.require_path_within_roots(
+        metadata.require_path_within_roots(
             escape / "job",
             (allowed_root,),
             label="Queue metadata 'job_dir'",
         )
-
-
-def test_run_engine_worker_process_job_uses_process_dependency_group() -> None:
-    running = SimpleNamespace(process=SimpleNamespace(pid=123))
-    registered: list[Any | None] = []
-    wait_kwargs: list[dict[str, Any]] = []
-
-    def wait_for_cancellable_process(actual_running: Any, **kwargs: Any) -> str:
-        assert actual_running is running
-        wait_kwargs.append(kwargs)
-        return "done"
-
-    process_deps = engine_execution.EngineWorkerProcessDependencies(
-        terminate_process=lambda _proc: True,
-        wait_for_cancellable_process=wait_for_cancellable_process,
-        sleep=lambda _seconds: None,
-        cancel_check_interval_seconds=0.75,
-    )
-
-    result = engine_execution.run_engine_worker_process_job(
-        SimpleNamespace(job_dir="/tmp/job"),
-        options=engine_execution.EngineWorkerOptions(
-            should_cancel=lambda: False,
-            register_running_job=registered.append,
-        ),
-        process_deps=process_deps,
-        start_job=lambda: running,
-        finalize_job=lambda *_args, **_kwargs: "finalized",
-        build_failure_result=lambda exc: f"failed:{exc}",
-        check_cancel_before_poll=True,
-    )
-
-    assert result == "done"
-    assert registered == [running, None]
-    assert wait_kwargs[0]["poll_interval_seconds"] == 0.75
-    assert wait_kwargs[0]["check_cancel_before_poll"] is True
-
-
-def test_build_engine_worker_dependency_factories_preserve_extra_fields() -> None:
-    factories = engine_execution.build_engine_worker_process_default_factories(
-        runner_dependencies_type=_EngineTaggedProcessDependencies,
-        terminate_process=lambda _proc: True,
-        wait_for_cancellable_process=lambda *_args, **_kwargs: "done",
-        sleep=lambda _seconds: None,
-        cancel_check_interval_seconds=0.5,
-        now_utc_iso=lambda: "now",
-        get_cancel_requested=lambda _root, _queue_id: True,
-        mark_completed=lambda *_args, **_kwargs: None,
-        mark_cancelled=lambda *_args, **_kwargs: None,
-        mark_failed=lambda *_args, **_kwargs: None,
-        engine="xtb",
-    )
-
-    timing = factories["timing"]()
-    queue = factories["queue"]()
-    process = factories["runner"]()
-
-    assert timing.now_utc_iso() == "now"
-    assert queue.get_cancel_requested("/tmp/queue", "queue-1") is True
-    assert process.cancel_check_interval_seconds == 0.5
-    assert process.engine == "xtb"
 
 
 def test_run_cancellable_process_execution_can_reraise_policy_exceptions() -> None:
@@ -644,8 +204,8 @@ def test_run_cancellable_process_execution_can_reraise_policy_exceptions() -> No
         return True
 
     try:
-        engine_execution.run_cancellable_process_execution(
-            engine_execution.CancellableProcessExecution(
+        cancellable.run_cancellable_process_execution(
+            cancellable.CancellableProcessExecution(
                 start_job=lambda: SimpleNamespace(process=process),
                 finalize_job=lambda *_args, **_kwargs: "finalized",
                 terminate_process=terminate,
@@ -699,9 +259,9 @@ def test_cleanup_failure_retries_and_never_builds_terminal_result(
 
     running = SimpleNamespace(process=process)
 
-    with pytest.raises(engine_execution.ProcessCleanupError, match=error_match):
-        engine_execution.run_cancellable_process_execution(
-            engine_execution.CancellableProcessExecution(
+    with pytest.raises(cancellable.ProcessCleanupError, match=error_match):
+        cancellable.run_cancellable_process_execution(
+            cancellable.CancellableProcessExecution(
                 start_job=lambda: running,
                 finalize_job=lambda *_args, **_kwargs: finalize_calls.append(True),
                 terminate_process=terminate,
@@ -733,7 +293,7 @@ def test_run_cancellable_engine_process_builds_common_execution_actions() -> Non
         wait_kwargs.append(kwargs)
         return "done"
 
-    outcome = engine_execution.run_cancellable_engine_process(
+    outcome = cancellable.run_cancellable_engine_process(
         start_job=lambda: running,
         finalize_job=lambda *_args, **_kwargs: "finalized",
         terminate_process=lambda _proc: True,

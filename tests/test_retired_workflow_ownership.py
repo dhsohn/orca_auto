@@ -79,9 +79,7 @@ def test_retired_worker_cannot_prepare_or_rebind_generation(
     before = _files(tmp_path)
     with pytest.raises(ValueError, match="retired"):
         if operation == "prepare":
-            worker_execution._build_execution_context(
-                cfg, entry, worker_config_path="unused", admission_token=None
-            )
+            worker_execution._build_execution_context(cfg, entry, admission_token=None)
         else:
             worker_execution._maybe_rebind_recovery_generation(
                 entry, queue_root=tmp_path, cfg_factory=lambda: cfg

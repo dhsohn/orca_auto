@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import argparse
 import logging
-from typing import Any
+from pathlib import Path
 
 from orca_auto.core.engines.queue_worker import build_engine_queue_worker_parser
 
 from ..config import load_config
-from ..engine import ENGINE_DEFINITION, read_worker_pid
-from ..queue.worker import QueueWorker
+from ..engine import read_worker_pid
+from ..queue.worker import OrcaQueueWorker
 
 logger = logging.getLogger(__name__)
-_ENGINE_RUNTIME = ENGINE_DEFINITION.build_queue_runtime()
 
 
 # -- Subcommands ----------------------------------------------------------
@@ -23,26 +22,22 @@ def build_parser() -> argparse.ArgumentParser:
     return build_engine_queue_worker_parser("python -m orca_auto.orca.commands.queue")
 
 
-def cmd_queue_worker(args: Any) -> int:
-    return _ENGINE_RUNTIME.run_pidfile_worker_command(
-        args,
-        load_config_fn=load_config,
-        config_path_fn=lambda worker_args: str(worker_args.config),
-        read_worker_pid_fn=read_worker_pid,
-        existing_pid_report_fn=_log_existing_worker,
-        worker_factory=lambda cfg, config_path, **kwargs: QueueWorker(
-            cfg,
-            config_path,
-            **kwargs,
-        ),
+def cmd_queue_worker(args: argparse.Namespace) -> int:
+    cfg = load_config(args.config)
+    allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
+    existing_pid = read_worker_pid(allowed_root)
+    if existing_pid is not None:
+        logger.error(
+            "Worker already running (pid=%d). Check the active systemd service.",
+            existing_pid,
+        )
+        return 1
+    worker = OrcaQueueWorker(
+        cfg,
+        str(args.config),
+        max_concurrent=max(1, int(cfg.runtime.max_concurrent)),
     )
-
-
-def _log_existing_worker(pid: int) -> None:
-    logger.error(
-        "Worker already running (pid=%d). Check the active systemd service.",
-        pid,
-    )
+    return worker.run()
 
 
 def main(argv: list[str] | None = None) -> int:

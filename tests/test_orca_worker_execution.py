@@ -2,23 +2,24 @@ from __future__ import annotations
 
 import fcntl
 from argparse import Namespace
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from orca_auto.core.admission import get_slot, reserve_slot
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import lock as lock_utils
 from orca_auto.orca import worker_execution
 from orca_auto.orca.config import AppConfig, load_config
+from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
 from orca_auto.orca.queue import adapter
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
-from orca_auto.orca.queue.worker import QueueWorker
+from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.submission import create_queued_submission
 
@@ -52,7 +53,7 @@ def test_worker_retains_prelaunch_snapshot_rejection(
     cfg, config_path, queued, executable = _queued_submission(tmp_path)
     executable.write_text("#!/bin/sh\nexit 91\n")
     monkeypatch.setattr(loop, "install_shutdown_signal_handlers", lambda _callback: None)
-    worker = QueueWorker(cfg, str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(cfg, str(config_path), max_concurrent=1)
     worker.poll_interval_seconds = 0.01
 
     assert worker.run_once() == 0
@@ -104,7 +105,6 @@ def test_prelaunch_rejection_does_not_overwrite_a_changed_claim(
             cfg,
             running,
             queue_root=runs_root,
-            worker_config_path=str(config_path),
         )
 
     current = adapter.get_entry_by_id(runs_root, running.queue_id)
@@ -122,16 +122,15 @@ def test_child_cancellation_probe_skips_contended_queue_lock(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    entry = SimpleNamespace(queue_id="queue-1")
-    sentinel = object()
+    cfg, _config_path, entry, _executable = _queued_submission(tmp_path)
     captured: dict[str, Any] = {}
     lock_calls: list[tuple[Path, float]] = []
     flock_calls: list[int] = []
     original_file_lock = queue_store.file_lock
 
-    def fake_run_engine_worker_entry(*_args: object, **kwargs: Any) -> object:
+    def fake_run_orca_job(*_args: object, **kwargs: Any) -> int:
         captured.update(kwargs)
-        return sentinel
+        return 4
 
     @contextmanager
     def recording_file_lock(
@@ -148,21 +147,21 @@ def test_child_cancellation_probe_skips_contended_queue_lock(
         raise BlockingIOError
 
     monkeypatch.setattr(
-        worker_execution._engine_execution,
-        "run_engine_worker_entry_with_spec_factory_options",
-        fake_run_engine_worker_entry,
+        worker_execution,
+        "_run_orca_job_for_entry",
+        fake_run_orca_job,
     )
     monkeypatch.setattr(queue_store, "file_lock", recording_file_lock)
     monkeypatch.setattr(lock_utils.fcntl, "flock", contended_flock)
 
     outcome = worker_execution.process_dequeued_entry(
-        object(),
+        cfg,
         entry,
         queue_root=tmp_path,
-        worker_config_path="/tmp/orca_auto.yaml",
     )
 
-    assert outcome is sentinel
+    assert outcome.exit_code == 4
+    assert outcome.entry is entry
     assert captured["should_cancel"]() is False
     assert lock_calls == [(tmp_path.resolve() / queue_store.QUEUE_LOCK_NAME, 0.0)]
     assert flock_calls == [fcntl.LOCK_EX | fcntl.LOCK_NB]
@@ -172,32 +171,31 @@ def test_child_cancellation_probe_propagates_non_lock_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    entry = SimpleNamespace(queue_id="queue-1")
-    sentinel = object()
+    cfg, _config_path, entry, _executable = _queued_submission(tmp_path)
     captured: dict[str, Any] = {}
 
-    def fake_run_engine_worker_entry(*_args: object, **kwargs: Any) -> object:
+    def fake_run_orca_job(*_args: object, **kwargs: Any) -> int:
         captured.update(kwargs)
-        return sentinel
+        return 4
 
     def timed_out_loader(_root: Path) -> list[object]:
         raise TimeoutError("simulated queue payload timeout")
 
     monkeypatch.setattr(
-        worker_execution._engine_execution,
-        "run_engine_worker_entry_with_spec_factory_options",
-        fake_run_engine_worker_entry,
+        worker_execution,
+        "_run_orca_job_for_entry",
+        fake_run_orca_job,
     )
     monkeypatch.setattr(queue_store, "load_entries", timed_out_loader)
 
     outcome = worker_execution.process_dequeued_entry(
-        object(),
+        cfg,
         entry,
         queue_root=tmp_path,
-        worker_config_path="/tmp/orca_auto.yaml",
     )
 
-    assert outcome is sentinel
+    assert outcome.exit_code == 4
+    assert outcome.entry is entry
     with pytest.raises(TimeoutError, match="simulated queue payload timeout"):
         captured["should_cancel"]()
 
@@ -206,13 +204,12 @@ def test_child_cancellation_probe_propagates_post_acquire_payload_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    entry = SimpleNamespace(queue_id="queue-1")
-    sentinel = object()
+    cfg, _config_path, entry, _executable = _queued_submission(tmp_path)
     captured: dict[str, Any] = {}
 
-    def fake_run_engine_worker_entry(*_args: object, **kwargs: Any) -> object:
+    def fake_run_orca_job(*_args: object, **kwargs: Any) -> int:
         captured.update(kwargs)
-        return sentinel
+        return 4
 
     # The lock's diagnostic payload is stamped after the flock is held, so a
     # clock that raises there simulates a post-acquire failure inside queue_lock.
@@ -220,20 +217,20 @@ def test_child_cancellation_probe_propagates_post_acquire_payload_timeout(
         raise TimeoutError("simulated lock payload timeout")
 
     monkeypatch.setattr(
-        worker_execution._engine_execution,
-        "run_engine_worker_entry_with_spec_factory_options",
-        fake_run_engine_worker_entry,
+        worker_execution,
+        "_run_orca_job_for_entry",
+        fake_run_orca_job,
     )
     monkeypatch.setattr(lock_utils, "now_utc_iso", timed_out_payload_clock)
 
     outcome = worker_execution.process_dequeued_entry(
-        object(),
+        cfg,
         entry,
         queue_root=tmp_path,
-        worker_config_path="/tmp/orca_auto.yaml",
     )
 
-    assert outcome is sentinel
+    assert outcome.exit_code == 4
+    assert outcome.entry is entry
     with pytest.raises(TimeoutError, match="simulated lock payload timeout"):
         captured["should_cancel"]()
 
@@ -242,32 +239,100 @@ def test_child_cancellation_probe_propagates_post_acquire_timeout_with_lock_mess
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    entry = SimpleNamespace(queue_id="queue-1")
-    sentinel = object()
+    cfg, _config_path, entry, _executable = _queued_submission(tmp_path)
     captured: dict[str, Any] = {}
     message = f"Timed out acquiring lock: {tmp_path.resolve() / queue_store.QUEUE_LOCK_NAME}"
 
-    def fake_run_engine_worker_entry(*_args: object, **kwargs: Any) -> object:
+    def fake_run_orca_job(*_args: object, **kwargs: Any) -> int:
         captured.update(kwargs)
-        return sentinel
+        return 4
 
     def timed_out_payload_clock() -> str:
         raise TimeoutError(message)
 
     monkeypatch.setattr(
-        worker_execution._engine_execution,
-        "run_engine_worker_entry_with_spec_factory_options",
-        fake_run_engine_worker_entry,
+        worker_execution,
+        "_run_orca_job_for_entry",
+        fake_run_orca_job,
     )
     monkeypatch.setattr(lock_utils, "now_utc_iso", timed_out_payload_clock)
 
     outcome = worker_execution.process_dequeued_entry(
-        object(),
+        cfg,
         entry,
         queue_root=tmp_path,
-        worker_config_path="/tmp/orca_auto.yaml",
     )
 
-    assert outcome is sentinel
+    assert outcome.exit_code == 4
+    assert outcome.entry is entry
     with pytest.raises(TimeoutError, match="Timed out acquiring lock"):
         captured["should_cancel"]()
+
+
+@pytest.mark.parametrize("boundary", ["handoff", "shutdown", "cancel", "exception"])
+def test_child_retains_parent_reservation_at_execution_boundaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    cfg, config_path, queued, _executable = _queued_submission(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    admission_root = Path(cfg.runtime.resolved_admission_root)
+    running = adapter.dequeue_next(queue_root)
+    assert running is not None
+    token = reserve_slot(admission_root, 1, source="orca-child-boundary-test")
+    assert token is not None
+    slot_before = get_slot(admission_root, token)
+    assert slot_before is not None
+    handoffs: list[tuple[Path, str]] = []
+    executions: list[str] = []
+
+    def handoff(root: str | Path, admission_token: str) -> bool:
+        handoffs.append((Path(root), admission_token))
+        return boundary != "handoff"
+
+    def install_signal_handler(callback: Callable[[], None]) -> None:
+        if boundary == "shutdown":
+            callback()
+
+    def execute(*_args: Any, **_kwargs: Any) -> int:
+        executions.append(boundary)
+        if boundary == "cancel":
+            cancelled = adapter.cancel(queue_root, queued.queue_id, expected_entry=running)
+            assert cancelled is not None and cancelled.cancel_requested
+            raise WorkerShutdownInterrupt
+        if boundary == "exception":
+            raise RuntimeError("execution failed before terminal publication")
+        pytest.fail("child launched without handoff or after shutdown")
+
+    monkeypatch.setattr(
+        worker_execution, "install_shutdown_signal_handlers", install_signal_handler
+    )
+    monkeypatch.setattr(worker_execution, "execute_orca_run", execute)
+
+    def run_child() -> int:
+        return worker_execution.run_worker_child_job(
+            config_path=str(config_path),
+            queue_root=queue_root,
+            queue_id=queued.queue_id,
+            admission_token=token,
+            await_parent_admission_handoff_fn=handoff,
+        )
+
+    if boundary == "exception":
+        with pytest.raises(RuntimeError, match="before terminal publication"):
+            run_child()
+    else:
+        assert run_child() == (1 if boundary == "handoff" else 0)
+
+    current = adapter.get_entry_by_id(queue_root, queued.queue_id)
+    assert current is not None
+    expected = {
+        "handoff": QueueStatus.RUNNING,
+        "shutdown": QueueStatus.PENDING,
+        "cancel": QueueStatus.CANCELLED,
+        "exception": QueueStatus.RUNNING,
+    }
+    assert current.status is expected[boundary]
+    assert current.metadata["execution_snapshot"] == running.metadata["execution_snapshot"]
+    assert get_slot(admission_root, token) == slot_before
+    assert handoffs == [(admission_root, token)]
+    assert executions == ([boundary] if boundary in {"cancel", "exception"} else [])
