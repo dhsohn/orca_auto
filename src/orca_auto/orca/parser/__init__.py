@@ -49,8 +49,7 @@ from .patterns import (
 # ---------------------------------------------------------------------------
 
 HARTREE_TO_EV = 27.211386245988
-# The one Hartree -> kcal/mol conversion factor. Report renderers and the
-# workflow SI import this; do not re-declare it elsewhere.
+# The shared Hartree -> kcal/mol conversion factor for report and SI renderers.
 KCAL_PER_HARTREE = 627.5094740631
 
 __all__ = [

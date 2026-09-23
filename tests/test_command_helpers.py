@@ -16,12 +16,11 @@ from orca_auto.orca.execution import _emit
 from orca_auto.orca.run_context import _validate_reaction_dir
 
 
-def _cfg(allowed_root: Path, *, workflow_root: Path | None = None) -> AppConfig:
+def _cfg(allowed_root: Path) -> AppConfig:
     return AppConfig(
         runtime=OrcaRuntimeConfig(
             allowed_root=str(allowed_root),
         ),
-        workflow_root=str(workflow_root.resolve()) if workflow_root is not None else "",
         paths=PathsConfig(orca_executable="/usr/bin/orca"),
     )
 
@@ -60,19 +59,6 @@ class TestCommandPathValidators(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 _validate_reaction_dir(cfg, str(allowed / "missing"))
-
-    def test_validate_reaction_dir_accepts_workflow_local_orca_root(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            root = Path(td)
-            workflow_root = root / "workflow_root"
-            allowed = root / "allowed"
-            reaction = workflow_root / "wf_example" / "03_orca" / "job_01"
-            allowed.mkdir()
-            reaction.mkdir(parents=True)
-            cfg = _cfg(allowed, workflow_root=workflow_root)
-
-            resolved = _validate_reaction_dir(cfg, str(reaction))
-            self.assertEqual(resolved, reaction.resolve())
 
 
 class TestHelperUtilities(unittest.TestCase):

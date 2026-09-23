@@ -378,17 +378,25 @@ class PidFileChildProcessQueueWorker(QueueWorkerPidFileMixin, ChildProcessQueueW
         if admission_root is not None:
             self.admission_root = Path(str(admission_root)).expanduser().resolve()
 
-    def run(self) -> int:
+    def _acquire_worker_lock(self, stack: contextlib.ExitStack) -> bool:
         lock_path = self._lock_file_path()
         try:
-            with file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds):
-                return super().run()
+            stack.enter_context(
+                file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds)
+            )
         except TimeoutError:
             print(
                 f"error: queue worker already running (lock={lock_path})",
                 file=sys.stderr,
             )
-            return 1
+            return False
+        return True
+
+    def run(self) -> int:
+        with contextlib.ExitStack() as stack:
+            if not self._acquire_worker_lock(stack):
+                return 1
+            return super().run()
 
     def run_once(
         self,
@@ -396,19 +404,13 @@ class PidFileChildProcessQueueWorker(QueueWorkerPidFileMixin, ChildProcessQueueW
         idle_message: str | None = "No pending jobs.",
         blocked_message: str | None = "status: waiting_for_slot",
     ) -> int:
-        lock_path = self._lock_file_path()
-        try:
-            with file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds):
-                return super().run_once(
-                    idle_message=idle_message,
-                    blocked_message=blocked_message,
-                )
-        except TimeoutError:
-            print(
-                f"error: queue worker already running (lock={lock_path})",
-                file=sys.stderr,
+        with contextlib.ExitStack() as stack:
+            if not self._acquire_worker_lock(stack):
+                return 1
+            return super().run_once(
+                idle_message=idle_message,
+                blocked_message=blocked_message,
             )
-            return 1
 
     def _before_run(self) -> None:
         self._write_pid_file()

@@ -41,9 +41,9 @@ def _git_env() -> dict[str, str]:
 @pytest.mark.parametrize("new_branch", [False, True])
 @pytest.mark.parametrize(
     ("changed_file", "expected_skip_install"),
-    [("extensions/workflows/pyproject.toml", "0"), ("README.md", "1")],
+    [("pyproject.toml", "0"), ("README.md", "1")],
 )
-def test_pre_push_refreshes_dependencies_for_extension_metadata(
+def test_pre_push_refreshes_dependencies_for_package_metadata(
     tmp_path: Path,
     changed_file: str,
     expected_skip_install: str,
@@ -69,8 +69,8 @@ def test_pre_push_refreshes_dependencies_for_extension_metadata(
     python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     python.chmod(0o755)
     env["ORCA_AUTO_VENV"] = str(python.parent.parent)
-    metadata = repo / "extensions" / "workflows" / "pyproject.toml"
-    metadata.parent.mkdir(parents=True)
+    metadata = repo / "pyproject.toml"
+    metadata.parent.mkdir(parents=True, exist_ok=True)
     metadata.write_text('[project]\ndependencies = ["orca_auto==5.0.0"]\n', encoding="utf-8")
     (repo / "README.md").write_text("Initial documentation\n", encoding="utf-8")
     _git(repo, env, "add", ".")
@@ -106,7 +106,7 @@ def test_pre_push_refreshes_dependencies_for_extension_metadata(
     assert f"skip_install={expected_skip_install}\n" in result.stdout
 
 
-def test_pre_push_imports_both_roots_from_pushed_checkout_with_sibling_venv(
+def test_pre_push_imports_source_from_pushed_checkout_with_sibling_venv(
     tmp_path: Path,
 ) -> None:
     repo = tmp_path / "repo"
@@ -115,11 +115,10 @@ def test_pre_push_imports_both_roots_from_pushed_checkout_with_sibling_venv(
     for checkout in (repo, sibling):
         core = checkout / "src" / "orca_auto"
         core.mkdir(parents=True)
-        # Use the real namespace initializer, which extends the core-owned
-        # package with separately installed workflow roots.
+        # Use the real package initializer from the checked source tree.
         for name in ("__init__.py", "_version.py"):
             shutil.copy2(source_package / name, core / name)
-        flow = checkout / "extensions/workflows/src/orca_auto/flow"
+        flow = core / "orca"
         flow.mkdir(parents=True)
         (flow / "__init__.py").write_text("", encoding="utf-8")
         (flow / "changed.py").write_text('VALUE = "old"\n', encoding="utf-8")
@@ -140,8 +139,8 @@ def test_pre_push_imports_both_roots_from_pushed_checkout_with_sibling_venv(
     )
     probe = scripts / "probe.py"
     probe.write_text(
-        "import json\nimport orca_auto\nfrom orca_auto.flow import changed\n"
-        'print(json.dumps({"core": orca_auto.__file__, "flow": changed.__file__, '
+        "import json\nimport orca_auto\nfrom orca_auto.orca import changed\n"
+        'print(json.dumps({"core": orca_auto.__file__, "orca": changed.__file__, '
         '"value": changed.VALUE}))\n',
         encoding="utf-8",
     )
@@ -158,9 +157,9 @@ def test_pre_push_imports_both_roots_from_pushed_checkout_with_sibling_venv(
             timeout=30,
         ).stdout.strip()
     )
-    # Model the simple editable .pth files produced by both distributions.
+    # Model the sibling editable package.
     (site_packages / "sibling-editable.pth").write_text(
-        f"{sibling / 'src'}\n{sibling / 'extensions/workflows/src'}\n",
+        f"{sibling / 'src'}\n",
         encoding="utf-8",
     )
     env["ORCA_AUTO_VENV"] = str(shared_venv)
@@ -175,16 +174,16 @@ def test_pre_push_imports_both_roots_from_pushed_checkout_with_sibling_venv(
     )
     assert json.loads(baseline.stdout) == {
         "core": str(sibling / "src/orca_auto/__init__.py"),
-        "flow": str(sibling / "extensions/workflows/src/orca_auto/flow/changed.py"),
+        "orca": str(sibling / "src/orca_auto/orca/changed.py"),
         "value": "old",
     }
     _git(repo, env, "add", ".")
     _git(repo, env, "commit", "-qm", "Initial fixture")
     base = _git(repo, env, "rev-parse", "HEAD")
-    changed_file = "extensions/workflows/src/orca_auto/flow/changed.py"
+    changed_file = "src/orca_auto/orca/changed.py"
     (repo / changed_file).write_text('VALUE = "new"\n', encoding="utf-8")
     _git(repo, env, "add", changed_file)
-    _git(repo, env, "commit", "-qm", "Update workflow source only")
+    _git(repo, env, "commit", "-qm", "Update ORCA source only")
     head = _git(repo, env, "rev-parse", "HEAD")
     assert _git(repo, env, "diff", "--name-only", base, head) == changed_file
     assert _git(repo, env, "status", "--porcelain") == ""
@@ -204,6 +203,6 @@ def test_pre_push_imports_both_roots_from_pushed_checkout_with_sibling_venv(
     assert "skip_install=1\n" in result.stdout
     assert json.loads(result.stdout.splitlines()[-1]) == {
         "core": str(repo / "src/orca_auto/__init__.py"),
-        "flow": str(repo / changed_file),
+        "orca": str(repo / changed_file),
         "value": "new",
     }

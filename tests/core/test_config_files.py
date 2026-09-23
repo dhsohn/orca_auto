@@ -15,7 +15,6 @@ from orca_auto.core.config.files import (
     runs_root_from_mapping,
     scheduler_admission_root,
     secure_config_file_permissions,
-    shared_workflow_root_from_config,
     validate_shared_config_sections,
     validated_runs_root_text,
 )
@@ -105,20 +104,6 @@ def test_runs_root_validation_error_does_not_echo_raw_value() -> None:
     assert "private-runs-root-secret" not in str(captured.value)
 
 
-def test_shared_workflow_root_from_config_returns_none_for_invalid_runs_root(
-    tmp_path: Path,
-) -> None:
-    runs_root = tmp_path / "runs"
-    config_path = tmp_path / "orca_auto.yaml"
-
-    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
-    assert shared_workflow_root_from_config(config_path) == str(runs_root.resolve())
-
-    for value in ("'C:\\runs'", "/mnt/c/runs", "./runs"):
-        config_path.write_text(f"runs_root: {value}\n", encoding="utf-8")
-        assert shared_workflow_root_from_config(config_path) is None
-
-
 def test_engine_config_mapping_requires_engine_section() -> None:
     raw = {
         "runtime": {"allowed_root": "/tmp/runs"},
@@ -158,11 +143,11 @@ def test_engine_config_mapping_rejects_redundant_engine_scoped_scheduler() -> No
         ),
         (
             {"workflow": {"root": "/tmp/runs"}},
-            "Unknown workflow config fields are not supported",
+            "Unknown top-level config fields are not supported",
         ),
         (
             {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
-            "Unknown workflow.paths config fields are not supported",
+            "Unknown top-level config fields are not supported",
         ),
         (
             {"orca": {"runtime": {"max_concurrent": 2}}},

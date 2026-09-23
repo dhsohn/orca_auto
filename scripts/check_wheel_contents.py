@@ -16,9 +16,6 @@ from zipfile import BadZipFile, ZipFile
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_SOURCE_ROOT = _REPOSITORY_ROOT / "src" / "orca_auto"
-_WORKFLOWS_SOURCE_ROOT = (
-    _REPOSITORY_ROOT / "extensions" / "workflows" / "src" / "orca_auto" / "flow"
-)
 
 
 def _source_payload_files(source_root: Path, package: str) -> set[str]:
@@ -93,10 +90,6 @@ def check_wheel_contents(
                 metadata = BytesParser().parsebytes(wheel.read(metadata_names[0]))
                 if str(metadata.get("Name", "")).replace("-", "_") != distribution:
                     errors.append(f"unexpected wheel distribution name; expected {distribution}")
-            if distribution == "orca_auto_workflows" and any(
-                name.endswith(".dist-info/entry_points.txt") for name in names
-            ):
-                errors.append("workflows must not own console entry points")
     except (BadZipFile, OSError) as exc:
         return [f"cannot read wheel {wheel_path}: {type(exc).__name__}: {exc}"]
 
@@ -127,47 +120,26 @@ def check_wheel_contents(
     return errors
 
 
-def check_disjoint_ownership(core_wheel: Path, workflows_wheel: Path) -> list[str]:
-    with ZipFile(core_wheel) as core, ZipFile(workflows_wheel) as workflows:
-        core_files = {entry.filename for entry in core.infolist() if not entry.is_dir()}
-        workflow_files = {entry.filename for entry in workflows.infolist() if not entry.is_dir()}
-        shared = core_files & workflow_files
-    return (
-        ["distribution wheels share installed files: " + ", ".join(sorted(shared))]
-        if shared
-        else []
-    )
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("wheel", type=Path, help="wheel file to inspect")
-    parser.add_argument("--distribution", choices=["core", "workflows"], default="core")
     parser.add_argument(
         "--source-root",
         type=Path,
-        help="override the selected distribution's source package directory",
+        help="override the source package directory",
     )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    workflows = args.distribution == "workflows"
-    source_root = args.source_root or (
-        _WORKFLOWS_SOURCE_ROOT if workflows else _DEFAULT_SOURCE_ROOT
-    )
-    errors = check_wheel_contents(
-        args.wheel,
-        source_root,
-        package="orca_auto/flow" if workflows else "orca_auto",
-        distribution="orca_auto_workflows" if workflows else "orca_auto",
-    )
+    source_root = args.source_root or _DEFAULT_SOURCE_ROOT
+    errors = check_wheel_contents(args.wheel, source_root)
     if errors:
         for error in errors:
             print(f"wheel-content-error: {error}", file=sys.stderr)
         return 1
-    print(f"wheel contents and RECORD match {args.distribution} source ownership")
+    print("wheel contents and RECORD match source ownership")
     return 0
 
 

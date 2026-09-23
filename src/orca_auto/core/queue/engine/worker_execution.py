@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Generic, NoReturn, Protocol, TypeVar, overload
 
 from ..cancellable import run_cancellable_engine_process
-from .lifecycle import EngineWorkerLifecycle, run_engine_worker_lifecycle
 
 OutcomeT = TypeVar("OutcomeT")
 FinalizedT = TypeVar("FinalizedT")
@@ -234,37 +233,21 @@ def run_engine_worker_entry_with_spec(
     options: EngineWorkerOptions | None = None,
 ) -> OutcomeT:
     active_options = options or EngineWorkerOptions()
-    return run_engine_worker_lifecycle(
+    active_queue_root = queue_root or Path(str(cfg.runtime.allowed_root)).expanduser().resolve()
+    context = spec.build_context(cfg, entry)
+    raise_if_shutdown_requested(context, active_options)
+    spec.mark_running(cfg, context, active_options)
+    raise_if_shutdown_requested(context, active_options)
+
+    result = spec.run_job(cfg, context, active_queue_root, active_options)
+    finalized = spec.finalize_entry(
         cfg,
-        entry,
-        queue_root=queue_root,
-        lifecycle=EngineWorkerLifecycle(
-            build_context=spec.build_context,
-            check_shutdown=lambda context: raise_if_shutdown_requested(
-                context,
-                active_options,
-            ),
-            mark_running=lambda cfg_obj, context: spec.mark_running(
-                cfg_obj,
-                context,
-                active_options,
-            ),
-            run_job=lambda cfg_obj, context, active_queue_root: spec.run_job(
-                cfg_obj,
-                context,
-                active_queue_root,
-                active_options,
-            ),
-            finalize_entry=lambda cfg_obj, context, result, active_queue_root: spec.finalize_entry(
-                cfg_obj,
-                context,
-                result,
-                active_queue_root,
-                active_options,
-            ),
-            build_outcome=spec.build_outcome,
-        ),
+        context,
+        result,
+        active_queue_root,
+        active_options,
     )
+    return spec.build_outcome(context, result, finalized)
 
 
 def run_engine_worker_entry_with_spec_factory_options(

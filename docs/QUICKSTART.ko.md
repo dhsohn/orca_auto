@@ -1,115 +1,21 @@
-# ORCA_auto 빠른 시작
+# 시작하기
 
 [English](QUICKSTART.md) | **한국어**
 
-> 이 문서는 [QUICKSTART.md](QUICKSTART.md)(영어판)의 한국어 번역본입니다.
-
-이 가이드는 새로 체크아웃한 저장소에서 감독되는 ORCA_auto 엔진 워커까지 가는
-가장 짧은 경로입니다.
-
-릴리스 wheel과 본체 / 본체 + 확장 구성 선택은 [패키지 설치](INSTALLATION.ko.md)를
-참고하세요. 아래 단계는 소스 checkout을 사용합니다.
-
-## 1) 설치
+[설치](INSTALLATION.ko.md)를 마치고 외부 설정과 별도 ORCA 실행 파일을 준비한다.
+운영 서비스는 [RUNTIME](RUNTIME.md)에 따라 준비·검증한 경로를 사용한다.
 
 ```bash
-cd <repo_root>
-bash scripts/bootstrap_wsl.sh
-source .venv/bin/activate
+orca_auto init --config /home/user/orca_auto-config.yaml
+orca_auto systemd install --user user --repo /absolute/runtime/root \
+  --config /home/user/orca_auto-config.yaml
+orca_auto service status --json
+orca_auto run-dir /home/user/orca_runs/water --config /home/user/orca_auto-config.yaml --json
+orca_auto queue list --config /home/user/orca_auto-config.yaml --json
 ```
 
-부트스트랩 스크립트는 `.venv`를 생성하고, ORCA_auto 본체를 설치하며, 필요할 때 예제
-템플릿으로부터 `config/orca_auto.yaml`을 생성합니다.
-본체 전용 구성은 새 환경의 기본값입니다. 기존 `.venv`를 재사용하면 이미 설치된
-워크플로우 확장을 제거하지 않으므로, 본체만 있는 구성이 필요하면 새 환경을 사용하세요.
-
-5.0.0부터 워크플로우는 기본 본체 설치에
-포함되지 않는 동일 버전의 선택적 배포물입니다. 함께 설치하려면 대신
-`bash scripts/bootstrap_wsl.sh --with-workflows`를 사용하거나, 환경을 활성화한 뒤
-다음을 실행하세요:
-
-```bash
-python -m pip install -e . -e ./extensions/workflows
-```
-
-6.0 확장은 컨포머 스크리닝만 지원하며, CREST 생성·ORCA 정밀 계산으로
-구성됩니다. 기존 설치본을 전환할 때는 새 환경과
-[RELEASE.md](RELEASE.md)(영어)의 절차 및 TS 워크플로우 제거 주의사항을 확인하세요.
-실행 중인 워커의 소스나 환경을 교체하지 마세요.
-
-## 2) 설정
-
-```bash
-orca_auto init
-```
-
-ORCA, xTB, CREST, 실행 디렉터리에는 절대 Linux 경로를 사용하세요. Discord 알림을
-원한다면 init 중에 `messenger.discord.bot_token`과 `messenger.discord.default_channel_id`를
-설정하거나, 이후에 `config/orca_auto.yaml`을 편집하세요.
-
-## 3) 런타임 서비스 설치
-
-```bash
-orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
-```
-
-이 명령은 런타임 타깃을 활성화하며, 런타임 타깃은 ORCA 엔진 서비스를 시작합니다.
-설치기는 여전히 `--repo`로 지정한 checkout의 `systemd/`를 읽습니다. 어느 wheel을
-설치하더라도 그것만으로 서비스가 배포되지는 않습니다. workflow 제출을 실행하려면
-워커가 사용하는 환경에 동일 버전 확장을 설치하고, queueing 전후에
-opt-in workflow unit을 시작하세요:
-
-```bash
-sudo systemctl start "orca_auto-workflow-worker@$(whoami)"
-```
-
-## 4) 서비스 확인 또는 재시작
-
-```bash
-orca_auto service status
-orca_auto service restart
-```
-
-`service status`는 런타임과 engine-worker 타깃, 기본 ORCA 엔진 서비스, opt-in workflow 서비스를
-보여줍니다. `service restart`는 런타임 타깃에 이어 워커 서비스 자체를(이미 실행 중이면 workflow
-워커까지) 재시작합니다 — 타깃만 재시작해서는 워커 프로세스가 그대로 남습니다. 워커가 import하는
-코드를 건드린 배포 뒤에 실행하되, 반드시 유휴 창에서 하세요. 기본적으로 실행 중·예약된
-계산이 있거나 안전 여부를 확인할 수 없으면 재시작을 거부합니다. 진단 원인을 해결한 뒤
-다시 실행하세요. `orca_auto service restart --force`는 이 보호를 의도적으로 생략하여
-계산을 중단시킬 수 있으며, 계산 완료를 기다리는 옵션이 아닙니다.
-guard의 제한은 [Systemd 계약](PUBLIC_CONTRACTS.ko.md#systemd-계약)을 참고하세요.
-
-## 5) 작업 제출
-
-설정한 `runs_root` 아래 작업 디렉터리에 ORCA `.inp`를 놓은 뒤 제출하세요:
-
-```bash
-orca_auto run-dir '/home/user/orca_runs/sample_rxn'
-```
-
-`run-dir`는 작업을 내구성 있게 큐에 넣습니다. 큐 제출이 성공한 뒤 터미널을 닫아도
-안전합니다. 실제 실행은 systemd 워커가 수행하기 때문입니다. ORCA의 경우 워커는 큐
-id로 큐 항목을 실행합니다. 작업의 `reaction_dir`는 큐와 리포트에 기록되어 남지만,
-워커-자식 명령의 정체성은 아닙니다.
-
-## 6) 큐 관찰
-
-```bash
-orca_auto queue list
-orca_auto queue list --engine orca
-orca_auto queue cancel <target>
-```
-
-통합 활동 목록에서 완료/실패/취소 항목을 정리하려면 `orca_auto queue list clear`를
-사용하세요.
-
-## 문제 해결
-
-```bash
-orca_auto service status
-orca_auto service restart
-orca_auto queue list --refresh
-```
-
-서비스가 여전히 기대대로 동작하지 않으면, [systemd/README.ko.md](../systemd/README.ko.md)의
-더 깊은 systemd 명령을 사용하세요.
+작업 디렉터리는 설정한 `runs_root` 아래에 두고 ORCA `.inp`와 참조 파일을 준비한다.
+입력의 `%pal`·`%maxcore`로 자원을 지정한다. 제출 성공은 큐 인수이며 계산 완료가 아니다.
+취소는 `orca_auto queue cancel TARGET --config /home/user/orca_auto-config.yaml`,
+로그는 `journalctl -u orca_auto-queue-worker@user -f`다.
+종료 `machine.json`과 원시 출력의 과학적 근거를 확인한다. 실행 중인 환경을 갱신하지 않는다.

@@ -28,6 +28,7 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import submission as run_inp
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
+from orca_auto.orca.input_artifacts import OrcaSelectedInputArtifacts
 from orca_auto.orca.notifications import notify_queue_enqueued_event
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import publication_repair
@@ -88,6 +89,82 @@ def _real_submission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
     return reaction_dir, args
 
 
+def test_queue_metadata_assembles_supplied_values_without_creating_files(tmp_path: Path) -> None:
+    snapshot = {"selected_inp": str(tmp_path / "generation" / "sample.inp")}
+    requested = {"max_cores": 2, "max_memory_gb": 4}
+    metadata = run_inp.build_queue_metadata(
+        artifacts=OrcaSelectedInputArtifacts(
+            selected_inp=str(tmp_path / "sample.inp"),
+            selected_input_xyz=str(tmp_path / "start.xyz"),
+        ),
+        job_type="opt",
+        molecule_key="sample",
+        resource_request=requested,
+        execution_snapshot=snapshot,
+    )
+    assert metadata == {
+        "submitted_via": "run_inp",
+        "job_type": "opt",
+        "molecule_key": "sample",
+        "resource_request": {"max_cores": 2, "max_memory_gb": 4},
+        "resource_actual": {"max_cores": 2, "max_memory_gb": 4},
+        "source_selected_inp": str(tmp_path / "sample.inp"),
+        "selected_inp": str(tmp_path / "generation" / "sample.inp"),
+        "selected_input_path": str(tmp_path / "start.xyz"),
+        "selected_input_xyz": str(tmp_path / "start.xyz"),
+        "execution_snapshot": snapshot,
+    }
+    assert list(tmp_path.iterdir()) == []
+    metadata["resource_actual"]["max_cores"] = 99
+    assert metadata["resource_request"] == requested == {"max_cores": 2, "max_memory_gb": 4}
+
+
+@pytest.mark.parametrize("failure_stage", ["metadata", "task_id", "intent_transition"])
+@pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt])
+def test_submission_cleans_created_snapshot_on_pre_enqueue_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    failure_type: type[BaseException],
+) -> None:
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    source = (reaction_dir / "rxn.inp").read_bytes()
+    snapshots: list[dict[str, Any]] = []
+    original_build = run_inp.build_orca_execution_snapshot
+
+    def build(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        snapshot = original_build(*args, **kwargs)
+        snapshots.append(snapshot)
+        return snapshot
+
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise failure_type("injected pre-enqueue failure")
+
+    monkeypatch.setattr(run_inp, "build_orca_execution_snapshot", build)
+    monkeypatch.setattr(
+        run_inp, "run_enqueue_publication", lambda *_args: pytest.fail("must not enqueue")
+    )
+    if failure_stage == "metadata":
+        monkeypatch.setattr(run_inp, "build_queue_metadata", fail)
+    elif failure_stage == "intent_transition":
+        monkeypatch.setattr(run_inp, "transition_snapshot_intent", fail)
+    else:
+        original_token = run_inp.timestamped_token
+
+        def token(prefix: str, **kwargs: Any) -> str:
+            if prefix == "orca":
+                fail()
+            return original_token(prefix, **kwargs)
+
+        monkeypatch.setattr(run_inp, "timestamped_token", token)
+    with pytest.raises(failure_type, match="injected pre-enqueue failure"):
+        run_inp.create_queued_submission(run_inp.load_config(args.config), args, reaction_dir)
+    assert len(snapshots) == 1
+    assert not Path(snapshots[0]["execution_dir"]).exists()
+    assert not list((tmp_path / ".orca_auto_snapshot_intents").glob("*.json"))
+    assert (reaction_dir / "rxn.inp").read_bytes() == source
+
+
 @pytest.mark.parametrize("snapshot", [None, {}])
 def test_internal_snapshot_failure_is_not_invalid_user_input(
     tmp_path: Path,
@@ -98,7 +175,7 @@ def test_internal_snapshot_failure_is_not_invalid_user_input(
     source_input = (reaction_dir / "rxn.inp").read_bytes()
     cleanup_calls: list[object] = []
     monkeypatch.setattr(
-        run_inp, "build_queue_metadata", lambda *_args, **_kwargs: {"execution_snapshot": snapshot}
+        run_inp, "build_orca_execution_snapshot", lambda *_args, **_kwargs: snapshot
     )
     monkeypatch.setattr(
         run_inp,

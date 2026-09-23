@@ -91,9 +91,12 @@ _RUNTIME_RE = re.compile(
     r"(\d+)\s*minutes?\s+(\d+)\s*seconds?",
 )
 
-# charge / multiplicity: "* xyz 0 1", "|  2> * xyz 0 1", or the file form the
-# workflow emits, "* xyzfile 0 1 input.xyz" (the trailing path is ignored).
-_CHARGE_MULT_RE = re.compile(r"(?:\|\s*\d+>\s*)?\*\s*xyz(?:file)?\s+([-\d]+)\s+(\d+)")
+# charge / multiplicity: inline, echoed, or file-form geometry directives
+# such as "* xyzfile 0 1 input.xyz" (the trailing path is ignored).
+_CHARGE_MULT_RE = re.compile(
+    r"^[ \t]*(?:\|[ \t]*\d+>[ \t]*)?\*[ \t]+xyz(?:file)?[ \t]+(-?\d+)[ \t]+(\d+)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 # Optimization cycle header
 _OPT_CYCLE_RE = re.compile(r"Geometry Optimization Cycle\s+(\d+)", re.IGNORECASE)

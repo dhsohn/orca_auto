@@ -448,6 +448,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertIsNotNone(token)
         dequeue_next(self.root)
         self.worker._running["q_done"] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -484,6 +485,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             )
         )
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -511,6 +513,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         entry = enqueue(self.root, str(rxn))
         dequeue_next(self.root)
         self.worker._running["q_fail"] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -536,6 +539,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = 1
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -596,6 +600,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         self.assertIsNotNone(token)
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=MagicMock(),
@@ -690,6 +695,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = 1
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -822,12 +828,13 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = None
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id="q_unknown_directory",
             reaction_dir="",
             process=process,
             admission_token="slot_unknown_directory",
         )
-        job.__dict__[replay_mod.TERMINAL_FINALIZE_RETRY_ATTR] = True
+        job.terminal_finalize_pending = True
         self.worker.max_concurrent = 2
         self.worker._running[job.queue_id] = job
 
@@ -951,12 +958,13 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = 1
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id="q_retry_only",
             reaction_dir=str(retained_dir),
             process=process,
             admission_token="slot_retry_only",
         )
-        job.__dict__[replay_mod.TERMINAL_FINALIZE_RETRY_ATTR] = True
+        job.terminal_finalize_pending = True
         self.worker.max_concurrent = 2
         self.worker._running[job.queue_id] = job
 
@@ -1027,6 +1035,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process_start_ticks=10101,
         )
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=MagicMock(),
@@ -1113,6 +1122,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             run_id=None,
         )
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=snapshot.queue_id,
             reaction_dir=str(rxn),
             process=MagicMock(),
@@ -1195,6 +1205,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         [closed] = list_queue(self.root)
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=MagicMock(),
@@ -1225,6 +1236,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             queue_root=self.root,
         )
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id="queue-moved",
             reaction_dir=str(self.root / "moved"),
             process=MagicMock(),
@@ -1282,6 +1294,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             child.kill()
             child.wait()
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=MagicMock(),
@@ -1319,6 +1332,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._finalize_completed_job(
             entry.queue_id,
             _RunningJob(
+                queue_root=self.worker.allowed_root,
                 queue_id=entry.queue_id,
                 reaction_dir=str(rxn),
                 process=MagicMock(),
@@ -1340,6 +1354,15 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_notify: MagicMock,
         mock_upsert_terminal: MagicMock,
     ) -> None:
+        from threading import Event
+
+        delivered = Event()
+
+        def notify(*_args: object) -> bool:
+            delivered.set()
+            return True
+
+        mock_notify.side_effect = notify
         cfg = AppConfig(
             runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
             messenger=MessengerConfig(
@@ -1365,6 +1388,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         worker._finalize_completed_job(
             entry.queue_id,
             _RunningJob(
+                queue_root=worker.allowed_root,
                 queue_id=entry.queue_id,
                 reaction_dir=str(rxn),
                 process=MagicMock(),
@@ -1375,12 +1399,14 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
 
         mock_upsert_terminal.assert_called_once()
+        self.assertTrue(delivered.wait(1))
         mock_notify.assert_called_once()
         saved = load_state(rxn)
         assert saved is not None
         final_result = saved["final_result"]
         assert final_result is not None
-        self.assertIn("finished_notification_sent_at", final_result)
+        self.assertIn("finished_notification_claimed_at", final_result)
+        self.assertNotIn("finished_notification_sent_at", final_result)
 
     @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
     @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=False)
@@ -1389,6 +1415,15 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_notify: MagicMock,
         mock_upsert_terminal: MagicMock,
     ) -> None:
+        from threading import Event
+
+        delivered = Event()
+
+        def notify(*_args: object) -> bool:
+            delivered.set()
+            return False
+
+        mock_notify.side_effect = notify
         cfg = AppConfig(
             runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
             messenger=MessengerConfig(
@@ -1411,6 +1446,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         self.assertIsNotNone(token)
         job = _RunningJob(
+            queue_root=worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=MagicMock(),
@@ -1421,6 +1457,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         worker._finalize_completed_job(entry.queue_id, job, rc=0)
 
         mock_upsert_terminal.assert_called_once()
+        self.assertTrue(delivered.wait(1))
         mock_notify.assert_called_once()
         [completed] = list_queue(self.root)
         self.assertEqual(completed.status, QueueStatus.COMPLETED)
@@ -1503,6 +1540,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._finalize_completed_job(
             entry.queue_id,
             _RunningJob(
+                queue_root=self.worker.allowed_root,
                 queue_id=entry.queue_id,
                 reaction_dir=str(rxn),
                 process=MagicMock(),
@@ -1550,6 +1588,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         self.assertIsNotNone(token)
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=MagicMock(),
@@ -1617,6 +1656,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._finalize_completed_job(
             entry.queue_id,
             _RunningJob(
+                queue_root=self.worker.allowed_root,
                 queue_id=entry.queue_id,
                 reaction_dir=str(rxn),
                 process=MagicMock(),
@@ -1644,7 +1684,11 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running["q_run"] = _RunningJob(
-            queue_id="q_run", reaction_dir="/tmp/r", process=mock_proc, admission_token="slot_run"
+            queue_root=self.worker.allowed_root,
+            queue_id="q_run",
+            reaction_dir="/tmp/r",
+            process=mock_proc,
+            admission_token="slot_run",
         )
         self.worker._check_completed_jobs()
         self.assertEqual(len(self.worker._running), 1)
@@ -1664,6 +1708,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc.poll.return_value = None
         mock_proc.wait.return_value = 0
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -1697,6 +1742,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -1728,6 +1774,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[selected.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=selected.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -1794,6 +1841,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = None
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -1875,6 +1923,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = None
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -1923,6 +1972,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -1969,6 +2019,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = 0
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -2022,6 +2073,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -2081,6 +2133,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = None
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -2144,7 +2197,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             self.assertEqual(active_slot_count(self.root), 1)
             [cancelled_entry] = list_queue(self.root)
             self.assertEqual(cancelled_entry.status, QueueStatus.CANCELLED)
-            self.assertIn("_orca_terminal_replay_item", job.__dict__)
+            self.assertIsNotNone(job.pending_terminal_replay)
 
             self.worker._check_completed_jobs()
 
@@ -2177,6 +2230,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = None
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -2245,6 +2299,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         process = MagicMock()
         process.poll.return_value = None
         job = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=process,
@@ -2294,6 +2349,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2324,6 +2380,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2375,6 +2432,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2421,6 +2479,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2457,6 +2516,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2514,12 +2574,14 @@ class TestQueueWorkerMethods(unittest.TestCase):
         live_proc = MagicMock()
         live_proc.poll.return_value = None
         self.worker._running[done_entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=done_entry.queue_id,
             reaction_dir=str(rxn_done),
             process=done_proc,
             admission_token="slot_done_raise",
         )
         self.worker._running[live_entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=live_entry.queue_id,
             reaction_dir=str(rxn_live),
             process=live_proc,
@@ -2571,12 +2633,14 @@ class TestQueueWorkerMethods(unittest.TestCase):
         live_proc = MagicMock()
         live_proc.poll.return_value = None
         self.worker._running[broken_entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=broken_entry.queue_id,
             reaction_dir=str(rxn_broken),
             process=broken_proc,
             admission_token="slot_term_raise",
         )
         self.worker._running[live_entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=live_entry.queue_id,
             reaction_dir=str(rxn_live),
             process=live_proc,
@@ -2635,6 +2699,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2675,12 +2740,14 @@ class TestQueueWorkerMethods(unittest.TestCase):
         live_proc = MagicMock()
         live_proc.poll.return_value = None
         self.worker._running[broken_entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=broken_entry.queue_id,
             reaction_dir=str(rxn_broken),
             process=broken_proc,
             admission_token="slot_pre_raise",
         )
         self.worker._running[live_entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=live_entry.queue_id,
             reaction_dir=str(rxn_live),
             process=live_proc,
@@ -2753,6 +2820,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2793,6 +2861,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2847,6 +2916,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -2876,6 +2946,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_proc = MagicMock()
         mock_proc.poll.return_value = None
         self.worker._running[entry.queue_id] = _RunningJob(
+            queue_root=self.worker.allowed_root,
             queue_id=entry.queue_id,
             reaction_dir=str(rxn),
             process=mock_proc,
@@ -3261,6 +3332,7 @@ class TestFillSlots(unittest.TestCase):
             )
             self.assertIsNotNone(completion_token)
             worker._running[completed_entry.queue_id] = _RunningJob(
+                queue_root=worker.allowed_root,
                 queue_id=completed_entry.queue_id,
                 reaction_dir=str(first_dir),
                 process=completed_proc,
@@ -3340,6 +3412,7 @@ class TestFillSlots(unittest.TestCase):
             )
             self.assertIsNotNone(token)
             worker._running["q_existing"] = _RunningJob(
+                queue_root=worker.allowed_root,
                 queue_id="q_existing",
                 reaction_dir=str(active_dir),
                 process=MagicMock(),

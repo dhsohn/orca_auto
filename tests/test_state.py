@@ -14,13 +14,13 @@ from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_ow
 from orca_auto.orca import run_lock
 from orca_auto.orca import state as state_module
 from orca_auto.orca import state_reading as state_reading_module
+from orca_auto.orca.report import publication as publication_module
+from orca_auto.orca.report.publication import write_report_files, write_report_json
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import (
     atomic_write_text,
     new_state,
     save_state,
-    write_report_files,
-    write_report_json,
     write_state,
 )
 from orca_auto.orca.state_reading import load_report_json, load_state
@@ -559,12 +559,12 @@ class TestState(unittest.TestCase):
 
                 with (
                     patch.object(
-                        state_module,
+                        publication_module,
                         "write_job_html_report",
                         side_effect=AssertionError("HTML writer must not run"),
                     ) as html_writer,
                     patch.object(
-                        state_module,
+                        publication_module,
                         "write_si_block",
                         side_effect=AssertionError("SI writer must not run"),
                     ) as si_writer,

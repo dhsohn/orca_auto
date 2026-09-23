@@ -22,7 +22,6 @@ from orca_auto.core.engines.queue_worker import (
     build_runtime_engine_queue_worker,
 )
 from orca_auto.core.queue.types import QueueEntry
-from orca_auto.core.queue.worker import EngineRunningJob as _RunningJob
 from orca_auto.core.queue.worker import ManagedProcess as _ManagedProcess
 from orca_auto.core.queue.worker import start_background_process, terminate_process_group
 from orca_auto.orca.worker_execution import (
@@ -34,6 +33,7 @@ from ..config import AppConfig
 from ..engine import ENGINE_DEFINITION, ENGINE_RUNTIME
 from . import cancellation, publication_repair, replay, worker_runtime
 from .adapter import (
+    cancel_requested_ids,
     get_cancel_requested,
     list_queue,
     mark_failed,
@@ -42,6 +42,8 @@ from .adapter import (
     queue_entry_task_id,
     worker_log_path,
 )
+from .entries import queue_entry_is_retired_workflow_owned
+from .models import OrcaRunningJob as _RunningJob
 
 logger = logging.getLogger(__name__)
 
@@ -255,18 +257,6 @@ def _orca_reserve_gate(worker: EngineQueueWorker) -> tuple[str, Any | None] | No
     return None
 
 
-def _before_orca_worker_run(worker: EngineQueueWorker) -> None:
-    worker_runtime.before_worker_run(worker)
-
-
-def _after_orca_worker_run(_worker: EngineQueueWorker) -> None:
-    worker_runtime.after_worker_run(_worker)
-
-
-def _log_orca_worker_interrupt(_worker: EngineQueueWorker) -> None:
-    worker_runtime.log_worker_interrupt(_worker)
-
-
 def _make_orca_running_job(
     _worker: EngineQueueWorker,
     *,
@@ -283,14 +273,13 @@ def _make_orca_running_job(
         queue_entry_id_fn=queue_entry_id,
         queue_entry_reaction_dir_fn=queue_entry_reaction_dir,
         queue_entry_task_id_fn=queue_entry_task_id,
-        running_job_cls=_RunningJob,
     )
 
 
 def _check_orca_cancel_requests(worker: EngineQueueWorker) -> None:
     worker_runtime.check_cancel_requests(
         worker,
-        get_cancel_requested_fn=get_cancel_requested,
+        cancel_requested_ids_fn=cancel_requested_ids,
         job_queue_root_fn=replay.job_queue_root,
         cancel_running_job_fn=cancellation.cancel_running_job,
     )
@@ -316,14 +305,17 @@ def QueueWorker(
         admission_root=_admission_root_for_cfg(worker_cfg),
         policy=EngineWorkerPolicy(
             after_init=_after_orca_worker_init,
-            before_run=_before_orca_worker_run,
-            after_run=_after_orca_worker_run,
-            keyboard_interrupt=_log_orca_worker_interrupt,
+            before_run=worker_runtime.before_worker_run,
+            after_run=worker_runtime.after_worker_run,
+            keyboard_interrupt=worker_runtime.log_worker_interrupt,
             running_queue_id=queue_entry_id,
             running_job_factory=_make_orca_running_job,
             check_cancel_requests=_check_orca_cancel_requests,
             reserve_gate=_orca_reserve_gate,
-            skip_entry=replay.entry_waits_for_terminal_replay,
+            skip_entry=lambda worker, entry: (
+                queue_entry_is_retired_workflow_owned(entry, cfg.runtime.allowed_root)
+                or replay.entry_waits_for_terminal_replay(worker, entry)
+            ),
         ),
     )
     return worker

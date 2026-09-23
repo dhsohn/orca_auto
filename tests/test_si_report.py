@@ -194,6 +194,39 @@ _SCAN_INP = (
 _IRC_INP = "! B3LYP def2-SVP IRC\n* xyz 0 1\nC 0 0 0\n*\n"
 
 
+@pytest.mark.parametrize("geometry_line", ["", "| 2> # previous input: * xyz 0 1"])
+def test_si_block_does_not_publish_unverified_electronic_state(
+    tmp_path: Path, geometry_line: str
+) -> None:
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "missing_electronic_state",
+        inp_text=_SP_INP,
+        out_text=_out_text().replace("|  2> * xyz 0 1", geometry_line),
+    )
+
+    block = collect_structure_evidence(reaction_dir, state)
+    assert block is not None
+    rendered = render_si_block_md(block)
+
+    assert "Charge 0, Multiplicity 1" not in rendered
+    assert "Charge / multiplicity: unavailable" in rendered
+    assert "E(el)" in rendered
+
+
+def test_si_block_publishes_verified_uppercase_geometry_state(tmp_path: Path) -> None:
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "uppercase_electronic_state",
+        inp_text=_SP_INP.replace("* xyz 0 1", "* XYZ -1 2"),
+        out_text=_out_text().replace("* xyz 0 1", "* XYZ -1 2"),
+    )
+
+    block = collect_structure_evidence(reaction_dir, state)
+    assert block is not None
+    assert "Charge -1, Multiplicity 2" in render_si_block_md(block)
+
+
 def test_final_out_path_never_substitutes_an_earlier_attempt(tmp_path: Path) -> None:
     earlier = tmp_path / "attempt_1.out"
     earlier.write_text("earlier attempt\n", encoding="utf-8")

@@ -23,18 +23,17 @@ from orca_auto.core.config.discovery import (
 )
 from orca_auto.core.config.files import (
     load_shared_config_mapping,
-    shared_workflow_root_from_config,
+    shared_runs_root_from_config,
     usable_runs_root_from_mapping,
 )
-from orca_auto.core.extensions import require_workflows
 from orca_auto.core.indexing import (
     JobLocationIndexError,
     JobLocationPruneResult,
     prune_job_locations,
 )
+from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.terminal import emit_error, label, status_text
 from orca_auto.core.utils import normalize_text
-from orca_auto.core.workflow_identity import is_workflow_run_dir
 
 
 def _configure_orca_logging(args: argparse.Namespace) -> None:
@@ -64,39 +63,17 @@ def cmd_orca_run_dir(args: argparse.Namespace) -> int:
     return int(_cmd_orca_run_dir(args))
 
 
-def cmd_workflow_scaffold(args: argparse.Namespace) -> int:
-    try:
-        require_workflows()
-    except ValueError as exc:
-        emit_error(exc)
-        return 1
-    from orca_auto.flow.scaffold import cmd_scaffold as _cmd_workflow_scaffold
-
-    return int(_cmd_workflow_scaffold(args))
-
-
 def _detect_run_dir_app(target: Path) -> str:
-    markers = {
-        "workflow": is_workflow_run_dir(target),
-        "orca": any(candidate.is_file() for candidate in target.glob("*.inp")),
-    }
-    # Workflow inputs legitimately contain engine-specific ``*.inp`` files, so
-    # a workflow manifest remains authoritative over a bare ORCA input.
-    if markers["workflow"]:
-        require_workflows()
-        return "workflow"
-    if markers["orca"]:
+    if path_is_retired_workflow_owned(target, target):
+        raise ValueError("Workflow support was removed; submit a standalone ORCA input directory.")
+    if any(candidate.is_file() for candidate in target.glob("*.inp")):
         return "orca"
-
-    raise ValueError(
-        "Could not infer run-dir target type from directory. "
-        "Expected flow.yaml/workflow.json for a workflow, or *.inp for ORCA."
-    )
+    raise ValueError("Could not infer run-dir target type: expected an ORCA *.inp file.")
 
 
 def _configured_runs_root_for_run_dir(args: Any) -> str:
     config_path = engine_config_for_args(args)
-    return shared_workflow_root_from_config(config_path) or ""
+    return shared_runs_root_from_config(config_path) or ""
 
 
 class _RunDirTargetChangedError(ValueError):
@@ -222,16 +199,13 @@ def cmd_run_dir(args: Any) -> int:
                 publication_contract,
                 pinned_target=pinned_target,
             ):
-                if run_dir_app == "workflow":
-                    args.workflow_dir = args.path
-                    return int(cmd_workflow_run_dir(args))
                 if (
                     getattr(args, "max_cores", None) is not None
                     or getattr(args, "max_memory_gb", None) is not None
                 ):
                     emit_error(
                         "ORCA run-dir does not support --max-cores or --max-memory-gb. "
-                        "Edit %pal/%maxcore in the selected .inp, or use a workflow run-dir."
+                        "Edit %pal/%maxcore in the selected .inp."
                     )
                     return 1
                 if getattr(args, "priority", None) is None:
@@ -240,20 +214,6 @@ def cmd_run_dir(args: Any) -> int:
     except _RunDirTargetChangedError as exc:
         emit_error(exc)
         return 1
-
-
-def cmd_workflow_run_dir(args: argparse.Namespace) -> int:
-    try:
-        require_workflows()
-    except ValueError as exc:
-        emit_error(exc)
-        return 1
-    from orca_auto.flow.cli.run_dir import cmd_run_dir as _cmd_workflow_run_dir
-
-    shared_config = engine_config_for_args(args)
-    if shared_config:
-        args.orca_auto_config = shared_config
-    return int(_cmd_workflow_run_dir(args))
 
 
 def _index_prune_payload(result: JobLocationPruneResult) -> dict[str, Any]:

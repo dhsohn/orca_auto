@@ -450,7 +450,7 @@ def test_not_converged_marker_before_the_tail_window_is_still_a_verdict(tmp_path
         "****ORCA TERMINATED NORMALLY****\n",
         encoding="utf-8",
     )
-    assert out_path.stat().st_size > out_analyzer._DEFAULT_TAIL_BYTES
+    assert out_path.stat().st_size > out_analyzer._DEFAULT_BUFFER_BYTES
 
     analysis = analyze_output(
         out_path, CompletionMode(kind="opt", require_irc=False, route_line="! Opt Freq")

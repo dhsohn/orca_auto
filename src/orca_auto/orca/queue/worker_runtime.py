@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.worker import EngineRunningJob
+from orca_auto.core.queue.store import QueueLockTimeoutError
+
+from .models import OrcaRunningJob
 
 logger = logging.getLogger(__name__)
 
@@ -38,42 +40,42 @@ def make_running_job(
     queue_entry_id_fn: Callable[[Any], str],
     queue_entry_reaction_dir_fn: Callable[[Any], str],
     queue_entry_task_id_fn: Callable[[Any], str | None],
-    running_job_cls: type[EngineRunningJob] = EngineRunningJob,
-) -> EngineRunningJob:
-    running = running_job_cls(
+) -> OrcaRunningJob:
+    return OrcaRunningJob(
+        queue_root=queue_root,
         queue_id=queue_entry_id_fn(entry),
         reaction_dir=queue_entry_reaction_dir_fn(entry),
         task_id=queue_entry_task_id_fn(entry) or None,
         process=process,
         admission_token=admission_token,
     )
-    running.__dict__["queue_root"] = queue_root
-    return running
 
 
 def check_cancel_requests(
     worker: Any,
     *,
-    get_cancel_requested_fn: Callable[..., bool],
+    cancel_requested_ids_fn: Callable[[Path, Mapping[str, str | None]], set[str]],
     job_queue_root_fn: Callable[[Any, Any], Path],
     cancel_running_job_fn: Callable[[Any, str, Any], bool],
 ) -> None:
+    jobs_by_root: dict[Path, list[tuple[str, Any]]] = {}
     for queue_id, job in worker._running_jobs():
-        # A completed child retained after finalization failure is no longer a
-        # cancellable process. Let completion retry own it; signalling its
-        # reaped numeric PID could terminate an unrelated reused session.
+        # Reaped children retained for completion retry must never be signalled.
         if job.process.poll() is not None:
             continue
-        generation_kwargs = {}
-        if getattr(job, "task_id", None):
-            generation_kwargs["expected_task_id"] = job.task_id
-        if get_cancel_requested_fn(
-            job_queue_root_fn(worker, job),
-            queue_id,
-            **generation_kwargs,
-        ):
-            if cancel_running_job_fn(worker, queue_id, job) is True:
-                worker._discard_running_job(queue_id)
+        root = job_queue_root_fn(worker, job)
+        jobs_by_root.setdefault(root, []).append((queue_id, job))
+    for root, jobs in jobs_by_root.items():
+        expected_tasks = {queue_id: getattr(job, "task_id", None) or None for queue_id, job in jobs}
+        try:
+            requested = cancel_requested_ids_fn(root, expected_tasks)
+        except QueueLockTimeoutError:
+            # Retry next pass; other queue roots still get their cancellation pass.
+            continue
+        for queue_id, job in jobs:
+            if queue_id in requested and job.process.poll() is None:
+                if cancel_running_job_fn(worker, queue_id, job) is True:
+                    worker._discard_running_job(queue_id)
 
 
 __all__ = [

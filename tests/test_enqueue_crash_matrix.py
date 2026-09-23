@@ -1,8 +1,7 @@
 """One crash-scenario matrix over every enqueue-publication engine adapter.
 
-The two engine adapters (workflow xtb/crest, ORCA) share the core
-publication driver; their adapters are supposed to stay thin. This
-suite drives each REAL adapter entry point through the same crash windows,
+The ORCA adapter delegates to the core publication driver. This
+suite drives the real adapter entry point through the crash windows,
 breaking the protocol at the shared layers only — the queue store's
 ``save_entries``, the driver's ``queue_record_publication_lock``, and the
 engine's publish symbol — and asserts the invariants that must hold for
@@ -46,7 +45,7 @@ from orca_auto.core.queue.publication import (
     queue_entry_is_claimable,
     queue_record_sync_metadata,
 )
-from orca_auto.core.queue.store import dequeue_next, enqueue, list_queue, request_cancel
+from orca_auto.core.queue.store import dequeue_next, list_queue, request_cancel
 from orca_auto.core.queue.types import QueueStatus
 
 FOREIGN_TOKEN = "foreign-lease-token"
@@ -86,77 +85,6 @@ def _single_row(queue_root: Path) -> Any:
 # --------------------------------------------------------------------------
 # Engine harnesses
 # --------------------------------------------------------------------------
-
-
-def _make_flow_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
-    del monkeypatch
-    from orca_auto.flow.submitters import internal_engine_submission
-
-    queue_root = tmp_path / "flow-queue"
-    job_dir = queue_root / "job"
-    job_dir.mkdir(parents=True)
-    submission = SimpleNamespace(
-        queue_root=queue_root,
-        app_name="orca_auto_crest",
-        task_id="crest-matrix",
-        task_kind="crest_conformer_search",
-        engine="crest",
-        priority=6,
-        metadata={"job_dir": str(job_dir), "resource_request": {}},
-        context={},
-    )
-    records: list[str] = []
-    notifications: list[str] = []
-    publish_failing = {"value": False}
-
-    def record_queued(_cfg: Any, current_submission: Any, entry: Any) -> bool:
-        if publish_failing["value"]:
-            raise OSError("queued record write failed")
-        records.append(str(entry.task_id))
-        if not current_submission.context.get("suppress_queued_notification", False):
-            notifications.append(str(entry.task_id))
-        return True
-
-    def submit() -> Outcome:
-        payload = internal_engine_submission.submit_internal_engine_job_dir(
-            load_config_fn=lambda _path: object(),
-            resolve_job_dir_fn=lambda _cfg, _job_dir: job_dir,
-            load_manifest_fn=lambda _job_dir: {},
-            build_submission_fn=lambda *_args: submission,
-            record_queued_fn=record_queued,
-            enqueue_fn=enqueue,
-            api_name="crest.run_dir",
-            job_dir=str(job_dir),
-            priority=6,
-            config_path="",
-        )
-        status = str(payload.get("status") or "")
-        stderr = str(payload.get("stderr") or "")
-        parsed = payload.get("parsed_stdout") or {}
-        return Outcome(
-            succeeded=status == "submitted",
-            cancelled=status == "blocked" and payload.get("reason") == "cancel_requested",
-            outcome_unknown="EnqueuePublicationOutcomeUnknown" in stderr,
-            detail="; ".join([stderr, str(parsed.get("warning") or "")]),
-        )
-
-    return Harness(
-        name="flow",
-        queue_root=queue_root,
-        submit=submit,
-        repair=lambda entry: internal_engine_submission.repair_internal_engine_queue_publication(
-            cfg=object(),
-            queue_root=queue_root,
-            entry=entry,
-            record_queued_fn=record_queued,
-            entry_matches_fn=lambda current: current.engine == "crest",
-        ),
-        record_published=lambda: bool(records),
-        set_publish_failing=lambda value: publish_failing.__setitem__("value", value),
-        notification_count=lambda: len(notifications),
-        expected_notifications_after_clean_submit=1,
-        expected_notifications_after_publish_failure=0,
-    )
 
 
 def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
@@ -240,7 +168,6 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
 
 
 _HARNESS_BUILDERS = {
-    "flow": _make_flow_harness,
     "orca": _make_orca_harness,
 }
 

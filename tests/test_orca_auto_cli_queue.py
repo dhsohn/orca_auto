@@ -69,12 +69,12 @@ def test_queue_list_stays_plain_under_force_color_pipe(
             "count": 3,
             "activities": [
                 {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "workflow",
+                    "activity_id": "orca-history-1",
+                    "kind": "job",
+                    "engine": "orca",
                     "status": "running",
                     "label": "screen",
-                    "source": "orca_auto_flow",
+                    "source": "orca_auto_orca",
                     "submitted_at": "2026-04-26T00:47:00+00:00",
                     "updated_at": "2026-04-26T00:47:00+00:00",
                 },
@@ -85,8 +85,7 @@ def test_queue_list_stays_plain_under_force_color_pipe(
                     "status": "running",
                     "label": "opt",
                     "source": "orca_auto_orca",
-                    "parent_workflow_id": "wf-1",
-                    "metadata": {"workflow_id": "wf-1"},
+                    "metadata": {},
                     "submitted_at": "2026-04-26T02:00:00+00:00",
                     "updated_at": "2026-04-26T02:00:00+00:00",
                 },
@@ -97,8 +96,7 @@ def test_queue_list_stays_plain_under_force_color_pipe(
                     "status": "running",
                     "label": "freq",
                     "source": "orca_auto_orca",
-                    "parent_workflow_id": "wf-1",
-                    "metadata": {"workflow_id": "wf-1"},
+                    "metadata": {},
                     "submitted_at": "2026-04-26T02:57:00+00:00",
                     "updated_at": "2026-04-26T02:57:00+00:00",
                 },
@@ -110,7 +108,6 @@ def test_queue_list_stays_plain_under_force_color_pipe(
     try:
         result = unified_cli.cmd_queue_list(
             SimpleNamespace(
-                workflow_root=None,
                 orca_auto_config=None,
                 limit=0,
                 refresh=False,
@@ -212,33 +209,33 @@ def test_cmd_queue_list_filters_text_output(
             "count": 3,
             "activities": [
                 {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "workflow",
-                    "status": "running",
-                    "label": "wf-1",
-                    "source": "orca_auto_flow",
+                    "activity_id": "orca-history-1",
+                    "kind": "job",
+                    "engine": "orca",
+                    "status": "completed",
+                    "label": "orca-history-1",
+                    "source": "orca_auto_orca",
                     "submitted_at": "2026-04-26T01:00:00+00:00",
                     "updated_at": "2026-04-26T01:00:00+00:00",
                 },
                 {
-                    "activity_id": "xtb-q-1",
+                    "activity_id": "orca-opt-q-1",
                     "kind": "job",
-                    "engine": "xtb",
+                    "engine": "orca",
                     "status": "running",
                     "label": "rxn-a",
-                    "source": "orca_auto_xtb",
+                    "source": "orca_auto_orca",
                     "submitted_at": "2026-04-26T02:00:00+00:00",
                     "updated_at": "2026-04-26T02:30:00+00:00",
                     "metadata": {"task_kind": "opt"},
                 },
                 {
-                    "activity_id": "crest-q-1",
+                    "activity_id": "orca-pending-q-1",
                     "kind": "job",
-                    "engine": "crest",
+                    "engine": "orca",
                     "status": "pending",
                     "label": "mol-a",
-                    "source": "orca_auto_crest",
+                    "source": "orca_auto_orca",
                     "submitted_at": "2026-04-26T02:15:00+00:00",
                     "updated_at": "2026-04-26T02:15:00+00:00",
                 },
@@ -249,11 +246,10 @@ def test_cmd_queue_list_filters_text_output(
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
-            workflow_root=None,
             orca_auto_config=None,
             limit=0,
             refresh=False,
-            engine=["xtb"],
+            engine=["orca"],
             status=["running"],
             kind=["job"],
             json=False,
@@ -271,11 +267,11 @@ def test_cmd_queue_list_filters_text_output(
         and "Elapsed" in stdout
     )
     assert "▶" in stdout
-    assert "xtb-q-1" in stdout
+    assert "orca-opt-q-1" in stdout
     assert "Opt" in stdout
     assert "01:00:00" in stdout
-    assert "crest-q-1" not in stdout
-    assert "wf-1" not in stdout
+    assert "orca-pending-q-1" not in stdout
+    assert "orca-history-1" not in stdout
 
 
 def test_cmd_queue_list_tty_renders_styled_view(
@@ -293,12 +289,12 @@ def test_cmd_queue_list_tty_renders_styled_view(
             "count": 3,
             "activities": [
                 {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "workflow",
+                    "activity_id": "orca-history-1",
+                    "kind": "job",
+                    "engine": "orca",
                     "status": "running",
                     "label": "screen",
-                    "source": "orca_auto_flow",
+                    "source": "orca_auto_orca",
                     "submitted_at": "2026-04-26T00:47:00+00:00",
                     "updated_at": "2026-04-26T00:47:00+00:00",
                 },
@@ -309,8 +305,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
                     "status": "completed",
                     "label": "opt",
                     "source": "orca_auto_orca",
-                    "parent_workflow_id": "wf-1",
-                    "metadata": {"workflow_id": "wf-1"},
+                    "metadata": {},
                     "submitted_at": "2026-04-26T02:00:00+00:00",
                     "updated_at": "2026-04-26T02:41:00+00:00",
                 },
@@ -321,8 +316,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
                     "status": "running",
                     "label": "freq",
                     "source": "orca_auto_orca",
-                    "parent_workflow_id": "wf-1",
-                    "metadata": {"workflow_id": "wf-1"},
+                    "metadata": {},
                     "submitted_at": "2026-04-26T02:57:00+00:00",
                     "updated_at": "2026-04-26T02:57:00+00:00",
                 },
@@ -336,7 +330,6 @@ def test_cmd_queue_list_tty_renders_styled_view(
     try:
         result = unified_cli.cmd_queue_list(
             SimpleNamespace(
-                workflow_root=None,
                 orca_auto_config=None,
                 limit=0,
                 refresh=False,
@@ -358,8 +351,8 @@ def test_cmd_queue_list_tty_renders_styled_view(
     assert "orca_auto queue" in plain
     assert "active" in plain and "running" in plain
     assert "active_simulations:" not in plain
-    # Tree connectors for the workflow's ORCA children plus the per-row rail.
-    assert "├─" in plain and "└─" in plain
+    # Standalone rows retain the per-row rail without hierarchy connectors.
+    assert "├─" not in plain and "└─" not in plain
     assert "▎" in plain
     # Real ANSI SGR codes were emitted (not just the plain fallback).
     assert "\x1b[" in stdout
@@ -381,12 +374,12 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
             "count": 3,
             "activities": [
                 {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "workflow",
+                    "activity_id": "orca-history-1",
+                    "kind": "job",
+                    "engine": "orca",
                     "status": "running",
                     "label": "screen",
-                    "source": "orca_auto_flow",
+                    "source": "orca_auto_orca",
                     "submitted_at": "2026-04-26T00:47:00+00:00",
                     "updated_at": "2026-04-26T00:47:00+00:00",
                 },
@@ -397,8 +390,7 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
                     "status": "completed",
                     "label": "opt",
                     "source": "orca_auto_orca",
-                    "parent_workflow_id": "wf-1",
-                    "metadata": {"workflow_id": "wf-1"},
+                    "metadata": {},
                     "submitted_at": "2026-04-26T02:00:00+00:00",
                     "updated_at": "2026-04-26T02:41:00+00:00",
                 },
@@ -409,8 +401,7 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
                     "status": "running",
                     "label": "freq",
                     "source": "orca_auto_orca",
-                    "parent_workflow_id": "wf-1",
-                    "metadata": {"workflow_id": "wf-1"},
+                    "metadata": {},
                     "submitted_at": "2026-04-26T02:57:00+00:00",
                     "updated_at": "2026-04-26T02:57:00+00:00",
                 },
@@ -420,7 +411,6 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
     )
 
     args = SimpleNamespace(
-        workflow_root=None,
         orca_auto_config=None,
         limit=0,
         refresh=False,
@@ -471,199 +461,6 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
     assert max(display_width(line) for line in roomy) <= min_width + 2
 
 
-def test_cmd_queue_list_shows_all_workflow_children_in_default_text_output(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(
-        activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
-    )
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: {
-            "count": 5,
-            "activities": [
-                {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "workflow",
-                    "status": "running",
-                    "label": "reaction-case",
-                    "source": "orca_auto_flow",
-                    "submitted_at": "2026-04-26T01:30:00+00:00",
-                    "updated_at": "2026-04-26T02:00:00+00:00",
-                    "metadata": {
-                        "template_name": "conformer_screening",
-                        "current_engine": "orca",
-                        "request_parameters": {"crest_mode": "nci"},
-                    },
-                },
-                {
-                    "activity_id": "xtb-q-1",
-                    "kind": "job",
-                    "engine": "xtb",
-                    "status": "running",
-                    "label": "path-search",
-                    "source": "orca_auto_xtb",
-                    "submitted_at": "2026-04-26T02:00:00+00:00",
-                    "updated_at": "2026-04-26T02:15:00+00:00",
-                    "metadata": {
-                        "task_kind": "opt",
-                        "workflow_id": "wf-1",
-                        "job_dir": "/tmp/workflows/wf-1/02_xtb/xtb_opt_01",
-                    },
-                },
-                {
-                    "activity_id": "crest-q-1",
-                    "kind": "job",
-                    "engine": "crest",
-                    "status": "pending",
-                    "label": "conformer-search",
-                    "source": "orca_auto_crest",
-                    "submitted_at": "2026-04-26T02:10:00+00:00",
-                    "updated_at": "2026-04-26T02:10:00+00:00",
-                    "metadata": {
-                        "task_kind": "conformer_search",
-                        "workflow_id": "wf-1",
-                        "job_dir": "/tmp/workflows/wf-1/01_crest/crest_reactant_01",
-                    },
-                },
-                {
-                    "activity_id": "orca-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "ts-opt",
-                    "source": "orca_auto_orca",
-                    "submitted_at": "2026-04-26T02:00:00+00:00",
-                    "updated_at": "2026-04-26T02:20:00+00:00",
-                    "metadata": {
-                        "task_kind": "opt",
-                        "workflow_id": "wf-1",
-                        "reaction_dir": "/tmp/workflows/wf-1/03_orca/case_001",
-                    },
-                },
-                {
-                    "activity_id": "orca-q-engine-job",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "queued-ts",
-                    "source": "orca_auto_orca",
-                    "submitted_at": "2026-04-26T00:30:00+00:00",
-                    "updated_at": "2026-04-26T01:30:00+00:00",
-                    "metadata": {
-                        "job_type": "neb",
-                        "reaction_dir": "/tmp/orca/runs/case_002",
-                    },
-                },
-            ],
-            "sources": {},
-        },
-    )
-
-    result = unified_cli.cmd_queue_list(
-        SimpleNamespace(
-            workflow_root=None,
-            orca_auto_config=None,
-            limit=0,
-            refresh=False,
-            engine=None,
-            status=None,
-            kind=None,
-            json=False,
-        )
-    )
-
-    assert result == 0
-    stdout = capsys.readouterr().out
-    assert "active_simulations: 3" in stdout
-    assert "▶" in stdout
-    assert "wf-1" in stdout
-    assert "conformer_search(nci)" in stdout
-    assert "xtb-q-1" in stdout
-    assert "Opt" in stdout
-    assert "crest-q-1" in stdout
-    assert "conformer_search" in stdout
-    assert "orca-q-1" in stdout
-    assert "Opt" in stdout
-    assert "orca-q-engine-job" in stdout
-    assert "NEB" in stdout
-
-
-def test_cmd_queue_list_shows_all_workflow_child_jobs(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(
-        activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
-    )
-    child_rows = [
-        {
-            "activity_id": f"orca-q-{index}",
-            "kind": "job",
-            "engine": "orca",
-            "status": "running",
-            "label": f"ts-{index}",
-            "source": "orca_auto_orca",
-            "submitted_at": "2026-04-26T02:00:00+00:00",
-            "updated_at": "2026-04-26T02:00:00+00:00",
-            "metadata": {
-                "task_kind": "opt",
-                "reaction_dir": f"/tmp/orca/wf-1/03_orca/case_{index:03d}",
-            },
-        }
-        for index in range(1, 10)
-    ]
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: {
-            "count": 10,
-            "activities": [
-                {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "workflow",
-                    "status": "running",
-                    "label": "reaction-case",
-                    "source": "orca_auto_flow",
-                    "submitted_at": "2026-04-26T01:00:00+00:00",
-                    "updated_at": "2026-04-26T01:00:00+00:00",
-                    "metadata": {
-                        "template_name": "conformer_screening",
-                        "current_engine": "orca",
-                    },
-                },
-                *child_rows,
-            ],
-            "sources": {},
-        },
-    )
-
-    result = unified_cli.cmd_queue_list(
-        SimpleNamespace(
-            workflow_root=None,
-            orca_auto_config=None,
-            limit=0,
-            refresh=False,
-            engine=None,
-            status=None,
-            kind=None,
-            json=False,
-        )
-    )
-
-    assert result == 0
-    stdout = capsys.readouterr().out
-    assert "active_simulations: 9" in stdout
-    assert stdout.count("▶") >= 1
-    assert stdout.count("orca-q-") == 9
-    assert "wf-1" in stdout
-    assert "conformer_search" in stdout
-
-
 def test_cmd_queue_list_reports_empty_filtered_results(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -675,15 +472,15 @@ def test_cmd_queue_list_reports_empty_filtered_results(
             "count": 1,
             "activities": [
                 {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "workflow",
+                    "activity_id": "orca-history-1",
+                    "kind": "job",
+                    "engine": "orca",
                     "status": "running",
                     "label": "reaction-case",
-                    "source": "orca_auto_flow",
+                    "source": "orca_auto_orca",
                     "submitted_at": "2026-04-26T01:00:00+00:00",
                     "updated_at": "2026-04-26T01:00:00+00:00",
-                    "metadata": {"template_name": "conformer_screening"},
+                    "metadata": {"job_type": "opt"},
                 }
             ],
             "sources": {},
@@ -692,7 +489,6 @@ def test_cmd_queue_list_reports_empty_filtered_results(
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
-            workflow_root=None,
             orca_auto_config=None,
             limit=0,
             refresh=False,
@@ -705,7 +501,7 @@ def test_cmd_queue_list_reports_empty_filtered_results(
 
     assert result == 0
     stdout = capsys.readouterr().out
-    assert "active_simulations: 0" in stdout
+    assert "active_simulations: 1" in stdout
     assert "No matching activities." in stdout
     assert "Status" not in stdout
 
@@ -729,12 +525,12 @@ def test_cmd_queue_list_json_filters_payload(
                     "source": "orca_auto_orca",
                 },
                 {
-                    "activity_id": "wf-1",
-                    "kind": "workflow",
-                    "engine": "xtb",
+                    "activity_id": "orca-history-1",
+                    "kind": "job",
+                    "engine": "orca",
                     "status": "queued",
-                    "label": "wf-1",
-                    "source": "orca_auto_flow",
+                    "label": "orca-history-1",
+                    "source": "orca_auto_orca",
                 },
             ],
             "sources": {"orca_config": "/tmp/orca_auto.yaml"},
@@ -743,12 +539,11 @@ def test_cmd_queue_list_json_filters_payload(
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
-            workflow_root=None,
             orca_auto_config=None,
             limit=0,
             refresh=False,
             engine=["orca"],
-            status=None,
+            status=["running"],
             kind=None,
             json=True,
         )
@@ -774,12 +569,12 @@ def test_cmd_queue_list_uses_global_active_simulation_count_from_full_payload(
             "count": 3,
             "activities": [
                 {
-                    "activity_id": "xtb-q-1",
+                    "activity_id": "orca-opt-q-1",
                     "kind": "job",
-                    "engine": "xtb",
+                    "engine": "orca",
                     "status": "running",
                     "label": "rxn-a",
-                    "source": "orca_auto_xtb",
+                    "source": "orca_auto_orca",
                 },
                 {
                     "activity_id": "orca-q-1",
@@ -790,12 +585,12 @@ def test_cmd_queue_list_uses_global_active_simulation_count_from_full_payload(
                     "source": "orca_auto_orca",
                 },
                 {
-                    "activity_id": "xtb-q-2",
+                    "activity_id": "orca-opt-q-2",
                     "kind": "job",
-                    "engine": "xtb",
+                    "engine": "orca",
                     "status": "running",
                     "label": "rxn-b",
-                    "source": "orca_auto_xtb",
+                    "source": "orca_auto_orca",
                 },
             ],
             "sources": {"orca_config": "/tmp/orca_auto.yaml"},
@@ -811,11 +606,10 @@ def test_cmd_queue_list_uses_global_active_simulation_count_from_full_payload(
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
-            workflow_root=None,
             orca_auto_config=None,
             limit=1,
             refresh=False,
-            engine=["xtb"],
+            engine=["orca"],
             status=["running"],
             kind=["job"],
             json=True,
@@ -826,7 +620,7 @@ def test_cmd_queue_list_uses_global_active_simulation_count_from_full_payload(
     payload = json.loads(capsys.readouterr().out)
     assert payload["count"] == 1
     assert payload["active_simulations"] == 7
-    assert payload["activities"][0]["activity_id"] == "xtb-q-1"
+    assert payload["activities"][0]["activity_id"] == "orca-opt-q-1"
     assert len(captured["items"]) == 3
     assert captured["config_path"] == "/tmp/orca_auto.yaml"
 
@@ -842,20 +636,20 @@ def test_cmd_queue_list_applies_limit_after_filters(
             "count": 4,
             "activities": [
                 {
-                    "activity_id": "crest-q-1",
+                    "activity_id": "orca-pending-q-1",
                     "kind": "job",
-                    "engine": "crest",
+                    "engine": "orca",
                     "status": "pending",
                     "label": "mol-a",
-                    "source": "orca_auto_crest",
+                    "source": "orca_auto_orca",
                 },
                 {
-                    "activity_id": "xtb-q-1",
+                    "activity_id": "orca-opt-q-1",
                     "kind": "job",
-                    "engine": "xtb",
+                    "engine": "orca",
                     "status": "running",
                     "label": "rxn-a",
-                    "source": "orca_auto_xtb",
+                    "source": "orca_auto_orca",
                 },
                 {
                     "activity_id": "orca-q-1",
@@ -866,12 +660,12 @@ def test_cmd_queue_list_applies_limit_after_filters(
                     "source": "orca_auto_orca",
                 },
                 {
-                    "activity_id": "xtb-q-2",
+                    "activity_id": "orca-opt-q-2",
                     "kind": "job",
-                    "engine": "xtb",
+                    "engine": "orca",
                     "status": "running",
                     "label": "rxn-b",
-                    "source": "orca_auto_xtb",
+                    "source": "orca_auto_orca",
                 },
             ],
             "sources": {},
@@ -880,11 +674,10 @@ def test_cmd_queue_list_applies_limit_after_filters(
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
-            workflow_root=None,
             orca_auto_config=None,
             limit=1,
             refresh=False,
-            engine=["xtb"],
+            engine=["orca"],
             status=["running"],
             kind=["job"],
             json=True,
@@ -895,7 +688,7 @@ def test_cmd_queue_list_applies_limit_after_filters(
     payload = json.loads(capsys.readouterr().out)
     assert payload["count"] == 1
     assert payload["active_simulations"] == 3
-    assert payload["activities"][0]["activity_id"] == "xtb-q-1"
+    assert payload["activities"][0]["activity_id"] == "orca-opt-q-1"
 
 
 def test_cmd_queue_list_clear_text_output(
@@ -906,11 +699,8 @@ def test_cmd_queue_list_clear_text_output(
         unified_cli,
         "clear_activities",
         lambda **kwargs: {
-            "total_cleared": 5,
+            "total_cleared": 2,
             "cleared": {
-                "workflows": 1,
-                "xtb_queue_entries": 2,
-                "crest_queue_entries": 0,
                 "orca_queue_entries": 1,
                 "orca_run_states": 1,
             },
@@ -921,7 +711,6 @@ def test_cmd_queue_list_clear_text_output(
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
             action="clear",
-            workflow_root=None,
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
@@ -934,9 +723,7 @@ def test_cmd_queue_list_clear_text_output(
 
     assert result == 0
     stdout = capsys.readouterr().out
-    assert "Cleared 5 completed/failed/cancelled entries." in stdout
-    assert "workflows: 1" in stdout
-    assert "xTB queue entries: 2" in stdout
+    assert "Cleared 2 completed/failed/cancelled entries." in stdout
     assert "ORCA queue entries: 1" in stdout
     assert "ORCA run states: 1" in stdout
 
@@ -951,20 +738,16 @@ def test_cmd_queue_list_clear_json_output(
         lambda **kwargs: {
             "total_cleared": 0,
             "cleared": {
-                "workflows": 0,
-                "xtb_queue_entries": 0,
-                "crest_queue_entries": 0,
                 "orca_queue_entries": 0,
                 "orca_run_states": 0,
             },
-            "sources": {"workflow_root": "/tmp/workflows"},
+            "sources": {"orca_config": "/tmp/orca_auto.yaml"},
         },
     )
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
             action="clear",
-            workflow_root=None,
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
@@ -978,7 +761,7 @@ def test_cmd_queue_list_clear_json_output(
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["total_cleared"] == 0
-    assert payload["sources"]["workflow_root"] == "/tmp/workflows"
+    assert payload["sources"]["orca_config"] == "/tmp/orca_auto.yaml"
 
 
 def test_cmd_queue_list_clear_rejects_filters(
@@ -994,7 +777,6 @@ def test_cmd_queue_list_clear_rejects_filters(
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
             action="clear",
-            workflow_root=None,
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
@@ -1025,7 +807,6 @@ def test_cmd_queue_list_clear_rejects_negative_limit_fail_closed(
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
             action="clear",
-            workflow_root=None,
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=-1,
             refresh=False,
@@ -1066,7 +847,6 @@ def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceba
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
             action=action,
-            workflow_root=None,
             orca_auto_config="/tmp/missing-or-corrupt.yaml",
             limit=0,
             refresh=False,
@@ -1108,7 +888,6 @@ def test_cmd_queue_list_treats_closed_output_pipe_separately_from_state_errors(
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
             action=None,
-            workflow_root=None,
             orca_auto_config=None,
             limit=0,
             refresh=False,
@@ -1137,7 +916,6 @@ def test_cmd_queue_cancel_reports_lookup_error(
     result = unified_cli.cmd_queue_cancel(
         SimpleNamespace(
             target="missing",
-            workflow_root=None,
             orca_auto_config=None,
             json=False,
         )
@@ -1171,7 +949,6 @@ def test_cmd_queue_cancel_treats_closed_pipe_as_success_after_durable_cancel(
     result = unified_cli.cmd_queue_cancel(
         SimpleNamespace(
             target="job-1",
-            workflow_root=None,
             orca_auto_config=None,
             json=True,
         )
@@ -1235,7 +1012,7 @@ def test_cmd_queue_cancel_reports_timeout_error(
 ) -> None:
     def fake_cancel_activity(**kwargs: Any) -> dict[str, Any]:
         raise TimeoutError(
-            "Workflow is busy and could not be locked for cancellation within 5s: /tmp/wf_busy"
+            "ORCA queue is busy and could not be locked for cancellation within 5s: /tmp/orca_busy"
         )
 
     monkeypatch.setattr(unified_cli, "cancel_activity", fake_cancel_activity)
@@ -1243,7 +1020,6 @@ def test_cmd_queue_cancel_reports_timeout_error(
     result = unified_cli.cmd_queue_cancel(
         SimpleNamespace(
             target="wf_busy",
-            workflow_root=None,
             orca_auto_config=None,
             json=False,
         )
@@ -1251,7 +1027,7 @@ def test_cmd_queue_cancel_reports_timeout_error(
 
     assert result == 1
     assert capsys.readouterr().err == (
-        "error: Workflow is busy and could not be locked for cancellation within 5s: /tmp/wf_busy\n"
+        "error: ORCA queue is busy and could not be locked for cancellation within 5s: /tmp/orca_busy\n"
         "hint: Check the configured runtime state, then run `orca_auto queue list` "
         "to see valid targets.\n"
     )
@@ -1279,7 +1055,6 @@ def test_cmd_queue_cancel_reports_expected_state_errors_without_traceback(
     result = unified_cli.cmd_queue_cancel(
         SimpleNamespace(
             target="anything",
-            workflow_root="/tmp/workflows",
             orca_auto_config="/tmp/missing-or-corrupt.yaml",
             json=True,
         )
@@ -1301,20 +1076,19 @@ def test_cmd_queue_cancel_json_output(
         unified_cli,
         "cancel_activity",
         lambda **kwargs: {
-            "activity_id": "crest-q-1",
+            "activity_id": "orca-pending-q-1",
             "kind": "job",
-            "engine": "crest",
-            "source": "orca_auto_crest",
+            "engine": "orca",
+            "source": "orca_auto_orca",
             "label": "mol-a",
             "status": "cancel_requested",
-            "cancel_target": "crest-q-1",
+            "cancel_target": "orca-pending-q-1",
         },
     )
 
     result = unified_cli.cmd_queue_cancel(
         SimpleNamespace(
-            target="crest-q-1",
-            workflow_root=None,
+            target="orca-pending-q-1",
             orca_auto_config="/tmp/orca_auto.yaml",
             json=True,
         )
@@ -1323,7 +1097,7 @@ def test_cmd_queue_cancel_json_output(
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "cancel_requested"
-    assert payload["engine"] == "crest"
+    assert payload["engine"] == "orca"
 
 
 def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
@@ -1333,8 +1107,8 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
 ) -> None:
     monkeypatch.setattr(
         unified_cli,
-        "workflow_root_for_args",
-        lambda args, config_path=None: str(tmp_path / "does_not_exist_root"),
+        "shared_runs_root_from_config",
+        lambda config_path: str(tmp_path / "does_not_exist_root"),
     )
     monkeypatch.setattr(
         unified_cli,
@@ -1345,7 +1119,6 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
             action=None,
-            workflow_root=None,
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
@@ -1363,70 +1136,6 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
     assert "does_not_exist_root" in captured.err
 
 
-def test_cmd_queue_list_json_reports_undrained_cancel_transitions(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    # End to end over the real registry: a cancel that died before journaling
-    # leaves an unclearable row, and `queue list --json` is where an operator
-    # finds out why.
-    from orca_auto import activity
-    from orca_auto.flow import registry
-    from orca_auto.flow.state import write_workflow_payload
-
-    runs_root = tmp_path / "runs"
-    runs_root.mkdir()
-    config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
-
-    workflow_root = tmp_path / "workflow_runs"
-    workspace = workflow_root / "wf-cancel-pending"
-    workspace.mkdir(parents=True)
-    payload = {
-        "workflow_id": "wf-cancel-pending",
-        "template_name": "conformer_screening",
-        "status": "cancelled",
-        "requested_at": "2026-08-11T05:00:00+00:00",
-        "stages": [],
-        "metadata": {
-            "cancellation_status_transitions": [
-                {"event_id": "wf_evt_1", "status": "cancelled"},
-            ]
-        },
-    }
-    write_workflow_payload(workspace, payload)
-    registry.sync_workflow_registry(workflow_root, workspace, payload)
-
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: activity.list_activities(
-            workflow_root=workflow_root,
-            shared_config=str(config_path),
-        ),
-    )
-
-    result = unified_cli.cmd_queue_list(
-        SimpleNamespace(
-            action=None,
-            workflow_root=str(workflow_root),
-            orca_auto_config=str(config_path),
-            limit=0,
-            refresh=False,
-            engine=None,
-            status=None,
-            kind=None,
-            json=True,
-        )
-    )
-
-    assert result == 0
-    rows = json.loads(capsys.readouterr().out)["activities"]
-    assert [row["activity_id"] for row in rows] == ["wf-cancel-pending"]
-    assert rows[0]["metadata"]["cancel_transitions_pending"] == 1
-
-
 #: One transition in the shape `_stored_cancellation_transitions` accepts.
 _STORED_CANCEL_TRANSITION = {
     "event_id": "wf_evt_1",
@@ -1434,398 +1143,3 @@ _STORED_CANCEL_TRANSITION = {
     "previous_status": "running",
     "status": "cancelled",
 }
-
-
-def _cancel_authority_workflow_root(
-    tmp_path: Path,
-    *,
-    workflow_id: str,
-    transitions: list[dict[str, str]],
-) -> tuple[Path, Path, Path, dict[str, Any]]:
-    """A real workflow root with one cancelled workflow and its registry row.
-
-    The row is synced from the payload as it stands here, so a later payload
-    rewrite without a sync leaves exactly the cached count a crashed cancel
-    plus a worker drain leaves behind.
-    """
-    from orca_auto.flow import registry
-    from orca_auto.flow.state import write_workflow_payload
-
-    runs_root = tmp_path / "runs"
-    runs_root.mkdir()
-    config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
-
-    workflow_root = tmp_path / "workflow_runs"
-    workspace = workflow_root / workflow_id
-    workspace.mkdir(parents=True)
-    payload: dict[str, Any] = {
-        "workflow_id": workflow_id,
-        "template_name": "conformer_screening",
-        "status": "cancelled",
-        "requested_at": "2026-08-11T05:00:00+00:00",
-        "stages": [],
-        "metadata": {"cancellation_status_transitions": list(transitions)},
-    }
-    write_workflow_payload(workspace, payload)
-    registry.sync_workflow_registry(workflow_root, workspace, payload)
-    return workflow_root, workspace, config_path, payload
-
-
-def _cancel_authority_args(
-    workflow_root: Path, config_path: Path, *, as_json: bool
-) -> SimpleNamespace:
-    # `refresh=False` is the listing an operator gets by default; a refresh
-    # reindexes the registry from the payloads and would hide a stale row.
-    return SimpleNamespace(
-        action=None,
-        workflow_root=str(workflow_root),
-        orca_auto_config=str(config_path),
-        limit=0,
-        refresh=False,
-        engine=None,
-        status=None,
-        kind=None,
-        json=as_json,
-    )
-
-
-def _patch_real_queue_listing(
-    monkeypatch: pytest.MonkeyPatch, workflow_root: Path, config_path: Path
-) -> None:
-    from orca_auto import activity
-
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: activity.list_activities(
-            workflow_root=workflow_root,
-            shared_config=str(config_path),
-        ),
-    )
-
-
-def test_cmd_queue_list_drops_cancel_pending_once_the_payload_is_drained(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    # End to end over the real registry: the row was synced while a crashed
-    # cancel's transitions were stored, then a worker drained them and rewrote
-    # only `workflow.json`. A terminal workflow is skipped without a registry
-    # sync, so the row still caches the count. `queue list clear` reads the
-    # payload and clears this row, so the listing must stop naming it.
-    from orca_auto.flow import registry
-    from orca_auto.flow.state import write_workflow_payload
-
-    workflow_root, workspace, config_path, payload = _cancel_authority_workflow_root(
-        tmp_path,
-        workflow_id="wf-cancel-drained",
-        transitions=[dict(_STORED_CANCEL_TRANSITION)],
-    )
-    payload["metadata"]["cancellation_status_transitions"] = []
-    write_workflow_payload(workspace, payload)
-    stale_row = registry.list_workflow_registry(workflow_root)[0]
-    assert stale_row.metadata["cancel_transitions_pending"] == 1
-
-    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
-
-    assert (
-        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
-        == 0
-    )
-    rows = json.loads(capsys.readouterr().out)["activities"]
-    assert [row["activity_id"] for row in rows] == ["wf-cancel-drained"]
-    assert "cancel_transitions_pending" not in rows[0]["metadata"]
-
-    assert (
-        unified_cli.cmd_queue_list(
-            _cancel_authority_args(workflow_root, config_path, as_json=False)
-        )
-        == 0
-    )
-    assert "cancel_pending" not in _strip_ansi(capsys.readouterr().out)
-
-    # The listing and the authoritative guard now agree: this row does clear.
-    assert registry.clear_terminal_workflow_registry(workflow_root) == 1
-
-
-def test_cmd_queue_list_names_a_stored_cancel_transition_the_guard_refuses(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    # The other half of the same authority: a transition the payload really
-    # still stores is reported and named, and the clear guard really refuses.
-    from orca_auto.flow import registry
-
-    workflow_root, _workspace, config_path, _payload = _cancel_authority_workflow_root(
-        tmp_path,
-        workflow_id="wf-cancel-stored",
-        transitions=[dict(_STORED_CANCEL_TRANSITION)],
-    )
-    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
-
-    assert (
-        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
-        == 0
-    )
-    rows = json.loads(capsys.readouterr().out)["activities"]
-    assert rows[0]["metadata"]["cancel_transitions_pending"] == 1
-
-    assert (
-        unified_cli.cmd_queue_list(
-            _cancel_authority_args(workflow_root, config_path, as_json=False)
-        )
-        == 0
-    )
-    lines = _strip_ansi(capsys.readouterr().out).splitlines()
-    assert lines[-2:] == [
-        "cancel_pending: wf-cancel-stored=1",
-        "  undrained cancel transitions; `queue list clear` refuses these rows.",
-    ]
-
-    assert registry.clear_terminal_workflow_registry(workflow_root) == 0
-
-
-def test_cmd_queue_list_stays_quiet_for_the_normal_empty_transition_list(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    # A cancel that completed leaves the key present but empty. Flagging its
-    # presence rather than its length would mark every cancelled workflow.
-    from orca_auto.flow import registry
-
-    workflow_root, _workspace, config_path, _payload = _cancel_authority_workflow_root(
-        tmp_path,
-        workflow_id="wf-cancel-normal",
-        transitions=[],
-    )
-    assert (
-        "cancel_transitions_pending"
-        not in registry.list_workflow_registry(workflow_root)[0].metadata
-    )
-    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
-
-    assert (
-        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
-        == 0
-    )
-    rows = json.loads(capsys.readouterr().out)["activities"]
-    assert "cancel_transitions_pending" not in rows[0]["metadata"]
-
-    assert (
-        unified_cli.cmd_queue_list(
-            _cancel_authority_args(workflow_root, config_path, as_json=False)
-        )
-        == 0
-    )
-    assert "cancel_pending" not in _strip_ansi(capsys.readouterr().out)
-
-
-def test_cmd_queue_list_keeps_the_cached_count_when_the_payload_cannot_be_read(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    # Decided behaviour for an unreadable payload: no summary is produced for
-    # this workspace, so the cached count is reported. The clear guard refuses
-    # the row as well -- on the corruption ground rather than this one -- so
-    # the note is not contradicted, and it is the only evidence an operator
-    # has left that a cancel was still holding transitions.
-    from orca_auto.flow import registry
-
-    workflow_root, workspace, config_path, _payload = _cancel_authority_workflow_root(
-        tmp_path,
-        workflow_id="wf-cancel-unreadable",
-        transitions=[dict(_STORED_CANCEL_TRANSITION)],
-    )
-    (workspace / "workflow.json").write_text("{ not json", encoding="utf-8")
-    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
-
-    assert (
-        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
-        == 0
-    )
-    rows = json.loads(capsys.readouterr().out)["activities"]
-    assert rows[0]["metadata"]["cancel_transitions_pending"] == 1
-
-    assert (
-        unified_cli.cmd_queue_list(
-            _cancel_authority_args(workflow_root, config_path, as_json=False)
-        )
-        == 0
-    )
-    assert "cancel_pending: wf-cancel-unreadable=1" in _strip_ansi(capsys.readouterr().out)
-
-    assert registry.clear_terminal_workflow_registry(workflow_root) == 0
-
-
-def test_cmd_queue_list_names_a_transition_a_quarantined_twin_cannot_answer_for(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
-) -> None:
-    # A second workspace persists the first one's `workflow_id` -- an operator
-    # copy of a workspace directory, which `advance` quarantines without
-    # rewriting the durable id -- and its directory name sorts first, so the
-    # reverse-name workspace scan visits it last. Matched by id it would be the
-    # summary the real row is answered from, and its own drained transition
-    # list would convert that row's count to zero. The clear guard reads the
-    # workspace each row names and still refuses both, so the note must stay.
-    from orca_auto.flow import registry
-    from orca_auto.flow.state import write_workflow_payload
-
-    workflow_root, _workspace, config_path, _payload = _cancel_authority_workflow_root(
-        tmp_path,
-        workflow_id="wf-cancel-real",
-        transitions=[dict(_STORED_CANCEL_TRANSITION)],
-    )
-    twin_workspace = workflow_root / "wf-cancel-copy"
-    twin_workspace.mkdir()
-    twin_payload: dict[str, Any] = {
-        "workflow_id": "wf-cancel-real",
-        "template_name": "conformer_screening",
-        "status": "failed",
-        "requested_at": "2026-08-11T05:00:00+00:00",
-        "stages": [],
-        "metadata": {
-            "cancellation_status_transitions": [],
-            "workflow_error": {
-                "status": "failed",
-                "scope": "workflow_identity_validation",
-                "reason": "workflow directory name does not match persisted workflow_id",
-            },
-        },
-    }
-    write_workflow_payload(twin_workspace, twin_payload)
-    registry.sync_workflow_registry(workflow_root, twin_workspace, twin_payload)
-    twin_row = next(
-        row
-        for row in registry.list_workflow_registry(workflow_root)
-        if row.workflow_id == "wf-cancel-copy"
-    )
-    assert twin_row.metadata["quarantined_persisted_workflow_id"] == "wf-cancel-real"
-
-    _patch_real_queue_listing(monkeypatch, workflow_root, config_path)
-
-    assert (
-        unified_cli.cmd_queue_list(_cancel_authority_args(workflow_root, config_path, as_json=True))
-        == 0
-    )
-    rows = {row["activity_id"]: row for row in json.loads(capsys.readouterr().out)["activities"]}
-    assert sorted(rows) == ["wf-cancel-copy", "wf-cancel-real"]
-    assert rows["wf-cancel-real"]["metadata"]["cancel_transitions_pending"] == 1
-    assert "cancel_transitions_pending" not in rows["wf-cancel-copy"]["metadata"]
-
-    assert (
-        unified_cli.cmd_queue_list(
-            _cancel_authority_args(workflow_root, config_path, as_json=False)
-        )
-        == 0
-    )
-    lines = _strip_ansi(capsys.readouterr().out).splitlines()
-    assert lines[-2:] == [
-        "cancel_pending: wf-cancel-real=1",
-        "  undrained cancel transitions; `queue list clear` refuses these rows.",
-    ]
-
-    assert registry.clear_terminal_workflow_registry(workflow_root) == 0
-
-
-_CANCEL_PENDING_ACTIVITY_ID = "wf_conformer_20260423_082755_542a9e"
-
-
-def _cancel_pending_queue_payload(metadata: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "count": 1,
-        "activities": [
-            {
-                "activity_id": _CANCEL_PENDING_ACTIVITY_ID,
-                "kind": "workflow",
-                "engine": "workflow",
-                "status": "cancelled",
-                "label": "rxn-9",
-                "source": "orca_auto_flow",
-                "submitted_at": "2026-08-11T05:00:00+00:00",
-                "updated_at": "2026-08-11T05:20:00+00:00",
-                "metadata": metadata,
-            }
-        ],
-        "sources": {},
-    }
-
-
-def _cancel_pending_queue_args() -> SimpleNamespace:
-    return SimpleNamespace(
-        action=None,
-        workflow_root=None,
-        orca_auto_config=None,
-        limit=0,
-        refresh=False,
-        engine=None,
-        status=None,
-        kind=None,
-        json=False,
-    )
-
-
-def test_cmd_queue_list_text_names_undrained_cancel_transitions_at_a_real_width(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    # An operator's terminal is 80 to 120 columns wide. `detail` is soft-capped
-    # at 36 columns and surrenders width first, so a marker written into that
-    # cell is truncated away exactly where an operator would read it; this row
-    # uses the widest workflow label plus a crest mode to force that. The note
-    # goes under the table, where no column shrinking reaches it.
-    monkeypatch.setattr(terminal_table, "terminal_max_width", lambda: 80)
-    monkeypatch.setattr(
-        activity_labels, "queue_table_now", lambda: datetime(2026, 8, 11, 6, 0, 0, tzinfo=UTC)
-    )
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: _cancel_pending_queue_payload(
-            {
-                "template_name": "conformer_screening",
-                "request_parameters": {"crest_mode": "quick"},
-                "cancel_transitions_pending": 2,
-            }
-        ),
-    )
-
-    assert unified_cli.cmd_queue_list(_cancel_pending_queue_args()) == 0
-
-    lines = _strip_ansi(capsys.readouterr().out).splitlines()
-    assert lines[0].startswith("active_simulations:")
-    assert "Detail" in lines[1]
-    # The row itself is fitted to the terminal and its Detail cell is cut; the
-    # note below it is not part of the table and survives intact.
-    assert terminal_table.display_width(lines[3]) <= 80
-    assert "cancel_pending" not in lines[3]
-    assert lines[4:] == [
-        f"cancel_pending: {_CANCEL_PENDING_ACTIVITY_ID}=2",
-        "  undrained cancel transitions; `queue list clear` refuses these rows.",
-    ]
-
-
-def test_cmd_queue_list_text_stays_quiet_without_undrained_cancel_transitions(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    # Every queue without a stalled cancel keeps the output it had before.
-    monkeypatch.setattr(terminal_table, "terminal_max_width", lambda: 80)
-    monkeypatch.setattr(
-        activity_labels, "queue_table_now", lambda: datetime(2026, 8, 11, 6, 0, 0, tzinfo=UTC)
-    )
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: _cancel_pending_queue_payload({"template_name": "conformer_screening"}),
-    )
-
-    assert unified_cli.cmd_queue_list(_cancel_pending_queue_args()) == 0
-
-    assert "cancel_pending" not in _strip_ansi(capsys.readouterr().out)

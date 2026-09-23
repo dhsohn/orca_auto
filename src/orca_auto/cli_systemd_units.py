@@ -16,7 +16,6 @@ _SERVICE_UNIT_FACTORIES: tuple[tuple[str, Callable[[str], str]], ...] = (
     ("runtime", systemd_plan._runtime_unit_for_user),
     ("engines", systemd_plan._engine_workers_unit_for_user),
     ("worker", systemd_plan._worker_unit_for_user),
-    ("workflow", systemd_plan._workflow_worker_unit_for_user),
 )
 _ENABLED_UNIT_FILE_STATES = frozenset({"enabled", "enabled-runtime"})
 _READABLE_UNIT_FILE_STATES = frozenset(

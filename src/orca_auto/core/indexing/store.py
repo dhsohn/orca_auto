@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..activity_index import published_source
 from ..utils.coercion import normalize_text
 from ..utils.lock import file_lock
 from ..utils.persistence import (
@@ -80,12 +81,14 @@ def _load_records(root: Path) -> list[JobLocationRecord]:
 
 
 def _save_records(root: Path, records: list[JobLocationRecord]) -> None:
+    payload = [_record_to_dict(record) for record in records]
     atomic_write_json(
         _index_path(root),
-        [_record_to_dict(record) for record in records],
+        payload,
         ensure_ascii=True,
         indent=2,
     )
+    published_source(root, "location", JOB_LOCATION_INDEX_FILE_NAME, payload)
 
 
 def _resolve_candidate_path(path_text: str) -> Path | None:

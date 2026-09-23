@@ -31,19 +31,8 @@ class BackgroundRunningJob:
     started_at: float = field(default_factory=time.monotonic)
 
 
-@dataclass
-class EngineRunningJob:
-    queue_id: str
-    reaction_dir: str
-    process: Any
-    admission_token: str
-    task_id: str | None = None
-    started_at: float = field(default_factory=time.monotonic)
-
-
 __all__ = [
     "BackgroundRunningJob",
-    "EngineRunningJob",
     "ReservedQueueEntry",
     "SlotFillResult",
 ]

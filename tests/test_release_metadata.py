@@ -1,4 +1,4 @@
-"""Matched distributions and citation metadata describe the same release state.
+"""Distribution and citation metadata describe the same release state.
 
 CITATION.cff drifted behind pyproject in 0.2.0, 0.2.1, and 0.3.0 because the
 release checklist never mentioned it. The checklist now does, and this test
@@ -59,17 +59,6 @@ def test_release_metadata_matches_current_source() -> None:
     citation = (_REPO_ROOT / "CITATION.cff").read_text(encoding="utf-8")
     changelog = (_REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     _assert_release_metadata(_pyproject_version(), citation, changelog)
-
-
-def test_workflows_distribution_version_matches_core() -> None:
-    with (_REPO_ROOT / "pyproject.toml").open("rb") as fh:
-        core = tomllib.load(fh)["project"]
-    with (_REPO_ROOT / "extensions" / "workflows" / "pyproject.toml").open("rb") as fh:
-        project = tomllib.load(fh)["project"]
-    assert project["name"] == "orca_auto_workflows"
-    assert project["version"] == core["version"]
-    assert core["optional-dependencies"]["workflows"] == [f"orca_auto_workflows=={core['version']}"]
-    assert project["dependencies"] == [f"orca_auto=={core['version']}"]
 
 
 @pytest.mark.parametrize(

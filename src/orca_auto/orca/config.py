@@ -73,7 +73,6 @@ class PathsConfig:
 @dataclass
 class AppConfig:
     runtime: OrcaRuntimeConfig = field(default_factory=OrcaRuntimeConfig)
-    workflow_root: str = ""
     paths: PathsConfig = field(default_factory=PathsConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
     scratch: ScratchConfig = field(default_factory=ScratchConfig)
@@ -159,7 +158,6 @@ def load_config(config_path: str) -> AppConfig:
             admission_root=admission_root,
             admission_limit=admission_limit,
         ),
-        workflow_root=runs_root,
         paths=PathsConfig(
             orca_executable=orca_executable,
         ),

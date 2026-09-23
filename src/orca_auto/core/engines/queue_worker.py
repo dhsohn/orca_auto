@@ -24,8 +24,7 @@ class EngineWorkerPolicy:
     shared worker keeps its default for the rest. ORCA installs its post-init,
     reserve gate (terminal replay and publication repair), row filter (rows
     withheld by an unfinished terminal replay), run, interrupt, queue-id,
-    job-factory and cancellation steps here; the internal xTB/CREST
-    engines install only their post-init step. Child-exit finalization and
+    job-factory and cancellation steps here. Child-exit finalization and
     worker-state reconciliation are pid-file ``hooks``, not policy steps.
     The value is immutable so a running worker cannot have its policy
     swapped underneath it.

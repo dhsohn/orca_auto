@@ -5,7 +5,7 @@ module hand-rolls the small amount of ANSI handling the CLI needs: TTY
 detection, ``NO_COLOR``/``FORCE_COLOR``/``--no-color`` support, a couple of
 ``paint`` helpers, and the ``error:`` line format every command uses on
 ``stderr``. Messenger output never routes through here. It lives in ``core``
-so the workflow command adapters can use it without reaching up into the
+so command adapters can use it without reaching up into the
 top-level CLI layer.
 """
 
@@ -107,7 +107,7 @@ def sgr(*codes: str) -> str:
 
 
 def label(text: str, *, stream: IO[str] | None = None) -> str:
-    """Dim a field label (e.g. ``workflow_id:``) for key/value output."""
+    """Dim a field label (e.g. ``queue_id:``) for key/value output."""
 
     return paint(text, DIM, stream=stream)
 

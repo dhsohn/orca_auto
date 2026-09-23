@@ -22,10 +22,6 @@ STATUS_WAITING_FOR_SLOT = "waiting_for_slot"
 
 TERMINAL_STATUSES = frozenset({STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED})
 FAILED_STATUSES = frozenset({STATUS_FAILED, STATUS_CANCEL_FAILED, STATUS_SUBMISSION_FAILED})
-WORKFLOW_FAILED_STATUSES = FAILED_STATUSES
-WORKFLOW_TERMINAL_STATUSES = frozenset(
-    {STATUS_COMPLETED, STATUS_CANCELLED, *WORKFLOW_FAILED_STATUSES}
-)
 QUEUE_ACTIVE_STATUSES = frozenset(
     {
         STATUS_PLANNED,
@@ -37,29 +33,12 @@ QUEUE_ACTIVE_STATUSES = frozenset(
         STATUS_CANCEL_REQUESTED,
     }
 )
-STAGE_TERMINAL_STATUSES = WORKFLOW_TERMINAL_STATUSES
-STAGE_CANCELLABLE_STATUSES = frozenset(
-    {
-        STATUS_PLANNED,
-        STATUS_QUEUED,
-        STATUS_RUNNING,
-        STATUS_SUBMITTED,
-    }
-)
 CANCEL_ACK_STATUSES = frozenset({STATUS_CANCELLED, STATUS_CANCEL_REQUESTED})
 SUBMISSION_DEFERRED_STATUSES = frozenset(
     {
         STATUS_BLOCKED,
         STATUS_WAITING_FOR_SLOT,
         STATUS_ADMISSION_LIMIT_REACHED,
-    }
-)
-SYNC_ONLY_WORKFLOW_STATUSES = frozenset(
-    {
-        STATUS_COMPLETED,
-        STATUS_CANCEL_REQUESTED,
-        STATUS_CANCELLED,
-        *WORKFLOW_FAILED_STATUSES,
     }
 )
 
@@ -76,36 +55,18 @@ def is_failed_status(value: object) -> bool:
     return status_in(value, FAILED_STATUSES)
 
 
-def is_workflow_terminal_status(value: object) -> bool:
-    return status_in(value, WORKFLOW_TERMINAL_STATUSES)
-
-
 def is_queue_active_status(value: object) -> bool:
     return status_in(value, QUEUE_ACTIVE_STATUSES)
-
-
-def is_stage_terminal_status(value: object) -> bool:
-    return status_in(value, STAGE_TERMINAL_STATUSES)
-
-
-def is_stage_cancellable_status(value: object) -> bool:
-    return status_in(value, STAGE_CANCELLABLE_STATUSES)
 
 
 def is_cancel_ack_status(value: object) -> bool:
     return status_in(value, CANCEL_ACK_STATUSES)
 
 
-def is_sync_only_workflow_status(value: object) -> bool:
-    return status_in(value, SYNC_ONLY_WORKFLOW_STATUSES)
-
-
 __all__ = [
     "CANCEL_ACK_STATUSES",
     "FAILED_STATUSES",
     "QUEUE_ACTIVE_STATUSES",
-    "STAGE_CANCELLABLE_STATUSES",
-    "STAGE_TERMINAL_STATUSES",
     "STATUS_ADMISSION_LIMIT_REACHED",
     "STATUS_BLOCKED",
     "STATUS_CANCEL_FAILED",
@@ -127,16 +88,9 @@ __all__ = [
     "STATUS_WAITING_FOR_SLOT",
     "SUBMISSION_DEFERRED_STATUSES",
     "TERMINAL_STATUSES",
-    "WORKFLOW_FAILED_STATUSES",
-    "WORKFLOW_TERMINAL_STATUSES",
-    "SYNC_ONLY_WORKFLOW_STATUSES",
     "is_cancel_ack_status",
     "is_failed_status",
     "is_queue_active_status",
-    "is_stage_cancellable_status",
-    "is_stage_terminal_status",
-    "is_sync_only_workflow_status",
-    "is_workflow_terminal_status",
     "normalize_status",
     "status_in",
 ]

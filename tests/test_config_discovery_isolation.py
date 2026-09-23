@@ -13,7 +13,35 @@ from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR, ORCA_AUTO_ORCA_APP_
 from orca_auto.core.config import discovery, engines
 from orca_auto.core.queue.persistence import entry_to_dict
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca.commands import init
 from tests.config_discovery_helpers import isolate_shared_config_discovery
+
+
+@pytest.mark.parametrize("installation", ["source", "wheel"])
+def test_init_new_config_default_matches_installation_layout(
+    installation: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    if installation == "source":
+        package = tmp_path / "checkout" / "src" / "orca_auto"
+        expected = tmp_path / "checkout" / "config" / "orca_auto.yaml"
+    else:
+        package = tmp_path / "venv" / "lib" / "python3.13" / "site-packages" / "orca_auto"
+        expected = home / "orca_auto" / "config" / "orca_auto.yaml"
+    module = package / "core" / "config" / "discovery.py"
+    module.parent.mkdir(parents=True)
+    monkeypatch.setattr(discovery, "__file__", str(module))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv(ORCA_AUTO_CONFIG_ENV_VAR, raising=False)
+
+    assert init._resolve_init_config_path(SimpleNamespace()) == expected
+    assert engines.default_shared_config_path() == str(expected)
+    assert discovery.resolve_shared_config_path(None) is None
+    expected.parent.mkdir(parents=True, exist_ok=True)
+    expected.write_text("{}\n", encoding="utf-8")
+    assert discovery.resolve_shared_config_path(None) == str(expected)
 
 
 def test_seal_reaches_every_binding_of_the_resolver(
@@ -36,7 +64,6 @@ def test_seal_reaches_every_binding_of_the_resolver(
     # cli_workers binds the resolver by from-import; the seal must still reach it.
     assert cli_workers.resolve_shared_config_path(None) is None
     assert discovery.engine_config_for_args(SimpleNamespace()) is None
-    assert discovery.workflow_root_for_args(SimpleNamespace()) is None
     # engines bound repo_root at import time; the seal patches that binding too.
     assert not Path(engines.default_shared_config_path()).exists()
 

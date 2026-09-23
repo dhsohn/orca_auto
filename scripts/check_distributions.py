@@ -1,4 +1,4 @@
-"""Build and exercise core/workflows distributions without editable source fallback.
+"""Build and exercise the ORCA_auto distribution without editable source fallback.
 
 Run with ``python -m scripts.check_distributions`` from the repository root.
 Builds and installed artifacts are retained in a new temporary directory.
@@ -7,7 +7,6 @@ Builds and installed artifacts are retained in a new temporary directory.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -23,8 +22,10 @@ from pathlib import Path, PurePosixPath
 from zipfile import ZipFile
 
 from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
-from scripts.check_wheel_contents import check_disjoint_ownership, check_wheel_contents
+from scripts.check_wheel_contents import check_wheel_contents
+from scripts.prepare_runtime import prepare_runtime
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,7 +57,7 @@ def _run(argv: list[str], *, cwd: Path, timeout: int = 180) -> subprocess.Comple
     return result
 
 
-def _copy_project(source: Path, destination: Path, *, include_workflows: bool = False) -> None:
+def _copy_project(source: Path, destination: Path) -> None:
     destination.mkdir()
     for name in ("pyproject.toml", "README.md", "LICENSE", "MANIFEST.in", "setup.cfg", "setup.py"):
         if (source / name).is_file():
@@ -66,12 +67,6 @@ def _copy_project(source: Path, destination: Path, *, include_workflows: bool = 
         destination / "src",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info"),
     )
-    if include_workflows:
-        # The initial core build must see the actual monorepo layout: hiding
-        # nested extension sources would conceal overly broad package discovery
-        # and a broken source-distribution manifest.
-        (destination / "extensions").mkdir()
-        _copy_project(source / "extensions" / "workflows", destination / "extensions" / "workflows")
 
 
 def _assert_core_sdist(archive: Path) -> None:
@@ -134,48 +129,22 @@ def _metadata(wheel: Path) -> dict[str, object]:
         "name": str(metadata["Name"]),
         "version": str(metadata["Version"]),
         "requires": list(metadata.get_all("Requires-Dist", [])),
+        "extras": list(metadata.get_all("Provides-Extra", [])),
     }
 
 
-def _assert_pair(
-    core: Path,
-    workflows: Path,
-    core_source: Path,
-    workflow_source: Path,
-    *,
-    expected_version: str,
-) -> None:
-    errors = check_wheel_contents(core, core_source)
-    errors += check_wheel_contents(
-        workflows, workflow_source, package="orca_auto/flow", distribution="orca_auto_workflows"
-    )
-    errors += check_disjoint_ownership(core, workflows)
+def _assert_distribution(wheel: Path, source: Path, *, expected_version: str) -> None:
+    errors = check_wheel_contents(wheel, source)
     assert not errors, "\n".join(errors)
-    core_metadata, workflow_metadata = _metadata(core), _metadata(workflows)
-    assert core_metadata["version"] == workflow_metadata["version"] == expected_version, (
-        "wheel versions do not match source release",
-        expected_version,
-        core_metadata["version"],
-        workflow_metadata["version"],
-    )
-    requirements = workflow_metadata["requires"]
-    assert isinstance(requirements, list)
-    normalized_requires = {
-        str(requirement).replace("-", "_").replace(" ", "") for requirement in requirements
-    }
-    assert f"orca_auto=={core_metadata['version']}" in normalized_requires, workflow_metadata
-    core_requirements = core_metadata["requires"]
-    assert isinstance(core_requirements, list)
-    extras = [
-        Requirement(str(value))
-        for value in core_requirements
-        if Requirement(str(value)).name.replace("-", "_") == "orca_auto_workflows"
-    ]
-    assert len(extras) == 1, core_metadata
-    assert str(extras[0].specifier) == f"=={workflow_metadata['version']}", core_metadata
-    assert extras[0].marker is not None
-    assert extras[0].marker.evaluate({"extra": "workflows"})
-    assert not extras[0].marker.evaluate({"extra": ""})
+    metadata = _metadata(wheel)
+    assert metadata["version"] == expected_version, "wheel version differs from source release"
+    extras, requirements = metadata["extras"], metadata["requires"]
+    assert isinstance(extras, list) and isinstance(requirements, list)
+    assert "workflows" not in extras, "retired workflows extra is advertised"
+    assert not any(
+        canonicalize_name(Requirement(str(requirement)).name) == "orca-auto-workflows"
+        for requirement in requirements
+    ), "retired workflows dependency is advertised"
 
 
 def _new_environment(path: Path, wheelhouse: Path, *, cwd: Path) -> Path:
@@ -222,7 +191,6 @@ def _probe(
     *,
     cwd: Path,
     core_source: Path,
-    flow_source: Path | None,
     expected_version: str,
 ) -> None:
     code = """\
@@ -233,21 +201,16 @@ def _probe(
     import orca_auto
 
     expected_core = Path(sys.argv[1]).resolve()
-    expected_version = sys.argv[3]
+    expected_version = sys.argv[2]
     assert Path(orca_auto.__file__).resolve().parent == expected_core, orca_auto.__file__
     assert importlib.metadata.version("orca_auto") == expected_version, "core version does not match source release"
-    if sys.argv[2]:
-        import orca_auto.flow
-        assert Path(orca_auto.flow.__file__).resolve().parent == Path(sys.argv[2]).resolve()
-        assert importlib.metadata.version("orca_auto_workflows") == expected_version, "workflows version does not match source release"
+    assert importlib.util.find_spec("orca_auto.flow") is None
+    try:
+        importlib.metadata.version("orca_auto_workflows")
+    except importlib.metadata.PackageNotFoundError:
+        pass
     else:
-        assert importlib.util.find_spec("orca_auto.flow") is None
-        try:
-            importlib.metadata.version("orca_auto_workflows")
-        except importlib.metadata.PackageNotFoundError:
-            pass
-        else:
-            raise AssertionError("uninstalled workflows metadata survived")
+        raise AssertionError("retired workflows distribution is installed")
     """
     _run(
         [
@@ -256,7 +219,6 @@ def _probe(
             "-c",
             textwrap.dedent(code),
             str(core_source),
-            str(flow_source or ""),
             expected_version,
         ],
         cwd=cwd,
@@ -273,58 +235,80 @@ def _site_package(python: Path, *, cwd: Path) -> Path:
     return Path(result.stdout.strip()) / "orca_auto"
 
 
-def _core_fingerprints(package: Path) -> dict[str, str]:
-    return {
-        str(path.relative_to(package)): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in package.rglob("*")
-        if path.is_file()
-        and "__pycache__" not in path.parts
-        and "flow" not in path.relative_to(package).parts
-    }
+def _wheel_config_default(python: Path, home: Path, *, cwd: Path) -> None:
+    code = """\
+    import os
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+    from orca_auto.core.config.discovery import resolve_shared_config_path
+    from orca_auto.orca.commands.init import _resolve_init_config_path
 
-
-def _scaffold(python: Path, root: Path, *, cwd: Path) -> None:
+    home = Path(sys.argv[1])
+    assert not home.exists()
+    os.environ["HOME"] = str(home)
+    expected = home / "orca_auto" / "config" / "orca_auto.yaml"
+    assert _resolve_init_config_path(SimpleNamespace()) == expected
+    assert resolve_shared_config_path(None) is None
+    """
     _run(
-        [str(python), "-I", "-m", "orca_auto.cli", "scaffold", "conformer_search", str(root)],
+        [str(python), "-I", "-c", textwrap.dedent(code), str(home)],
         cwd=cwd,
     )
-    assert (root / "flow.yaml").is_file()
 
 
-def _refuse_scaffold(python: Path, root: Path, *, cwd: Path, reason: str) -> None:
-    assert not root.exists()
-    result = subprocess.run(
-        [str(python), "-I", "-m", "orca_auto.cli", "scaffold", "conformer_search", str(root)],
-        cwd=cwd,
-        env=_environment(),
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
+def _prepared_runtime_smoke(core: Path, wheelhouse: Path, *, work: Path) -> None:
+    yaml_wheels = [
+        path for path in wheelhouse.glob("*.whl") if path.name.lower().startswith("pyyaml-")
+    ]
+    assert len(yaml_wheels) == 1
+    wheels = [core, *yaml_wheels]
+    root = prepare_runtime(
+        wheels=wheels, releases_root=work / "releases", templates=REPO_ROOT / "systemd"
     )
-    assert result.returncode != 0, result.stdout
-    assert reason in result.stderr + result.stdout, (result.stdout, result.stderr)
-    assert not root.exists()
-
-
-def _mismatched_version(python: Path, package: Path, *, cwd: Path) -> None:
-    metadata_files = list(package.parent.glob("orca_auto_workflows-*.dist-info/METADATA"))
-    assert len(metadata_files) == 1
-    path = metadata_files[0]
-    original = path.read_bytes()
-    lines = original.decode("utf-8").splitlines(keepends=True)
-    assert sum(line.startswith("Version: ") for line in lines) == 1
-    changed = "".join(
-        "Version: 0.0.0\n" if line.startswith("Version: ") else line for line in lines
+    assert (
+        prepare_runtime(
+            wheels=wheels, releases_root=work / "releases", templates=REPO_ROOT / "systemd"
+        )
+        == root
     )
-    # Deliberate corruption of only disposable installation metadata exercises
-    # the runtime guard separately from the wheel's exact Requires-Dist pin.
-    try:
-        path.write_text(changed, encoding="utf-8")
-        _refuse_scaffold(python, cwd / "mismatched-scaffold", cwd=cwd, reason="version mismatch")
-    finally:
-        path.write_bytes(original)
-    _scaffold(python, cwd / "restored-version-scaffold", cwd=cwd)
+    python = root / ".venv/bin/python"
+    package = _site_package(python, cwd=work)
+    machine = _fake_orca(python, work / "prepared-runtime-worker", package=package)
+    assert machine.is_file()
+    config = work / "prepared-runtime-worker/orca_auto.yaml"
+    result = _run(
+        [
+            str(python),
+            "-I",
+            "-B",
+            "-m",
+            "orca_auto.cli",
+            "queue",
+            "worker",
+            "--json",
+            "--config",
+            str(config),
+        ],
+        cwd=work,
+    )
+    assert json.loads(result.stdout)["workers"][0]["app"] == "orca"
+    code = """\
+    import sys
+    from pathlib import Path
+    from orca_auto.core.runtime_bundle import verify_runtime_bundle
+    from orca_auto.systemd_plan import build_systemd_install_plan
+    root, config = Path(sys.argv[1]), Path(sys.argv[2])
+    build_id = verify_runtime_bundle(root)["build_id"]
+    plan = build_systemd_install_plan(target_user="testuser", repo=root, config=config, no_enable=True, no_sudo=True)
+    worker = next(unit.content for unit in plan.units if unit.name == "orca_auto-queue-worker@.service")
+    assert build_id in worker and f"ReadOnlyPaths={root}" in worker
+    """
+    _run([str(python), "-I", "-B", "-c", textwrap.dedent(code), str(root), str(config)], cwd=work)
+    print(
+        "[distributions] prepared read-only runtime, idempotency, fake worker and service plan passed",
+        flush=True,
+    )
 
 
 def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
@@ -403,85 +387,24 @@ def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
     return machines[0]
 
 
-def _monolith_upgrade(
-    python: Path,
-    wheelhouse: Path,
-    core_project: Path,
-    flow_project: Path,
-    core: Path,
-    flow: Path,
-    work: Path,
-    *,
-    expected_version: str,
-) -> None:
-    monolith = work / "synthetic-monolith-source"
-    _copy_project(core_project, monolith)
-    shutil.copytree(
-        flow_project / "src" / "orca_auto" / "flow", monolith / "src" / "orca_auto" / "flow"
-    )
-    # A synthetic old ownership layout, not a claim to execute historical 4.1
-    # runtime code: one RECORD owns core+flow, including one retired sentinel.
-    sentinel = "_monolith_only_fixture.py"
-    (monolith / "src" / "orca_auto" / sentinel).write_text("", encoding="utf-8")
-    (monolith / "pyproject.toml").write_text(
-        '[build-system]\nrequires = ["setuptools>=68"]\nbuild-backend = "setuptools.build_meta"\n'
-        '[project]\nname = "orca_auto"\nversion = "4.1.0"\ndependencies = ["PyYAML>=6"]\n'
-        '[project.scripts]\norca_auto = "orca_auto.cli:main"\n'
-        '[tool.setuptools.packages.find]\nwhere = ["src"]\ninclude = ["orca_auto*"]\n',
-        encoding="utf-8",
-    )
-    old_wheel, _ = _build(monolith, work / "synthetic-monolith-dist", wheel_only=True)
-    _run(
-        [str(python), "-m", "pip", "uninstall", "-y", "orca_auto", "orca_auto_workflows"], cwd=work
-    )
-    _pip(python, wheelhouse, str(old_wheel), cwd=work)
-    package = _site_package(python, cwd=work)
-    assert (package / sentinel).is_file() and (package / "flow" / "__init__.py").is_file()
-    _pip(python, wheelhouse, str(core), str(flow), cwd=work)
-    assert not (package / sentinel).exists()
-    _probe(
-        python,
-        cwd=work,
-        core_source=package,
-        flow_source=package / "flow",
-        expected_version=expected_version,
-    )
-    _scaffold(python, work / "upgraded-monolith-scaffold", cwd=work)
-
-
 def run_matrix(work: Path) -> dict[str, object]:
     print(f"[distributions] retained workspace: {work}", flush=True)
     with (REPO_ROOT / "pyproject.toml").open("rb") as source:
         expected_version = str(tomllib.load(source)["project"]["version"])
-    core_project, flow_project = work / "core-source", work / "workflows-source"
-    _copy_project(REPO_ROOT, core_project, include_workflows=True)
-    _copy_project(REPO_ROOT / "extensions" / "workflows", flow_project)
-    core, core_sdist = _build(core_project, work / "core-dist")
-    flow, flow_sdist = _build(flow_project, work / "workflows-dist")
-    assert core_sdist is not None and flow_sdist is not None
-    _assert_core_sdist(core_sdist)
-    _assert_pair(
-        core,
-        flow,
-        core_project / "src" / "orca_auto",
-        flow_project / "src" / "orca_auto" / "flow",
-        expected_version=expected_version,
-    )
-    core_unpacked = _unpack_sdist(core_sdist, work / "core-sdist")
-    flow_unpacked = _unpack_sdist(flow_sdist, work / "workflows-sdist")
-    core_rebuilt, _ = _build(core_unpacked, work / "core-rebuilt", wheel_only=True)
-    flow_rebuilt, _ = _build(flow_unpacked, work / "workflows-rebuilt", wheel_only=True)
-    _assert_pair(
-        core_rebuilt,
-        flow_rebuilt,
-        core_project / "src" / "orca_auto",
-        flow_project / "src" / "orca_auto" / "flow",
-        expected_version=expected_version,
-    )
+    project = work / "core-source"
+    _copy_project(REPO_ROOT, project)
+    wheel, sdist = _build(project, work / "core-dist")
+    assert sdist is not None
+    _assert_core_sdist(sdist)
+    unpacked = _unpack_sdist(sdist, work / "core-sdist")
+    rebuilt, _ = _build(unpacked, work / "core-rebuilt", wheel_only=True)
+    for candidate in (wheel, rebuilt):
+        _assert_distribution(
+            candidate, project / "src" / "orca_auto", expected_version=expected_version
+        )
     wheelhouse = work / "wheelhouse"
     wheelhouse.mkdir()
-    for wheel in (core, flow):
-        shutil.copy2(wheel, wheelhouse / wheel.name)
+    shutil.copy2(wheel, wheelhouse / wheel.name)
     _run(
         [
             sys.executable,
@@ -498,143 +421,32 @@ def run_matrix(work: Path) -> dict[str, object]:
         cwd=work,
     )
     python = _new_environment(work / "installed", wheelhouse, cwd=work)
-    _pip(python, wheelhouse, str(core), cwd=work)
+    _pip(python, wheelhouse, str(wheel), cwd=work)
     package = _site_package(python, cwd=work)
-    _probe(
-        python, cwd=work, core_source=package, flow_source=None, expected_version=expected_version
-    )
-    _refuse_scaffold(
-        python, work / "core-only-scaffold", cwd=work, reason="workflows extension is not installed"
-    )
+    _probe(python, cwd=work, core_source=package, expected_version=expected_version)
+    _wheel_config_default(python, work / "wheel-config-home", cwd=work)
+    _prepared_runtime_smoke(wheel, wheelhouse, work=work)
     machine = _fake_orca(python, work / "fake-worker", package=package)
-    print("[distributions] core-only installed fake worker passed", flush=True)
-    fingerprints = _core_fingerprints(package)
-    _pip(python, wheelhouse, str(flow), cwd=work)
-    _probe(
-        python,
-        cwd=work,
-        core_source=package,
-        flow_source=package / "flow",
-        expected_version=expected_version,
-    )
-    _scaffold(python, work / "wheel-scaffold", cwd=work)
-    worker_plan = _run(
-        [
-            str(python),
-            "-I",
-            "-m",
-            "orca_auto.cli",
-            "queue",
-            "worker",
-            "--app",
-            "workflow",
-            "--json",
-            "--config",
-            str(work / "fake-worker" / "orca_auto.yaml"),
-        ],
-        cwd=work,
-    )
-    assert {worker["app"] for worker in json.loads(worker_plan.stdout)["workers"]} == {
-        "workflow",
-        "xtb",
-        "crest",
-    }
-    assert _core_fingerprints(package) == fingerprints
-    _run([str(python), "-m", "pip", "uninstall", "-y", "orca_auto_workflows"], cwd=work)
-    assert _core_fingerprints(package) == fingerprints
-    _probe(
-        python, cwd=work, core_source=package, flow_source=None, expected_version=expected_version
-    )
-    _refuse_scaffold(
-        python,
-        work / "uninstalled-scaffold",
-        cwd=work,
-        reason="workflows extension is not installed",
-    )
-    _pip(python, wheelhouse, str(flow), cwd=work)
-    _scaffold(python, work / "reinstalled-scaffold", cwd=work)
-    print("[distributions] wheel add/remove/reinstall passed", flush=True)
-    # The second clean environment proves the source archives independently
-    # rebuild installable distributions, with no access to a sibling project.
+    # A second fresh environment proves the source archive independently
+    # rebuilds an installable distribution without the original checkout.
     rebuilt_python = _new_environment(work / "rebuilt-installed", wheelhouse, cwd=work)
-    _pip(rebuilt_python, wheelhouse, str(core_rebuilt), str(flow_rebuilt), cwd=work)
-    rebuilt_package = _site_package(rebuilt_python, cwd=work)
+    _pip(rebuilt_python, wheelhouse, str(rebuilt), cwd=work)
     _probe(
         rebuilt_python,
         cwd=work,
-        core_source=rebuilt_package,
-        flow_source=rebuilt_package / "flow",
+        core_source=_site_package(rebuilt_python, cwd=work),
         expected_version=expected_version,
     )
-    _scaffold(rebuilt_python, work / "sdist-scaffold", cwd=work)
-    _mismatched_version(rebuilt_python, rebuilt_package, cwd=work)
-    _monolith_upgrade(
-        rebuilt_python,
-        wheelhouse,
-        core_project,
-        flow_project,
-        core,
-        flow,
-        work,
-        expected_version=expected_version,
-    )
-    # Mixed editable/wheel installs exercise pkgutil namespace path composition
-    # in both directions; each transition runs a fresh interpreter.
-    _run(
-        [str(python), "-m", "pip", "uninstall", "-y", "orca_auto", "orca_auto_workflows"], cwd=work
-    )
-    _pip(python, wheelhouse, "-e", str(core_project), str(flow), cwd=work)
-    _probe(
-        python,
-        cwd=work,
-        core_source=core_project / "src" / "orca_auto",
-        flow_source=package / "flow",
-        expected_version=expected_version,
-    )
-    _scaffold(python, work / "editable-core-scaffold", cwd=work)
-    _run(
-        [str(python), "-m", "pip", "uninstall", "-y", "orca_auto", "orca_auto_workflows"], cwd=work
-    )
-    _pip(python, wheelhouse, str(core), "-e", str(flow_project), cwd=work)
-    _probe(
-        python,
-        cwd=work,
-        core_source=package,
-        flow_source=flow_project / "src" / "orca_auto" / "flow",
-        expected_version=expected_version,
-    )
-    _scaffold(python, work / "editable-workflows-scaffold", cwd=work)
     _run([str(python), "-m", "pip", "uninstall", "-y", "orca_auto"], cwd=work)
-    _pip(python, wheelhouse, "-e", str(core_project), cwd=work)
+    _pip(python, wheelhouse, "-e", str(project), cwd=work)
     _probe(
         python,
         cwd=work,
-        core_source=core_project / "src" / "orca_auto",
-        flow_source=flow_project / "src" / "orca_auto" / "flow",
+        core_source=project / "src" / "orca_auto",
         expected_version=expected_version,
     )
-    _scaffold(python, work / "both-editable-scaffold", cwd=work)
-    _run([str(python), "-m", "pip", "uninstall", "-y", "orca_auto_workflows"], cwd=work)
-    _probe(
-        python,
-        cwd=work,
-        core_source=core_project / "src" / "orca_auto",
-        flow_source=None,
-        expected_version=expected_version,
-    )
-    _refuse_scaffold(
-        python,
-        work / "editable-core-only-scaffold",
-        cwd=work,
-        reason="workflows extension is not installed",
-    )
-    print("[distributions] independent sdists and mixed editable installs passed", flush=True)
-    return {
-        "work_dir": str(work),
-        "core_wheel": str(core),
-        "workflows_wheel": str(flow),
-        "machine": str(machine),
-    }
+    print("[distributions] wheel, rebuilt sdist and editable installation passed", flush=True)
+    return {"work_dir": str(work), "core_wheel": str(wheel), "machine": str(machine)}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -644,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     if args.work_dir is None:
-        work = Path(tempfile.mkdtemp(prefix="orca-workflow-boundary-distributions-", dir="/tmp"))
+        work = Path(tempfile.mkdtemp(prefix="orca-distributions-", dir="/tmp"))
     else:
         work = args.work_dir.resolve()
         if work.exists() and any(work.iterdir()):

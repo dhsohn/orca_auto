@@ -1,10 +1,8 @@
 """Shared driver for the durable enqueue-publication protocol.
 
 One committed queue row must always end up with its queued job artifact
-published exactly once, no matter where the publisher crashes. The engines
-(workflow xtb/crest, ORCA) grew separate copies of that
-protocol; this module is the single implementation they converge on. Engine
-differences stay in the :class:`EnqueuePublicationSpec` — commit guards,
+published exactly once, no matter where the publisher crashes. Publication
+policy stays in the :class:`EnqueuePublicationSpec` — commit guards,
 duplicate policy, the publish callback, and the generation comparator — while
 the crash-safety state machine lives here.
 
@@ -28,12 +26,14 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.queue.generation import queue_entries_same_generation
 from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS,
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
@@ -57,6 +57,7 @@ from orca_auto.core.queue.store import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.core.utils.lock import FileLockTimeoutError
 from orca_auto.core.utils.persistence import timestamped_token
 
 logger = logging.getLogger(__name__)
@@ -632,6 +633,7 @@ def repair_enqueue_publication_outcome(
     publish: Callable[[QueueEntry], None],
     label: str,
     same_generation: Callable[[QueueEntry, QueueEntry], bool] = queue_entries_same_generation,
+    lock_timeout_seconds: float = QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS,
 ) -> RepairOutcome:
     """Re-publish one committed row whose queued record never landed.
 
@@ -716,7 +718,16 @@ def repair_enqueue_publication_outcome(
     try:
         # One lock acquisition covers claim, publication, and completion, so no
         # cancel fence or foreign publication can interleave between them.
-        with queue_record_publication_lock(queue_root, entry.queue_id):
+        with ExitStack() as publication_lock:
+            try:
+                publication_lock.enter_context(
+                    queue_record_publication_lock(
+                        queue_root, entry.queue_id, timeout_seconds=lock_timeout_seconds
+                    )
+                )
+            except FileLockTimeoutError:
+                # Another publisher still owns the lease; leave it untouched.
+                return RepairOutcome(reason="busy", entry=entry)
             outcome, current = mutate_entries(queue_root, claim)
             if outcome != "claimed":
                 if outcome == "invalid_state":

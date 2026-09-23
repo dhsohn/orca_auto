@@ -1,30 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.paths import validate_configured_executable_path
 from orca_auto.core.paths.validation import validated_absolute_linux_path_text
 from orca_auto.core.utils.coercion import positive_int
 
 from .discovery import repo_root
 from .files import (
     default_config_path_from_repo_root,
-    default_shared_admission_root,
-    engine_config_mapping,
-    load_required_shared_config_mapping,
-    mapping_section,
-    messenger_mapping_from_root,
-    runs_root_from_mapping,
-    validated_runs_root_text,
 )
 from .schema import (
     CommonResourceConfig,
-    CommonRuntimeConfig,
-    MessengerConfig,
 )
 from .schema import (
     as_nonempty_str as as_nonempty_str,
@@ -38,25 +26,8 @@ from .schema import (
 from .schema import (
     messenger_config_from_mapping as messenger_config_from_mapping,
 )
-from .scratch import ScratchConfig, scratch_config_from_runtime_mapping
 
 CONFIG_ENV_VAR = ORCA_AUTO_CONFIG_ENV_VAR
-
-
-@dataclass(frozen=True)
-class WorkflowEnginePathsConfig:
-    xtb_executable: str = ""
-    crest_executable: str = ""
-
-
-@dataclass(frozen=True)
-class WorkflowEngineAppConfig:
-    runtime: CommonRuntimeConfig
-    workflow_root: str = ""
-    paths: WorkflowEnginePathsConfig = field(default_factory=WorkflowEnginePathsConfig)
-    resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
-    scratch: ScratchConfig = field(default_factory=ScratchConfig)
-    messenger: MessengerConfig = field(default_factory=MessengerConfig)
 
 
 @dataclass(frozen=True)
@@ -84,54 +55,6 @@ def default_shared_config_path() -> str:
     return default_config_path_from_repo_root(repo_root(), env_var=CONFIG_ENV_VAR)
 
 
-def resource_request_from_manifest(cfg: Any, manifest: dict[str, Any]) -> dict[str, int]:
-    resources = manifest.get("resources")
-    if resources is not None and not isinstance(resources, dict):
-        raise ValueError("Manifest field 'resources' must be a mapping.")
-    resource_overrides = dict(resources or {})
-    unknown_resource_keys = set(resource_overrides) - {
-        "max_cores",
-        "max_memory_gb",
-    }
-    if unknown_resource_keys:
-        raise ValueError(
-            f"Unknown manifest resource fields: {sorted(str(key) for key in unknown_resource_keys)}"
-        )
-
-    def explicit_positive_value(label: str, raw: Any) -> int | None:
-        if raw is None or raw == "":
-            return None
-        if isinstance(raw, bool):
-            raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
-        if isinstance(raw, int):
-            parsed = raw
-        elif isinstance(raw, str) and raw.strip().isdigit():
-            parsed = int(raw.strip())
-        else:
-            raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
-        if parsed < 1:
-            raise ValueError(f"Manifest resource {label!r} must be a positive integer.")
-        return parsed
-
-    default_cores = max(1, int(cfg.resources.max_cores_per_task))
-    default_memory = max(1, int(cfg.resources.max_memory_gb_per_task))
-    max_cores = (
-        explicit_positive_value("resources.max_cores", resource_overrides.get("max_cores"))
-        or default_cores
-    )
-    max_memory_gb = (
-        explicit_positive_value(
-            "resources.max_memory_gb",
-            resource_overrides.get("max_memory_gb"),
-        )
-        or default_memory
-    )
-    return {
-        "max_cores": max_cores,
-        "max_memory_gb": max_memory_gb,
-    }
-
-
 def resource_actual_from_request(resource_request: dict[str, int]) -> dict[str, int]:
     cores = max(1, int(resource_request.get("max_cores", 1)))
     memory_gb = max(1, int(resource_request.get("max_memory_gb", 1)))
@@ -143,18 +66,6 @@ def resource_actual_from_request(resource_request: dict[str, int]) -> dict[str, 
         "mkl_num_threads": cores,
         "numexpr_num_threads": cores,
     }
-
-
-def _load_config_mapping(path: Path) -> dict[str, Any]:
-    _, raw = load_required_shared_config_mapping(
-        path,
-        missing_error=lambda missing: ValueError(
-            "Config file not found: "
-            f"{missing}. Copy config/orca_auto.yaml.example to this path and edit the workflow section."
-        ),
-        invalid_message="Config file is invalid: {path}",
-    )
-    return raw
 
 
 def scheduler_runtime_settings(
@@ -186,31 +97,6 @@ def scheduler_runtime_settings(
     )
 
 
-def _required_workflow_root(raw: dict[str, Any], path: Path) -> str:
-    workflow_root = runs_root_from_mapping(raw)
-    if not workflow_root:
-        raise ValueError(f"Config is missing runs_root: {path}")
-    return str(Path(validated_runs_root_text(workflow_root)).expanduser().resolve())
-
-
-def _runtime_config_from_scheduler(
-    scheduler_raw: dict[str, Any],
-    workflow_root: str,
-) -> CommonRuntimeConfig:
-    scheduler = scheduler_runtime_settings(
-        scheduler_raw,
-        default_max_active=4,
-        default_admission_root=default_shared_admission_root(workflow_root),
-        admission_limit_enabled=True,
-    )
-    return CommonRuntimeConfig(
-        allowed_root=workflow_root,
-        max_concurrent=scheduler.max_active,
-        admission_root=scheduler.admission_root,
-        admission_limit=scheduler.admission_limit,
-    )
-
-
 def resource_config_from_mapping(resources_raw: dict[str, Any]) -> CommonResourceConfig:
     def configured_positive_int(key: str, default: int) -> int:
         if key not in resources_raw:
@@ -223,83 +109,4 @@ def resource_config_from_mapping(resources_raw: dict[str, Any]) -> CommonResourc
     return CommonResourceConfig(
         max_cores_per_task=configured_positive_int("max_cores_per_task", 8),
         max_memory_gb_per_task=configured_positive_int("max_memory_gb_per_task", 32),
-    )
-
-
-def _validate_workflow_engine_executable(
-    value: str,
-    *,
-    executable_key: str,
-    display_name: str,
-) -> str:
-    if not value:
-        return ""
-    return str(
-        validate_configured_executable_path(
-            value,
-            label=f"workflow.paths.{executable_key}",
-            display_name=display_name,
-        )
-    )
-
-
-def load_workflow_engine_config(
-    config_path: str | None,
-    *,
-    default_config_path_fn: Callable[[], str],
-    executable_key: str,
-    executable_display_name: str,
-    additional_executables: tuple[tuple[str, str], ...] = (),
-) -> WorkflowEngineAppConfig:
-    path = Path(config_path or default_config_path_fn()).expanduser().resolve()
-    raw = _load_config_mapping(path)
-
-    scheduler_raw = mapping_section(raw, "scheduler")
-    workflow_raw = mapping_section(raw, "workflow")
-    workflow_paths_raw = mapping_section(workflow_raw, "paths")
-    resources_raw = mapping_section(raw, "resources")
-    messenger_raw = messenger_mapping_from_root(raw)
-    workflow_root = _required_workflow_root(raw, path)
-    orca_runtime_raw = mapping_section(engine_config_mapping(raw, "orca"), "runtime")
-    executable_values = {
-        executable_key: _validate_workflow_engine_executable(
-            as_str(workflow_paths_raw.get(executable_key)),
-            executable_key=executable_key,
-            display_name=executable_display_name,
-        )
-    }
-    for additional_key, additional_display_name in additional_executables:
-        executable_values[additional_key] = _validate_workflow_engine_executable(
-            as_str(workflow_paths_raw.get(additional_key)),
-            executable_key=additional_key,
-            display_name=additional_display_name,
-        )
-    messenger = messenger_config_from_mapping(messenger_raw)
-
-    return WorkflowEngineAppConfig(
-        runtime=_runtime_config_from_scheduler(scheduler_raw, workflow_root),
-        workflow_root=workflow_root,
-        paths=WorkflowEnginePathsConfig(**executable_values),
-        resources=resource_config_from_mapping(resources_raw),
-        scratch=scratch_config_from_runtime_mapping(orca_runtime_raw),
-        messenger=messenger,
-    )
-
-
-def load_xtb_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
-    return load_workflow_engine_config(
-        config_path,
-        default_config_path_fn=default_shared_config_path,
-        executable_key="xtb_executable",
-        executable_display_name="xTB",
-    )
-
-
-def load_crest_config(config_path: str | None = None) -> WorkflowEngineAppConfig:
-    return load_workflow_engine_config(
-        config_path,
-        default_config_path_fn=default_shared_config_path,
-        executable_key="crest_executable",
-        executable_display_name="CREST",
-        additional_executables=(("xtb_executable", "xTB"),),
     )

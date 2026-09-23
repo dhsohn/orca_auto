@@ -32,7 +32,7 @@ _FALLBACK_ICON = "•"
 
 
 def activity_status_icon(status: object) -> str:
-    """Return the canonical icon for a workflow/queue activity status."""
+    """Return the canonical icon for a queue activity status."""
 
     normalized = str(status).strip().lower() if status is not None else ""
     return _ACTIVITY_STATUS_ICONS.get(normalized, _FALLBACK_ICON)

@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto.orca.report import irc, write_job_html_report
 from orca_auto.orca.report.irc import collect_irc_report_data, parse_irc_output
-from orca_auto.orca.state import write_report_files
+from orca_auto.orca.report.publication import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 
 _COORDS_BLOCK = """
@@ -341,6 +341,22 @@ def test_irc_report_html_renders_path_profile(tmp_path: Path) -> None:
     assert "kcal mol⁻¹" in text
     assert "<polyline" in text
     assert "TS optimization convergence" not in text
+
+
+def test_irc_report_does_not_publish_unverified_electronic_state(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP IRC")
+    out_path = tmp_path / "rxn.out"
+    _write_out(out_path, route="! B3LYP def2-SVP IRC")
+    out_path.write_text(out_path.read_text().replace("|  2> * xyz 0 1", ""))
+
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "0 / 1" not in text
+    assert "unavailable" in text
 
 
 def test_combined_optts_freq_irc_route_renders_composite_sections(tmp_path: Path) -> None:

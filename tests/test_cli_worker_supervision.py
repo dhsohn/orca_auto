@@ -111,7 +111,7 @@ def test_run_worker_supervisor_staggers_initial_worker_starts(
 
     result = worker_supervision._run_worker_supervisor(
         [
-            worker_supervision.WorkerSpec(app="workflow", argv=("workflow", "worker")),
+            worker_supervision.WorkerSpec(app="finite_demo", argv=("finite_demo", "worker")),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
         ],
         startup_stagger_seconds=2.0,
@@ -158,7 +158,7 @@ def test_run_worker_supervisor_keeps_siblings_running_after_clean_exit(
 
     result = worker_supervision._run_worker_supervisor(
         [
-            worker_supervision.WorkerSpec(app="workflow", argv=("workflow", "worker")),
+            worker_supervision.WorkerSpec(app="finite_demo", argv=("finite_demo", "worker")),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
         ],
         startup_stagger_seconds=0,
@@ -170,11 +170,11 @@ def test_run_worker_supervisor_keeps_siblings_running_after_clean_exit(
     assert processes[2].terminate_calls == 1
     assert popen_calls == 3
     out = capsys.readouterr().out
-    assert "worker[workflow] exited with code 0" in out
-    assert "restarting worker[workflow]: workflow worker" in out
+    assert "worker[finite_demo] exited with code 0" in out
+    assert "restarting worker[finite_demo]: finite_demo worker" in out
 
 
-def test_run_worker_supervisor_stops_after_finite_workflow_clean_exit(
+def test_run_worker_supervisor_stops_after_finite_finite_demo_clean_exit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -196,7 +196,7 @@ def test_run_worker_supervisor_stops_after_finite_workflow_clean_exit(
         installed_handlers[sig] = handler
 
     def _fail_sleep(_seconds: float) -> None:
-        raise AssertionError("finite workflow clean exit should stop without sleeping")
+        raise AssertionError("finite finite_demo clean exit should stop without sleeping")
 
     monkeypatch.setattr(worker_supervision.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(worker_supervision.signal, "getsignal", lambda sig: None)
@@ -206,8 +206,8 @@ def test_run_worker_supervisor_stops_after_finite_workflow_clean_exit(
     result = worker_supervision._run_worker_supervisor(
         [
             worker_supervision.WorkerSpec(
-                app="workflow",
-                argv=("workflow", "worker", "--max-cycles", "3"),
+                app="finite_demo",
+                argv=("finite_demo", "worker", "--iterations", "3"),
                 restart_on_clean_exit=False,
             ),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
@@ -220,9 +220,9 @@ def test_run_worker_supervisor_stops_after_finite_workflow_clean_exit(
     assert processes[1].terminate_calls == 1
     assert popen_calls == 2
     out = capsys.readouterr().out
-    assert "worker[workflow] exited with code 0" in out
-    assert "worker[workflow] completed cleanly; stopping supervisor." in out
-    assert "restarting worker[workflow]" not in out
+    assert "worker[finite_demo] exited with code 0" in out
+    assert "worker[finite_demo] completed cleanly; stopping supervisor." in out
+    assert "restarting worker[finite_demo]" not in out
 
 
 def test_run_worker_supervisor_restarts_workers_after_failure(
@@ -262,7 +262,7 @@ def test_run_worker_supervisor_restarts_workers_after_failure(
 
     result = worker_supervision._run_worker_supervisor(
         [
-            worker_supervision.WorkerSpec(app="workflow", argv=("workflow", "worker")),
+            worker_supervision.WorkerSpec(app="finite_demo", argv=("finite_demo", "worker")),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
         ],
         startup_stagger_seconds=0,
@@ -274,8 +274,8 @@ def test_run_worker_supervisor_restarts_workers_after_failure(
     assert processes[2].terminate_calls == 1
     assert popen_calls == 3
     out = capsys.readouterr().out
-    assert "worker[workflow] exited with code 2" in out
-    assert "restarting worker[workflow]: workflow worker" in out
+    assert "worker[finite_demo] exited with code 2" in out
+    assert "restarting worker[finite_demo]: finite_demo worker" in out
 
 
 def test_run_worker_supervisor_stops_after_repeated_startup_failures(
@@ -313,7 +313,7 @@ def test_run_worker_supervisor_stops_after_repeated_startup_failures(
 
     result = worker_supervision._run_worker_supervisor(
         [
-            worker_supervision.WorkerSpec(app="workflow", argv=("workflow", "worker")),
+            worker_supervision.WorkerSpec(app="finite_demo", argv=("finite_demo", "worker")),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
         ],
         startup_stagger_seconds=0,
@@ -326,12 +326,12 @@ def test_run_worker_supervisor_stops_after_repeated_startup_failures(
     assert popen_calls == 3
     assert sleep_calls == 1
     out = capsys.readouterr().out
-    assert "worker[workflow] exited with code 2" in out
+    assert "worker[finite_demo] exited with code 2" in out
     assert (
-        "worker[workflow] failed repeatedly during startup; stopping supervisor to avoid a restart loop."
+        "worker[finite_demo] failed repeatedly during startup; stopping supervisor to avoid a restart loop."
         in out
     )
-    assert "restarting worker[workflow]: workflow worker" in out
+    assert "restarting worker[finite_demo]: finite_demo worker" in out
 
 
 def test_restart_or_stop_worker_stops_repeated_non_startup_exits(

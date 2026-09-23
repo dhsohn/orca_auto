@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -196,6 +196,8 @@ def _consume_modes_line(
 
 def find_frequency_analysis(
     attempts: Sequence[Mapping[str, Any]],
+    *,
+    parse_analysis_fn: Callable[[Path], FrequencyAnalysis | None] | None = None,
 ) -> tuple[FrequencyAnalysis | None, int | None]:
     """Latest attempt output containing a frequency block, searched backwards.
 
@@ -209,7 +211,10 @@ def find_frequency_analysis(
         out_path = Path(out_raw)
         if not out_path.exists():
             continue
-        analysis = parse_frequency_analysis(out_path)
+        try:
+            analysis = (parse_analysis_fn or parse_frequency_analysis)(out_path)
+        except OSError:
+            continue
         if analysis is not None:
             index = int(attempts[position].get("index", position + 1) or (position + 1))
             return analysis, index

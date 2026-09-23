@@ -4,13 +4,13 @@ import json
 import logging
 import os
 import re
-import shutil
 import stat
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.lock import file_lock
@@ -39,6 +39,7 @@ _MUTATION_LOCK_NAME = ".orca_auto_snapshot_intents.mutation.lock"
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{16,160}")
 _MANAGED_PARENT_NAMES = frozenset({".orca_auto_input_snapshots", ".orca_auto_orca_executions"})
 _DIRECT_VISIBLE_GENERATION_KINDS = frozenset({"orca_visible_generation"})
+# Retired values remain readable; only direct visible ORCA generations are produced.
 _KINDS = frozenset(
     {
         INPUT_SNAPSHOT_NAMESPACE_INTENT_KIND,
@@ -235,7 +236,7 @@ def create_snapshot_intent(
 ) -> None:
     resolved_root = _resolved_queue_root(queue_root)
     normalized_kind = str(kind).strip()
-    if normalized_kind not in _KINDS:
+    if normalized_kind not in _DIRECT_VISIBLE_GENERATION_KINDS:
         raise ValueError(f"Unsupported snapshot intent kind: {kind!r}")
     normalized_token = _normalized_token(token)
     paths = _validated_generation_paths(
@@ -244,6 +245,8 @@ def create_snapshot_intent(
         require_existing=False,
         kind=normalized_kind,
     )
+    if any(path_is_retired_workflow_owned(path, resolved_root) for path in paths):
+        raise ValueError("Snapshot generation belongs to a retired workflow directory")
     intent_dir = _intent_dir(resolved_root, create=True)
     with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         if len(_bounded_intent_paths(intent_dir)) >= _MAX_PENDING_INTENTS:
@@ -464,6 +467,11 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
             marker = _read_intent(intent_path, expected_root=resolved_root)
         except FileNotFoundError:
             return
+        if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS or any(
+            path_is_retired_workflow_owned(path, resolved_root)
+            for path in marker["generation_paths"]
+        ):
+            return
         _validated_generation_paths(
             resolved_root,
             marker["generation_paths"],
@@ -605,8 +613,7 @@ def _remove_generation(
             expected_owner_token=owner_token,
         )
         return
-    shutil.rmtree(validated)
-    fsync_directory(validated.parent)
+    raise ValueError("Retired snapshot generations are read-only")
 
 
 def reconcile_orphaned_snapshot_generations(
@@ -645,6 +652,12 @@ def reconcile_orphaned_snapshot_generations(
                             try:
                                 marker = _read_intent(intent_path, expected_root=root)
                             except (OSError, ValueError):
+                                continue
+                            if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS or any(
+                                path_is_retired_workflow_owned(path, root)
+                                for path in marker["generation_paths"]
+                            ):
+                                # Retired intent formats and workflow trees are read-only.
                                 continue
                             if marker["state"] == SNAPSHOT_INTENT_STATE_OWNED or any(
                                 _entry_references_intent(entry, marker) for entry in entries

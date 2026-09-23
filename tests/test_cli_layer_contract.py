@@ -8,7 +8,7 @@ _CONTRACT_NAME = "Domain packages never import the top-level CLI layer"
 # Consumed on both sides of the boundary: the CLI prints the version and the
 # domain packages stamp it into machine.json and job state.
 _SHARED_TOP_LEVEL_MODULES = frozenset({"orca_auto._version"})
-_DOMAIN_PACKAGES = frozenset({"core", "orca", "flow"})
+_DOMAIN_PACKAGES = frozenset({"core", "orca"})
 
 
 def _forbidden_top_level_modules(repo_root: Path) -> set[str]:

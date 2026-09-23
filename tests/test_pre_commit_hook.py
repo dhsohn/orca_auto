@@ -116,12 +116,12 @@ def test_pre_commit_import_linter_checks_staged_tree_not_shared_venv(
         package = root / "src" / "orca_auto"
         package.mkdir(parents=True)
         (package / "__init__.py").write_text("", encoding="utf-8")
-        extension = root / "extensions/workflows/src/orca_auto/flow"
+        extension = package / "orca"
         extension.mkdir(parents=True)
         (extension / "__init__.py").write_text("", encoding="utf-8")
         (extension / "higher.py").write_text("VALUE = 1\n", encoding="utf-8")
         (package / "lower.py").write_text(
-            "from orca_auto.flow import higher\n" if broken else "VALUE = 2\n",
+            "from orca_auto.orca import higher\n" if broken else "VALUE = 2\n",
             encoding="utf-8",
         )
     (repo / "scripts").mkdir()
@@ -130,15 +130,14 @@ def test_pre_commit_import_linter_checks_staged_tree_not_shared_venv(
         '[tool.importlinter]\nroot_packages = ["orca_auto"]\n'
         '[[tool.importlinter.contracts]]\nname = "lower cannot import higher"\n'
         'type = "forbidden"\nsource_modules = ["orca_auto.lower"]\n'
-        'forbidden_modules = ["orca_auto.flow.higher"]\n',
+        'forbidden_modules = ["orca_auto.orca.higher"]\n',
         encoding="utf-8",
     )
     _git(repo, env, "add", ".")
-    # Model sibling editable roots; the actual adapter must select both staged
-    # roots, not silently pass by reading either sibling component instead.
+    # The import boundary must be checked against the staged package, not its
+    # sibling editable checkout.
     lint_code = (
         f"import sys, runpy; sys.path.insert(0, {str(sibling / 'src')!r}); "
-        f"sys.path.insert(0, {str(sibling / 'extensions/workflows/src')!r}); "
         "sys.argv = ['scripts/check_imports.py', '--no-cache']; "
         "runpy.run_path('scripts/check_imports.py', run_name='__main__')"
     )

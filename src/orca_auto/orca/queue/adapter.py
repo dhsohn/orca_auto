@@ -18,6 +18,7 @@ from orca_auto.core.queue.deferral import (
 )
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_BLOCKED_KEY,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
@@ -41,6 +42,7 @@ from .entries import (
     queue_entry_app_name,
     queue_entry_force,
     queue_entry_id,
+    queue_entry_is_retired_workflow_owned,
     queue_entry_matches_target,
     queue_entry_metadata,
     queue_entry_priority,
@@ -75,6 +77,8 @@ __all__ = [
     "TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY",
     "TERMINAL_REPLAY_METADATA_KEY",
     "cancel",
+    "cancel_requested_ids",
+    "cancellation_probe",
     "clear_terminal",
     "dequeue_entry_if_pending",
     "dequeue_next",
@@ -328,6 +332,7 @@ def queue_entries_same_publication_generation(current: QueueEntry, expected: Que
 
 def _immutable_publication_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     lease_keys = {
+        QUEUE_RECORD_SYNC_BLOCKED_KEY,
         QUEUE_RECORD_SYNC_KEY,
         QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
         QUEUE_RECORD_SYNC_OWNER_PID_KEY,
@@ -347,14 +352,16 @@ def dequeue_next(
 ) -> QueueEntry | None:
     """Return the highest-priority pending entry and mark it running.
 
-    ``accept_entry_fn`` scopes which entries this worker may claim. The ORCA
-    worker shares the runs root with standalone xTB/CREST jobs, so it must pass
-    an app filter (like the internal engines do) to avoid claiming a foreign
-    engine's entry on the single-root dequeue fast path.
+    Only canonical ORCA rows outside retired workflow directories are eligible.
+    ``accept_entry_fn`` may narrow that set further.
     """
 
     def accepts_orca(entry: QueueEntry) -> bool:
-        return is_orca_queue_entry(entry) and (accept_entry_fn is None or accept_entry_fn(entry))
+        return (
+            is_orca_queue_entry(entry)
+            and not queue_entry_is_retired_workflow_owned(entry, allowed_root)
+            and (accept_entry_fn is None or accept_entry_fn(entry))
+        )
 
     entry = _queue_store.dequeue_next(
         allowed_root,
@@ -382,7 +389,10 @@ def dequeue_entry_if_pending(
         allowed_root,
         queue_id,
         save_entries_fn=_queue_store.save_entries,
-        accept_entry_fn=is_orca_queue_entry,
+        accept_entry_fn=lambda entry: (
+            is_orca_queue_entry(entry)
+            and not queue_entry_is_retired_workflow_owned(entry, allowed_root)
+        ),
         expected_entry=expected_entry,
     )
     if entry is None:
@@ -639,6 +649,7 @@ def cancel(
         ),
         accept_entry_fn=lambda current: (
             is_orca_queue_entry(current)
+            and not queue_entry_is_retired_workflow_owned(current, allowed_root)
             and (
                 expected_entry is None
                 or queue_entries_same_publication_generation(current, expected_entry)
@@ -681,6 +692,46 @@ def get_active_entry_for_reaction_dir(allowed_root: Path, reaction_dir: str) -> 
     return find_active_entry(list_queue(allowed_root), resolved)
 
 
+def _cancel_entry_matches(
+    current: QueueEntry,
+    *,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+) -> bool:
+    return (
+        is_orca_queue_entry(current)
+        and (
+            expected_entry is None
+            or queue_entries_same_publication_generation(current, expected_entry)
+        )
+        and (
+            expected_task_id is None
+            or normalize_text(current.task_id) == normalize_text(expected_task_id)
+        )
+    )
+
+
+def cancellation_probe(allowed_root: Path, entry: QueueEntry) -> Callable[[], bool]:
+    """One child-owned, generation-fenced observer; unchanged polls need only stat."""
+    return _queue_store.QueueCancellationProbe(
+        _queue_store.QueueStore.for_root(allowed_root),
+        entry.queue_id,
+        accept_entry_fn=lambda current: _cancel_entry_matches(current, expected_entry=entry),
+    )
+
+
+def cancel_requested_ids(allowed_root: Path, expected_tasks: Mapping[str, str | None]) -> set[str]:
+    """Read one snapshot for all live children at this queue root."""
+    entries = _queue_store.QueueStore.for_root(allowed_root).list_entries(timeout_seconds=0.0)
+    return {
+        entry.queue_id
+        for entry in entries
+        if entry.queue_id in expected_tasks
+        and entry.cancel_requested
+        and _cancel_entry_matches(entry, expected_task_id=expected_tasks[entry.queue_id])
+    }
+
+
 def get_cancel_requested(
     allowed_root: Path,
     queue_id: str,
@@ -694,16 +745,8 @@ def get_cancel_requested(
         allowed_root,
         queue_id,
         lock_timeout_seconds=lock_timeout_seconds,
-        accept_entry_fn=lambda current: (
-            is_orca_queue_entry(current)
-            and (
-                expected_entry is None
-                or queue_entries_same_publication_generation(current, expected_entry)
-            )
-            and (
-                expected_task_id is None
-                or normalize_text(current.task_id) == normalize_text(expected_task_id)
-            )
+        accept_entry_fn=lambda current: _cancel_entry_matches(
+            current, expected_entry=expected_entry, expected_task_id=expected_task_id
         ),
     )
 
@@ -714,7 +757,10 @@ def clear_terminal(allowed_root: Path, *, keep_last: int = 0) -> int:
         allowed_root,
         keep_last=keep_last,
         retain_entry_fn=_has_pending_terminal_replay,
-        select_entry_fn=is_orca_queue_entry,
+        select_entry_fn=lambda entry: (
+            is_orca_queue_entry(entry)
+            and not queue_entry_is_retired_workflow_owned(entry, allowed_root)
+        ),
         save_entries_fn=_queue_store.save_entries,
     )
     logger.info("Cleared %d terminal entries", removed_count)

@@ -7,7 +7,7 @@ import io
 import subprocess
 import sys
 import tarfile
-from importlib import import_module, metadata, util
+from importlib import metadata, util
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -17,12 +17,11 @@ import pytest
 
 from scripts.check_distributions import (
     _assert_core_sdist,
-    _assert_pair,
-    _copy_project,
+    _assert_distribution,
     _probe,
     _unpack_sdist,
 )
-from scripts.check_wheel_contents import check_disjoint_ownership, check_wheel_contents
+from scripts.check_wheel_contents import check_wheel_contents
 
 
 def _wheel(
@@ -32,6 +31,7 @@ def _wheel(
     name: str = "orca_auto",
     version: str = "5.0.0.dev0",
     requires: tuple[str, ...] = (),
+    extras: tuple[str, ...] = (),
 ) -> Path:
     metadata = f"{name}-{version}.dist-info"
     files = {
@@ -39,6 +39,7 @@ def _wheel(
         f"{metadata}/METADATA": (
             f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
             + "".join(f"Requires-Dist: {value}\n" for value in requires)
+            + "".join(f"Provides-Extra: {value}\n" for value in extras)
         ).encode(),
         f"{metadata}/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
     }
@@ -65,60 +66,42 @@ def _source(root: Path, payload: dict[str, bytes], prefix: str) -> Path:
     return root
 
 
-def test_each_distribution_owns_only_its_source_payload(tmp_path: Path) -> None:
-    core_payload = {"orca_auto/__init__.py": b"", "orca_auto/py.typed": b""}
-    flow_payload = {"orca_auto/flow/__init__.py": b"", "orca_auto/flow/py.typed": b""}
-    core_source = _source(tmp_path / "core", core_payload, "orca_auto")
-    flow_source = _source(tmp_path / "flow", flow_payload, "orca_auto/flow")
-    core = _wheel(tmp_path / "core.whl", core_payload)
-    flow = _wheel(tmp_path / "flow.whl", flow_payload, name="orca_auto_workflows")
-    assert check_wheel_contents(core, core_source) == []
-    assert (
-        check_wheel_contents(
-            flow, flow_source, package="orca_auto/flow", distribution="orca_auto_workflows"
-        )
-        == []
-    )
-    assert check_disjoint_ownership(core, flow) == []
+def test_distribution_owns_only_its_source_payload(tmp_path: Path) -> None:
+    payload = {"orca_auto/__init__.py": b"", "orca_auto/py.typed": b""}
+    source = _source(tmp_path / "source", payload, "orca_auto")
+    assert check_wheel_contents(_wheel(tmp_path / "package.whl", payload), source) == []
 
 
 @pytest.mark.parametrize(
-    "core_version,flow_version,accepted",
-    [("2.3.4", "2.3.4", True), ("2.2.0", "2.2.0", False), ("2.3.4", "2.2.0", False)],
-    ids=["expected-pair", "matching-but-stale-pair", "mismatched-pair"],
+    "version,requires,extras,accepted",
+    [
+        ("2.3.4", (), (), True),
+        ("2.2.0", (), (), False),
+        ("2.3.4", ("orca_auto_workflows==2.3.4",), (), False),
+        ("2.3.4", ("orca.auto.workflows==2.3.4",), (), False),
+        ("2.3.4", (), ("workflows",), False),
+    ],
 )
-def test_wheel_pair_versions_match_source_release(
-    tmp_path: Path, core_version: str, flow_version: str, accepted: bool
+def test_distribution_gate_rejects_stale_version_and_retired_dependency(
+    tmp_path: Path, version: str, requires: tuple[str, ...], extras: tuple[str, ...], accepted: bool
 ) -> None:
-    core_payload = {"orca_auto/__init__.py": b"", "orca_auto/py.typed": b""}
-    flow_payload = {"orca_auto/flow/__init__.py": b"", "orca_auto/flow/py.typed": b""}
-    core_source = _source(tmp_path / "core", core_payload, "orca_auto")
-    flow_source = _source(tmp_path / "flow", flow_payload, "orca_auto/flow")
-    core = _wheel(
-        tmp_path / f"orca_auto-{core_version}-py3-none-any.whl",
-        core_payload,
-        version=core_version,
-        requires=(f'orca_auto_workflows=={flow_version}; extra == "workflows"',),
-    )
-    flow = _wheel(
-        tmp_path / f"orca_auto_workflows-{flow_version}-py3-none-any.whl",
-        flow_payload,
-        name="orca_auto_workflows",
-        version=flow_version,
-        requires=(f"orca_auto=={core_version}",),
+    payload = {"orca_auto/__init__.py": b"", "orca_auto/py.typed": b""}
+    source = _source(tmp_path / "source", payload, "orca_auto")
+    wheel = _wheel(
+        tmp_path / "package.whl", payload, version=version, requires=requires, extras=extras
     )
     if accepted:
-        _assert_pair(core, flow, core_source, flow_source, expected_version="2.3.4")
+        _assert_distribution(wheel, source, expected_version="2.3.4")
     else:
         with pytest.raises(AssertionError):
-            _assert_pair(core, flow, core_source, flow_source, expected_version="2.3.4")
+            _assert_distribution(wheel, source, expected_version="2.3.4")
 
 
 @pytest.mark.parametrize(
     "core_version,flow_version,cli_output,accepted",
     [
         ("2.3.4", None, "orca_auto 2.3.4\n", True),
-        ("2.3.4", "2.3.4", "orca_auto 2.3.4\n", True),
+        ("2.3.4", "2.3.4", "orca_auto 2.3.4\n", False),
         ("2.2.0", None, "orca_auto 2.3.4\n", False),
         ("2.2.0", "2.2.0", "orca_auto 2.3.4\n", False),
         ("2.3.4", "2.2.0", "orca_auto 2.3.4\n", False),
@@ -148,7 +131,6 @@ def test_installed_probe_checks_metadata_and_cli_release_version(
     accepted: bool,
 ) -> None:
     core_source = tmp_path / "orca_auto"
-    flow_source = core_source / "flow" if flow_version is not None else None
     core_module = ModuleType("orca_auto")
     core_module.__file__ = str(core_source / "__init__.py")
     core_module.__path__ = [str(core_source)]
@@ -186,7 +168,6 @@ def test_installed_probe_checks_metadata_and_cli_release_version(
             tmp_path / "bin" / "python",
             cwd=tmp_path,
             core_source=core_source,
-            flow_source=flow_source,
             expected_version="2.3.4",
         )
     else:
@@ -195,7 +176,6 @@ def test_installed_probe_checks_metadata_and_cli_release_version(
                 tmp_path / "bin" / "python",
                 cwd=tmp_path,
                 core_source=core_source,
-                flow_source=flow_source,
                 expected_version="2.3.4",
             )
 
@@ -227,34 +207,6 @@ def test_checker_rejects_wrong_payload_even_with_valid_record(
         payload["orca_auto-fake/escape.py"] = b""
     errors = check_wheel_contents(_wheel(tmp_path / "bad.whl", payload), source)
     assert any(expected_error in error for error in errors), errors
-
-
-def test_workflows_cannot_own_parent_package_or_console_entrypoint(tmp_path: Path) -> None:
-    flow_payload = {"orca_auto/flow/__init__.py": b""}
-    source = _source(tmp_path / "flow", flow_payload, "orca_auto/flow")
-    wheel = _wheel(
-        tmp_path / "flow.whl",
-        {
-            **flow_payload,
-            "orca_auto/__init__.py": b"",
-            "orca_auto/py.typed": b"",
-            "orca_auto_workflows-5.0.0.dev0.dist-info/entry_points.txt": b"[console_scripts]\n",
-        },
-        name="orca_auto_workflows",
-    )
-    errors = check_wheel_contents(
-        wheel, source, package="orca_auto/flow", distribution="orca_auto_workflows"
-    )
-    assert any("unowned source payload" in error for error in errors)
-    assert any("console entry points" in error for error in errors)
-
-
-def test_cross_distribution_file_overlap_is_rejected(tmp_path: Path) -> None:
-    core = _wheel(tmp_path / "core.whl", {"orca_auto/__init__.py": b""})
-    flow = _wheel(tmp_path / "flow.whl", {"orca_auto/__init__.py": b""}, name="orca_auto_workflows")
-    assert check_disjoint_ownership(core, flow) == [
-        "distribution wheels share installed files: orca_auto/__init__.py"
-    ]
 
 
 @pytest.mark.parametrize("corruption", ["hash", "missing-row", "duplicate-row", "duplicate-file"])
@@ -307,50 +259,6 @@ def test_sdist_rebuild_input_is_self_contained(tmp_path: Path) -> None:
     project = _unpack_sdist(archive, tmp_path / "unpacked")
     assert project == tmp_path / "unpacked" / "package-1.0"
     assert (project / "pyproject.toml").read_bytes() == b"x"
-
-
-def test_root_build_fixture_retains_nested_project_and_broad_discovery_hazard(
-    tmp_path: Path,
-) -> None:
-    find_namespace_packages = import_module("setuptools").find_namespace_packages
-    repo = tmp_path / "repository"
-    core = repo / "src" / "orca_auto"
-    extension = repo / "extensions" / "workflows"
-    flow = extension / "src" / "orca_auto" / "flow"
-    core.mkdir(parents=True)
-    flow.mkdir(parents=True)
-    (core / "__init__.py").write_text("", encoding="utf-8")
-    (core / "py.typed").write_text("", encoding="utf-8")
-    (flow / "__init__.py").write_text("", encoding="utf-8")
-    for project in (repo, extension):
-        (project / "pyproject.toml").write_text(
-            '[project]\nversion = "5.0.0.dev0"\n', encoding="utf-8"
-        )
-        (project / "MANIFEST.in").write_text("recursive-include src *.py\n", encoding="utf-8")
-    staged = tmp_path / "staged"
-    _copy_project(repo, staged, include_workflows=True)
-    staged_extension = staged / "extensions" / "workflows"
-    assert (staged_extension / "pyproject.toml").read_bytes() == (
-        extension / "pyproject.toml"
-    ).read_bytes()
-    assert (staged_extension / "MANIFEST.in").read_bytes() == (
-        extension / "MANIFEST.in"
-    ).read_bytes()
-    assert (staged_extension / "src" / "orca_auto" / "flow" / "__init__.py").is_file()
-    assert find_namespace_packages(where=str(staged / "src")) == ["orca_auto"]
-    wrong_discovery = find_namespace_packages(where=str(staged))
-    assert "extensions.workflows.src.orca_auto.flow" in wrong_discovery
-    # The same wrong root discovery produces payload outside core ownership,
-    # which the wheel checker must reject rather than hiding it in the fixture.
-    payload = {
-        "orca_auto/__init__.py": b"",
-        "orca_auto/py.typed": b"",
-        "extensions/workflows/src/orca_auto/flow/__init__.py": b"",
-    }
-    errors = check_wheel_contents(
-        _wheel(tmp_path / "wrong-discovery.whl", payload), staged / "src" / "orca_auto"
-    )
-    assert any("unsupported installation payload" in error for error in errors), errors
 
 
 @pytest.mark.parametrize(

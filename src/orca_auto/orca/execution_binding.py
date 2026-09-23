@@ -6,7 +6,7 @@ import math
 import os
 import re
 import secrets
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -1188,8 +1188,6 @@ def _write_bound_selected_snapshot(
     source_selected: Path,
     selected: _SelectedSnapshotInput,
     materialized: _MaterializedSnapshotInputs,
-    *,
-    bound_selected_validator: Callable[[Path, bytes], None] | None,
 ) -> tuple[Path, dict[str, Any]]:
     bound_payload = _rewrite_bound_input(
         selected.lines,
@@ -1212,8 +1210,6 @@ def _write_bound_selected_snapshot(
     if materialized.consumed_bytes + len(bound_payload) > MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES:
         raise ValueError("ORCA submission inputs exceed the aggregate snapshot size limit")
     bound_selected = execution_dir / source_selected.name
-    if bound_selected_validator is not None:
-        bound_selected_validator(bound_selected, bound_payload)
     _write_private_input(
         execution_dir,
         bound_selected,
@@ -1235,7 +1231,6 @@ def build_orca_execution_snapshot(
     target_generation_name: str | None = None,
     normalized_selected_payload: bytes | None = None,
     source_selected_sha256: str | None = None,
-    bound_selected_validator: Callable[[Path, bytes], None] | None = None,
     recovery_from: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one visible, immutable ORCA execution generation.
@@ -1333,7 +1328,6 @@ def build_orca_execution_snapshot(
             source_selected,
             selected,
             materialized,
-            bound_selected_validator=bound_selected_validator,
         )
         executable = _engine_runner.executable_identity(
             recovery_executable if recovery_executable is not None else orca_executable

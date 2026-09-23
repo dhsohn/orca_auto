@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a reusable workflow, CLI, reporting, or documentation improvement.
+description: Propose an ORCA execution, CLI, reporting, or documentation improvement.
 title: "feat: "
 labels: ["enhancement"]
 body:
@@ -7,7 +7,7 @@ body:
     id: motivation
     attributes:
       label: Motivation
-      description: What research workflow gap would this close?
+      description: What calculation or maintenance problem would this solve?
       placeholder: As a user running ..., I need ... because ...
     validations:
       required: true

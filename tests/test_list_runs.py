@@ -105,7 +105,7 @@ class TestListEmpty(_ListTestBase):
 
 
 class TestListStandaloneRuns(_ListTestBase):
-    """Test listing standalone runs (not queued)."""
+    """Discover unindexed runs explicitly; indexed runs use ordinary listing."""
 
     def test_shows_runs(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -121,7 +121,17 @@ class TestListStandaloneRuns(_ListTestBase):
             captured = io.StringIO()
             with patch("sys.stdout", captured):
                 rc = main(
-                    ["queue", "list", "--config", str(config), "--engine", "orca", "--kind", "job"]
+                    [
+                        "queue",
+                        "list",
+                        "--refresh",
+                        "--config",
+                        str(config),
+                        "--engine",
+                        "orca",
+                        "--kind",
+                        "job",
+                    ]
                 )
 
         self.assertEqual(rc, 0)
@@ -157,6 +167,7 @@ class TestListStandaloneRuns(_ListTestBase):
                         "job",
                         "--status",
                         "running",
+                        "--refresh",
                     ]
                 )
 
@@ -177,7 +188,17 @@ class TestListStandaloneRuns(_ListTestBase):
             captured = io.StringIO()
             with patch("sys.stdout", captured):
                 rc = main(
-                    ["queue", "list", "--config", str(config), "--engine", "orca", "--kind", "job"]
+                    [
+                        "queue",
+                        "list",
+                        "--refresh",
+                        "--config",
+                        str(config),
+                        "--engine",
+                        "orca",
+                        "--kind",
+                        "job",
+                    ]
                 )
 
         self.assertEqual(rc, 0)
@@ -295,6 +316,7 @@ class TestListQueueEntries(_ListTestBase):
                         "job",
                         "--status",
                         "pending",
+                        "--refresh",
                     ]
                 )
 

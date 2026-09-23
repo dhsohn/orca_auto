@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -11,11 +12,15 @@ from typing import Any
 from orca_auto import cli_systemd_units
 from orca_auto._process_evidence import (
     PROCESS_IMPORT_SOURCE_ENV,
-    PROCESS_WORKFLOW_IMPORT_SOURCE_ENV,
+)
+from orca_auto.core.runtime_bundle import (
+    PROCESS_RUNTIME_BUILD_ENV,
+    runtime_root_for_import_source,
+    verify_runtime_bundle,
 )
 from orca_auto.core.utils.coercion import normalize_text
 
-_WORKER_PROCESS_LABELS = frozenset({"worker", "workflow"})
+_WORKER_PROCESS_LABELS = frozenset({"worker"})
 
 
 def _unit_main_pid(
@@ -231,20 +236,20 @@ def _read_process_start_ticks(
 class _WorkerImportEvidence:
     import_source: Path
     process_start_ticks: int
+    runtime_build_id: str = ""
 
 
 def _worker_process_import_evidence(
     pid: int,
     *,
     read_process_file: Callable[[str], bytes] = _read_process_file,
-    source_env_var: str = PROCESS_IMPORT_SOURCE_ENV,
 ) -> _WorkerImportEvidence:
     start_ticks_before = _read_process_start_ticks(pid, read_process_file=read_process_file)
     try:
         raw_environ = read_process_file(f"/proc/{pid}/environ")
     except OSError as exc:
         raise ValueError(f"cannot read /proc/{pid}/environ: {exc}") from exc
-    prefix = f"{source_env_var}=".encode()
+    prefix = f"{PROCESS_IMPORT_SOURCE_ENV}=".encode()
     values = [
         entry[len(prefix) :] for entry in raw_environ.split(b"\0") if entry.startswith(prefix)
     ]
@@ -262,9 +267,18 @@ def _worker_process_import_evidence(
     start_ticks_after = _read_process_start_ticks(pid, read_process_file=read_process_file)
     if start_ticks_after != start_ticks_before:
         raise ValueError("worker process identity changed during freshness inspection")
+    runtime_prefix = f"{PROCESS_RUNTIME_BUILD_ENV}=".encode()
+    builds = [
+        entry[len(runtime_prefix) :]
+        for entry in raw_environ.split(b"\0")
+        if entry.startswith(runtime_prefix)
+    ]
+    if len(builds) > 1:
+        raise ValueError("worker runtime build evidence is ambiguous")
     return _WorkerImportEvidence(
         import_source=import_source,
         process_start_ticks=start_ticks_before,
+        runtime_build_id=os.fsdecode(builds[0]) if builds else "",
     )
 
 
@@ -440,7 +454,6 @@ def _judge_worker_source(
     override_root: Path | None,
     run: Callable[..., subprocess.CompletedProcess[Any]],
     read_process_file: Callable[[str], bytes],
-    source_env_var: str = PROCESS_IMPORT_SOURCE_ENV,
 ) -> _WorkerVerdict:
     """Judge one active worker: locate its checkout, snapshot HEAD, compare."""
     base_row: dict[str, Any] = {"label": status.label, "unit": status.unit}
@@ -457,7 +470,6 @@ def _judge_worker_source(
             import_evidence = _worker_process_import_evidence(
                 pid_before,
                 read_process_file=read_process_file,
-                source_env_var=source_env_var,
             )
             import_source = import_evidence.import_source
             observed_root = _tracked_checkout_for_import_source(import_source, run=run)
@@ -498,6 +510,39 @@ def _judge_worker_source(
     # worker as additive evidence.
     if observed_root is None:
         assert import_source is not None
+        assert import_evidence is not None
+        try:
+            runtime_root = runtime_root_for_import_source(import_source)
+            if runtime_root is not None:
+                manifest = verify_runtime_bundle(runtime_root)
+                if manifest["build_id"] != import_evidence.runtime_build_id:
+                    raise ValueError("worker runtime build evidence is missing or mismatched")
+                if detail := race_detail():
+                    raise ValueError(detail)
+                return _WorkerVerdict(
+                    "worker",
+                    {
+                        **base_row,
+                        "pid": pid_before,
+                        "import_source": str(import_source),
+                        "source_root": str(runtime_root),
+                        "process_start_ticks": import_evidence.process_start_ticks,
+                        "runtime_build_id": manifest["build_id"],
+                        "runtime_version": manifest["identity"]["version"],
+                    },
+                )
+            if import_evidence.runtime_build_id:
+                raise ValueError("managed worker has no prepared runtime manifest")
+        except (OSError, ValueError, RuntimeError) as exc:
+            return _WorkerVerdict(
+                "undetermined",
+                {
+                    **base_row,
+                    "pid": pid_before,
+                    "import_source": str(import_source),
+                    "detail": f"cannot verify worker runtime: {exc}",
+                },
+            )
         return _WorkerVerdict(
             "uncompared",
             {
@@ -505,6 +550,7 @@ def _judge_worker_source(
                 "pid": pid_before,
                 "source_root": str(import_source.parent),
                 "import_source": str(import_source),
+                "process_start_ticks": import_evidence.process_start_ticks,
                 "reason": "installed_distribution",
             },
         )
@@ -592,73 +638,84 @@ def _judge_worker_source(
     )
 
 
-def _judge_worker(
-    status: cli_systemd_units.ServiceUnitStatus,
+def _installed_runtime_property(
+    unit: str,
+    name: str,
     *,
-    override_root: Path | None,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+) -> str:
+    completed = cli_systemd_units._show_unit_property(unit, name, run=run)
+    if completed.returncode != 0 or normalize_text(completed.stderr):
+        raise ValueError(f"cannot read installed unit {name}")
+    return str(completed.stdout or "").strip()
+
+
+def _judge_installed_runtime(
+    verdict: _WorkerVerdict,
+    *,
     run: Callable[..., subprocess.CompletedProcess[Any]],
     read_process_file: Callable[[str], bytes],
 ) -> _WorkerVerdict:
-    if status.label != "workflow" or override_root is not None:
-        return _judge_worker_source(
-            status,
-            override_root=override_root,
-            run=run,
-            read_process_file=read_process_file,
-        )
+    """Compare process-bound source evidence with the currently installed pin.
 
-    # A workflow supervisor imports core and the separately installed extension.
-    # Bind both source observations to the same process, then keep one unit row.
-    base_row: dict[str, Any] = {"label": status.label, "unit": status.unit}
-    pid = _unit_main_pid(status.unit, run=run)
+    Installing a unit and daemon-reloading it does not replace its running
+    process. A valid old bundle must therefore still report a pending cutover.
+    """
+    if verdict.kind == "undetermined":
+        return verdict
+    row = verdict.row
+    unit = row["unit"]
     try:
-        start_ticks = _read_process_start_ticks(pid, read_process_file=read_process_file)
-    except ValueError as exc:
-        return _WorkerVerdict("undetermined", {**base_row, "detail": str(exc)})
-    components = {
-        name: _judge_worker_source(
-            status,
-            override_root=None,
+        environment = _installed_runtime_property(unit, "Environment", run=run)
+        prefix = f"{PROCESS_RUNTIME_BUILD_ENV}="
+        values = [
+            item[len(prefix) :] for item in shlex.split(environment) if item.startswith(prefix)
+        ]
+        if not values:
+            if row.get("runtime_build_id"):
+                raise ValueError("installed unit has no pinned runtime build")
+            return verdict
+        if len(values) != 1 or not values[0]:
+            raise ValueError("installed unit runtime build is missing or ambiguous")
+        if any(
+            _installed_runtime_property(unit, prop, run=run)
+            for prop in ("EnvironmentFiles", "UnsetEnvironment")
+        ):
+            raise ValueError("installed unit has unsupported environment overrides")
+        directory = _installed_runtime_property(unit, "WorkingDirectory", run=run)
+        root = Path(directory)
+        if not root.is_absolute() or root.resolve(strict=True) != root:
+            raise ValueError("installed unit runtime root must be an absolute resolved path")
+        manifest = verify_runtime_bundle(root)
+        if manifest["build_id"] != values[0]:
+            raise ValueError("installed unit pin differs from its prepared runtime")
+        if (
+            _installed_runtime_property(unit, "Environment", run=run) != environment
+            or _installed_runtime_property(unit, "WorkingDirectory", run=run) != directory
+        ):
+            raise ValueError("installed unit runtime changed during freshness inspection")
+        detail = _process_identity_race_detail(
+            unit,
+            pid=row["pid"],
+            process_start_ticks=row.get("process_start_ticks"),
             run=run,
             read_process_file=read_process_file,
-            source_env_var=source_env_var,
         )
-        for name, source_env_var in (
-            ("core", PROCESS_IMPORT_SOURCE_ENV),
-            ("workflows", PROCESS_WORKFLOW_IMPORT_SOURCE_ENV),
-        )
-    }
-    evidence = {name: verdict.row for name, verdict in components.items()}
-    detail = _process_identity_race_detail(
-        status.unit,
-        pid=pid,
-        process_start_ticks=start_ticks,
-        run=run,
-        read_process_file=read_process_file,
-    )
-    if not detail and any(verdict.row.get("pid", pid) != pid for verdict in components.values()):
-        detail = "main PID changed between core and workflow source observations"
-    if detail:
+        if detail:
+            raise ValueError(detail)
         return _WorkerVerdict(
-            "undetermined", {**base_row, "detail": detail, "components": evidence}
+            "worker",
+            {**row, "expected_runtime_build_id": values[0], "expected_runtime_root": str(root)},
+            stale=(
+                verdict.stale
+                or row.get("runtime_build_id") != values[0]
+                or row.get("source_root") != str(root)
+            ),
         )
-    for name, verdict in components.items():
-        if verdict.kind == "undetermined":
-            return _WorkerVerdict(
-                "undetermined",
-                {
-                    **verdict.row,
-                    "detail": f"{name}: {verdict.row.get('detail', 'source cannot be compared')}",
-                    "components": evidence,
-                },
-            )
-    compared = [verdict for verdict in components.values() if verdict.kind == "worker"]
-    selected = compared[0] if compared else components["core"]
-    return _WorkerVerdict(
-        "worker" if compared else "uncompared",
-        {**selected.row, "components": evidence},
-        stale=any(verdict.stale for verdict in compared),
-    )
+    except (OSError, ValueError, RuntimeError) as exc:
+        return _WorkerVerdict(
+            "undetermined", {**row, "detail": f"cannot verify installed runtime: {exc}"}
+        )
 
 
 def collect_worker_staleness(
@@ -675,8 +732,9 @@ def collect_worker_staleness(
     selects the checkout whose HEAD reflog is compared with the unit start.
     PID plus kernel process-start ticks are rechecked around the observation so
     a restart or PID reuse becomes undetermined rather than false-fresh. A
-    source imported from an installed wheel is not comparable; an all-wheel set
-    returns ``None``, while mixed sets still judge tracked editable checkouts.
+    Prepared wheel runtimes are checked against their recorded bytes and the
+    installed unit's build/root pin. Unmanaged installed wheels have no such
+    comparison; an all-unmanaged-wheel set returns ``None``.
 
     ``source_root`` is retained as a test/diagnostic override. Production calls
     leave it unset and inspect process-bound import evidence for every worker.
@@ -697,12 +755,16 @@ def collect_worker_staleness(
     undetermined: list[dict[str, Any]] = []
     uncompared: list[dict[str, Any]] = []
     for status in active_workers:
-        verdict = _judge_worker(
+        verdict = _judge_worker_source(
             status,
             override_root=override_root,
             run=run,
             read_process_file=read_process_file,
         )
+        if override_root is None:
+            verdict = _judge_installed_runtime(
+                verdict, run=run, read_process_file=read_process_file
+            )
         if verdict.kind == "undetermined":
             undetermined.append(verdict.row)
         elif verdict.kind == "uncompared":

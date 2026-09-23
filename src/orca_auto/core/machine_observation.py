@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any
 
@@ -243,13 +245,57 @@ def results_payload_from_observation(payload: Mapping[str, Any]) -> dict[str, An
     return data
 
 
-def verify_available_artifacts(payload: Mapping[str, Any], package_root: Path) -> bool:
+def _file_identity(details: os.stat_result) -> tuple[int, ...]:
+    return (
+        details.st_dev,
+        details.st_ino,
+        details.st_mode,
+        details.st_nlink,
+        details.st_size,
+        details.st_mtime_ns,
+        details.st_ctime_ns,
+    )
+
+
+@dataclass(frozen=True)
+class VerifiedArtifact:
+    """Content read in this verification, bound to a file that can be rechecked."""
+
+    path: Path
+    receipt: dict[str, Any]
+    file_identity: tuple[int, ...]
+
+    def is_unchanged(self) -> bool:
+        try:
+            return (
+                self.path.resolve(strict=True) == self.path
+                and _file_identity(self.path.lstat()) == self.file_identity
+            )
+        except (OSError, RuntimeError):
+            return False
+
+
+def read_verified_artifacts(
+    payload: Mapping[str, Any], package_root: Path, *, last_path: Path | None = None
+) -> dict[str, VerifiedArtifact] | None:
+    """Hash files once, with all references to ``last_path`` checked last."""
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, Mapping):
-        return False
-    for receipt in artifacts.values():
+        return None
+    verified: dict[str, VerifiedArtifact] = {}
+    by_path: dict[Path, VerifiedArtifact] = {}
+    items = list(artifacts.items())
+    if last_path is not None:
+        # Sort by path, not artifact id: another receipt may alias the final input.
+        def is_last(item: tuple[str, Any]) -> bool:
+            receipt = item[1]
+            path = receipt.get("path") if isinstance(receipt, Mapping) else None
+            return isinstance(path, str) and package_root / path == last_path
+
+        items.sort(key=is_last)
+    for artifact_id, receipt in items:
         if not isinstance(receipt, Mapping):
-            return False
+            return None
         if receipt.get("status") != "available":
             continue
         path = receipt.get("path")
@@ -265,19 +311,39 @@ def verify_available_artifacts(payload: Mapping[str, Any], package_root: Path) -
             or not isinstance(media_type, str)
             or not media_type
         ):
-            return False
-        observed = artifact_receipt(
-            package_root,
-            Path(path),
-            required=bool(receipt.get("required")),
-            role=role,
-            media_type=media_type,
-        )
+            return None
+        try:
+            candidate = package_root.resolve(strict=True) / path
+            previous = by_path.get(candidate)
+            if previous is None:
+                identity = _file_identity(candidate.lstat())
+                observed = artifact_receipt(
+                    package_root,
+                    candidate,
+                    required=bool(receipt.get("required")),
+                    role=role,
+                    media_type=media_type,
+                )
+            else:
+                identity = previous.file_identity
+                observed = {
+                    **previous.receipt,
+                    "required": bool(receipt.get("required")),
+                    "role": role,
+                    "media_type": media_type,
+                }
+        except (OSError, RuntimeError, ValueError):
+            return None
         if observed.get("status") != "available":
-            return False
+            return None
         if observed.get("bytes") != expected_size or observed.get("byte_sha256") != expected_hash:
-            return False
-    return True
+            return None
+        artifact = VerifiedArtifact(candidate, observed, identity)
+        if not artifact.is_unchanged():
+            return None
+        verified[artifact_id] = artifact
+        by_path[candidate] = artifact
+    return verified
 
 
 __all__ = [
@@ -287,10 +353,11 @@ __all__ = [
     "RESULTS_PAYLOAD_CONTRACT_NAME",
     "RESULTS_PAYLOAD_CONTRACT_VERSION",
     "ReceiptDigest",
+    "VerifiedArtifact",
     "artifact_receipt",
     "machine_code",
     "machine_json_bytes",
     "required_delivery_complete",
     "results_payload_from_observation",
-    "verify_available_artifacts",
+    "read_verified_artifacts",
 ]

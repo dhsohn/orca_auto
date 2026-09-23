@@ -12,6 +12,7 @@ from typing import Any
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis_text
 from .input_blocks import file_route_lines
+from .orca_opt_progress import OptProgress, parse_opt_progress_text
 from .parser import OrcaResult, parse_orca_output_text
 from .parser.io import read_orca_text
 from .relaxed_scan import first_scan_coordinate_spec
@@ -83,32 +84,54 @@ def structure_kind(selected_inp: Path) -> str | None:
     return "sp"
 
 
+@dataclass(frozen=True)
+class _ParsedOutput:
+    final_output: tuple[OrcaResult, FrequencyAnalysis | None]
+    optimization: OptProgress
+
+
 @lru_cache(maxsize=32)
-def _parsed_output_cached(
-    out_path_text: str, mtime_ns: int, size: int
-) -> tuple[OrcaResult, FrequencyAnalysis | None]:
+def _parsed_output_cached(out_path_text: str, mtime_ns: int, size: int) -> _ParsedOutput:
     text = read_orca_text(out_path_text)
-    return (
-        parse_orca_output_text(text, source_path=out_path_text),
-        parse_frequency_analysis_text(text),
+    return _ParsedOutput(
+        final_output=(
+            parse_orca_output_text(text, source_path=out_path_text),
+            parse_frequency_analysis_text(text),
+        ),
+        optimization=parse_opt_progress_text(text, source_path=out_path_text),
     )
 
 
 def parsed_final_output(out_path: Path) -> tuple[OrcaResult, FrequencyAnalysis | None]:
     """Parsed (result, frequency analysis), cached per (path, mtime, size).
 
-    Workflow SI regeneration re-reads every completed stage on every advance;
-    a finished job's output never changes, so parsing it once per process is
-    enough. Callers must treat both returned objects as read-only — they are
-    shared across cache hits.
+    Report sections reuse the same final output facts. Callers must treat both
+    returned objects as read-only because they are shared across cache hits.
     """
+    return _parsed_output(out_path).final_output
+
+
+def _parsed_output(out_path: Path) -> _ParsedOutput:
     stat = out_path.stat()
     return _parsed_output_cached(str(out_path), stat.st_mtime_ns, stat.st_size)
 
 
+def parsed_optimization_progress(out_path: Path) -> OptProgress:
+    """Read-only progress from the same decoded snapshot as final evidence.
+
+    The bounded cache retains parsed facts, never the full output text.
+    """
+    return _parsed_output(out_path).optimization
+
+
+def parsed_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
+    """Reuse even an absent frequency section; read failures remain retryable."""
+    return parsed_final_output(out_path)[1]
+
+
 @dataclass(frozen=True)
 class OrcaStructureEvidence:
-    """Final structure facts shared by workflow decisions and human reports."""
+    """Final structure facts shared by job reports and SI blocks."""
 
     name: str
     kind: str

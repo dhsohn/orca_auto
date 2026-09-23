@@ -100,7 +100,7 @@ fi
 echo "[check] Using Python: $("$VENV_PY" -c 'import sys; print(sys.executable)')"
 if [[ "${ORCA_AUTO_CHECK_SKIP_INSTALL:-0}" != "1" ]]; then
   "$VENV_PY" -m pip install --upgrade pip
-  "$VENV_PY" -m pip install -c constraints-dev.txt -e '.[dev]' -e ./extensions/workflows
+  "$VENV_PY" -m pip install -c constraints-dev.txt -e '.[dev]'
 fi
 
 echo "[check] Ruff"

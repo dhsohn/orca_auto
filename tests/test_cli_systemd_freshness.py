@@ -23,7 +23,6 @@ def _process_file_reader(
     import_sources: dict[int, Path],
     *,
     start_ticks: int = 123_456,
-    workflow_sources: dict[int, Path] | None = None,
 ) -> Callable[[str], bytes]:
     def _read(path: str) -> bytes:
         parts = Path(path).parts
@@ -33,10 +32,6 @@ def _process_file_reader(
         assert parts[-1] == "environ"
         source = import_sources[pid]
         evidence = f"{_process_evidence.PROCESS_IMPORT_SOURCE_ENV}={source}\0"
-        if workflow_sources and pid in workflow_sources:
-            evidence += (
-                f"{_process_evidence.PROCESS_WORKFLOW_IMPORT_SOURCE_ENV}={workflow_sources[pid]}\0"
-            )
         return evidence.encode()
 
     return _read
@@ -55,11 +50,11 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
     _make_fake_git_checkout(source_root)
     start_stamps = {
         "orca_auto-queue-worker@alice.service": "Mon 2026-08-03 08:02:30 UTC",
-        "orca_auto-workflow-worker@alice.service": "Mon 2026-08-03 10:02:30 UTC",
+        "orca_auto-queue-worker@bob.service": "Mon 2026-08-03 10:02:30 UTC",
     }
     main_pids = {
         "orca_auto-queue-worker@alice.service": "41",
-        "orca_auto-workflow-worker@alice.service": "42",
+        "orca_auto-queue-worker@bob.service": "42",
     }
 
     def _fake_run(
@@ -105,8 +100,8 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
             enabled="enabled",
         ),
         cli_systemd_units.ServiceUnitStatus(
-            label="workflow",
-            unit="orca_auto-workflow-worker@alice.service",
+            label="worker",
+            unit="orca_auto-queue-worker@bob.service",
             active="active",
             enabled="disabled",
         ),
@@ -124,7 +119,7 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
     assert verdict["source_root"] == str(source_root)
     assert verdict["head_sha"] == head_sha
     assert verdict["undetermined"] == []
-    # Only the pre-update worker service is stale; the fresh workflow worker and
+    # Only the pre-update worker service is stale; the fresh second worker and
     # the non-service engines target are not inspected as stale. In particular,
     # the stale worker started *after* the old commit object's timestamp.
     assert [entry["unit"] for entry in verdict["stale"]] == ["orca_auto-queue-worker@alice.service"]
@@ -148,7 +143,7 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
     head_moved = False
     units = {
         "orca_auto-queue-worker@alice.service": "41",
-        "orca_auto-workflow-worker@alice.service": "42",
+        "orca_auto-queue-worker@bob.service": "42",
     }
 
     def _fake_run(
@@ -177,7 +172,7 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
             return subprocess.CompletedProcess(argv, 0, stdout=f"{value}\n", stderr="")
         if argv[:4] == ["systemctl", "show", "--property=ExecMainStartTimestamp", "--value"]:
             assert argv[4] == "--timestamp=utc"
-            if argv[5] == "orca_auto-workflow-worker@alice.service":
+            if argv[5] == "orca_auto-queue-worker@bob.service":
                 head_moved = True
             return subprocess.CompletedProcess(
                 argv,
@@ -197,7 +192,7 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
         )
         for label, unit in (
             ("worker", "orca_auto-queue-worker@alice.service"),
-            ("workflow", "orca_auto-workflow-worker@alice.service"),
+            ("worker", "orca_auto-queue-worker@bob.service"),
         )
     )
 
@@ -208,9 +203,7 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
     )
 
     assert verdict is not None
-    assert [entry["unit"] for entry in verdict["stale"]] == [
-        "orca_auto-workflow-worker@alice.service"
-    ]
+    assert [entry["unit"] for entry in verdict["stale"]] == ["orca_auto-queue-worker@bob.service"]
     assert verdict["workers"][0]["head_sha"] == old_sha
     assert verdict["workers"][0]["started_epoch"] == worker_start_epoch
     assert verdict["workers"][1]["head_sha"] == new_sha
@@ -235,6 +228,8 @@ def test_collect_worker_staleness_observes_the_active_process_checkout(tmp_path:
         stderr: Any = None,
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        if "--property=Environment" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         del check, stdout, stderr, text
         if argv[0] == "git":
             # A regression to the status CLI's own editable checkout would not
@@ -461,6 +456,8 @@ def test_collect_worker_staleness_treats_wheel_inside_git_cwd_as_uncompared(
         stderr: Any = None,
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        if "--property=Environment" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         del check, stdout, stderr, text
         if argv[0] == "git":
             assert argv[1:3] == ["-C", str(git_cwd)]
@@ -542,6 +539,8 @@ def test_collect_worker_staleness_does_not_require_start_time_for_wheel_worker(
         stderr: Any = None,
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        if "--property=Environment" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         del check, stdout, stderr, text
         if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
             return subprocess.CompletedProcess(argv, 0, stdout="91\n", stderr="")
@@ -623,14 +622,11 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
     git_import_source.write_text("# editable source\n", encoding="utf-8")
     wheel_import_source.parent.mkdir(parents=True)
     wheel_import_source.write_text("# installed wheel\n", encoding="utf-8")
-    workflow_import_source = wheel_import_source.parent / "flow" / "__init__.py"
-    workflow_import_source.parent.mkdir()
-    workflow_import_source.write_text("# installed workflow wheel\n", encoding="utf-8")
     head_update_epoch = 1_785_747_750
     head_commit_epoch = head_update_epoch - 86_400
     head_sha = "d" * 40
     git_unit = "orca_auto-queue-worker@alice.service"
-    wheel_unit = "orca_auto-workflow-worker@alice.service"
+    wheel_unit = "orca_auto-queue-worker@bob.service"
     pids = {git_unit: "101", wheel_unit: "102"}
     starts = {
         git_unit: "Mon 2026-08-03 08:02:30 UTC",
@@ -644,6 +640,8 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
         stderr: Any = None,
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        if "--property=Environment" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
         del check, stdout, stderr, text
         if argv[0] == "git":
             assert argv[1:3] == ["-C", str(git_root)]
@@ -686,7 +684,7 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
                 enabled="enabled",
             ),
             cli_systemd_units.ServiceUnitStatus(
-                label="workflow",
+                label="worker",
                 unit=wheel_unit,
                 active="active",
                 enabled="disabled",
@@ -695,7 +693,6 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
         run=_fake_run,
         read_process_file=_process_file_reader(
             {101: git_import_source, 102: wheel_import_source},
-            workflow_sources={102: workflow_import_source},
         ),
     )
 
@@ -704,30 +701,13 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
     assert verdict["undetermined"] == []
     assert verdict["uncompared"] == [
         {
-            "label": "workflow",
+            "label": "worker",
             "unit": wheel_unit,
             "pid": 102,
             "source_root": str(wheel_import_source.parent),
             "import_source": str(wheel_import_source),
+            "process_start_ticks": 123_456,
             "reason": "installed_distribution",
-            "components": {
-                "core": {
-                    "label": "workflow",
-                    "unit": wheel_unit,
-                    "pid": 102,
-                    "source_root": str(wheel_import_source.parent),
-                    "import_source": str(wheel_import_source),
-                    "reason": "installed_distribution",
-                },
-                "workflows": {
-                    "label": "workflow",
-                    "unit": wheel_unit,
-                    "pid": 102,
-                    "source_root": str(workflow_import_source.parent),
-                    "import_source": str(workflow_import_source),
-                    "reason": "installed_distribution",
-                },
-            },
         }
     ]
 
@@ -831,8 +811,8 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_
             enabled="enabled",
         ),
         cli_systemd_units.ServiceUnitStatus(
-            label="workflow",
-            unit="orca_auto-workflow-worker@alice.service",
+            label="worker",
+            unit="orca_auto-queue-worker@bob.service",
             active="inactive",
             enabled="disabled",
         ),
@@ -844,7 +824,7 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_
         source_root=source_root,
     )
 
-    # The inactive workflow worker is not a running process to judge, while the
+    # The inactive second worker is not a running process to judge, while the
     # active worker with no readable start record must surface instead of passing.
     assert verdict is not None
     assert verdict["stale"] == []

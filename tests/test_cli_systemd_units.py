@@ -10,7 +10,6 @@ def test_service_units_for_user_reuses_canonical_name_owner() -> None:
         ("runtime", systemd_plan._runtime_unit_for_user("alice")),
         ("engines", systemd_plan._engine_workers_unit_for_user("alice")),
         ("worker", systemd_plan._worker_unit_for_user("alice")),
-        ("workflow", systemd_plan._workflow_worker_unit_for_user("alice")),
     )
 
 

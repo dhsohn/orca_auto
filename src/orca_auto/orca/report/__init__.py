@@ -33,8 +33,7 @@ def write_job_html_report(
 
     The report lands inside the verified execution generation. When the current
     job type has no HTML report, a stale ``job_report.html`` in that generation
-    is removed so downstream links (e.g. the workflow report) cannot surface an
-    obsolete report. The exception path deliberately does NOT remove it: a
+    is removed so links cannot surface an obsolete report. The exception path deliberately does NOT remove it: a
     transient parse error must not destroy the last valid report.
     """
     path = generation_target[0] / RUN_REPORT_HTML_FILE

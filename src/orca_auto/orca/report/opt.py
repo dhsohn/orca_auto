@@ -11,6 +11,8 @@ from typing import Any
 from ..evidence import (
     final_out_path,
     parsed_final_output,
+    parsed_frequency_analysis,
+    parsed_optimization_progress,
 )
 from ..frequencies import (
     FrequencyAnalysis,
@@ -19,7 +21,7 @@ from ..frequencies import (
     mode_summaries,
 )
 from ..input_blocks import file_route_lines
-from ..orca_opt_progress import OptProgress, parse_opt_progress
+from ..orca_opt_progress import OptProgress
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
@@ -97,7 +99,7 @@ def collect_opt_report_data(
         if not out_raw or not Path(out_raw).exists():
             continue
         try:
-            progress = parse_opt_progress(out_raw)
+            progress = parsed_optimization_progress(Path(out_raw))
         except OSError:
             continue
         if fallback is None:
@@ -128,7 +130,9 @@ def collect_opt_report_data(
     if analysis is not None and out_path is not None:
         frequency_attempt_index = _attempt_index_for_output(attempts, out_path)
     else:
-        analysis, frequency_attempt_index = find_frequency_analysis(attempts)
+        analysis, frequency_attempt_index = find_frequency_analysis(
+            attempts, parse_analysis_fn=parsed_frequency_analysis
+        )
         frequency_from_earlier_attempt = analysis is not None
 
     final_result = state.get("final_result")

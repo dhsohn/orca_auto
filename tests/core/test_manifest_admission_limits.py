@@ -6,44 +6,37 @@ from pathlib import Path
 import pytest
 import yaml
 
-from orca_auto.core.commands.run_dir import load_yaml_job_manifest
 from orca_auto.core.config.bounded_yaml import (
     MAX_JOB_MANIFEST_ALIASES,
     MAX_JOB_MANIFEST_BYTES,
     MAX_JOB_MANIFEST_DEPTH,
     MAX_JOB_MANIFEST_NODES,
+    load_bounded_yaml_data,
 )
-from orca_auto.flow.manifest import load_flow_manifest
 
 
 def _load_manifest(directory: Path, kind: str) -> dict[str, object]:
-    if kind == "flow":
-        return load_flow_manifest(directory)
-    return load_yaml_job_manifest(
-        directory,
-        "job.yaml",
-        invalid_message="invalid job manifest: {path}",
-    )
+    return load_bounded_yaml_data(directory / "job.yaml")
 
 
 def _manifest_path(directory: Path, kind: str) -> Path:
-    return directory / ("flow.yaml" if kind == "flow" else "job.yaml")
+    return directory / "job.yaml"
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_accepts_normal_mapping(tmp_path: Path, kind: str) -> None:
     _manifest_path(tmp_path, kind).write_text(
-        "workflow_type: conformer_screening\nresources:\n  max_cores: 4\n",
+        "job_type: orca\nresources:\n  max_cores: 4\n",
         encoding="utf-8",
     )
 
     assert _load_manifest(tmp_path, kind) == {
-        "workflow_type": "conformer_screening",
+        "job_type": "orca",
         "resources": {"max_cores": 4},
     }
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_non_utf8_text(tmp_path: Path, kind: str) -> None:
     _manifest_path(tmp_path, kind).write_bytes(b"value: \xff\n")
 
@@ -51,7 +44,7 @@ def test_bounded_manifest_loader_rejects_non_utf8_text(tmp_path: Path, kind: str
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_duplicate_keys(tmp_path: Path, kind: str) -> None:
     _manifest_path(tmp_path, kind).write_text(
         "outer:\n  value: 1\n  value: 2\n",
@@ -62,7 +55,7 @@ def test_bounded_manifest_loader_rejects_duplicate_keys(tmp_path: Path, kind: st
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_unhashable_mapping_keys(
     tmp_path: Path,
     kind: str,
@@ -76,35 +69,30 @@ def test_bounded_manifest_loader_rejects_unhashable_mapping_keys(
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 @pytest.mark.parametrize("payload", ["", "null\n"])
-def test_bounded_manifest_loader_treats_empty_and_null_documents_as_empty_mappings(
+def test_bounded_manifest_loader_preserves_empty_and_null_documents(
     tmp_path: Path,
     kind: str,
     payload: str,
 ) -> None:
     _manifest_path(tmp_path, kind).write_text(payload, encoding="utf-8")
 
-    assert _load_manifest(tmp_path, kind) == {}
+    assert _load_manifest(tmp_path, kind) is None
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_preserves_malformed_yaml_errors(
     tmp_path: Path,
     kind: str,
 ) -> None:
     _manifest_path(tmp_path, kind).write_text("outer: [1,\n", encoding="utf-8")
 
-    if kind == "flow":
-        with pytest.raises(ValueError, match="Invalid Workflow manifest"):
-            _load_manifest(tmp_path, kind)
-        return
-
     with pytest.raises(yaml.parser.ParserError, match="while parsing a flow node"):
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_oversize_file(tmp_path: Path, kind: str) -> None:
     _manifest_path(tmp_path, kind).write_bytes(b"value: " + b"x" * MAX_JOB_MANIFEST_BYTES)
 
@@ -112,7 +100,7 @@ def test_bounded_manifest_loader_rejects_oversize_file(tmp_path: Path, kind: str
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_symlink(tmp_path: Path, kind: str) -> None:
     source = tmp_path / "source.yaml"
     source.write_text("value: 1\n", encoding="utf-8")
@@ -122,7 +110,7 @@ def test_bounded_manifest_loader_rejects_symlink(tmp_path: Path, kind: str) -> N
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_hardlink(tmp_path: Path, kind: str) -> None:
     source = tmp_path / "source.yaml"
     source.write_text("value: 1\n", encoding="utf-8")
@@ -132,7 +120,7 @@ def test_bounded_manifest_loader_rejects_hardlink(tmp_path: Path, kind: str) -> 
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_deep_nesting(tmp_path: Path, kind: str) -> None:
     depth = MAX_JOB_MANIFEST_DEPTH + 1
     _manifest_path(tmp_path, kind).write_text(
@@ -144,7 +132,7 @@ def test_bounded_manifest_loader_rejects_deep_nesting(tmp_path: Path, kind: str)
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_alias_bomb(tmp_path: Path, kind: str) -> None:
     aliases = ", ".join("*base" for _ in range(MAX_JOB_MANIFEST_ALIASES + 1))
     _manifest_path(tmp_path, kind).write_text(
@@ -156,7 +144,7 @@ def test_bounded_manifest_loader_rejects_alias_bomb(tmp_path: Path, kind: str) -
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_recursive_alias_cycle(
     tmp_path: Path,
     kind: str,
@@ -167,7 +155,7 @@ def test_bounded_manifest_loader_rejects_recursive_alias_cycle(
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_exponential_alias_expansion(
     tmp_path: Path,
     kind: str,
@@ -181,7 +169,7 @@ def test_bounded_manifest_loader_rejects_exponential_alias_expansion(
         _load_manifest(tmp_path, kind)
 
 
-@pytest.mark.parametrize("kind", ["flow", "job"])
+@pytest.mark.parametrize("kind", ["job"])
 def test_bounded_manifest_loader_rejects_excessive_node_count(
     tmp_path: Path,
     kind: str,

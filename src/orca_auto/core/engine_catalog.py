@@ -4,18 +4,12 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 ActivityRole = Literal["engine-queue", "orca-run"]
-WorkflowStageRole = Literal["shared-root", "workflow-stage"]
-SupervisionRole = Literal["default", "with-workflow"]
+SupervisionRole = Literal["default"]
 
 
 @dataclass(frozen=True)
 class EngineCatalogEntry:
-    """Import-safe metadata for a known engine, including optional implementations.
-
-    Module names are strings on purpose: reading the catalog must not import
-    engine implementations from the ORCA or workflow layers. Persisted engine
-    identities remain known when the workflows package is not installed.
-    """
+    """Import-safe metadata for supported standalone ORCA execution."""
 
     engine_id: str
     definition_module: str
@@ -24,15 +18,12 @@ class EngineCatalogEntry:
     app_id: str
     source_id: str
     activity_role: ActivityRole
-    workflow_stage_role: WorkflowStageRole
-    workflow_stage_dirname: str | None
     managed_admission: bool
     engine_launch_gated: bool
     default_supervision_role: SupervisionRole
     supervision_order: int
     activity_order: int
     task_kinds: tuple[str, ...]
-    requires_workflows: bool = False
 
 
 _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
@@ -44,50 +35,12 @@ _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
         app_id="orca_auto_orca",
         source_id="orca_auto_orca",
         activity_role="orca-run",
-        workflow_stage_role="shared-root",
-        workflow_stage_dirname="03_orca",
         managed_admission=True,
         engine_launch_gated=True,
         default_supervision_role="default",
         supervision_order=0,
         activity_order=2,
         task_kinds=("orca_run_inp",),
-    ),
-    EngineCatalogEntry(
-        engine_id="xtb",
-        definition_module="orca_auto.flow.engines.xtb.engine",
-        worker_module="orca_auto.core.engines.queue_worker",
-        admission_source="orca_auto.flow.engines.xtb.queue_worker",
-        app_id="orca_auto_xtb",
-        source_id="orca_auto_xtb",
-        activity_role="engine-queue",
-        workflow_stage_role="workflow-stage",
-        workflow_stage_dirname="02_xtb",
-        managed_admission=True,
-        engine_launch_gated=False,
-        default_supervision_role="with-workflow",
-        supervision_order=3,
-        activity_order=1,
-        task_kinds=("xtb_opt", "xtb_sp", "xtb_ranking"),
-        requires_workflows=True,
-    ),
-    EngineCatalogEntry(
-        engine_id="crest",
-        definition_module="orca_auto.flow.engines.crest.engine",
-        worker_module="orca_auto.core.engines.queue_worker",
-        admission_source="orca_auto.flow.engines.crest.queue_worker",
-        app_id="orca_auto_crest",
-        source_id="orca_auto_crest",
-        activity_role="engine-queue",
-        workflow_stage_role="workflow-stage",
-        workflow_stage_dirname="01_crest",
-        managed_admission=True,
-        engine_launch_gated=False,
-        default_supervision_role="with-workflow",
-        supervision_order=2,
-        activity_order=0,
-        task_kinds=("crest_conformer_search",),
-        requires_workflows=True,
     ),
 )
 
@@ -135,25 +88,6 @@ def find_engine_catalog_entry_by_source_id(source_id: object) -> EngineCatalogEn
     return _ENGINE_BY_SOURCE_ID.get(str(source_id or "").strip())
 
 
-def workflow_stage_engine_entries() -> tuple[EngineCatalogEntry, ...]:
-    return tuple(
-        entry for entry in _ENGINE_CATALOG if entry.workflow_stage_role == "workflow-stage"
-    )
-
-
-def engine_uses_workflow_stage_roots(engine: object) -> bool:
-    """True only for engines whose queues and indexes live per workflow stage.
-
-    A ``shared-root`` engine (ORCA) keeps every queue row and job-location
-    record in the shared runs root even when its stage job directories sit
-    inside a workflow workspace, so root discovery must not enumerate its
-    workflow stage directories. An unknown engine is not a workflow-stage
-    engine.
-    """
-    entry = find_engine_catalog_entry(engine)
-    return entry is not None and entry.workflow_stage_role == "workflow-stage"
-
-
 def supervised_engine_entries() -> tuple[EngineCatalogEntry, ...]:
     return tuple(sorted(_ENGINE_CATALOG, key=lambda entry: entry.supervision_order))
 
@@ -166,14 +100,11 @@ __all__ = [
     "ActivityRole",
     "EngineCatalogEntry",
     "SupervisionRole",
-    "WorkflowStageRole",
     "activity_engine_entries",
     "engine_catalog",
-    "engine_uses_workflow_stage_roots",
     "find_engine_catalog_entry",
     "find_engine_catalog_entry_by_source_id",
     "get_engine_catalog_entry",
     "known_engine_ids",
     "supervised_engine_entries",
-    "workflow_stage_engine_entries",
 ]

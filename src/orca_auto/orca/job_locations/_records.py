@@ -13,7 +13,7 @@ from orca_auto.core.indexing import (
     upsert_job_location,
 )
 from orca_auto.core.indexing import engine_artifacts as _engine_artifacts
-from orca_auto.core.indexing import engines as _engine_locations
+from orca_auto.core.indexing import engine_records as _engine_locations
 
 from ..config import AppConfig
 from ..job_type import detect_job_type

@@ -11,7 +11,7 @@ from orca_auto.core.config.files import (
     scheduler_admission_root,
     validated_runs_root_text,
 )
-from orca_auto.core.engine_catalog import find_engine_catalog_entry
+from orca_auto.core.engine_catalog import get_engine_catalog_entry
 
 
 def _load_engine_config(config_path: str) -> tuple[Path, dict[str, Any]]:
@@ -22,12 +22,7 @@ def _load_engine_config(config_path: str) -> tuple[Path, dict[str, Any]]:
 
 
 def engine_runtime_paths(config_path: str, *, engine: str | None = None) -> dict[str, Path]:
-    """Resolve the shared runtime roots every engine anchors on.
-
-    All engines share the single runs root (top-level runs_root), so the
-    resolved allowed_root/workflow_root are identical. Scheduler configuration
-    is also shared at the top level; engine-scoped scheduler keys are rejected.
-    """
+    """Resolve standalone ORCA roots without validating the engine executable."""
     path, raw = _load_engine_config(config_path)
     runs_root = runs_root_from_mapping(raw)
     if not runs_root:
@@ -35,12 +30,11 @@ def engine_runtime_paths(config_path: str, *, engine: str | None = None) -> dict
 
     resolved_root = Path(validated_runs_root_text(runs_root)).expanduser().resolve()
     resolved: dict[str, Path] = {
-        "workflow_root": resolved_root,
         "allowed_root": resolved_root,
     }
     scheduler_raw = mapping_section(raw, "scheduler")
-    catalog_entry = find_engine_catalog_entry(engine)
-    if engine and (catalog_entry is None or catalog_entry.workflow_stage_role != "workflow-stage"):
+    if engine:
+        get_engine_catalog_entry(engine)
         engine_raw = engine_config_mapping(raw, engine, inherit_keys=("scheduler",))
         scheduler_raw = mapping_section(engine_raw, "scheduler") or scheduler_raw
     admission_root = scheduler_admission_root(

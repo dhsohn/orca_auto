@@ -23,6 +23,7 @@ from orca_auto.core.queue.generation import (
 )
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
+    QUEUE_RECORD_SYNC_BLOCKED_KEY,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
@@ -254,6 +255,7 @@ def _without_sync_metadata(metadata: dict[str, object]) -> dict[str, object]:
             QUEUE_RECORD_SYNC_OWNER_PID_KEY,
             QUEUE_RECORD_SYNC_OWNER_START_KEY,
             QUEUE_RECORD_SYNC_TOKEN_KEY,
+            QUEUE_RECORD_SYNC_BLOCKED_KEY,
         }
     }
 

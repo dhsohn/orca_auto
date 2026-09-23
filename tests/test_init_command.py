@@ -240,18 +240,6 @@ def test_cmd_init_handles_write_or_load_failure(tmp_path: Path, capsys) -> None:
             },
         ),
         patch(
-            "orca_auto.orca.commands.init._prompt_xtb_runtime",
-            return_value={
-                "executable": "/usr/bin/xtb",
-            },
-        ),
-        patch(
-            "orca_auto.orca.commands.init._prompt_crest_runtime",
-            return_value={
-                "executable": "/usr/bin/crest",
-            },
-        ),
-        patch(
             "orca_auto.orca.commands.init._prompt_max_active_simulations",
             return_value=4,
         ),
@@ -286,18 +274,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
             },
         ),
         patch(
-            "orca_auto.orca.commands.init._prompt_xtb_runtime",
-            return_value={
-                "executable": "/usr/bin/xtb",
-            },
-        ),
-        patch(
-            "orca_auto.orca.commands.init._prompt_crest_runtime",
-            return_value={
-                "executable": "/usr/bin/crest",
-            },
-        ),
-        patch(
             "orca_auto.orca.commands.init._prompt_max_active_simulations",
             return_value=4,
         ),
@@ -319,8 +295,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
     assert "Config created successfully." in output
     assert "runs_root" in output
     assert str(orca_allowed_root) in output
-    assert "xtb_executable" in output
-    assert "crest_executable" in output
     assert "max_active_simulations: 4" in output
     assert "messenger_provider: discord" in output
     assert yaml.safe_load(config_path.read_text(encoding="utf-8").split("\n", 1)[1]) == {
@@ -331,12 +305,6 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
         },
         "scheduler": {
             "max_active_simulations": 4,
-        },
-        "workflow": {
-            "paths": {
-                "xtb_executable": "/usr/bin/xtb",
-                "crest_executable": "/usr/bin/crest",
-            },
         },
         "messenger": {
             "provider": "discord",
@@ -376,14 +344,6 @@ def test_cmd_init_force_preserves_existing_discord_messenger(tmp_path: Path, cap
                 "runs_root": str(orca_allowed_root),
                 "executable": "/usr/bin/orca",
             },
-        ),
-        patch(
-            "orca_auto.orca.commands.init._prompt_xtb_runtime",
-            return_value={"executable": "/usr/bin/xtb"},
-        ),
-        patch(
-            "orca_auto.orca.commands.init._prompt_crest_runtime",
-            return_value={"executable": "/usr/bin/crest"},
         ),
         patch(
             "orca_auto.orca.commands.init._prompt_max_active_simulations",
@@ -426,14 +386,6 @@ def test_prompt_init_values_can_replace_existing_messenger() -> None:
                 "runs_root": "/runs",
                 "executable": "/usr/bin/orca",
             },
-        ),
-        patch(
-            "orca_auto.orca.commands.init._prompt_xtb_runtime",
-            return_value={"executable": "/usr/bin/xtb"},
-        ),
-        patch(
-            "orca_auto.orca.commands.init._prompt_crest_runtime",
-            return_value={"executable": "/usr/bin/crest"},
         ),
         patch(
             "orca_auto.orca.commands.init._prompt_max_active_simulations",

@@ -6,24 +6,24 @@ from typing import Any
 
 from orca_auto.core.engines.queue_worker import EngineQueueWorker
 from orca_auto.core.queue.lifecycle import cancel_running_process_job
-from orca_auto.core.queue.worker import EngineRunningJob
 from orca_auto.core.statuses import STATUS_RUNNING
 
 from . import replay
 from .entries import queue_entry_reaction_dir
+from .models import OrcaRunningJob
 from .terminal_replay import terminal_replay_marker_from_entry
 
 logger = logging.getLogger(__name__)
 
 
-def cancel_running_job(worker: EngineQueueWorker, queue_id: str, job: EngineRunningJob) -> bool:
+def cancel_running_job(worker: EngineQueueWorker, queue_id: str, job: OrcaRunningJob) -> bool:
     hooks = replay.orca_worker_lifecycle_hooks()
     queue_root = replay.job_queue_root(worker, job)
 
     def terminate_child_and_recover(process: Any) -> bool:
         terminated = hooks.terminate_process_fn(process)
         if terminated is True and process.poll() is not None:
-            job.__dict__[replay.TERMINAL_FINALIZE_RETRY_ATTR] = True
+            job.terminal_finalize_pending = True
             replay.recover_slot_engine_process(worker.admission_root, job.admission_token)
         return terminated
 
@@ -59,9 +59,7 @@ def cancel_running_job(worker: EngineQueueWorker, queue_id: str, job: EngineRunn
     if marker is None:
         # Another owner may already have completed and cleared this exact
         # generation while the stale cancellation snapshot was in flight.
-        worker._release_admission_slot(job.admission_token)
-        job.__dict__.pop("_orca_terminal_replay_item", None)
-        job.__dict__.pop(replay.TERMINAL_FINALIZE_RETRY_ATTR, None)
+        replay.release_terminal_job(worker, job)
         return True
     assert terminal_entry is not None
     reaction_dir = queue_entry_reaction_dir(terminal_entry)
@@ -88,9 +86,7 @@ def cancel_running_job(worker: EngineQueueWorker, queue_id: str, job: EngineRunn
         return False
     finally:
         if release_slot:
-            worker._release_admission_slot(job.admission_token)
-            job.__dict__.pop("_orca_terminal_replay_item", None)
-            job.__dict__.pop(replay.TERMINAL_FINALIZE_RETRY_ATTR, None)
+            replay.release_terminal_job(worker, job)
 
 
 __all__ = ["cancel_running_job"]

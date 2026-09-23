@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, TypeVar
 
+from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue import store as _core_queue
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import normalize_bool as _shared_normalize_bool
@@ -97,6 +98,14 @@ def queue_entry_status(entry: QueueEntry) -> str:
 
 def queue_entry_reaction_dir(entry: QueueEntry) -> str:
     return normalize_text(entry.metadata.get("reaction_dir"))
+
+
+def queue_entry_is_retired_workflow_owned(entry: QueueEntry, root: str | Path) -> bool:
+    """Read legacy ownership without opening or changing retired workflow state."""
+    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    return bool(normalize_text(metadata.get("workflow_id"))) or path_is_retired_workflow_owned(
+        queue_entry_reaction_dir(entry), root
+    )
 
 
 def queue_entry_force(entry: QueueEntry) -> bool:

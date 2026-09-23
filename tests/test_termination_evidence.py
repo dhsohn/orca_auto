@@ -109,3 +109,80 @@ def test_termination_fix_does_not_promote_quoted_ts_failure(tmp_path: Path, quot
     result = analyze_output(out, CompletionMode("ts", False, "! OptTS Freq"))
     assert result.status == "completed"
     assert result.reason == "ts_criteria_met"
+
+
+@pytest.mark.parametrize("prefix", ["# ", "|  2> # ", "  | 2> "])
+@pytest.mark.parametrize("large", [False, True])
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        "SCF NOT CONVERGED",
+        "OUT OF MEMORY",
+        "NO SPACE LEFT ON DEVICE",
+        "ZERO DISTANCE BETWEEN ATOMS",
+        "MULTIPLICITY IMPOSSIBLE",
+        "THE OPTIMIZATION DID NOT CONVERGE",
+    ],
+)
+def test_quoted_diagnostics_do_not_fail_successful_execution(
+    tmp_path: Path, prefix: str, large: bool, diagnostic: str
+) -> None:
+    out = tmp_path / "commented_diagnostic.out"
+    filler = "ordinary output\n" * (22000 if large else 1)
+    out.write_text(prefix + diagnostic + "\n" + filler + NORMAL + "\n")
+
+    result = analyze_output(out, CompletionMode("opt", False, "! SP"))
+
+    assert result.status == "completed"
+    assert result.markers["last_opt_converged"] is None
+    assert parse_orca_output(str(out)).opt_converged is None
+
+
+@pytest.mark.parametrize("large", [False, True])
+@pytest.mark.parametrize(
+    "diagnostic,status",
+    [
+        ("SCF NOT CONVERGED", "error_scf"),
+        ("OUT OF MEMORY", "error_memory"),
+        ("NO SPACE LEFT ON DEVICE", "error_disk_io"),
+        ("ZERO DISTANCE BETWEEN ATOMS", "error_geometry"),
+        ("MULTIPLICITY IMPOSSIBLE", "error_multiplicity_impossible"),
+    ],
+)
+def test_actual_diagnostic_verdict_does_not_depend_on_output_size(
+    tmp_path: Path, large: bool, diagnostic: str, status: str
+) -> None:
+    # The actual diagnostic lies outside both former sampling windows.
+    filler = "ordinary output\n" * (22000 if large else 1)
+    out = tmp_path / "actual_diagnostic.out"
+    out.write_text(filler + diagnostic + "\n" + filler + NORMAL + "\n")
+
+    assert analyze_output(out, CompletionMode("opt", False, "! SP")).status == status
+
+
+@pytest.mark.parametrize("diagnostic", ["SCF NOT CONVERGED", "OUT OF MEMORY"])
+def test_partial_tail_of_long_input_echo_is_not_diagnostic_evidence(
+    tmp_path: Path, diagnostic: str
+) -> None:
+    out = tmp_path / "long_diagnostic_echo.out"
+    out.write_text("| 1> # " + "x" * 300000 + diagnostic + "\n" + NORMAL + "\n")
+
+    assert analyze_output(out, CompletionMode("opt", False, "! SP")).status == "completed"
+
+
+@pytest.mark.parametrize("large", [False, True])
+def test_ts_verification_ignores_echoed_frequency_and_irc_evidence(
+    tmp_path: Path, large: bool
+) -> None:
+    out = tmp_path / "quoted_ts_verification.out"
+    filler = "ordinary output\n" * (22000 if large else 1)
+    out.write_text(
+        "| 1> # IRC PATH SUMMARY\n"
+        "| 2> # VIBRATIONAL FREQUENCIES -150.0 cm**-1\n" + filler + NORMAL + "\n"
+    )
+
+    result = analyze_output(out, CompletionMode("ts", True, "! OptTS Freq IRC"))
+
+    assert result.status == "ts_not_found"
+    assert result.markers["imaginary_frequency_count"] == 0
+    assert result.markers["irc_marker_found"] is False

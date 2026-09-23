@@ -10,10 +10,7 @@ import pytest
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts/bootstrap_wsl.sh"
 
 
-@pytest.mark.parametrize("with_workflows", [False, True])
-def test_bootstrap_installs_only_the_requested_local_projects(
-    tmp_path: Path, with_workflows: bool
-) -> None:
+def test_bootstrap_installs_only_the_requested_local_projects(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "scripts").mkdir(parents=True)
     (repo / "config").mkdir()
@@ -35,7 +32,7 @@ def test_bootstrap_installs_only_the_requested_local_projects(
     python.chmod(0o755)
     calls = tmp_path / "calls"
     result = subprocess.run(
-        ["bash", "scripts/bootstrap_wsl.sh", *(["--with-workflows"] if with_workflows else [])],
+        ["bash", "scripts/bootstrap_wsl.sh"],
         cwd=repo,
         env={
             **os.environ,
@@ -53,13 +50,13 @@ def test_bootstrap_installs_only_the_requested_local_projects(
     installs = [
         line for line in calls.read_text().splitlines() if line.startswith("-m pip install -e")
     ]
-    assert installs == [
-        "-m pip install -e . -e ./extensions/workflows" if with_workflows else "-m pip install -e ."
-    ]
+    assert installs == ["-m pip install -e ."]
     assert (repo / "config/orca_auto.yaml").stat().st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize(("argument", "exit_code"), [("--help", 0), ("--unknown", 2)])
+@pytest.mark.parametrize(
+    ("argument", "exit_code"), [("--help", 0), ("--unknown", 2), ("--with-workflows", 2)]
+)
 def test_bootstrap_parses_options_before_any_installation(argument: str, exit_code: int) -> None:
     result = subprocess.run(
         ["/bin/bash", str(_SCRIPT), argument],

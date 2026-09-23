@@ -11,7 +11,7 @@ body:
     id: motivation
     attributes:
       label: Motivation
-      description: What workflow were you trying to complete, and why does this matter?
+      description: What operation were you trying to complete, and why does this matter?
       placeholder: I was trying to submit/cancel/inspect/organize ...
     validations:
       required: true
@@ -45,12 +45,12 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS/WSL, Python version, orca_auto version/commit, and relevant ORCA/xTB/CREST versions.
+      description: OS/WSL, Python version, orca_auto version/commit, and relevant ORCA versions.
       placeholder: |
         OS: Ubuntu on WSL2
         Python: 3.13
         orca_auto commit:
-        ORCA/xTB/CREST:
+        ORCA:
     validations:
       required: true
   - type: textarea
