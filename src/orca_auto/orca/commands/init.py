@@ -36,8 +36,6 @@ class _PromptedEngineRuntime(TypedDict):
 @dataclass(frozen=True)
 class _PromptedInitValues:
     orca_runtime: _PromptedEngineRuntime
-    xtb_runtime: dict[str, str]
-    crest_runtime: dict[str, str]
     max_active_simulations: int
     messenger: dict[str, object]
 
@@ -113,14 +111,6 @@ def _prompt_orca_executable() -> str:
     return _prompt_executable_path("ORCA executable path", "orca_executable", "ORCA")
 
 
-def _prompt_xtb_executable() -> str:
-    return _prompt_executable_path("xTB executable path", "xtb_executable", "xTB")
-
-
-def _prompt_crest_executable() -> str:
-    return _prompt_executable_path("CREST executable path", "crest_executable", "CREST")
-
-
 def _prompt_directory_path(label: str, *, default: str | None = None) -> Path:
     while True:
         raw = _prompt_text(label, default)
@@ -189,8 +179,8 @@ def _prompt_messenger_config() -> dict[str, object]:
 
 
 def _prompt_runs_root() -> str:
-    """Single runs root: ORCA jobs, workflow workspaces, and .admission live here."""
-    prompt_label = "runs root directory (ORCA jobs + workflows)"
+    """Standalone ORCA jobs and .admission share one runs root."""
+    prompt_label = "runs root directory (ORCA jobs)"
     runs_root = _prompt_directory_path(prompt_label)
     while not _ensure_directory(runs_root, label="runs_root"):
         runs_root = _prompt_directory_path(prompt_label)
@@ -204,20 +194,8 @@ def _prompt_orca_runtime() -> _PromptedEngineRuntime:
     }
 
 
-def _prompt_xtb_runtime() -> dict[str, str]:
-    return {"executable": _prompt_xtb_executable()}
-
-
-def _prompt_crest_runtime() -> dict[str, str]:
-    return {"executable": _prompt_crest_executable()}
-
-
 def _validate_generated_config(config_path: str) -> None:
-    from orca_auto.core.config.engines import load_crest_config, load_xtb_config
-
     load_config(config_path)
-    load_xtb_config(config_path)
-    load_crest_config(config_path)
 
 
 def _write_config(config_path: Path, payload: Mapping[str, object]) -> None:
@@ -257,8 +235,6 @@ def _prompt_init_values(
     *, existing_messenger: Mapping[str, object] | None = None
 ) -> _PromptedInitValues:
     orca_runtime = _prompt_orca_runtime()
-    xtb_runtime = _prompt_xtb_runtime()
-    crest_runtime = _prompt_crest_runtime()
     max_active_simulations = _prompt_max_active_simulations()
     if existing_messenger is not None and _prompt_yes_no(
         "Keep the existing messenger settings?",
@@ -270,8 +246,6 @@ def _prompt_init_values(
         messenger = _prompt_messenger_config()
     return _PromptedInitValues(
         orca_runtime=orca_runtime,
-        xtb_runtime=xtb_runtime,
-        crest_runtime=crest_runtime,
         max_active_simulations=max_active_simulations,
         messenger=messenger,
     )
@@ -289,12 +263,6 @@ def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
         "scheduler": {
             "max_active_simulations": values.max_active_simulations,
         },
-        "workflow": {
-            "paths": {
-                "xtb_executable": str(values.xtb_runtime["executable"]),
-                "crest_executable": str(values.crest_runtime["executable"]),
-            },
-        },
         "messenger": values.messenger,
         "orca": {
             "runtime": {},
@@ -310,8 +278,6 @@ def _print_init_summary(config_path: Path, values: _PromptedInitValues) -> None:
     print(f"  config: {config_path}")
     print(f"  runs_root: {values.orca_runtime['runs_root']}")
     print(f"  max_active_simulations: {values.max_active_simulations}")
-    print(f"  xtb_executable: {values.xtb_runtime['executable']}")
-    print(f"  crest_executable: {values.crest_runtime['executable']}")
     print(f"  messenger_provider: {values.messenger.get('provider', 'discord')}")
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -1767,7 +1768,12 @@ def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> Non
     generation = Path(snapshot["execution_dir"])
     # The crash landed after ORCA finished: a completed, analyzer-verified
     # output exists next to the bound input.
-    (generation / "h2.out").write_text(_COMPLETED_OUT, encoding="utf-8")
+    output = generation / "h2.out"
+    output.write_text(_COMPLETED_OUT, encoding="utf-8")
+    # Completed-output adoption requires output newer than its selected input.
+    # Make that premise explicit even if the host clock is corrected mid-test.
+    output_mtime = Path(snapshot["selected_inp"]).stat().st_mtime_ns + 1
+    os.utime(output, ns=(output_mtime, output_mtime))
     (generation / "h2.gbw").write_bytes(b"final-orbitals")
 
     def unexpected_cfg() -> Any:

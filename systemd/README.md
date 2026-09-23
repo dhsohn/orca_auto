@@ -1,71 +1,22 @@
-# systemd Services
+# systemd services
 
 **English** | [한국어](README.ko.md)
 
-This directory contains systemd unit templates and operational guidance for running ORCA_auto background workers.
-
-## Unit Overview
-
-- `orca_auto-runtime@.target`
-  - Recommended top-level runtime target that manages background engine workers.
-- `orca_auto-engine-workers@.target`
-  - Worker target for ORCA queue execution.
-- `orca_auto-queue-worker@.service`
-  - Template service for the ORCA queue worker (`python -m orca_auto.cli queue worker --app orca`).
-- `orca_auto-workflow-worker@.service`
-  - Worker service for conformer screening and multi-stage workflows (xTB/CREST).
-
-## Service Installation
-
-From the repository root:
+`orca_auto-queue-worker@USER.service` runs the ORCA worker.
+`orca_auto-engine-workers@USER.target` groups that worker and
+`orca_auto-runtime@USER.target` selects the runtime. There are three templates.
 
 ```bash
-cd <repo_root>
-orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
-```
-
-This renders unit files to `/etc/systemd/system`, reloads systemd, and enables/starts `orca_auto-runtime@<user>.target`.
-
-If you update the repository or edit unit templates, re-run the same command to apply changes.
-
-### Enabling the Workflow Worker
-
-To process multi-stage workflows such as conformer screening, install the `orca_auto_workflows` extension in your Python environment and start the workflow service:
-
-```bash
-sudo systemctl start "orca_auto-workflow-worker@$(whoami)"
-```
-
-## Monitoring and Maintenance
-
-### Status and Logs
-
-```bash
-# Check status across all targets and workers
-orca_auto service status
-
-# Follow ORCA queue worker logs
-journalctl -u "orca_auto-queue-worker@$(whoami)" -f
-
-# Follow workflow worker logs
-journalctl -u "orca_auto-workflow-worker@$(whoami)" -f
-```
-
-### Restart and Stop
-
-```bash
-# Safely restart workers (refused while calculations are active to prevent disruption)
+orca_auto systemd install --user user --repo /absolute/runtime/root \
+  --config /absolute/external/orca_auto.yaml
+orca_auto service status --json
 orca_auto service restart
-
-# Force restart immediately if required
-orca_auto service restart --force
-
-# Stop runtime services
-sudo systemctl stop "orca_auto-runtime@$(whoami).target"
 ```
 
-## Worker Policies
+Installing units does not reload an existing worker. Cut over only while idle
+and verify the process build/root against the unit. Prepared runtimes are read-only;
+configuration, queues, logs and scratch remain external. Follow [RUNTIME](../docs/RUNTIME.md).
 
-- **Automatic Restart**: Units use `Restart=on-failure` with a 30-second backoff (up to 3 restart attempts within 5 minutes).
-- **Concurrency Guard**: `scheduler.max_active_simulations` in `config/orca_auto.yaml` limits total concurrent calculations across engines.
-- **Safe Restart**: `orca_auto service restart` checks for running jobs and prompts or requires `--force` if jobs are actively computing.
+Version 7 does not provide a workflow worker. Finish/cancel old work with its old
+runtime, then stop/disable any old instance. Installing new units does not delete
+historical templates. Follow the [upgrade guide](../docs/RELEASE.md#upgrading-to-70).

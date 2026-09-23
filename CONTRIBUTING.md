@@ -7,7 +7,7 @@ public development record.
 
 ## Project scope
 
-ORCA_auto is a queue-first runtime and workflow layer for ORCA-centered
+ORCA_auto is a queue-first runtime for ORCA-centered
 computational chemistry work on Linux and WSL. It should make calculations more
 observable and recoverable without becoming a general workflow engine, an ORCA
 replacement, or a collection of one-off site scripts.
@@ -17,7 +17,6 @@ Good contributions usually improve one of these surfaces:
 - durable queue submission, cancellation, and worker behavior;
 - ORCA state/report/provenance files;
 - fail-closed execution and interrupted-run recovery;
-- workflow handoff contracts for internal xTB/CREST stages;
 - documentation, examples, validation, and release hygiene.
 
 ## Development workflow
@@ -75,28 +74,23 @@ A good verification section looks like:
 From the repository root:
 
 ```bash
-bash scripts/bootstrap_wsl.sh --with-workflows
+bash scripts/bootstrap_wsl.sh
 source .venv/bin/activate
 make test
 ```
 
 `make test` runs `scripts/check.sh`, which creates or repairs `.venv`, installs
-`.[dev]` and the local `extensions/workflows` project, then runs Ruff, Ruff
-format check, mypy, import-linter, and the coverage-gated pytest suite.
-
-The source tree contains two matched-version distributions: the core at the
-repository root and `orca_auto_workflows` at `extensions/workflows`. For a manual
-development install, use `python -m pip install -e '.[dev]' -e ./extensions/workflows`.
-The default bootstrap installs only core; contributor checks install both to
-exercise the existing workflow contracts as well. The 5.0.0 release provides
-both distributions through GitHub release assets, not PyPI; pass both local
-projects for development so the resolver does not need the extension on an index.
+`.[dev]`, then runs Ruff, Ruff format check, mypy, import-linter, and the
+coverage-gated pytest suite. The repository ships one distribution, `orca_auto`.
+For a manual development install, use `python -m pip install -e '.[dev]'`.
+Run `make check-packages` for package or installation changes. Version 7 removes
+the former workflows extension; see the [upgrade guide](docs/RELEASE.md#upgrading-to-70).
 
 For a narrower loop:
 
 ```bash
 bash scripts/check.sh tests/test_single_attempt_contract.py -q
-bash scripts/check.sh tests/flow -q
+bash scripts/check.sh tests/test_orca_worker_execution.py -q
 ```
 
 The fake ORCA example smoke is intentionally runnable without a licensed ORCA
@@ -128,7 +122,7 @@ git config core.hooksPath .githooks
 Both need `.venv` (run `scripts/check.sh` once first) and can be bypassed with
 `git commit --no-verify` / `git push --no-verify`.
 
-## ORCA, xTB, CREST, and path policy
+## ORCA, and path policy
 
 - Use absolute Linux paths for configured executables and runtime roots.
 - Do not add support for Windows drive paths, `/mnt/<drive>/...` executable

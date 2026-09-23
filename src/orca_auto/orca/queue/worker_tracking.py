@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.messaging import build_channel
+from orca_auto.core.messaging import MessageChannel, build_channel
 from orca_auto.core.queue.engine.execution import coerce_resource_request
 from orca_auto.core.statuses import (
     STATUS_QUEUED,
@@ -16,7 +17,6 @@ from orca_auto.core.statuses import (
 from ..attempt.reporting import (
     build_run_finished_notification,
     finished_notification_already_sent,
-    mark_finished_notification_sent,
 )
 from ..config import AppConfig
 from ..inp_rewriter import read_resource_request_from_input
@@ -28,10 +28,41 @@ from ..job_locations import (
     upsert_job_record,
 )
 from ..notifications import notify_run_finished_event
+from ..run_lock import acquire_run_lock
+from ..state import now_utc_iso, save_state
 from ..state_reading import load_state, state_payload_job_id
+from ..types import RunFinishedNotification
 from .entries import queue_entry_metadata, queue_entry_reaction_dir, queue_entry_task_id
 
 logger = logging.getLogger(__name__)
+_NOTIFICATION_SLOTS = threading.BoundedSemaphore(4)
+
+
+def _dispatch_finished_notification(
+    channel: MessageChannel, notification: RunFinishedNotification
+) -> bool:
+    """Bound advisory sends without blocking scheduler or interpreter shutdown."""
+    slots = _NOTIFICATION_SLOTS
+    if not slots.acquire(blocking=False):
+        logger.warning("Terminal notification skipped: delivery capacity exhausted")
+        return False
+    send = notify_run_finished_event
+
+    def deliver() -> None:
+        try:
+            send(channel, notification)
+        except Exception as exc:  # noqa: BLE001 - advisory transport
+            logger.warning("Terminal notification failed: %s", type(exc).__name__)
+        finally:
+            slots.release()
+
+    try:
+        threading.Thread(target=deliver, name="orca-terminal-notification", daemon=True).start()
+    except Exception as exc:  # noqa: BLE001 - no retry after the durable claim
+        slots.release()
+        logger.warning("Terminal notification dispatch failed: %s", type(exc).__name__)
+        return False
+    return True
 
 
 def payload_matches_expected_job_id(payload: Any, expected_job_id: str | None) -> bool:
@@ -182,54 +213,43 @@ def notify_terminal_job_from_state(
     reaction_dir: str,
     *,
     expected_job_id: str | None = None,
+    expected_run_id: str | None = None,
 ) -> bool:
+    """Claim one best-effort notification, then dispatch an immutable message.
+
+    A crash or saturated sender after the claim may lose an advisory message.
+    Transport never writes state: the job directory may already hold a successor.
+    """
     channel = build_channel(cfg.messenger, logger=logger)
     if not channel.enabled:
         return False
 
     job_dir = Path(reaction_dir).expanduser().resolve()
-    state = load_state(job_dir)
-    if not state:
-        logger.warning("Skipping terminal messenger notification; state missing for %s", job_dir)
-        return False
-    if not payload_matches_expected_job_id(state, expected_job_id):
-        logger.warning(
-            "Skipping terminal messenger notification; state generation mismatch for %s "
-            "(expected_job_id=%s state_job_id=%s)",
-            job_dir,
-            str(expected_job_id or "").strip(),
-            state_payload_job_id(state),
+    with acquire_run_lock(job_dir):
+        state = load_state(job_dir)
+        if not state or not payload_matches_expected_job_id(state, expected_job_id):
+            return False
+        if not state.get("run_id") or (expected_run_id and state.get("run_id") != expected_run_id):
+            return False
+        final_result = state.get("final_result")
+        if (
+            normalize_status(state.get("status")) not in TERMINAL_STATUSES
+            or not isinstance(final_result, dict)
+            or finished_notification_already_sent(state)
+            or final_result.get("finished_notification_claimed_at")
+        ):
+            return False
+        selected_inp_text = str(state.get("selected_inp") or "").strip()
+        notification = build_run_finished_notification(
+            reaction_dir=job_dir,
+            selected_inp=Path(selected_inp_text) if selected_inp_text else job_dir / "-",
+            state=state,
+            status=str(final_result.get("status") or state.get("status") or "").strip(),
+            final_result=final_result,
         )
-        return False
-    if finished_notification_already_sent(state):
-        return False
-
-    final_result = state.get("final_result")
-    if not isinstance(final_result, dict):
-        logger.warning(
-            "Skipping terminal messenger notification; final_result missing for %s",
-            job_dir,
-        )
-        return False
-
-    selected_inp_text = str(state.get("selected_inp") or "").strip()
-    selected_inp = Path(selected_inp_text) if selected_inp_text else job_dir / "-"
-    status = str(final_result.get("status") or state.get("status") or "").strip()
-    notification = build_run_finished_notification(
-        reaction_dir=job_dir,
-        selected_inp=selected_inp,
-        state=state,
-        status=status,
-        final_result=final_result,
-    )
-    sent = notify_run_finished_event(channel, notification)
-    if sent:
-        mark_finished_notification_sent(job_dir, state)
-        logger.info("Terminal messenger notification sent by queue worker: %s", job_dir)
-        return True
-
-    logger.warning("Terminal messenger notification failed in queue worker: %s", job_dir)
-    return False
+        final_result["finished_notification_claimed_at"] = now_utc_iso()
+        save_state(job_dir, state)
+    return _dispatch_finished_notification(channel, notification)
 
 
 __all__ = [

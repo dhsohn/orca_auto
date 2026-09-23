@@ -183,7 +183,6 @@ def _slot_from_reservation_request(
         owner_boot_id=owner_boot_id,
         app_name=request.app_name.strip(),
         task_id=request.task_id.strip(),
-        workflow_id=request.workflow_id.strip(),
         state=request.state.strip() or "active",
         work_dir=_normalize_work_dir(request.work_dir),
         queue_id=request.queue_id.strip(),
@@ -246,7 +245,7 @@ def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> Adm
         source=slot.source if update.source is None else update.source.strip(),
         app_name=slot.app_name if update.app_name is None else update.app_name.strip(),
         task_id=slot.task_id if update.task_id is None else update.task_id.strip(),
-        workflow_id=slot.workflow_id if update.workflow_id is None else update.workflow_id.strip(),
+        workflow_id=slot.workflow_id,
         engine_process_state=engine_process_state,
     )
 
@@ -267,7 +266,7 @@ def _metadata_updated_slot(
         queue_id=slot.queue_id if update.queue_id is None else update.queue_id.strip(),
         app_name=slot.app_name if update.app_name is None else update.app_name.strip(),
         task_id=slot.task_id if update.task_id is None else update.task_id.strip(),
-        workflow_id=slot.workflow_id if update.workflow_id is None else update.workflow_id.strip(),
+        workflow_id=slot.workflow_id,
         work_dir=slot.work_dir if update.work_dir is None else _normalize_work_dir(update.work_dir),
         owner_pid=resolved_owner_pid,
         process_start_ticks=owner_start_ticks,
@@ -428,7 +427,6 @@ def reserve_slot(
     source: str,
     app_name: str = "",
     task_id: str = "",
-    workflow_id: str = "",
     state: str = "active",
     work_dir: str | Path = "",
     queue_id: str = "",
@@ -443,7 +441,6 @@ def reserve_slot(
             source=source,
             app_name=app_name,
             task_id=task_id,
-            workflow_id=workflow_id,
             state=state,
             work_dir=work_dir,
             queue_id=queue_id,
@@ -494,7 +491,6 @@ def activate_reserved_slot(
     source: str | None = None,
     app_name: str | None = None,
     task_id: str | None = None,
-    workflow_id: str | None = None,
     engine_process_state: str | None = None,
 ) -> AdmissionSlot | None:
     return activate_reserved_slot_with_update(
@@ -508,7 +504,6 @@ def activate_reserved_slot(
             source=source,
             app_name=app_name,
             task_id=task_id,
-            workflow_id=workflow_id,
             engine_process_state=engine_process_state,
         ),
     )
@@ -800,7 +795,6 @@ def update_slot_metadata(
     queue_id: str | None = None,
     app_name: str | None = None,
     task_id: str | None = None,
-    workflow_id: str | None = None,
     work_dir: str | Path | None = None,
     owner_pid: int | None = None,
     engine_process_state: str | None = None,
@@ -813,7 +807,6 @@ def update_slot_metadata(
             queue_id=queue_id,
             app_name=app_name,
             task_id=task_id,
-            workflow_id=workflow_id,
             work_dir=work_dir,
             owner_pid=owner_pid,
             engine_process_state=engine_process_state,

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import logging
 import re
 from collections.abc import Iterable
@@ -9,7 +8,12 @@ from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
 from .completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1, CompletionMode
-from .output_status import optimization_convergence_line, termination_line
+from .output_status import (
+    is_execution_output_line,
+    iter_output_lines,
+    optimization_convergence_line,
+    termination_line,
+)
 from .statuses import AnalyzerStatus
 
 logger = logging.getLogger(__name__)
@@ -19,9 +23,8 @@ NEG_FREQ_RE = re.compile(r"(^|\s)(-\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
 VIB_FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
 FINAL_ENERGY_HEADER = "FINAL SINGLE POINT ENERGY"
 
-_DEFAULT_TAIL_BYTES = 64 * 1024
-_TS_TAIL_BYTES = 256 * 1024
-_HEAD_BYTES = 8 * 1024
+_DEFAULT_BUFFER_BYTES = 64 * 1024
+_TS_BUFFER_BYTES = 256 * 1024
 
 BooleanMarkerName = Literal[
     "terminated_normally",
@@ -122,6 +125,8 @@ def _marker_is_set(markers: OutMarkers, marker_name: BooleanMarkerName) -> bool:
 
 
 def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
+    if not is_execution_output_line(line):
+        return
     upper = line.upper()
     normal, error = termination_line(line)
     markers["terminated_normally"] |= normal
@@ -138,7 +143,7 @@ def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
 
 
 def _scan_text_for_markers(text: str, markers: OutMarkers) -> None:
-    for line in io.StringIO(text, newline=None):
+    for line in iter_output_lines(text):
         _scan_line_for_markers(line, markers)
 
 
@@ -212,42 +217,11 @@ def _interpret_ts_completion(markers: OutMarkers, mode: CompletionMode) -> OutAn
     )
 
 
-def _read_tail(out_path: Path, encoding: str, nbytes: int) -> str:
-    file_size = out_path.stat().st_size
-    offset = max(0, file_size - nbytes)
-    with out_path.open("rb") as fh:
-        if offset > 0:
-            fh.seek(offset)
-        raw = fh.read()
-    return raw.decode(encoding, errors="ignore")
-
-
-def _scan_full_for_verdicts(out_path: Path, encoding: str, markers: OutMarkers) -> None:
-    """Use complete lines for termination and the last optimization verdict.
-
-    A tail can omit an earlier error, or start inside an echoed input line.
-    Replace its termination flags rather than retaining truncated-line evidence.
-    """
-    normal = False
-    error = False
-    last_opt_converged = None
+def _scan_full_for_markers(out_path: Path, encoding: str, markers: OutMarkers) -> None:
+    """Stream complete lines with the same diagnostic rules as buffered reads."""
     with out_path.open("r", encoding=encoding, errors="ignore") as handle:
         for line in handle:
-            line_normal, line_error = termination_line(line)
-            normal |= line_normal
-            error |= line_error
-            verdict = optimization_convergence_line(line)
-            if verdict is not None:
-                last_opt_converged = verdict
-    markers["terminated_normally"] = normal
-    markers["generic_error_termination"] = error
-    markers["last_opt_converged"] = last_opt_converged
-
-
-def _read_head(out_path: Path, encoding: str, nbytes: int) -> str:
-    with out_path.open("rb") as fh:
-        raw = fh.read(nbytes)
-    return raw.decode(encoding, errors="ignore")
+            _scan_line_for_markers(line, markers)
 
 
 def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool]:
@@ -264,11 +238,8 @@ def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool]
     ``final_section`` is True only when the count came from a section after
     the last final energy.
 
-    Public because the workflow report recounts a non-completed stage's Nimag
-    from the same output the stage's machine observation hash-pins, and both
-    sides must count it by exactly the same rule. Every caller therefore feeds
-    it the same universal-newline line stream, so the count does not depend on
-    whether the file was small enough to be read whole.
+    Every caller feeds the same universal-newline line stream, so the count
+    does not depend on whether the file was small enough to be read whole.
     """
     total_negative_count = 0
     last_vib_section_negative_count = 0
@@ -277,6 +248,8 @@ def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool]
     irc_found = False
 
     for line in lines:
+        if not is_execution_output_line(line):
+            continue
         upper = line.upper()
         if "IRC PATH SUMMARY" in upper or "IRC-DRV" in upper:
             irc_found = True
@@ -312,14 +285,13 @@ def _scan_ts_full_for_imag_count(out_path: Path, encoding: str) -> tuple[int, bo
 
 
 def _scan_ts_text_for_imag_count(text: str) -> tuple[int, bool, bool]:
-    # ``StringIO(..., newline=None)`` splits exactly where reading the file
+    # The shared iterator splits exactly where reading the file
     # would: on LF, CR and CRLF only. ``str.splitlines()`` also breaks on the
     # vertical tab, the form feed, the file/group/record separators, NEL, and
     # the Unicode line and paragraph separators, so a small output holding any
     # of those would be sectioned differently from the same output read past
-    # the tail window, and differently again from the workflow report's
-    # recount.
-    return scan_ts_lines_for_imag_count(io.StringIO(text, newline=None))
+    # the tail window.
+    return scan_ts_lines_for_imag_count(iter_output_lines(text))
 
 
 def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
@@ -333,28 +305,16 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
     try:
         encoding = "utf-8"
         file_size = out_path.stat().st_size
-        tail_bytes = _TS_TAIL_BYTES if mode.kind == "ts" else _DEFAULT_TAIL_BYTES
+        buffer_bytes = _TS_BUFFER_BYTES if mode.kind == "ts" else _DEFAULT_BUFFER_BYTES
         full_text: str | None = None
 
-        if file_size <= tail_bytes:
-            # Small file: read entirely (identical to previous behaviour).
+        if file_size <= buffer_bytes:
+            # Buffer small files so TS verification can reuse the same text.
             with out_path.open("r", encoding=encoding, errors="ignore") as handle:
                 full_text = handle.read()
             _scan_text_for_markers(full_text, markers)
         else:
-            # Large file: tail-first strategy.
-            tail_text = _read_tail(out_path, encoding, tail_bytes)
-            _scan_text_for_markers(tail_text, markers)
-
-            _scan_full_for_verdicts(out_path, encoding, markers)
-
-            # Head scan: multiplicity_impossible typically appears near the top.
-            if not markers["multiplicity_impossible"]:
-                head_text = _read_head(out_path, encoding, _HEAD_BYTES)
-                head_markers = _default_markers(out_path)
-                _scan_text_for_markers(head_text, head_markers)
-                if head_markers["multiplicity_impossible"]:
-                    markers["multiplicity_impossible"] = True
+            _scan_full_for_markers(out_path, encoding, markers)
 
         # TS mode needs exact imaginary frequency count from the final vibration block.
         if mode.kind == "ts" and markers["terminated_normally"]:

@@ -1,89 +1,62 @@
-# ORCA_auto Architecture
+# Architecture
 
 **English** | [한국어](ARCHITECTURE.ko.md)
 
-This document describes the system architecture, package structure, runtime lifecycle, and core subsystems of ORCA_auto.
+ORCA_auto validates and durably queues standalone ORCA input directories. Supervised
+workers claim eligible jobs, reserve shared admission slots, execute isolated
+generations, and publish verified terminal observations.
 
----
+## Ownership
 
-## 1. Core Design Principles
+| Component | Responsibility |
+| --- | --- |
+| `cli*.py`, `activity/` | User commands, queue views, cancellation and service inspection |
+| `orca/` | ORCA input, execution, recovery policy, analysis and reports |
+| `core/` | Durable queues, admission, process supervision, paths and storage |
 
-- **Queue-First Asynchronous Execution**: The CLI (`run-dir`) validates input files, writes a durable queue entry (`queue.json`), and returns immediately.
-- **Process Supervision**: Background `systemd` worker daemons poll the queue and execute calculations sequentially.
-- **File-Based Observability**: Job status, execution logs, and structured outputs are persisted alongside the calculation directory in `machine.json` and Markdown reports.
+Imports follow `orca` → `core`; domain code does not import CLI commands.
+`core/engine_catalog.py` registers ORCA alone. Version 7 has no extension loader
+or workflow implementation.
 
----
+## Submission and execution
 
-## 2. Package Architecture and Dependency Rules
+`orca/submission.py` prepares input resources and explicitly creates the execution
+snapshot. Metadata assembly is pure. The submitter owns cleanup until durable
+enqueue transfers ownership; an uncertain commit is resolved before cleanup.
 
-```text
-orca_auto/
-├── cli*.py             # Top-level CLI entrypoints and argument parsing
-├── core/               # Shared infrastructure (queues, admission, process tracking)
-├── orca/               # Canonical ORCA engine implementation (submission, parsing, states)
-└── flow/               # Workflow extension (extensions/workflows: conformer search, etc.)
-```
+The worker validates queue identity and the immutable input/executable binding
+before launch. It tracks every live child, including a child whose row already
+returned to pending. One unsettled terminal generation blocks its own directory;
+unresolved directory identity or queued-publication failure can block the queue.
+Capacity refusal before execution defers a job without recording a calculation failure.
 
-- **Unidirectional Layering**: Enforces `flow` → `orca` → `core` strictly via `import-linter`.
-- **CLI Isolation**: Core domain packages (`core`, `orca`, `flow`) do not import from top-level CLI modules.
-- **Dynamic Engine Loading**: Cross-engine dispatch uses string-based module resolution via `core/engine_catalog.py` rather than static imports.
+Cancellation observations reuse unchanged queue snapshots. Terminal notification
+dispatch has a durable claim and bounded background sends; notification delivery
+is best effort and does not retain execution admission slots.
 
----
+## State, evidence and reports
 
-## 3. Runtime Control Flow
+`orca/state.py` owns state mutation. `orca/state_reading.py` is a read-only consumer;
+`orca/report/publication.py` publishes machine observations. They share the pure
+`orca/report_fields.py` projection for ORCA-owned summary/results fields.
 
-```text
-[ User / CLI ]
-      │  orca_auto run-dir <path>
-      ▼
-[ Validation & Enqueue ] ──▶ queue.json (Durable disk storage)
-                                 │
-[ systemd Worker Daemon ] ◀──────┘ (Polling)
-      │
-      ├─▶ Reserve admission slot (concurrency guard)
-      ├─▶ Spawn child process (worker_child)
-      │      └─▶ Execute ORCA and monitor output
-      ├─▶ Release slot and finalize queue outcome
-      └─▶ Dispatch notifications & write machine.json
-```
+A report read verifies state, generation ownership, artifact paths and receipts.
+It hashes each distinct file once per read, hashes the selected input after
+ownership and other artifacts, then rechecks file identities before returning.
+Receipt reuse is local to that read. Scientific evidence comes from validated
+engine output; HTML and SI presentation are not evidence sources.
 
-1. **Submission (`run-dir`)**: Scans for the latest `.inp` file, validates dependencies, binds an isolated execution generation, and writes to `queue.json`.
-2. **Worker Polling (`EngineQueueWorker`)**: The background daemon claims the next eligible queue entry and checks admission limits.
-3. **Child Execution (`worker_child`)**: Runs the engine inside an isolated subprocess to prevent parent daemon pollution.
-4. **Finalization**: Verifies produced artifacts, writes `machine.json`, and updates the queue state.
+## Queue views and deployment
 
----
+Durable JSON/state remains authoritative. `core/activity_index.py` supplies a
+rebuildable SQLite projection for ordered/filterable queries; durable invalidation
+tickets keep published state changes visible. `--refresh` discovers unindexed
+runs. Initial builds and recovery still read source history.
 
-## 4. Key Subsystems
+Production can use a verified, immutable wheel runtime with external config and
+state. Service status compares the installed unit with the actual process build.
+See [RUNTIME](RUNTIME.md) for preparation and idle cutover.
 
-### Admission Control (`core/admission/`)
-- Limits total concurrent simulations across engines via `scheduler.max_active_simulations`.
-- Uses disk-based slot records protected by file locks (`admission_lock`).
-- Reconciles stale slots automatically by checking PID liveness.
-
-### Queue & State Lifecycle (`core/queue/`)
-- Tracks job states (`queued`, `running`, `completed`, `failed`, `cancelled`) in `queue.json`.
-- Prevents concurrent duplicate runs on active directories while allowing clean re-submissions into new generations.
-
-### ORCA Engine Runtime (`orca/`)
-- **Input Snapshotting**: Copies inputs and dependencies into isolated generation directories before execution.
-- **Convergence Verification (`output_status.py`)**: Parses ORCA output markers to accurately determine success or failure reasons.
-- **Checkpoint Resumption**: Reuses existing valid `.gbw` binary files when restarting interrupted runs.
-
-### Workflow Orchestration (`flow/`)
-- Automates multi-stage calculations (e.g., CREST conformer generation followed by ORCA DFT optimization).
-- Manages state transitions and resume checkpoints through `flow.yaml`.
-
----
-
-## 5. Summary of Core Modules
-
-| Module Path | Responsibility |
-|---|---|
-| `core/engines/definitions.py` | Unified `EngineDefinition` interface for engines |
-| `core/admission/store.py` | Slot reservation, concurrency limiting, and stale recovery |
-| `core/queue/store.py` | Disk queue (`queue.json`) persistence and transactions |
-| `orca/submission.py` | Input validation, snapshot binding, and queue submission |
-| `orca/output_status.py` | Output convergence analysis and status classification |
-| `orca/state.py` | Job state persistence and `machine.json` publication |
-| `flow/orchestration/` | Multi-stage workflow lifecycle and journal tracking |
+Retired workflow directory markers are read only to reject execution and protect
+historical files from standalone discovery/cleanup. Historical admission fields
+remain readable so old reservations cannot disappear from capacity accounting.

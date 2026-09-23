@@ -34,7 +34,7 @@ dep_files_changed() { # $1 = local sha, $2 = remote sha (may be all zeros)
     base="$(git merge-base "$1" origin/main 2>/dev/null || true)"
     [[ -n "$base" ]] || return 0
   fi
-  [[ -n "$(git diff --name-only "$base" "$1" -- pyproject.toml extensions/workflows/pyproject.toml constraints-dev.txt)" ]]
+  [[ -n "$(git diff --name-only "$base" "$1" -- pyproject.toml constraints-dev.txt)" ]]
 }
 
 # stdin FIRST: "<local_ref> <local_sha> <remote_ref> <remote_sha>" per pushed
@@ -99,9 +99,9 @@ while IFS= read -r name; do
   [[ -n "$name" ]] && unset "$name"
 done <<< "$git_local_env_output"
 
-# A shared venv may be an editable install of a sibling worktree. Prepend both
-# source roots so core and workflows come from the commit that is pushed.
-PYTHONPATH="$ROOT/src:$ROOT/extensions/workflows/src${PYTHONPATH:+:$PYTHONPATH}" \
+# A shared venv may be an editable install of a sibling worktree. Prepend the
+# source root so imports come from the commit that is pushed.
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
   PYTHON_BIN="$VENV_DIR/bin/python" \
   ORCA_AUTO_CHECK_SKIP_INSTALL=$skip_install \
   exec bash "$ROOT/scripts/check.sh"

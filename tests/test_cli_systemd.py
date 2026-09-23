@@ -148,10 +148,8 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
 
     unit_by_name = {unit.name: unit for unit in plan.units}
     worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
-    workflow_worker_content = unit_by_name["orca_auto-workflow-worker@.service"].content
     assert "queue worker --app orca" in worker_content
-    assert "--app xtb_md" not in worker_content
-    assert "queue worker --app workflow" in workflow_worker_content
+    assert "orca_auto-workflow-worker@.service" not in unit_by_name
     assert "orca_auto-xtb-md-worker@.service" not in unit_by_name
     assert f"WorkingDirectory={repo.resolve(strict=False)}" in worker_content
     assert f"Environment=ORCA_AUTO_CONFIG={config_path.resolve(strict=False)}" in worker_content
@@ -228,7 +226,7 @@ def test_systemd_default_nested_admission_uses_writable_runs_root(
     tmp_path: Path,
 ) -> None:
     repo, config_path = _make_repo(tmp_path)
-    runs_root = repo / "workflow_runs"
+    runs_root = repo / "nested_runs"
     runs_root.mkdir()
     config_path.write_text(
         "\n".join(
@@ -594,7 +592,7 @@ def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) 
     config_path.write_text(
         "\n".join(
             [
-                f"runs_root: {repo / 'workflow runs'}",
+                f"runs_root: {repo / 'orca runs'}",
                 "scheduler:",
                 f"  admission_root: {repo / 'admission'}",
                 "messenger:",
@@ -824,8 +822,6 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
         ("is-enabled", "orca_auto-engine-workers@alice.target"): "disabled",
         ("is-active", "orca_auto-queue-worker@alice.service"): "active",
         ("is-enabled", "orca_auto-queue-worker@alice.service"): "disabled",
-        ("is-active", "orca_auto-workflow-worker@alice.service"): "inactive",
-        ("is-enabled", "orca_auto-workflow-worker@alice.service"): "disabled",
     }
 
     result = cli_systemd_status.cmd_service_status(
@@ -847,9 +843,8 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
     assert "Enabled" not in output
     assert "worker" in output
     assert "orca_auto-queue-worker@alice.service" in output
-    assert "workflow" in output
-    assert "orca_auto-workflow-worker@alice.service" in output
-    assert "inactive" in output
+    assert "workflow" not in output
+    assert "orca_auto-workflow-worker@alice.service" not in output
 
 
 def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> None:
@@ -870,12 +865,6 @@ def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> Non
             label="worker",
             unit="orca_auto-queue-worker@alice.service",
             active="active",
-            enabled="disabled",
-        ),
-        cli_systemd_units.ServiceUnitStatus(
-            label="workflow",
-            unit="orca_auto-workflow-worker@alice.service",
-            active="inactive",
             enabled="disabled",
         ),
     )
@@ -921,12 +910,6 @@ def test_cmd_service_status_hides_runtime_managed_enabled_noise(
             active="active",
             enabled="disabled",
         ),
-        cli_systemd_units.ServiceUnitStatus(
-            label="workflow",
-            unit="orca_auto-workflow-worker@alice.service",
-            active="active",
-            enabled="disabled",
-        ),
     )
 
     result = cli_systemd_status.cmd_service_status(
@@ -956,8 +939,6 @@ def test_cmd_service_status_emits_json(capsys: Any) -> None:
         ("is-enabled", "orca_auto-engine-workers@alice.target"): "disabled",
         ("is-active", "orca_auto-queue-worker@alice.service"): "failed",
         ("is-enabled", "orca_auto-queue-worker@alice.service"): "disabled",
-        ("is-active", "orca_auto-workflow-worker@alice.service"): "inactive",
-        ("is-enabled", "orca_auto-workflow-worker@alice.service"): "disabled",
         ("is-active", "orca_auto-bot@alice.service"): "inactive",
         ("is-enabled", "orca_auto-bot@alice.service"): "disabled",
     }
@@ -1603,7 +1584,6 @@ def test_cmd_service_status_full_mode_rejects_any_non_active_required_unit(
         ("runtime", "orca_auto-runtime@alice.target", "enabled"),
         ("engines", "orca_auto-engine-workers@alice.target", "disabled"),
         ("worker", "orca_auto-queue-worker@alice.service", "disabled"),
-        ("workflow", "orca_auto-workflow-worker@alice.service", "disabled"),
     )
 
     def _statuses(unhealthy: str | None) -> tuple[cli_systemd_units.ServiceUnitStatus, ...]:
@@ -1625,6 +1605,7 @@ def test_cmd_service_status_full_mode_rejects_any_non_active_required_unit(
                 run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
                 which=lambda name: "/bin/systemctl" if name == "systemctl" else None,
                 collect_worker_staleness=lambda statuses, run=None: None,
+                installed_version_drift=lambda: None,
             ),
         )
 

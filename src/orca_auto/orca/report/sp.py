@@ -19,6 +19,7 @@ from ..evidence import (
     collect_structure_evidence,
     final_out_path,
     parsed_final_output,
+    parsed_frequency_analysis,
 )
 from ..frequencies import (
     FrequencyAnalysis,
@@ -90,7 +91,9 @@ def collect_sp_report_data(reaction_dir: Path, state: Mapping[str, Any]) -> SpRe
     # output has no frequency section (e.g. a failed run whose earlier attempt
     # still carries one).
     if analysis is None:
-        analysis, _attempt_index = find_frequency_analysis(attempts)
+        analysis, _attempt_index = find_frequency_analysis(
+            attempts, parse_analysis_fn=parsed_frequency_analysis
+        )
 
     # The SI block only exists for completed jobs with a parsed energy and
     # geometry; the report is still useful without it (failed runs keep the
@@ -197,9 +200,12 @@ def _metric_cards(data: SpReportData) -> str:
         )
     if result is not None and result.n_atoms:
         note = " · ".join(part for part in (result.formula, f"{result.n_atoms} atoms") if part)
-        cards.append(
-            metric_card("Charge / multiplicity", f"{result.charge} / {result.multiplicity}", note)
+        electronic_state = (
+            f"{result.charge} / {result.multiplicity}"
+            if result.electronic_state_verified
+            else "unavailable"
         )
+        cards.append(metric_card("Charge / multiplicity", electronic_state, note))
     if data.imaginary_count is not None:
         cards.append(metric_card("Imaginary frequencies", str(data.imaginary_count), ""))
     cards.append(

@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config.schema import normalize_max_concurrent
-from orca_auto.core.paths import is_subpath, validate_job_dir
-from orca_auto.core.paths.workflow import workflow_workspace_internal_engine_paths_from_path
+from orca_auto.core.paths import is_subpath
+from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.orca.admission_env import (
     ADMISSION_APP_NAME_ENV_VAR,
     ADMISSION_TASK_ID_ENV_VAR,
@@ -22,27 +22,14 @@ def _validate_reaction_dir(cfg: AppConfig, reaction_dir_raw: str) -> Path:
     if not reaction_dir.exists() or not reaction_dir.is_dir():
         raise ValueError(f"Job directory not found: {reaction_dir}")
 
-    workflow_root = str(getattr(cfg, "workflow_root", "")).strip()
-    runtime_paths = (
-        workflow_workspace_internal_engine_paths_from_path(
-            reaction_dir,
-            workflow_root=workflow_root,
-            engine="orca",
-        )
-        if workflow_root
-        else None
-    )
-    if runtime_paths is not None:
-        return validate_job_dir(
-            reaction_dir_raw,
-            str(runtime_paths["allowed_root"]),
-            label="Job directory",
-        )
-
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
     if not is_subpath(reaction_dir, allowed_root):
         raise ValueError(
             f"Job directory must be under allowed root: {allowed_root}. got={reaction_dir}"
+        )
+    if path_is_retired_workflow_owned(reaction_dir, allowed_root):
+        raise ValueError(
+            "Workflow directories are retired; submit a standalone ORCA input directory"
         )
     return reaction_dir
 

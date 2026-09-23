@@ -1,102 +1,97 @@
-# Public Contracts
+# Public contracts
 
 **English** | [한국어](PUBLIC_CONTRACTS.ko.md)
 
-This document defines the stable public contracts, CLI interfaces, configuration schema, and output artifacts guaranteed by ORCA_auto.
+ORCA_auto 7 supports standalone ORCA jobs on Linux/WSL with Python 3.11+ and
+systemd supervision. Use absolute Linux paths and a separately installed ORCA
+executable. Native Windows execution is unsupported.
 
----
+## Public commands
 
-## 1. Contract Principles
+| Command | Behavior |
+| --- | --- |
+| `init` | Create/update shared configuration; `--config` selects its location |
+| `run-dir PATH` | Validate and durably enqueue an ORCA input directory; returns before execution |
+| `queue list` | List ORCA jobs and global active count; `--json` is the automation surface |
+| `queue list clear` | Clear terminal queue/run listings while preserving calculation artifacts |
+| `queue cancel TARGET` | Cancel a queue id, run id or unambiguous known path alias |
+| `index prune` | Preview missing-path index rows; only `--apply` removes them |
+| `systemd install` | Render/install matching runtime units |
+| `service status` | Inspect units and actual worker freshness; stale/undetermined returns nonzero |
+| `service restart` | Hold admission locks and refuse active or unresolved reservations unless forced |
 
-- **Semantic Versioning**: All interfaces documented here adhere to semantic versioning. Breaking changes require a major version bump.
-- **Additive JSON Extension**: JSON payloads (`--json`, `machine.json`) may receive backward-compatible new fields over time. Integration scripts should ignore unknown fields.
-- **Internal Evolution**: Internal module structures, private helper routines, and process plumbing remain free to evolve as long as documented contract behaviors are preserved.
+Queue list accepts `--engine orca`, `--kind job`, repeated status filters,
+non-negative `--limit` and explicit `--refresh`. Global active counts and admission
+blockers remain visible when filters or limits hide individual rows. Clear does
+not accept list filters. Ordinary discovery uses queue/index locations; refresh
+also scans unindexed standalone runs without registering them.
 
----
+`run-dir` chooses the latest eligible `.inp`, with deterministic name ordering
+for ties. It binds inputs, dependencies, executable identity and resource values
+to a new generation. An active directory cannot be submitted twice. `--force`
+permits a new execution where an existing successful result would otherwise be
+reused. ORCA `%pal`/`%maxcore` determine resources; configuration fills missing
+directives. There are no command-line resource overrides.
 
-## 2. Runtime Environment Contract
+## Configuration
 
-| Dimension | Supported Environment | Unsupported / Rejected |
-|---|---|---|
-| **OS** | Native Linux (Ubuntu 20.04+), WSL2 on Windows | Native Windows, macOS |
-| **Python** | Python 3.11+ | Python <= 3.10 |
-| **Path Scheme** | Absolute Linux/POSIX paths (`/home/...`) | Windows drive letters (`C:\...`), relative paths |
-| **Binaries** | Linux ELF executable binaries | Windows `.exe` binaries |
-| **Service Supervisor** | systemd 247+ | Legacy init systems |
+Discovery uses an explicit CLI path, `ORCA_AUTO_CONFIG`, the checkout's
+`config/orca_auto.yaml`, then `~/orca_auto/config/orca_auto.yaml`. A fresh wheel
+installation creates its default config outside its environment, under the last
+path. Configuration is validated before defaults: malformed mappings, explicit
+null values, duplicate/unknown keys and removed fields fail closed.
 
----
+Supported top-level keys are `runs_root`, `scheduler`, `resources`, `orca`, and
+`messenger`. See the [complete example](../config/orca_auto.yaml.example).
+`scheduler.admission_root` defaults to `<runs_root>/.admission`; its shared slots
+limit active simulations. Discord is outbound only; blank token/channel strings
+disable delivery. Notifications are best effort.
 
-## 3. Public CLI Interface
+## Durable execution and recovery
 
-The official CLI entrypoint is `orca_auto`. Scripts and automated tools should use `--json`.
+Submission saves a snapshot and durable queue acceptance before returning success.
+An uncertain enqueue outcome is reconciled before its snapshot can be removed.
+Each execution has an isolated generation beneath its public job directory.
+Nested generations and retired workflow-owned directories cannot be submitted.
 
-| Command | Contract Behavior |
-|---|---|
-| `orca_auto init` | Interactively generate or update `config/orca_auto.yaml`. |
-| `orca_auto run-dir <path>` | Validate input files, enqueue the job (`status: queued`), and return immediately. |
-| `orca_auto queue list` | Query queue state and active simulations in table or JSON format. |
-| `orca_auto queue list clear` | Prune completed, failed, or cancelled jobs from the active queue list. |
-| `orca_auto queue cancel <target>` | Safely cancel queued or active calculations. |
-| `orca_auto scaffold conformer_search <path>` | Scaffold standard `flow.yaml` template for conformer screening workflows. |
-| `orca_auto index prune` | Clean up tracked location records whose directories no longer exist on disk. |
-| `orca_auto service status` | Report systemd runtime targets and worker daemon status/freshness. |
-| `orca_auto service restart` | Safely restart worker daemons (refused while calculations are active). |
+Workers validate bound identities and preserve unresolved ownership. Calculation
+failures are recorded without automatic calculation retries. A launch denied by
+scratch capacity before execution remains pending and can be admitted later.
+Cancellation/finalization must release verified ownership before the same row or
+directory can run again. Corrupt queue/index/admission state is reported rather
+than treated as empty.
 
----
+Queue/state writers invalidate a rebuildable activity index. A warm bounded query
+does not reread all historical state. Initial indexing, explicit refresh and
+recovery still inspect source history; external manual file edits require refresh.
 
-## 4. Configuration Schema (`config/orca_auto.yaml`)
+## Machine observations and reports
 
-Configuration files accept only recognized keys and fail closed on invalid syntax or unknown fields.
+Terminal `machine.json` uses the immutable common contract
+`{"name":"factory/machine-observation","version":1}`, with operation kind
+`chemistry/orca-run` and domain payload `chemistry/results-bundle` v1.
+Lifecycle, delivery and handoff are separate decisions. Artifacts carry content
+receipts; process exit or a notification alone does not prove scientific success.
 
-- `runs_root` (required): Absolute Linux path to the top-level calculation directory.
-- `scheduler.max_active_simulations`: Global limit on concurrent active simulations (default: 4).
-- `scheduler.admission_root`: Path for admission locks and slot tracking (default: `<runs_root>/.admission`).
-- `resources.max_cores_per_task`: Default CPU cores per task.
-- `resources.max_memory_gb_per_task`: Default RAM (GB) per task.
-- `orca.paths.orca_executable`: Absolute path to ORCA binary.
-- `orca.runtime.scratch_root`: Private tmpfs RAM scratch workspace (optional).
-- `orca.runtime.scratch_min_free_gb`: Minimum free memory required before launching in scratch.
-- `messenger.provider`: Notification provider (`discord`).
-- `messenger.discord.bot_token` / `default_channel_id`: Discord bot token and notification channel ID.
+The reader verifies state, generation ownership, file binding and ORCA-owned
+summary/results fields. Missing or inconsistent owned fields are rejected;
+additional domain fields remain allowed. Each distinct artifact is hashed once
+per read and its identity is rechecked before acceptance. Do not edit generated
+reports or interpret private `job_state.json` as a public handoff.
 
----
+Human HTML and SI reports depend on the calculation type and available verified
+evidence. Missing charge/multiplicity or frequency evidence is reported as
+unavailable, not inferred as a neutral singlet or a successful stationary point.
+Users remain responsible for chemical input design and scientific acceptance.
 
-## 5. Queue and Lifecycle Contracts
+## Version 7 removal
 
-- **Asynchronous Queueing**: `run-dir` guarantees durable enqueueing before returning. Users can safely disconnect terminal sessions.
-- **Generation Isolation**: Every execution creates an isolated subdirectory (`YYYYMMDD-HHMMSS-<hex>`), preserving exact input snapshots and output artifacts.
-- **Duplicate Prevention**: Submitting an active job directory is rejected to prevent race conditions. Re-submitting a finished directory spawns a clean new generation.
-- **No Uncontrolled Retries**: Calculation failures preserve the root cause and output logs without unwanted automatic reruns.
+Workflows, conformer scaffolds, xTB/CREST execution, workflow configuration,
+grouped workflow activity and the optional `orca_auto_workflows` distribution
+are removed. There is no execution alias or state migration. Historical files
+are retained, and retired admission/state identifiers remain readable only for
+ownership/accounting safety. Use the [upgrade procedure](RELEASE.md#upgrading-to-70).
 
----
-
-## 6. Output Artifacts and Machine Metadata
-
-Completed calculation generations contain:
-
-### `machine.json` (Public Observation Envelope)
-The standard machine-readable contract for automated downstream analysis:
-- `contract`: Schema identifier (`factory/machine-observation:1`).
-- `operation`: Operation kind (`chemistry/orca-run` or `chemistry/workflow`).
-- `lifecycle`: Final outcome (`succeeded`, `failed`, `cancelled`) and wall times.
-- `payload.results`: Electronic energies, vibrational modes, and chemical metadata.
-- `artifacts`: Manifest of generated files with SHA-256 receipts.
-
-### Supporting Information (`si_block.md`)
-- For stationary point calculations, renders a clean Markdown block containing final energies, ZPE/thermal corrections, and Cartesian coordinates.
-
----
-
-## 7. Workflow Contracts (`flow.yaml`)
-
-- The conformer screening workflow (`conformer_screening`) systematically sequences CREST search, xTB screening, and ORCA DFT optimization.
-- Execution checkpoints are tracked in `flow.yaml`, enabling safe resumption from the last completed stage after interruptions.
-
----
-
-## 8. Non-Contract Surfaces
-
-The following are internal implementation details subject to change without notice:
-- Subprocess entrypoints like `orca_auto queue worker`.
-- Internal state files like `job_state.json`.
-- Terminal ANSI color formatting and line wrapping.
+Public behavior changes use semantic versioning. Consumers should ignore unknown
+additive JSON fields. Python internals, state files, worker subprocess plumbing,
+and terminal formatting are not stable integration APIs.

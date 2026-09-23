@@ -460,10 +460,8 @@ class OrcaRunner:
                             # single-threaded and N ranks do not each spawn N
                             # BLAS/OMP threads (N^2 oversubscription). The %pal
                             # count in the input keeps ORCA's real parallelism.
-                            # xTB/CREST already pin threads through the
-                            # shared launcher; ORCA's bespoke launch-gate path
-                            # otherwise inherits the worker env unpinned. The env
-                            # flows through the gate's execve into ORCA.
+                            # The explicit env flows through the launch gate's
+                            # execve into ORCA.
                             "env": thread_limited_env(dict(os.environ), 1),
                         }
                         inherited_fds = [launch_gate_fd, executable_fd]

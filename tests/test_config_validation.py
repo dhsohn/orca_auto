@@ -229,7 +229,7 @@ class TestConfigValidation:
             with pytest.raises(ValueError, match="messenger.provider"):
                 load_config(str(cfg_path))
 
-    def test_workflow_root_equals_runs_root(self) -> None:
+    def test_runtime_root_equals_runs_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             allowed = root / "orca_runs"
@@ -249,7 +249,6 @@ class TestConfigValidation:
 
             cfg = load_config(str(cfg_path))
 
-            assert cfg.workflow_root == str(allowed)
             assert cfg.runtime.allowed_root == str(allowed)
             assert cfg.paths.orca_executable == str(fake_orca.resolve())
 

@@ -18,7 +18,7 @@ from orca_auto import cli_systemd_restart, cli_systemd_restart_guard
 from orca_auto.core.admission import store
 
 WORKER = "orca_auto-queue-worker@alice.service"
-WORKFLOW = "orca_auto-workflow-worker@alice.service"
+OTHER_WORKER = "orca_auto-queue-worker@carol.service"
 
 
 @dataclass(frozen=True)
@@ -62,14 +62,13 @@ class _Evidence:
         self.environ: dict[int, bytes] = {}
         self.commands: list[tuple[str, ...]] = []
         for index, (unit, site) in enumerate(sites.items(), start=4242):
-            app = "workflow" if "workflow-worker" in unit else "orca"
             self.units[unit] = {
                 "EnvironmentFiles": "",
                 "UnsetEnvironment": "",
                 "Environment": shlex.quote(f"ORCA_AUTO_CONFIG={site.config}"),
                 "ExecStart": (
                     "{ path=/fixture/.venv/bin/python ; argv[]=/fixture/.venv/bin/python -m orca_auto.cli "
-                    f"queue worker --app {app} ; ignore_errors=no ; }}"
+                    "queue worker --app orca ; ignore_errors=no ; }"
                 ),
                 "MainPID": str(index),
                 "ExecMainStartTimestamp": "Mon 2099-01-05 00:00:00 UTC",
@@ -412,7 +411,9 @@ def test_multiple_service_roots_are_sorted_and_deduplicated(
 ) -> None:
     high = _site(tmp_path, "z-root")
     low = _site(tmp_path, "a-root")
-    evidence = _Evidence({WORKER: high, WORKFLOW: low, "orca_auto-queue-worker@bob.service": high})
+    evidence = _Evidence(
+        {WORKER: high, OTHER_WORKER: low, "orca_auto-queue-worker@bob.service": high}
+    )
     original_lock = cli_systemd_restart_guard.admission_lock
     acquired: list[Path] = []
 

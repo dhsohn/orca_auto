@@ -23,8 +23,7 @@ from orca_auto.cli_systemd_apply import cmd_systemd_install
 from orca_auto.cli_systemd_restart import cmd_service_restart
 from orca_auto.cli_systemd_status import cmd_service_status
 from orca_auto.core.commands.worker_options import add_worker_common_cli_options
-from orca_auto.core.engine_catalog import known_engine_ids, supervised_engine_entries
-from orca_auto.core.extensions import workflows_available
+from orca_auto.core.engine_catalog import known_engine_ids
 from orca_auto.core.terminal import emit_error
 from orca_auto.systemd_plan import DEFAULT_SYSTEMD_UNIT_DIR
 
@@ -96,56 +95,18 @@ def _non_negative_limit(value: str) -> int:
     return parsed
 
 
-def add_resource_override_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--max-cores",
-        type=int,
-        default=None,
-        help=(
-            "Set workflow max cores; standalone ORCA uses %%pal/%%maxcore from the selected input"
-        ),
-    )
-    parser.add_argument(
-        "--max-memory-gb",
-        type=int,
-        default=None,
-        help=(
-            "Set workflow max memory in GB; standalone ORCA uses %%pal/%%maxcore "
-            "from the selected input"
-        ),
-    )
-
-
-def _add_workflow_scaffold_shortcut(
-    scaffold_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
-    *,
-    name: str,
-    workflow_type: str,
-    help_text: str,
-) -> None:
-    parser = scaffold_subparsers.add_parser(name, help=help_text)
-    parser.add_argument("root", help="Workflow input directory to create")
-    parser.set_defaults(
-        func=cli_handlers.cmd_workflow_scaffold,
-        workflow_type=workflow_type,
-    )
-
-
 def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     run_dir_parser = subparsers.add_parser(
         "run-dir",
-        help="Submit an ORCA or workflow input directory.",
+        help="Submit an ORCA input directory.",
     )
     add_engine_config_argument(run_dir_parser)
     add_orca_logging_arguments(run_dir_parser)
-    run_dir_parser.add_argument("path", help="ORCA or workflow input directory")
+    run_dir_parser.add_argument("path", help="ORCA input directory")
     run_dir_parser.add_argument(
         "--force",
         action="store_true",
-        help=(
-            "Force ORCA re-run, or allow restarting an existing workflow workspace outside "
-            "failed status"
-        ),
+        help=("Force an ORCA re-run"),
     )
     run_dir_parser.add_argument(
         "--priority",
@@ -153,7 +114,6 @@ def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         default=None,
         help="Queue priority when submission is enqueued (lower = higher)",
     )
-    add_resource_override_arguments(run_dir_parser)
     add_json_argument(run_dir_parser, help_text="Print JSON submission output")
     run_dir_parser.set_defaults(func=cli_handlers.cmd_run_dir)
 
@@ -171,35 +131,10 @@ def add_init_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPars
     init_parser.set_defaults(func=cli_handlers.cmd_init)
 
 
-def add_scaffold_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    scaffold_parser = subparsers.add_parser(
-        "scaffold",
-        help="Create raw input workflow scaffold directories.",
-    )
-    if not workflows_available():
-        scaffold_parser.add_argument("workflow_type", nargs="?")
-        scaffold_parser.add_argument("root", nargs="?")
-        scaffold_parser.set_defaults(func=cli_handlers.cmd_workflow_scaffold)
-        return
-    from orca_auto.flow.templates import WORKFLOW_SCAFFOLD_SHORTCUTS
-
-    scaffold_subparsers = scaffold_parser.add_subparsers(dest="scaffold_app", required=True)
-
-    for name, workflow_type, help_text in WORKFLOW_SCAFFOLD_SHORTCUTS:
-        _add_workflow_scaffold_shortcut(
-            scaffold_subparsers,
-            name=name,
-            workflow_type=workflow_type,
-            help_text=help_text,
-        )
-
-
 def _add_queue_list_parser(
     queue_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    list_parser = queue_subparsers.add_parser(
-        "list", help="List workflows and engine activities together."
-    )
+    list_parser = queue_subparsers.add_parser("list", help="List ORCA jobs.")
     list_parser.add_argument(
         "action",
         nargs="?",
@@ -219,12 +154,14 @@ def _add_queue_list_parser(
         help="Optional non-negative maximum number of activities to print",
     )
     list_parser.add_argument(
-        "--refresh", action="store_true", help="Refresh workflow registry before listing"
+        "--refresh",
+        action="store_true",
+        help="Discover unindexed ORCA runs",
     )
     list_parser.add_argument(
         "--engine",
         action="append",
-        choices=[*known_engine_ids(), "workflow"],
+        choices=list(known_engine_ids()),
         help="Filter by engine; may be passed more than once",
     )
     list_parser.add_argument(
@@ -233,7 +170,7 @@ def _add_queue_list_parser(
     list_parser.add_argument(
         "--kind",
         action="append",
-        choices=["job", "workflow"],
+        choices=["job"],
         help="Filter by activity kind; may be passed more than once",
     )
     add_json_argument(list_parser)
@@ -243,12 +180,8 @@ def _add_queue_list_parser(
 def _add_queue_cancel_parser(
     queue_subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
 ) -> None:
-    cancel_parser = queue_subparsers.add_parser(
-        "cancel", help="Cancel a workflow or engine activity."
-    )
-    cancel_parser.add_argument(
-        "target", help="Activity id, workflow id, queue id, run id, or known path alias"
-    )
+    cancel_parser = queue_subparsers.add_parser("cancel", help="Cancel an ORCA job.")
+    cancel_parser.add_argument("target", help="Activity id, queue id, run id, or known path alias")
     cancel_parser.add_argument(
         "--orca_auto-config",
         "--config",
@@ -263,31 +196,12 @@ def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--app",
         action="append",
-        choices=[
-            *(
-                entry.engine_id
-                for entry in supervised_engine_entries()
-                if entry.default_supervision_role == "default"
-            ),
-            "workflow",
-        ],
-        help=(
-            "Worker app to supervise; defaults to ORCA only and may be passed more than once; "
-            "workflow explicitly includes its xTB/CREST workers"
-        ),
+        choices=["orca"],
+        help="Worker app to supervise (default: orca)",
     )
-    json_help = "Print worker commands as JSON without starting them"
-    if workflows_available():
-        from orca_auto.flow.cli.worker_options import (
-            WorkflowWorkerOptionConfig,
-            add_workflow_worker_cli_options,
-        )
-
-        add_workflow_worker_cli_options(
-            parser, config=WorkflowWorkerOptionConfig(json_help=json_help)
-        )
-    else:
-        add_worker_common_cli_options(parser, json_help=json_help)
+    add_worker_common_cli_options(
+        parser, json_help="Print worker commands as JSON without starting them"
+    )
 
 
 def _add_queue_worker_parser(
@@ -301,7 +215,7 @@ def _add_queue_worker_parser(
 def add_queue_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     queue_parser = subparsers.add_parser(
         "queue",
-        help="Unified queue and worker commands across ORCA, workflow-managed internal engines, and workflows.",
+        help="ORCA queue and worker commands.",
     )
     queue_subparsers = queue_parser.add_subparsers(dest="queue_command", required=True)
     _add_queue_list_parser(queue_subparsers)
@@ -357,7 +271,7 @@ def add_systemd_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     install_parser.add_argument(
         "--repo",
         required=True,
-        help="Absolute path to the orca_auto repository checkout",
+        help="Absolute path to a repository checkout or a prepared wheel runtime",
     )
     install_parser.add_argument(
         "--config",
@@ -466,7 +380,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_queue_parser(subparsers)
     add_run_dir_parser(subparsers)
     add_init_parser(subparsers)
-    add_scaffold_parser(subparsers)
     add_index_parser(subparsers)
     add_systemd_parser(subparsers)
     add_service_parser(subparsers)

@@ -19,6 +19,7 @@ from ..statuses import RunStatus
 from .entries import (
     WORKER_PID_FILE_NAME,
     queue_entry_id,
+    queue_entry_is_retired_workflow_owned,
     queue_entry_reaction_dir,
     queue_entry_status,
 )
@@ -168,6 +169,8 @@ def reconcile_orphaned_running_entries(
             if not normalized_dir or not Path(normalized_dir).is_relative_to(
                 allowed_root.expanduser().resolve()
             ):
+                continue
+            if queue_entry_is_retired_workflow_owned(entry, allowed_root):
                 continue
             if queue_id in (protected_queue_ids or set()) or (
                 queue_id,

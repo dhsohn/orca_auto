@@ -2,10 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from orca_auto.flow.adapters._orca_contract_context import (
-    LoaderContext,
-    load_context_payloads,
-)
 from orca_auto.orca.job_locations._generation import (
     current_generation_payloads,
     payload_matches_queue_generation,
@@ -104,38 +100,3 @@ def test_queue_present_accepts_task_identity_before_terminal_run_update() -> Non
         {"task_id": "job-a"},
         {"job_id": "job-a", "run_id": "run-a"},
     )
-
-
-def test_adapter_rejects_same_spoofed_inner_pair_before_flattening() -> None:
-    def normalized_payload(*, outer_job_id: str) -> dict[str, object]:
-        return {
-            "schema_version": 1,
-            "engine": "orca",
-            "job": {"id": outer_job_id, "task_id": outer_job_id},
-            "status": {"state": "completed"},
-            "input": {},
-            "timestamps": {},
-            "artifacts": {},
-            "engine_payload": {
-                "job_id": "job-expected",
-                "run_id": "run-expected",
-                "attempts": [{"status": "completed"}],
-            },
-        }
-
-    context = LoaderContext(
-        tracked_artifact_dir=None,
-        tracked_dir=None,
-        tracked_record=None,
-        state=normalized_payload(outer_job_id="job-foreign-state"),
-        report=normalized_payload(outer_job_id="job-foreign-report"),
-        queue_entry={
-            "task_id": "job-expected",
-            "metadata": {"run_id": "run-expected"},
-        },
-    )
-
-    load_context_payloads(context)
-
-    assert context.state == {}
-    assert context.report == {}

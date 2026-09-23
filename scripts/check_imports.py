@@ -1,9 +1,4 @@
-"""Run all import contracts over both source roots in this checkout.
-
-Grimp reads ModuleSpec locations without executing pkgutil namespace initializers.
-Supply the two explicit source locations for static analysis only; runtime import
-discovery still depends exclusively on which distributions were installed.
-"""
+"""Run import contracts over the source package in this checkout."""
 
 from __future__ import annotations
 
@@ -13,8 +8,8 @@ from pathlib import Path
 
 
 def configure_source_roots(repo: Path) -> None:
-    package_roots = [repo / "src" / "orca_auto", repo / "extensions/workflows/src/orca_auto"]
-    for required in (package_roots[0] / "__init__.py", package_roots[1] / "flow/__init__.py"):
+    package_roots = [repo / "src" / "orca_auto"]
+    for required in (package_roots[0] / "__init__.py",):
         if not required.is_file():
             raise SystemExit(f"Missing source package for import contracts: {required}")
     spec = importlib.util.spec_from_file_location(

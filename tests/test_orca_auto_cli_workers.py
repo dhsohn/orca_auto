@@ -13,7 +13,6 @@ from orca_auto import cli_worker_supervision as worker_supervision
 from orca_auto import cli_workers as unified_cli
 from orca_auto import cli_workers as worker_conflicts
 from orca_auto import cli_workers as worker_specs
-from orca_auto.cli_parsers import build_parser
 from orca_auto.core.config import discovery
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
@@ -111,9 +110,7 @@ def test_build_worker_specs_defaults_to_orca_only(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(worker_specs, "worker_module_command", fake_worker_module_command)
 
-    specs = worker_specs._build_worker_specs(
-        SimpleNamespace(app=None, workflow_root=None, orca_auto_config=None)
-    )
+    specs = worker_specs._build_worker_specs(SimpleNamespace(app=None, orca_auto_config=None))
 
     assert [spec.app for spec in specs] == ["orca"]
     assert str(specs[0].argv[2]) == "orca_auto.core.engines.queue_worker"
@@ -144,7 +141,6 @@ def test_build_worker_specs_runs_each_selected_default_engine_once(
     specs = worker_specs._build_worker_specs(
         SimpleNamespace(
             app=["orca", "orca"],
-            workflow_root=None,
             orca_auto_config=None,
         )
     )
@@ -153,99 +149,6 @@ def test_build_worker_specs_runs_each_selected_default_engine_once(
     assert [spec.argv[-2:] for spec in specs] == [
         ("--engine", "orca"),
     ]
-
-
-def test_build_worker_specs_does_not_infer_workflow_workers_from_configured_root(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
-    )
-    monkeypatch.setattr(
-        discovery, "shared_workflow_root_from_config", lambda config_path: "/tmp/workflows"
-    )
-
-    def fake_worker_module_command(
-        *,
-        config_path: str,
-        repo_root: str | None,
-        module_name: str,
-        tail_argv: list[str],
-    ) -> tuple[list[str], str | None, dict[str, str] | None]:
-        del repo_root
-        return (["python", "-m", module_name, "--config", config_path, *tail_argv], None, {})
-
-    monkeypatch.setattr(worker_specs, "worker_module_command", fake_worker_module_command)
-
-    specs = worker_specs._build_worker_specs(
-        SimpleNamespace(app=None, workflow_root=None, orca_auto_config=None)
-    )
-
-    assert [spec.app for spec in specs] == ["orca"]
-    assert str(specs[0].argv[2]) == "orca_auto.core.engines.queue_worker"
-    assert specs[0].argv[-2:] == ("--engine", "orca")
-
-
-def test_build_worker_specs_requires_workflow_root(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
-    )
-    with pytest.raises(ValueError, match="workflow worker requires runs_root in orca_auto.yaml"):
-        worker_specs._build_worker_specs(
-            SimpleNamespace(app=["workflow"], workflow_root=None, orca_auto_config=None)
-        )
-
-
-def test_build_worker_specs_explicit_workflow_app_uses_configured_workflow_root(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
-    )
-    monkeypatch.setattr(
-        discovery, "shared_workflow_root_from_config", lambda config_path: "/tmp/workflows"
-    )
-
-    specs = worker_specs._build_worker_specs(
-        SimpleNamespace(app=["workflow"], workflow_root=None, orca_auto_config=None)
-    )
-
-    assert [spec.app for spec in specs] == ["crest", "xtb", "workflow"]
-    assert str(specs[0].argv[2]) == "orca_auto.core.engines.queue_worker"
-    assert str(specs[1].argv[2]) == "orca_auto.core.engines.queue_worker"
-    assert specs[0].argv[-2:] == ("--engine", "crest")
-    assert specs[1].argv[-2:] == ("--engine", "xtb")
-    assert "--workflow-root" in specs[2].argv
-    assert "/tmp/workflows" in specs[2].argv
-
-
-def test_workflow_root_for_args_uses_shared_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: list[str | None] = []
-
-    monkeypatch.setattr(
-        discovery, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
-    )
-
-    def _shared_workflow_root(config_path: str | None) -> str:
-        seen.append(config_path)
-        return "/tmp/from-config-workflows"
-
-    monkeypatch.setattr(
-        discovery,
-        "shared_workflow_root_from_config",
-        _shared_workflow_root,
-    )
-
-    discovered = discovery.workflow_root_for_args(
-        SimpleNamespace(
-            workflow_root=None,
-            orca_auto_config=None,
-            config=None,
-        )
-    )
-
-    assert discovered == "/tmp/from-config-workflows"
-    assert seen == ["/tmp/orca_auto.yaml"]
 
 
 def test_engine_config_for_args_uses_discovered_shared_config(
@@ -320,7 +223,7 @@ def test_cmd_queue_worker_returns_supervisor_status(monkeypatch: pytest.MonkeyPa
     )
 
     result = unified_cli.cmd_queue_worker(
-        SimpleNamespace(app=["orca"], workflow_root=None, orca_auto_config=None, json=False)
+        SimpleNamespace(app=["orca"], orca_auto_config=None, json=False)
     )
 
     assert result == 0
@@ -349,9 +252,7 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
     monkeypatch.setattr(worker_supervision, "_run_worker_supervisor", lambda built_specs: 99)
 
     result = unified_cli.cmd_queue_worker(
-        SimpleNamespace(
-            app=["orca"], workflow_root=None, orca_auto_config="/tmp/orca_auto.yaml", json=False
-        )
+        SimpleNamespace(app=["orca"], orca_auto_config="/tmp/orca_auto.yaml", json=False)
     )
 
     assert result == 1
@@ -368,28 +269,26 @@ def test_cmd_queue_worker_json_outputs_commands(
 ) -> None:
     specs = [
         worker_supervision.WorkerSpec(
-            app="workflow",
+            app="orca",
             argv=(
                 "python",
                 "-m",
-                "orca_auto.flow.cli.workflow",
-                "--workflow-root",
-                "/tmp/workflows",
+                "orca_auto.core.engines.queue_worker",
+                "--engine",
+                "orca",
             ),
         )
     ]
     monkeypatch.setattr(unified_cli, "_build_worker_specs", lambda args: specs)
 
     result = unified_cli.cmd_queue_worker(
-        SimpleNamespace(
-            app=["workflow"], workflow_root="/tmp/workflows", orca_auto_config=None, json=True
-        )
+        SimpleNamespace(app=["orca"], orca_auto_config=None, json=True)
     )
 
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["workers"][0]["app"] == "workflow"
-    assert payload["workers"][0]["argv"][2] == "orca_auto.flow.cli.workflow"
+    assert payload["workers"][0]["app"] == "orca"
+    assert payload["workers"][0]["argv"][2] == "orca_auto.core.engines.queue_worker"
 
 
 def test_worker_command_and_selection_helpers_cover_edges() -> None:
@@ -398,101 +297,18 @@ def test_worker_command_and_selection_helpers_cover_edges() -> None:
     assert worker_conflicts._format_command_argv(("python", "-m", "orca_auto.cli")) == (
         "python -m orca_auto.cli"
     )
-    assert worker_specs._selected_worker_apps(["orca", "orca", "workflow", ""]) == [
+    assert worker_specs._selected_worker_apps(["orca", "orca", ""]) == [
         "orca",
-        "workflow",
     ]
 
     with pytest.raises(ValueError, match="Unsupported worker app"):
         worker_specs._selected_worker_apps(["bad-app"])
 
 
-@pytest.mark.parametrize("app", ["xtb", "crest"])
+@pytest.mark.parametrize("app", ["xtb", "crest", "workflow"])
 def test_workflow_engine_workers_are_not_direct_app_selections(app: str) -> None:
     with pytest.raises(ValueError, match=f"Unsupported worker app: {app}"):
         worker_specs._selected_worker_apps([app])
-
-
-def test_worker_tail_and_workflow_spec_include_optional_flags() -> None:
-    assert worker_specs._engine_worker_tail_argv(app="orca") == ["--engine", "orca"]
-    assert worker_specs._engine_worker_tail_argv(app="xtb") == ["--engine", "xtb"]
-
-    spec = worker_specs._workflow_worker_spec(
-        workflow_root="/tmp/workflows",
-        config_path="/tmp/orca_auto.yaml",
-        args=build_parser().parse_args(
-            [
-                "queue",
-                "worker",
-                "--app",
-                "workflow",
-                "--no-submit",
-                "--refresh-registry",
-                "--refresh-each-cycle",
-                "--max-cycles",
-                "3",
-                "--interval-seconds",
-                "2.5",
-                "--lock-timeout-seconds",
-                "9",
-            ]
-        ),
-    )
-
-    assert spec.restart_on_clean_exit is False
-    assert spec.argv[1:] == (
-        "-m",
-        "orca_auto.flow.cli.workflow",
-        "--workflow-root",
-        str(Path("/tmp/workflows").resolve()),
-        "--orca_auto-config",
-        str(Path("/tmp/orca_auto.yaml").resolve()),
-        "--no-submit",
-        "--refresh-registry",
-        "--refresh-each-cycle",
-        "--max-cycles",
-        "3",
-        "--interval-seconds",
-        "2.5",
-        "--lock-timeout-seconds",
-        "9.0",
-    )
-
-    default_spec = worker_specs._workflow_worker_spec(
-        workflow_root="/tmp/workflows",
-        config_path="/tmp/orca_auto.yaml",
-        args=build_parser().parse_args(["queue", "worker", "--app", "workflow"]),
-    )
-
-    assert default_spec.restart_on_clean_exit is True
-
-
-def test_workflow_only_worker_flags_require_workflow_app() -> None:
-    with pytest.raises(ValueError, match="workflow-only worker flags require --app workflow"):
-        worker_specs._workflow_only_worker_flag_error(
-            SimpleNamespace(
-                no_submit=True,
-                refresh_registry=False,
-                refresh_each_cycle=False,
-                max_cycles=0,
-                interval_seconds=0,
-                lock_timeout_seconds=0,
-            )
-        )
-
-    assert (
-        worker_specs._workflow_only_worker_flag_error(
-            SimpleNamespace(
-                no_submit=False,
-                refresh_registry=False,
-                refresh_each_cycle=False,
-                max_cycles=2,
-                interval_seconds=0,
-                lock_timeout_seconds=0,
-            )
-        )
-        == "--max-cycles requires --app workflow"
-    )
 
 
 def test_cmd_queue_worker_reports_spec_build_errors(
@@ -522,7 +338,7 @@ def test_detect_existing_orca_worker_conflict_edges(
 
     assert (
         worker_conflicts._detect_existing_orca_worker_conflict(
-            [worker_supervision.WorkerSpec(app="workflow", argv=("workflow", "worker"))],
+            [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
             args=args,
         )
         is None

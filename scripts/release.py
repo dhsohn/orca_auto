@@ -1,4 +1,4 @@
-"""Guard and stage the matched release; never upload, overwrite, or repair a release."""
+"""Guard and stage the release; never upload, overwrite, or repair a release."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import Any
 from urllib.request import urlopen
 from zipfile import ZipFile
 
-PROJECTS = ("orca_auto", "orca_auto_workflows")
+PROJECTS = ("orca_auto",)
 MAX_PYPI_RESPONSE = 1024 * 1024
 
 
@@ -73,17 +73,10 @@ def guard(repo: Path, tag: str, commit: str) -> str:
     if _git(repo, "status", "--porcelain", "--untracked-files=normal"):
         raise ValueError("release source tree must be clean")
     core = tomllib.loads((repo / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    workflows = tomllib.loads(
-        (repo / "extensions/workflows/pyproject.toml").read_text(encoding="utf-8")
-    )["project"]
-    if (core["name"], workflows["name"]) != PROJECTS:
-        raise ValueError("unexpected release project names")
-    if core["version"] != version or workflows["version"] != version:
+    if core["name"] != "orca_auto":
+        raise ValueError("unexpected release project name")
+    if core["version"] != version:
         raise ValueError("tag and source versions differ")
-    if core["optional-dependencies"]["workflows"] != [f"orca_auto_workflows=={version}"]:
-        raise ValueError("core workflows extra must pin the release version")
-    if workflows["dependencies"] != [f"orca_auto=={version}"]:
-        raise ValueError("workflows must pin the core release version")
     _changelog(repo, version)
     return version
 
@@ -139,7 +132,7 @@ def _checksums(digests: dict[str, str]) -> str:
 def stage(repo: Path, tag: str, commit: str, work: Path, output: Path) -> None:
     version = guard(repo, tag, commit)
     sources: list[Path] = []
-    for directory, project in zip(("core-dist", "workflows-dist"), PROJECTS, strict=True):
+    for directory, project in zip(("core-dist",), PROJECTS, strict=True):
         names = {name for name in filenames(version) if name.startswith(f"{project}-{version}-")}
         names.add(f"{project}-{version}.tar.gz")
         _regular_files(work / directory, names)
@@ -162,7 +155,7 @@ def stage(repo: Path, tag: str, commit: str, work: Path, output: Path) -> None:
     )
     (output / "SHA256SUMS").write_text(_checksums(digests), encoding="utf-8")
     (output / "release-notes.md").write_text(
-        f"## Motivation\n\nI publish ORCA_auto {version} core and optional workflows as a matched release.\n\n"
+        f"## Motivation\n\nORCA_auto {version} provides durable queues and supervised ORCA execution.\n\n"
         f"## Changes\n\n{_changelog(repo, version)}\n\n"
         "## Verification\n\n"
         f"- Release commit: `{commit}` (`{tag}`).\n"
@@ -195,7 +188,7 @@ def verify_artifacts(artifacts: Path, tag: str, commit: str) -> dict[str, Any]:
         raise ValueError("artifact release identity differs from selected release")
     digests = manifest["sha256"]
     if not isinstance(digests, dict) or set(digests) != set(filenames(version)):
-        raise ValueError("release manifest must describe exactly four distributions")
+        raise ValueError("release manifest must describe exactly two distributions")
     for name, digest in digests.items():
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
             raise ValueError("invalid release digest")

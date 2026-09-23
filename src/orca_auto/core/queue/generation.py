@@ -56,8 +56,7 @@ def visible_generation_children(job_dir: Path) -> tuple[Path, ...]:
 def new_visible_generation_name() -> str:
     """Mint a fresh user-visible generation name (`YYYYMMDD-HHMMSS-<8hex>`).
 
-    The one shared factory behind ORCA execution generations and workflow
-    workspace generations, so both always match VISIBLE_GENERATION_NAME_RE.
+    Every ORCA execution generation matches VISIBLE_GENERATION_NAME_RE.
     """
 
     local_timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")

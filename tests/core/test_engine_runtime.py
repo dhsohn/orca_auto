@@ -69,17 +69,17 @@ def _internal_entry(engine: str, queue_id: str) -> SimpleNamespace:
 
 
 def test_engine_identity_rejects_conflicting_present_labels() -> None:
-    accept_xtb = own_engine_accept_entry("xtb")
+    accept_orca = own_engine_accept_entry("orca")
 
     own_entry = SimpleNamespace(
-        queue_id="q-xtb",
-        app_name="orca_auto_xtb",
-        task_id="xtb-1",
-        task_kind="xtb_opt",
-        engine="xtb",
+        queue_id="q-orca",
+        app_name="orca_auto_orca",
+        task_id="orca-1",
+        task_kind="orca_run_inp",
+        engine="orca",
         metadata={"job_type": "opt"},
     )
-    assert accept_xtb(own_entry)
+    assert accept_orca(own_entry)
 
     for overrides in (
         {"app_name": "orca_auto_crest"},
@@ -90,7 +90,7 @@ def test_engine_identity_rejects_conflicting_present_labels() -> None:
         {"task_kind": "crest_conformer_search"},
         {"app_name": "", "engine": ""},
     ):
-        assert not accept_xtb(SimpleNamespace(**{**vars(own_entry), **overrides}))
+        assert not accept_orca(SimpleNamespace(**{**vars(own_entry), **overrides}))
 
     assert not entry_matches_engine_identity(
         SimpleNamespace(
@@ -154,7 +154,7 @@ def test_engine_queue_runtime_listing_filters_missing_roots_and_foreign_entries(
 ) -> None:
     queue_root = tmp_path / "queue"
     queue_root.mkdir()
-    own_entry = _internal_entry("demo", "own")
+    own_entry = _internal_entry("orca", "own")
     foreign_entry = _internal_entry("crest", "foreign")
     seen: list[tuple[str, Path | str]] = []
 
@@ -172,7 +172,7 @@ def test_engine_queue_runtime_listing_filters_missing_roots_and_foreign_entries(
         list_queue=list_queue,
         dequeue_next=lambda _root: None,
         worker_pid_file_name="worker.pid",
-        accept_entry_fn=own_engine_accept_entry("demo"),
+        accept_entry_fn=own_engine_accept_entry("orca"),
     )
 
     assert runtime.queue_entries_with_roots(
@@ -190,9 +190,9 @@ def test_engine_queue_runtime_peek_preserves_selection_without_dequeuing(
     root_a.mkdir()
     root_b.mkdir()
     foreign_entry = _internal_entry("crest", "foreign")
-    own_entry = _internal_entry("demo", "own")
+    own_entry = _internal_entry("orca", "own")
     own_entry.priority = -1
-    fallback_entry = _internal_entry("demo", "fallback")
+    fallback_entry = _internal_entry("orca", "fallback")
     fallback_entry.priority = 5
     seen: list[Path | str] = []
 
@@ -210,7 +210,7 @@ def test_engine_queue_runtime_peek_preserves_selection_without_dequeuing(
         dequeue_next=unexpected_dequeue,
         dequeue_entry_if_pending=unexpected_dequeue if dequeue_by_id else None,
         worker_pid_file_name="worker.pid",
-        accept_entry_fn=own_engine_accept_entry("demo"),
+        accept_entry_fn=own_engine_accept_entry("orca"),
     )
 
     expected = (root_a, own_entry) if dequeue_by_id else (root_b, fallback_entry)
@@ -222,8 +222,8 @@ def test_engine_queue_runtime_peek_preserves_selection_without_dequeuing(
 def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(tmp_path: Path) -> None:
     root = tmp_path / "queue"
     root.mkdir()
-    tracked = _internal_entry("demo", "queue-tracked")
-    behind = _internal_entry("demo", "queue-behind")
+    tracked = _internal_entry("orca", "queue-tracked")
+    behind = _internal_entry("orca", "queue-behind")
     foreign = _internal_entry("crest", "queue-foreign")
     claimed: list[tuple[str, Any]] = []
 
@@ -238,7 +238,7 @@ def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(tmp_path: Pa
         dequeue_next=lambda _root: pytest.fail("a skipped head row must not be claimed"),
         dequeue_entry_if_pending=dequeue_by_id,
         worker_pid_file_name="worker.pid",
-        accept_entry_fn=own_engine_accept_entry("demo"),
+        accept_entry_fn=own_engine_accept_entry("orca"),
     )
 
     def skip(entry: Any) -> bool:
@@ -258,14 +258,14 @@ def test_skip_predicate_is_ignored_by_a_runtime_that_claims_its_head_row(tmp_pat
     # would disagree with what the dequeue then claims.
     root = tmp_path / "queue"
     root.mkdir()
-    head = _internal_entry("demo", "queue-head")
+    head = _internal_entry("orca", "queue-head")
     runtime = EngineQueueRuntime(
         load_config=lambda value: value,
         runtime_roots_for_cfg=lambda _cfg: (root,),
         list_queue=lambda _root: [head],
         dequeue_next=lambda _root: head,
         worker_pid_file_name="worker.pid",
-        accept_entry_fn=own_engine_accept_entry("demo"),
+        accept_entry_fn=own_engine_accept_entry("orca"),
     )
 
     assert runtime.peek_next_entry(object(), skip_entry_fn=lambda _entry: True) == (root, head)
@@ -298,7 +298,7 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
 ) -> None:
     queue_root = tmp_path / "queue"
     queue_root.mkdir()
-    own_entry = _internal_entry("demo", "queue-own")
+    own_entry = _internal_entry("orca", "queue-own")
     foreign_entry = _internal_entry("crest", "queue-foreign")
     looked_up: list[tuple[Path | str, str]] = []
 
@@ -307,7 +307,7 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
         return own_entry if queue_id == own_entry.queue_id else foreign_entry
 
     definition = EngineDefinition(
-        engine="demo",
+        engine="orca",
         load_config=lambda path: path,
         queue_worker_runner=lambda _argv: 0,
         queue_functions=EngineQueueFunctions(
@@ -339,7 +339,7 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
 
 def test_engine_definition_requires_worker_pid_in_queue_contract() -> None:
     definition = EngineDefinition(
-        engine="demo",
+        engine="orca",
         load_config=lambda path: path,
         queue_worker_runner=lambda _argv: 0,
         queue_functions=EngineQueueFunctions(
@@ -479,7 +479,7 @@ def test_engine_queue_runtime_reserves_admission_slot(tmp_path: Path) -> None:
     assert (
         runtime.reserve_admission_slot(
             cfg,
-            engine="xtb",
+            engine="orca",
             reserve_slot_fn=reserve_slot,
         )
         == "slot-1"
@@ -489,9 +489,10 @@ def test_engine_queue_runtime_reserves_admission_slot(tmp_path: Path) -> None:
             "root": "/tmp/admission",
             "limit": 2,
             "kwargs": {
-                "source": "orca_auto.flow.engines.xtb.queue_worker",
-                "app_name": "orca_auto_xtb",
+                "source": "orca_auto.orca.queue_worker",
+                "app_name": "orca_auto_orca",
                 "engine_process_state": "idle",
+                "engine_launch_gated": True,
             },
         }
     ]
@@ -596,7 +597,7 @@ def test_engine_queue_runtime_builds_common_child_worker_hooks(tmp_path: Path) -
         return object()
 
     hooks = runtime.child_worker_hooks(
-        engine="xtb",
+        engine="orca",
         handle_worker_start_error_fn=handle_worker_start_error,
         finalize_completed_job_fn=finalize_completed_job,
         finalize_child_exit_fn=finalize_child_exit,
@@ -634,7 +635,7 @@ def test_engine_queue_runtime_builds_common_child_worker_hooks(tmp_path: Path) -
                 "token": "slot-1",
                 "kwargs": {
                     "owner_pid": 2468,
-                    "source": "orca_auto.flow.engines.xtb.queue_worker.child",
+                    "source": "orca_auto.orca.queue_worker.child",
                     "queue_id": "queue-1",
                     "work_dir": str(tmp_path / "job-1"),
                 },

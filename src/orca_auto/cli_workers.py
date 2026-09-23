@@ -13,35 +13,18 @@ from pathlib import Path
 from typing import Any
 
 import orca_auto.cli_worker_supervision as cli_worker_supervision
-from orca_auto.core.app_ids import ORCA_AUTO_WORKFLOW_WORKER_MODULE
 from orca_auto.core.config.discovery import (
     repo_root_for_subprocess,
     resolve_shared_config_path,
     shared_config_text_from_args,
-    workflow_root_for_args,
 )
-from orca_auto.core.engine_catalog import supervised_engine_entries
-from orca_auto.core.extensions import require_workflows
 from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
 
 LOGGER = logging.getLogger(__name__)
 
-_SUPERVISED_ENGINE_ENTRIES = supervised_engine_entries()
-_WORKFLOW_ENGINE_APPS = tuple(
-    entry.engine_id
-    for entry in _SUPERVISED_ENGINE_ENTRIES
-    if entry.default_supervision_role == "with-workflow"
-)
-_ENGINE_APPS = tuple(
-    entry.engine_id
-    for entry in _SUPERVISED_ENGINE_ENTRIES
-    if entry.default_supervision_role == "default"
-)
-_ENGINE_WORKER_MODULES = {
-    entry.engine_id: entry.worker_module for entry in _SUPERVISED_ENGINE_ENTRIES
-}
-_KNOWN_WORKER_APPS = (*_ENGINE_APPS, "workflow")
+_ENGINE_WORKER_MODULES = {"orca": "orca_auto.core.engines.queue_worker"}
+_KNOWN_WORKER_APPS = ("orca",)
 _DEFAULT_WORKER_APPS = ("orca",)
 
 
@@ -110,56 +93,6 @@ def _engine_worker_spec(
     )
 
 
-def _workflow_worker_spec(
-    *,
-    workflow_root: str,
-    config_path: str | None,
-    args: argparse.Namespace,
-) -> cli_worker_supervision.WorkerSpec:
-    argv = [
-        sys.executable,
-        "-m",
-        ORCA_AUTO_WORKFLOW_WORKER_MODULE,
-        "--workflow-root",
-        str(Path(workflow_root).expanduser().resolve()),
-    ]
-    if normalize_text(config_path):
-        argv.extend(["--orca_auto-config", str(Path(str(config_path)).expanduser().resolve())])
-    if bool(getattr(args, "no_submit", False)):
-        argv.append("--no-submit")
-    if bool(getattr(args, "refresh_registry", False)):
-        argv.append("--refresh-registry")
-    if bool(getattr(args, "refresh_each_cycle", False)):
-        argv.append("--refresh-each-cycle")
-
-    max_cycles = int(getattr(args, "max_cycles", 0) or 0)
-    if max_cycles > 0:
-        argv.extend(["--max-cycles", str(max_cycles)])
-
-    interval_seconds = float(getattr(args, "interval_seconds", 0.0) or 0.0)
-    if interval_seconds > 0:
-        argv.extend(["--interval-seconds", str(interval_seconds)])
-
-    lock_timeout_seconds = float(getattr(args, "lock_timeout_seconds", 0.0) or 0.0)
-    if lock_timeout_seconds > 0:
-        argv.extend(["--lock-timeout-seconds", str(lock_timeout_seconds)])
-    finite_worker = max_cycles > 0
-    return cli_worker_supervision.WorkerSpec(
-        app="workflow",
-        argv=tuple(argv),
-        restart_on_clean_exit=not finite_worker,
-    )
-
-
-def _worker_engine_apps(apps: Sequence[str], *, workflow_enabled: bool) -> list[str]:
-    engine_apps = [app for app in apps if app in _ENGINE_APPS]
-    if workflow_enabled:
-        for app in _WORKFLOW_ENGINE_APPS:
-            if app not in engine_apps:
-                engine_apps.append(app)
-    return engine_apps
-
-
 def _validate_engine_worker_config(engine_apps: Sequence[str], config_path: str | None) -> None:
     if engine_apps and not normalize_text(config_path):
         raise ValueError(
@@ -167,65 +100,11 @@ def _validate_engine_worker_config(engine_apps: Sequence[str], config_path: str 
         )
 
 
-def _workflow_only_worker_flag_error(args: Any) -> str | None:
-    if any(
-        bool(getattr(args, attr, False))
-        for attr in ("no_submit", "refresh_registry", "refresh_each_cycle")
-    ):
-        raise ValueError("workflow-only worker flags require --app workflow")
-    numeric_flags = (
-        ("max_cycles", int, "--max-cycles"),
-        ("interval_seconds", float, "--interval-seconds"),
-        ("lock_timeout_seconds", float, "--lock-timeout-seconds"),
-    )
-    for attr, caster, option in numeric_flags:
-        if caster(getattr(args, attr, 0) or 0) > 0:
-            return f"{option} requires --app workflow"
-    return None
-
-
-def _add_workflow_worker_spec(
-    specs: list[cli_worker_supervision.WorkerSpec],
-    *,
-    apps: Sequence[str],
-    workflow_root: str | None,
-    config_path: str | None,
-    args: argparse.Namespace,
-) -> None:
-    if "workflow" in apps and not workflow_root:
-        raise ValueError("workflow worker requires runs_root in orca_auto.yaml")
-
-    if "workflow" in apps and workflow_root:
-        specs.append(
-            _workflow_worker_spec(workflow_root=workflow_root, config_path=config_path, args=args)
-        )
-        return
-
-    flag_error = _workflow_only_worker_flag_error(args)
-    if flag_error:
-        raise ValueError(flag_error)
-
-
 def _build_worker_specs(args: Any) -> list[cli_worker_supervision.WorkerSpec]:
-    explicit_apps = list(getattr(args, "app", None) or [])
-    apps = _selected_worker_apps(explicit_apps)
-    if "workflow" in apps:
-        require_workflows()
+    apps = _selected_worker_apps(list(getattr(args, "app", None) or []))
     config_path = resolve_shared_config_path(shared_config_text_from_args(args))
-    workflow_root = workflow_root_for_args(args)
-    workflow_enabled = "workflow" in apps
-    engine_apps = _worker_engine_apps(apps, workflow_enabled=workflow_enabled)
-    _validate_engine_worker_config(engine_apps, config_path)
-
-    specs = [_engine_worker_spec(app=app, config_path=str(config_path)) for app in engine_apps]
-    _add_workflow_worker_spec(
-        specs,
-        apps=apps,
-        workflow_root=workflow_root,
-        config_path=config_path,
-        args=args,
-    )
-    return specs
+    _validate_engine_worker_config(apps, config_path)
+    return [_engine_worker_spec(app=app, config_path=str(config_path)) for app in apps]
 
 
 @dataclass(frozen=True)

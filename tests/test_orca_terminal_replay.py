@@ -859,6 +859,7 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
         cfg,
         str(reaction_dir),
         expected_job_id="task-b",
+        expected_run_id=None,
     )
 
 
@@ -1130,6 +1131,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
         cfg,
         str(reaction_dir),
         expected_job_id=entry.task_id,
+        expected_run_id="run-cancelled",
     )
     assert replay_mod.get_replay_state(worker).pending_replays == {}
 
@@ -1196,6 +1198,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
         cfg,
         str(reaction_dir),
         expected_job_id=entry.task_id,
+        expected_run_id="run-cancelled",
     )
     assert replay_mod.get_replay_state(worker).pending_replays == {}
 
@@ -1253,6 +1256,7 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
         cfg,
         str(reaction_dir),
         expected_job_id=cancelled.task_id,
+        expected_run_id="run-current",
     )
     assert replay_mod.get_replay_state(worker).pending_replays == {}
     assert replay_mod.get_replay_state(worker).generation_owners[str(reaction_dir.resolve())] == (
@@ -1808,7 +1812,7 @@ def test_retired_generation_is_frozen_across_terminal_replay_and_notification(
     terminal: bool,
 ) -> None:
     from orca_auto.orca.attempt.reporting import mark_finished_notification_sent
-    from orca_auto.orca.state import write_report_files
+    from orca_auto.orca.report.publication import write_report_files
     from orca_auto.orca.state_reading import load_report_json_with_output_receipt
     from tests.engine_artifact_helpers import bind_report_generation
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
@@ -22,12 +23,6 @@ from orca_auto.core.queue.engine.snapshot_intent import (
 )
 
 
-def _generation_path(queue_root: Path, name: str = "generation-0001") -> Path:
-    job_dir = queue_root / "job"
-    job_dir.mkdir(exist_ok=True)
-    return job_dir / ".orca_auto_input_snapshots" / name
-
-
 def _visible_generation_path(
     queue_root: Path,
     name: str = "20260714-224054-959479f2",
@@ -45,13 +40,13 @@ def _intent_path(queue_root: Path, token: str) -> Path:
     return queue_root / ".orca_auto_snapshot_intents" / f"{token}.json"
 
 
-def test_reconcile_removes_dead_intent_that_crashed_before_mkdir(tmp_path: Path) -> None:
-    generation = _generation_path(tmp_path)
+def test_reconcile_retires_dead_visible_intent_that_crashed_before_mkdir(tmp_path: Path) -> None:
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-before-mkdir"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
 
@@ -61,33 +56,61 @@ def test_reconcile_removes_dead_intent_that_crashed_before_mkdir(tmp_path: Path)
         owner_is_alive_fn=lambda _marker: False,
     )
 
-    assert removed == 1
+    assert removed == 0
     assert not generation.exists()
     assert not _intent_path(tmp_path, token).exists()
 
 
-def test_reconcile_removes_dead_orca_generation_pair(tmp_path: Path) -> None:
-    input_generation = _generation_path(tmp_path)
+@pytest.mark.parametrize("kind", ["input_snapshot_namespace", "orca_execution_pair"])
+def test_legacy_snapshot_intents_are_preserved_but_cannot_be_created(
+    tmp_path: Path, kind: str
+) -> None:
+    input_generation = tmp_path / "job" / ".orca_auto_input_snapshots" / "generation-0001"
     execution_generation = tmp_path / "job" / ".orca_auto_orca_executions" / input_generation.name
-    token = "snapshot-intent-orca-pair"
-    create_snapshot_intent(
-        tmp_path,
-        token=token,
-        kind="orca_execution_pair",
-        generation_paths=[execution_generation, input_generation],
+    generations = [input_generation]
+    if kind == "orca_execution_pair":
+        generations.append(execution_generation)
+    token = "snapshot-intent-legacy-preserved"
+    with pytest.raises(ValueError, match="Unsupported snapshot intent kind"):
+        create_snapshot_intent(tmp_path, token=token, kind=kind, generation_paths=generations)
+    assert not _intent_path(tmp_path, token).parent.exists()
+    for generation in generations:
+        _create_generation(generation)
+        (generation / "legacy.txt").write_text("preserve original data", encoding="utf-8")
+    intent = _intent_path(tmp_path, token)
+    intent.parent.mkdir(mode=0o700)
+    intent.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "token": token,
+                "kind": kind,
+                "state": SNAPSHOT_INTENT_STATE_CREATING,
+                "queue_root": str(tmp_path.resolve()),
+                "generation_paths": [str(path.resolve()) for path in generations],
+            }
+        ),
+        encoding="utf-8",
     )
-    _create_generation(execution_generation)
-    _create_generation(input_generation)
-
-    removed = reconcile_orphaned_snapshot_generations(
-        [tmp_path],
-        list_queue_fn=lambda _root: [],
-        owner_is_alive_fn=lambda _marker: False,
+    before = intent.read_bytes()
+    entry = SimpleNamespace(
+        metadata={
+            "execution_snapshot": {
+                SNAPSHOT_INTENT_TOKEN_KEY: token,
+                SNAPSHOT_INTENT_QUEUE_ROOT_KEY: str(tmp_path.resolve()),
+            }
+        }
     )
-
-    assert removed == 1
-    assert not execution_generation.exists()
-    assert not input_generation.exists()
+    assert (
+        reconcile_orphaned_snapshot_generations(
+            [tmp_path], list_queue_fn=lambda _root: [], owner_is_alive_fn=lambda _marker: False
+        )
+        == 0
+    )
+    finalize_queued_snapshot_intent(tmp_path, entry)
+    assert intent.read_bytes() == before
+    for generation in generations:
+        assert (generation / "legacy.txt").read_text(encoding="utf-8") == "preserve original data"
 
 
 @pytest.mark.parametrize("kind", ["orca_visible_generation"])
@@ -250,12 +273,12 @@ def test_visible_generation_finalize_requires_matching_queue_snapshot_identity(
 
 
 def test_reconcile_preserves_live_creator_without_queue_row(tmp_path: Path) -> None:
-    generation = _generation_path(tmp_path)
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-live-owner"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
     _create_generation(generation)
@@ -272,12 +295,12 @@ def test_reconcile_preserves_live_creator_without_queue_row(tmp_path: Path) -> N
 
 
 def test_raw_queue_token_finalizes_intent_and_preserves_generation(tmp_path: Path) -> None:
-    generation = _generation_path(tmp_path)
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-queue-owned"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
     _create_generation(generation)
@@ -295,12 +318,12 @@ def test_raw_queue_token_finalizes_intent_and_preserves_generation(tmp_path: Pat
 
 
 def test_default_reconcile_reads_raw_queue_rows_under_the_core_store(tmp_path: Path) -> None:
-    generation = _generation_path(tmp_path)
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-raw-core-store"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
     _create_generation(generation)
@@ -326,18 +349,23 @@ def test_default_reconcile_reads_raw_queue_rows_under_the_core_store(tmp_path: P
 def test_reserved_queue_entry_finalizes_intent_before_fast_terminal_cleanup(
     tmp_path: Path,
 ) -> None:
-    generation = _generation_path(tmp_path)
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-worker-finalize"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
     _create_generation(generation)
+    bind_snapshot_intent_generation_identities(tmp_path, token)
+    details = generation.stat()
     entry = SimpleNamespace(
         metadata={
             "execution_snapshot": {
+                "version": 3,
+                "execution_dir": str(generation.resolve()),
+                "execution_dir_identity": {"device": details.st_dev, "inode": details.st_ino},
                 SNAPSHOT_INTENT_TOKEN_KEY: token,
                 SNAPSHOT_INTENT_QUEUE_ROOT_KEY: str(tmp_path.resolve()),
             }
@@ -359,15 +387,16 @@ def test_reserved_queue_entry_finalizes_intent_before_fast_terminal_cleanup(
 def test_enqueueing_without_a_queue_row_is_reclaimable_after_creator_death(
     tmp_path: Path,
 ) -> None:
-    generation = _generation_path(tmp_path)
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-enqueueing"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
     _create_generation(generation)
+    bind_snapshot_intent_generation_identities(tmp_path, token)
     transition_snapshot_intent(
         tmp_path,
         token,
@@ -386,12 +415,12 @@ def test_enqueueing_without_a_queue_row_is_reclaimable_after_creator_death(
 
 
 def test_queue_read_failure_retains_every_intent(tmp_path: Path) -> None:
-    generation = _generation_path(tmp_path)
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-queue-error"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
     _create_generation(generation)
@@ -408,12 +437,12 @@ def test_queue_read_failure_retains_every_intent(tmp_path: Path) -> None:
 
 
 def test_cleanup_discard_requires_every_generation_to_be_absent(tmp_path: Path) -> None:
-    generation = _generation_path(tmp_path)
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-cleanup-guard"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
     _create_generation(generation)
@@ -439,15 +468,16 @@ def test_reconcile_keeps_queue_lock_through_owner_decision(
 ) -> None:
     from orca_auto.core.queue import store as queue_store
 
-    generation = _generation_path(tmp_path)
+    generation = _visible_generation_path(tmp_path)
     token = "snapshot-intent-queue-lock-race"
     create_snapshot_intent(
         tmp_path,
         token=token,
-        kind="input_snapshot_namespace",
+        kind="orca_visible_generation",
         generation_paths=[generation],
     )
     _create_generation(generation)
+    bind_snapshot_intent_generation_identities(tmp_path, token)
     queue_loaded = Event()
     allow_queue_read = Event()
     enqueue_done = Event()
@@ -504,8 +534,8 @@ def test_busy_maintenance_root_does_not_block_other_roots(tmp_path: Path) -> Non
     ready_root = tmp_path / "ready"
     busy_root.mkdir()
     ready_root.mkdir()
-    busy_generation = _generation_path(busy_root)
-    ready_generation = _generation_path(ready_root)
+    busy_generation = _visible_generation_path(busy_root)
+    ready_generation = _visible_generation_path(ready_root)
     for root, generation, token in (
         (busy_root, busy_generation, "snapshot-intent-busy-root"),
         (ready_root, ready_generation, "snapshot-intent-ready-root"),
@@ -513,10 +543,11 @@ def test_busy_maintenance_root_does_not_block_other_roots(tmp_path: Path) -> Non
         create_snapshot_intent(
             root,
             token=token,
-            kind="input_snapshot_namespace",
+            kind="orca_visible_generation",
             generation_paths=[generation],
         )
         _create_generation(generation)
+        bind_snapshot_intent_generation_identities(root, token)
 
     lock_held = Event()
     release_lock = Event()
@@ -551,12 +582,12 @@ def test_busy_maintenance_root_does_not_block_other_roots(tmp_path: Path) -> Non
 
 
 def test_create_intent_rejects_generation_outside_queue_root(tmp_path: Path) -> None:
-    outside = tmp_path.parent / ".orca_auto_input_snapshots" / "generation-outside"
+    outside = tmp_path.parent / "outside-job" / "20260714-224054-959479f2"
 
     with pytest.raises(ValueError, match="escapes"):
         create_snapshot_intent(
             tmp_path,
             token="snapshot-intent-path-escape",
-            kind="input_snapshot_namespace",
+            kind="orca_visible_generation",
             generation_paths=[outside],
         )

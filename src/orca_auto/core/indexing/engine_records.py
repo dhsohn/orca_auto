@@ -1,21 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 from .location import JobLocationRecord
 from .store import normalize_index_text as normalize_text
-
-
-@dataclass(frozen=True)
-class EngineLocationSpec:
-    app_name: str
-    job_type_from_payload: Callable[[str], str]
-    default_molecule_key: Callable[[Path, str], str]
-    payload_kind_key: str
-    payload_kind_default: str
-    molecule_key_name: str
 
 
 def resource_dict(max_cores: int, max_memory_gb: int) -> dict[str, int]:
@@ -120,37 +109,7 @@ def build_job_location_record(
     )
 
 
-def build_engine_job_location_record(
-    *,
-    spec: EngineLocationSpec,
-    existing: JobLocationRecord | None = None,
-    job_id: str,
-    status: str,
-    job_dir: Path,
-    payload_kind: str,
-    selected_input_xyz: str,
-    molecule_key: str = "",
-    resource_request: dict[str, int] | None = None,
-    resource_actual: dict[str, int] | None = None,
-) -> JobLocationRecord:
-    return build_job_location_record(
-        existing=existing,
-        job_id=job_id,
-        app_name=spec.app_name,
-        job_type=spec.job_type_from_payload(payload_kind),
-        status=status,
-        job_dir=job_dir,
-        selected_input_xyz=selected_input_xyz,
-        molecule_key=molecule_key,
-        resource_request=resource_request,
-        resource_actual=resource_actual,
-        default_molecule_key_fn=spec.default_molecule_key,
-    )
-
-
 __all__ = [
-    "EngineLocationSpec",
-    "build_engine_job_location_record",
     "build_job_location_record",
     "resource_dict",
 ]

@@ -12,6 +12,7 @@ import pytest
 
 from orca_auto.orca import evidence
 from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.orca_opt_progress import parse_opt_progress
 from orca_auto.orca.parser import parse_orca_output
 
 _ENERGY = "FINAL SINGLE POINT ENERGY -1.0\n"
@@ -64,6 +65,7 @@ def test_cached_output_reads_once_and_preserves_both_parsers(
     encoded = contents.encode(encoding)
     out.write_bytes(encoded)
     expected = parse_orca_output(str(out)), parse_frequency_analysis(out)
+    expected_progress = parse_opt_progress(str(out))
     reads = _record_output_reads(monkeypatch)
 
     actual = evidence.parsed_final_output(out)
@@ -71,6 +73,7 @@ def test_cached_output_reads_once_and_preserves_both_parsers(
     assert actual == expected
     assert actual[0].source_path == str(out)
     assert evidence.parsed_final_output(out) is actual
+    assert evidence.parsed_optimization_progress(out) == expected_progress
     assert reads == [(str(out), len(encoded))]
 
 
@@ -159,4 +162,20 @@ def test_unreadable_output_preserves_errors_and_is_not_cached(
     assert recovered[1] is not None
     assert recovered[1].frequencies == (-410.20, 100.0)
     assert evidence.parsed_final_output(out) is recovered
+    assert len(reads) == 1
+
+
+def test_opt_report_and_si_share_absent_frequency_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.orca.report.composer import compose_job_report_html
+    from tests.test_opt_report import _state, _write_inp, _write_opt_out
+
+    out = tmp_path / "final.out"
+    _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP Opt")
+    _write_opt_out(out)
+    state = _state(tmp_path, out, reason="normal_termination")
+    reads = _record_output_reads(monkeypatch)
+    assert compose_job_report_html(tmp_path, state)
+    assert evidence.collect_structure_evidence(tmp_path, state)
     assert len(reads) == 1

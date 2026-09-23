@@ -26,13 +26,9 @@ from .scratch import scratch_config_from_runtime_mapping
 DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
 DEFAULT_SHARED_ADMISSION_DIRNAME = ".admission"
 SECURE_CONFIG_FILE_MODE = 0o600
-_ROOT_CONFIG_FIELDS = frozenset(
-    {"messenger", "orca", "resources", "runs_root", "scheduler", "workflow"}
-)
+_ROOT_CONFIG_FIELDS = frozenset({"messenger", "orca", "resources", "runs_root", "scheduler"})
 _SCHEDULER_CONFIG_FIELDS = frozenset({"admission_root", "max_active_simulations"})
 _RESOURCE_CONFIG_FIELDS = frozenset({"max_cores_per_task", "max_memory_gb_per_task"})
-_WORKFLOW_CONFIG_FIELDS = frozenset({"paths"})
-_WORKFLOW_PATH_CONFIG_FIELDS = frozenset({"crest_executable", "xtb_executable"})
 _ORCA_CONFIG_FIELDS = frozenset({"paths", "runtime"})
 _ORCA_RUNTIME_CONFIG_FIELDS = frozenset({"scratch_min_free_gb", "scratch_root"})
 _ORCA_PATH_CONFIG_FIELDS = frozenset({"orca_executable"})
@@ -67,7 +63,11 @@ def default_config_path_from_repo_root(
     if home_default.exists():
         return str(home_default)
 
-    return str(repo_default)
+    # A wheel's package ancestry points into the virtual environment, not a
+    # source checkout. Keep a new config outside that replaceable installation.
+    if (repo_root / "src" / "orca_auto").is_dir():
+        return str(repo_default)
+    return str(home_default)
 
 
 def discover_shared_config_path(
@@ -189,29 +189,6 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
                 resources.get(key),
                 field_name=f"resources.{key}",
             )
-    workflow = _configured_mapping_section(raw, "workflow")
-    _reject_unknown_config_fields(
-        workflow,
-        allowed=_WORKFLOW_CONFIG_FIELDS,
-        section="workflow",
-    )
-    workflow_paths = _configured_mapping_section(
-        workflow,
-        "paths",
-        field_name="workflow.paths",
-    )
-    _reject_unknown_config_fields(
-        workflow_paths,
-        allowed=_WORKFLOW_PATH_CONFIG_FIELDS,
-        section="workflow.paths",
-    )
-    for key in _WORKFLOW_PATH_CONFIG_FIELDS:
-        _validate_optional_text_field(
-            workflow_paths,
-            key,
-            field_name=f"workflow.paths.{key}",
-        )
-
     orca = _configured_mapping_section(raw, "orca")
     _reject_unknown_config_fields(orca, allowed=_ORCA_CONFIG_FIELDS, section="orca")
     orca_runtime = _configured_mapping_section(orca, "runtime", field_name="orca.runtime")
@@ -364,7 +341,7 @@ def usable_runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
         return ""
 
 
-def shared_workflow_root_from_config(config_path: str | Path | None) -> str | None:
+def shared_runs_root_from_config(config_path: str | Path | None) -> str | None:
     if config_path is None:
         return None
 

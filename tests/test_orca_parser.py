@@ -515,7 +515,11 @@ def test_parser_detects_smd_solvation(tmp_path: Path) -> None:
     assert result.solvation == "SMD(water)"
 
 
-def test_parser_reads_charge_multiplicity_from_xyzfile(tmp_path: Path) -> None:
+@pytest.mark.parametrize("geometry", ["xyz", "XYZ", "xyzfile", "XyZFiLe"])
+@pytest.mark.parametrize("prefix", ["", "|  2> "])
+def test_parser_reads_charge_multiplicity_from_geometry(
+    tmp_path: Path, geometry: str, prefix: str
+) -> None:
     # Workflow-generated inputs use "* xyzfile <charge> <mult> <path>"; the
     # parser must read the real values, not fall back to Charge 0 / Mult 1.
     out_file = tmp_path / "xyzfile.out"
@@ -523,7 +527,9 @@ def test_parser_reads_charge_multiplicity_from_xyzfile(tmp_path: Path) -> None:
         "\n".join(
             [
                 "|  1> ! B3LYP def2-SVP Opt",
-                "|  2> * xyzfile -1 2 conformer.xyz",
+                "|  1> # previous input: * xyz 0 1",
+                f"{prefix}* {geometry} -1 2"
+                + (" conformer.xyz" if geometry.lower() == "xyzfile" else ""),
                 "CARTESIAN COORDINATES (ANGSTROEM)",
                 "---------------------------------",
                 "  C      0.000000    0.000000    0.000000",
@@ -539,6 +545,13 @@ def test_parser_reads_charge_multiplicity_from_xyzfile(tmp_path: Path) -> None:
     assert result.charge == -1
     assert result.multiplicity == 2
     assert result.electronic_state_verified is True
+
+
+def test_parser_does_not_verify_electronic_state_from_a_commented_geometry(tmp_path: Path) -> None:
+    out_file = tmp_path / "commented_geometry.out"
+    out_file.write_text("| 2> # old geometry: * xyz -1 2\nORCA TERMINATED NORMALLY\n")
+
+    assert parse_orca_output(str(out_file)).electronic_state_verified is False
 
 
 def test_parser_derives_gibbs_correction_when_line_absent(tmp_path: Path) -> None:

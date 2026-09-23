@@ -1,4 +1,4 @@
-"""Common CLI options for engine and workflow workers."""
+"""Common CLI options for ORCA workers."""
 
 from __future__ import annotations
 

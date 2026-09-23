@@ -20,6 +20,7 @@ from .queue.adapter import (
     queue_entry_reaction_dir,
     queue_entry_status,
 )
+from .queue.entries import queue_entry_is_retired_workflow_owned
 from .queue.terminal_replay import (
     TerminalReplayMarkerKind,
     terminal_replay_marker_kind,
@@ -65,7 +66,7 @@ def _queue_cleanup_reaction_dirs(
         reaction_dir = _resolved_path_text(queue_entry_reaction_dir(entry))
         if not reaction_dir:
             continue
-        if status in ACTIVE_STATUSES:
+        if status in ACTIVE_STATUSES or queue_entry_is_retired_workflow_owned(entry, allowed_root):
             active_dirs.add(reaction_dir)
         elif status in TERMINAL_STATUSES:
             terminal_dirs.add(reaction_dir)
@@ -93,7 +94,7 @@ def _queue_generation_blocks_state_cleanup(
         if _resolved_path_text(queue_entry_reaction_dir(entry)) != reaction_dir:
             continue
         status = queue_entry_status(entry)
-        if status in ACTIVE_STATUSES:
+        if status in ACTIVE_STATUSES or queue_entry_is_retired_workflow_owned(entry, allowed_root):
             return True
         if (
             status in TERMINAL_STATUSES
@@ -257,6 +258,9 @@ def clear_terminal_run_states(allowed_root: Path) -> int:
                         continue
                     if not _snapshot_state_is_current(snapshot, directory_fd):
                         continue
+                    from orca_auto.core.activity_invalidation import invalidate_state
+
+                    invalidate_state(snapshot.reaction_dir, root=allowed_root)
                     os.unlink(STATE_FILE_NAME, dir_fd=directory_fd)
                     run_count += 1
         except FileNotFoundError:

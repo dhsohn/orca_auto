@@ -6,7 +6,6 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 
@@ -18,7 +17,6 @@ from orca_auto.core.queue.engine.input_snapshot import (
     require_direct_generation_owner,
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.orca import state as orca_state
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.job_locations import _contract_payload as _job_location_payload
@@ -33,6 +31,7 @@ from orca_auto.orca.job_locations import (
     upsert_job_record,
 )
 from orca_auto.orca.job_locations._generation import payload_matches_queue_generation
+from orca_auto.orca.report import publication as orca_publication
 from orca_auto.orca.state_reading import (
     REPORT_JSON_NAME,
     STATE_FILE_NAME,
@@ -160,7 +159,7 @@ def _write_json(path: Path, payload: object) -> None:
         and isinstance(payload, dict)
         and payload.get("contract") is None
     ):
-        payload = orca_state._machine_observation(path.parent, payload)
+        payload = orca_publication._machine_observation(path.parent, payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.name == REPORT_JSON_NAME and isinstance(payload, dict) and payload.get("contract"):
         path.write_bytes(machine_json_bytes(payload))
@@ -1028,24 +1027,12 @@ def test_queue_absent_visible_generation_uses_provenance_and_rejects_unowned_rep
 
     publish(provenance)
     valid = load_orca_contract_payload(allowed_root, str(generation))
-    from orca_auto.flow.adapters.orca import load_orca_artifact_contract
-
-    with patch(
-        "orca_auto.flow.adapters.orca._orca_tracking.load_orca_contract_payload_impl",
-        return_value=None,
-    ):
-        fallback = load_orca_artifact_contract(
-            target=str(generation),
-            orca_allowed_root=allowed_root,
-        )
 
     assert valid["status"] == "completed"
     assert valid["selected_inp"] == str(selected_inp.resolve())
     assert valid["optimized_xyz_path"] == str(calculated_xyz.resolve())
     assert valid["run_state_path"] == str(state_path(generation).resolve())
     assert valid["report_json_path"] == str(report_json_path(generation).resolve())
-    assert fallback.run_state_path == str(state_path(generation).resolve())
-    assert fallback.report_json_path == str(report_json_path(generation).resolve())
 
     report_json_path(generation).unlink()
     without_report = load_orca_contract_payload(allowed_root, str(generation))
@@ -1336,7 +1323,6 @@ def test_load_orca_contract_payload_rejects_missing_explicit_queue_generation(
     queue_id: str,
     run_id: str,
 ) -> None:
-    from orca_auto.flow.adapters.orca import load_orca_artifact_contract
 
     allowed_root = tmp_path / "runs"
     job_dir = allowed_root / "rxn_selector_miss"
@@ -1378,13 +1364,6 @@ def test_load_orca_contract_payload_rejects_missing_explicit_queue_generation(
         run_id=run_id,
         reaction_dir=str(job_dir),
     )
-    contract = load_orca_artifact_contract(
-        target=str(job_dir),
-        orca_allowed_root=allowed_root,
-        queue_id=queue_id,
-        run_id=run_id,
-        reaction_dir=str(job_dir),
-    )
 
     assert payload["queue_id"] == queue_id
     assert payload["run_id"] == run_id
@@ -1394,14 +1373,6 @@ def test_load_orca_contract_payload_rejects_missing_explicit_queue_generation(
     assert payload["run_state_path"] == ""
     assert payload["report_json_path"] == ""
     assert payload["last_out_path"] == ""
-    assert contract.queue_id == queue_id
-    assert contract.run_id == run_id
-    assert contract.status == "unknown"
-    assert contract.reason == "queue_generation_not_found"
-    assert contract.reaction_dir == str(job_dir)
-    assert contract.run_state_path == ""
-    assert contract.report_json_path == ""
-    assert contract.last_out_path == ""
 
 
 @pytest.mark.parametrize(

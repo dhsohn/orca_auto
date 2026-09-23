@@ -153,6 +153,11 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
         print(json.dumps(payload, ensure_ascii=True, indent=2))
     else:
         _print_service_status(target_user, statuses)
+        for entry in (staleness or {}).get("workers", []):
+            if entry.get("runtime_build_id"):
+                print(
+                    f"runtime_build: {entry['unit']} {entry['runtime_build_id']} ({entry['source_root']})"
+                )
     if drift is not None:
         # This interpreter runs the checkout's code but declares the version its
         # last install froze, so every version it reports is wrong until the
@@ -166,6 +171,15 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
     staleness_ok = staleness is None or not (staleness["stale"] or staleness["undetermined"])
     if staleness is not None:
         for entry in staleness["stale"]:
+            if entry.get("expected_runtime_build_id"):
+                emit_error(
+                    f"{entry['unit']} (pid {entry['pid']}) runs "
+                    f"{entry.get('runtime_build_id') or entry.get('source_root', 'another source')}; "
+                    f"installed unit requires runtime {entry['expected_runtime_build_id']} "
+                    f"in {entry['expected_runtime_root']}",
+                    hint="restart the workers in an idle window: orca_auto service restart",
+                )
+                continue
             # Legacy injected/test payloads only carry head_commit_epoch. New
             # collector payloads attach the checkout update evidence per worker.
             head_update_epoch = float(

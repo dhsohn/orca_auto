@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -11,7 +10,6 @@ from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.cli import main as cli_main
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import discovery
-from orca_auto.flow.run_dir.layout import WorkflowRunDirLayout, inspect_workflow_run_dir
 from orca_auto.orca.queue import adapter as queue_adapter
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
@@ -26,13 +24,13 @@ def test_discovery_resolves_config_from_explicit_env_and_repo_candidate(
     tmp_path: Path,
 ) -> None:
     explicit_config = tmp_path / "explicit.yaml"
-    explicit_config.write_text("workflow:\n  root: /tmp/workflows\n", encoding="utf-8")
+    explicit_config.write_text("runs_root: /tmp/runs\n", encoding="utf-8")
     env_config = tmp_path / "env.yaml"
-    env_config.write_text("workflow:\n  root: /tmp/workflows\n", encoding="utf-8")
+    env_config.write_text("runs_root: /tmp/runs\n", encoding="utf-8")
     repo_root = tmp_path / "repo"
     repo_config = repo_root / "config" / "orca_auto.yaml"
     repo_config.parent.mkdir(parents=True)
-    repo_config.write_text("workflow:\n  root: /tmp/workflows\n", encoding="utf-8")
+    repo_config.write_text("runs_root: /tmp/runs\n", encoding="utf-8")
 
     assert discovery.resolve_shared_config_path(str(explicit_config)) == str(
         explicit_config.resolve()
@@ -44,26 +42,6 @@ def test_discovery_resolves_config_from_explicit_env_and_repo_candidate(
     monkeypatch.delenv(ORCA_AUTO_CONFIG_ENV_VAR)
     monkeypatch.setattr(discovery, "repo_root", lambda: repo_root)
     assert discovery.resolve_shared_config_path(None) == str(repo_config.resolve())
-    assert discovery.resolve_workflow_root(str(tmp_path / "workflows")) == str(
-        (tmp_path / "workflows").resolve()
-    )
-    assert discovery.resolve_workflow_root(" ") is None
-
-
-def test_workflow_root_for_args_prefers_explicit_root(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        discovery,
-        "shared_workflow_root_from_config",
-        lambda config_path: (_ for _ in ()).throw(AssertionError("config should not be read")),
-    )
-
-    assert discovery.workflow_root_for_args(
-        argparse.Namespace(
-            workflow_root="/tmp/explicit-workflows",
-            orca_auto_config=None,
-            config=None,
-        )
-    ) == str(Path("/tmp/explicit-workflows").resolve())
 
 
 def test_cmd_run_dir_dispatches_to_orca_for_inp_directories(
@@ -79,12 +57,7 @@ def test_cmd_run_dir_dispatches_to_orca_for_inp_directories(
         calls.append(("orca", str(Path(args.path).resolve())))
         return 41
 
-    def _fake_workflow_run_dir(args: Any) -> int:
-        calls.append(("workflow", args.path))
-        return 42
-
     monkeypatch.setattr(cli_run_dir, "cmd_orca_run_dir", _fake_orca_run_dir)
-    monkeypatch.setattr(cli_run_dir, "cmd_workflow_run_dir", _fake_workflow_run_dir)
 
     result = cli_run_dir.cmd_run_dir(
         SimpleNamespace(
@@ -94,43 +67,6 @@ def test_cmd_run_dir_dispatches_to_orca_for_inp_directories(
 
     assert result == 41
     assert calls == [("orca", str(target))]
-
-
-def test_cmd_run_dir_dispatches_to_workflow_for_manifest_directories(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "workflow_job"
-    target.mkdir()
-    (target / "flow.yaml").write_text("workflow_type: conformer_screening\n", encoding="utf-8")
-    (target / "path.inp").write_text("$path\n$end\n", encoding="utf-8")
-    calls: list[tuple[str, str, str | None]] = []
-
-    def _fake_orca_run_dir(args: Any) -> int:
-        calls.append(("orca", str(Path(args.path).resolve()), None))
-        return 41
-
-    def _fake_workflow_run_dir(args: Any) -> int:
-        calls.append(
-            (
-                "workflow",
-                str(Path(args.path).resolve()),
-                str(Path(args.workflow_dir).resolve()),
-            )
-        )
-        return 42
-
-    monkeypatch.setattr(cli_run_dir, "cmd_orca_run_dir", _fake_orca_run_dir)
-    monkeypatch.setattr(cli_run_dir, "cmd_workflow_run_dir", _fake_workflow_run_dir)
-
-    result = cli_run_dir.cmd_run_dir(
-        SimpleNamespace(
-            path=str(target),
-        )
-    )
-
-    assert result == 42
-    assert calls == [("workflow", str(target), str(target))]
 
 
 def test_cli_run_dir_rejects_orca_namespace_replacement_after_preflight(
@@ -180,86 +116,6 @@ def test_cli_run_dir_rejects_orca_namespace_replacement_after_preflight(
         assert not (job_dir / ".orca_auto_input_snapshots").exists()
 
 
-def test_cli_run_dir_rejects_workflow_namespace_replacement_before_payload_commit(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    workflow_root = tmp_path / "workflow_root"
-    workflow_root.mkdir()
-    input_dir = workflow_root / "workflow_input"
-    moved_input = workflow_root / "workflow_input_moved"
-    input_dir.mkdir()
-    flow_payload = "\n".join(
-        (
-            "workflow_type: conformer_screening",
-            "max_orca_stages: 1",
-            "resources:",
-            "  max_cores: 1",
-            "  max_memory_gb: 1",
-            "",
-        )
-    )
-    original_xyz = "2\noriginal H2\nH 0 0 0\nH 0 0 0.74\n"
-    replacement_xyz = "2\nreplacement H2\nH 0 0 0\nH 0 0 0.80\n"
-    (input_dir / "flow.yaml").write_text(flow_payload, encoding="utf-8")
-    (input_dir / "input.xyz").write_text(original_xyz, encoding="utf-8")
-
-    fake_xtb = tmp_path / "fake-xtb"
-    fake_crest = tmp_path / "fake-crest"
-    for executable in (fake_xtb, fake_crest):
-        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        executable.chmod(0o755)
-    config = tmp_path / "orca_auto.yaml"
-    config.write_text(
-        "\n".join(
-            (
-                f"runs_root: {workflow_root}",
-                "scheduler:",
-                "  max_active_simulations: 1",
-                f"  admission_root: {tmp_path / 'admission'}",
-                "workflow:",
-                "  paths:",
-                f"    xtb_executable: {fake_xtb}",
-                f"    crest_executable: {fake_crest}",
-                "resources:",
-                "  max_cores_per_task: 1",
-                "  max_memory_gb_per_task: 1",
-                "",
-            )
-        ),
-        encoding="utf-8",
-    )
-    original_gate = cli_run_dir.validate_production_run_dir_target
-    gate_count = 0
-
-    def replace_namespace_after_fourth_gate(path: str | Path, root: str | Path) -> None:
-        nonlocal gate_count
-        original_gate(path, root)
-        gate_count += 1
-        if gate_count == 4:
-            input_dir.rename(moved_input)
-            input_dir.mkdir()
-            (input_dir / "flow.yaml").write_text(flow_payload, encoding="utf-8")
-            (input_dir / "input.xyz").write_text(replacement_xyz, encoding="utf-8")
-
-    monkeypatch.setattr(
-        cli_run_dir,
-        "validate_production_run_dir_target",
-        replace_namespace_after_fourth_gate,
-    )
-
-    assert cli_main(["run-dir", str(input_dir), "--config", str(config), "--json"]) == 1
-    assert gate_count == 4
-    assert (moved_input / "input.xyz").read_text(encoding="utf-8") == original_xyz
-    assert (input_dir / "input.xyz").read_text(encoding="utf-8") == replacement_xyz
-    assert not (workflow_root / "workflow_registry.json").exists()
-    assert {path.name for path in workflow_root.iterdir()} <= {
-        ".workflow_create.lock",
-        "workflow_input",
-        "workflow_input_moved",
-    }
-
-
 def test_pinned_run_dir_does_not_relabel_downstream_oserror(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -307,36 +163,6 @@ def test_cmd_run_dir_rejects_resource_overrides_for_orca_directories(
     assert "%pal/%maxcore" in err
 
 
-def test_cmd_run_dir_allows_resource_overrides_for_workflow_directories(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "workflow_job"
-    target.mkdir()
-    (target / "flow.yaml").write_text("workflow_type: conformer_screening\n", encoding="utf-8")
-    calls: list[tuple[str, int | None, int | None]] = []
-
-    def _fake_workflow_run_dir(args: Any) -> int:
-        calls.append(
-            ("workflow", getattr(args, "max_cores", None), getattr(args, "max_memory_gb", None))
-        )
-        return 42
-
-    monkeypatch.setattr(cli_run_dir, "cmd_workflow_run_dir", _fake_workflow_run_dir)
-
-    result = cli_run_dir.cmd_run_dir(
-        SimpleNamespace(
-            path=str(target),
-            max_cores=12,
-            max_memory_gb=48,
-            priority=None,
-        )
-    )
-
-    assert result == 42
-    assert calls == [("workflow", 12, 48)]
-
-
 def test_cmd_run_dir_prefers_orca_for_mixed_input_xyz_and_inp_without_manifest(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -351,12 +177,7 @@ def test_cmd_run_dir_prefers_orca_for_mixed_input_xyz_and_inp_without_manifest(
         calls.append(("orca", str(Path(args.path).resolve())))
         return 41
 
-    def _fake_workflow_run_dir(args: Any) -> int:
-        calls.append(("workflow", args.path))
-        return 42
-
     monkeypatch.setattr(cli_run_dir, "cmd_orca_run_dir", _fake_orca_run_dir)
-    monkeypatch.setattr(cli_run_dir, "cmd_workflow_run_dir", _fake_workflow_run_dir)
 
     result = cli_run_dir.cmd_run_dir(
         SimpleNamespace(
@@ -382,14 +203,17 @@ def test_cmd_run_dir_reports_unknown_directory_layout(
     )
 
     assert result == 1
-    assert "Could not infer run-dir target type from directory" in capsys.readouterr().err
+    assert (
+        "Could not infer run-dir target type: expected an ORCA *.inp file."
+        in capsys.readouterr().err
+    )
 
 
-def test_cmd_run_dir_requires_manifest_for_workflow_scaffold_directories(
+def test_cmd_run_dir_rejects_xyz_only_directories(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    target = tmp_path / "workflow_scaffold"
+    target = tmp_path / "xyz_only"
     target.mkdir()
     (target / "input.xyz").write_text("3\nmol\nH 0 0 0\nH 0 0 0.7\nH 0 0 1.4\n", encoding="utf-8")
 
@@ -400,7 +224,10 @@ def test_cmd_run_dir_requires_manifest_for_workflow_scaffold_directories(
     )
 
     assert result == 1
-    assert "Could not infer run-dir target type from directory" in capsys.readouterr().err
+    assert (
+        "Could not infer run-dir target type: expected an ORCA *.inp file."
+        in capsys.readouterr().err
+    )
 
 
 def test_cmd_run_dir_reports_missing_and_file_targets(
@@ -437,18 +264,3 @@ def test_cmd_run_dir_sets_default_orca_priority(
     assert cli_run_dir.cmd_run_dir(args) == 44
     assert args.priority == 10
     assert seen == [args]
-
-
-def test_workflow_run_dir_layout_properties_and_manifest_detection(tmp_path: Path) -> None:
-    empty = WorkflowRunDirLayout(has_manifest=False, has_conformer_input=False)
-    conformer = WorkflowRunDirLayout(has_manifest=False, has_conformer_input=True)
-    assert empty.inferred_workflow_type is None
-    assert conformer.inferred_workflow_type == "conformer_screening"
-
-    target = tmp_path / "workflow"
-    target.mkdir()
-    (target / "reactant.xyz").write_text("1\nr\nH 0 0 0\n", encoding="utf-8")
-    (target / "product.xyz").write_text("1\np\nH 0 0 1\n", encoding="utf-8")
-    assert inspect_workflow_run_dir(target).inferred_workflow_type is None
-    (target / "input.xyz").write_text("1\ninput\nH 0 0 0\n", encoding="utf-8")
-    assert inspect_workflow_run_dir(target).inferred_workflow_type == "conformer_screening"

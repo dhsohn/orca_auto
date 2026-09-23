@@ -68,8 +68,6 @@ def queue_status_icon(item: dict[str, Any]) -> str:
 def queue_task_label(task_kind: Any) -> str:
     normalized = normalize_text(task_kind).lower()
     return {
-        "crest_conformer_search": "conformer_search",
-        "conformer_search": "conformer_search",
         "optts": "OptTS",
         "ts": "TS",
         "opt": "Opt",
@@ -78,8 +76,6 @@ def queue_task_label(task_kind: Any) -> str:
         "irc": "IRC",
         "neb": "NEB",
         "orca": "ORCA",
-        "xtb": "xTB",
-        "crest": "CREST",
     }.get(normalized, normalize_text(task_kind))
 
 
@@ -103,47 +99,15 @@ def infer_orca_detail_from_metadata(metadata: dict[str, Any]) -> str:
     return "ORCA"
 
 
-def workflow_detail_text(metadata: dict[str, Any]) -> str:
-    from orca_auto.flow.templates import workflow_template_label
-
-    base = workflow_template_label(metadata.get("template_name"))
-    request_parameters = metadata.get("request_parameters")
-    request_parameters = request_parameters if isinstance(request_parameters, dict) else {}
-    crest_mode = normalize_text(request_parameters.get("crest_mode"))
-    return f"{base}({crest_mode})" if crest_mode else base
-
-
-def crest_detail_text(metadata: dict[str, Any]) -> str:
-    base = queue_task_label(metadata.get("task_kind")) or "conformer_search"
-    mode = normalize_text(metadata.get("mode"))
-    return f"{base}({mode})" if mode else base
-
-
-def xtb_detail_text(metadata: dict[str, Any]) -> str:
-    return (
-        queue_task_label(metadata.get("task_kind"))
-        or queue_task_label(metadata.get("job_type"))
-        or "xTB"
-    )
-
-
-_QUEUE_ENGINE_DETAIL_TEXT = {
-    "crest": crest_detail_text,
-    "xtb": xtb_detail_text,
-    "orca": infer_orca_detail_from_metadata,
-}
-
-
 def queue_detail_text(item: dict[str, Any]) -> str:
-    kind = normalize_text(item.get("kind")).lower()
     engine = normalize_text(item.get("engine")).lower()
     metadata = item.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
 
-    if kind == "workflow":
-        return workflow_detail_text(metadata)
-    if detail_text := _QUEUE_ENGINE_DETAIL_TEXT.get(engine):
-        detail = detail_text(metadata)
+    if engine == "orca":
+        detail = infer_orca_detail_from_metadata(metadata)
+        if normalize_text(metadata.get("publication_blocked_reason")):
+            return f"{detail} (waiting for publication repair)"
         if normalize_text(metadata.get("admission_deferral_reason")):
             # The full reason is in the JSON record; the table only says why
             # a pending row is not being started.
@@ -170,30 +134,16 @@ def queue_path_name(value: Any) -> str:
 def queue_metadata_path_name(metadata: dict[str, Any], keys: Sequence[str]) -> str:
     for key in keys:
         name = queue_path_name(metadata.get(key))
-        if name and name not in {"reaction_dir", "workflow.json"}:
+        if name and name not in {"reaction_dir"}:
             return name
     return ""
 
 
 def queue_name_text(item: dict[str, Any]) -> str:
     activity_id = normalize_text(item.get("activity_id")) or "-"
-    kind = normalize_text(item.get("kind")).lower()
     label = normalize_text(item.get("label"))
     metadata = item.get("metadata")
     metadata = metadata if isinstance(metadata, dict) else {}
-
-    if kind == "workflow":
-        # The submitted directory is the stable user-facing name: the scaffold
-        # for scaffolded workflows, the workspace itself otherwise. Stage
-        # labels (reaction keys, candidate paths) belong to Detail, not Name.
-        workspace_name = normalize_text(
-            metadata.get("workspace_display_name")
-        ) or queue_metadata_path_name(metadata, ("workspace_dir", "workflow_file"))
-        if workspace_name:
-            return workspace_name
-        if label and not queue_looks_like_path(label):
-            return label
-        return activity_id
 
     if label and not queue_looks_like_path(label):
         return label
@@ -211,9 +161,8 @@ def queue_name_text(item: dict[str, Any]) -> str:
         return path_name
 
     label_name = queue_path_name(label)
-    if label_name and label_name not in {"reaction_dir", "workflow.json"}:
+    if label_name and label_name != "reaction_dir":
         return label_name
-
     return activity_id
 
 

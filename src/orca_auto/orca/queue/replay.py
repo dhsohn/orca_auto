@@ -27,7 +27,6 @@ from orca_auto.core.queue.lifecycle import (
 )
 from orca_auto.core.queue.lifecycle import job_queue_root as _lifecycle_job_queue_root
 from orca_auto.core.queue.types import QueueEntry
-from orca_auto.core.queue.worker import EngineRunningJob as RunningJob
 from orca_auto.core.queue.worker import (
     live_queue_slot_keys_for_slots,
     terminate_process_group,
@@ -45,11 +44,11 @@ from ..attempt.reporting import build_final_result, last_out_path_from_state
 from ..config import AppConfig
 from ..engine import ENGINE_RUNTIME
 from ..execution_binding import orca_execution_provenance
+from ..report.publication import write_report_files
 from ..run_lock import acquire_run_lock
 from ..state import (
     finalize_state,
     new_state,
-    write_report_files,
 )
 from ..state_reading import load_state, state_path, state_payload_job_id
 from ..statuses import AnalyzerStatus
@@ -71,6 +70,8 @@ from .adapter import (
     update_terminal,
 )
 from .adapter import update_metadata as update_queue_metadata
+from .entries import queue_entry_is_retired_workflow_owned
+from .models import OrcaRunningJob as RunningJob
 from .terminal_replay import (
     TERMINAL_REPLAY_METADATA_KEY,
     StateGenerationFingerprint,
@@ -87,7 +88,6 @@ logger = logging.getLogger(__name__)
 
 ACTIVE_QUEUE_STATUSES = frozenset({"pending", "running"})
 TERMINAL_QUEUE_STATUSES = frozenset({STATUS_COMPLETED, STATUS_CANCELLED, STATUS_FAILED})
-TERMINAL_FINALIZE_RETRY_ATTR = "_orca_terminal_finalize_retry_pending"
 
 
 def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
@@ -97,7 +97,11 @@ def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
 def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, Any]]:
     return ENGINE_RUNTIME.queue_entries_with_roots(
         cfg,
-        list_queue_fn=lambda root: list_queue(Path(root)),
+        list_queue_fn=lambda root: [
+            entry
+            for entry in list_queue(Path(root))
+            if not queue_entry_is_retired_workflow_owned(entry, root)
+        ],
     )
 
 
@@ -175,9 +179,11 @@ def get_replay_state(worker: Any) -> OrcaWorkerReplayState:
     return state
 
 
-def job_pending_replay_item(job: Any) -> TerminalReplayWorkItem | None:
-    item = getattr(job, "_orca_terminal_replay_item", None)
-    return item if isinstance(item, TerminalReplayWorkItem) else None
+def release_terminal_job(worker: Any, job: RunningJob) -> None:
+    """Release capacity before clearing the state needed to retry a failed release."""
+    worker._release_admission_slot(job.admission_token)
+    job.pending_terminal_replay = None
+    job.terminal_finalize_pending = False
 
 
 def unresolved_terminal_reaction_keys(worker: Any) -> frozenset[str] | None:
@@ -189,10 +195,10 @@ def unresolved_terminal_reaction_keys(worker: Any) -> frozenset[str] | None:
     items = list(get_replay_state(worker).pending_replays.values())
     reaction_dirs: list[str] = []
     for _queue_id, job in worker._running_jobs():
-        job_item = job_pending_replay_item(job)
+        job_item = job.pending_terminal_replay
         if job_item is not None:
             items.append(job_item)
-        elif bool(getattr(job, TERMINAL_FINALIZE_RETRY_ATTR, False)):
+        elif job.terminal_finalize_pending:
             reaction_dirs.append(str(getattr(job, "reaction_dir", "") or ""))
     keys: set[str] = set()
     for item in items:
@@ -403,9 +409,9 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: RunningJob, *, rc: i
     # not publish a terminal queue state (or make the capacity reusable) until
     # that identity has been recovered.  Raising here deliberately leaves the
     # completed job in ``_running`` so the worker retries the whole finalization.
-    job.__dict__[TERMINAL_FINALIZE_RETRY_ATTR] = True
+    job.terminal_finalize_pending = True
     recover_slot_engine_process(worker.admission_root, job.admission_token)
-    pending_item = job_pending_replay_item(job)
+    pending_item = job.pending_terminal_replay
     if pending_item is not None:
         release_slot_after_finalize = False
         try:
@@ -413,9 +419,7 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: RunningJob, *, rc: i
             release_slot_after_finalize = True
         finally:
             if release_slot_after_finalize:
-                worker._release_admission_slot(job.admission_token)
-                job.__dict__.pop("_orca_terminal_replay_item", None)
-                job.__dict__.pop(TERMINAL_FINALIZE_RETRY_ATTR, None)
+                release_terminal_job(worker, job)
         return
 
     mark_result = mark_terminal_process_queue_entry_with_result(
@@ -476,9 +480,7 @@ def _finalize_finished_job(worker: Any, queue_id: str, job: RunningJob, *, rc: i
         release_slot_after_finalize = True
     finally:
         if release_slot_after_finalize:
-            worker._release_admission_slot(job.admission_token)
-            job.__dict__.pop("_orca_terminal_replay_item", None)
-            job.__dict__.pop(TERMINAL_FINALIZE_RETRY_ATTR, None)
+            release_terminal_job(worker, job)
 
 
 def finalize_completed_job(worker: Any, queue_id: str, job: Any, rc: int) -> None:
@@ -684,15 +686,17 @@ def _run_terminal_replay_side_effects(
     # is logged (redacted) by the notifier and does not retain the replay.
     # Retaining it pinned the finished job's slot and blocked every ORCA
     # admission until the messenger recovered, and left the row unclearable.
-    # The notifier records a delivered send in the run state, so a delivered
-    # message is not resent and a failed delivery is one missed message, not
-    # a loop.  An exception out of the notifier is the same missed message:
+    # The notifier durably claims one attempt before background delivery; it
+    # never writes state after sending, when a successor may already own it.
+    # A failed dispatch or delivery is one missed message, not a retry loop.
+    # An exception out of the notifier is the same missed message:
     # only the record upsert above and the marker may retain the replay.
     try:
         worker_tracking.notify_terminal_job_from_state(
             worker.cfg,
             item.reaction_dir,
             expected_job_id=item.task_id,
+            expected_run_id=item.run_id or item.recorded_run_id or None,
         )
     except Exception as exc:  # noqa: BLE001 - advisory boundary
         logger.warning(
@@ -720,13 +724,13 @@ def strictly_finish_terminal_replay(
 ) -> None:
     """Finish one durable terminal generation before making its slot reusable."""
 
-    job.__dict__["_orca_terminal_replay_item"] = item
+    job.pending_terminal_replay = item
     if _pending_replay_state_is_superseded(item):
         _clear_terminal_replay_marker_or_confirm_absent(item)
         return
 
     prepared_item = item if item.state_prepared else _prepare_terminal_replay_work_item(item)
-    job.__dict__["_orca_terminal_replay_item"] = prepared_item
+    job.pending_terminal_replay = prepared_item
     if prepared_item.resolved_status != item.observed_status or (
         prepared_item.run_id and prepared_item.recorded_run_id != prepared_item.run_id
     ):
@@ -747,7 +751,7 @@ def strictly_finish_terminal_replay(
             prepared_item,
             recorded_run_id=prepared_item.run_id or prepared_item.recorded_run_id,
         )
-        job.__dict__["_orca_terminal_replay_item"] = prepared_item
+        job.pending_terminal_replay = prepared_item
 
     _run_terminal_replay_side_effects(worker, prepared_item)
     _clear_terminal_replay_marker_or_confirm_absent(prepared_item)
@@ -1409,7 +1413,6 @@ __all__ = [
     "finalize_child_exit",
     "finalize_completed_job",
     "handle_worker_start_error",
-    "job_pending_replay_item",
     "job_queue_root",
     "shutdown_running_job",
     "new_terminal_replay_work_item",

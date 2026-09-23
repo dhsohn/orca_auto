@@ -62,19 +62,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - project: orca_auto
-            environment: pypi
-          - project: orca_auto_workflows
-            environment: pypi-workflows
     environment:
-      name: ${{ matrix.environment }}
-      url: https://pypi.org/project/${{ matrix.project }}/
+      name: pypi
+      url: https://pypi.org/project/orca_auto/
     env:
-      RELEASE_PROJECT: ${{ matrix.project }}
+      RELEASE_PROJECT: orca_auto
     permissions:
       contents: read
       id-token: write

@@ -4,7 +4,6 @@ from .engine_catalog import get_engine_catalog_entry
 
 ORCA_AUTO_CLI_MODULE = "orca_auto.cli"
 ORCA_AUTO_CLI_COMMAND = f"python -m {ORCA_AUTO_CLI_MODULE}"
-ORCA_AUTO_WORKFLOW_WORKER_MODULE = "orca_auto.flow.cli.workflow"
 
 ORCA_AUTO_ORCA_APP_NAME = get_engine_catalog_entry("orca").app_id
 

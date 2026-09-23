@@ -86,13 +86,13 @@ def _installed_config(
         argv = shlex.split(argv_matches[0])
     except ValueError:
         raise ValueError(f"Cannot verify installed worker command for {unit}.") from None
-    app = "workflow" if unit.startswith("orca_auto-workflow-worker@") else "orca"
+    worker_args = ["-m", "orca_auto.cli", "queue", "worker", "--app", "orca"]
     if (
-        len(argv) != 7
+        len(argv) not in {7, 8}
         or not Path(argv[0]).is_absolute()
         or not argv[0].endswith("/.venv/bin/python")
         or executable_matches[0] != argv[0]
-        or argv[1:] != ["-m", "orca_auto.cli", "queue", "worker", "--app", app]
+        or argv[1:] not in (worker_args, ["-I", *worker_args])
     ):
         raise ValueError(f"Unsupported worker command or custom configuration override for {unit}.")
     return config

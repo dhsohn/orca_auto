@@ -575,7 +575,6 @@ def test_reserve_activate_and_release_slot_lifecycle(
         tmp_path,
         2,
         source="reserve-source",
-        workflow_id="wf-9",
         state="reserved",
         work_dir="subdir/run",
         queue_id="queue-a",
@@ -601,7 +600,6 @@ def test_reserve_activate_and_release_slot_lifecycle(
         acquired_at="2026-04-19T00:00:00+00:00",
         app_name="chem-app",
         task_id="task-7",
-        workflow_id="wf-9",
         state="active",
         work_dir=str(Path(".").resolve()),
         queue_id="queue-b",
@@ -633,7 +631,6 @@ def test_update_slot_metadata_updates_reserved_identity_and_reports_missing_toke
         queue_id="q_123",
         app_name="orca_auto_orca",
         task_id="orca_task_123",
-        workflow_id="wf_123",
         work_dir=tmp_path / "rxn",
         owner_pid=5151,
     )
@@ -646,7 +643,6 @@ def test_update_slot_metadata_updates_reserved_identity_and_reports_missing_toke
         acquired_at="2026-04-19T00:00:00+00:00",
         app_name="orca_auto_orca",
         task_id="orca_task_123",
-        workflow_id="wf_123",
         state="active",
         work_dir=str((tmp_path / "rxn").resolve()),
         queue_id="q_123",
@@ -776,3 +772,17 @@ def test_reserve_slot_at_capacity_does_not_rewrite_the_file(
 
     after = path.stat()
     assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+
+
+def test_retired_workflow_slot_identity_remains_readable_and_occupies_capacity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_deterministic_liveness(monkeypatch)
+    token = store.reserve_slot(tmp_path, 1, source="orca_auto.flow.cli.workflow")
+    assert token is not None
+    [current] = store.list_all_slots(tmp_path)
+    retained = replace(current, workflow_id="retired-workflow")
+    store._save_slots(tmp_path, [retained])
+    assert store.list_slots(tmp_path) == [retained]
+    assert store.reserve_slot(tmp_path, 1, source="orca_auto.orca.queue_worker") is None
+    assert store.get_slot(tmp_path, token) == retained

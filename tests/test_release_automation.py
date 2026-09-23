@@ -38,15 +38,7 @@ def repository(tmp_path: Path) -> tuple[Path, str]:
     _git(repo, "config", "user.name", "Release Tests")
     _git(repo, "config", "user.email", "release-tests@example.invalid")
     (repo / "pyproject.toml").write_text(
-        '[project]\nname = "orca_auto"\nversion = "1.2.3"\n'
-        '[project.optional-dependencies]\nworkflows = ["orca_auto_workflows==1.2.3"]\n',
-        encoding="utf-8",
-    )
-    extension = repo / "extensions/workflows"
-    extension.mkdir(parents=True)
-    (extension / "pyproject.toml").write_text(
-        '[project]\nname = "orca_auto_workflows"\nversion = "1.2.3"\n'
-        'dependencies = ["orca_auto==1.2.3"]\n',
+        '[project]\nname = "orca_auto"\nversion = "1.2.3"\n',
         encoding="utf-8",
     )
     (repo / "CITATION.cff").write_text(
@@ -73,7 +65,7 @@ def _retag(repo: Path) -> str:
 
 
 def _build_fixture(work: Path, *, metadata_version: str = VERSION) -> None:
-    for directory, project in zip(("core-dist", "workflows-dist"), release.PROJECTS, strict=True):
+    for directory, project in zip(("core-dist",), release.PROJECTS, strict=True):
         output = work / directory
         output.mkdir(parents=True)
         payload = f"Metadata-Version: 2.1\nName: {project}\nVersion: {metadata_version}\n".encode()
@@ -168,14 +160,7 @@ def test_git_guard_rejects_dirty_or_wrong_checkout(repository: tuple[Path, str])
     "path,old,new,message",
     [
         ("pyproject.toml", 'version = "1.2.3"', 'version = "1.2.3.dev0"', "source versions"),
-        (
-            "extensions/workflows/pyproject.toml",
-            'version = "1.2.3"',
-            'version = "1.2.2"',
-            "source versions",
-        ),
-        ("pyproject.toml", "orca_auto_workflows==1.2.3", "orca_auto_workflows>=1.2.3", "extra"),
-        ("extensions/workflows/pyproject.toml", "orca_auto==1.2.3", "orca_auto>=1.2.3", "pin"),
+        ("pyproject.toml", 'name = "orca_auto"', 'name = "other"', "project name"),
         ("CHANGELOG.md", "2026-09-13", "Unreleased", "dated changelog"),
         ("CITATION.cff", "2026-09-13", "2026-09-12", "release date"),
     ],
@@ -417,20 +402,11 @@ def test_release_workflow_has_one_trigger_and_scoped_publication_permissions() -
     assert jobs["publish-pypi"]["permissions"] == {"contents": "read", "id-token": "write"}
     publisher = jobs["publish-pypi"]
     assert publisher["environment"] == {
-        "name": "${{ matrix.environment }}",
-        "url": "https://pypi.org/project/${{ matrix.project }}/",
+        "name": "pypi",
+        "url": "https://pypi.org/project/orca_auto/",
     }
-    assert publisher["env"] == {"RELEASE_PROJECT": "${{ matrix.project }}"}
-    assert publisher["strategy"]["fail-fast"] == "false"
-    assert set(publisher["strategy"]) == {"fail-fast", "matrix"}
-    assert set(publisher["strategy"]["matrix"]) == {"include"}
-    rows = publisher["strategy"]["matrix"]["include"]
-    assert len(rows) == 2
-    assert all(set(row) == {"project", "environment"} for row in rows)
-    assert {(row["project"], row["environment"]) for row in rows} == {
-        ("orca_auto", "pypi"),
-        ("orca_auto_workflows", "pypi-workflows"),
-    }
+    assert publisher["env"] == {"RELEASE_PROJECT": "orca_auto"}
+    assert "strategy" not in publisher
     assert jobs["publish-pypi"]["needs"] == "build"
     assert jobs["github-release"]["permissions"] == {"contents": "write"}
     assert jobs["github-release"]["needs"] == ["build", "publish-pypi"]

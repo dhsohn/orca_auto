@@ -5,15 +5,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engine_catalog import activity_engine_entries
 from orca_auto.core.utils import normalize_text, parse_iso_utc
 
 
 @dataclass(frozen=True)
 class ActivitySourceRequest:
-    workflow_root: str | Path | None = None
-    crest_config: str | None = None
-    xtb_config: str | None = None
     orca_config: str | None = None
     shared_config: str | None = None
 
@@ -23,6 +19,10 @@ class ActivityListRequest:
     sources: ActivitySourceRequest
     refresh: bool = False
     limit: int = 0
+    indexed: bool = False
+    engines: tuple[str, ...] = ()
+    statuses: tuple[str, ...] = ()
+    kinds: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -33,26 +33,7 @@ class ActivityCancelRequest:
 
 @dataclass(frozen=True)
 class ResolvedActivitySources:
-    workflow_root: str | None
-    crest_config: str | None
-    xtb_config: str | None
     orca_config: str | None
-    engine_configs: dict[str, str | None] = field(default_factory=dict)
-
-    def config_for_engine(self, engine: str) -> str | None:
-        engine_id = normalize_text(engine).lower()
-        if engine_id in self.engine_configs:
-            return self.engine_configs[engine_id]
-        return getattr(self, f"{engine_id}_config", None)
-
-    @property
-    def shared_config(self) -> str | None:
-        for entry in activity_engine_entries():
-            config = self.config_for_engine(entry.engine_id)
-            text = normalize_text(config)
-            if text:
-                return text
-        return None
 
 
 @dataclass(frozen=True)

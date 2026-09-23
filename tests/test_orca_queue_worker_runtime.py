@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -25,7 +26,7 @@ def test_make_running_job_attaches_queue_root(tmp_path: Path) -> None:
     assert running.task_id == "task-1"
     assert running.process == "process"
     assert running.admission_token == "slot-1"
-    assert running.__dict__["queue_root"] == tmp_path / "queue"
+    assert running.queue_root == tmp_path / "queue"
 
 
 def test_check_cancel_requests_cancels_and_discards_matching_jobs(tmp_path: Path) -> None:
@@ -36,7 +37,7 @@ def test_check_cancel_requests_cancels_and_discards_matching_jobs(tmp_path: Path
     )
     cancelled: list[tuple[str, Any]] = []
     discarded: list[str] = []
-    cancel_checks: list[tuple[Path, str, dict[str, object]]] = []
+    cancel_checks: list[tuple[Path, Mapping[str, str | None]]] = []
     worker = SimpleNamespace(
         _running_jobs=lambda: [("queue-1", job), ("queue-2", job)],
         _discard_running_job=lambda queue_id: discarded.append(queue_id),
@@ -46,17 +47,13 @@ def test_check_cancel_requests_cancels_and_discards_matching_jobs(tmp_path: Path
         cancelled.append((queue_id, job_obj))
         return True
 
-    def get_cancel_requested(
-        root: Path,
-        queue_id: str,
-        **kwargs: object,
-    ) -> bool:
-        cancel_checks.append((root, queue_id, kwargs))
-        return queue_id == "queue-1"
+    def cancel_requested_ids(root: Path, tasks: Mapping[str, str | None]) -> set[str]:
+        cancel_checks.append((root, tasks))
+        return {"queue-1"}
 
     queue_worker_runtime.check_cancel_requests(
         worker,
-        get_cancel_requested_fn=get_cancel_requested,
+        cancel_requested_ids_fn=cancel_requested_ids,
         job_queue_root_fn=lambda _worker, job_obj: job_obj.queue_root,
         cancel_running_job_fn=cancel_running_job,
     )
@@ -64,8 +61,7 @@ def test_check_cancel_requests_cancels_and_discards_matching_jobs(tmp_path: Path
     assert cancelled == [("queue-1", job)]
     assert discarded == ["queue-1"]
     assert cancel_checks == [
-        (tmp_path / "queue", "queue-1", {"expected_task_id": "task-1"}),
-        (tmp_path / "queue", "queue-2", {"expected_task_id": "task-1"}),
+        (tmp_path / "queue", {"queue-1": "task-1", "queue-2": "task-1"}),
     ]
 
 
@@ -87,10 +83,50 @@ def test_check_cancel_requests_skips_completed_retained_child(tmp_path: Path) ->
 
     queue_worker_runtime.check_cancel_requests(
         worker,
-        get_cancel_requested_fn=lambda *_args: True,
+        cancel_requested_ids_fn=lambda *_args: {"queue-1"},
         job_queue_root_fn=lambda _worker, job_obj: job_obj.queue_root,
         cancel_running_job_fn=cancel_running_job,
     )
 
     assert cancelled == []
     assert discarded == []
+
+
+def test_busy_root_does_not_delay_cancellation_at_another_root(tmp_path: Path) -> None:
+    from orca_auto.core.queue.store import QueueLockTimeoutError
+
+    jobs = [
+        (
+            str(i),
+            SimpleNamespace(
+                queue_root=tmp_path / str(i // 2),
+                task_id=str(i),
+                process=SimpleNamespace(poll=lambda: None),
+            ),
+        )
+        for i in range(4)
+    ]
+    calls: list[tuple[Path, Mapping[str, str | None]]] = []
+    cancelled: list[str] = []
+    discarded: list[str] = []
+    worker = SimpleNamespace(_running_jobs=lambda: jobs, _discard_running_job=discarded.append)
+
+    def requested(root: Path, tasks: Mapping[str, str | None]) -> set[str]:
+        calls.append((root, tasks))
+        if root == tmp_path / "0":
+            raise QueueLockTimeoutError("busy")
+        return {"2", "3"}
+
+    def cancel(_worker: Any, queue_id: str, _job: Any) -> bool:
+        cancelled.append(queue_id)
+        return queue_id == "2"
+
+    queue_worker_runtime.check_cancel_requests(
+        worker,
+        cancel_requested_ids_fn=requested,
+        job_queue_root_fn=lambda _worker, job: job.queue_root,
+        cancel_running_job_fn=cancel,
+    )
+    assert calls == [(tmp_path / "0", {"0": "0", "1": "1"}), (tmp_path / "1", {"2": "2", "3": "3"})]
+    assert cancelled == ["2", "3"]
+    assert discarded == ["2"]

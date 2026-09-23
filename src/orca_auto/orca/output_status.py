@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import io
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
 NORMAL_TERMINATION_NEEDLES: tuple[str, ...] = ("ORCA TERMINATED NORMALLY",)
 
@@ -27,8 +26,16 @@ _OPT_NOT_CONVERGED_RE = re.compile(
 )
 
 
+def is_execution_output_line(line: str) -> bool:
+    """Exclude input echoes and comments from execution diagnostics."""
+    stripped = line.lstrip()
+    return not (stripped.startswith("#") or _INPUT_ECHO_RE.match(stripped))
+
+
 def optimization_convergence_line(line: str) -> bool | None:
     """Verdict on one output line; a negative marker takes precedence."""
+    if not is_execution_output_line(line):
+        return None
     upper = line.upper()
     if _OPT_NOT_CONVERGED_RE.search(upper):
         return False
@@ -49,22 +56,38 @@ def last_optimization_convergence(lines: Iterable[str]) -> bool | None:
 
 def termination_line(line: str) -> tuple[bool, bool]:
     """Normal/error termination evidence, excluding input echoes and comments."""
-    stripped = line.lstrip()
-    if stripped.startswith("#") or _INPUT_ECHO_RE.match(stripped):
+    if not is_execution_output_line(line):
         return False, False
-    upper = stripped.upper()
+    upper = line.upper()
     return (
         any(needle in upper for needle in NORMAL_TERMINATION_NEEDLES),
         any(needle in upper for needle in ERROR_TERMINATION_NEEDLES),
     )
 
 
+_OUTPUT_NEWLINE_RE = re.compile(r"\r\n|[\r\n]")
+
+
+def iter_output_lines(text: str) -> Iterator[str]:
+    """StringIO(newline=None) semantics without cloning the entire buffer.
+
+    Only CR, LF and CRLF are newlines; unicode separators and control
+    characters inside a line must not expose commented/echoed diagnostics.
+    """
+    start = 0
+    for match in _OUTPUT_NEWLINE_RE.finditer(text):
+        yield text[start : match.start()] + "\n"
+        start = match.end()
+    if start < len(text):
+        yield text[start:]
+
+
 def has_normal_termination(text: str) -> bool:
-    return any(termination_line(line)[0] for line in io.StringIO(text, newline=None))
+    return any(termination_line(line)[0] for line in iter_output_lines(text))
 
 
 def has_error_termination(text: str) -> bool:
-    return any(termination_line(line)[1] for line in io.StringIO(text, newline=None))
+    return any(termination_line(line)[1] for line in iter_output_lines(text))
 
 
 def coarse_orca_status(

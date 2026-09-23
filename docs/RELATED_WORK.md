@@ -30,7 +30,7 @@ Cluster schedulers like SLURM and PBS manage compute resources across large clus
 
 ## General Workflow Engines
 
-General workflow engines (such as Nextflow, Snakemake, and AiiDA) provide comprehensive DAG abstractions across multi-step distributed pipelines. ORCA_auto is deliberately focused: its scope is dedicated to robust ORCA queue management and screening workflows. This targeted design keeps local and WSL workflows lightweight, easy to inspect, and simple to debug.
+General workflow engines (such as Nextflow, Snakemake, and AiiDA) provide DAG abstractions across multi-step distributed pipelines. ORCA_auto handles durable submission, execution and reporting for standalone ORCA jobs on Linux/WSL. External tools can consume its documented machine observations; version 7 does not provide workflow orchestration.
 
 ## Chemistry Libraries
 

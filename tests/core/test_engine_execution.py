@@ -35,120 +35,47 @@ def test_object_attribute_fields_extracts_named_context_values() -> None:
     }
 
 
-def test_build_terminal_result_from_context_merges_identity_and_timestamp(
+@pytest.mark.parametrize("shutdown_check", [1, 2])
+def test_run_engine_worker_entry_stops_at_shutdown_checkpoint(
     tmp_path: Path,
-) -> None:
-    entry = SimpleNamespace(queue_id="queue-1", started_at="")
-    context = SimpleNamespace(
-        entry=entry,
-        job_dir=tmp_path / "job",
-        selected_xyz=tmp_path / "job" / "input.xyz",
-        resource_request={"max_cores": 2},
-    )
-    captured: dict[str, Any] = {}
-
-    def build_terminal_result(entry_obj: Any, **kwargs: Any) -> Any:
-        captured["entry"] = entry_obj
-        captured["kwargs"] = kwargs
-        return "terminal-result"
-
-    result = engine_execution.build_terminal_result_from_context(
-        build_terminal_result,
-        context,
-        identity_fields={"mode": "nci"},
-        status="failed",
-        reason="runner_error:boom",
-        now_utc_iso="2026-01-01T00:00:00+00:00",
-    )
-
-    assert result == "terminal-result"
-    assert captured["entry"] is entry
-    assert captured["kwargs"]["job_dir"] == tmp_path / "job"
-    assert captured["kwargs"]["selected_xyz"] == tmp_path / "job" / "input.xyz"
-    assert captured["kwargs"]["resource_request"] == {"max_cores": 2}
-    assert captured["kwargs"]["mode"] == "nci"
-    assert captured["kwargs"]["status"] == "failed"
-    assert captured["kwargs"]["reason"] == "runner_error:boom"
-    assert captured["kwargs"]["exit_code"] == 1
-    assert captured["kwargs"]["now_utc_iso_fn"]() == "2026-01-01T00:00:00+00:00"
-
-
-def test_run_engine_worker_lifecycle_stops_on_shutdown_before_mark_running(
-    tmp_path: Path,
+    shutdown_check: int,
 ) -> None:
     cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
+    context = SimpleNamespace()
     calls: list[str] = []
+    checks = 0
 
-    def raise_shutdown(_context: Any) -> None:
+    def shutdown_requested() -> bool:
+        nonlocal checks
+        checks += 1
         calls.append("check")
-        raise RuntimeError("shutdown")
+        return checks == shutdown_check
 
     def build_context(_cfg: Any, _entry: Any) -> SimpleNamespace:
         calls.append("build")
-        return SimpleNamespace()
+        return context
 
-    lifecycle = engine_execution.EngineWorkerLifecycle(
+    spec = engine_execution.EngineWorkerExecutionSpec(
         build_context=build_context,
-        check_shutdown=raise_shutdown,
         mark_running=lambda *_args: calls.append("mark"),
         run_job=lambda *_args: calls.append("run"),
         finalize_entry=lambda *_args: calls.append("finalize"),
         build_outcome=lambda *_args: calls.append("outcome"),
     )
 
-    try:
-        engine_execution.run_engine_worker_lifecycle(
+    with pytest.raises(WorkerShutdownRequested) as caught:
+        engine_execution.run_engine_worker_entry_with_spec(
             cfg,
             SimpleNamespace(queue_id="q-1"),
             queue_root=None,
-            lifecycle=lifecycle,
+            spec=spec,
+            options=engine_execution.EngineWorkerOptions(shutdown_requested=shutdown_requested),
         )
-    except RuntimeError as exc:
-        assert str(exc) == "shutdown"
-    else:
-        raise AssertionError("expected shutdown")
 
-    assert calls == ["build", "check"]
-
-
-def test_run_engine_worker_lifecycle_stops_on_shutdown_after_mark_running(
-    tmp_path: Path,
-) -> None:
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(tmp_path / "allowed")))
-    checks = iter([False, True])
-    calls: list[str] = []
-
-    def maybe_raise_shutdown(_context: Any) -> None:
-        calls.append("check")
-        if next(checks):
-            raise RuntimeError("shutdown")
-
-    def build_context(_cfg: Any, _entry: Any) -> SimpleNamespace:
-        calls.append("build")
-        return SimpleNamespace()
-
-    lifecycle = engine_execution.EngineWorkerLifecycle(
-        build_context=build_context,
-        check_shutdown=maybe_raise_shutdown,
-        mark_running=lambda *_args: calls.append("mark"),
-        run_job=lambda *_args: calls.append("run"),
-        finalize_entry=lambda *_args: calls.append("finalize"),
-        build_outcome=lambda *_args: calls.append("outcome"),
+    assert caught.value.context is context
+    assert calls == (
+        ["build", "check"] if shutdown_check == 1 else ["build", "check", "mark", "check"]
     )
-
-    try:
-        engine_execution.run_engine_worker_lifecycle(
-            cfg,
-            SimpleNamespace(queue_id="q-1"),
-            queue_root=None,
-            lifecycle=lifecycle,
-        )
-    except RuntimeError as exc:
-        assert str(exc) == "shutdown"
-    else:
-        raise AssertionError("expected shutdown")
-
-    assert calls == ["build", "check", "mark", "check"]
 
 
 def test_run_engine_worker_entry_with_spec_raises_shutdown_with_context(
@@ -486,11 +413,18 @@ def test_default_entry_resource_request_uses_common_resource_caps() -> None:
     )
     entry = SimpleNamespace(metadata={"resource_request": {"max_cores": "4"}})
 
-    assert engine_execution.default_engine_resource_caps(cfg) == {
+    from orca_auto.core.indexing.engine_records import resource_dict
+
+    def caps(config: Any) -> dict[str, int]:
+        return engine_execution.engine_resource_caps(config, resource_dict_fn=resource_dict)
+
+    assert caps(cfg) == {
         "max_cores": 8,
         "max_memory_gb": 32,
     }
-    assert engine_execution.default_entry_resource_request(cfg, entry) == {"max_cores": 4}
+    assert engine_execution.entry_resource_request(cfg, entry, resource_caps_fn=caps) == {
+        "max_cores": 4
+    }
 
 
 def test_run_cancellable_process_execution_waits_and_clears_running_job() -> None:

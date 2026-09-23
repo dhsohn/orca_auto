@@ -38,7 +38,6 @@ from .loop import (
 )
 from .models import (
     BackgroundRunningJob,
-    EngineRunningJob,
     ReservedQueueEntry,
     SlotFillResult,
 )
@@ -54,7 +53,6 @@ __all__ = [
     "BackgroundRunningJob",
     "ChildProcessQueueWorker",
     "admission_has_capacity",
-    "EngineRunningJob",
     "HookedPidFileChildProcessQueueWorker",
     "ManagedProcess",
     "PidFileChildProcessQueueWorker",

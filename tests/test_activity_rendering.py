@@ -6,12 +6,12 @@ from orca_auto import activity_labels, terminal_table
 from orca_auto import activity_rendering as rendering
 
 
-def test_queue_elapsed_uses_restart_metadata_and_clamps_negative_durations() -> None:
+def test_queue_elapsed_uses_attempt_metadata_and_clamps_negative_durations() -> None:
     item = {
         "status": "completed",
         "submitted_at": "2026-05-20T00:00:00+00:00",
         "updated_at": "2026-05-20T00:00:05+00:00",
-        "metadata": {"restart_summary": {"restarted_at": "2026-05-20T00:01:00+00:00"}},
+        "metadata": {"elapsed_started_at": "2026-05-20T00:01:00+00:00"},
     }
 
     assert activity_labels.queue_elapsed_text(item) == "00:00:00"
@@ -19,7 +19,7 @@ def test_queue_elapsed_uses_restart_metadata_and_clamps_negative_durations() -> 
     running = {
         "status": "running",
         "updated_at": "2026-05-20T00:00:00+00:00",
-        "metadata": {"last_restarted_at": "2026-05-20T00:00:10Z"},
+        "metadata": {"elapsed_started_at": "2026-05-20T00:00:10Z"},
     }
 
     assert (
@@ -31,60 +31,13 @@ def test_queue_elapsed_uses_restart_metadata_and_clamps_negative_durations() -> 
     )
 
 
-def test_queue_name_uses_workflow_workspace_for_generic_input_label() -> None:
-    assert (
-        activity_labels.queue_name_text(
-            {
-                "activity_id": "wf_006",
-                "kind": "workflow",
-                "status": "running",
-                "label": "input",
-                "metadata": {"workspace_dir": "/tmp/workflow_runs/wf_006"},
-            }
-        )
-        == "wf_006"
-    )
-
-
-def test_queue_name_prefers_workspace_over_stage_label() -> None:
-    assert (
-        activity_labels.queue_name_text(
-            {
-                "activity_id": "wf_001",
-                "kind": "workflow",
-                "status": "running",
-                "label": "reaction-case",
-                "metadata": {"workspace_dir": "/tmp/workflow_runs/wf_001"},
-            }
-        )
-        == "wf_001"
-    )
-
-
-def test_queue_name_uses_workspace_display_name_for_generation_workspaces() -> None:
-    assert (
-        activity_labels.queue_name_text(
-            {
-                "activity_id": "20260717-153816-966c453a",
-                "kind": "workflow",
-                "status": "running",
-                "label": "reactant_to_product",
-                "metadata": {
-                    "workspace_dir": "/tmp/orca_runs/TS8_wf/20260717-153816-966c453a",
-                    "workspace_display_name": "TS8_wf",
-                },
-            }
-        )
-        == "TS8_wf"
-    )
-
-
 def test_queue_name_falls_back_to_label_without_workspace() -> None:
     assert (
         activity_labels.queue_name_text(
             {
                 "activity_id": "wf_002",
-                "kind": "workflow",
+                "kind": "job",
+                "engine": "orca",
                 "status": "running",
                 "label": "reaction-case",
                 "metadata": {},
@@ -105,13 +58,13 @@ def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypat
             0,
             {
                 "activity_id": "wf_한국어_very_long_identifier",
-                "kind": "workflow",
+                "kind": "job",
+                "engine": "orca",
                 "status": "running",
                 "submitted_at": "2026-05-20T00:00:00+00:00",
                 "metadata": {
-                    "template_name": "conformer_screening",
-                    "workspace_dir": "/tmp/매우긴워크플로우이름_very_long_workflow_name",
-                    "request_parameters": {"crest_mode": "nci"},
+                    "selected_inp_name": "opt.inp",
+                    "reaction_dir": "/tmp/매우긴계산이름_very_long_reaction_name",
                 },
             },
         ),
@@ -124,7 +77,6 @@ def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypat
                 "status": "submitted",
                 "updated_at": "2026-05-20T00:00:00+00:00",
                 "metadata": {
-                    "workflow_id": "wf_한국어_very_long_identifier",
                     "selected_inp_name": "긴파일이름_opt_ts_freq.inp",
                 },
             },
@@ -136,7 +88,7 @@ def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypat
 
     assert len(set(widths)) == 1
     assert "..." in "\n".join(lines)
-    assert "매우긴워크플로우" in "\n".join(lines)
+    assert "매우긴계산이름" in "\n".join(lines)
 
 
 def _basic_rows() -> list[tuple[int, dict[str, object]]]:
@@ -215,76 +167,6 @@ def test_queue_table_lines_shrinks_detail_before_id(monkeypatch) -> None:
     lines = rendering.queue_table_lines(rows, max_width=60)
 
     assert "orca_keep_this_id" in "\n".join(lines)
-
-
-def test_tree_prefixes_marks_last_child_and_continuations() -> None:
-    assert rendering._tree_prefixes([0, 1, 1]) == ["", "├─ ", "└─ "]
-    assert rendering._tree_prefixes([0, 1, 1, 0, 1]) == ["", "├─ ", "└─ ", "", "└─ "]
-    # A deeper branch keeps a continuation bar while an ancestor still has a
-    # later sibling, and drops it once the ancestor is the last child.
-    assert rendering._tree_prefixes([0, 1, 2, 2, 1]) == [
-        "",
-        "├─ ",
-        "│  ├─ ",
-        "│  └─ ",
-        "└─ ",
-    ]
-
-
-def test_queue_table_lines_tree_glyphs_are_opt_in(monkeypatch) -> None:
-    monkeypatch.setattr(
-        activity_labels,
-        "queue_table_now",
-        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
-    )
-    rows: list[tuple[int, dict[str, object]]] = [
-        (
-            0,
-            {
-                "activity_id": "wf_1",
-                "kind": "workflow",
-                "status": "running",
-                "label": "screen",
-                "submitted_at": "2026-05-20T00:00:00+00:00",
-            },
-        ),
-        (
-            1,
-            {
-                "activity_id": "orca_1",
-                "kind": "job",
-                "engine": "orca",
-                "status": "completed",
-                "label": "opt",
-                "updated_at": "2026-05-20T00:00:00+00:00",
-                "metadata": {"workflow_id": "wf_1"},
-            },
-        ),
-        (
-            1,
-            {
-                "activity_id": "orca_2",
-                "kind": "job",
-                "engine": "orca",
-                "status": "running",
-                "label": "freq",
-                "updated_at": "2026-05-20T00:00:00+00:00",
-                "metadata": {"workflow_id": "wf_1"},
-            },
-        ),
-    ]
-
-    joined_default = "\n".join(rendering.queue_table_lines(rows))
-    tree_lines = rendering.queue_table_lines(rows, use_tree_glyphs=True)
-    joined_tree = "\n".join(tree_lines)
-
-    # Opt-in only: the default stays on plain indentation so messaging/piped
-    # surfaces are unaffected.
-    assert "├─" not in joined_default and "└─" not in joined_default
-    assert "├─" in joined_tree and "└─" in joined_tree
-    # The wider connector prefix must not break column alignment.
-    widths = [terminal_table.display_width(line) for line in tree_lines]
-    assert len(set(widths)) == 1
 
 
 def test_terminal_max_width_returns_none_without_terminal(monkeypatch) -> None:

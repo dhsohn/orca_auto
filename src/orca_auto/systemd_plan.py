@@ -17,12 +17,16 @@ from orca_auto.core.config.files import (
     scheduler_admission_root,
     usable_runs_root_from_mapping,
 )
+from orca_auto.core.runtime_bundle import (
+    PROCESS_RUNTIME_BUILD_ENV,
+    RUNTIME_MANIFEST_NAME,
+    verify_runtime_bundle,
+)
 from orca_auto.core.utils.coercion import normalize_text
 
 SYSTEMD_UNIT_NAMES = (
     "orca_auto-engine-workers@.target",
     "orca_auto-queue-worker@.service",
-    "orca_auto-workflow-worker@.service",
     "orca_auto-runtime@.target",
 )
 
@@ -231,7 +235,9 @@ def _render_read_write_paths(config: Path) -> str:
     return f"ReadWritePaths={joined}"
 
 
-def _render_unit_template(template: str, *, repo: Path, config: Path) -> str:
+def _render_unit_template(
+    template: str, *, repo: Path, config: Path, runtime_build: str = ""
+) -> str:
     repo_text = _systemd_path_text(repo, label="--repo")
     config_text = _systemd_path_text(config, label="--config")
     read_write_paths = _render_read_write_paths(config)
@@ -241,6 +247,16 @@ def _render_unit_template(template: str, *, repo: Path, config: Path) -> str:
     for line in rendered.splitlines():
         if line.startswith(config_environment_prefix):
             lines.append(f"{config_environment_prefix}{config_text}")
+        elif runtime_build and line.startswith("ExecStart="):
+            lines.extend(
+                [
+                    f"Environment={PROCESS_RUNTIME_BUILD_ENV}={runtime_build}",
+                    "Environment=PYTHONPATH=",
+                    "Environment=PYTHONNOUSERSITE=1",
+                    f"ReadOnlyPaths={repo_text}",
+                    line.replace("/bin/python -m ", "/bin/python -I -m "),
+                ]
+            )
         elif line.strip() == _SYSTEMD_READ_WRITE_PLACEHOLDER:
             lines.append(read_write_paths)
         else:
@@ -266,10 +282,6 @@ def _engine_workers_unit_for_user(target_user: str) -> str:
 
 def _worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
-
-
-def _workflow_worker_unit_for_user(target_user: str) -> str:
-    return f"orca_auto-workflow-worker@{target_user}.service"
 
 
 def _enabled_unit_for_args(*, target_user: str, worker_only: bool, no_enable: bool) -> str | None:
@@ -331,18 +343,12 @@ def _systemctl_transition_commands(
 
 
 def _validate_worker_config(config: Path) -> None:
-    """Run the same config loaders used by supervised engine workers."""
+    """Run the same config loader used by the supervised ORCA worker."""
 
     try:
-        from orca_auto.core.config.engines import (
-            load_crest_config,
-            load_xtb_config,
-        )
         from orca_auto.orca.config import load_config
 
         load_config(str(config))
-        load_xtb_config(str(config))
-        load_crest_config(str(config))
     except Exception as exc:
         raise ValueError(f"runtime config preflight failed: {exc}") from exc
 
@@ -384,6 +390,13 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
     # service code will run. Its versioned unit files are therefore the sole
     # template source, including when this installer itself came from a wheel.
     template_root = _template_dir(options.repo)
+    runtime_build = ""
+    if (options.repo / RUNTIME_MANIFEST_NAME).exists():
+        runtime_build = verify_runtime_bundle(options.repo)["build_id"]
+        if options.config.is_relative_to(options.repo):
+            raise ValueError(
+                "prepared runtime configuration must be outside the read-only runtime; pass --config"
+            )
     if not template_root.is_dir():
         raise ValueError(
             "--repo must name a checkout that contains a systemd/ template directory: "
@@ -397,6 +410,7 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
                 _read_unit_template(template_root, name),
                 repo=options.repo,
                 config=options.config,
+                runtime_build=runtime_build,
             ),
         )
         for name in SYSTEMD_UNIT_NAMES

@@ -1,5 +1,5 @@
 name: Calculation failure triage
-description: Report an ORCA or workflow calculation that failed or needs classification.
+description: Report an ORCA calculation that failed or needs classification.
 title: "calc: "
 labels: ["bug"]
 body:
@@ -10,16 +10,13 @@ body:
   - type: dropdown
     id: calculation-type
     attributes:
-      label: Calculation or workflow type
+      label: ORCA calculation type
       options:
         - ORCA Opt/Freq/single job
         - ORCA relaxed scan
         - ORCA OptTS
         - ORCA IRC
         - ORCA NEB-TS
-        - conformer workflow
-        - internal xTB stage
-        - internal CREST stage
         - not sure
     validations:
       required: true

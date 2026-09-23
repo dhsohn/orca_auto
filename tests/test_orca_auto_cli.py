@@ -116,7 +116,7 @@ def test_build_parser_parses_unified_queue_commands() -> None:
             "queue",
             "list",
             "--engine",
-            "xtb",
+            "orca",
             "--status",
             "running",
             "--kind",
@@ -125,7 +125,7 @@ def test_build_parser_parses_unified_queue_commands() -> None:
     )
     assert list_args.command == "queue"
     assert list_args.queue_command == "list"
-    assert list_args.engine == ["xtb"]
+    assert list_args.engine == ["orca"]
     assert list_args.status == ["running"]
     assert list_args.kind == ["job"]
     assert list_args.func is cli_queue.cmd_queue_list
@@ -308,23 +308,6 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
             "--priority",
             "4",
             "--force",
-            "--max-cores",
-            "12",
-            "--max-memory-gb",
-            "48",
-        ]
-    )
-    workflow_args = parser.parse_args(
-        [
-            "run-dir",
-            "/tmp/workflow-inputs",
-            "--priority",
-            "6",
-            "--max-cores",
-            "12",
-            "--max-memory-gb",
-            "48",
-            "--json",
         ]
     )
 
@@ -333,21 +316,7 @@ def test_build_parser_parses_unified_run_dir_commands() -> None:
     assert orca_args.config == "/tmp/orca_auto.yaml"
     assert orca_args.priority == 4
     assert orca_args.force is True
-    assert orca_args.max_cores == 12
-    assert orca_args.max_memory_gb == 48
     assert orca_args.func is cli_run_dir.cmd_run_dir
-
-    assert workflow_args.path == "/tmp/workflow-inputs"
-    assert workflow_args.priority == 6
-    assert not hasattr(workflow_args, "workflow_type")
-    assert not hasattr(workflow_args, "workflow_root")
-    assert not hasattr(workflow_args, "reactant_xyz")
-    assert not hasattr(workflow_args, "product_xyz")
-    assert not hasattr(workflow_args, "input_xyz")
-    assert workflow_args.max_cores == 12
-    assert workflow_args.max_memory_gb == 48
-    assert workflow_args.json is True
-    assert workflow_args.func is cli_run_dir.cmd_run_dir
 
 
 def test_run_dir_help_renders_engine_directives(capsys: pytest.CaptureFixture[str]) -> None:
@@ -358,12 +327,21 @@ def test_run_dir_help_renders_engine_directives(capsys: pytest.CaptureFixture[st
 
     assert exc_info.value.code == 0
     rendered = capsys.readouterr().out
-    assert "%pal/%maxcore" in rendered
+    assert "ORCA" in rendered
+    assert "--max-cores" not in rendered
 
 
 @pytest.mark.parametrize(
     "removed_option",
-    ["--workflow-type", "--workflow-root", "--reactant-xyz", "--product-xyz", "--input-xyz"],
+    [
+        "--workflow-type",
+        "--workflow-root",
+        "--reactant-xyz",
+        "--product-xyz",
+        "--input-xyz",
+        "--max-cores",
+        "--max-memory-gb",
+    ],
 )
 def test_run_dir_parser_rejects_internal_workflow_options(removed_option: str) -> None:
     parser = unified_cli.build_parser()
@@ -372,24 +350,14 @@ def test_run_dir_parser_rejects_internal_workflow_options(removed_option: str) -
         parser.parse_args(["run-dir", "/tmp/workflow-inputs", removed_option, "value"])
 
 
-def test_build_parser_parses_unified_init_and_scaffold_commands() -> None:
+def test_build_parser_parses_unified_init_command() -> None:
     parser = unified_cli.build_parser()
 
     init_args = parser.parse_args(["init", "--orca_auto-config", "/tmp/orca_auto.yaml", "--force"])
-    shortcut_scaffold_args = parser.parse_args(
-        ["scaffold", "conformer_search", "/tmp/conformer-inputs"]
-    )
 
     assert init_args.command == "init"
     assert init_args.force is True
     assert init_args.func is cli_run_dir.cmd_init
-
-    assert shortcut_scaffold_args.command == "scaffold"
-    assert shortcut_scaffold_args.scaffold_app == "conformer_search"
-    assert shortcut_scaffold_args.root == "/tmp/conformer-inputs"
-    assert shortcut_scaffold_args.workflow_type == "conformer_screening"
-    assert getattr(shortcut_scaffold_args, "crest_mode", None) is None
-    assert shortcut_scaffold_args.func is cli_run_dir.cmd_workflow_scaffold
 
 
 def test_build_parser_parses_systemd_install_command() -> None:
@@ -468,12 +436,12 @@ def test_main_dispatches_unified_queue_list(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(cli_queue, "cmd_queue_list", fake_cmd)
 
-    result = unified_cli.main(["queue", "list", "--engine", "xtb", "--status", "running"])
+    result = unified_cli.main(["queue", "list", "--engine", "orca", "--status", "running"])
 
     assert result == 17
     assert len(seen) == 1
     assert seen[0].queue_command == "list"
-    assert seen[0].engine == ["xtb"]
+    assert seen[0].engine == ["orca"]
     assert seen[0].status == ["running"]
 
 
@@ -509,17 +477,6 @@ def test_main_dispatches_unified_queue_cancel(monkeypatch: pytest.MonkeyPatch) -
             "cmd_init",
             {"command": "init", "force": True},
             22,
-        ),
-        (
-            ["scaffold", "conformer_search", "/tmp/workflow-job"],
-            "cmd_workflow_scaffold",
-            {
-                "command": "scaffold",
-                "scaffold_app": "conformer_search",
-                "root": "/tmp/workflow-job",
-                "workflow_type": "conformer_screening",
-            },
-            24,
         ),
     ],
 )

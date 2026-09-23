@@ -147,6 +147,19 @@ def queue_pending_cancel_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> li
     ]
 
 
+def queue_admission_blocker_lines(blockers: Sequence[dict[str, Any]]) -> list[str]:
+    lines = []
+    for blocker in blockers:
+        lines.extend(
+            [
+                f"admission_blocked: ORCA queue {blocker['allowed_root']} (queue_id={blocker['queue_id']})",
+                f"  {blocker['reason']}",
+                f"  {blocker['next_action']}",
+            ]
+        )
+    return lines
+
+
 def queue_clear_lines(payload: dict[str, Any]) -> list[str]:
     total_cleared = int(payload.get("total_cleared", 0) or 0)
     if total_cleared <= 0:
@@ -158,9 +171,6 @@ def queue_clear_lines(payload: dict[str, Any]) -> list[str]:
         return lines
 
     labels = (
-        ("workflows", "workflows"),
-        ("xtb_queue_entries", "xTB queue entries"),
-        ("crest_queue_entries", "CREST queue entries"),
         ("orca_queue_entries", "ORCA queue entries"),
         ("orca_run_states", "ORCA run states"),
     )

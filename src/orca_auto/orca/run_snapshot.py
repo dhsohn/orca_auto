@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,9 +11,9 @@ from typing import Any
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
-    path_is_inside_workflow_workspace,
     should_exclude_from_production_runs_scan,
 )
+from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from .job_locations import list_job_location_records, resolve_record_job_dir
@@ -198,11 +199,18 @@ def _snapshot_name(
 
 def _candidate_snapshot_dirs(
     allowed_root: Path,
+    *,
+    discover_unindexed: bool,
+    known_dirs: Iterable[Path],
+    location_records: Iterable[JobLocationRecord] | None = None,
 ) -> list[tuple[Path, Path | None, tuple[int, int]]]:
     candidates: list[tuple[Path, Path | None, tuple[int, int]]] = []
     seen: set[str] = set()
 
-    for record in list_job_location_records(allowed_root):
+    records = (
+        list_job_location_records(allowed_root) if location_records is None else location_records
+    )
+    for record in records:
         if _record_has_excluded_path(record, allowed_root):
             continue
         reaction_dir = resolve_record_job_dir(record)
@@ -221,8 +229,6 @@ def _candidate_snapshot_dirs(
             )
         ):
             continue
-        if path_is_inside_workflow_workspace(reaction_dir, allowed_root):
-            continue
         key = _dir_key(reaction_dir)
         if key in seen:
             continue
@@ -232,14 +238,13 @@ def _candidate_snapshot_dirs(
         seen.add(key)
         candidates.append((reaction_dir, original_run_dir, identity))
 
-    for state_path in iter_production_runs_artifacts(allowed_root, STATE_FILE_NAME):
+    state_paths = [directory / STATE_FILE_NAME for directory in known_dirs]
+    if discover_unindexed:
+        state_paths.extend(iter_production_runs_artifacts(allowed_root, STATE_FILE_NAME))
+    for state_path in state_paths:
         if should_exclude_from_production_runs_scan(state_path, allowed_root):
             continue
         reaction_dir = state_path.parent
-        # Workflow-internal jobs surface through the workflow activity view;
-        # listing them here too would double-count them as standalone runs.
-        if path_is_inside_workflow_workspace(reaction_dir, allowed_root):
-            continue
         key = _dir_key(reaction_dir)
         if key in seen:
             continue
@@ -252,13 +257,23 @@ def _candidate_snapshot_dirs(
     return candidates
 
 
-def collect_run_snapshots(allowed_root: Path) -> list[RunSnapshot]:
+def collect_run_snapshots(
+    allowed_root: Path,
+    *,
+    discover_unindexed: bool = True,
+    known_dirs: Iterable[Path] = (),
+    location_records: Iterable[JobLocationRecord] | None = None,
+    synchronize: bool = False,
+) -> list[RunSnapshot]:
     snapshots: list[RunSnapshot] = []
     if not allowed_root.is_dir():
         return snapshots
 
     for reaction_dir, original_run_dir, reaction_dir_identity in _candidate_snapshot_dirs(
-        allowed_root
+        allowed_root,
+        discover_unindexed=discover_unindexed,
+        known_dirs=known_dirs,
+        location_records=location_records,
     ):
         directory_fd = _open_snapshot_directory(
             reaction_dir,
@@ -267,7 +282,14 @@ def collect_run_snapshots(allowed_root: Path) -> list[RunSnapshot]:
         if directory_fd is None:
             continue
         try:
-            loaded_state = _load_pinned_state(directory_fd)
+            # The query index consumes pre-write invalidations only after this
+            # lock proves it observed the corresponding state publication.
+            with (
+                file_lock_at(directory_fd, ".job_state.mutation.lock")
+                if synchronize
+                else nullcontext()
+            ):
+                loaded_state = _load_pinned_state(directory_fd)
             if loaded_state is None:
                 continue
             state_payload, state_file_identity = loaded_state

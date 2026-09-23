@@ -173,18 +173,16 @@ class TestCli(unittest.TestCase):
                 "/tmp/rxn",
                 "--priority",
                 "3",
-                "--max-cores",
-                "16",
-                "--max-memory-gb",
-                "64",
+                "--force",
+                "--json",
             ]
         )
 
         self.assertEqual(args.command, "run-dir")
         self.assertEqual(args.path, "/tmp/rxn")
         self.assertEqual(args.priority, 3)
-        self.assertEqual(args.max_cores, 16)
-        self.assertEqual(args.max_memory_gb, 64)
+        self.assertTrue(args.force)
+        self.assertTrue(args.json)
 
     def test_run_dir_rejects_foreground_flag(self) -> None:
         parser = build_parser()

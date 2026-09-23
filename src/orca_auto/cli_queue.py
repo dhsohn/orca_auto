@@ -13,39 +13,30 @@ from orca_auto import activity_rendering as _activity_rendering
 from orca_auto.activity import cancel_activity, clear_activities, list_activities
 from orca_auto.activity_view import (
     activity_counter_config_path,
-    activity_with_parent_hint,
     count_global_active_simulations,
     filter_activity_items,
     normalize_activity_filter_values,
-    queue_list_default_visible_items,
-    queue_list_display_rows,
 )
 from orca_auto.core import statuses as _s
 from orca_auto.core import terminal
 from orca_auto.core.activity_icons import activity_status_icon
+from orca_auto.core.activity_index import ActivityIndexError
 from orca_auto.core.config import discovery
 from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.config.discovery import (
     shared_config_text_from_args,
-    workflow_root_for_args,
 )
-from orca_auto.core.extensions import require_workflows, workflows_available
+from orca_auto.core.config.files import shared_runs_root_from_config
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
 from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
 
-_WORKFLOW_STATE_ERRORS: tuple[type[Exception], ...] = ()
-if workflows_available():
-    from orca_auto.flow.registry import WorkflowRegistryCorruptError
-
-    _WORKFLOW_STATE_ERRORS = (WorkflowRegistryCorruptError,)
-
 _QUEUE_STATE_ERRORS: tuple[type[Exception], ...] = (
+    ActivityIndexError,
     *YAML_CONFIG_LOAD_EXCEPTIONS,
     QueueStoreCorruptError,
     JobLocationIndexError,
-    *_WORKFLOW_STATE_ERRORS,
 )
 _QUEUE_CANCEL_ERRORS: tuple[type[Exception], ...] = (LookupError, *_QUEUE_STATE_ERRORS)
 
@@ -58,15 +49,6 @@ class _QueueListRequest:
     status_values: tuple[str, ...]
     kind_values: tuple[str, ...]
     json_output: bool
-
-    @property
-    def default_combined_text_view(self) -> bool:
-        return (
-            not self.json_output
-            and not self.engine_values
-            and not self.status_values
-            and not self.kind_values
-        )
 
 
 def _activity_counter_config_path(
@@ -242,12 +224,10 @@ def _queue_list_text_lines(
 def _queue_list_request(args: Any) -> _QueueListRequest:
     engine_values = normalize_activity_filter_values(getattr(args, "engine", None))
     kind_values = normalize_activity_filter_values(getattr(args, "kind", None))
-    if not workflows_available() and (
-        bool(getattr(args, "refresh", False))
-        or any(engine != "orca" for engine in engine_values)
-        or "workflow" in kind_values
+    if any(engine != "orca" for engine in engine_values) or any(
+        kind != "job" for kind in kind_values
     ):
-        require_workflows()
+        raise ValueError("Only ORCA jobs are supported.")
     explicit_config = shared_config_text_from_args(args) or None
     return _QueueListRequest(
         # Resolve one effective config up front so activity rows and the global
@@ -263,9 +243,6 @@ def _queue_list_request(args: Any) -> _QueueListRequest:
 
 def _queue_list_clear_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
     return clear_activities(
-        workflow_root=workflow_root_for_args(args, config_path=request.shared_config),
-        crest_config=request.shared_config,
-        xtb_config=request.shared_config,
         orca_config=request.shared_config,
     )
 
@@ -279,9 +256,9 @@ def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int
     return 0
 
 
-def _missing_workflow_root(args: Any, request: _QueueListRequest) -> str | None:
+def _missing_runs_root(args: Any, request: _QueueListRequest) -> str | None:
     """The configured runs root when it is not a directory, else None."""
-    root = workflow_root_for_args(args, config_path=request.shared_config)
+    root = shared_runs_root_from_config(request.shared_config)
     if not root:
         return None
     return None if Path(root).is_dir() else str(root)
@@ -289,11 +266,11 @@ def _missing_workflow_root(args: Any, request: _QueueListRequest) -> str | None:
 
 def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
     return list_activities(
-        workflow_root=workflow_root_for_args(args, config_path=request.shared_config),
-        limit=0,
+        limit=request.limit,
+        engines=request.engine_values,
+        statuses=request.status_values,
+        kinds=request.kind_values,
         refresh=bool(getattr(args, "refresh", False)),
-        crest_config=request.shared_config,
-        xtb_config=request.shared_config,
         orca_config=request.shared_config,
     )
 
@@ -309,17 +286,37 @@ def _filtered_queue_payload(
         kinds=request.kind_values,
     )
     limited_activities = activities[: request.limit] if request.limit > 0 else list(activities)
-    active_simulations = count_global_active_simulations(
-        payload.get("activities", []),
-        config_path=_activity_counter_config_path(
-            payload=payload, config_hint=request.shared_config
-        ),
-    )
+    if "active_simulations" in payload:
+        active_simulations = int(payload["active_simulations"])
+    else:
+        active_simulations = count_global_active_simulations(
+            payload.get("activities", []),
+            config_path=_activity_counter_config_path(
+                payload=payload, config_hint=request.shared_config
+            ),
+        )
+    blockers = []
+    for item in payload.get("activities", []):
+        metadata = item.get("metadata", {})
+        reason = normalize_text(metadata.get("publication_blocked_reason"))
+        if reason:
+            blockers.append(
+                {
+                    "queue_id": metadata.get("queue_id", item.get("activity_id", "")),
+                    "allowed_root": metadata.get("allowed_root", ""),
+                    "scope": metadata.get("publication_blocked_scope", ""),
+                    "reason": reason,
+                    "next_action": metadata.get("publication_blocked_action", ""),
+                }
+            )
+    if "admission_blockers" in payload:
+        blockers = list(payload["admission_blockers"])
     return {
         "count": len(limited_activities),
         "active_simulations": active_simulations,
-        "activities": [activity_with_parent_hint(item) for item in limited_activities],
+        "activities": [dict(item) for item in limited_activities],
         "sources": dict(payload.get("sources", {})),
+        **({"admission_blockers": blockers} if blockers else {}),
     }, activities
 
 
@@ -334,15 +331,9 @@ def _print_queue_list_text(
     term_width = terminal_table.terminal_max_width()
     rail_width = terminal_table.display_width(_QUEUE_RAIL)
     display_items = list(filtered_activities)
-    if request.default_combined_text_view:
-        display_items = queue_list_default_visible_items(display_items)
     if request.limit > 0:
         display_items = display_items[: request.limit]
-    display_rows = queue_list_display_rows(
-        all_items=list(payload.get("activities", [])),
-        visible_items=display_items,
-        show_workflow_context=set(request.kind_values) != {"job"},
-    )
+    display_rows = [(0, item) for item in display_items]
     active_simulations = filtered_payload["active_simulations"]
     lines = _queue_list_text_lines(
         display_rows,
@@ -363,15 +354,23 @@ def _print_queue_list_text(
     else:
         print(lines[0])
 
+    blocker_lines = _activity_rendering.queue_admission_blocker_lines(
+        filtered_payload.get("admission_blockers", [])
+    )
     if not display_rows:
         print(lines[1])
+        for note in blocker_lines:
+            print(note)
         return 0
 
     # Printed under the table, where no column shrinking can truncate it: the
     # ``detail`` cell surrenders width first, so a narrow terminal would hide
     # the one thing that explains an unclearable row. Empty for every queue
     # without such a row.
-    pending_cancel_lines = _activity_rendering.queue_pending_cancel_lines(display_rows)
+    pending_cancel_lines = [
+        *_activity_rendering.queue_pending_cancel_lines(display_rows),
+        *blocker_lines,
+    ]
 
     # lines[1] is the header, lines[2] the divider, and the rest map one-to-one
     # onto display_rows so each data row is tinted by its status. On a non-TTY
@@ -459,7 +458,7 @@ def cmd_queue_list(args: Any) -> int:
         except BrokenPipeError:
             return 0
 
-    missing_root = _missing_workflow_root(args, request)
+    missing_root = _missing_runs_root(args, request)
     if missing_root is not None:
         emit_error(
             f"runs_root does not exist: {missing_root}",
@@ -487,6 +486,15 @@ def cmd_queue_list(args: Any) -> int:
 
 
 def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
+    result = payload.get("result", {})
+    if result.get("returncode", 0) != 0 or payload.get("status") == "failed":
+        emit_error(
+            normalize_text(result.get("stderr"))
+            or normalize_text(result.get("reason"))
+            or "Cancellation failed.",
+            hint="Run `orca_auto queue list` to inspect the current target state.",
+        )
+        return 1
     if json_output:
         print(json.dumps(payload, ensure_ascii=True, indent=2))
         return 0
@@ -506,9 +514,6 @@ def cmd_queue_cancel(args: Any) -> int:
     try:
         payload = cancel_activity(
             target=args.target,
-            workflow_root=workflow_root_for_args(args),
-            crest_config=shared_config,
-            xtb_config=shared_config,
             orca_config=shared_config,
         )
     except _QUEUE_CANCEL_ERRORS as exc:

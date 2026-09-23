@@ -14,7 +14,7 @@ class AdmissionSlot:
     acquired_at: str
     app_name: str = ""
     task_id: str = ""
-    workflow_id: str = ""
+    workflow_id: str = ""  # Retired durable field; retained for existing slot readers.
     state: str = "active"
     work_dir: str = ""
     queue_id: str = ""
@@ -32,7 +32,6 @@ class AdmissionReservationRequest:
     source: str
     app_name: str = ""
     task_id: str = ""
-    workflow_id: str = ""
     state: str = "active"
     work_dir: str | Path = ""
     queue_id: str = ""
@@ -50,7 +49,6 @@ class AdmissionSlotActivation:
     source: str | None = None
     app_name: str | None = None
     task_id: str | None = None
-    workflow_id: str | None = None
     engine_process_state: str | None = None
 
 
@@ -60,7 +58,6 @@ class AdmissionSlotMetadataUpdate:
     queue_id: str | None = None
     app_name: str | None = None
     task_id: str | None = None
-    workflow_id: str | None = None
     work_dir: str | Path | None = None
     owner_pid: int | None = None
     engine_process_state: str | None = None

@@ -5,7 +5,8 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from ..state import finalize_state, now_utc_iso, write_report_files
+from ..report.publication import write_report_files
+from ..state import finalize_state, now_utc_iso
 from ..state_reading import state_path
 from ..statuses import AnalyzerStatus, RunStatus
 from ..types import (

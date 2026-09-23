@@ -4,7 +4,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-from orca_auto.core.paths.workflow import directory_is_workflow_scaffold
+from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.generation import is_visible_generation_name
 
 
@@ -51,31 +51,9 @@ def _relative_if_inside(path: Path, root: Path) -> Path | None:
 
 
 def relative_reaches_reserved_generation(root: Path, relative: Path | None) -> bool:
-    """True when *relative* (under *root*) crosses an ORCA execution generation.
-
-    Workflow workspaces share the generation name shape but carry a
-    ``workflow.json`` and sit either directly under root (direct API
-    submissions) or inside a scaffold (``flow.yaml``); those are legitimate
-    scan/submission surfaces. Every other generation-named component —
-    including execution generations inside standalone ORCA job dirs or
-    inside a workspace's stage job dirs — stays reserved, even if a
-    ``workflow.json`` file was planted there.
-    """
-
-    if relative is None:
-        return False
-    current = root
-    for component in relative.parts:
-        parent = current
-        current = current / component
-        if not is_visible_generation_name(component):
-            continue
-        is_workspace = (current / "workflow.json").is_file() and (
-            parent == root or directory_is_workflow_scaffold(parent)
-        )
-        if not is_workspace:
-            return True
-    return False
+    """True when a path crosses a reserved execution-generation component."""
+    del root
+    return relative is not None and any(is_visible_generation_name(part) for part in relative.parts)
 
 
 def should_exclude_from_production_runs_scan(
@@ -87,6 +65,8 @@ def should_exclude_from_production_runs_scan(
     try:
         lexical_root = _lexical_absolute(runs_root, label="runs_root")
         lexical_path = _lexical_absolute(path, label="path")
+        if path_is_retired_workflow_owned(lexical_path, lexical_root):
+            return True
         lexical_relative = _relative_if_inside(lexical_path, lexical_root)
         if relative_reaches_reserved_generation(lexical_root, lexical_relative):
             return True

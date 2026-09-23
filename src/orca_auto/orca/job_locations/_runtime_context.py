@@ -19,7 +19,10 @@ from orca_auto.core.queue.generation import is_visible_generation_name
 from ..execution_binding import (
     ORCA_EXECUTION_SNAPSHOT_VERSION,
     orca_execution_provenance,
-    orca_execution_snapshot_generation_dir,
+)
+from ..generation_validation import (
+    require_bound_generation_directory,
+    require_generation_selected_input,
 )
 from ..state_reading import load_report_json, load_state
 from ._artifacts import first_artifact_context, job_artifact_context
@@ -276,17 +279,14 @@ def _execution_generation(inputs: _RuntimeInputs) -> _ExecutionGeneration | None
         job_details = job_dir.stat()
         if (int(job_details.st_dev), int(job_details.st_ino)) != job_identity:
             return None
-        generation_name = normalize_text(snapshot.get("generation_name"))
+        generation_name = str(snapshot.get("generation_name") or "")
         raw_execution_dir = Path(normalize_text(snapshot.get("execution_dir"))).expanduser()
         expected_execution_dir = job_dir / generation_name
         if raw_execution_dir != expected_execution_dir:
             return None
-        artifact_dir = orca_execution_snapshot_generation_dir(job_dir, snapshot)
-        if artifact_dir != expected_execution_dir:
-            return None
-        generation_details = artifact_dir.stat()
-        if (int(generation_details.st_dev), int(generation_details.st_ino)) != generation_identity:
-            return None
+        artifact_dir = require_bound_generation_directory(
+            job_dir, raw_execution_dir, generation_identity
+        )
         require_direct_generation_owner(
             job_dir,
             namespace=generation_name,
@@ -296,7 +296,7 @@ def _execution_generation(inputs: _RuntimeInputs) -> _ExecutionGeneration | None
         )
         selected_path_text = normalize_text(bound_selected_identity.get("path"))
         raw_selected = Path(selected_path_text).expanduser()
-        selected = require_confined_regular_file(
+        selected = require_generation_selected_input(
             artifact_dir,
             raw_selected,
             label="Historical ORCA selected input",
@@ -305,8 +305,6 @@ def _execution_generation(inputs: _RuntimeInputs) -> _ExecutionGeneration | None
         snapshot_selected = normalize_text(snapshot.get("selected_inp"))
         if (
             not selected_path_text
-            or raw_selected != selected
-            or selected.parent != artifact_dir
             or selected.suffix.lower() != ".inp"
             or (queue_selected and queue_selected != str(selected))
             or (snapshot_selected and snapshot_selected != str(selected))
@@ -385,16 +383,10 @@ def _provenance_execution_generation(
         return None
     try:
         raw_execution_dir = Path(normalize_text(provenance.get("execution_dir"))).expanduser()
-        if (
-            not raw_execution_dir.is_absolute()
-            or raw_execution_dir.is_symlink()
-            or not is_visible_generation_name(raw_execution_dir.name)
-        ):
-            return None
-        artifact_dir = raw_execution_dir.resolve(strict=True)
-        if raw_execution_dir != artifact_dir or not artifact_dir.is_dir():
-            return None
-        job_dir = artifact_dir.parent
+        job_dir = raw_execution_dir.parent.resolve(strict=True)
+        artifact_dir = require_bound_generation_directory(
+            job_dir, raw_execution_dir, generation_identity
+        )
         job_dir.relative_to(inputs.index_root)
         artifact_job_dir = getattr(artifact, "job_dir", None)
         if artifact_job_dir is not None:
@@ -402,12 +394,6 @@ def _provenance_execution_generation(
             if resolved_artifact_job_dir not in {job_dir, artifact_dir}:
                 return None
         job_details = job_dir.stat()
-        generation_details = artifact_dir.stat()
-        if (
-            int(generation_details.st_dev),
-            int(generation_details.st_ino),
-        ) != generation_identity:
-            return None
         job_identity = (int(job_details.st_dev), int(job_details.st_ino))
         require_direct_generation_owner(
             job_dir,
@@ -418,15 +404,13 @@ def _provenance_execution_generation(
         )
         selected_path_text = normalize_text(bound_selected_identity.get("path"))
         raw_selected = Path(selected_path_text).expanduser()
-        selected = require_confined_regular_file(
+        selected = require_generation_selected_input(
             artifact_dir,
             raw_selected,
             label="Visible ORCA provenance selected input",
         )
         if (
             not selected_path_text
-            or raw_selected != selected
-            or selected.parent != artifact_dir
             or selected.suffix.lower() != ".inp"
             or _engine_runner.executable_identity(selected) != dict(bound_selected_identity)
         ):

@@ -7,8 +7,8 @@ import pytest
 
 from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.report import write_job_html_report
+from orca_auto.orca.report.publication import write_report_files
 from orca_auto.orca.report.scan import collect_scan_report_data
-from orca_auto.orca.state import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 
 _FREQ_BLOCK = """

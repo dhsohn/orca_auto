@@ -81,11 +81,18 @@ class _CoreOnlyInstallation:
     def cli(self, *args: str) -> subprocess.CompletedProcess[str]:
         return self.run_code(_CLI_SOURCE, *args)
 
-    def snapshot(self, *, include_locks: bool = True) -> dict[str, bytes | None]:
+    def snapshot(
+        self, *, include_locks: bool = True, include_projection: bool = True
+    ) -> dict[str, bytes | None]:
         return {
             str(path.relative_to(self.runtime)): path.read_bytes() if path.is_file() else None
             for path in self.runtime.rglob("*")
             if include_locks or path.suffix != ".lock"
+            if include_projection
+            or not any(
+                part in {".activity.sqlite3", ".activity-dirty"}
+                for part in path.relative_to(self.runtime).parts
+            )
         }
 
     def write_orca_input(self, name: str = "public_h2") -> Path:
@@ -191,8 +198,7 @@ def _assert_success(result: subprocess.CompletedProcess[str]) -> None:
 def _assert_workflows_unavailable(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode != 0, (result.stdout, result.stderr)
     output = result.stdout + result.stderr
-    assert "workflows extension is not installed" in output
-    assert "matching workflow-enabled ORCA_auto installation" in output
+    assert "error" in output.lower() or "retired" in output.lower()
     assert "Traceback" not in output
 
 
@@ -210,8 +216,8 @@ def test_core_help_and_version_without_workflow_files(
 
 
 def test_core_empty_queue_json_and_text_are_read_only(core_only: _CoreOnlyInstallation) -> None:
-    # Read locks retain acquisition diagnostics; queue/index data must not change.
-    before = core_only.snapshot(include_locks=False)
+    # Locks and the disposable read model may change; canonical data must not.
+    before = core_only.snapshot(include_locks=False, include_projection=False)
     result = core_only.cli("queue", "list", "--json")
     _assert_success(result)
     payload = json.loads(result.stdout)
@@ -220,20 +226,21 @@ def test_core_empty_queue_json_and_text_are_read_only(core_only: _CoreOnlyInstal
     text = core_only.cli("queue", "list")
     _assert_success(text)
     assert "Traceback" not in text.stderr
-    assert core_only.snapshot(include_locks=False) == before
+    assert core_only.snapshot(include_locks=False, include_projection=False) == before
+    assert (core_only.runs / ".activity.sqlite3").read_bytes().startswith(b"SQLite format 3")
 
 
 def test_core_orca_submission_listing_and_cancellation(core_only: _CoreOnlyInstallation) -> None:
     input_dir = core_only.write_orca_input()
     _assert_success(core_only.cli("run-dir", str(input_dir), "--json"))
-    before_listing = core_only.snapshot(include_locks=False)
+    before_listing = core_only.snapshot(include_locks=False, include_projection=False)
     listed = core_only.cli("queue", "list", "--json")
     _assert_success(listed)
     activities = json.loads(listed.stdout)["activities"]
     assert len(activities) == 1
     assert activities[0]["engine"] == "orca"
     assert activities[0]["status"] == "pending"
-    assert core_only.snapshot(include_locks=False) == before_listing
+    assert core_only.snapshot(include_locks=False, include_projection=False) == before_listing
     _assert_success(core_only.cli("queue", "cancel", str(input_dir), "--json"))
     cancelled = core_only.cli("queue", "list", "--json")
     _assert_success(cancelled)
@@ -331,7 +338,6 @@ def test_explicit_workflows_refuse_before_runtime_mutation(
         ("--engine", "xtb"),
         ("--engine", "crest"),
         ("--kind", "workflow"),
-        ("--refresh",),
     ],
 )
 def test_explicit_workflow_queue_filters_refuse_without_mutation(
@@ -342,54 +348,16 @@ def test_explicit_workflow_queue_filters_refuse_without_mutation(
     assert core_only.snapshot() == before
 
 
-@pytest.mark.parametrize("evidence", ["registry", "workspace"])
-@pytest.mark.parametrize("operation", ["list", "clear", "cancel"])
-def test_retained_workflow_state_cannot_be_hidden_or_mutated_without_extension(
-    core_only: _CoreOnlyInstallation, evidence: str, operation: str
-) -> None:
-    input_dir = core_only.write_orca_input()
-    _assert_success(core_only.cli("run-dir", str(input_dir), "--json"))
-    if evidence == "registry":
-        (core_only.runs / "workflow_registry.json").write_text(
-            '{"version": 1, "workflows": {"retained": {"status": "running"}}}\n',
-            encoding="utf-8",
-        )
-    else:
-        retained = core_only.runs / "retained"
-        retained.mkdir()
-        (retained / "workflow.json").write_text(
-            '{"workflow_id": "retained", "status": "running"}\n', encoding="utf-8"
-        )
-    command = {
-        "list": ("queue", "list", "--json"),
-        "clear": ("queue", "list", "clear", "--json"),
-        "cancel": ("queue", "cancel", str(input_dir), "--json"),
-    }[operation]
-    before = core_only.snapshot()
-    result = core_only.cli(*command)
-    assert result.returncode != 0, (result.stdout, result.stderr)
-    assert "Workflow state exists" in result.stderr
-    assert "restore the matching ORCA_auto workflows extension" in result.stderr
-    assert "Traceback" not in result.stderr
-    assert core_only.snapshot() == before
+def test_orca_refresh_is_supported_without_extension(core_only: _CoreOnlyInstallation) -> None:
+    _assert_success(core_only.cli("queue", "list", "--refresh", "--json"))
 
 
-@pytest.mark.parametrize("failure", ["RuntimeError", "ModuleNotFoundError"])
-def test_broken_installed_workflows_are_not_treated_as_absent(
-    core_only: _CoreOnlyInstallation, failure: str
-) -> None:
+def test_retired_installed_package_is_never_imported(core_only: _CoreOnlyInstallation) -> None:
     flow = core_only.imports / "orca_auto" / "flow"
     flow.mkdir()
     (flow / "__init__.py").write_text(
-        f"raise {failure}('installed workflow is broken')\n", encoding="utf-8"
+        "raise RuntimeError('retired extension imported')\n", encoding="utf-8"
     )
-    result = core_only.run_code(
-        """\
-        from orca_auto.core.extensions import require_workflows, workflows_available
-        assert workflows_available() is True
-        require_workflows()
-        """
-    )
-    assert result.returncode != 0
-    assert f"{failure}: installed workflow is broken" in result.stderr
-    assert "workflows extension is not installed" not in result.stderr
+    result = core_only.cli("queue", "worker", "--json")
+    _assert_success(result)
+    assert [item["app"] for item in json.loads(result.stdout)["workers"]] == ["orca"]

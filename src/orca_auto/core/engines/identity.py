@@ -17,25 +17,9 @@ def entry_matches_engine_identity(entry: Any, engine: str) -> bool:
     catalog_entry = find_engine_catalog_entry(expected_engine)
     task_kind = _entry_text(entry, "task_kind")
     if catalog_entry is None:
-        expected_app_name = f"orca_auto_{expected_engine}"
-        task_kind_matches = task_kind.startswith(f"{expected_engine}_") and bool(
-            task_kind.removeprefix(f"{expected_engine}_")
-        )
-    else:
-        expected_app_name = catalog_entry.app_id
-        task_kind_matches = task_kind in catalog_entry.task_kinds
-    if expected_engine == "xtb" and catalog_entry is not None:
-        metadata = (
-            entry.get("metadata", {})
-            if isinstance(entry, Mapping)
-            else getattr(entry, "metadata", {})
-        )
-        job_type = (
-            str(metadata.get("job_type") or "").strip() if isinstance(metadata, Mapping) else ""
-        )
-        task_kind_matches = task_kind_matches and (
-            task_kind == f"xtb_{job_type}" and task_kind in catalog_entry.task_kinds
-        )
+        return False
+    expected_app_name = catalog_entry.app_id
+    task_kind_matches = task_kind in catalog_entry.task_kinds
     return bool(
         expected_engine
         and _entry_text(entry, "app_name") == expected_app_name

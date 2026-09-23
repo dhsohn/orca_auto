@@ -733,6 +733,56 @@ def request_cancel(
         return queue_store.mutate_entry_by_id(queue_id, update, missing_result=None)
 
 
+class QueueCancellationProbe:
+    """Memoize one generation's cancellation until the canonical file changes.
+
+    Keep only a boolean and file identity, never a second authoritative store or
+    a retained copy of queue history. Writers replace queue.json under its lock.
+    A concurrent commit after the fast stat is observed on the next poll.
+    """
+
+    def __init__(
+        self,
+        store: QueueStore,
+        queue_id: str,
+        *,
+        accept_entry_fn: Callable[[QueueEntry], bool],
+    ) -> None:
+        self.store = store
+        self.queue_id = queue_id
+        self.accept_entry_fn = accept_entry_fn
+        self._signature: tuple[int, ...] | None = None
+        self._initialized = False
+        self._cancel_requested = False
+
+    def _file_signature(self) -> tuple[int, ...] | None:
+        try:
+            stat = self.store.path.stat()
+        except FileNotFoundError:
+            return None
+        return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+    def __call__(self) -> bool:
+        signature = self._file_signature()
+        if self._initialized and signature == self._signature:
+            return self._cancel_requested
+        with queue_lock(self.store.root, timeout_seconds=0.0):
+            entries = self.store.load_entries_fn(self.store.root)
+            result = any(
+                entry.queue_id == self.queue_id
+                and self.accept_entry_fn(entry)
+                and entry.cancel_requested
+                for entry in entries
+            )
+            # Bind the value and signature under the SAME lock. A post-unlock
+            # stat could label an old False with a newly committed cancellation.
+            signature = self._file_signature()
+            self._signature = signature
+            self._cancel_requested = result
+            self._initialized = True
+        return result
+
+
 def get_cancel_requested(
     root: str | Path,
     queue_id: str,

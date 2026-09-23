@@ -8,6 +8,8 @@ from orca_auto.core.commands.queue import display_status
 from orca_auto.core.engines import command_result as _engine_models
 from orca_auto.core.utils import normalize_text as _normalize_text
 
+from .queue.entries import queue_entry_is_retired_workflow_owned
+
 _CANCEL_API_NAME = "orca_auto.orca.direct_cancel"
 
 
@@ -68,11 +70,10 @@ def _cancel_request(*, target: str, config_path: str) -> _OrcaDirectCancelReques
 
 
 def _find_orca_cancel_entry(request: _OrcaDirectCancelRequest) -> tuple[Path, Any] | None:
-    from orca_auto.orca.config import load_config
+    from orca_auto.core.engine_runtime import engine_runtime_paths
     from orca_auto.orca.queue import adapter as queue_adapter
 
-    cfg = load_config(request.config_path)
-    allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
+    allowed_root = engine_runtime_paths(request.config_path, engine="orca")["allowed_root"]
     matched = queue_adapter.find_entry_by_target(
         queue_adapter.list_queue(allowed_root),
         request.target,
@@ -154,6 +155,12 @@ def cancel_target(
                 reason="target_not_found",
             )
         allowed_root, matched = entry_with_root
+        if queue_entry_is_retired_workflow_owned(matched, allowed_root):
+            return _failure_payload(
+                command_argv=request.command_argv,
+                stderr="Workflow directories are retired; use the previous runtime to cancel this job",
+                reason="retired_workflow",
+            )
         updated = _request_orca_cancel(allowed_root, matched)
         if updated is None:
             from orca_auto.orca.queue import adapter as queue_adapter

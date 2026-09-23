@@ -25,7 +25,7 @@ artifacts when available:
 - command run and exact output;
 - OS/runtime context such as Linux distribution or WSL version;
 - Python version and ORCA_auto commit or release;
-- ORCA/xTB/CREST versions if the issue depends on real engines;
+- ORCA versions if the issue depends on real engines;
 - selected `.inp` snippet, output tail, and terminal marker;
 - terminal generation `machine.json`, plus relevant sanitized `job_state.json`
   or queue snippets for private recovery-state diagnosis;

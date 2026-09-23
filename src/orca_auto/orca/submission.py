@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,8 +10,8 @@ from orca_auto.core.commands.run_dir import (
     active_run_dir_pinned_target,
     assert_run_dir_publication_allowed,
 )
-from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.messaging import build_channel
+from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_STATE_CREATING,
@@ -38,9 +38,11 @@ from .execution_binding import (
     cleanup_unowned_orca_execution_snapshot,
 )
 from .inp_rewriter import prepare_submission_resource_request, read_resource_request_from_input
-from .input_artifacts import selected_input_artifacts
+from .input_artifacts import OrcaSelectedInputArtifacts, selected_input_artifacts
 from .notifications import notify_queue_enqueued_event
 from .queue import adapter as queue_adapter
+from .queue.entries import queue_entry_is_retired_workflow_owned
+from .resource_directives import PreparedSubmissionResourceInput
 from .run_context import WorkerStatusInfo, resolve_submission_context
 from .types import QueueEnqueuedNotification
 
@@ -179,7 +181,7 @@ def prepared_resource_input_from_selected_inp(
     selected_inp: Path | None,
     *,
     logger: logging.Logger,
-) -> Any:
+) -> PreparedSubmissionResourceInput:
     if selected_inp is None:
         raise ValueError("No .inp file selected for ORCA queue submission.")
     prepared = prepare_submission_resource_request(
@@ -206,47 +208,21 @@ def warn_ignored_resource_override_flags(args: Any, *, logger: logging.Logger) -
 
 
 def build_queue_metadata(
-    cfg: Any,
     *,
-    reaction_dir: Path,
-    selected_inp: Path | None,
-    args: Any | None = None,
+    artifacts: OrcaSelectedInputArtifacts,
+    job_type: str,
+    molecule_key: str,
+    resource_request: Mapping[str, int],
+    execution_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    from .job_locations import resolve_job_metadata
-
-    bound_selected_validator = _workflow_bound_selected_validator(
-        args,
-        reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
-    )
-    artifacts = selected_input_artifacts(selected_inp)
-    job_type, molecule_key = resolve_job_metadata(artifacts.selected_inp, reaction_dir)
-    prepared_input = prepared_resource_input_from_selected_inp(
-        cfg,
-        selected_inp,
-        logger=logger,
-    )
-    requested = dict(prepared_input.resource_request)
-    assert selected_inp is not None
+    """Assemble queue values from an already-created snapshot without filesystem work."""
     metadata: dict[str, Any] = {
         "submitted_via": "run_inp",
         "job_type": job_type,
         "molecule_key": molecule_key,
-        "resource_request": requested,
-        "resource_actual": dict(requested),
+        "resource_request": dict(resource_request),
+        "resource_actual": dict(resource_request),
     }
-    execution_snapshot = build_orca_execution_snapshot(
-        reaction_dir,
-        selected_inp,
-        selected_input_xyz=artifacts.selected_input_xyz,
-        resource_request=requested,
-        orca_executable=cfg.paths.orca_executable,
-        queue_root=Path(cfg.runtime.allowed_root).expanduser().resolve(),
-        snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
-        normalized_selected_payload=prepared_input.normalized_payload,
-        source_selected_sha256=prepared_input.source_sha256,
-        bound_selected_validator=bound_selected_validator,
-    )
     if artifacts.selected_inp:
         metadata["source_selected_inp"] = artifacts.selected_inp
         metadata["selected_inp"] = execution_snapshot["selected_inp"]
@@ -254,40 +230,6 @@ def build_queue_metadata(
     metadata["selected_input_xyz"] = artifacts.selected_input_xyz
     metadata["execution_snapshot"] = execution_snapshot
     return metadata
-
-
-def _workflow_bound_selected_validator(
-    args: Any | None,
-    *,
-    reaction_dir: Path,
-    selected_inp: Path | None,
-) -> Callable[[Path, bytes], None] | None:
-    task_kind_raw = getattr(args, "workflow_task_kind", None) if args is not None else None
-    expected_raw = getattr(args, "expected_selected_inp", None) if args is not None else None
-    validator: Callable[[Path, bytes], None] | None = (
-        getattr(args, "bound_selected_validator", None) if args is not None else None
-    )
-    task_kind = task_kind_raw.strip().lower() if isinstance(task_kind_raw, str) else ""
-    expected_text = expected_raw.strip() if isinstance(expected_raw, str) else ""
-    if not task_kind and not expected_text and validator is None:
-        return None
-    if not task_kind or not expected_text or selected_inp is None or not callable(validator):
-        raise ValueError(
-            "Workflow ORCA submission requires task kind, durable selected input, and "
-            "an upper-layer bound-payload validator together"
-        )
-    expected = require_confined_regular_file(
-        reaction_dir,
-        Path(expected_text),
-        label="Workflow ORCA durable selected input",
-    )
-    if expected != selected_inp.expanduser().resolve():
-        raise ValueError(
-            "Workflow ORCA actual selected input differs from durable selected input: "
-            f"actual={str(selected_inp)!r}, expected={str(expected)!r}"
-        )
-
-    return validator
 
 
 def upsert_queued_job_record(
@@ -390,7 +332,21 @@ def create_queued_submission(
     *,
     selected_inp: Path | None = None,
 ) -> QueuedSubmissionResult:
+    from .job_locations import resolve_job_metadata
+
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
+    resolved_reaction_dir = reaction_dir.expanduser().resolve()
+    if path_is_retired_workflow_owned(resolved_reaction_dir, allowed_root) or any(
+        queue_entry_is_retired_workflow_owned(entry, allowed_root)
+        and queue_adapter.queue_entry_reaction_dir(entry)
+        and resolved_reaction_dir.is_relative_to(
+            Path(queue_adapter.queue_entry_reaction_dir(entry)).expanduser().resolve()
+        )
+        for entry in queue_adapter.list_queue(allowed_root)
+    ):
+        raise ValueError(
+            "Workflow directories are retired; submit a standalone ORCA input directory"
+        )
     if selected_inp is None:
         try:
             selected_inp = select_latest_inp(reaction_dir)
@@ -400,14 +356,21 @@ def create_queued_submission(
     priority = normalize_queue_priority(getattr(args, "priority", 10))
     force = bool(getattr(args, "force", False))
     assert_run_dir_publication_allowed("ORCA target mutation preflight")
-    queue_metadata = build_queue_metadata(
-        cfg,
-        reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
-        args=args,
+    artifacts = selected_input_artifacts(selected_inp)
+    job_type, molecule_key = resolve_job_metadata(artifacts.selected_inp, reaction_dir)
+    prepared_input = prepared_resource_input_from_selected_inp(cfg, selected_inp, logger=logger)
+    assert selected_inp is not None
+    execution_snapshot = build_orca_execution_snapshot(
+        reaction_dir,
+        selected_inp,
+        selected_input_xyz=artifacts.selected_input_xyz,
+        resource_request=prepared_input.resource_request,
+        orca_executable=cfg.paths.orca_executable,
+        queue_root=allowed_root,
+        snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
+        normalized_selected_payload=prepared_input.normalized_payload,
+        source_selected_sha256=prepared_input.source_sha256,
     )
-    task_id = timestamped_token("orca", token_bytes=16)
-    execution_snapshot = queue_metadata.get("execution_snapshot")
     try:
         if not isinstance(execution_snapshot, dict):
             raise RuntimeError("ORCA submission has no execution snapshot")
@@ -419,6 +382,16 @@ def create_queued_submission(
         intent_token = str(execution_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
         if intent_root != allowed_root or not intent_token:
             raise RuntimeError("ORCA submission snapshot intent does not match its queue root")
+        queue_metadata = build_queue_metadata(
+            artifacts=artifacts,
+            job_type=job_type,
+            molecule_key=molecule_key,
+            resource_request=prepared_input.resource_request,
+            execution_snapshot=execution_snapshot,
+        )
+        # Post-commit recovery matches the same job directory stamped by the adapter.
+        queue_metadata["reaction_dir"] = str(reaction_dir.expanduser().resolve())
+        task_id = timestamped_token("orca", token_bytes=16)
         transition_snapshot_intent(
             intent_root,
             intent_token,
@@ -432,15 +405,10 @@ def create_queued_submission(
         )
         raise
 
-    # The adapter stamps the resolved reaction_dir into every row it creates;
-    # carrying the same value in the submitted metadata lets the driver's
-    # strict post-commit recovery match the committed row by its job location.
-    queue_metadata.setdefault("reaction_dir", str(Path(reaction_dir).expanduser().resolve()))
-
     def cleanup_submission_snapshot() -> None:
         cleanup_unowned_orca_execution_snapshot(
-            _snapshot_cleanup_job_dir(reaction_dir, queue_metadata.get("execution_snapshot")),
-            queue_metadata.get("execution_snapshot"),
+            _snapshot_cleanup_job_dir(reaction_dir, execution_snapshot),
+            execution_snapshot,
         )
 
     detail_warnings: list[str] = []

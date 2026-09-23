@@ -16,10 +16,7 @@ QUEUE_RECORD_SYNC_UPDATED_AT_KEY = "_orca_auto_queued_record_sync_updated_at"
 QUEUE_RECORD_SYNC_OWNER_PID_KEY = "_orca_auto_queued_record_sync_owner_pid"
 QUEUE_RECORD_SYNC_OWNER_START_KEY = "_orca_auto_queued_record_sync_owner_start"
 QUEUE_RECORD_SYNC_TOKEN_KEY = "_orca_auto_queued_record_sync_token"
-# No producer since the workflow-level submitter cluster was removed; the
-# constant survives only so the restart stale-key scrub can keep clearing the
-# key out of durable stage metadata written by earlier releases.
-QUEUE_SUBMISSION_INTENT_KEY = "submission_intent_token"
+QUEUE_RECORD_SYNC_BLOCKED_KEY = "_orca_auto_queued_record_sync_blocked"
 
 QUEUE_RECORD_SYNC_PREPARING = "preparing"
 QUEUE_RECORD_SYNC_REPAIR_PENDING = "repair_pending"
@@ -82,7 +79,7 @@ def queue_record_sync_metadata(
 ) -> dict[str, Any]:
     """Build the canonical fencing metadata for one publication lease."""
     normalized_owner_pid = int(owner_pid)
-    return {
+    metadata = {
         QUEUE_RECORD_SYNC_KEY: str(sync_state).strip().lower(),
         QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
         QUEUE_RECORD_SYNC_OWNER_PID_KEY: normalized_owner_pid,
@@ -91,6 +88,9 @@ def queue_record_sync_metadata(
         ),
         QUEUE_RECORD_SYNC_TOKEN_KEY: str(token).strip(),
     }
+    if str(sync_state).strip().lower() in {QUEUE_RECORD_SYNC_COMPLETE, QUEUE_RECORD_SYNC_ABORTED}:
+        metadata[QUEUE_RECORD_SYNC_BLOCKED_KEY] = None
+    return metadata
 
 
 def _publication_lock_path(root: str | Path, queue_id: str) -> Path:
@@ -140,7 +140,6 @@ __all__ = [
     "QUEUE_RECORD_SYNC_REPAIRING",
     "QUEUE_RECORD_SYNC_TOKEN_KEY",
     "QUEUE_RECORD_SYNC_UPDATED_AT_KEY",
-    "QUEUE_SUBMISSION_INTENT_KEY",
     "current_process_start_token",
     "process_start_token",
     "queue_entry_is_claimable",

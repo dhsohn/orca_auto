@@ -630,7 +630,11 @@ def _calculation_summary_html(data: IrcReportData) -> str:
         rows.append(
             (
                 "Charge / multiplicity",
-                f"{data.result.charge} / {data.result.multiplicity}",
+                (
+                    f"{data.result.charge} / {data.result.multiplicity}"
+                    if data.result.electronic_state_verified
+                    else "unavailable"
+                ),
             )
         )
         if data.result.energy_hartree is not None:

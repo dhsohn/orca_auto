@@ -8,8 +8,8 @@ from typing import Any
 import pytest
 
 from orca_auto.orca.report import write_job_html_report
+from orca_auto.orca.report.publication import write_report_files
 from orca_auto.orca.report.sp import collect_sp_report_data
-from orca_auto.orca.state import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 
 
@@ -149,6 +149,24 @@ def test_sp_report_html_renders_energy_and_embedded_si_block(tmp_path: Path) -> 
     assert "<pre>" in text
     assert f"== {tmp_path.name} ==" in text
     assert "si_block.md" in text
+
+
+def test_sp_report_does_not_publish_unverified_electronic_state(tmp_path: Path) -> None:
+    state = _job_dir(
+        tmp_path,
+        inp_text=_SP_INP,
+        out_text=_out_text().replace("|  2> * xyz 0 1", ""),
+    )
+
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Charge 0, Multiplicity 1" not in text
+    assert "0 / 1" not in text
+    assert "unavailable" in text
 
 
 def test_bare_freq_report_includes_vibrational_summary_and_thermo(tmp_path: Path) -> None:

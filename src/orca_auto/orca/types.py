@@ -39,6 +39,7 @@ class RunFinalResult(TypedDict, total=False):
     skipped_execution: bool
     runner_error: str
     finished_notification_sent_at: str
+    finished_notification_claimed_at: str
 
 
 class RunState(TypedDict, total=False):

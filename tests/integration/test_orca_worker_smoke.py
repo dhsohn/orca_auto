@@ -697,6 +697,66 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert parsed.orca_version in si_text
 
 
+@pytest.mark.parametrize("diagnostic_comment", [False, True], ids=["uppercase", "echoed-error"])
+def test_real_orca_electronic_state_and_input_echo_acceptance_when_configured(
+    tmp_path: Path, diagnostic_comment: bool
+) -> None:
+    executable_text = os.environ.get("ORCA_REAL_EXECUTABLE", "").strip()
+    if not executable_text:
+        pytest.skip("set ORCA_REAL_EXECUTABLE to run the real ORCA acceptance")
+    executable = Path(executable_text).expanduser().resolve()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        pytest.fail(f"ORCA_REAL_EXECUTABLE is not executable: {executable}")
+
+    allowed_root = tmp_path / "orca_runs"
+    admission_root = tmp_path / "admission"
+    reaction_dir = allowed_root / "helium_cation"
+    reaction_dir.mkdir(parents=True)
+    config_path = tmp_path / "orca_auto.yaml"
+    _write_orca_worker_config(
+        config_path,
+        allowed_root=allowed_root,
+        admission_root=admission_root,
+        orca_executable=executable,
+    )
+    comment = "# Previous trial: SCF NOT CONVERGED\n" if diagnostic_comment else ""
+    (reaction_dir / "helium.inp").write_text(
+        "! UHF STO-3G SP TightSCF\n%pal nprocs 1 end\n%maxcore 128\n"
+        + comment
+        + "* XYZ 1 2\nHe 0 0 0\n*\n",
+        encoding="utf-8",
+    )
+    assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
+    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker.poll_interval_seconds = 0.05
+    assert worker.run_once(idle_message=None, blocked_message=None) == 0
+
+    entry = _queue_entry_for_reaction(allowed_root, reaction_dir)
+    assert entry.status == QueueStatus.COMPLETED
+    assert list_slots(admission_root) == []
+    generation = Path(entry.metadata["execution_snapshot"]["execution_dir"])
+    state = load_state(reaction_dir)
+    assert state is not None and state["final_result"] is not None
+    assert state["final_result"]["reason"] == "normal_termination"
+    output_text = state["final_result"]["last_out_path"]
+    assert isinstance(output_text, str) and output_text
+    output = Path(output_text)
+    text = output.read_text(encoding="utf-8")
+    assert "ORCA TERMINATED NORMALLY" in text
+    assert "* XYZ 1 2" in text
+    if diagnostic_comment:
+        assert "# Previous trial: SCF NOT CONVERGED" in text
+    parsed = parse_orca_output(str(output))
+    assert parsed.electronic_state_verified
+    assert (parsed.charge, parsed.multiplicity) == (1, 2)
+    assert parsed.energy_hartree is not None and math.isfinite(parsed.energy_hartree)
+    assert parsed.energy_hartree < 0
+    si = (generation / SI_BLOCK_MD_FILE).read_text(encoding="utf-8")
+    assert "Charge 1, Multiplicity 2" in si
+    assert "Charge 0, Multiplicity 1" not in si
+    assert load_report_json(generation, require_consumable_success=True) is not None
+
+
 @pytest.mark.parametrize("converged", [True, False], ids=["opt-freq", "opt-iteration-limit"])
 def test_real_orca_water_optimization_acceptance_when_configured(
     tmp_path: Path, converged: bool

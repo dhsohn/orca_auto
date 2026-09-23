@@ -1,102 +1,82 @@
-# 공개 인터페이스 계약 (Public Contracts)
+# 공개 계약
 
 [English](PUBLIC_CONTRACTS.md) | **한국어**
 
-ORCA_auto가 보장하는 공개 인터페이스(CLI, 설정, 큐, 산출물 파일)와 하위 호환성 계약을 정의합니다.
+ORCA_auto 7은 Linux/WSL, Python 3.11+, systemd 환경의 독립 ORCA 작업을 지원한다.
+절대 Linux 경로와 별도 설치한 ORCA 실행 파일을 사용한다. Windows 네이티브 실행은 지원하지 않는다.
 
----
+## 명령
 
-## 1. 계약 원칙
+| 명령 | 동작 |
+| --- | --- |
+| `init` | 공통 설정 생성·수정. `--config`로 위치 지정 |
+| `run-dir PATH` | ORCA 입력 디렉터리를 검증·영속 제출하고 실행 전에 반환 |
+| `queue list` | ORCA 작업·전역 실행 수 조회. 자동화는 `--json` 사용 |
+| `queue list clear` | 계산 산출물을 보존하며 종료된 큐·실행 목록 정리 |
+| `queue cancel TARGET` | 큐 id·run id·모호하지 않은 경로 별칭으로 취소 |
+| `index prune` | 경로가 사라진 인덱스 행 미리보기. `--apply`일 때만 제거 |
+| `systemd install` | 해당 runtime의 unit 설치 |
+| `service status` | unit과 실제 worker freshness 조회. stale/undetermined는 실패 코드 |
+| `service restart` | admission 잠금 아래 실행·미해결 예약이 있으면 재시작 거부 |
 
-- **하위 호환성 보장**: 본 문서에 명시된 동작은 시맨틱 버저닝(Semantic Versioning)에 따라 유지되며, 호환성을 깨뜨리는 변경은 메이저(Major) 버전 업데이트를 요구합니다.
-- **JSON 확장 허용**: JSON 산출물(`--json`, `machine.json`)에 하위 호환 필드가 추가될 수 있습니다. 연동 스크립트는 정의되지 않은 새 필드를 안전하게 무시해야 합니다.
-- **내부 구현 변경 가능성**: 명시된 공개 계약이 유지되는 한 내부 모듈 구조, 헬퍼 함수, 런타임 세부 배선은 지속적으로 개선될 수 있습니다.
+목록은 `--engine orca`, `--kind job`, 상태 필터, 0 이상의 `--limit`, `--refresh`를 받는다.
+필터·제한으로 행이 숨겨져도 전역 실행 수와 admission 차단 사유는 유지한다.
+clear는 목록 필터를 받지 않는다. 일반 조회는 큐·인덱스 위치를 사용하며 refresh는
+미등록 독립 실행도 발견하지만 인덱스에 등록하지 않는다.
 
----
+`run-dir`는 적합한 최신 `.inp`를 선택하고 동률은 파일명으로 정한다. 입력·의존 파일·
+실행 파일 identity·자원 값을 새 generation에 묶는다. 활성 디렉터리의 중복 제출은 거부한다.
+`--force`는 기존 성공 결과를 재사용하는 대신 새 실행을 요청한다. 자원은 ORCA의
+`%pal`·`%maxcore`가 정하고 설정은 빠진 지시문을 보완한다. CLI 자원 override는 없다.
 
-## 2. 런타임 환경 계약
+## 설정
 
-| 구분 | 지원 환경 | 미지원 / 차단 환경 |
-|---|---|---|
-| **OS** | Native Linux (Ubuntu 20.04+ 등), Windows WSL2 | Native Windows, macOS |
-| **Python** | Python 3.11 이상 | Python 3.10 이하 |
-| **경로 체계** | Linux/POSIX 절대 경로 (`/home/...`) | Windows 드라이브 경로 (`C:\...`), 상대 경로 |
-| **바이너리** | Linux ELF 실행 바이너리 | Windows `.exe` 바이너리 |
-| **서비스** | systemd 247 이상 | 기타 init 시스템 (직접 관리 필요) |
+명시적 CLI 경로, `ORCA_AUTO_CONFIG`, checkout의 `config/orca_auto.yaml`,
+`~/orca_auto/config/orca_auto.yaml` 순으로 찾는다. 새 wheel 설치의 기본 설정은
+가상환경 밖 마지막 경로에 만든다. 잘못된 mapping, 명시적 null, 중복·알 수 없는 키와
+폐기한 필드는 기본값을 적용하기 전에 거부한다.
 
----
+최상위 키는 `runs_root`, `scheduler`, `resources`, `orca`, `messenger`다.
+[전체 예제](../config/orca_auto.yaml.example)를 참고한다. admission 기본 경로는
+`<runs_root>/.admission`이며 공유 슬롯으로 실행 수를 제한한다. Discord는 발신 전용이고,
+빈 token/channel 문자열은 전송을 끈다. 알림 전달은 best effort다.
 
-## 3. 공개 CLI 인터페이스
+## 실행과 복구
 
-공식 CLI 진입점은 `orca_auto`이며, 스크립트 연동을 위한 `--json` 옵션을 지원합니다.
+제출 성공은 스냅샷 저장과 영속 큐 인수를 뜻한다. 인수가 불확실하면 먼저 재조회하며,
+그 전에 스냅샷을 지우지 않는다. 실행별 generation은 공용 작업 디렉터리 아래에 분리된다.
+중첩 generation과 폐기된 워크플로우 소유 경로는 새 제출 대상이 될 수 없다.
 
-| 명령어 | 계약된 동작 보장 |
-|---|---|
-| `orca_auto init` | 대화형 입력으로 `config/orca_auto.yaml`을 생성하거나 갱신합니다. |
-| `orca_auto run-dir <path>` | 디렉터리 내 입력 파일을 검증하고 큐에 등록(`status: queued`) 후 즉시 반환합니다. |
-| `orca_auto queue list` | 현재 큐 및 작업 상태를 JSON 또는 테이블 형태로 조회합니다. |
-| `orca_auto queue list clear` | 완료(`completed`), 실패(`failed`), 취소(`cancelled`)된 작업 항목을 큐에서 정리합니다. |
-| `orca_auto queue cancel <target>` | 대기 중이거나 실행 중인 작업을 안전하게 취소합니다. |
-| `orca_auto scaffold conformer_search <path>` | 컨포머 탐색을 위한 표준 `flow.yaml` 템플릿 디렉터리를 생성합니다. |
-| `orca_auto index prune` | 디스크에서 실제 디렉터리가 삭제된 작업 인덱스 기록을 정리합니다. |
-| `orca_auto service status` | systemd 런타임 타깃 및 워커 데몬의 프로세스/최신성 상태를 보고합니다. |
-| `orca_auto service restart` | 워커 데몬을 안전하게 재시작합니다. 실행 중인 작업이 있으면 기본적으로 차단됩니다. |
+worker는 binding을 검증하고 미해결 소유권을 보존한다. 계산 실패를 자동 재시도하지 않는다.
+실행 전 scratch 자원이 부족하면 pending으로 남아 나중에 다시 admission을 받을 수 있다.
+취소·종료 처리가 소유권 반환을 확인하기 전에는 같은 행·디렉터리를 다시 실행하지 않는다.
+큐·인덱스·admission 손상은 오류로 보고하며 빈 상태로 취급하지 않는다.
 
----
+상태 writer는 재생성 가능한 activity 인덱스를 무효화한다. 준비된 인덱스의 제한 조회는
+모든 과거 상태를 다시 읽지 않는다. 최초 구성·refresh·복구는 원본 이력을 읽는다.
+외부에서 직접 파일을 바꿨다면 refresh가 필요하다.
 
-## 4. 설정 파일 스키마 (`orca_auto.yaml`)
+## 기계 기록과 보고서
 
-설정 파일은 정의된 키만 허용하며, 정의되지 않은 잘못된 키나 문법 오류가 있을 경우 안전하게 실행을 거부합니다.
+종료 `machine.json`은 공통 `factory/machine-observation` v1 봉투와
+`chemistry/orca-run` operation, `chemistry/results-bundle` v1 payload를 사용한다.
+Lifecycle·delivery·handoff는 별도 판정이고 산출물은 내용 receipt를 갖는다.
+프로세스 종료나 알림만으로 과학적 성공을 판정하지 않는다.
 
-- `runs_root` (필수): 계산 디렉터리들이 위치하는 최상위 Linux 절대 경로
-- `scheduler.max_active_simulations`: 시스템 전역 동시 실행 최대 시뮬레이션 수 (기본: 4)
-- `scheduler.admission_root`: 동시성 슬롯 저장 디렉터리 (기본: `<runs_root>/.admission`)
-- `resources.max_cores_per_task`: 작업당 기본 코어 수
-- `resources.max_memory_gb_per_task`: 작업당 기본 메모리(GB)
-- `orca.paths.orca_executable`: ORCA 바이너리 절대 경로
-- `orca.runtime.scratch_root`: tmpfs RAM scratch 작업 디렉터리 (선택)
-- `orca.runtime.scratch_min_free_gb`: scratch 생성에 필요한 최소 여유 메모리
-- `messenger.provider`: 알림 제공자 (`discord`)
-- `messenger.discord.bot_token` / `default_channel_id`: Discord 알림 봇 토큰 및 채널 ID
+reader는 상태·generation 소유권·파일 binding과 ORCA 소유 summary/results 필드의
+일치를 검증한다. 필수 필드 누락·모순은 거부하고 추가 도메인 필드는 허용한다.
+각 파일은 조회당 한 번 해시하며 반환 전 identity를 다시 확인한다.
+생성 보고서를 직접 수정하거나 내부 `job_state.json`을 공개 handoff로 사용하지 않는다.
 
----
+HTML·SI 내용은 계산 종류와 검증된 근거에 따라 달라진다. 전하·다중도·진동수 근거가
+없으면 unavailable로 표시한다. 화학 입력 설계와 과학적 acceptance는 사용자 책임이다.
 
-## 5. 큐 및 작업 라이프사이클 계약
+## 7.0 제거 범위
 
-- **비동기 큐잉**: `run-dir` 실행 성공 시 `status: queued`를 반환하며, 제출 후 터미널을 종료해도 백그라운드 워커 데몬이 작업을 지속합니다.
-- **실행 디렉터리 격리(Generation)**: 각 실행 시점마다 작업 디렉터리 아래에 `YYYYMMDD-HHMMSS-<hex>` 형태의 독립된 generation 디렉터리가 생성되어 입력 파일과 산출물을 보존합니다.
-- **중복 제출 방지**: 동일한 디렉터리에 실행 중이거나 대기 중인 작업이 있으면 중복 등록을 차단합니다. 작업이 완료된 후 재제출 시에는 새 generation으로 분리 실행됩니다.
-- **자동 재시도 배제**: 계산 실패 시 원본 입력을 덮어쓰거나 무분별하게 자동 재시도하지 않고 원본 실패 원인을 보존합니다.
+워크플로우·conformer scaffold·xTB/CREST 실행·workflow 설정·계층 목록과
+`orca_auto_workflows` 배포물을 제거했다. 실행 별칭·자동 상태 마이그레이션은 없다.
+과거 파일은 보존하며 은퇴 식별자 읽기는 소유권·슬롯 집계 안전을 위해서만 유지한다.
+[업그레이드 절차](RELEASE.md#upgrading-to-70)를 따른다.
 
----
-
-## 6. 산출물 및 머신 메타데이터 계약
-
-완료된 작업 디렉터리(`runs_root/<job>/<generation>/`) 내에 아래 파일이 생성됩니다:
-
-### `machine.json` (공식 기계 판독 메타데이터)
-다운스트림 자동화 도구 및 분석 스크립트를 위한 공식 표준 인터페이스입니다.
-- `contract`: 메타데이터 스키마 버전 (`factory/machine-observation:1`)
-- `operation`: 수행된 계산 유형 (`chemistry/orca-run` 또는 `chemistry/workflow`)
-- `lifecycle`: 계산 최종 상태 (`succeeded`, `failed`, `cancelled`) 및 소요 시간
-- `payload.results`: 수렴 에너지(Hartree), 전자 상태, 진동수 분석 결과
-- `artifacts`: 산출물 파일 목록 및 SHA-256 해시 검증 영수증
-
-### Supporting Information (`si_block.md`)
-- 정류점(Stationary Point) 계산 완료 시 최종 에너지, 영점 에너지(ZPE), 열역학 보정값, 진동 모드 요약, 데카르트 좌표를 포함한 마크다운 블록을 생성합니다.
-
----
-
-## 7. 워크플로우 계약 (`flow.yaml`)
-
-- 컨포머 탐색(`conformer_screening`) 워크플로우는 CREST 구조 생성과 xTB 스크리닝, ORCA DFT 정밀 최적화 단계를 체계적으로 연결합니다.
-- 각 단계의 상태는 `flow.yaml` 저널에 기록되며, 비정상 중단 시 마지막 완료 단계부터 안전하게 재개할 수 있습니다.
-
----
-
-## 8. 비계약 내부 영역 (Non-contract Surfaces)
-
-아래 항목은 공개 계약 인터페이스가 아니며, 사전 예고 없이 변경될 수 있습니다:
-- `orca_auto queue worker` 등의 내부 CLI 서브프로세스 진입점
-- `job_state.json` 등 내부 런타임 전용 상태 파일 구조
-- 터미널 텍스트 출력의 줄바꿈 및 색상 서식
+공개 동작 변경에는 semantic versioning을 적용한다. 소비자는 새 JSON 필드를 무시할 수 있어야 한다.
+내부 Python API·복구 파일·worker 배관·터미널 서식은 안정된 연동 API가 아니다.

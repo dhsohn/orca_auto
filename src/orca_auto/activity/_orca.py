@@ -8,6 +8,8 @@ from orca_auto.core.activity import ActivityRecord, path_aliases, timestamp_meta
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
 from orca_auto.core.engine_runtime import engine_runtime_paths
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
+from orca_auto.core.queue.generation import queue_entry_generation_token
+from orca_auto.core.queue.publication import QUEUE_RECORD_SYNC_BLOCKED_KEY
 from orca_auto.core.statuses import (
     STATUS_PENDING,
     STATUS_RETRYING,
@@ -46,7 +48,14 @@ def snapshot_matches_entry(
         resolved = str(Path(reaction_dir).expanduser().resolve())
     except OSError:
         resolved = reaction_dir
-    return snapshot_by_dir.get(resolved)
+    snapshot = snapshot_by_dir.get(resolved)
+    # The reusable root can still carry the preceding run's terminal state
+    # while this queue generation waits for its child to publish new state.
+    if snapshot is None or snapshot.state_generation_identity != queue_entry_generation_token(
+        entry
+    ):
+        return None
+    return snapshot
 
 
 def queue_represents_snapshot(queue_adapter: Any, entry: Any, snapshot: RunSnapshot | None) -> bool:
@@ -113,6 +122,9 @@ def queue_record(
     snapshot_completed_at = snapshot.completed_at if snapshot is not None else ""
     snapshot_updated_at = snapshot.updated_at if snapshot is not None else ""
     status = queue_entry_status(queue_adapter, entry, snapshot)
+    blocker = entry_metadata.get(QUEUE_RECORD_SYNC_BLOCKED_KEY)
+    if not isinstance(blocker, dict) or status != STATUS_PENDING or entry.cancel_requested:
+        blocker = {}
     label = (
         normalize_text(snapshot_name)
         or normalize_text(Path(reaction_dir).name if reaction_dir else "")
@@ -149,7 +161,6 @@ def queue_record(
             "run_id": run_id,
             "job_type": normalize_text(entry_metadata.get("job_type")),
             "selected_inp": normalize_text(entry_metadata.get("selected_inp")),
-            "workflow_id": normalize_text(entry_metadata.get("workflow_id")),
             "reaction_dir": reaction_dir,
             "allowed_root": str(allowed_root),
             "priority": queue_adapter.queue_entry_priority(entry),
@@ -158,6 +169,9 @@ def queue_record(
             "admission_deferral_reason": (
                 queue_entry_admission_deferral_reason(entry) if status == STATUS_PENDING else ""
             ),
+            "publication_blocked_reason": normalize_text(blocker.get("reason")),
+            "publication_blocked_scope": normalize_text(blocker.get("scope")),
+            "publication_blocked_action": normalize_text(blocker.get("next_action")),
             **timestamp_metadata(
                 enqueued_at=submitted_at, started_at=started_at, finished_at=finished_at
             ),
@@ -277,6 +291,7 @@ def _snapshot_is_superseded(snapshot: RunSnapshot, superseded_dirs: set[str]) ->
 def orca_records(
     *,
     config_path: str,
+    refresh: bool = False,
 ) -> list[ActivityRecord]:
     from orca_auto.orca import run_snapshot
     from orca_auto.orca.queue import adapter as queue_adapter
@@ -289,15 +304,43 @@ def orca_records(
         for entry in queue_adapter.list_queue(allowed_root)
         if queue_adapter.is_orca_queue_entry(entry)
     ]
-    snapshots = list(run_snapshot.collect_run_snapshots(allowed_root))
+    snapshots = run_snapshot.collect_run_snapshots(
+        allowed_root,
+        discover_unindexed=refresh,
+        known_dirs=(
+            Path(reaction_dir)
+            for entry in queue_entries
+            if (reaction_dir := queue_adapter.queue_entry_reaction_dir(entry))
+        ),
+    )
+    return [
+        record
+        for _kind, _key, record in materialized_records(queue_entries, snapshots, allowed_root)
+    ]
+
+
+def materialized_records(
+    queue_entries: list[Any],
+    snapshots: list[RunSnapshot],
+    allowed_root: Path,
+) -> list[tuple[str, str, ActivityRecord]]:
+    """One generation-aware merge shared by discovery and the query projection."""
+    from orca_auto.orca.queue import adapter as queue_adapter
+
     snapshot_by_run_id, snapshot_by_dir = snapshot_indexes(snapshots)
     represented_snapshot_keys: set[str] = set()
     superseded_dirs = superseded_snapshot_dirs(queue_adapter, queue_entries)
-    rows: list[ActivityRecord] = []
+    rows: list[tuple[str, str, ActivityRecord]] = []
 
     for entry in queue_entries:
         snapshot = snapshot_matches_entry(queue_adapter, entry, snapshot_by_run_id, snapshot_by_dir)
-        rows.append(queue_record(queue_adapter, entry, snapshot, allowed_root=allowed_root))
+        rows.append(
+            (
+                "queue",
+                entry.queue_id,
+                queue_record(queue_adapter, entry, snapshot, allowed_root=allowed_root),
+            )
+        )
         if snapshot is not None and queue_represents_snapshot(queue_adapter, entry, snapshot):
             represented_snapshot_keys.add(normalize_text(snapshot.key))
 
@@ -307,6 +350,12 @@ def orca_records(
             continue
         if _snapshot_is_superseded(snapshot, superseded_dirs):
             continue
-        rows.append(snapshot_record(snapshot, allowed_root=allowed_root))
+        rows.append(
+            (
+                "snapshot",
+                str(snapshot.reaction_dir.resolve()),
+                snapshot_record(snapshot, allowed_root=allowed_root),
+            )
+        )
 
     return rows
