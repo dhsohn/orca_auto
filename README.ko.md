@@ -30,7 +30,7 @@ python -m pip install orca_auto==7.0.0
 ```
 
 - **[설치 상세 안내](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/INSTALLATION.ko.md)** — 독립 ORCA 실행용 PyPI 패키지 설치
-- **[빠른 시작 가이드](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/QUICKSTART.ko.md)** — 소스 체크아웃, 워커 서비스 설정 및 첫 계산 제출
+- **[빠른 시작 가이드](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/QUICKSTART.ko.md)** — 기본 환경 설정, 워커 서비스 등록 및 첫 계산 제출
 
 기존 환경 업그레이드는 [업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/RELEASE.md#upgrading-to-70)(영어)를 참고하세요.
 
@@ -40,7 +40,7 @@ python -m pip install orca_auto==7.0.0
 - **ORCA_auto**: 계산 큐 및 백그라운드 실행 관리
 - [LLMdocx](https://github.com/dhsohn/LLMdocx): 연구 보고서 및 논문 문서화 도구
 
-각 도구는 독립적으로 동작하는 로컬 중심(Local-first) 동반 도구이며, 표준 형식(`machine.json`, 결과 번들 등)을 통해 유기적으로 연계해 사용할 수 있습니다.
+각 도구는 독립적으로 동작하는 로컬 중심(Local-first) 연구 도구이며, 표준 형식(`machine.json`, 결과 번들 등)을 통해 유기적으로 연계해 사용할 수 있습니다.
 [도구 간 연결 방식 →](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/RELATED_WORK.md#local-first-companion-tools)(영어)
 
 ## 문서

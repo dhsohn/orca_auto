@@ -1,82 +1,70 @@
-# 공개 계약
+# 공개 계약 (Public Contracts)
 
 [English](PUBLIC_CONTRACTS.md) | **한국어**
 
-ORCA_auto 7은 Linux/WSL, Python 3.11+, systemd 환경의 독립 ORCA 작업을 지원한다.
-절대 Linux 경로와 별도 설치한 ORCA 실행 파일을 사용한다. Windows 네이티브 실행은 지원하지 않는다.
+ORCA_auto 7.0의 안정적인 공개 계약(인터페이스, 동작 보장, 설정 규칙 및 결과 형식)을 정의합니다.
+ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 동작하며, Linux 절대 경로를 사용합니다.
 
-## 명령
+---
 
-| 명령 | 동작 |
-| --- | --- |
-| `init` | 공통 설정 생성·수정. `--config`로 위치 지정 |
-| `run-dir PATH` | ORCA 입력 디렉터리를 검증·영속 제출하고 실행 전에 반환 |
-| `queue list` | ORCA 작업·전역 실행 수 조회. 자동화는 `--json` 사용 |
-| `queue list clear` | 계산 산출물을 보존하며 종료된 큐·실행 목록 정리 |
-| `queue cancel TARGET` | 큐 id·run id·모호하지 않은 경로 별칭으로 취소 |
-| `index prune` | 경로가 사라진 인덱스 행 미리보기. `--apply`일 때만 제거 |
-| `systemd install` | 해당 runtime의 unit 설치 |
-| `service status` | unit과 실제 worker freshness 조회. stale/undetermined는 실패 코드 |
-| `service restart` | admission 잠금 아래 실행·미해결 예약이 있으면 재시작 거부 |
+## 1. 공개 CLI 명령어 계약
 
-목록은 `--engine orca`, `--kind job`, 상태 필터, 0 이상의 `--limit`, `--refresh`를 받는다.
-필터·제한으로 행이 숨겨져도 전역 실행 수와 admission 차단 사유는 유지한다.
-clear는 목록 필터를 받지 않는다. 일반 조회는 큐·인덱스 위치를 사용하며 refresh는
-미등록 독립 실행도 발견하지만 인덱스에 등록하지 않는다.
+| 명령어 | 동작 및 보장 사항 |
+| :--- | :--- |
+| `init` | 공통 설정 파일(`orca_auto.yaml`)을 생성하거나 갱신합니다. `--config`로 경로를 지정할 수 있습니다. |
+| `run-dir PATH` | 지정된 작업 디렉터리를 검증하고 큐에 영속화한 뒤 즉시 반환합니다. (실제 계산 실행을 기다리지 않음) |
+| `queue list` | 현재 큐 작업 목록 및 전역 활성 시뮬레이션 수를 조회합니다. 스크립트 연동 시 `--json` 출력을 지원합니다. |
+| `queue list clear` | 계산 결과 산출물은 그대로 보존하면서, 완료/실패/취소된 큐 목록 이력을 정리합니다. |
+| `queue cancel TARGET` | 큐 ID, Run ID, 또는 명확한 작업 디렉터리 경로를 지정하여 작업을 안전하게 취소합니다. |
+| `index prune` | 디스크에서 실제 경로가 삭제된 인덱스 행을 확인합니다. `--apply` 플래그를 넘길 때만 실제 정리가 수행됩니다. |
+| `systemd install` | 현재 실행 환경에 맞는 systemd 유닛 템플릿을 등록합니다. |
+| `service status` | 등록된 유닛과 실제 실행 중인 워커 프로세스의 빌드 일치 여부(freshness)를 검사합니다. 불일치 시 0이 아닌 종료 코드를 반환합니다. |
+| `service restart` | 활성 계산이나 미완료 예약이 있는 경우 안전을 위해 재시작을 거부합니다. 즉시 재시작이 필요할 때는 `--force`를 사용합니다. |
 
-`run-dir`는 적합한 최신 `.inp`를 선택하고 동률은 파일명으로 정한다. 입력·의존 파일·
-실행 파일 identity·자원 값을 새 generation에 묶는다. 활성 디렉터리의 중복 제출은 거부한다.
-`--force`는 기존 성공 결과를 재사용하는 대신 새 실행을 요청한다. 자원은 ORCA의
-`%pal`·`%maxcore`가 정하고 설정은 빠진 지시문을 보완한다. CLI 자원 override는 없다.
+### `run-dir` 동작 보장
+- 디렉터리 내에서 가장 최근에 수정된 적합한 `.inp` 파일을 자동 감지하며, 수정 시각이 동일한 경우 파일명 알파벳 순으로 결정합니다.
+- 입력 파일, 참조 좌표 파일, ORCA 실행 바이너리 식별자를 새로운 실행 회차(generation)에 안전하게 바인딩합니다.
+- 이미 계산이 진행 중인 활성 디렉터리에 대한 중복 제출은 거부됩니다.
+- `--force` 플래그를 지정하면 이전에 성공한 완료 기록이 있더라도 새로운 실행 회차를 생성하여 재계산합니다.
+- 계산 자원은 ORCA 입력 파일의 `%pal`(코어 수)과 `%maxcore`(코어당 메모리) 지시어를 최우선으로 따르며, 설정 파일은 누락된 값에 대한 기본값을 보완합니다.
 
-## 설정
+---
 
-명시적 CLI 경로, `ORCA_AUTO_CONFIG`, checkout의 `config/orca_auto.yaml`,
-`~/orca_auto/config/orca_auto.yaml` 순으로 찾는다. 새 wheel 설치의 기본 설정은
-가상환경 밖 마지막 경로에 만든다. 잘못된 mapping, 명시적 null, 중복·알 수 없는 키와
-폐기한 필드는 기본값을 적용하기 전에 거부한다.
+## 2. 설정 파일 우선순위 및 규칙
 
-최상위 키는 `runs_root`, `scheduler`, `resources`, `orca`, `messenger`다.
-[전체 예제](../config/orca_auto.yaml.example)를 참고한다. admission 기본 경로는
-`<runs_root>/.admission`이며 공유 슬롯으로 실행 수를 제한한다. Discord는 발신 전용이고,
-빈 token/channel 문자열은 전송을 끈다. 알림 전달은 best effort다.
+설정 파일은 다음 순서로 탐색되며, 가장 먼저 발견된 유효한 설정을 채택합니다:
+1. CLI 인자로 명시한 경로 (`--config PATH`)
+2. 환경 변수 `ORCA_AUTO_CONFIG`
+3. 소스 체크아웃 경로의 `config/orca_auto.yaml`
+4. 사용자 홈 기본 경로 `~/orca_auto/config/orca_auto.yaml`
 
-## 실행과 복구
+> **설정 검증 원칙**:
+> 유효하지 않은 매핑, 명시적 null, 알 수 없는 키 또는 7.0에서 폐기된 이전 워크플로우 설정 키는 실행 전 엄격히 거부(fail-closed)됩니다. 전체 설정 항목 예시는 [config/orca_auto.yaml.example](../config/orca_auto.yaml.example)를 참고하세요.
 
-제출 성공은 스냅샷 저장과 영속 큐 인수를 뜻한다. 인수가 불확실하면 먼저 재조회하며,
-그 전에 스냅샷을 지우지 않는다. 실행별 generation은 공용 작업 디렉터리 아래에 분리된다.
-중첩 generation과 폐기된 워크플로우 소유 경로는 새 제출 대상이 될 수 없다.
+---
 
-worker는 binding을 검증하고 미해결 소유권을 보존한다. 계산 실패를 자동 재시도하지 않는다.
-실행 전 scratch 자원이 부족하면 pending으로 남아 나중에 다시 admission을 받을 수 있다.
-취소·종료 처리가 소유권 반환을 확인하기 전에는 같은 행·디렉터리를 다시 실행하지 않는다.
-큐·인덱스·admission 손상은 오류로 보고하며 빈 상태로 취급하지 않는다.
+## 3. 실행 및 복구 보장
 
-상태 writer는 재생성 가능한 activity 인덱스를 무효화한다. 준비된 인덱스의 제한 조회는
-모든 과거 상태를 다시 읽지 않는다. 최초 구성·refresh·복구는 원본 이력을 읽는다.
-외부에서 직접 파일을 바꿨다면 refresh가 필요하다.
+1. **원자적 제출 (Atomic Submission)**: 제출 성공 응답(`status: queued`)은 입력 스냅샷 생성과 큐 영속화가 완결되었음을 의미합니다.
+2. **독립 실행 회차 (Generation Isolation)**: 모든 실행은 고유한 generation 서브디렉터리에서 독립적으로 격리되어 수행됩니다.
+3. **무분별한 재시도 방지**: 워커는 비정상 종료된 작업을 임의로 재실행하지 않으며, 정확한 종료 사유를 기록합니다.
+4. **자원 대기 지원**: RAM Scratch 사용 중 일시적으로 시스템 메모리가 부족한 경우, 작업을 실패시키지 않고 대기(`waiting for resources`) 상태로 유지하여 다음 폴링 시 안전하게 재진입할 수 있도록 합니다.
 
-## 기계 기록과 보고서
+---
 
-종료 `machine.json`은 공통 `factory/machine-observation` v1 봉투와
-`chemistry/orca-run` operation, `chemistry/results-bundle` v1 payload를 사용한다.
-Lifecycle·delivery·handoff는 별도 판정이고 산출물은 내용 receipt를 갖는다.
-프로세스 종료나 알림만으로 과학적 성공을 판정하지 않는다.
+## 4. 기계 가독 결과 (`machine.json`) 계약
 
-reader는 상태·generation 소유권·파일 binding과 ORCA 소유 summary/results 필드의
-일치를 검증한다. 필수 필드 누락·모순은 거부하고 추가 도메인 필드는 허용한다.
-각 파일은 조회당 한 번 해시하며 반환 전 identity를 다시 확인한다.
-생성 보고서를 직접 수정하거나 내부 `job_state.json`을 공개 handoff로 사용하지 않는다.
+계산이 완료되면 작업 디렉터리에 다운스트림 도구(Chemvas, LLMdocx 등) 연동을 위한 구조화 데이터 파일 `machine.json`이 발행됩니다:
 
-HTML·SI 내용은 계산 종류와 검증된 근거에 따라 달라진다. 전하·다중도·진동수 근거가
-없으면 unavailable로 표시한다. 화학 입력 설계와 과학적 acceptance는 사용자 책임이다.
+- **엔벨로프 규격**: 공통 `factory/machine-observation` v1 엔벨로프 형식을 준수합니다.
+- **오퍼레이션 및 페이로드**: `chemistry/orca-run` 작업 식별자와 `chemistry/results-bundle` v1 페이로드를 포함합니다.
+- **결과 검증**: 프로세스 종료 코드(0)만으로 성공을 판단하지 않고, ORCA 출력 파일의 정상 종료 배너 및 실제 에너지 수렴 여부를 분석하여 최종 상태를 판정합니다.
+- **연구자 책임 경계**: ORCA_auto는 계산의 신뢰성 있는 수명 주기 관리에 집중하며, 계산 입력 설계 및 계산 결과의 화학적 타당성 검토는 연구자의 전문 영역입니다.
 
-## 7.0 제거 범위
+---
 
-워크플로우·conformer scaffold·xTB/CREST 실행·workflow 설정·계층 목록과
-`orca_auto_workflows` 배포물을 제거했다. 실행 별칭·자동 상태 마이그레이션은 없다.
-과거 파일은 보존하며 은퇴 식별자 읽기는 소유권·슬롯 집계 안전을 위해서만 유지한다.
-[업그레이드 절차](RELEASE.md#upgrading-to-70)를 따른다.
+## 5. ORCA_auto 7.0 은퇴 및 마이그레이션 정책
 
-공개 동작 변경에는 semantic versioning을 적용한다. 소비자는 새 JSON 필드를 무시할 수 있어야 한다.
-내부 Python API·복구 파일·worker 배관·터미널 서식은 안정된 연동 API가 아니다.
+- **워크플로우 기능 제거**: 7.0부터 `orca_auto_workflows` 확장, conformer 탐색, 내장 xTB/CREST 엔진 및 워크플로우 CLI 명령이 공식 제거되었습니다.
+- **기존 데이터 보존**: 기존 6.x 이전 워크플로우로 생성된 작업 디렉터리는 보존되며, 새로운 7.0 워커가 과거 데이터를 임의로 변경하거나 덮어쓰지 않도록 보호됩니다.
+- 자세한 전환 절차는 [7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)를 확인하세요.

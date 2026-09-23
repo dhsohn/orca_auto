@@ -30,8 +30,7 @@ python -m pip install orca_auto==7.0.0
 ```
 
 - **[Installation details](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/INSTALLATION.md)** — install the standalone ORCA package.
-- **[Set up workers and submit your first job](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/QUICKSTART.md)** — configure a
-  source checkout, start services, and inspect the queue.
+- **[Quickstart guide](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/QUICKSTART.md)** — configure settings, start background services, and submit your first calculation.
 
 **Upgrading?** See the [upgrade guide](https://github.com/dhsohn/orca_auto/blob/v7.0.0/docs/RELEASE.md#upgrading-to-70).
 

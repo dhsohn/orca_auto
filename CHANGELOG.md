@@ -10,149 +10,32 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Removed
 
-- Removed the workflows extension, conformer screening orchestration, scaffold
-  commands, internal xTB/CREST engines, workflow workers, and `workflow` config.
-  ORCA_auto now ships one distribution for standalone ORCA jobs.
-- Removed workflow queue filters/grouping, workflow-only worker flags and
-  `run-dir --max-cores/--max-memory-gb`. ORCA resources remain bound to its input.
-- Existing workflow files and old releases are retained. Version 7 refuses new
-  submissions or execution in retired workflow directories; it does not migrate
-  or delete their data. Finish or cancel old work with its original runtime,
-  then follow the [7.0 upgrade procedure](docs/RELEASE.md#upgrading-to-70).
+- Removed the workflows extension, conformer screening orchestration, scaffolds, internal xTB/CREST engines, workflow workers, and `workflow` configuration. ORCA_auto now ships as a unified distribution for standalone ORCA jobs.
+- Removed workflow queue filters/grouping, workflow-only worker flags, and CLI resource overrides (`--max-cores`/`--max-memory-gb`). Computational resources remain governed by the ORCA input file.
+- Existing workflow calculation directories and historical releases are retained as read-only data. Version 7 refuses new submissions in retired workflow directories without altering historical files.
 
 ### Changed
 
-- ORCA report reads reuse verified file receipts within each read and recheck
-  file identities before returning; input and output content are each hashed once.
-- ORCA submission explicitly owns snapshot creation and the pre-enqueue cleanup
-  boundary; queue metadata assembly only combines prepared values.
-
-- ORCA child cancellation polls reuse unchanged canonical queue observations;
-  the parent checks all live children from one snapshot per queue root.
-- Parent terminal notifications use a durable job/run claim and at most four
-  background sends, so transport delays do not retain admission slots. Delivery
-  remains best-effort: saturation or process exit can lose a claimed message.
-- Opt and SP reports reuse parsed output and absent frequency results. Opt
-  progress shares the same decoded snapshot; termination scans iterate lines
-  without cloning the full output buffer.
-
-- ORCA activity listings use a rebuildable SQLite projection with ordered
-  status/page queries. Warm bounded queries skip historical JSON/state reads;
-  source writers and durable pre-write state tickets keep changed generations
-  current, while lock polling reuses matched context. Global counts/blockers
-  survive filters and limits. Initial builds, explicit refresh, and recovery
-  still read source history; manual filesystem changes require `--refresh`.
-
-- Production deployments can use offline, versioned wheel runtimes with verified
-  build receipts and read-only installed files. Service plans pin the runtime
-  root/build and isolate imports; status detects an old worker after unit cutover.
-  The existing idle restart guard accepts the prepared runtime command. See
-  `docs/RUNTIME.md` for preparation, cutover, and rollback; preparation alone
-  does not deploy services.
-
-- ORCA queued-publication repair failures retain a generation-bound reason and
-  recovery guidance. Queue listings expose the queue-wide admission block even
-  when the responsible row is excluded by filters or limits; successful
-  publication clears the stored blocker atomically.
-
-- Ordinary ORCA activity discovery reads queue-known and indexed locations.
-  `queue list --refresh` explicitly scans for unindexed runs. This scan does not register discovered ORCA
-  runs; subsequent ordinary queries still use the queue and location index.
-
-- RAM scratch no longer admits exactly one workspace. Each workspace manifest
-  (schema 2) records its task-memory cap, and a new attempt launches only while
-  `MemAvailable` covers its own cap, the caps of every live workspace, the free
-  tmpfs space and `scratch_min_free_gb`; concurrency is otherwise bounded by
-  `scheduler.max_active_simulations`. A schema-1 manifest, or one whose owner
-  cannot be verified, is treated as unresolved ownership and blocks launches
-  until inspected. Cutover: a deployment that already set
-  `max_active_simulations` above 1 with RAM scratch enabled previously failed
-  the second concurrent attempt as `runner_exception`; it now runs both under
-  the guard. Keep `max_active_simulations: 1` to retain serial execution. The
-  scratch-root lock wait is 300 s so a peer's staging or publication recovery
-  queues an attempt instead of failing it.
+- **Prepared Production Runtimes**: Production deployments can use offline, versioned wheel runtimes with verified build receipts and read-only installations ([docs/RUNTIME.md](docs/RUNTIME.md)).
+- **RAM Scratch Concurrency**: Enabled concurrent workspaces under a summed memory guard checking `MemAvailable`, per-workspace task-memory caps, and `scratch_min_free_gb`.
+- **SQLite Activity Projection**: Optimized queue queries using a rebuildable SQLite index with ordered status and pagination, avoiding full filesystem scans for routine listings (`queue list --refresh` scans unindexed runs).
+- **Report & Parser Efficiency**: File receipt verification reuses computed hashes within each read; optimization scans iterate output lines without cloning the entire buffer.
+- **Durable Notification Dispatch**: Terminal notifications use durable job/run claims with background delivery, ensuring slow notification transports do not hold active admission slots.
+- **Explicit Blockers**: Queued-publication repair failures retain generation-bound reasons and expose queue-wide admission blocks in CLI listings.
 
 ### Fixed
 
-- ORCA machine-report verification now checks every owned summary/result field
-  against the same projection used to publish it, including summary attempt
-  counts and result reason/analyzer status. Additional domain fields remain allowed.
+- **RAM Scratch Capacity Deferral**: A job refused due to temporary memory or tmpfs constraints returns to `pending` with `waiting for resources` instead of terminating as `runner_exception`.
+- **Worker Re-admission Race**: A worker no longer re-claims a queue row while the previous job in that row is still undergoing exit finalization.
+- **Granular Replay Withholding**: An unresolved terminal replay now withholds only the affected reaction directory, admitting unrelated jobs instead of pausing the entire queue.
+- **Interrupted Run Settlement**: Re-executing an interrupted generation settles from its recorded attempt verdict rather than adopting an existing output completion marker over a failed attempt.
+- **Electronic State Parsing**: Correctly parses ORCA charge and multiplicity from mixed-case geometry headers, preventing unverified states from defaulting to neutral-singlet.
+- **Output Diagnostic Accuracy**: Input echoes and comments are excluded from SCF, convergence, and TS diagnostic scanning across all file sizes.
+- **Run Isolation**: Resubmitting within an existing job directory no longer inherits terminal status or timestamps from previous generations.
+- **Admission Rejection Diagnostics**: Pre-execution validation failures retain specific rejection reasons on the queue row and final state instead of collapsing to `exit_code=1`.
+- **Wheel Config Location**: Default configuration for fresh wheel installations is placed in `~/orca_auto/config/` outside the virtual environment.
+- **Standalone Cancellation**: Standalone ORCA cancellation no longer requires an installed engine executable and returns non-zero exits on failure.
 
-- Standalone ORCA cancellation no longer requires an installed engine executable,
-  and failed cancellation returns a non-zero CLI exit in text and JSON modes.
-- Queue-body timeouts retain their actual cause instead of being reported as
-  duplicate workers. A busy publication lock defers repair without blocking
-  the worker loop or persisting a false failure marker.
-
-- ORCA charge and multiplicity are parsed from supported mixed-case geometry
-  headers. SI and SP/IRC HTML reports identify unverified electronic state as
-  unavailable instead of presenting neutral-singlet defaults as measured data.
-- Input echoes and comments no longer supply SCF, memory, convergence, or TS
-  evidence. Diagnostic scanning uses complete output lines for both small and
-  large files, so crossing the former tail window does not change the verdict.
-- A newly submitted ORCA generation no longer borrows an earlier run's terminal
-  status or timestamps just because it reuses the same job directory.
-- Initial execution-context validation failures retain their specific rejection
-  reason on the queue row and final state, instead of only `exit_code=1`.
-  Cancellation and dequeue ownership checks remain in effect.
-- A fresh wheel installation creates its default configuration under
-  `~/orca_auto/config`, outside the virtual environment. Explicit configuration,
-  environment overrides, and existing configuration discovery keep their precedence.
-- `queue list` now shows why an ORCA job waits for RAM scratch capacity. The
-  change below recorded the refusal on the queue row and logged it, but ORCA
-  activity rows are built by their own source, which did not carry it: the
-  documented `admission_deferral_reason` metadata key and the
-  `(waiting for resources)` detail were missing from the command's output. They
-  are now reported for a pending ORCA row.
-- An ORCA job that the RAM scratch launch guard refuses before ORCA starts is
-  no longer failed. With `scheduler.max_active_simulations` above 1, a job
-  admitted by the slot count but not by current memory ended as `failed` /
-  `runner_exception` after a "started" notification although ORCA never ran.
-  The workspace is now reserved before the run writes any state; on a capacity
-  refusal (memory, tmpfs space, or a scratch root busy past the 300 s lock
-  wait) the queue row returns to `pending` with no run state, attempt record,
-  notification, or recovery rebind spent. It is not claimed again for 60
-  seconds, rows behind it stay eligible, and `queue list` shows it as
-  `(waiting for resources)` with the refusal in `admission_deferral_reason`.
-  A job whose cap can never fit the host waits until it is cancelled. This
-  re-asks for a resource and is not a retry: the same refusal after the run
-  wrote its state, and every other scratch failure, still fails the attempt.
-- A queue worker no longer starts a row again while it still tracks that row's
-  previous job. A child that is stopped from outside (for example by a manual
-  `SIGTERM`) returns its own row to `pending` and only then exits; a worker
-  with a free slot that polled in that instant claimed the row again, replaced
-  the tracked job, and left its admission slot to stale-slot reconciliation.
-  Such a row is now skipped until the exit has been finalized; rows behind it
-  stay eligible, and a poll that finds only such rows does not touch the
-  admission file. If finalizing that exit keeps failing, the row stays pending
-  until the worker is restarted, with the failure logged on every poll.
-- One ORCA job whose terminal replay or exit finalization is unresolved no
-  longer pauses admission of every other job. The pause existed to keep a new
-  generation from starting in a reaction directory whose previous generation
-  has unpublished terminal state, but it was queue-wide: a replay that held no
-  slot and retried once a minute stopped all new starts for as long as it
-  lasted. The worker now withholds only rows in the affected reaction
-  directories (compared by resolved path, including where a replay's recorded
-  path resolves now), logs those directories when the set changes, and admits
-  unrelated jobs. It still pauses all admission when such a generation cannot
-  be tied to a directory and when queued-publication repair fails. A poll that
-  finds only withheld rows reports no pending jobs instead of
-  `waiting_for_slot`. Periodic reconciliation stays suspended, as before,
-  while an exited job awaits a finalization retry; jobs are now admitted in
-  that state, and the retry failure is still logged on every poll.
-- Re-executing an interrupted or failed generation no longer reports
-  `completed` over its recorded failed attempt. When a worker died after an
-  attempt record was saved and before its final result was, a restart adopted
-  the output's completion marker as `existing_out_completed` without consulting
-  the record, so an attempt already recorded as `nonzero_exit_code` became a
-  success. An interrupted
-  generation with a recorded attempt now settles from that record's analyzer
-  verdict: a failed one keeps its recorded reason, and a successful one
-  completes with its recorded reason, `resumed: true` and the usual finished
-  notification instead of `existing_out_completed` / `skipped_execution`. A
-  generation already settled as failed whose recorded attempt failed keeps its
-  published result untouched instead of being replaced by an adopted success.
-  An output with no recorded attempt is adopted as before.
 
 ## [6.0.0] - 2026-09-13
 

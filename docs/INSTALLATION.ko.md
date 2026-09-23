@@ -1,24 +1,77 @@
-# 설치
+# 설치 가이드 (Installation)
 
 [English](INSTALLATION.md) | **한국어**
 
-Linux/WSL2, Python 3.11+, systemd를 사용한다. ORCA는 해당 라이선스에 따라 별도로 설치한다.
-7.0은 워크플로우 확장을 제거했으므로 기존 환경을 바꾸기 전에
-[업그레이드 절차](RELEASE.md#upgrading-to-70)를 읽는다.
+ORCA_auto는 Linux 및 WSL2 환경에서 실행되는 백그라운드 큐 러너입니다.
+
+---
+
+## 시스템 요구사항
+
+- **운영체제**: Linux 또는 WSL2 (Ubuntu 20.04 LTS 이상 권장)
+- **Python**: 3.11 이상
+- **서비스 관리**: `systemd` (백그라운드 워커 데몬 감독용)
+- **ORCA 엔진**: 별도 설치된 ORCA 실행 바이너리 (버전 5.x ~ 6.x 호환)
+
+> **참고**: ORCA_auto 7.0.0부터 기존 워크플로우 확장(`orca_auto_workflows`, xTB/CREST 오케스트레이션)이 공식 은퇴하고 **독립형 ORCA 단독 실행 및 큐 관리**에 집중하도록 단일 패키지로 간소화되었습니다. 이전 버전(6.x 이하)에서 마이그레이션하는 경우 [7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)를 참고하세요.
+
+---
+
+## 1. PyPI 패키지 설치
+
+격리된 가상환경에 최신 릴리스를 설치합니다:
 
 ```bash
-python3 -m venv ~/.local/share/orca_auto/venv-7.0.0
-~/.local/share/orca_auto/venv-7.0.0/bin/python -m pip install orca_auto==7.0.0
-~/.local/share/orca_auto/venv-7.0.0/bin/python -m pip check
-~/.local/share/orca_auto/venv-7.0.0/bin/orca_auto --version
-source ~/.local/share/orca_auto/venv-7.0.0/bin/activate
+# 가상환경 생성 및 활성화
+python3 -m venv ~/.local/share/orca_auto/venv
+source ~/.local/share/orca_auto/venv/bin/activate
+
+# ORCA_auto 7.0.0 설치
+pip install --upgrade pip
+pip install orca_auto==7.0.0
+
+# 정상 설치 확인
+orca_auto --version
 ```
 
-`orca_auto_workflows`가 없는 새 환경에 설치한다. 활성 계산이 사용하는 환경은 변경하지 않는다.
-`init --config /absolute/path/orca_auto.yaml`로 환경 밖 설정을 만든다.
-[설정 예제](../config/orca_auto.yaml.example)를 참고한다.
-서비스에는 같은 릴리스의 systemd template과 [wheel runtime](RUNTIME.md)을 준비한다.
-패키지 설치만으로 실행 중인 worker가 갱신되지는 않는다.
+---
 
-개발은 clone 후 격리 worktree의 `.venv`에서 `pip install -e '.[dev]'`,
-`make check`를 실행한다. 이어서 [시작 안내](QUICKSTART.ko.md)를 따른다.
+## 2. 초기 설정 및 시작
+
+설치가 완료되면 설정 파일을 생성하고 워커 서비스를 등록합니다:
+
+```bash
+# 기본 설정 파일 생성
+orca_auto init --config ~/orca_auto.yaml
+
+# systemd 워커 등록 및 상태 확인
+orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
+orca_auto service status --config ~/orca_auto.yaml
+```
+
+이후 작업 제출 방법은 [빠른 시작 가이드](QUICKSTART.ko.md)를 참고하세요.
+
+---
+
+## 3. 프로덕션 배포 (선택 사항)
+
+실제 연구실 워크스테이션이나 서버에서 불변(immutable) 오프라인 휠 런타임으로 배포하려면 [프로덕션 런타임 가이드](RUNTIME.md)를 확인하세요.
+
+---
+
+## 4. 개발 환경 설치 (소스 체크아웃)
+
+코드 기여 및 개발을 위해 저장소를 직접 클론하여 설치하는 경우:
+
+```bash
+git clone https://github.com/dhsohn/orca_auto.git
+cd orca_auto
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+
+# 정적 분석 및 전체 테스트 실행
+make check
+```
+세부 개발 규칙은 [개발 가이드](DEVELOPMENT.ko.md)를 참고하세요.

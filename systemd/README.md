@@ -1,22 +1,71 @@
-# systemd services
+# systemd Service Management
 
 **English** | [한국어](README.ko.md)
 
-`orca_auto-queue-worker@USER.service` runs the ORCA worker.
-`orca_auto-engine-workers@USER.target` groups that worker and
-`orca_auto-runtime@USER.target` selects the runtime. There are three templates.
+ORCA_auto uses `systemd` user-level instances on Linux and WSL to supervise background worker processes.
 
-```bash
-orca_auto systemd install --user user --repo /absolute/runtime/root \
-  --config /absolute/external/orca_auto.yaml
-orca_auto service status --json
-orca_auto service restart
+---
+
+## 1. Unit Architecture
+
+ORCA_auto 7.0 provides three templated systemd units configured per user (`@USER`):
+
+```text
+orca_auto-runtime@USER.target          # Top-level runtime target
+  └─ orca_auto-engine-workers@USER.target # Engine worker grouping target
+       └─ orca_auto-queue-worker@USER.service  # Supervised ORCA queue worker process
 ```
 
-Installing units does not reload an existing worker. Cut over only while idle
-and verify the process build/root against the unit. Prepared runtimes are read-only;
-configuration, queues, logs and scratch remain external. Follow [RUNTIME](../docs/RUNTIME.md).
+- **`orca_auto-queue-worker@USER.service`**: The resident worker service polling the queue and launching ORCA jobs.
+- **`orca_auto-engine-workers@USER.target`**: Groups all calculation worker services.
+- **`orca_auto-runtime@USER.target`**: Controls the overall lifecycle of the ORCA_auto runtime.
 
-Version 7 does not provide a workflow worker. Finish/cancel old work with its old
-runtime, then stop/disable any old instance. Installing new units does not delete
-historical templates. Follow the [upgrade guide](../docs/RELEASE.md#upgrading-to-70).
+> **Note**: Following the retirement of workflows in 7.0, `orca_auto-workflow-worker@.service` is no longer provided.
+
+---
+
+## 2. Service Management Commands
+
+### Install Units
+```bash
+# Render and install systemd templates for the current user
+orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
+```
+
+### Check Service Status
+Verifies that running worker processes match the installed systemd unit build:
+```bash
+orca_auto service status --config ~/orca_auto.yaml
+```
+
+### Safe Service Restart
+To protect running calculations from accidental interruption, restarts are only permitted during an idle maintenance window (zero active simulations):
+```bash
+orca_auto service restart --config ~/orca_auto.yaml
+
+# Force restart (aborts active calculations; use with caution)
+orca_auto service restart --config ~/orca_auto.yaml --force
+```
+
+---
+
+## 3. Real-time Worker Logs
+
+Monitor worker scheduling, dequeue events, and simulation transitions via systemd journal:
+
+```bash
+journalctl -u "orca_auto-queue-worker@$(id -un)" -f
+```
+
+---
+
+## 4. Upgrading to 7.0
+
+If you have legacy `orca_auto-workflow-worker` services from 6.x or earlier, ensure remaining jobs have finished or been cancelled, then stop and disable them:
+
+```bash
+sudo systemctl stop "orca_auto-workflow-worker@$(id -un)"
+sudo systemctl disable "orca_auto-workflow-worker@$(id -un)"
+```
+
+See the [7.0 Upgrade Guide](../docs/RELEASE.md#upgrading-to-70) for complete cutover instructions.
