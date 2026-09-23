@@ -3,49 +3,55 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Generic, Protocol, TypeVar
+
+from orca_auto.core.config.schema import RuntimeAdmissionMixin
+
+from .processes import ManagedProcess
+from .types import QueueEntry
 
 
-class SleepTimer(Protocol):
-    def sleep(self, seconds: float) -> None: ...
+class WorkerConfig(Protocol):
+    @property
+    def runtime(self) -> RuntimeAdmissionMixin: ...
 
 
-class QueueEntrySelector(Protocol):
-    """Preview or claim the next row, passing over rows ``skip_entry_fn`` names.
+ConfigT = TypeVar("ConfigT", bound=WorkerConfig)
+ConfigT_contra = TypeVar("ConfigT_contra", bound=WorkerConfig, contravariant=True)
+EntryT = TypeVar("EntryT")
 
-    A runtime can honor the filter only when it claims rows by id; one that
-    claims its root's head row ignores it.
-    """
 
+class QueueEntryDequeuer(Protocol[EntryT]):
     def __call__(
         self,
-        cfg: Any,
+        root: Path,
+        queue_id: str,
         /,
         *,
-        skip_entry_fn: Callable[[Any], bool] | None = None,
-    ) -> tuple[Path, Any] | None: ...
+        expected_entry: EntryT | None,
+    ) -> EntryT | None: ...
 
 
-AdmissionCapacityCheck = Callable[[Any], bool]
-AdmissionReserver = Callable[[Any], str | None]
-
-
-class SlotReleaser(Protocol):
-    def __call__(self, admission_root: str | Path, admission_token: str, /) -> object: ...
-
-
-class DequeuedEntryReserver(Protocol):
+class QueueEntrySelector(Protocol[ConfigT_contra]):
     def __call__(
         self,
-        cfg: Any,
+        cfg: ConfigT_contra,
+        /,
         *,
-        admission_root: str | Path,
-        has_capacity_fn: AdmissionCapacityCheck,
-        peek_next_fn: Callable[[Any], tuple[Path, Any] | None],
-        reserve_slot_fn: AdmissionReserver,
-        dequeue_next_fn: Callable[[Any], tuple[Path, Any] | None],
-        release_slot_fn: SlotReleaser,
-    ) -> tuple[str, Any | None]: ...
+        skip_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    ) -> tuple[Path, QueueEntry] | None: ...
+
+
+class QueueEntryFailureMarker(Protocol):
+    def __call__(
+        self,
+        root: Path,
+        queue_id: str,
+        /,
+        *,
+        error: str,
+        expected_entry: QueueEntry,
+    ) -> object: ...
 
 
 class BackgroundJobProcessStarter(Protocol):
@@ -54,31 +60,18 @@ class BackgroundJobProcessStarter(Protocol):
         *,
         config_path: str,
         queue_root: Path,
-        entry: Any,
+        entry: QueueEntry,
         admission_token: str,
-    ) -> Any: ...
+    ) -> ManagedProcess: ...
 
 
 @dataclass(frozen=True)
-class ChildQueueWorkerDeps:
-    poll_interval_seconds: int
-    time: SleepTimer
-    admission_root: Callable[[Any], str]
+class ChildQueueWorkerDeps(Generic[ConfigT]):
+    poll_interval_seconds: float
+    sleep: Callable[[float], None]
     start_background_job_process: BackgroundJobProcessStarter
-    release_slot: SlotReleaser
-    reserve_dequeued_entry: DequeuedEntryReserver
-    has_admission_capacity: AdmissionCapacityCheck
-    peek_next_entry: QueueEntrySelector
-    dequeue_next_entry: QueueEntrySelector
-    try_reserve_admission_slot: AdmissionReserver
-
-
-__all__ = [
-    "AdmissionCapacityCheck",
-    "ChildQueueWorkerDeps",
-    "BackgroundJobProcessStarter",
-    "DequeuedEntryReserver",
-    "QueueEntrySelector",
-    "SleepTimer",
-    "SlotReleaser",
-]
+    release_slot: Callable[[str | Path, str], object]
+    has_admission_capacity: Callable[[ConfigT], bool]
+    peek_next_entry: QueueEntrySelector[ConfigT]
+    dequeue_next_entry: QueueEntrySelector[ConfigT]
+    try_reserve_admission_slot: Callable[[ConfigT], str | None]

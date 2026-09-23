@@ -194,7 +194,8 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
     from orca_auto.core.admission import active_slot_count, reserve_slot
     from orca_auto.orca.config import OrcaRuntimeConfig
     from orca_auto.orca.queue import adapter
-    from orca_auto.orca.queue.worker import QueueWorker, _RunningJob
+    from orca_auto.orca.queue.models import OrcaRunningJob as _RunningJob
+    from orca_auto.orca.queue.worker import OrcaQueueWorker
 
     entered, release = threading.Event(), threading.Event()
 
@@ -211,7 +212,7 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
         worker_tracking, "upsert_terminal_job_record", lambda *_args, **_kwargs: True
     )
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = QueueWorker(cfg, str(tmp_path / "config.yaml"), max_concurrent=2)
+    worker = OrcaQueueWorker(cfg, str(tmp_path / "config.yaml"), max_concurrent=2)
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     write_completed_run_state(job_dir)

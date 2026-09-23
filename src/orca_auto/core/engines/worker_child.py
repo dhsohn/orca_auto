@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Callable
 from pathlib import Path
+
+from .definitions import WorkerChildCommandBuilder
 
 WORKER_CHILD_MODULE = "orca_auto.core.engines.worker_child"
 
@@ -34,7 +35,7 @@ def build_worker_child_command(
     return command
 
 
-def build_worker_child_command_for_engine(engine: str) -> Callable[..., list[str]]:
+def build_worker_child_command_for_engine(engine: str) -> WorkerChildCommandBuilder:
     engine_id = str(engine).strip().lower()
 
     def build_engine_worker_child_command(

@@ -2,37 +2,27 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TypeVar
 
-from orca_auto.core.admission import read_active_slot_count, reserve_slot
-from orca_auto.core.engine_catalog import find_engine_catalog_entry
+from orca_auto.core.admission import read_active_slot_count
 
 from ..child.execution import find_queue_entry_by_id
 from ..deferral import queue_entry_admission_is_deferred
-from ..dependencies import ChildQueueWorkerDeps, QueueEntrySelector
+from ..dependencies import ConfigT, QueueEntryDequeuer, WorkerConfig
 from ..priority import normalize_queue_priority
 from ..publication import queue_entry_is_claimable
-from .models import ReservedQueueEntry
+from ..types import QueueEntry
+from .models import ReservedQueueEntry, ReserveStatus
 
 T = TypeVar("T")
 
 
-def engine_queue_worker_source(engine: str) -> str:
-    engine_slug = str(engine).strip().replace("-", "_")
-    entry = find_engine_catalog_entry(engine_slug)
-    return entry.admission_source if entry is not None else f"orca_auto.{engine_slug}.queue_worker"
-
-
-def resolve_admission_root(cfg: Any) -> str:
-    """Adapt the runtime's admission root to the callable the workers inject.
-
-    The resolution itself belongs to the config: two engine worker modules pass
-    this function as a value, so a property alone cannot serve them.
-    """
+def resolve_admission_root(cfg: WorkerConfig) -> str:
+    """Return the shared admission root resolved by the runtime configuration."""
     return str(cfg.runtime.resolved_admission_root)
 
 
-def admission_has_capacity(cfg: Any) -> bool:
+def admission_has_capacity(cfg: WorkerConfig) -> bool:
     """Read-only check that the shared pool could admit one more slot.
 
     Counts live slots without locking or rewriting the admission file, using
@@ -41,31 +31,6 @@ def admission_has_capacity(cfg: Any) -> bool:
     """
     limit = int(cfg.runtime.resolved_admission_limit)
     return read_active_slot_count(resolve_admission_root(cfg)) < limit
-
-
-def reserve_engine_queue_worker_slot(
-    cfg: Any,
-    *,
-    engine: str,
-    reserve_slot_fn: Callable[..., str | None] = reserve_slot,
-) -> str | None:
-    engine_slug = str(engine).strip().replace("-", "_")
-    entry = find_engine_catalog_entry(engine_slug)
-    reservation_kwargs: dict[str, Any] = {
-        "source": engine_queue_worker_source(engine_slug),
-        "app_name": entry.app_id if entry is not None else f"orca_auto_{engine_slug}",
-    }
-    if entry is not None and entry.managed_admission:
-        # Internal-engine child entrypoints publish engine identities through
-        # register_running_job (ORCA once per retry attempt).
-        reservation_kwargs["engine_process_state"] = "idle"
-        if entry.engine_launch_gated:
-            reservation_kwargs["engine_launch_gated"] = True
-    return reserve_slot_fn(
-        resolve_admission_root(cfg),
-        cfg.runtime.resolved_admission_limit,
-        **reservation_kwargs,
-    )
 
 
 def _select_next_claimable_entry(
@@ -176,7 +141,7 @@ def dequeue_next_across_roots(
     *,
     list_queue_fn: Callable[[Path], list[T]],
     dequeue_next_fn: Callable[[Path], T | None],
-    dequeue_entry_fn: Callable[..., T | None] | None = None,
+    dequeue_entry_fn: QueueEntryDequeuer[T] | None = None,
     accept_entry_fn: Callable[[T], bool] | None = None,
 ) -> tuple[Path, T] | None:
     if len(roots) == 1 and accept_entry_fn is None:
@@ -213,8 +178,8 @@ def queue_entry_by_id(
     queue_root: str | Path,
     queue_id: str,
     *,
-    list_queue_fn: Callable[[str | Path], Any],
-) -> Any | None:
+    list_queue_fn: Callable[[str | Path], list[QueueEntry]],
+) -> QueueEntry | None:
     return find_queue_entry_by_id(
         queue_root,
         queue_id,
@@ -223,15 +188,15 @@ def queue_entry_by_id(
 
 
 def reserve_dequeued_entry(
-    cfg: Any,
+    cfg: ConfigT,
     *,
     admission_root: str | Path,
-    has_capacity_fn: Callable[[Any], bool],
-    peek_next_fn: Callable[[Any], tuple[Path, T] | None],
-    reserve_slot_fn: Callable[[Any], str | None],
-    dequeue_next_fn: Callable[[Any], tuple[Path, T] | None],
+    has_capacity_fn: Callable[[ConfigT], bool],
+    peek_next_fn: Callable[[ConfigT], tuple[Path, T] | None],
+    reserve_slot_fn: Callable[[ConfigT], str | None],
+    dequeue_next_fn: Callable[[ConfigT], tuple[Path, T] | None],
     release_slot_fn: Callable[[str | Path, str], object],
-) -> tuple[str, ReservedQueueEntry[T] | None]:
+) -> tuple[ReserveStatus, ReservedQueueEntry[T] | None]:
     # Read before writing, and read the cheap thing first: a full pool is one
     # lock-free admission read, and an empty queue is a queue listing, while
     # an admission reservation is a durable write to the shared slot file that
@@ -267,45 +232,11 @@ def reserve_dequeued_entry(
     )
 
 
-def make_child_queue_worker_deps(
-    *,
-    poll_interval_seconds: int,
-    time_module: Any,
-    release_slot_fn: Callable[[str | Path, str], object],
-    admission_root_fn: Callable[[Any], str],
-    has_admission_capacity_fn: Callable[[Any], bool],
-    peek_next_entry_fn: QueueEntrySelector,
-    dequeue_next_entry_fn: QueueEntrySelector,
-    start_background_job_process_fn: Callable[..., Any],
-    try_reserve_admission_slot_fn: Callable[[Any], str | None],
-) -> ChildQueueWorkerDeps:
-    return ChildQueueWorkerDeps(
-        poll_interval_seconds=poll_interval_seconds,
-        time=time_module,
-        release_slot=release_slot_fn,
-        reserve_dequeued_entry=reserve_dequeued_entry,
-        admission_root=admission_root_fn,
-        has_admission_capacity=has_admission_capacity_fn,
-        peek_next_entry=peek_next_entry_fn,
-        dequeue_next_entry=dequeue_next_entry_fn,
-        start_background_job_process=start_background_job_process_fn,
-        try_reserve_admission_slot=try_reserve_admission_slot_fn,
-    )
-
-
-def config_path_for_worker(args: Any, *, default_config_path_fn: Callable[[], str]) -> str:
-    configured = str(getattr(args, "config", "") or "").strip()
-    return configured or default_config_path_fn()
-
-
 __all__ = [
     "admission_has_capacity",
-    "config_path_for_worker",
     "dequeue_next_across_roots",
-    "make_child_queue_worker_deps",
     "peek_next_across_roots",
     "queue_entry_by_id",
     "reserve_dequeued_entry",
-    "reserve_engine_queue_worker_slot",
     "resolve_admission_root",
 ]

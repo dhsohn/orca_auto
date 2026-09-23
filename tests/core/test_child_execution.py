@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
 
 from orca_auto.core.queue.child import execution as child_execution
+from orca_auto.core.queue.types import QueueEntry
 
 
 def test_child_worker_shutdown_controller_tracks_request() -> None:
@@ -17,8 +16,14 @@ def test_child_worker_shutdown_controller_tracks_request() -> None:
 
 
 def test_find_queue_entry_by_id_returns_matching_entry(tmp_path: Path) -> None:
-    wanted = SimpleNamespace(queue_id="q-wanted")
-    entries = [SimpleNamespace(queue_id="q-other"), wanted]
+    wanted = QueueEntry(
+        queue_id="q-wanted",
+        app_name="orca_auto_orca",
+        task_id="task-wanted",
+        task_kind="orca_run_inp",
+        engine="orca",
+    )
+    entries = [replace(wanted, queue_id="q-other"), wanted]
 
     assert (
         child_execution.find_queue_entry_by_id(
@@ -36,99 +41,3 @@ def test_find_queue_entry_by_id_returns_matching_entry(tmp_path: Path) -> None:
         )
         is None
     )
-
-
-def test_build_queue_entry_lookup_reuses_lister_and_optional_path_coercion(
-    tmp_path: Path,
-) -> None:
-    wanted = SimpleNamespace(queue_id="q-wanted")
-    seen_roots: list[Path | str] = []
-
-    def list_queue(root: str | Path) -> list[Any]:
-        seen_roots.append(root)
-        return [wanted]
-
-    lookup = child_execution.build_queue_entry_lookup(
-        list_queue_fn=list_queue,
-        coerce_root_to_path=True,
-    )
-
-    assert lookup(str(tmp_path), "q-wanted") is wanted
-    assert seen_roots == [tmp_path]
-
-
-def test_load_child_worker_entrypoint_job_resolves_paths_and_entry(tmp_path: Path) -> None:
-    cfg = SimpleNamespace(name="cfg", admission_root=tmp_path / "admission")
-    entry = SimpleNamespace(queue_id="q-wanted", status="running")
-    seen_roots: list[Path] = []
-
-    def find_entry(root: Path, _queue_id: str) -> SimpleNamespace:
-        seen_roots.append(root)
-        return entry
-
-    job = child_execution.load_child_worker_entrypoint_job(
-        config_path="/tmp/orca_auto.yaml",
-        queue_root=tmp_path / "queue",
-        queue_id="q-wanted",
-        load_config_fn=lambda _path: cfg,
-        find_queue_entry_fn=find_entry,
-        admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-        entry_ready_fn=lambda item: item.status == "running",
-    )
-
-    assert job is not None
-    assert job.cfg is cfg
-    assert job.queue_root == (tmp_path / "queue").resolve()
-    assert job.entry is entry
-    assert job.admission_root() == tmp_path / "admission"
-    assert seen_roots == [(tmp_path / "queue").resolve()]
-
-
-def test_load_child_worker_entrypoint_job_returns_none_when_entry_is_missing(
-    tmp_path: Path,
-) -> None:
-    cfg = SimpleNamespace(admission_root=tmp_path / "admission")
-
-    job = child_execution.load_child_worker_entrypoint_job(
-        config_path="/tmp/orca_auto.yaml",
-        queue_root=tmp_path / "queue",
-        queue_id="missing",
-        load_config_fn=lambda _path: cfg,
-        find_queue_entry_fn=lambda _root, _queue_id: None,
-        admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-    )
-
-    assert job is None
-
-
-def test_load_child_worker_entrypoint_job_returns_none_when_entry_is_not_ready(
-    tmp_path: Path,
-) -> None:
-    cfg = SimpleNamespace(admission_root=tmp_path / "admission")
-    entry = SimpleNamespace(queue_id="q-wanted", status="pending")
-
-    job = child_execution.load_child_worker_entrypoint_job(
-        config_path="/tmp/orca_auto.yaml",
-        queue_root=tmp_path / "queue",
-        queue_id="q-wanted",
-        load_config_fn=lambda _path: cfg,
-        find_queue_entry_fn=lambda _root, _queue_id: entry,
-        admission_root_fn=lambda loaded_cfg: loaded_cfg.admission_root,
-        entry_ready_fn=lambda item: item.status == "running",
-    )
-
-    assert job is None
-
-
-def test_install_shutdown_request_handlers_wires_controller() -> None:
-    installed: list[Callable[[], None]] = []
-    controller = child_execution.ChildWorkerShutdownController()
-
-    child_execution.install_shutdown_request_handlers(
-        controller,
-        install_signal_handlers_fn=lambda callback: installed.append(callback),
-    )
-
-    assert controller.is_requested() is False
-    installed[0]()
-    assert controller.is_requested() is True

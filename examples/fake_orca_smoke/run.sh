@@ -27,7 +27,7 @@ from orca_auto.cli import main as cli_main
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
-from orca_auto.orca.queue.worker import QueueWorker
+from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_report_json, load_state
 
 repo_root = Path(sys.argv[1]).resolve()
@@ -101,11 +101,11 @@ if len(matches) != 1:
 if matches[0].status != QueueStatus.PENDING:
     raise SystemExit(f"expected pending queue entry, got {matches[0].status}")
 
-worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
 worker.poll_interval_seconds = 0.01
 worker_rc = worker.run_once(idle_message=None, blocked_message=None)
 if worker_rc != 0:
-    raise SystemExit(f"QueueWorker.run_once returned {worker_rc}")
+    raise SystemExit(f"OrcaQueueWorker.run_once returned {worker_rc}")
 
 completed = [
     entry

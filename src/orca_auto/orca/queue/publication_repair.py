@@ -5,9 +5,9 @@ import stat
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from orca_auto.core.engines import entry_matches_engine_identity
-from orca_auto.core.engines.queue_worker import EngineQueueWorker
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue.enqueue_publication import repair_enqueue_publication_outcome
 from orca_auto.core.queue.publication import (
@@ -34,6 +34,9 @@ from .adapter import (
 )
 from .entries import queue_entry_id, queue_entry_is_retired_workflow_owned, queue_entry_reaction_dir
 from .worker_tracking import upsert_queued_job_record
+
+if TYPE_CHECKING:
+    from .worker import OrcaQueueWorker
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +264,7 @@ def repair_queue_publication(
     return True
 
 
-def repair_queue_publications(worker: EngineQueueWorker) -> bool:
+def repair_queue_publications(worker: OrcaQueueWorker) -> bool:
     repaired_all = True
     for queue_root in ENGINE_RUNTIME.queue_roots(worker.cfg):
         try:

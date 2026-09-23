@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.messaging import MessageChannel, build_channel
-from orca_auto.core.queue.engine.execution import coerce_resource_request
+from orca_auto.core.queue.resource_requests import coerce_resource_request
 from orca_auto.core.statuses import (
     STATUS_QUEUED,
     STATUS_RUNNING,

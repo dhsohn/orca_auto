@@ -19,10 +19,6 @@ from orca_auto.core.engine_catalog import (
     supervised_engine_entries,
 )
 from orca_auto.core.engines.registry import get_engine_definition
-from orca_auto.core.queue.worker.admission import (
-    engine_queue_worker_source,
-    reserve_engine_queue_worker_slot,
-)
 
 
 def _subparser(
@@ -95,53 +91,13 @@ def test_catalog_preserves_public_engine_and_routing_orders() -> None:
     assert engine_catalog()[0].task_kinds == ("orca_run_inp",)
 
 
-def test_every_catalog_engine_has_registry_supervision_and_admission_metadata(
-    tmp_path: Path,
-) -> None:
-    captured: list[dict[str, Any]] = []
-
-    def reserve_slot(root: str, limit: int, **kwargs: Any) -> str:
-        captured.append({"root": root, "limit": limit, **kwargs})
-        return "slot-1"
-
+def test_every_catalog_engine_has_registry_supervision_and_admission_metadata() -> None:
     for entry in engine_catalog():
-        captured.clear()
         assert get_engine_definition(entry.engine_id).engine == entry.engine_id
         assert cli_worker_specs._ENGINE_WORKER_MODULES[entry.engine_id] == entry.worker_module
         assert entry.engine_id in known_engine_ids()
-
-        assert engine_queue_worker_source(entry.engine_id) == entry.admission_source
-        cfg = type(
-            "Cfg",
-            (),
-            {
-                "runtime": type(
-                    "Runtime",
-                    (),
-                    {
-                        "allowed_root": str(tmp_path),
-                        "admission_root": str(tmp_path / ".admission"),
-                        "admission_limit": 2,
-                        "max_concurrent": 2,
-                        "resolved_admission_root": str(tmp_path / ".admission"),
-                        "resolved_admission_limit": 2,
-                    },
-                )()
-            },
-        )()
-
-        assert (
-            reserve_engine_queue_worker_slot(
-                cfg,
-                engine=entry.engine_id,
-                reserve_slot_fn=reserve_slot,
-            )
-            == "slot-1"
-        )
-        assert captured[0]["source"] == entry.admission_source
-        assert captured[0]["app_name"] == entry.app_id
-        assert ("engine_process_state" in captured[0]) is entry.managed_admission
-        assert captured[0].get("engine_launch_gated", False) is entry.engine_launch_gated
+        assert entry.admission_source
+        assert entry.app_id
 
 
 def test_orca_worker_reservation_uses_catalog_identity(
@@ -158,11 +114,18 @@ def test_orca_worker_reservation_uses_catalog_identity(
 
     monkeypatch.setattr(orca_worker, "reserve_slot", reserve_slot)
 
-    assert orca_worker._reserve_orca_worker_slot(tmp_path, 2) == "slot-1"
+    from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
+
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path), max_concurrent=2))
+    assert orca_worker._try_reserve_admission_slot(cfg) == "slot-1"
     orca_entry = next(entry for entry in engine_catalog() if entry.engine_id == "orca")
     assert captured[0]["source"] == orca_entry.admission_source
     assert captured[0]["app_name"] == orca_entry.app_id
     assert captured[0]["engine_launch_gated"] is True
+    assert captured[0]["engine_process_state"] == "idle"
+    assert captured[0]["state"] == "reserved"
+    assert captured[0]["root"] == Path(cfg.runtime.resolved_admission_root)
+    assert captured[0]["limit"] == cfg.runtime.resolved_admission_limit
 
 
 def test_every_catalog_engine_has_queue_filter_list_cancel_and_clear_coverage() -> None:

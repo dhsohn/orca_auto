@@ -3,7 +3,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from orca_auto.core.queue.processes import ManagedProcess
 
 if TYPE_CHECKING:
     from .replay import TerminalReplayWorkItem
@@ -14,7 +16,7 @@ class OrcaRunningJob:
     queue_root: Path
     queue_id: str
     reaction_dir: str
-    process: Any
+    process: ManagedProcess
     admission_token: str
     task_id: str | None = None
     started_at: float = field(default_factory=time.monotonic)

@@ -25,7 +25,7 @@ from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress
 from orca_auto.orca.parser import parse_orca_output
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
-from orca_auto.orca.queue.worker import QueueWorker
+from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.report.irc import collect_irc_report_data
 from orca_auto.orca.report.opt import collect_opt_report_data
 from orca_auto.orca.state_reading import (
@@ -166,7 +166,7 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert queued.status == QueueStatus.PENDING
     assert not counter_path.exists()
 
-    worker = QueueWorker(
+    worker = OrcaQueueWorker(
         load_config(str(config_path)),
         str(config_path),
         max_concurrent=1,
@@ -276,7 +276,7 @@ def test_orca_queue_worker_runs_fake_orca_in_dev_shm_and_publishes_attempt(
         )
 
         assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-        worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+        worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
         worker.poll_interval_seconds = 0.05
         assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -327,7 +327,9 @@ def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_genera
     selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
 
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-    first_worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    first_worker = OrcaQueueWorker(
+        load_config(str(config_path)), str(config_path), max_concurrent=1
+    )
     first_worker.poll_interval_seconds = 0.05
     assert first_worker.run_once(idle_message=None, blocked_message=None) == 0
     [first_entry] = list_queue(allowed_root)
@@ -347,7 +349,9 @@ def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_genera
     second_generation = Path(second_entry.metadata["execution_snapshot"]["execution_dir"])
     assert second_generation != first_generation
 
-    second_worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    second_worker = OrcaQueueWorker(
+        load_config(str(config_path)), str(config_path), max_concurrent=1
+    )
     second_worker.poll_interval_seconds = 0.05
     assert second_worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -401,7 +405,7 @@ def test_orca_worker_preflight_failure_publishes_generation_reports(
         bound_input.read_text(encoding="utf-8") + "# corrupt\n", encoding="utf-8"
     )
 
-    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -455,7 +459,7 @@ def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
     generation.mkdir()
     (generation / "sentinel").write_text("replacement", encoding="utf-8")
 
-    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -527,7 +531,7 @@ def test_orca_queue_worker_rejects_incomplete_or_conflicting_termination_evidenc
     assert queued.status == QueueStatus.PENDING
     assert not counter_path.exists()
 
-    worker = QueueWorker(
+    worker = OrcaQueueWorker(
         load_config(str(config_path)),
         str(config_path),
         max_concurrent=1,
@@ -623,7 +627,7 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     queued = _queue_entry_for_reaction(allowed_root, reaction_dir)
     assert queued.status == QueueStatus.PENDING
 
-    worker = QueueWorker(
+    worker = OrcaQueueWorker(
         load_config(str(config_path)),
         str(config_path),
         max_concurrent=1,
@@ -727,7 +731,7 @@ def test_real_orca_electronic_state_and_input_echo_acceptance_when_configured(
         encoding="utf-8",
     )
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -787,7 +791,7 @@ def test_real_orca_water_optimization_acceptance_when_configured(
         encoding="utf-8",
     )
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -864,7 +868,7 @@ def test_real_orca_ammonia_ts_irc_acceptance_when_configured(
         encoding="utf-8",
     )
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-    worker = QueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 

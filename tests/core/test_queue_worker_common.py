@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import subprocess
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,10 +13,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from orca_auto.core.queue import lifecycle as lifecycle_helpers
 from orca_auto.core.queue import processes as process_helpers
 from orca_auto.core.queue import worker as worker_common
 from orca_auto.core.queue.child import process as child_process_helpers
+from orca_auto.core.queue.dependencies import BackgroundJobProcessStarter, ChildQueueWorkerDeps
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -24,8 +24,13 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_PREPARING,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
 )
-from orca_auto.core.queue.worker import execution_dependencies as worker_dependency_helpers
+from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker import process as worker_process_helpers
+from orca_auto.core.queue.worker.models import (
+    BackgroundRunningJob,
+    ReservedQueueEntry,
+    ReserveStatus,
+)
 from tests.process_helpers import FakeManagedProcess, recording_killpg
 
 
@@ -42,7 +47,57 @@ def _cfg(**runtime_overrides: object) -> SimpleNamespace:
         "max_concurrent": 3,
     }
     runtime.update(runtime_overrides)
+    runtime.setdefault(
+        "resolved_admission_root", runtime["admission_root"] or runtime["allowed_root"]
+    )
+    runtime.setdefault(
+        "resolved_admission_limit", runtime["admission_limit"] or runtime["max_concurrent"]
+    )
     return SimpleNamespace(runtime=SimpleNamespace(**runtime))
+
+
+def _worker_deps(
+    *,
+    poll_interval_seconds: float = 1,
+    sleep: Callable[[float], None] = lambda _seconds: None,
+    start_background_job_process: BackgroundJobProcessStarter | None = None,
+) -> ChildQueueWorkerDeps[SimpleNamespace]:
+    return ChildQueueWorkerDeps(
+        poll_interval_seconds=poll_interval_seconds,
+        sleep=sleep,
+        release_slot=lambda _root, _token: None,
+        has_admission_capacity=lambda _cfg: True,
+        peek_next_entry=lambda _cfg, **_kwargs: None,
+        dequeue_next_entry=lambda _cfg, **_kwargs: None,
+        start_background_job_process=start_background_job_process
+        or (lambda **_kwargs: FakeManagedProcess()),
+        try_reserve_admission_slot=lambda _cfg: None,
+    )
+
+
+def _queue_entry(queue_id: str, task_id: str = "task-1") -> QueueEntry:
+    return QueueEntry(queue_id, "orca_auto_orca", task_id, "orca_run_inp", "orca")
+
+
+class _RecordingWorker(
+    worker_common.PidFileChildProcessQueueWorker[SimpleNamespace, BackgroundRunningJob]
+):
+    worker_pid_file_name = "engine.pid"
+
+    def __init__(
+        self, cfg: SimpleNamespace, calls: list[tuple[str, str]], *, fail_finalize: bool = False
+    ) -> None:
+        super().__init__(cfg, config_path="/tmp/config.yaml", max_concurrent=2, deps=_worker_deps())
+        self.calls = calls
+        self.fail_finalize = fail_finalize
+
+    def _finalize_completed_job(self, queue_id: str, job: BackgroundRunningJob, rc: int) -> None:
+        self.calls.append(("finalize", queue_id))
+        if self.fail_finalize:
+            raise RuntimeError("finalize failed once")
+
+    def _shutdown_running_job(self, queue_id: str, job: BackgroundRunningJob) -> None:
+        self.calls.append(("shutdown", queue_id))
 
 
 def _entry(
@@ -64,59 +119,6 @@ def _entry(
         cancel_requested=cancel_requested,
         metadata=entry_metadata,
     )
-
-
-def _process_lifecycle_hooks(
-    **overrides: Any,
-) -> lifecycle_helpers.EngineQueueProcessLifecycleHooks:
-    callbacks: dict[str, Any] = {
-        "queue_entry_id_fn": lambda entry: entry.queue_id,
-        "queue_entry_app_name_fn": lambda _entry: "app",
-        "queue_entry_task_id_fn": lambda entry: getattr(entry, "task_id", None),
-        "update_slot_metadata_fn": lambda *_args, **_kwargs: None,
-        "terminate_process_fn": lambda _proc: True,
-        "mark_failed_fn": lambda *_args, **_kwargs: None,
-        "upsert_running_job_record_fn": lambda *_args, **_kwargs: None,
-        "get_run_id_from_state_fn": lambda _reaction_dir, **_kwargs: None,
-        "get_cancel_requested_fn": lambda *_args, **_kwargs: False,
-        "mark_cancelled_fn": lambda *_args, **_kwargs: None,
-        "mark_completed_fn": lambda *_args, **_kwargs: None,
-        "upsert_terminal_job_record_fn": lambda *_args, **_kwargs: None,
-        "notify_terminal_job_from_state_fn": lambda *_args, **_kwargs: True,
-    }
-    callbacks.update(overrides)
-    return lifecycle_helpers.EngineQueueProcessLifecycleHooks(**callbacks)
-
-
-def test_worker_execution_dependency_container_prefers_overrides_and_builds_defaults_lazily() -> (
-    None
-):
-    @dataclass(frozen=True)
-    class Container:
-        a: str
-        b: str
-
-    calls: list[str] = []
-
-    def default_a() -> str:
-        calls.append("a")
-        return "default-a"
-
-    def default_b() -> str:
-        calls.append("b")
-        return "default-b"
-
-    container = worker_dependency_helpers.build_worker_execution_dependency_container(
-        Container,
-        {"a": "override-a", "b": None},
-        {"a": default_a, "b": default_b},
-    )
-
-    assert container == Container(
-        a="override-a",
-        b="default-b",
-    )
-    assert calls == ["b"]
 
 
 def test_resolve_admission_root_reads_the_runtime_property() -> None:
@@ -589,7 +591,10 @@ def test_peek_next_across_roots_defers_eligibility_to_the_single_root_dequeue() 
 
 
 def test_queue_entry_by_id_scans_queue_with_injected_lister(tmp_path: Path) -> None:
-    entries = [_entry("q-1"), _entry("q-2")]
+    entries = [
+        QueueEntry(queue_id=qid, app_name="app", task_id=qid, task_kind="task", engine="orca")
+        for qid in ("q-1", "q-2")
+    ]
 
     assert (
         worker_common.queue_entry_by_id(
@@ -664,128 +669,35 @@ def test_start_background_process_redirects_output_to_log_file(
     assert calls[0]["text"] is True
 
 
-def test_hooked_pidfile_child_worker_runs_engine_hooks(
+def test_pidfile_worker_reconciles_snapshots_and_finalizes_intent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, tuple[object, ...]]] = []
-    snapshot_reconcile_calls: list[tuple[Path, ...]] = []
-    cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
-
-    def record_started(
-        worker: object,
-        root: object,
-        entry: object,
-        process: object,
-        token: object,
-    ) -> bool:
-        calls.append(("started", (worker, root, entry, process, token)))
-        return True
-
-    deps = SimpleNamespace(
-        poll_interval_seconds=1,
-        time=SimpleNamespace(sleep=lambda _seconds: None),
-        admission_root=lambda _cfg: str(tmp_path / "admission"),
-        release_slot=lambda _root, _token: None,
-        reserve_dequeued_entry=lambda *args, **kwargs: ("idle", None),
-        dequeue_next_entry=lambda _cfg, **_kwargs: None,
-        start_background_job_process=lambda **_kwargs: None,
-        try_reserve_admission_slot=lambda _cfg: None,
-    )
-
-    hooks = worker_common.PidFileChildProcessQueueWorkerHooks(
-        handle_worker_start_error=lambda worker, root, entry, token, exc: calls.append(
-            ("start_error", (worker, root, entry, token, str(exc)))
-        ),
-        on_worker_process_started=record_started,
-        finalize_completed_job=lambda worker, queue_id, job, rc: calls.append(
-            ("finalize", (worker, queue_id, job, rc))
-        ),
-        shutdown_running_job=lambda worker, queue_id, job: calls.append(
-            ("shutdown", (worker, queue_id, job))
-        ),
-        reconcile_worker_state=lambda worker: calls.append(("reconcile", (worker,))),
-        before_shutdown_all=lambda worker, running_count: calls.append(
-            ("before_shutdown", (worker, running_count))
-        ),
-    )
-
-    worker = worker_common.HookedPidFileChildProcessQueueWorker(
-        cfg,
-        config_path="/tmp/config.yaml",
-        max_concurrent=1,
-        deps=deps,
-        hooks=hooks,
-        worker_pid_file_name="engine.pid",
-    )
-
-    def record_snapshot_reconcile(roots: tuple[Path, ...]) -> int:
-        snapshot_reconcile_calls.append(tuple(roots))
-        return 0
-
+    worker = _RecordingWorker(_cfg(allowed_root=str(tmp_path)), [])
+    reconciled: list[tuple[Path, ...]] = []
+    events: list[str] = []
     monkeypatch.setattr(
-        worker_process_helpers,
-        "snapshot_runtime_roots_for_cfg",
-        lambda _cfg: (tmp_path,),
+        worker_process_helpers, "snapshot_runtime_roots_for_cfg", lambda _cfg: (tmp_path,)
     )
     monkeypatch.setattr(
         worker_process_helpers,
         "reconcile_orphaned_snapshot_generations",
-        record_snapshot_reconcile,
+        lambda roots: _append_and_return(reconciled, roots, 0),
     )
-    finalized_entries: list[tuple[Path, object]] = []
-    started_entries: list[tuple[Path, object, str]] = []
     monkeypatch.setattr(
         worker_process_helpers,
         "finalize_queued_snapshot_intent",
-        lambda queue_root, queued_entry: finalized_entries.append((queue_root, queued_entry)),
+        lambda *_args: events.append("intent"),
     )
-
-    def record_start_job(
-        queue_root: Path,
-        queued_entry: object,
-        *,
-        admission_token: str,
-    ) -> bool:
-        started_entries.append((queue_root, queued_entry, admission_token))
-        return True
-
-    worker.__dict__["_start_job"] = record_start_job
-    entry = _entry("queue-1")
-    root = tmp_path / "queue"
-    process = SimpleNamespace(pid=1234)
-    job = SimpleNamespace()
-    reserved = SimpleNamespace(queue_root=root, entry=entry, admission_token="slot-reserved")
-
-    assert worker._start_reserved(reserved)
-    assert finalized_entries == [(root, entry)]
-    assert started_entries == [(root, entry, "slot-reserved")]
-
-    worker._handle_worker_start_error(root, entry, "slot-1", OSError("boom"))
-    assert worker._on_worker_process_started(
-        root,
-        entry,
-        process=process,
-        admission_token="slot-1",
+    monkeypatch.setattr(
+        worker, "_start_job", lambda *_args, **_kwargs: _append_and_return(events, "start", True)
     )
-    worker._finalize_completed_job("queue-1", job, 0)
-    worker._before_shutdown_all(2)
-    worker._shutdown_running_job("queue-1", job)
+    entry = _queue_entry("q-1")
+    assert worker._start_reserved(ReservedQueueEntry(tmp_path, entry, "slot"))
+    assert events == ["intent", "start"]
     worker._reconcile_worker_state()
     worker._reconcile_worker_state()
-
-    assert worker.worker_pid_file_name == "engine.pid"
-    assert [name for name, _args in calls] == [
-        "start_error",
-        "started",
-        "finalize",
-        "before_shutdown",
-        "shutdown",
-        "reconcile",
-        "reconcile",
-    ]
-    assert all(args[0] is worker for _name, args in calls)
-    assert snapshot_reconcile_calls == [(tmp_path,)]
+    assert reconciled == [(tmp_path,)]
 
 
 def test_child_process_worker_throttles_idle_state_reconciliation(
@@ -803,11 +715,7 @@ def test_child_process_worker_throttles_idle_state_reconciliation(
     worker = _Worker(
         _cfg(),
         config_path="/tmp/config.yaml",
-        deps=SimpleNamespace(
-            poll_interval_seconds=5.0,
-            time=SimpleNamespace(sleep=lambda seconds: sleep_calls.append(seconds)),
-            admission_root=lambda _cfg: "/tmp/admission",
-        ),
+        deps=_worker_deps(poll_interval_seconds=5.0, sleep=sleep_calls.append),
     )
 
     worker._before_run()
@@ -827,27 +735,13 @@ def test_shutdown_all_reaps_finished_job_before_requeuing(tmp_path: Path) -> Non
     # (which would needlessly re-run a completed job on the next worker start).
     cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
     calls: list[tuple[str, str]] = []
-    hooks = worker_common.PidFileChildProcessQueueWorkerHooks(
-        handle_worker_start_error=lambda *_args: None,
-        on_worker_process_started=lambda *_args: True,
-        finalize_completed_job=lambda _w, queue_id, _job, _rc: calls.append(("finalize", queue_id)),
-        shutdown_running_job=lambda _w, queue_id, _job: calls.append(("shutdown", queue_id)),
-        reconcile_worker_state=lambda _w: None,
+    worker = _RecordingWorker(cfg, calls, fail_finalize=False)
+    finished = BackgroundRunningJob(
+        tmp_path, _queue_entry("done"), FakeManagedProcess(poll_result=0), "slot-done"
     )
-    worker = worker_common.HookedPidFileChildProcessQueueWorker(
-        cfg,
-        config_path="/tmp/config.yaml",
-        max_concurrent=2,
-        deps=SimpleNamespace(
-            poll_interval_seconds=1,
-            time=SimpleNamespace(sleep=lambda _seconds: None),
-            admission_root=lambda _cfg: str(tmp_path / "admission"),
-            release_slot=lambda _root, _token: None,
-        ),
-        hooks=hooks,
+    still_running = BackgroundRunningJob(
+        tmp_path, _queue_entry("busy"), FakeManagedProcess(), "slot-busy"
     )
-    finished = SimpleNamespace(process=SimpleNamespace(poll=lambda: 0))
-    still_running = SimpleNamespace(process=SimpleNamespace(poll=lambda: None))
     worker._running = {"done": finished, "busy": still_running}
 
     worker._shutdown_all()
@@ -866,31 +760,13 @@ def test_shutdown_all_does_not_requeue_exited_job_after_finalize_failure(
     cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
     calls: list[tuple[str, str]] = []
 
-    def finalize(_worker: object, queue_id: str, _job: object, _rc: int) -> None:
-        calls.append(("finalize", queue_id))
-        raise RuntimeError("finalize failed once")
-
-    hooks = worker_common.PidFileChildProcessQueueWorkerHooks(
-        handle_worker_start_error=lambda *_args: None,
-        on_worker_process_started=lambda *_args: True,
-        finalize_completed_job=finalize,
-        shutdown_running_job=lambda _w, queue_id, _job: calls.append(("shutdown", queue_id)),
-        reconcile_worker_state=lambda _w: None,
+    worker = _RecordingWorker(cfg, calls, fail_finalize=True)
+    finished = BackgroundRunningJob(
+        tmp_path, _queue_entry("done"), FakeManagedProcess(poll_result=0), "slot-done"
     )
-    worker = worker_common.HookedPidFileChildProcessQueueWorker(
-        cfg,
-        config_path="/tmp/config.yaml",
-        max_concurrent=2,
-        deps=SimpleNamespace(
-            poll_interval_seconds=1,
-            time=SimpleNamespace(sleep=lambda _seconds: None),
-            admission_root=lambda _cfg: str(tmp_path / "admission"),
-            release_slot=lambda _root, _token: None,
-        ),
-        hooks=hooks,
+    still_running = BackgroundRunningJob(
+        tmp_path, _queue_entry("busy"), FakeManagedProcess(), "slot-busy"
     )
-    finished = SimpleNamespace(process=SimpleNamespace(poll=lambda: 0))
-    still_running = SimpleNamespace(process=SimpleNamespace(poll=lambda: None))
     worker._running = {"done": finished, "busy": still_running}
 
     worker._shutdown_all()
@@ -907,31 +783,7 @@ def test_pidfile_child_worker_run_once_returns_error_when_singleton_lock_held(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
-    deps = SimpleNamespace(
-        poll_interval_seconds=1,
-        time=SimpleNamespace(sleep=lambda _seconds: None),
-        admission_root=lambda _cfg: str(tmp_path / "admission"),
-        release_slot=lambda _root, _token: None,
-        reserve_dequeued_entry=lambda *args, **kwargs: ("idle", None),
-        dequeue_next_entry=lambda _cfg, **_kwargs: None,
-        start_background_job_process=lambda **_kwargs: None,
-        try_reserve_admission_slot=lambda _cfg: None,
-    )
-    hooks = worker_common.PidFileChildProcessQueueWorkerHooks(
-        handle_worker_start_error=lambda *_args: None,
-        on_worker_process_started=lambda *_args: True,
-        finalize_completed_job=lambda *_args: None,
-        shutdown_running_job=lambda *_args: None,
-        reconcile_worker_state=lambda _worker: None,
-    )
-    worker = worker_common.HookedPidFileChildProcessQueueWorker(
-        cfg,
-        config_path="/tmp/config.yaml",
-        max_concurrent=1,
-        deps=deps,
-        hooks=hooks,
-        worker_pid_file_name="engine.pid",
-    )
+    worker = _RecordingWorker(cfg, [])
     lock_calls: list[tuple[Path, float]] = []
 
     def locked_file_lock(path: Path, *, timeout_seconds: float) -> object:
@@ -977,29 +829,20 @@ def test_child_worker_rejected_attach_terminates_and_marks_start_error(tmp_path:
         ) -> None:
             start_errors.append((queue_root, admission_token, str(exc)))
 
-    class FakeProcess:
+    class FakeProcess(FakeManagedProcess):
         def terminate(self) -> None:
             nonlocal terminate_calls
             terminate_calls += 1
 
     process = FakeProcess()
-    deps = SimpleNamespace(
-        poll_interval_seconds=1,
-        time=SimpleNamespace(sleep=lambda _seconds: None),
-        admission_root=lambda _cfg: str(tmp_path / "admission"),
-        release_slot=lambda _root, _token: None,
-        reserve_dequeued_entry=lambda *args, **kwargs: ("idle", None),
-        dequeue_next_entry=lambda _cfg, **_kwargs: None,
-        start_background_job_process=lambda **_kwargs: process,
-        try_reserve_admission_slot=lambda _cfg: None,
-    )
+    deps = _worker_deps(start_background_job_process=lambda **_kwargs: process)
     worker = RejectingWorker(
         _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission")),
         config_path="/tmp/config.yaml",
         max_concurrent=1,
         deps=deps,
     )
-    entry = _entry("queue-reject")
+    entry = _queue_entry("queue-reject")
 
     assert not worker._start_job(tmp_path / "queue", entry, admission_token="slot-1")
     assert terminate_calls == 1
@@ -1009,7 +852,7 @@ def test_child_worker_rejected_attach_terminates_and_marks_start_error(tmp_path:
 
 def test_fill_worker_slots_starts_until_capacity_and_reports_processed() -> None:
     running: list[str] = []
-    reservations = iter(
+    reservations: Iterator[tuple[ReserveStatus, str | None]] = iter(
         [
             ("processed", "slot-1"),
             ("processed", "slot-2"),
@@ -1058,7 +901,7 @@ def test_fill_worker_slots_respects_max_new_jobs() -> None:
 
 
 def test_fill_worker_slots_does_not_count_handled_start_failure() -> None:
-    reservations = iter(
+    reservations: Iterator[tuple[ReserveStatus, str | None]] = iter(
         [
             ("processed", "slot-1"),
             ("processed", "slot-2"),
@@ -1066,7 +909,7 @@ def test_fill_worker_slots_does_not_count_handled_start_failure() -> None:
     )
     reserve_calls = 0
 
-    def reserve_next() -> tuple[str, str | None]:
+    def reserve_next() -> tuple[ReserveStatus, str | None]:
         nonlocal reserve_calls
         reserve_calls += 1
         return next(reservations)
@@ -1315,34 +1158,6 @@ def test_terminate_process_group_returns_true_after_forced_exit() -> None:
     assert proc.wait_calls == pytest.approx([1, 2], rel=1e-4)
 
 
-def test_shutdown_running_process_job_keeps_running_state_when_process_survives(
-    tmp_path: Path,
-) -> None:
-    worker = SimpleNamespace(
-        _release_admission_slot=lambda token: released.append(token),
-    )
-    job = SimpleNamespace(
-        process=object(),
-        queue_root=tmp_path / "queue",
-        admission_token="slot-1",
-    )
-    requeued: list[tuple[Path, str]] = []
-    released: list[str] = []
-
-    lifecycle_helpers.shutdown_running_process_job(
-        worker,
-        "queue-1",
-        job,
-        hooks=lifecycle_helpers.EngineQueueProcessShutdownHooks(
-            terminate_process_fn=lambda _process: False,
-            requeue_running_entry_fn=lambda root, queue_id: requeued.append((root, queue_id)),
-        ),
-    )
-
-    assert requeued == []
-    assert released == []
-
-
 def test_install_shutdown_signal_handlers_invokes_callback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1457,76 +1272,8 @@ def test_reconcile_orphaned_child_queue_entries_cancels_or_requeues_only_orphans
     assert recovery_pending == ["orphaned"]
 
 
-def test_finalize_child_exit_with_policy_preserves_root_and_uses_recovery_entry(
-    tmp_path: Path,
-) -> None:
-    cfg = object()
-    current = _entry("current", status="running")
-    job = SimpleNamespace(
-        queue_root=tmp_path / "queue",
-        entry=_entry("job-entry", status="running"),
-        admission_token="slot-1",
-    )
-    requeued: list[tuple[Path, str, dict[str, object]]] = []
-    recovery: list[tuple[object, str, str]] = []
-    released: list[str] = []
-
-    lifecycle_helpers.finalize_child_exit_with_policy(
-        cfg,
-        job,
-        policy=lifecycle_helpers.ChildExitPolicy(
-            recovery_entry_fn=lambda _current, current_job: current_job.entry,
-        ),
-        find_queue_entry_fn=lambda _root, _queue_id: current,
-        mark_cancelled_fn=lambda *args, **kwargs: None,
-        requeue_running_entry_fn=lambda root, queue_id, **kwargs: _append_and_return(
-            requeued,
-            (root, queue_id, kwargs),
-            current,
-        ),
-        mark_recovery_pending_fn=lambda cfg_obj, entry, *, reason: recovery.append(
-            (cfg_obj, entry.queue_id, reason)
-        ),
-        release_admission_slot_fn=released.append,
-    )
-
-    assert requeued == [
-        (tmp_path / "queue", "current", {"expected_entry": current}),
-    ]
-    assert recovery == [(cfg, "job-entry", "worker_shutdown")]
-    assert released == ["slot-1"]
-
-
-def test_finalize_child_exit_skips_replacement_generation(tmp_path: Path) -> None:
-    job_entry = _entry("q-same", status="running")
-    job_entry.task_id = "task-a"
-    replacement = _entry("q-same", status="running", cancel_requested=True)
-    replacement.task_id = "task-b"
-    job = SimpleNamespace(
-        queue_root=tmp_path / "queue",
-        entry=job_entry,
-        admission_token="slot-a",
-    )
-    mutations: list[str] = []
-    released: list[str] = []
-
-    lifecycle_helpers.finalize_child_exit_with_policy(
-        object(),
-        job,
-        policy=lifecycle_helpers.ChildExitPolicy(),
-        find_queue_entry_fn=lambda _root, _queue_id: replacement,
-        mark_cancelled_fn=lambda *_args, **_kwargs: mutations.append("cancelled"),
-        requeue_running_entry_fn=lambda *_args, **_kwargs: mutations.append("requeued"),
-        mark_recovery_pending_fn=lambda *_args, **_kwargs: mutations.append("recovery"),
-        release_admission_slot_fn=released.append,
-    )
-
-    assert mutations == []
-    assert released == ["slot-a"]
-
-
 def test_start_error_mark_is_fenced_to_selected_entry(tmp_path: Path) -> None:
-    selected = SimpleNamespace(queue_id="q-same", task_id="task-a")
+    selected = _queue_entry("q-same", "task-a")
     replacement = SimpleNamespace(queue_id="q-same", task_id="task-b")
     durable = [replacement]
     released: list[str] = []
@@ -1557,372 +1304,6 @@ def test_start_error_mark_is_fenced_to_selected_entry(tmp_path: Path) -> None:
 
     assert durable == [replacement]
     assert released == ["slot-a"]
-
-
-def test_terminal_mark_result_preserves_premark_generation_context(
-    tmp_path: Path,
-) -> None:
-    queue_root = tmp_path / "queue"
-    current = _entry("q-1", status="running")
-    current.task_id = "task-current"
-    current_entry: list[SimpleNamespace | None] = [current]
-    run_id_calls: list[tuple[str, dict[str, object]]] = []
-    failed: list[tuple[Path, str, dict[str, object]]] = []
-    worker = SimpleNamespace(allowed_root=queue_root)
-    job = SimpleNamespace(
-        queue_root=queue_root,
-        reaction_dir=str(tmp_path / "rxn"),
-        task_id="task-current",
-    )
-
-    def get_run_id(reaction_dir: str, **kwargs: object) -> str:
-        run_id_calls.append((reaction_dir, kwargs))
-        return "run-current"
-
-    def mark_failed(root: Path, queue_id: str, **kwargs: object) -> None:
-        failed.append((root, queue_id, kwargs))
-        current_entry[0] = None
-
-    result = lifecycle_helpers.mark_terminal_process_queue_entry_with_result(
-        worker,
-        "q-1",
-        job,
-        rc=17,
-        hooks=_process_lifecycle_hooks(
-            find_queue_entry_fn=lambda _root, _queue_id: current_entry[0],
-            get_run_id_from_state_fn=get_run_id,
-            mark_failed_fn=mark_failed,
-        ),
-    )
-
-    assert result.marked is True
-    assert result.status == lifecycle_helpers.QueueStatus.FAILED.value
-    assert result.expected_job_id == "task-current"
-    assert result.current_entry is current
-    assert result.queue_root == queue_root.resolve()
-    assert result.run_id == "run-current"
-    assert run_id_calls == [(str(tmp_path / "rxn"), {"expected_job_id": "task-current"})]
-    assert failed == [
-        (
-            queue_root.resolve(),
-            "q-1",
-            {
-                "error": "exit_code=17",
-                "run_id": "run-current",
-                "expected_entry": current,
-                "expected_task_id": "task-current",
-            },
-        )
-    ]
-
-
-def test_terminal_mark_result_preserves_skipped_entry_identity(
-    tmp_path: Path,
-) -> None:
-    queue_root = tmp_path / "queue"
-    current = _entry("q-1", status="pending")
-    current.task_id = "task-current"
-    worker = SimpleNamespace(allowed_root=queue_root)
-    job = SimpleNamespace(
-        queue_root=queue_root,
-        reaction_dir=str(tmp_path / "rxn"),
-        task_id="task-current",
-    )
-    hooks = _process_lifecycle_hooks(
-        find_queue_entry_fn=lambda _root, _queue_id: current,
-    )
-
-    result = lifecycle_helpers.mark_terminal_process_queue_entry_with_result(
-        worker,
-        "q-1",
-        job,
-        rc=0,
-        hooks=hooks,
-    )
-
-    assert result.marked is False
-    assert result.status is None
-    assert result.expected_job_id == "task-current"
-    assert result.current_entry is current
-    assert result.queue_root == queue_root.resolve()
-
-
-def test_terminal_mark_result_reports_failed_queue_mutation(tmp_path: Path) -> None:
-    queue_root = tmp_path / "queue"
-    current = _entry("q-1", status="running")
-    current.task_id = "task-current"
-    worker = SimpleNamespace(allowed_root=queue_root)
-    job = SimpleNamespace(
-        queue_root=queue_root,
-        reaction_dir=str(tmp_path / "rxn"),
-        task_id="task-current",
-    )
-
-    result = lifecycle_helpers.mark_terminal_process_queue_entry_with_result(
-        worker,
-        "q-1",
-        job,
-        rc=0,
-        hooks=_process_lifecycle_hooks(
-            find_queue_entry_fn=lambda _root, _queue_id: current,
-            get_run_id_from_state_fn=lambda *_args, **_kwargs: "run-current",
-            mark_completed_fn=lambda *_args, **_kwargs: False,
-        ),
-    )
-
-    assert result.marked is False
-    assert result.status is None
-    assert result.expected_job_id == "task-current"
-    assert result.current_entry is current
-    assert result.queue_root == queue_root.resolve()
-    assert result.run_id == "run-current"
-
-
-@pytest.mark.parametrize(
-    ("release_admission_slot", "expected_released"),
-    [(True, ["slot-1"]), (False, [])],
-)
-def test_cancel_running_process_job_can_defer_admission_release(
-    tmp_path: Path,
-    *,
-    release_admission_slot: bool,
-    expected_released: list[str],
-) -> None:
-    queue_root = tmp_path / "queue"
-    released: list[str] = []
-    cancelled: list[tuple[Path, str]] = []
-    worker = SimpleNamespace(
-        allowed_root=queue_root,
-        _release_admission_slot=released.append,
-    )
-    job = SimpleNamespace(
-        queue_root=queue_root,
-        process=SimpleNamespace(poll=lambda: 0),
-        admission_token="slot-1",
-    )
-
-    cancelled_job = lifecycle_helpers.cancel_running_process_job(
-        worker,
-        "q-1",
-        job,
-        hooks=_process_lifecycle_hooks(
-            mark_cancelled_fn=lambda root, queue_id: cancelled.append((root, queue_id)),
-        ),
-        release_admission_slot=release_admission_slot,
-    )
-
-    assert cancelled_job is True
-    assert cancelled == [(queue_root.resolve(), "q-1")]
-    assert released == expected_released
-
-
-def test_cancel_running_process_job_deferred_release_retains_slot_when_mark_fails(
-    tmp_path: Path,
-) -> None:
-    queue_root = tmp_path / "queue"
-    released: list[str] = []
-    cancelled: list[tuple[Path, str]] = []
-    worker = SimpleNamespace(
-        allowed_root=queue_root,
-        _release_admission_slot=released.append,
-    )
-    job = SimpleNamespace(
-        queue_root=queue_root,
-        process=SimpleNamespace(poll=lambda: 0),
-        admission_token="slot-1",
-    )
-
-    def mark_cancelled(root: Path, queue_id: str) -> bool:
-        cancelled.append((root, queue_id))
-        return False
-
-    cancelled_job = lifecycle_helpers.cancel_running_process_job(
-        worker,
-        "q-1",
-        job,
-        hooks=_process_lifecycle_hooks(
-            mark_cancelled_fn=mark_cancelled,
-        ),
-        release_admission_slot=False,
-    )
-
-    assert cancelled_job is False
-    assert cancelled == [(queue_root.resolve(), "q-1")]
-    assert released == []
-
-
-def test_cancel_running_process_job_default_releases_when_terminal_mark_raises(
-    tmp_path: Path,
-) -> None:
-    queue_root = tmp_path / "queue"
-    released: list[str] = []
-    worker = SimpleNamespace(
-        allowed_root=queue_root,
-        _release_admission_slot=released.append,
-    )
-    job = SimpleNamespace(
-        queue_root=queue_root,
-        process=SimpleNamespace(poll=lambda: 0),
-        admission_token="slot-1",
-    )
-
-    with pytest.raises(RuntimeError, match="queue write failed"):
-        lifecycle_helpers.cancel_running_process_job(
-            worker,
-            "q-1",
-            job,
-            hooks=_process_lifecycle_hooks(
-                mark_cancelled_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                    RuntimeError("queue write failed")
-                ),
-            ),
-        )
-
-    assert released == ["slot-1"]
-
-
-def test_reconcile_orphaned_running_with_policy_preserves_roots_and_reason(
-    tmp_path: Path,
-) -> None:
-    queue_root = tmp_path / "queue"
-    entry = _entry("orphan", status="running")
-    requeued: list[tuple[Path, str]] = []
-    recovery: list[tuple[str, str]] = []
-
-    lifecycle_helpers.reconcile_orphaned_running_with_policy(
-        _cfg(),
-        policy=lifecycle_helpers.OrphanedRunningPolicy(
-            recovery_reason="custom_recovery",
-        ),
-        admission_root="/tmp/admission",
-        queue_roots_fn=lambda _cfg: (queue_root,),
-        list_queue_fn=lambda _root: [entry],
-        list_slots_fn=lambda _root: [],
-        reconcile_stale_slots_fn=lambda _root: None,
-        mark_cancelled_fn=lambda *args, **kwargs: None,
-        requeue_running_entry_fn=lambda root, queue_id, **_kwargs: _append_and_return(
-            requeued,
-            (root, queue_id),
-            entry,
-        ),
-        mark_recovery_pending_fn=lambda _cfg, current, *, reason: recovery.append(
-            (current.queue_id, reason)
-        ),
-    )
-
-    assert requeued == [(queue_root, "orphan")]
-    assert recovery == [("orphan", "custom_recovery")]
-
-
-def test_reconcile_orphaned_process_entries_passes_policy_kwargs(tmp_path: Path) -> None:
-    queue_root = tmp_path / "queue"
-    calls: list[tuple[str, object]] = []
-    worker = SimpleNamespace(
-        cfg=object(),
-        admission_root="/tmp/admission",
-    )
-
-    lifecycle_helpers.reconcile_orphaned_process_entries(
-        worker,
-        hooks=lifecycle_helpers.EngineQueueProcessReconcileHooks(
-            queue_roots_fn=lambda _cfg: (queue_root,),
-            reconcile_stale_slots_fn=lambda admission_root: calls.append(("stale", admission_root)),
-            reconcile_orphaned_running_entries_fn=lambda root, **kwargs: calls.append(
-                ("orphans", (root, kwargs))
-            ),
-            reconcile_orphaned_running_entries_kwargs={"ignore_worker_pid": True},
-        ),
-    )
-
-    assert calls == [
-        ("stale", "/tmp/admission"),
-        ("orphans", (queue_root, {"ignore_worker_pid": True})),
-    ]
-
-
-def test_run_terminal_process_side_effects_uses_standard_hooks() -> None:
-    cfg = object()
-    job = SimpleNamespace(reaction_dir="/tmp/job", task_id="task-1")
-    worker = SimpleNamespace(cfg=cfg)
-    calls: list[tuple[str, object, object]] = []
-
-    def notify_terminal_job_from_state(
-        cfg_obj: object,
-        reaction_dir: str,
-        **kwargs: object,
-    ) -> bool:
-        calls.append(("notify", cfg_obj, (reaction_dir, kwargs)))
-        return True
-
-    lifecycle_helpers.run_terminal_process_side_effects(
-        worker,
-        "queue-1",
-        job,
-        hooks=lifecycle_helpers.EngineQueueTerminalSideEffectHooks(
-            upsert_terminal_job_record_fn=lambda cfg_obj, reaction_dir, **kwargs: calls.append(
-                ("upsert", cfg_obj, (reaction_dir, kwargs))
-            ),
-            notify_terminal_job_from_state_fn=notify_terminal_job_from_state,
-        ),
-    )
-
-    assert calls == [
-        (
-            "upsert",
-            cfg,
-            (
-                "/tmp/job",
-                {
-                    "fallback_job_id": "task-1",
-                    "expected_job_id": "task-1",
-                },
-            ),
-        ),
-        ("notify", cfg, ("/tmp/job", {"expected_job_id": "task-1"})),
-    ]
-
-
-def test_record_terminal_process_side_effects_uses_generation_override(
-    tmp_path: Path,
-) -> None:
-    queue_root = tmp_path / "queue"
-    calls: list[tuple[str, dict[str, object]]] = []
-    worker = SimpleNamespace(cfg=object(), allowed_root=queue_root)
-    job = SimpleNamespace(
-        queue_root=queue_root,
-        reaction_dir=str(tmp_path / "rxn"),
-        task_id="task-job",
-    )
-
-    def notify(*_args: object, **kwargs: object) -> bool:
-        calls.append(("notify", kwargs))
-        return True
-
-    lifecycle_helpers.record_terminal_process_side_effects(
-        worker,
-        "q-1",
-        job,
-        rc=1,
-        hooks=_process_lifecycle_hooks(
-            find_queue_entry_fn=lambda _root, _queue_id: _entry("replacement"),
-            upsert_terminal_job_record_fn=lambda _cfg, _reaction_dir, **kwargs: calls.append(
-                ("upsert", kwargs)
-            ),
-            notify_terminal_job_from_state_fn=notify,
-        ),
-        expected_job_id="task-current",
-    )
-
-    assert calls == [
-        (
-            "upsert",
-            {
-                "fallback_job_id": "task-current",
-                "expected_job_id": "task-current",
-            },
-        ),
-        ("notify", {"expected_job_id": "task-current"}),
-    ]
 
 
 def test_shutdown_child_process_with_grace_retains_live_child_after_deadline(

@@ -24,7 +24,7 @@ from orca_auto.core.admission import (
     set_slot_engine_process,
 )
 from orca_auto.core.config import DiscordConfig, MessengerConfig
-from orca_auto.core.queue.lifecycle import TerminalProcessQueueMarkResult
+from orca_auto.core.queue.processes import terminate_process_group as _terminate_process
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
@@ -43,11 +43,11 @@ from orca_auto.orca.queue.adapter import (
     mark_failed,
     queue_entry_reaction_dir,
 )
+from orca_auto.orca.queue.models import OrcaRunningJob as _RunningJob
+from orca_auto.orca.queue.replay import TerminalQueueMarkResult
 from orca_auto.orca.queue.worker import (
     DEFAULT_MAX_CONCURRENT,
-    QueueWorker,
-    _RunningJob,
-    _terminate_process,
+    OrcaQueueWorker,
 )
 from orca_auto.orca.queue.worker_tracking import (
     notify_terminal_job_from_state as _notify_terminal_job_from_state,
@@ -170,13 +170,13 @@ class TestQueueWorkerInit(unittest.TestCase):
     def test_max_concurrent_floor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(Path(tmp) / "config.yaml"), max_concurrent=0)
+            worker = OrcaQueueWorker(cfg, str(Path(tmp) / "config.yaml"), max_concurrent=0)
             self.assertEqual(worker.max_concurrent, 1)
 
     def test_default_init(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(Path(tmp) / "config.yaml"))
+            worker = OrcaQueueWorker(cfg, str(Path(tmp) / "config.yaml"))
             self.assertEqual(worker.max_concurrent, DEFAULT_MAX_CONCURRENT)
             self.assertFalse(worker._shutdown_requested)
             self.assertEqual(len(worker._running), 0)
@@ -194,7 +194,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self._tmpdir.name)
         self.cfg = _make_cfg(self._tmpdir.name)
-        self.worker = QueueWorker(self.cfg, str(self.root / "config.yaml"), max_concurrent=2)
+        self.worker = OrcaQueueWorker(self.cfg, str(self.root / "config.yaml"), max_concurrent=2)
 
     def tearDown(self) -> None:
         self._signal_guard.__exit__(None, None, None)
@@ -478,7 +478,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertIsNotNone(token)
         dequeue_next(self.root)
         self.assertTrue(
-            replay_mod.requeue_running_entry(
+            queue_worker_mod.requeue_running_entry(
                 self.root,
                 entry.queue_id,
                 admission_deferral_reason="engine scratch cannot guarantee RAM headroom",
@@ -555,8 +555,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
             ) as recover,
             patch.object(
                 replay_mod,
-                "mark_terminal_process_queue_entry_with_result",
-                wraps=replay_mod.mark_terminal_process_queue_entry_with_result,
+                "mark_terminal_queue_entry",
+                wraps=replay_mod.mark_terminal_queue_entry,
             ) as mark_terminal,
             patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
             patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
@@ -629,7 +629,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(marker["task_id"], "task-b")
         self.assertEqual(marker["observed_state"]["job_id"], "task-a")
 
-        restarted = QueueWorker(
+        restarted = OrcaQueueWorker(
             self.cfg,
             str(self.root / "config.yaml"),
             max_concurrent=2,
@@ -804,7 +804,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             selected_inp="",
             error="",
         )
-        replay_mod.get_replay_state(self.worker).pending_replays[item.key] = item
+        self.worker.replay_state.pending_replays[item.key] = item
 
         with patch("orca_auto.orca.queue.worker.start_background_process") as start:
             started = MagicMock()
@@ -871,7 +871,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         withheld_dir.mkdir()
         alias = self.root / "mol_symlink_alias"
         alias.symlink_to(withheld_dir, target_is_directory=True)
-        state = replay_mod.get_replay_state(self.worker)
+        state = self.worker.replay_state
         state.admission_withheld_keys = frozenset({str(withheld_dir.resolve())})
 
         def row(reaction_dir: str) -> QueueEntry:
@@ -893,7 +893,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertFalse(replay_mod.entry_waits_for_terminal_replay(self.worker, row("")))
 
     def test_row_whose_directory_cannot_be_resolved_is_withheld_while_any_is(self) -> None:
-        state = replay_mod.get_replay_state(self.worker)
+        state = self.worker.replay_state
         state.admission_withheld_keys = frozenset({str(self.root / "mol_withheld")})
         candidate = QueueEntry(
             queue_id="q_unresolvable",
@@ -928,7 +928,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             selected_inp="",
             error="",
         )
-        replay_mod.get_replay_state(self.worker).pending_replays[item.key] = item
+        self.worker.replay_state.pending_replays[item.key] = item
 
         self.assertEqual(
             replay_mod.unresolved_terminal_reaction_keys(self.worker),
@@ -995,7 +995,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             selected_inp="",
             error="",
         )
-        state = replay_mod.get_replay_state(self.worker)
+        state = self.worker.replay_state
         state.pending_replays[item.key] = item
 
         with self.assertLogs("orca_auto.orca.queue.worker", level="INFO") as logs:
@@ -1059,9 +1059,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
             events.append("recover")
             return True
 
-        real_mark = replay_mod.mark_terminal_process_queue_entry_with_result
+        real_mark = replay_mod.mark_terminal_queue_entry
 
-        def mark(*args: Any, **kwargs: Any) -> TerminalProcessQueueMarkResult:
+        def mark(*args: Any, **kwargs: Any) -> TerminalQueueMarkResult:
             current = get_slot(self.root, token or "")
             assert current is not None
             assert current.engine_process_state == "idle"
@@ -1079,7 +1079,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             patch.object(replay_mod, "recover_slot_engine_process", side_effect=recover),
             patch.object(
                 replay_mod,
-                "mark_terminal_process_queue_entry_with_result",
+                "mark_terminal_queue_entry",
                 side_effect=mark,
             ),
             patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
@@ -1113,7 +1113,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 "selected_inp": str(selected_inp),
             },
         )
-        result = TerminalProcessQueueMarkResult(
+        result = TerminalQueueMarkResult(
             marked=True,
             status=STATUS_FAILED,
             expected_job_id="task-b",
@@ -1131,7 +1131,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
         events: list[str] = []
 
-        def mark(*_args: object, **_kwargs: object) -> TerminalProcessQueueMarkResult:
+        def mark(*_args: object, **_kwargs: object) -> TerminalQueueMarkResult:
             events.append("mark")
             return result
 
@@ -1143,7 +1143,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             ),
             patch.object(
                 replay_mod,
-                "mark_terminal_process_queue_entry_with_result",
+                "mark_terminal_queue_entry",
                 side_effect=mark,
             ),
             patch.object(
@@ -1228,7 +1228,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
     def test_finalize_child_exit_recovers_once_and_releases_on_benign_mark_noop(
         self,
     ) -> None:
-        result = TerminalProcessQueueMarkResult(
+        result = TerminalQueueMarkResult(
             marked=False,
             status=None,
             expected_job_id="task-moved",
@@ -1247,7 +1247,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             patch.object(replay_mod, "recover_slot_engine_process") as recover,
             patch.object(
                 replay_mod,
-                "mark_terminal_process_queue_entry_with_result",
+                "mark_terminal_queue_entry",
                 return_value=result,
             ),
             patch.object(
@@ -1369,7 +1369,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 discord=DiscordConfig(bot_token="token", default_channel_id="123")
             ),
         )
-        worker = QueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
+        worker = OrcaQueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
         rxn = self.root / "mol_terminal_notify"
         rxn.mkdir()
         _write_completed_run_state(rxn)
@@ -1430,7 +1430,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 discord=DiscordConfig(bot_token="token", default_channel_id="123")
             ),
         )
-        worker = QueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
+        worker = OrcaQueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
         rxn = self.root / "mol_terminal_notify_failed"
         rxn.mkdir()
         _write_completed_run_state(rxn)
@@ -1815,7 +1815,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             running,
             token,
             error="worker start failed",
-            mark_failed_fn=queue_worker_mod.mark_failed,
+            mark_failed_fn=mark_failed,
         )
 
         [durable] = list_queue(self.root)
@@ -1874,11 +1874,6 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 side_effect=lambda *_args: events.append("recover"),
             ),
             patch.object(
-                cancellation_mod,
-                "cancel_running_process_job",
-                wraps=cancellation_mod.cancel_running_process_job,
-            ) as cancel_core,
-            patch.object(
                 replay_mod,
                 "_run_terminal_replay_side_effects",
                 side_effect=finalize,
@@ -1897,7 +1892,6 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 )
             )
 
-        self.assertFalse(cancel_core.call_args.kwargs["release_admission_slot"])
         self.assertEqual(events, ["terminate", "recover", "finalize", "release"])
         self.assertEqual(active_slot_count(self.root), 0)
         replay_item = finalize_cancelled.call_args.args[1]
@@ -2339,7 +2333,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
 
-    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_all_with_running(self, mock_requeue: MagicMock) -> None:
         rxn = self.root / "mol_shut"
         rxn.mkdir()
@@ -2396,7 +2390,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 "orca_auto.orca.queue.replay.terminate_process",
                 side_effect=terminate_process,
             ),
-            patch("orca_auto.orca.queue.replay.requeue_running_entry") as mock_requeue,
+            patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
         ):
             self.worker._shutdown_all()
 
@@ -2448,7 +2442,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 "orca_auto.orca.queue.replay.terminate_process",
                 side_effect=terminate_process,
             ),
-            patch("orca_auto.orca.queue.replay.requeue_running_entry") as mock_requeue,
+            patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
         ):
             self.worker._shutdown_all()
 
@@ -2495,7 +2489,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 "orca_auto.orca.queue.replay.terminate_process",
                 side_effect=terminate_process,
             ),
-            patch("orca_auto.orca.queue.replay.requeue_running_entry") as mock_requeue,
+            patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
         ):
             self.worker._shutdown_all()
 
@@ -2525,7 +2519,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         def terminate_process(process: MagicMock) -> bool:
             # The child honors the stop by requeueing its own row first.
-            replay_mod.requeue_running_entry(self.root, entry.queue_id)
+            queue_worker_mod.requeue_running_entry(self.root, entry.queue_id)
             process.poll.return_value = 0
             return True
 
@@ -2544,7 +2538,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         queue_entries = {e.queue_id: e for e in list_queue(self.root)}
         self.assertEqual(queue_entries[entry.queue_id].status.value, "pending")
 
-    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_continues_with_the_next_job_when_finalizing_one_fails(
         self, mock_requeue: MagicMock
     ) -> None:
@@ -2613,7 +2607,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         # The finished job's row is left for the next worker start, not requeued.
         self.assertEqual(queue_entries[done_entry.queue_id].status.value, "running")
 
-    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_continues_with_the_next_job_when_terminating_one_fails(
         self, mock_requeue: MagicMock
     ) -> None:
@@ -2679,7 +2673,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_requeue.assert_called_once()
         self.assertEqual(mock_requeue.call_args.args, (self.root, live_entry.queue_id))
 
-    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_requeues_a_child_that_died_handling_the_stop(
         self, mock_requeue: MagicMock
     ) -> None:
@@ -2718,7 +2712,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         queue_entries = {e.queue_id: e for e in list_queue(self.root)}
         self.assertEqual(queue_entries[entry.queue_id].status.value, "running")
 
-    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_tolerates_a_failed_cancel_read_and_still_stops_the_child(
         self, mock_requeue: MagicMock
     ) -> None:
@@ -2797,7 +2791,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             sorted([broken_entry.queue_id, live_entry.queue_id]),
         )
 
-    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_finalizes_a_child_whose_row_is_already_terminal(
         self, mock_requeue: MagicMock
     ) -> None:
@@ -2896,7 +2890,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertFalse(queue_entries[entry.queue_id].cancel_requested)
         self.assertIsNotNone(terminal_replay_marker_from_entry(queue_entries[entry.queue_id]))
 
-    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_ignores_a_terminal_state_left_by_an_earlier_task(
         self, mock_requeue: MagicMock
     ) -> None:
@@ -2933,7 +2927,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         mock_requeue.assert_called_once()
         self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
 
-    @patch("orca_auto.orca.queue.replay.requeue_running_entry", return_value=True)
+    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
     def test_shutdown_requeues_a_child_killed_mid_run(self, mock_requeue: MagicMock) -> None:
         # A child killed by a signal (SIGKILL after the grace window, or a death
         # before its stop handler was installed) exits negative and keeps the
@@ -2964,12 +2958,17 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
 
     @patch("orca_auto.core.queue.worker.signal.signal")
-    @patch("orca_auto.orca.queue.worker.time.sleep", side_effect=KeyboardInterrupt)
     def test_run_keyboard_interrupt(
         self,
-        mock_sleep: MagicMock,
         mock_signal: MagicMock,
     ) -> None:
+        mock_sleep = MagicMock(side_effect=KeyboardInterrupt)
+        self.worker = OrcaQueueWorker(
+            self.cfg,
+            str(self.root / "config.yaml"),
+            max_concurrent=2,
+            deps=replace(self.worker.deps, sleep=mock_sleep),
+        )
         rc = self.worker.run()
         self.assertEqual(rc, 0)
         self.assertGreaterEqual(mock_signal.call_count, 2)
@@ -2977,12 +2976,18 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertFalse(self.worker._pid_file_path().exists())
 
     @patch("orca_auto.core.queue.worker.signal.signal")
-    @patch("orca_auto.orca.queue.worker.time.sleep")
     def test_run_shutdown_flag(
         self,
-        mock_sleep: MagicMock,
         mock_signal: MagicMock,
     ) -> None:
+        mock_sleep = MagicMock()
+        self.worker = OrcaQueueWorker(
+            self.cfg,
+            str(self.root / "config.yaml"),
+            max_concurrent=2,
+            deps=replace(self.worker.deps, sleep=mock_sleep),
+        )
+
         def set_shutdown(*a):
             self.worker._shutdown_requested = True
 
@@ -3041,7 +3046,7 @@ class TestFillSlots(unittest.TestCase):
             cfg = _make_cfg(tmp)
             original_max_concurrent = cfg.runtime.max_concurrent
 
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
 
             self.assertEqual(cfg.runtime.max_concurrent, original_max_concurrent)
             self.assertIsNot(worker.cfg, cfg)
@@ -3057,7 +3062,7 @@ class TestFillSlots(unittest.TestCase):
             cfg.runtime.admission_limit = 5
             original_max_concurrent = cfg.runtime.max_concurrent
 
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
 
             self.assertIs(worker.cfg, cfg)
             self.assertEqual(cfg.runtime.max_concurrent, original_max_concurrent)
@@ -3068,7 +3073,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
 
             rxn = root / "mol_A"
             rxn.mkdir()
@@ -3092,7 +3097,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
             rxn = root / "mol_requeued"
             rxn.mkdir()
             entry = enqueue(root, str(rxn), metadata=_current_orca_queue_metadata(rxn))
@@ -3111,7 +3116,7 @@ class TestFillSlots(unittest.TestCase):
                 mock_start_background_process.side_effect = [first_proc, behind_proc]
                 worker._fill_slots()
                 tracked = worker._running[entry.queue_id]
-                self.assertTrue(replay_mod.requeue_running_entry(root, entry.queue_id))
+                self.assertTrue(queue_worker_mod.requeue_running_entry(root, entry.queue_id))
                 behind_entry = enqueue(
                     root, str(behind), metadata=_current_orca_queue_metadata(behind)
                 )
@@ -3131,7 +3136,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
             rxn = root / "mol_requeued_only"
             rxn.mkdir()
             entry = enqueue(root, str(rxn), metadata=_current_orca_queue_metadata(rxn))
@@ -3144,7 +3149,7 @@ class TestFillSlots(unittest.TestCase):
                 proc.poll.return_value = None
                 mock_start_background_process.return_value = proc
                 worker._fill_slots()
-                self.assertTrue(replay_mod.requeue_running_entry(root, entry.queue_id))
+                self.assertTrue(queue_worker_mod.requeue_running_entry(root, entry.queue_id))
                 admission_file = root / "admission_slots.json"
                 before = admission_file.stat()
 
@@ -3162,7 +3167,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
 
             rxn = root / "mol_identity"
             rxn.mkdir()
@@ -3193,7 +3198,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
 
             rxn = root / "mol_task_identity"
             rxn.mkdir()
@@ -3238,7 +3243,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
 
             for name in ("a", "b"):
                 d = root / name
@@ -3258,7 +3263,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=3)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=3)
 
             for name in ("p1", "p2", "p3", "p4"):
                 reaction_dir = root / name
@@ -3299,7 +3304,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
 
             first_dir = root / "first"
             second_dir = root / "second"
@@ -3366,7 +3371,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
 
             queued = root / "queued_only"
             queued.mkdir()
@@ -3399,7 +3404,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            worker = QueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
+            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
 
             active_dir = root / "already_running"
             token = reserve_slot(

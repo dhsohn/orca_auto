@@ -5,13 +5,15 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
+from orca_auto.core.config import ScratchConfig
 from orca_auto.orca import execution as run_inp_execution
+from orca_auto.orca.config import AppConfig, PathsConfig
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
@@ -71,25 +73,17 @@ def _execute(
     monkeypatch.setattr(run_inp_execution, "acquire_run_lock", passthrough)
     monkeypatch.setattr(run_inp_execution, "_admission_context", passthrough)
     monkeypatch.setattr(run_inp_execution, "notification_callbacks", lambda _cfg: (None, None))
-    context = cast(
-        RunExecutionContext,
-        SimpleNamespace(
-            reaction_dir=reaction_dir,
-            selected_inp=inp,
-            admission_root=None,
-            reservation_token=None,
-            admission_app_name=None,
-            admission_task_id="",
-            cfg=SimpleNamespace(
-                paths=SimpleNamespace(orca_executable="/bin/true"),
-                scratch=SimpleNamespace(enabled=False),
-            ),
-        ),
+    context = RunExecutionContext(
+        reaction_dir=reaction_dir,
+        selected_inp=inp,
+        admission_root=reaction_dir.parent / ".admission",
+        reservation_token=None,
+        admission_app_name=None,
+        admission_task_id="",
+        cfg=AppConfig(paths=PathsConfig(orca_executable="/bin/true"), scratch=ScratchConfig()),
     )
     return run_inp_execution.execute_locked_run(
-        SimpleNamespace(force=False),
-        context,
-        runner_cls=_RunnerMustNotLaunch,
+        replace(context, force=False), runner_cls=_RunnerMustNotLaunch
     )
 
 

@@ -4,24 +4,24 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from orca_auto.core.config import CommonResourceConfig
 from orca_auto.core.engine_scratch import scratch_provenance_from_exception
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import worker_execution as worker_job
+from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
     orca_execution_provenance,
 )
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
-from orca_auto.orca.worker_execution import execute_run_job
 
 
 def _bound_orca_metadata(
@@ -56,36 +56,6 @@ def _bound_orca_metadata(
     }
 
 
-@patch("orca_auto.orca.worker_execution.execute_orca_run", return_value=7)
-def test_execute_run_job_builds_run_inp_execution_request(
-    mock_execute: MagicMock,
-    tmp_path: Path,
-) -> None:
-    reaction_dir = tmp_path / "rxn"
-    selected_inp = reaction_dir / "20260714-224054-959479f2" / "rxn.inp"
-    rc = execute_run_job(
-        "/tmp/config.yaml",
-        str(reaction_dir),
-        selected_inp=selected_inp,
-        force=True,
-        reservation_token="slot_123",
-        admission_app_name="orca_auto_orca",
-        admission_task_id="task_123",
-    )
-
-    assert rc == 7
-    args = mock_execute.call_args.args[0]
-    assert args.config == "/tmp/config.yaml"
-    assert args.reaction_dir == str(reaction_dir)
-    assert args.force is True
-    assert mock_execute.call_args.kwargs["reservation_token"] == "slot_123"
-    assert mock_execute.call_args.kwargs["admission_app_name"] == "orca_auto_orca"
-    assert mock_execute.call_args.kwargs["admission_task_id"] == "task_123"
-    assert mock_execute.call_args.kwargs["reaction_dir"] == reaction_dir.resolve()
-    assert mock_execute.call_args.kwargs["selected_inp"] == selected_inp.resolve()
-    assert mock_execute.call_args.kwargs["cfg"] is None
-
-
 def test_build_worker_child_command_uses_queue_identity(tmp_path: Path) -> None:
     command = worker_job.build_worker_child_command(
         config_path="/tmp/config.yaml",
@@ -105,42 +75,16 @@ def test_build_worker_child_command_uses_queue_identity(tmp_path: Path) -> None:
     assert "--admission-root" not in command
 
 
-def test_orca_worker_child_spec_requires_running_complete_identity() -> None:
-    ready = worker_job._WORKER_CHILD_RUN_SPEC.entry_ready_fn
-    assert ready is not None
-    base = {
-        "queue_id": "queue-1",
-        "app_name": "orca_auto_orca",
-        "task_id": "task-1",
-        "task_kind": "orca_run_inp",
-        "engine": "orca",
-        "status": QueueStatus.RUNNING,
-        "metadata": {},
-    }
-
-    assert ready(SimpleNamespace(**base))
-    assert not ready(SimpleNamespace(**{**base, "status": QueueStatus.PENDING}))
-    assert not ready(SimpleNamespace(**{**base, "engine": "xtb"}))
-    assert not ready(SimpleNamespace(**{**base, "task_kind": "orca_unknown"}))
-    assert not ready(SimpleNamespace(**{**base, "queue_id": ""}))
-
-
 def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     queue_root = tmp_path / "queue"
     reaction_dir = queue_root / "rxn"
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(
-            allowed_root=str(queue_root),
-            admission_root=str(tmp_path / "admission"),
-            admission_limit=1,
-            max_concurrent=1,
-            resolved_admission_root=str(tmp_path / "admission"),
-            resolved_admission_limit=1,
-        ),
-        resources=CommonResourceConfig(),
+    cfg = AppConfig(
+        runtime=OrcaRuntimeConfig(
+            allowed_root=str(queue_root), admission_root=str(tmp_path / "admission")
+        )
     )
     entry = QueueEntry(
         queue_id="queue-1",
@@ -157,12 +101,12 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     monkeypatch.setattr(worker_job, "_queue_entry_by_id", lambda _root, _queue_id: entry)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
 
-    def fake_execute_run_job(*args: Any, **kwargs: Any) -> int:
+    def fake_execute_orca_run(*args: Any, **kwargs: Any) -> int:
         calls["args"] = args
         calls["kwargs"] = kwargs
         return 5
 
-    monkeypatch.setattr(worker_job, "execute_run_job", fake_execute_run_job)
+    monkeypatch.setattr(worker_job, "execute_orca_run", fake_execute_orca_run)
 
     rc = worker_job.run_worker_child_job(
         config_path="/tmp/config.yaml",
@@ -173,10 +117,12 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     )
 
     assert rc == 5
-    assert calls["args"] == ("/tmp/config.yaml", str(reaction_dir))
+    (execution,) = calls["args"]
+    assert isinstance(execution, RunExecutionContext)
+    assert execution.reaction_dir == reaction_dir.resolve()
     runner_cls = calls["kwargs"].pop("runner_cls")
-    bound_cfg = calls["kwargs"].pop("cfg")
-    execution_provenance = calls["kwargs"].pop("execution_provenance")
+    bound_cfg = execution.cfg
+    execution_provenance = execution.execution_provenance
     assert issubclass(runner_cls, OrcaRunner)
     assert bound_cfg.resources.max_cores_per_task == 1
     assert bound_cfg.resources.max_memory_gb_per_task == 1
@@ -187,15 +133,14 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
         == entry.metadata["execution_snapshot"]["executable_identities"]["orca"]
     )
     assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
-    assert calls["kwargs"] == {
-        "force": True,
-        "reservation_token": "slot-1",
-        "admission_app_name": "orca_auto_orca",
-        "admission_task_id": "task-1",
-        "queue_id": entry.queue_id,
-        "queue_generation": queue_entry_generation_token(entry),
-        "selected_inp": entry.metadata["selected_inp"],
-    }
+    assert calls["kwargs"] == {}
+    assert execution.force is True
+    assert execution.reservation_token == "slot-1"
+    assert execution.admission_app_name == "orca_auto_orca"
+    assert execution.admission_task_id == "task-1"
+    assert execution.queue_id == entry.queue_id
+    assert execution.queue_generation == queue_entry_generation_token(entry)
+    assert str(execution.selected_inp) == entry.metadata["selected_inp"]
     state = new_state(reaction_dir, Path(entry.metadata["selected_inp"]))
     save_state(reaction_dir, state)
     with patch.object(
@@ -257,13 +202,12 @@ def test_orca_worker_rejects_snapshotless_persisted_generation(tmp_path: Path) -
             "resource_request": {"max_cores": 1, "max_memory_gb": 1},
         },
     )
-    cfg = SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(queue_root)))
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(queue_root)))
 
     with pytest.raises(ValueError, match="drain or resubmit"):
         worker_job._build_execution_context(
             cfg,
             entry,
-            worker_config_path="/tmp/config.yaml",
             admission_token="slot-snapshotless",
         )
 
@@ -274,10 +218,7 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
 ) -> None:
     queue_root = tmp_path / "queue"
     reaction_dir = queue_root / "rxn"
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(allowed_root=str(queue_root)),
-        resources=CommonResourceConfig(),
-    )
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(queue_root)))
     entry = QueueEntry(
         queue_id="queue-1",
         app_name="orca_auto_orca",
@@ -289,18 +230,17 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
     )
     calls: dict[str, Any] = {}
 
-    def fake_execute_run_job(*args: Any, **kwargs: Any) -> int:
+    def fake_execute_orca_run(*args: Any, **kwargs: Any) -> int:
         calls["args"] = args
         calls["kwargs"] = kwargs
         return 4
 
-    monkeypatch.setattr(worker_job, "execute_run_job", fake_execute_run_job)
+    monkeypatch.setattr(worker_job, "execute_orca_run", fake_execute_orca_run)
 
     outcome = worker_job.process_dequeued_entry(
         cfg,
         entry,
         queue_root=queue_root,
-        worker_config_path="/tmp/config.yaml",
         admission_token="slot-1",
         shutdown_requested=lambda: False,
     )
@@ -308,26 +248,27 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
     assert outcome.exit_code == 4
     assert outcome.reaction_dir == str(reaction_dir)
     assert outcome.entry is entry
-    assert calls["args"] == ("/tmp/config.yaml", str(reaction_dir))
+    (execution,) = calls["args"]
+    assert isinstance(execution, RunExecutionContext)
+    assert execution.reaction_dir == reaction_dir.resolve()
     runner_cls = calls["kwargs"].pop("runner_cls")
-    bound_cfg = calls["kwargs"].pop("cfg")
-    execution_provenance = calls["kwargs"].pop("execution_provenance")
+    bound_cfg = execution.cfg
+    execution_provenance = execution.execution_provenance
     assert issubclass(runner_cls, OrcaRunner)
     assert bound_cfg.resources.max_cores_per_task == 1
     assert bound_cfg.resources.max_memory_gb_per_task == 1
     assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
-    assert calls["kwargs"] == {
-        "force": True,
-        "reservation_token": "slot-1",
-        "admission_app_name": "orca_auto_orca",
-        "admission_task_id": "task-1",
-        "queue_id": entry.queue_id,
-        "queue_generation": queue_entry_generation_token(entry),
-        "selected_inp": entry.metadata["selected_inp"],
-    }
+    assert calls["kwargs"] == {}
+    assert execution.force is True
+    assert execution.reservation_token == "slot-1"
+    assert execution.admission_app_name == "orca_auto_orca"
+    assert execution.admission_task_id == "task-1"
+    assert execution.queue_id == entry.queue_id
+    assert execution.queue_generation == queue_entry_generation_token(entry)
+    assert str(execution.selected_inp) == entry.metadata["selected_inp"]
 
 
-def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
+def test_run_worker_child_job_finds_real_queue_entry_and_preserves_exit_code(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -344,28 +285,20 @@ def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
     )
     running = dequeue_next(queue_root)
     assert running is not None
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(
-            allowed_root=str(queue_root),
-            admission_root=str(admission_root),
-            admission_limit=1,
-            max_concurrent=1,
-            resolved_admission_root=str(admission_root),
-            resolved_admission_limit=1,
-        ),
-        resources=CommonResourceConfig(),
+    cfg = AppConfig(
+        runtime=OrcaRuntimeConfig(allowed_root=str(queue_root), admission_root=str(admission_root))
     )
     calls: dict[str, Any] = {}
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
 
-    def fake_execute_run_job(*args: Any, **kwargs: Any) -> int:
+    def fake_execute_orca_run(*args: Any, **kwargs: Any) -> int:
         calls["args"] = args
         calls["kwargs"] = kwargs
         return 8
 
-    monkeypatch.setattr(worker_job, "execute_run_job", fake_execute_run_job)
+    monkeypatch.setattr(worker_job, "execute_orca_run", fake_execute_orca_run)
 
     rc = worker_job.run_worker_child_job(
         config_path="/tmp/config.yaml",
@@ -376,12 +309,13 @@ def test_run_worker_child_job_finds_real_queue_entry_and_releases_slot(
     )
 
     assert rc == 8
-    assert calls["args"] == ("/tmp/config.yaml", str(rxn))
-    assert calls["kwargs"]["force"] is True
-    assert calls["kwargs"]["reservation_token"] == "slot-real"
-    assert calls["kwargs"]["admission_app_name"] == "orca_auto_orca"
-    assert calls["kwargs"]["admission_task_id"] == "task-real"
-    assert calls["kwargs"]["selected_inp"] == entry.metadata["selected_inp"]
+    (execution,) = calls["args"]
+    assert execution.reaction_dir == rxn.resolve()
+    assert execution.force is True
+    assert execution.reservation_token == "slot-real"
+    assert execution.admission_app_name == "orca_auto_orca"
+    assert execution.admission_task_id == "task-real"
+    assert str(execution.selected_inp) == entry.metadata["selected_inp"]
 
 
 def test_run_worker_child_job_requeues_on_worker_shutdown(
@@ -401,23 +335,15 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
     )
     running = dequeue_next(queue_root)
     assert running is not None
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(
-            allowed_root=str(queue_root),
-            admission_root=str(admission_root),
-            admission_limit=1,
-            max_concurrent=1,
-            resolved_admission_root=str(admission_root),
-            resolved_admission_limit=1,
-        ),
-        resources=CommonResourceConfig(),
+    cfg = AppConfig(
+        runtime=OrcaRuntimeConfig(allowed_root=str(queue_root), admission_root=str(admission_root))
     )
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
     monkeypatch.setattr(
         worker_job,
-        "execute_run_job",
+        "execute_orca_run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(WorkerShutdownInterrupt),
     )
 
@@ -436,21 +362,14 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
     assert updated.started_at == ""
 
 
-def test_run_worker_child_job_releases_slot_when_entry_not_running(
+def test_run_worker_child_job_refuses_entry_that_is_not_running(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     queue_root = tmp_path / "queue"
     admission_root = tmp_path / "admission"
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(
-            allowed_root=str(queue_root),
-            admission_root=str(admission_root),
-            admission_limit=1,
-            max_concurrent=1,
-            resolved_admission_root=str(admission_root),
-            resolved_admission_limit=1,
-        )
+    cfg = AppConfig(
+        runtime=OrcaRuntimeConfig(allowed_root=str(queue_root), admission_root=str(admission_root))
     )
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
@@ -469,7 +388,7 @@ def test_run_worker_child_job_releases_slot_when_entry_not_running(
     )
     monkeypatch.setattr(
         worker_job,
-        "execute_run_job",
+        "execute_orca_run",
         lambda *_args, **_kwargs: pytest.fail("entry should not execute"),
     )
 

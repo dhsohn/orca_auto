@@ -135,7 +135,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
     if existing_cursor:
-        replay_mod.get_replay_state(worker).reconcile_statuses = {
+        worker.replay_state.reconcile_statuses = {
             (str(tmp_path.resolve()), "other-queue"): STATUS_RUNNING
         }
 
@@ -151,7 +151,8 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(
             replay_mod,
             "record_failed_run_state",
@@ -185,7 +186,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
     clear_marker.assert_not_called()
     key = (str(tmp_path.resolve()), entry.queue_id)
     assert _reconcile_statuses(worker)[key] == terminal_status.value
-    assert replay_mod.get_replay_state(worker).pending_replays == {}
+    assert worker.replay_state.pending_replays == {}
 
 
 def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
@@ -224,7 +225,8 @@ def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(
             replay_mod,
             "record_failed_run_state",
@@ -337,7 +339,8 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(
             worker_tracking_mod,
             "upsert_terminal_job_record",
@@ -528,7 +531,7 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
     clear_marker.assert_not_called()
     key = (str(tmp_path.resolve()), entry.queue_id)
     assert _reconcile_statuses(worker)[key] == STATUS_FAILED
-    assert replay_mod.get_replay_state(worker).pending_replays == {}
+    assert worker.replay_state.pending_replays == {}
 
 
 def test_terminal_replay_with_empty_reaction_dir_never_resolves_workspace() -> None:
@@ -589,7 +592,7 @@ def test_terminal_replay_completes_when_the_notification_fails(tmp_path: Path) -
         assert notify.call_count == 1
         key = (str(tmp_path.resolve()), entry.queue_id)
         assert _reconcile_statuses(worker)[key] == "completed"
-        assert replay_mod.get_replay_state(worker).pending_replays == {}
+        assert worker.replay_state.pending_replays == {}
         _run_terminal_replay(worker, tmp_path, entry)
 
     assert notify.call_count == 1
@@ -630,7 +633,7 @@ def test_terminal_replay_completes_when_the_notifier_raises(tmp_path: Path) -> N
         assert notify.call_count == 1
         key = (str(tmp_path.resolve()), entry.queue_id)
         assert _reconcile_statuses(worker)[key] == "completed"
-        assert replay_mod.get_replay_state(worker).pending_replays == {}
+        assert worker.replay_state.pending_replays == {}
         _run_terminal_replay(worker, tmp_path, entry)
 
     assert notify.call_count == 1
@@ -820,7 +823,8 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
@@ -892,9 +896,9 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
     entries = [(root_a, active_a), (root_b, failed_b)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    replay_mod.get_replay_state(worker).generation_owners = {reaction_key: owner_b}
-    replay_mod.get_replay_state(worker).generation_owner_active = {reaction_key: True}
-    replay_mod.get_replay_state(worker).reconcile_statuses = {
+    worker.replay_state.generation_owners = {reaction_key: owner_b}
+    worker.replay_state.generation_owner_active = {reaction_key: True}
+    worker.replay_state.reconcile_statuses = {
         owner_a: STATUS_RUNNING,
         owner_b: STATUS_RUNNING,
     }
@@ -911,15 +915,16 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(replay_mod, "record_failed_run_state") as record_failed,
         patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
         replay_mod.reconcile_worker_state(worker)
 
-    assert replay_mod.get_replay_state(worker).generation_owners[reaction_key] == owner_a
-    assert replay_mod.get_replay_state(worker).generation_owner_active[reaction_key] is True
+    assert worker.replay_state.generation_owners[reaction_key] == owner_a
+    assert worker.replay_state.generation_owner_active[reaction_key] is True
     record_failed.assert_not_called()
     upsert.assert_not_called()
     notify.assert_not_called()
@@ -964,7 +969,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     entries = [(old_root, old_cancelled), (new_root, new_cancelled)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    replay_mod.get_replay_state(worker).reconcile_statuses = {
+    worker.replay_state.reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
     }
 
@@ -980,7 +985,8 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1002,7 +1008,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     assert record_cancelled.call_args.kwargs["selected_inp"] == ""
     assert record_cancelled.call_args.kwargs["observed_state"] is not None
     reaction_key = str(reaction_dir.resolve())
-    assert replay_mod.get_replay_state(worker).generation_owners[reaction_key] == (
+    assert worker.replay_state.generation_owners[reaction_key] == (
         str(new_root.resolve()),
         new_cancelled.queue_id,
     )
@@ -1036,7 +1042,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     entries = [(root_a, cancelled_a), (root_b, cancelled_b)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    replay_mod.get_replay_state(worker).reconcile_statuses = {
+    worker.replay_state.reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
     }
 
@@ -1052,7 +1058,8 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1085,7 +1092,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    replay_mod.get_replay_state(worker).reconcile_statuses = {
+    worker.replay_state.reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
     }
 
@@ -1101,7 +1108,8 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1120,7 +1128,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
         ) as notify,
     ):
         replay_mod.reconcile_worker_state(worker)
-        pending = replay_mod.get_replay_state(worker).pending_replays
+        pending = worker.replay_state.pending_replays
         assert len(pending) == 1
 
         replay_mod.reconcile_worker_state(worker)
@@ -1133,7 +1141,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
         expected_job_id=entry.task_id,
         expected_run_id="run-cancelled",
     )
-    assert replay_mod.get_replay_state(worker).pending_replays == {}
+    assert worker.replay_state.pending_replays == {}
 
 
 def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
@@ -1145,7 +1153,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    replay_mod.get_replay_state(worker).reconcile_statuses = {
+    worker.replay_state.reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
     }
 
@@ -1161,7 +1169,8 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1180,7 +1189,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
         ) as notify,
     ):
         replay_mod.reconcile_worker_state(worker)
-        pending = replay_mod.get_replay_state(worker).pending_replays
+        pending = worker.replay_state.pending_replays
         assert len(pending) == 1
         assert not next(iter(pending.values())).state_prepared
 
@@ -1200,7 +1209,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
         expected_job_id=entry.task_id,
         expected_run_id="run-cancelled",
     )
-    assert replay_mod.get_replay_state(worker).pending_replays == {}
+    assert worker.replay_state.pending_replays == {}
 
 
 def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remains(
@@ -1239,7 +1248,7 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
     ):
         _run_terminal_replay(worker, tmp_path, running)
         _run_terminal_replay(worker, tmp_path, cancelled)
-        pending = replay_mod.get_replay_state(worker).pending_replays
+        pending = worker.replay_state.pending_replays
         assert len(pending) == 1
         assert not next(iter(pending.values())).state_prepared
 
@@ -1258,8 +1267,8 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
         expected_job_id=cancelled.task_id,
         expected_run_id="run-current",
     )
-    assert replay_mod.get_replay_state(worker).pending_replays == {}
-    assert replay_mod.get_replay_state(worker).generation_owners[str(reaction_dir.resolve())] == (
+    assert worker.replay_state.pending_replays == {}
+    assert worker.replay_state.generation_owners[str(reaction_dir.resolve())] == (
         str(tmp_path.resolve()),
         cancelled.queue_id,
     )
@@ -1292,7 +1301,7 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
     ):
         _run_terminal_replay(worker, tmp_path, running)
         _run_terminal_replay(worker, tmp_path, cancelled)
-        pending = replay_mod.get_replay_state(worker).pending_replays
+        pending = worker.replay_state.pending_replays
         assert len(pending) == 1
         assert next(iter(pending.values())).state_prepared
 
@@ -1305,7 +1314,7 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
     record_cancelled.assert_called_once()
     upsert.assert_called_once()
     notify.assert_not_called()
-    assert replay_mod.get_replay_state(worker).pending_replays == {}
+    assert worker.replay_state.pending_replays == {}
     key = (str(tmp_path.resolve()), cancelled.queue_id)
     assert _reconcile_statuses(worker)[key] == STATUS_CANCELLED
     written = load_state(reaction_dir)
@@ -1363,7 +1372,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
     record_cancelled.assert_not_called()
     upsert.assert_not_called()
     notify.assert_not_called()
-    assert replay_mod.get_replay_state(worker).pending_replays == {}
+    assert worker.replay_state.pending_replays == {}
     written = load_state(reaction_dir)
     assert written is not None
     assert written["job_id"] == "task-b"
@@ -1394,7 +1403,7 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
     new_entries = [(new_root, new_running)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
     worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-    replay_mod.get_replay_state(worker).reconcile_statuses = {
+    worker.replay_state.reconcile_statuses = {
         (str(old_root.resolve()), old_cancelled.queue_id): STATUS_RUNNING
     }
 
@@ -1410,7 +1419,8 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
         patch.object(
             replay_mod,
             "record_cancelled_run_state",
@@ -1425,15 +1435,15 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
         replay_mod.reconcile_worker_state(worker)
-        assert len(replay_mod.get_replay_state(worker).pending_replays) == 1
+        assert len(worker.replay_state.pending_replays) == 1
 
         replay_mod.reconcile_worker_state(worker)
 
     record_cancelled.assert_called_once()
     upsert.assert_called_once()
     notify.assert_not_called()
-    assert replay_mod.get_replay_state(worker).pending_replays == {}
-    assert replay_mod.get_replay_state(worker).generation_owners[str(reaction_dir.resolve())] == (
+    assert worker.replay_state.pending_replays == {}
+    assert worker.replay_state.generation_owners[str(reaction_dir.resolve())] == (
         str(new_root.resolve()),
         new_running.queue_id,
     )

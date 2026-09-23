@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from orca_auto.core import engine_scratch as scratch_mod
-from orca_auto.core.config import CommonResourceConfig
+from orca_auto.core.config import CommonResourceConfig, ScratchConfig
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
     EngineScratchWorkspace,
@@ -28,6 +29,7 @@ from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import peek_next_across_roots
 from orca_auto.orca import execution as run_inp_execution
 from orca_auto.orca import worker_execution as worker_job
+from orca_auto.orca.config import AppConfig, PathsConfig
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
     orca_execution_started_evidence,
@@ -157,7 +159,7 @@ def _run_child_with(
         worker_job, "load_config", lambda _path: _child_cfg(queue_root, tmp_path / "admission")
     )
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
-    monkeypatch.setattr(worker_job, "execute_run_job", execute)
+    monkeypatch.setattr(worker_job, "execute_orca_run", execute)
     return worker_job.run_worker_child_job(
         config_path="/tmp/config.yaml",
         queue_root=queue_root,
@@ -395,20 +397,17 @@ def _scratch_run(
         lambda _cfg: (notifications.append, notifications.append),
     )
     _ManagedRunner.launches = []
-    context = cast(
-        RunExecutionContext,
-        SimpleNamespace(
-            reaction_dir=reaction_dir,
-            selected_inp=inp,
-            admission_root=None,
-            reservation_token=None,
-            admission_app_name=None,
-            admission_task_id="",
-            cfg=SimpleNamespace(
-                paths=SimpleNamespace(orca_executable="/bin/true"),
-                scratch=SimpleNamespace(enabled=True, root=str(shm / "orca_auto"), min_free_gb=1),
-                resources=SimpleNamespace(max_memory_gb_per_task=1),
-            ),
+    context = RunExecutionContext(
+        reaction_dir=reaction_dir,
+        selected_inp=inp,
+        admission_root=reaction_dir.parent / ".admission",
+        reservation_token=None,
+        admission_app_name=None,
+        admission_task_id="",
+        cfg=AppConfig(
+            paths=PathsConfig(orca_executable="/bin/true"),
+            scratch=ScratchConfig(root=str(shm / "orca_auto"), min_free_gb=1),
+            resources=CommonResourceConfig(max_memory_gb_per_task=1),
         ),
     )
     return reaction_dir, shm / "orca_auto", notifications, context
@@ -425,7 +424,7 @@ def test_capacity_refusal_before_launch_writes_no_state_and_sends_no_notificatio
 
     with pytest.raises(EngineScratchCapacityError, match="RAM headroom"):
         run_inp_execution.execute_locked_run(
-            SimpleNamespace(force=False), context, runner_cls=_ManagedRunner
+            replace(context, force=False), runner_cls=_ManagedRunner
         )
 
     assert _generation_listing(reaction_dir) == listing_before
@@ -442,10 +441,9 @@ def test_execute_orca_run_does_not_turn_the_refusal_into_an_ordinary_failure(
     _reaction_dir, _root, _notifications, context = _scratch_run(
         monkeypatch, tmp_path, available_memory_bytes=1
     )
-    monkeypatch.setattr(run_inp_execution, "resolve_execution_context", lambda *_a, **_k: context)
 
     with pytest.raises(EngineScratchCapacityError):
-        run_inp_execution.execute_orca_run(SimpleNamespace(force=False), runner_cls=_ManagedRunner)
+        run_inp_execution.execute_orca_run(context, runner_cls=_ManagedRunner)
 
 
 def test_admitted_run_launches_in_the_workspace_it_reserved_before_writing_state(
@@ -465,7 +463,7 @@ def test_admitted_run_launches_in_the_workspace_it_reserved_before_writing_state
     monkeypatch.setattr(EngineScratchWorkspace, "create", classmethod(counting_create))
 
     exit_code = run_inp_execution.execute_locked_run(
-        SimpleNamespace(force=False), context, runner_cls=_ManagedRunner
+        replace(context, force=False), runner_cls=_ManagedRunner
     )
 
     assert exit_code == 0
@@ -494,7 +492,7 @@ def test_reserved_workspace_is_removed_when_the_run_fails_before_launch(
 
     with pytest.raises(OSError, match="unreadable"):
         run_inp_execution.execute_locked_run(
-            SimpleNamespace(force=False), context, runner_cls=_ManagedRunner
+            replace(context, force=False), runner_cls=_ManagedRunner
         )
 
     assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
@@ -543,7 +541,7 @@ def test_capacity_refusal_after_the_run_started_is_a_failed_attempt_not_a_deferr
             raise EngineScratchCapacityError(_REFUSAL)
 
     exit_code = run_inp_execution.execute_locked_run(
-        SimpleNamespace(force=False), context, runner_cls=RefusedAtLaunch
+        replace(context, force=False), runner_cls=RefusedAtLaunch
     )
 
     assert exit_code == 1
@@ -565,7 +563,7 @@ def test_unsafe_scratch_root_still_fails_the_attempt_with_its_state_and_notifica
     (scratch_root / "attempt-unknown").mkdir()  # no manifest: ownership cannot be verified
 
     exit_code = run_inp_execution.execute_locked_run(
-        SimpleNamespace(force=False), context, runner_cls=_ManagedRunner
+        replace(context, force=False), runner_cls=_ManagedRunner
     )
 
     assert exit_code == 1
@@ -585,7 +583,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     tmp_path: Path,
 ) -> None:
     from orca_auto.core.admission import list_slots
-    from orca_auto.core.queue.worker.admission import reserve_engine_queue_worker_slot
+    from orca_auto.orca.queue.worker import _try_reserve_admission_slot
 
     shm = tmp_path / "shm"
     shm.mkdir()
@@ -622,7 +620,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
 
     def run_child() -> int:
-        token = reserve_engine_queue_worker_slot(cfg, engine="orca")
+        token = _try_reserve_admission_slot(cfg)
         assert token is not None
         return worker_job.run_worker_child_job(
             config_path="/tmp/config.yaml",

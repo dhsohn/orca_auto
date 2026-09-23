@@ -362,8 +362,8 @@ def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
     from orca_auto.core.admission import list_slots
     from orca_auto.orca.config import load_config
     from orca_auto.orca.queue.adapter import list_queue
-    from orca_auto.orca.queue.worker import QueueWorker
-    worker = QueueWorker(load_config(sys.argv[1]), sys.argv[1], max_concurrent=1)
+    from orca_auto.orca.queue.worker import OrcaQueueWorker
+    worker = OrcaQueueWorker(load_config(sys.argv[1]), sys.argv[1], max_concurrent=1)
     worker.poll_interval_seconds = 0.01
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
     entries = list_queue(sys.argv[2])

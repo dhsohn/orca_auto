@@ -4,11 +4,13 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from orca_auto.core.queue import store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca.config import AppConfig
 from orca_auto.orca.queue import adapter
 
 
@@ -164,19 +166,23 @@ def test_child_execution_reuses_one_probe_for_all_runner_callbacks(
 
     monkeypatch.setattr(store, "load_entries", load)
 
-    def execution(*_args: object, should_cancel: Callable[[], bool], **_kwargs: object) -> None:
+    def execution(*_args: object, should_cancel: Callable[[], bool], **_kwargs: object) -> int:
         callback = should_cancel
         for _ in range(10):
             assert not callback()
         store.save_entries(tmp_path, [replace(target, cancel_requested=True)])
         assert callback()
+        return 0
 
     monkeypatch.setattr(
-        worker_execution._engine_execution,
-        "run_engine_worker_entry_with_spec_factory_options",
+        worker_execution,
+        "_run_orca_job_for_entry",
         execution,
     )
-    worker_execution.process_dequeued_entry(
-        None, target, queue_root=tmp_path, worker_config_path="config.yaml"
+    monkeypatch.setattr(
+        worker_execution,
+        "_build_execution_context",
+        lambda *_a, **_k: SimpleNamespace(reaction_dir=str(tmp_path)),
     )
+    worker_execution.process_dequeued_entry(AppConfig(), target, queue_root=tmp_path)
     assert len(reads) == 2

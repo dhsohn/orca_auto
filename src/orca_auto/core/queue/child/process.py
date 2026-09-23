@@ -10,6 +10,8 @@ from typing import Any
 from orca_auto.core.engine_process import open_confined_log
 from orca_auto.core.statuses import STATUS_CANCELLED, normalize_status
 
+from ..types import QueueEntry, QueueStatus
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -218,3 +220,7 @@ __all__ = [
     "start_background_process",
     "status_matches",
 ]
+
+
+def entry_status_is_running(entry: QueueEntry | None) -> bool:
+    return status_matches(getattr(entry, "status", None), QueueStatus.RUNNING)

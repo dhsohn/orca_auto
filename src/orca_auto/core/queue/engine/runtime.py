@@ -3,153 +3,42 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Generic
 
-from orca_auto.core.admission import (
-    get_slot,
-    recover_orphaned_engine_slots,
-    recover_slot_engine_process,
-)
-from orca_auto.core.commands import queue as queue_commands
-
-from .. import lifecycle as _queue_lifecycle
-from ..dependencies import ChildQueueWorkerDeps
+from ..dependencies import ConfigT, QueueEntryDequeuer
+from ..types import QueueEntry
 from ..worker import (
-    PidFileChildProcessQueueWorkerHooks,
     admission_has_capacity,
     dequeue_next_across_roots,
-    engine_queue_worker_source,
-    make_child_queue_worker_deps,
     peek_next_across_roots,
     read_worker_pid_file,
-    reserve_engine_queue_worker_slot,
     resolve_admission_root,
 )
 from ..worker import (
     queue_entry_by_id as _queue_entry_by_id,
 )
-from .admission import attach_started_process
-
-
-def attach_started_child_process(
-    *,
-    engine: str,
-    worker: Any,
-    queue_root: Path,
-    entry: Any,
-    process: Any,
-    admission_token: str,
-    activate_reserved_slot_fn: Callable[..., Any],
-    terminate_process_fn: Callable[[Any], Any],
-    mark_failed_fn: Callable[..., Any],
-) -> bool:
-    return attach_started_process(
-        admission_root=worker.admission_root,
-        queue_root=queue_root,
-        entry=entry,
-        process=process,
-        admission_token=admission_token,
-        activate_reserved_slot_fn=activate_reserved_slot_fn,
-        terminate_process_fn=terminate_process_fn,
-        mark_entry_failed_and_release_fn=worker._mark_entry_failed_and_release,
-        mark_failed_fn=mark_failed_fn,
-        source=f"{engine_queue_worker_source(engine)}.child",
-    )
-
-
-def shutdown_child_job(
-    worker: Any,
-    job: Any,
-    *,
-    finalize_child_exit_fn: Callable[..., Any],
-    grace_seconds: float,
-    sleep_fn: Callable[[float], None],
-) -> bool:
-    return _queue_lifecycle.shutdown_running_job(
-        job,
-        finalize_child_exit_fn=lambda current_job, rc: finalize_child_exit_fn(
-            worker,
-            current_job,
-            rc=rc,
-        ),
-        grace_seconds=grace_seconds,
-        sleep_fn=sleep_fn,
-    )
-
-
-def build_child_worker_hooks(
-    *,
-    engine: str,
-    handle_worker_start_error_fn: Callable[[Any, Path, Any, str, OSError], None],
-    finalize_completed_job_fn: Callable[[Any, str, Any, int], None],
-    finalize_child_exit_fn: Callable[..., Any],
-    reconcile_worker_state_fn: Callable[[Any], None],
-    activate_reserved_slot_fn: Callable[..., Any],
-    terminate_process_fn: Callable[[Any], Any],
-    mark_failed_fn: Callable[..., Any],
-    shutdown_grace_seconds: float,
-    sleep_fn: Callable[[float], None],
-    on_worker_process_started_fn: Callable[[Any, Path, Any, Any, str], bool] | None = None,
-    shutdown_running_job_fn: Callable[[Any, str, Any], Any] | None = None,
-    before_shutdown_all_fn: Callable[[Any, int], Any] | None = None,
-) -> PidFileChildProcessQueueWorkerHooks:
-    on_worker_process_started = on_worker_process_started_fn or (
-        lambda worker, queue_root, entry, process, admission_token: attach_started_child_process(
-            engine=engine,
-            worker=worker,
-            queue_root=queue_root,
-            entry=entry,
-            process=process,
-            admission_token=admission_token,
-            activate_reserved_slot_fn=activate_reserved_slot_fn,
-            terminate_process_fn=terminate_process_fn,
-            mark_failed_fn=mark_failed_fn,
-        )
-    )
-
-    def shutdown_running_job(worker: Any, queue_id: str, job: Any) -> None:
-        if shutdown_running_job_fn is not None:
-            shutdown_running_job_fn(worker, queue_id, job)
-            return
-        shutdown_child_job(
-            worker,
-            job,
-            finalize_child_exit_fn=finalize_child_exit_fn,
-            grace_seconds=shutdown_grace_seconds,
-            sleep_fn=sleep_fn,
-        )
-
-    return PidFileChildProcessQueueWorkerHooks(
-        handle_worker_start_error=handle_worker_start_error_fn,
-        on_worker_process_started=on_worker_process_started,
-        finalize_completed_job=finalize_completed_job_fn,
-        shutdown_running_job=shutdown_running_job,
-        reconcile_worker_state=reconcile_worker_state_fn,
-        before_shutdown_all=before_shutdown_all_fn,
-    )
 
 
 @dataclass(frozen=True)
-class EngineQueueRuntime:
-    load_config: Callable[[Any], Any]
-    runtime_roots_for_cfg: Callable[[Any], tuple[Path, ...]]
-    list_queue: Callable[[str | Path], list[Any]]
-    dequeue_next: Callable[[Path], Any | None]
+class EngineQueueRuntime(Generic[ConfigT]):
+    runtime_roots_for_cfg: Callable[[ConfigT], tuple[Path, ...]]
+    list_queue: Callable[[str | Path], list[QueueEntry]]
+    dequeue_next: Callable[[Path], QueueEntry | None]
     worker_pid_file_name: str
-    dequeue_entry_if_pending: Callable[..., Any | None] | None = None
-    accept_entry_fn: Callable[[Any], bool] | None = None
-    queue_entry_by_id_fn: Callable[[str | Path, str], Any | None] | None = None
+    dequeue_entry_if_pending: QueueEntryDequeuer[QueueEntry] | None = None
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None
+    queue_entry_by_id_fn: Callable[[str | Path, str], QueueEntry | None] | None = None
 
-    def queue_roots(self, cfg: Any) -> tuple[Path, ...]:
-        return queue_commands.queue_roots(
-            cfg,
-            runtime_roots_for_cfg_fn=self.runtime_roots_for_cfg,
-        )
+    def queue_roots(self, cfg: ConfigT) -> tuple[Path, ...]:
+        return tuple(self.runtime_roots_for_cfg(cfg))
+
+    def _existing_queue_roots(self, cfg: ConfigT) -> tuple[Path, ...]:
+        return tuple(root for root in self.queue_roots(cfg) if root.expanduser().exists())
 
     def _accept_unless_skipped(
         self,
-        skip_entry_fn: Callable[[Any], bool] | None,
-    ) -> Callable[[Any], bool] | None:
+        skip_entry_fn: Callable[[QueueEntry], bool] | None,
+    ) -> Callable[[QueueEntry], bool] | None:
         if skip_entry_fn is None or self.dequeue_entry_if_pending is None:
             # Without a by-id dequeue the root claims its own head row, which a
             # selection filter cannot steer. Engine definitions always supply a
@@ -157,7 +46,7 @@ class EngineQueueRuntime:
             return self.accept_entry_fn
         accept_entry_fn = self.accept_entry_fn
 
-        def accept(entry: Any) -> bool:
+        def accept(entry: QueueEntry) -> bool:
             if accept_entry_fn is not None and not accept_entry_fn(entry):
                 return False
             return not skip_entry_fn(entry)
@@ -166,54 +55,51 @@ class EngineQueueRuntime:
 
     def peek_next_entry(
         self,
-        cfg: Any,
+        cfg: ConfigT,
         /,
         *,
-        skip_entry_fn: Callable[[Any], bool] | None = None,
-    ) -> tuple[Path, Any] | None:
-        return queue_commands.peek_next_entry(
-            cfg,
-            queue_roots_fn=self.queue_roots,
+        skip_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    ) -> tuple[Path, QueueEntry] | None:
+        return peek_next_across_roots(
+            self._existing_queue_roots(cfg),
             list_queue_fn=self.list_queue,
-            peek_next_across_roots_fn=peek_next_across_roots,
             select_all_rows=self.dequeue_entry_if_pending is not None,
             accept_entry_fn=self._accept_unless_skipped(skip_entry_fn),
         )
 
-    def has_admission_capacity(self, cfg: Any) -> bool:
+    def has_admission_capacity(self, cfg: ConfigT) -> bool:
         return admission_has_capacity(cfg)
 
     def queue_entries_with_roots(
         self,
-        cfg: Any,
+        cfg: ConfigT,
         *,
-        list_queue_fn: Callable[[str | Path], list[Any]] | None = None,
-    ) -> list[tuple[Path, Any]]:
-        return queue_commands.queue_entries_with_roots(
-            cfg,
-            queue_roots_fn=self.queue_roots,
-            list_queue_fn=list_queue_fn or self.list_queue,
-            accept_entry_fn=self.accept_entry_fn,
-        )
+        list_queue_fn: Callable[[str | Path], list[QueueEntry]] | None = None,
+    ) -> list[tuple[Path, QueueEntry]]:
+        queue_lister = list_queue_fn or self.list_queue
+        return [
+            (root, entry)
+            for root in self._existing_queue_roots(cfg)
+            for entry in queue_lister(root)
+            if self.accepts_entry(entry)
+        ]
 
     def dequeue_next_entry(
         self,
-        cfg: Any,
+        cfg: ConfigT,
         /,
         *,
-        skip_entry_fn: Callable[[Any], bool] | None = None,
-    ) -> tuple[Path, Any] | None:
-        return queue_commands.dequeue_next_entry(
-            cfg,
-            queue_roots_fn=self.queue_roots,
+        skip_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    ) -> tuple[Path, QueueEntry] | None:
+        return dequeue_next_across_roots(
+            self._existing_queue_roots(cfg),
             list_queue_fn=self.list_queue,
             dequeue_next_fn=self.dequeue_next,
-            dequeue_entry_if_pending_fn=self.dequeue_entry_if_pending,
-            dequeue_next_across_roots_fn=dequeue_next_across_roots,
+            dequeue_entry_fn=self.dequeue_entry_if_pending,
             accept_entry_fn=self._accept_unless_skipped(skip_entry_fn),
         )
 
-    def queue_entry_by_id(self, queue_root: Path | str, queue_id: str) -> Any | None:
+    def queue_entry_by_id(self, queue_root: Path | str, queue_id: str) -> QueueEntry | None:
         if self.queue_entry_by_id_fn is not None:
             entry = self.queue_entry_by_id_fn(queue_root, queue_id)
         else:
@@ -226,194 +112,14 @@ class EngineQueueRuntime:
             return None
         return entry
 
-    def accepts_entry(self, entry: Any) -> bool:
+    def accepts_entry(self, entry: QueueEntry) -> bool:
         return bool(self.accept_entry_fn is None or self.accept_entry_fn(entry))
 
-    def admission_root(self, cfg: Any) -> str:
+    def admission_root(self, cfg: ConfigT) -> str:
         return resolve_admission_root(cfg)
 
     def read_worker_pid(self, allowed_root: Path) -> int | None:
         return read_worker_pid_file(allowed_root, self.worker_pid_file_name)
-
-    def child_worker_deps(
-        self,
-        *,
-        poll_interval_seconds: int,
-        time_module: Any,
-        release_slot_fn: Callable[[str | Path, str], object],
-        start_background_job_process_fn: Callable[..., Any],
-        try_reserve_admission_slot_fn: Callable[[Any], str | None],
-    ) -> ChildQueueWorkerDeps:
-        return make_child_queue_worker_deps(
-            poll_interval_seconds=poll_interval_seconds,
-            time_module=time_module,
-            release_slot_fn=release_slot_fn,
-            admission_root_fn=self.admission_root,
-            has_admission_capacity_fn=self.has_admission_capacity,
-            peek_next_entry_fn=self.peek_next_entry,
-            dequeue_next_entry_fn=self.dequeue_next_entry,
-            start_background_job_process_fn=start_background_job_process_fn,
-            try_reserve_admission_slot_fn=try_reserve_admission_slot_fn,
-        )
-
-    def max_concurrent(self, cfg: Any) -> int:
-        return max(1, int(getattr(cfg.runtime, "max_concurrent", 1)))
-
-    def reserve_admission_slot(
-        self,
-        cfg: Any,
-        *,
-        engine: str,
-        reserve_slot_fn: Callable[..., str | None],
-    ) -> str | None:
-        return reserve_engine_queue_worker_slot(
-            cfg,
-            engine=engine,
-            reserve_slot_fn=reserve_slot_fn,
-        )
-
-    def child_worker_hooks(
-        self,
-        *,
-        engine: str,
-        handle_worker_start_error_fn: Callable[[Any, Path, Any, str, OSError], None],
-        finalize_completed_job_fn: Callable[[Any, str, Any, int], None],
-        finalize_child_exit_fn: Callable[..., Any],
-        reconcile_worker_state_fn: Callable[[Any], None],
-        activate_reserved_slot_fn: Callable[..., Any],
-        terminate_process_fn: Callable[[Any], Any],
-        mark_failed_fn: Callable[..., Any],
-        shutdown_grace_seconds: float,
-        sleep_fn: Callable[[float], None],
-        on_worker_process_started_fn: Callable[[Any, Path, Any, Any, str], bool] | None = None,
-        shutdown_running_job_fn: Callable[[Any, str, Any], Any] | None = None,
-        before_shutdown_all_fn: Callable[[Any, int], Any] | None = None,
-    ) -> PidFileChildProcessQueueWorkerHooks:
-        return build_child_worker_hooks(
-            engine=engine,
-            handle_worker_start_error_fn=handle_worker_start_error_fn,
-            finalize_completed_job_fn=finalize_completed_job_fn,
-            finalize_child_exit_fn=finalize_child_exit_fn,
-            reconcile_worker_state_fn=reconcile_worker_state_fn,
-            activate_reserved_slot_fn=activate_reserved_slot_fn,
-            terminate_process_fn=terminate_process_fn,
-            mark_failed_fn=mark_failed_fn,
-            shutdown_grace_seconds=shutdown_grace_seconds,
-            sleep_fn=sleep_fn,
-            on_worker_process_started_fn=on_worker_process_started_fn,
-            shutdown_running_job_fn=shutdown_running_job_fn,
-            before_shutdown_all_fn=before_shutdown_all_fn,
-        )
-
-    def start_child_process(
-        self,
-        *,
-        config_path: str,
-        queue_root: Path,
-        entry: Any,
-        admission_token: str,
-        start_background_process_fn: Callable[[list[str]], Any],
-        build_worker_child_command_fn: Callable[..., list[str]],
-    ) -> Any:
-        return start_background_process_fn(
-            build_worker_child_command_fn(
-                config_path=config_path,
-                queue_root=queue_root,
-                queue_id=entry.queue_id,
-                admission_token=admission_token,
-            ),
-        )
-
-    def finalize_child_exit(
-        self,
-        cfg: Any,
-        job: Any,
-        *,
-        rc: int,
-        shutdown_requested: bool,
-        admission_root: str | Path | None = None,
-        find_queue_entry_fn: Callable[[Any, str], Any | None],
-        mark_cancelled_fn: Callable[..., Any],
-        requeue_running_entry_fn: Callable[..., Any],
-        mark_failed_fn: Callable[..., Any],
-        mark_recovery_pending_fn: Callable[..., Any],
-        release_admission_slot_fn: Callable[[str], Any],
-    ) -> None:
-        """Finalize a managed engine child without releasing a live engine process."""
-        if admission_root is not None:
-            slot = get_slot(admission_root, job.admission_token)
-            if slot is not None:
-                recover_slot_engine_process(admission_root, job.admission_token)
-        _queue_lifecycle.finalize_child_exit_with_policy(
-            cfg,
-            job,
-            policy=_queue_lifecycle.ChildExitPolicy(
-                shutdown_requested=shutdown_requested,
-                fail_unexpected_exit=True,
-                use_entry_fallback=False,
-                recovery_entry_fn=lambda _current, current_job: current_job.entry,
-            ),
-            find_queue_entry_fn=find_queue_entry_fn,
-            mark_cancelled_fn=mark_cancelled_fn,
-            requeue_running_entry_fn=requeue_running_entry_fn,
-            mark_recovery_pending_fn=mark_recovery_pending_fn,
-            release_admission_slot_fn=release_admission_slot_fn,
-            mark_failed_fn=mark_failed_fn,
-            rc=rc,
-        )
-
-    def reconcile_orphaned_running(
-        self,
-        cfg: Any,
-        *,
-        admission_root: Any,
-        list_slots_fn: Callable[[Any], list[Any]],
-        reconcile_stale_slots_fn: Callable[[Any], Any],
-        reconcile_orphaned_child_queue_entries_fn: Callable[..., Any],
-        mark_cancelled_fn: Callable[..., Any],
-        requeue_running_entry_fn: Callable[..., Any],
-        mark_recovery_pending_fn: Callable[..., Any],
-        list_queue_fn: Callable[[str | Path], list[Any]] | None = None,
-    ) -> None:
-        """Recover admission records and reconcile this engine's orphaned rows."""
-        queue_lister = list_queue_fn or self.list_queue
-        recover_orphaned_engine_slots(admission_root, strict=False)
-        _queue_lifecycle.reconcile_orphaned_running_with_policy(
-            cfg,
-            policy=_queue_lifecycle.OrphanedRunningPolicy(),
-            admission_root=admission_root,
-            queue_roots_fn=self.queue_roots,
-            list_queue_fn=lambda root: [
-                entry for entry in queue_lister(root) if self.accepts_entry(entry)
-            ],
-            list_slots_fn=list_slots_fn,
-            reconcile_stale_slots_fn=reconcile_stale_slots_fn,
-            reconcile_orphaned_child_queue_entries_fn=(reconcile_orphaned_child_queue_entries_fn),
-            mark_cancelled_fn=mark_cancelled_fn,
-            requeue_running_entry_fn=requeue_running_entry_fn,
-            mark_recovery_pending_fn=mark_recovery_pending_fn,
-        )
-
-    def run_pidfile_worker_command(
-        self,
-        args: Any,
-        *,
-        config_path_fn: Callable[[Any], str],
-        worker_factory: Callable[..., Any],
-        load_config_fn: Callable[[Any], Any] | None = None,
-        read_worker_pid_fn: Callable[[Path], int | None] | None = None,
-        existing_pid_report_fn: Callable[[int], Any] | None = None,
-        max_concurrent_fn: Callable[[Any], int] | None = None,
-    ) -> int:
-        return queue_commands.run_pidfile_queue_worker_command(
-            args,
-            load_config_fn=load_config_fn or self.load_config,
-            config_path_fn=config_path_fn,
-            read_worker_pid_fn=read_worker_pid_fn or self.read_worker_pid,
-            existing_pid_report_fn=existing_pid_report_fn,
-            max_concurrent_fn=max_concurrent_fn or self.max_concurrent,
-            worker_factory=worker_factory,
-        )
 
 
 __all__ = ["EngineQueueRuntime"]

@@ -7,6 +7,7 @@ from orca_auto.core.queue.types import QueueEntry
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.queue import replay as replay_mod
+from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state import finalize_state, new_state
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 
@@ -66,21 +67,21 @@ def write_completed_run_state(reaction_dir: Path) -> None:
     )
 
 
-def reconcile_statuses(worker: object) -> dict[tuple[str, str], str]:
-    statuses = replay_mod.get_replay_state(worker).reconcile_statuses
+def reconcile_statuses(worker: OrcaQueueWorker) -> dict[tuple[str, str], str]:
+    statuses = worker.replay_state.reconcile_statuses
     assert statuses is not None
     return statuses
 
 
 def run_terminal_replay(
-    worker: object,
+    worker: OrcaQueueWorker,
     tmp_path: Path,
     entry: QueueEntry,
     *,
     previous_status: str | None = None,
 ) -> None:
     if previous_status is not None:
-        state = replay_mod.get_replay_state(worker)
+        state = worker.replay_state
         statuses = dict(state.reconcile_statuses or {})
         statuses[(str(tmp_path.resolve()), entry.queue_id)] = previous_status
         state.reconcile_statuses = statuses
@@ -96,7 +97,8 @@ def run_terminal_replay(
             "live_queue_slot_keys_for_slots",
             return_value=(set(), set()),
         ),
-        patch.object(replay_mod, "reconcile_orphaned_process_entries"),
+        patch.object(replay_mod, "reconcile_stale_slots"),
+        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
     ):
         replay_mod.reconcile_worker_state(worker)
 

@@ -3,14 +3,26 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Generic, TypeVar
+from typing import Generic, Literal, Protocol, TypeVar
+
+from ..processes import ManagedProcess
+from ..types import QueueEntry
 
 T = TypeVar("T")
+ReserveStatus = Literal["blocked", "idle", "processed"]
+
+
+class ProcessBackedJob(Protocol):
+    @property
+    def process(self) -> ManagedProcess: ...
+
+
+JobT = TypeVar("JobT", bound=ProcessBackedJob)
 
 
 @dataclass(frozen=True)
 class SlotFillResult:
-    status: str
+    status: ReserveStatus
     started: int
 
 
@@ -24,8 +36,8 @@ class ReservedQueueEntry(Generic[T]):
 @dataclass
 class BackgroundRunningJob:
     queue_root: Path
-    entry: Any
-    process: Any
+    entry: QueueEntry
+    process: ManagedProcess
     admission_token: str
     cancel_requested: bool = False
     started_at: float = field(default_factory=time.monotonic)
