@@ -78,7 +78,7 @@ orca_auto service restart [--config PATH] [--force]
 | :--- | :--- |
 | `pending` | Job is durably recorded in the queue, awaiting worker admission and an available slot. |
 | `running` | Worker has claimed an execution slot and ORCA is running inside an isolated generation directory. |
-| `completed` | ORCA calculation finished cleanly with verified termination markers and energy convergence. |
+| `completed` | ORCA calculation finished with a verified normal termination banner and no detected diagnostic errors. |
 | `failed` | Calculation terminated with an error, SCF convergence failure, or non-zero exit code (no blind retries). |
 | `cancelled` | Calculation was explicitly aborted by the user. |
 | `waiting for resources` | Job is temporarily deferred due to transient host constraints (e.g., RAM Scratch memory capacity). |

@@ -78,7 +78,7 @@ orca_auto service restart [--config PATH] [--force]
 | :--- | :--- |
 | `pending` | 작업이 큐에 안전하게 등록되어 가용 워커와 실행 슬롯을 기다리는 상태 |
 | `running` | 워커가 슬롯을 예약하고 독립 실행 디렉터리(`generation`)에서 ORCA를 구동 중인 상태 |
-| `completed` | 계산이 정상 종료되고 에너지 수렴 검증까지 통과한 상태 |
+| `completed` | ORCA 정상 종료 배너가 확인되고 진단 오류 마커가 발견되지 않은 상태 |
 | `failed` | 수렴 실패, 프로세스 비정상 종료 등으로 계산이 종료된 상태 (자동 재시도 없음) |
 | `cancelled` | 사용자가 명시적으로 취소한 상태 |
 | `waiting for resources` | RAM Scratch 용량 부족 등으로 인해 작업이 일시적으로 실행을 대기하는 상태 |

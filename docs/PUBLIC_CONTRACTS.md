@@ -58,8 +58,8 @@ Upon completion, each job publishes a structured `machine.json` artifact for dow
 
 - **Envelope Schema**: Conforms to the standard `factory/machine-observation` v1 contract.
 - **Operation & Payload**: Emits `chemistry/orca-run` with a `chemistry/results-bundle` v1 payload.
-- **Verification**: Success is determined not merely by process exit code (0), but by verifying ORCA output termination markers and energy convergence.
-- **Scope Boundary**: ORCA_auto provides dependable runtime supervision and structured data extraction; chemical interpretation and theoretical validity remain the researcher's responsibility.
+- **Verification**: Completion is verified through ORCA normal termination markers and output diagnostic scanning rather than process exit codes alone. Extracted chemical properties (energies, stationary points, electronic states) reflect verified evidence without synthetic defaults.
+- **Scope Boundary**: ORCA_auto supervises process lifecycle and structures output artifacts; scientific acceptance and chemical validity remain the researcher's responsibility.
 
 ---
 

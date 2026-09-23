@@ -56,7 +56,7 @@ graph TD
 - Interrupted or failed executions retain their specific failure causes in both the queue entry and generation state.
 
 ### 4. Convergence & Publication
-- Upon calculation exit, `orca/out_analyzer.py` verifies termination banners and convergence against the output lines (ignoring comments and input echoes).
+- Upon calculation exit, `orca/out_analyzer.py` verifies termination banners and scans output lines for error or convergence failures (ignoring comments and input echoes).
 - A verified observation payload (`machine.json` adhering to the v1 envelope contract) and human-readable HTML/SI reports are published.
 
 ---
