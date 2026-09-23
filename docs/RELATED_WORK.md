@@ -1,93 +1,37 @@
-# Related work and project scope
+# Related Work and Project Scope
 
-ORCA_auto is a runtime and observability layer around ORCA-centered computational
-chemistry workflows. It is not a replacement for ORCA, a general workflow engine,
-or a chemistry toolkit. This page explains the gap it is designed to fill and how
-it relates to neighboring tools.
+ORCA_auto provides a reliable runtime and observability layer for ORCA-centered computational chemistry workflows on Linux and WSL. This page explains how ORCA_auto fits into the broader computational chemistry ecosystem.
 
-## Local-first companion tools
+## Local-first Companion Tools
 
-ORCA_auto is a companion to [Chemvas](https://github.com/dhsohn/Chemvas) and
-[LLMdocx](https://github.com/dhsohn/LLMdocx): independent tools for drawing
-chemistry, running calculations, and working with research documents.
+ORCA_auto is designed to complement neighboring open-source tools:
 
-The tools share a versioned `machine.json` observation envelope while keeping
-their own input and output contracts. Connecting them requires explicit
-conversion: Chemvas handoffs must become ORCA inputs or `flow.yaml` workflows,
-and calculation results must be packaged in
-[LLMdocx's results-bundle format](https://github.com/dhsohn/LLMdocx/blob/main/docs/RESULTS_BUNDLE_V1.md).
-These conversions are not built into ORCA_auto.
+- **[Chemvas](https://github.com/dhsohn/Chemvas)**: Drawing molecular structures and reaction schemes.
+- **ORCA_auto**: Durable queueing, execution management, and observability for quantum chemical calculations.
+- **[LLMdocx](https://github.com/dhsohn/LLMdocx)**: Generating research reports, Supporting Information, and paper drafts.
 
-## Raw ORCA commands and shell scripts
+These tools share a versioned `machine.json` schema and standardized output bundles, allowing them to be composed smoothly in local-first research pipelines.
 
-ORCA already provides the electronic-structure engine and input language. For a
-single calculation, invoking ORCA directly is often the simplest and clearest
-choice. Many groups then add shell scripts for repeated submission, directory
-layout, and result copying.
+## Shell Scripts vs. ORCA_auto
 
-ORCA_auto is useful when that script layer needs durable state:
+For single one-off calculations, running `orca input.inp > input.out` directly is simple and effective. Research groups often build shell scripts for batch runs or directory organization.
 
-- queue entries that survive terminal restarts;
-- supervised workers instead of foreground-only runs;
-- consistent internal `job_state.json` and public `machine.json` outputs;
-- failure and recovery decisions that are recorded rather than implicit;
-- a compact activity view across multiple ORCA and workflow jobs.
+ORCA_auto augments this approach with structured, reliable infrastructure:
 
-The design intent is to keep ORCA input files as the chemistry-facing contract
-while adding an auditable runtime layer around execution.
+- Background queue execution that persists across terminal closures and reboots.
+- Process supervision via systemd rather than fragile foreground scripts.
+- Consistent structured artifacts (`job_state.json` and `machine.json`) for downstream automation.
+- Explicit failure classification and reproducible recovery procedures.
+- Unified activity tracking across multiple jobs.
 
-## Site schedulers and service managers
+## Cluster Schedulers and Resource Managers
 
-Schedulers and service managers such as SLURM, PBS, systemd, and cron are
-important infrastructure, but they do not by themselves understand ORCA job
-state, execution provenance, selected input files, or chemistry-specific failure
-classification.
+Cluster schedulers like SLURM and PBS manage compute resources across large clusters. ORCA_auto focuses on workstation/single-node execution (under Linux or WSL) with systemd. It handles ORCA-specific lifecycle management, input selection, output parsing, and failure diagnosis above the OS process layer.
 
-ORCA_auto complements this layer. It can be run under systemd on Linux or WSL,
-and it records ORCA/job-level state above the process-manager layer. It does not
-try to become a cluster scheduler or replace local site policy about cores,
-memory, queues, or walltime.
+## General Workflow Engines
 
-## General workflow engines
+General workflow engines (such as Nextflow, Snakemake, and AiiDA) provide comprehensive DAG abstractions across multi-step distributed pipelines. ORCA_auto is deliberately focused: its scope is dedicated to robust ORCA queue management and screening workflows. This targeted design keeps local and WSL workflows lightweight, easy to inspect, and simple to debug.
 
-General engines such as Snakemake, Nextflow, Parsl, FireWorks, and AiiDA provide
-broad workflow abstractions. They are appropriate when a project needs a general
-DAG engine, database-backed provenance framework, or multi-code workflow system.
+## Chemistry Libraries
 
-ORCA_auto is intentionally narrower. Its public surface is a queue-first CLI,
-configuration file, worker runtime, and report/state contracts tailored to ORCA
-and the optional conformer-screening workflow. This smaller scope keeps the
-common local/WSL use case easy to inspect and debug, while still leaving room to
-export artifacts into broader provenance systems later.
-
-## Chemistry and molecular-toolkit ecosystem
-
-Libraries such as ASE, RDKit, Open Babel, and cclib occupy adjacent roles:
-structure manipulation, cheminformatics, file conversion, parsing, or analysis.
-They are not direct replacements for a supervised ORCA runtime.
-
-ORCA_auto may use or interoperate with chemistry tools at the workflow edge, but
-its main responsibility is execution orchestration and observable job state, not
-molecular modeling algorithms or post-processing analysis APIs.
-
-## xTB and CREST
-
-xTB and CREST remain important for fast pre-screening and conformer-related
-workflow stages. Workflow xTB and CREST are internal stages used to prepare or
-route ORCA-centered work.
-
-## Non-goals
-
-ORCA_auto is not intended to be:
-
-- an electronic-structure engine;
-- a replacement for ORCA input design or chemical judgment;
-- a cluster scheduler or resource broker;
-- a general DAG/workflow engine;
-- a GUI or laboratory information-management system;
-- a package for crawling literature or managing publication databases;
-- a guarantee that a calculation will converge or be chemically meaningful.
-
-The project is successful when it makes ORCA-centered workflows easier to run,
-inspect, recover, and curate without hiding the underlying computational
-chemistry decisions.
+Toolkits like ASE, RDKit, and cclib handle structure generation, file parsing, and cheminformatics. ORCA_auto complements these libraries by providing execution supervision and observable lifecycle management, rather than duplicating molecular modeling algorithms.

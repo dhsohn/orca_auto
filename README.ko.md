@@ -11,45 +11,36 @@
 
 <p align="center"><a href="https://github.com/dhsohn/orca_auto/blob/v6.0.0/README.md">English</a> · <b>한국어</b></p>
 
-ORCA_auto는 Linux/WSL용 **큐 기반 ORCA 실행 도구**입니다.
-**AI 에이전트가 양자화학 계산을 위임할 수 있는 영속 실행 계층**으로,
-공개 CLI를 통해 계산을 제출하고 진행 상황과 기록된 결과를 확인할 수 있습니다.
+ORCA_auto는 Linux 및 WSL 환경을 위한 **큐 기반 ORCA 자동 실행 및 관리 도구**입니다.
+작업 큐와 백그라운드 워커를 통해 양자화학 계산을 안정적으로 실행하고, CLI 및 구조화된 데이터(`--json`, `machine.json`)로 진행 상황과 결과를 손쉽게 관리할 수 있습니다.
 
-## AI 에이전트를 위한 계산 실행
+## 주요 기능
 
-- **세션이 끝나도 실행을 맡길 수 있습니다.** 제출에 성공하면 작업이 디스크에 기록되고,
-  별도로 관리되는 워커가 제출한 에이전트의 세션과 독립적으로 실행합니다.
-- **구조화된 실행 근거를 읽습니다.** `orca_auto queue list --json`과
-  `orca_auto service status --json`으로 상태를 조회합니다. 종료 시 기록되는
-  `machine.json`은 후속 도구에 계산 결과와 산출물 검증 정보를 제공합니다.
-- **명시적인 정책으로 복구합니다.** 워커·호스트 중단에는 검증된 복구 경로를 적용합니다.
-  ORCA 계산 자체의 실패는 자동으로 재시도하지 않습니다.
-
-ORCA_auto가 맡는 것은 실행이지 화학적 판단이 아닙니다.
-입력 설계와 과학적 타당성 검증은 사용자의 책임입니다.
+- **안전한 백그라운드 실행**: 작업을 큐에 등록하면 터미널 세션이 종료되어도 systemd 워커 데몬이 백그라운드에서 계산을 안정적으로 완료합니다.
+- **구조화된 결과 및 상태 조회**: `orca_auto queue list --json`과 `orca_auto service status --json`으로 진행 상황을 모니터링할 수 있으며, 계산 종료 시 생성되는 `machine.json`을 통해 후속 도구 및 자동화 스크립트와 쉽게 연계할 수 있습니다.
+- **예측 가능한 복구**: 워커나 시스템이 중단되어도 검증된 복구 절차를 따르며, 실패한 계산을 무분별하게 자동 재시도하지 않아 자원 낭비를 방지합니다.
 
 ## 시작하기
 
-**Python 3.11+**, Linux/WSL2와 별도로 설치한 ORCA 엔진이 필요합니다.
-워커는 `systemd`로 실행·관리합니다.
+**Python 3.11+**, Linux/WSL2 및 별도로 설치된 ORCA 엔진이 필요합니다.
+워커 프로세스는 `systemd`로 관리합니다.
 
 ```bash
 python -m pip install orca_auto==6.0.0
 ```
 
-- **[설치 상세 안내](https://github.com/dhsohn/orca_auto/blob/v6.0.0/docs/INSTALLATION.ko.md)** — 새 환경에 PyPI에서 본체를 설치합니다.
-- **[워커 설정과 첫 작업 제출](https://github.com/dhsohn/orca_auto/blob/v6.0.0/docs/QUICKSTART.ko.md)** — 소스 checkout에서
-  설정·서비스 시작·큐 확인까지 진행합니다.
+- **[설치 상세 안내](https://github.com/dhsohn/orca_auto/blob/v6.0.0/docs/INSTALLATION.ko.md)** — PyPI 패키지 및 워크플로우 확장 설치
+- **[빠른 시작 가이드](https://github.com/dhsohn/orca_auto/blob/v6.0.0/docs/QUICKSTART.ko.md)** — 소스 체크아웃, 워커 서비스 설정 및 첫 계산 제출
 
-**업그레이드할 때는** 계산 중인 환경을 유지하고 유휴 시간에만 전환하세요.
-[업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v6.0.0/docs/RELEASE.md#removing-ts-workflows-in-60)(영어)를 참고하세요.
+기존 환경 업그레이드는 [업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v6.0.0/docs/RELEASE.md#removing-ts-workflows-in-60)(영어)를 참고하세요.
 
-## 같은 화학 연구 생태계
+## 계산화학 도구 생태계
 
-화학 구조를 그리는 [Chemvas](https://github.com/dhsohn/Chemvas),
-계산을 실행하는 **ORCA_auto**, 연구 문서를 작성하는
-[LLMdocx](https://github.com/dhsohn/LLMdocx)는 로컬 중심의 독립적인 동반 도구입니다.
-데이터 전달에는 명시적인 변환이 필요하며, 전 과정이 자동으로 연결되는 구조는 아닙니다.
+- [Chemvas](https://github.com/dhsohn/Chemvas): 분자 구조 및 반응식 작도 도구
+- **ORCA_auto**: 계산 큐 및 백그라운드 실행 관리
+- [LLMdocx](https://github.com/dhsohn/LLMdocx): 연구 보고서 및 논문 문서화 도구
+
+각 도구는 독립적으로 동작하는 로컬 중심(Local-first) 동반 도구이며, 표준 형식(`machine.json`, 결과 번들 등)을 통해 유기적으로 연계해 사용할 수 있습니다.
 [도구 간 연결 방식 →](https://github.com/dhsohn/orca_auto/blob/v6.0.0/docs/RELATED_WORK.md#local-first-companion-tools)(영어)
 
 ## 문서

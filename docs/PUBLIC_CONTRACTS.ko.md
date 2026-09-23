@@ -1,121 +1,66 @@
-# 공개 계약
+# 공개 계약 (Public Contracts)
 
 [English](PUBLIC_CONTRACTS.md) | **한국어**
 
-> 이 문서는 [PUBLIC_CONTRACTS.md](PUBLIC_CONTRACTS.md)(영어판)의 한국어 번역본입니다.
+이 문서는 사용자와 운영자, 연동 도구가 신뢰하고 의존할 수 있는 ORCA_auto의 공식 인터페이스와 동작 보장 범위를 정의합니다. 명시된 동작 계약이 유지되는 한, 내부 모듈 구성과 비공개 런타임 구현은 유연하게 개선될 수 있습니다.
 
-이 문서는 사용자, 운영자, 미래의 기여자가 의존해도 되는 ORCA_auto의 표면을 정리합니다.
-구현 전체를 고정하려는 문서가 아닙니다. 내부 모듈, private helper, 런타임 배선은
-문서화된 동작이 유지되는 한 바뀔 수 있습니다.
-
-1.0.0부터 이 문서가 명명하는 모든 표면은 고정된 계약입니다. 0.x 릴리스는 2계층 —
-작은 고정 Stable Core와 정확하되 움직일 수 있는 Experimental 나머지 — 이었으나,
-1.0 태그 전에 모든 Experimental 표면을 승격하거나 제거했으므로 계층은 사라졌습니다.
-여기 문서화된 것이 곧 프로젝트가 약속하는 것입니다.
+1.0.0 버전 이후 이 문서에 기술된 모든 인터페이스는 하위 호환성을 보장하는 공개 계약으로 관리됩니다.
 
 ## 계약 규칙
 
-- 여기 명명된 표면의 변경은 의도적이어야 하며 테스트·문서·
-  [CHANGELOG.md](../CHANGELOG.md)에 반영됩니다. 문서화된 동작을 깨는 변경은
-  major 버전을 요구합니다.
-- JSON 필드 추가는 허용됩니다. 소비자는 알 수 없는 필드를 무시해야 합니다.
-- 사람을 위한 Markdown·HTML·터미널 출력은 바뀔 수 있습니다. 스크립트는
-  `--json` 또는 JSON 산출물을 사용하세요.
-- 내부 워커 진입점과 Python helper 모듈은 이 문서나 [docs/REFERENCE.ko.md](REFERENCE.ko.md)에
-  명시되지 않는 한 공개 API가 아닙니다.
-- 공개 CI로 증명할 수 없는 실제 ORCA 동작은 [VALIDATION.md](VALIDATION.md)에 맞춰 수동
-  acceptance 근거를 남깁니다.
+- 명시된 공개 인터페이스의 변경은 의도적으로 관리되며, 테스트 및 [CHANGELOG.md](../CHANGELOG.md)에 기록됩니다. 기존 동작을 깨뜨리는 변경은 메이저(Major) 버전 업데이트를 요구합니다.
+- JSON 응답에 새로운 필드가 추가될 수 있습니다. 연동 스크립트는 정의되지 않은 추가 필드를 안전하게 무시해야 합니다.
+- 터미널 출력 및 사람을 위한 텍스트 포맷은 변경될 수 있습니다. 스크립트 연동 시에는 반드시 `--json` 옵션 또는 JSON 산출물을 사용하세요.
+- 내부 워커 진입점 및 헬퍼 모듈은 본 문서나 [레퍼런스 문서](REFERENCE.ko.md)에 공개 API로 명시되지 않은 한 내부 전용입니다.
 
-## 런타임 계약
+## 런타임 환경 계약
 
-5.0.0부터 `orca_auto`는 기본으로 본체만 설치하며, 워크플로우에는
-동일 버전의 `orca_auto_workflows` 확장이 필요합니다. 6.0 릴리스의
-확장은 컨포머 스크리닝만 지원하며, 두 TS 워크플로우는 호환 지원이나 자동
-마이그레이션 없이 제거합니다. [전환 주의사항](RELEASE.md#removing-ts-workflows-in-60)(영어)을
-참고하세요. 확장 없이도 단독 ORCA는 사용할 수 있지만, 워크플로우 동작이나 기존
-워크플로우 상태의 불완전한 조회·변경은 명확히 거부합니다. 운영 중인 워크플로우 배포의
-마이그레이션·제거 절차는 아니므로 먼저 동일 버전의 워크플로우 포함 설치를 복원하세요.
-설치와 전환 절차는 [QUICKSTART.ko.md](QUICKSTART.ko.md),
-[RELEASE.md](RELEASE.md)(영어)를 참고하세요.
+5.0.0부터 `orca_auto` 코어 패키지는 단독 ORCA 실행을 지원하며, 컨포머 탐색 등 다단계 워크플로우를 사용하려면 동일 버전의 `orca_auto_workflows` 확장이 필요합니다.
 
-지원되는 런타임 가정:
+지원되는 런타임 환경:
 
-- Python 3.11 이상.
-- 네이티브 Linux 또는 WSL2.
-- systemd unit을 쓰는 호스트에서는 systemd 247 이상. `service status`는
-  `systemctl show --timestamp=utc`로 unit 시작 시각을 읽으며, 더 오래된 systemd에서는
-  모든 git-backed 워커를 `undetermined`로 보고합니다.
-- 설정된 루트와 실행 파일에는 Linux/POSIX 경로 사용.
-- ORCA, xTB, CREST 실행 파일을 설정할 경우 절대 Linux 실행 경로 사용.
-- 계산 엔진을 실행하는 계정은 작업이 끝날 때까지 작업 디렉터리와 실행 파일 배포본을
-  소유하고 신뢰해야 합니다. xTB/CREST에서는 캡처된 `PATH`/`LD_LIBRARY_PATH`와
-  `XTBPATH`/`XTBHOME` 파라미터 루트도 포함됩니다. 실행 파일 바이트에는 콘텐츠 정체성을
-  부여하지만 공유 라이브러리와 외부 파라미터 내용은 큐 generation 안으로 복사하지
-  않습니다. 따라서 같은 UID로 실행되는 신뢰할 수 없는 프로세스는 격리 경계 밖입니다.
-- 실행 파일 콘텐츠 정체성은 일반적인 엔진 버전 호환성 검사와 다릅니다. ORCA와
-  워크플로우 xTB/CREST 버전은 운영자가 qualification합니다.
+- Python 3.11 이상
+- 네이티브 Linux 또는 WSL2
+- systemd 247 이상 (systemd 워커를 사용하는 호스트)
+- 작업 디렉터리 및 실행 파일 경로에 Linux/POSIX 절대 경로 사용
+- 계산 엔진 실행 계정은 작업 디렉터리와 바이너리에 대한 적절한 파일 권한을 보유해야 합니다.
 
-지원하지 않는 가정:
+지원하지 않는 환경:
 
-- `C:\...` 또는 `C:/...` 같은 Windows 드라이브 경로.
-- `/mnt/<drive>/...` 실행 파일 경로.
-- 설정 안의 상대 실행 파일 경로.
-- `.exe` 엔진 바이너리.
-- 라이선스가 필요한 계산화학 바이너리를 공개 CI에 요구하는 구성.
+- Windows 드라이브 경로 (`C:\...`, `C:/...`)
+- `/mnt/<drive>/...` 형태의 바이너리 실행 경로
+- 설정 파일 내 상대 경로
+- Windows용 `.exe` 바이너리
 
 ## 공개 CLI 계약
 
-사용자/운영자 대상 공개 CLI는 `orca_auto ...`입니다.
+공식 사용자/운영자 CLI 인터페이스는 `orca_auto` 명령어입니다.
 
-지원되는 명령:
+지원되는 명령어:
 
-- `orca_auto init`
-- `orca_auto run-dir <path>`
-- `orca_auto scaffold conformer_search <path>`
-- `orca_auto queue list`
-- `orca_auto queue list clear`
-- `orca_auto queue cancel <target>`
-- `orca_auto index prune`
-- `orca_auto service status`
-- `orca_auto service restart`
-- `orca_auto systemd install --user <name> --repo <path>`
+- `orca_auto init`: 대화형 초기 설정
+- `orca_auto run-dir <path>`: 계산 작업 디렉터리 큐 등록
+- `orca_auto scaffold conformer_search <path>`: 컨포머 탐색 템플릿 생성 (워크플로우 확장 필요)
+- `orca_auto queue list`: 작업 큐 목록 및 상태 조회
+- `orca_auto queue list clear`: 완료/실패/취소된 작업 이력 정리
+- `orca_auto queue cancel <target>`: 큐 대기 또는 실행 중인 작업 취소
+- `orca_auto index prune`: 디스크에서 삭제된 작업의 인덱스 정리
+- `orca_auto service status`: systemd 워커 및 런타임 상태 확인
+- `orca_auto service restart`: 워커 서비스 안전 재시작
+- `orca_auto systemd install --user <name> --repo <path>`: systemd 서비스 등록
 
-동작:
+동작 보장:
 
-- `run-dir`는 queue-first입니다. 새 작업은 내구성 있게 큐에 들어가고, 감독되는 워커가
-  나중에 실행합니다.
-- 새 제출이 성공하면 `status: queued`를 반환합니다.
-- 큐 제출 성공 뒤 제출 터미널을 닫아도 안전합니다.
-- 완전히 닫힌 standalone ORCA 작업 디렉터리는 다시 제출할 수 있고, 새 제출은
-  sibling visible generation을 만듭니다. 활성 행이나 미완료 terminal replay/fence 상태가
-  남아 있으면 같은 디렉터리의 후속 제출을 계속 차단하며 `--force`로 우회할 수
-  없습니다.
-- `queue cancel`은 화면에 보이는 activity id와 workflow id, queue id, run id, 경로 alias를
-  대상으로 받을 수 있습니다.
-- 스크립트는 `queue list --json`, `queue cancel --json`, `service status --json`을 사용해야
-  합니다.
-- `queue list`, `queue list clear`, `queue cancel`에서 예상 가능한 설정·queue store·index·
-  workflow registry 실패는 stderr의 간결한 `error:`/`hint:` 진단으로 출력합니다. Python
-  traceback이나 stdout의 불완전한 JSON 없이 0이 아닌 코드로 종료합니다. 출력 중
-  downstream pipe가 닫히면 durable clear/cancel 동작 후의 출력 조건으로 별도 처리하며,
-  설정이나 상태 손상으로 진단하지 않습니다.
-- `queue list --limit N`은 음수가 아닌 정수만 받습니다. `0`은 목록 개수를 제한하지
-  않습니다. `queue list clear`는 durable state를 변경하기 전에 0이 아닌 `--limit`을
-  포함한 모든 목록 필터를 거부합니다.
-- `index prune`은 설정된 `runs_root`의 `job_locations.json`에서 기록된 경로
-  (`original_run_dir`, `selected_input_xyz`, `latest_known_path`)가 모두 디스크에서
-  사라진 행을 나열하고, `--apply`가 있을 때만 제거합니다. 절대 경로를 하나도
-  기록하지 않은 행은 유지합니다. queue 행과 실행 디렉터리는 건드리지 않습니다.
-  `index prune --json`이 스크립트용 표면이며, 예상 가능한 설정·index 실패는 같은
-  형식의 간결한 `error:`/`hint:` 진단을 stderr에 출력하고 아무것도 쓰지 않은 채
-  0이 아닌 코드로 종료합니다.
+- `run-dir`는 큐 기반(queue-first)으로 동작합니다. 새 작업은 디스크 큐에 안전하게 등록되며, 백그라운드 워커가 순차적으로 실행합니다.
+- 작업 제출에 성공하면 `status: queued`를 반환하며, 제출 후 터미널을 안전하게 닫을 수 있습니다.
+- 완료된 작업 디렉터리에 새 계산을 재제출하면 이전 기록을 보존하며 신규 실행 디렉터리(generation)가 생성됩니다. (진행 중인 작업이 있는 경우 중복 제출이 방지됩니다.)
+- `queue cancel`은 작업 ID(activity id, queue id, run id) 및 경로 별칭을 대상으로 취소할 수 있습니다.
+- 스크립트 연동을 위해 `queue list --json`, `queue cancel --json`, `service status --json`, `index prune --json`을 공식 지원합니다.
+- CLI 오류 시 stderr에 명확한 `error:` 및 `hint:` 진단 메시지를 출력하고 0이 아닌 종료 코드를 반환합니다.
 
-비계약 CLI 표면:
+내부 전용 인터페이스:
 
-- `orca_auto queue worker`와 `python -m ...worker_child`는 런타임 배선입니다. 장기 실행
-  워커는 보통 `systemd`로 관리합니다.
-- 숨겨진 `systemd install` 플래그는 테스트/유지보수용이며, 레퍼런스에 문서화되지 않으면
-  지원되는 운영자 인터페이스가 아닙니다.
+- `orca_auto queue worker` 및 하위 프로세스 진입점은 내부 런타임 배선용입니다. 일반적인 운영은 `systemd` 서비스를 통해 관리합니다.
 
 ## 설정 계약
 

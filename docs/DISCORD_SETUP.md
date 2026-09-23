@@ -1,91 +1,66 @@
 # Discord Setup
 
-ORCA_auto sends one-way outbound notifications to a Discord channel using a bot
-token. The bot only posts messages; it does not read channel messages or accept
-interactive commands. Create a dedicated application for ORCA_auto; do not reuse
-the `ollama_bot` token.
+**English** | [한국어](DISCORD_SETUP.ko.md)
+
+ORCA_auto can send notifications to a Discord channel when jobs are queued and completed. The bot operates in outbound-only mode.
 
 ## 1. Create and invite the bot
 
-1. Open the [Discord Developer Portal](https://discord.com/developers/applications),
-   create an application, add a bot, and copy its bot token.
-2. On **OAuth2 → URL Generator**, select the `bot` scope and grant the minimum
-   permissions needed in the notification channel:
-   **View Channel**, **Send Messages**, and **Embed Links**. Open the generated
-   URL and add the bot to the server.
-3. Check channel-level permission overrides too. The bot must have those
-   permissions in the notification channel.
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications), create an application, add a bot, and copy its bot token.
+2. Under **OAuth2 → URL Generator**, select the `bot` scope and grant the following permissions:
+   - **View Channel**
+   - **Send Messages**
+   - **Embed Links**
+3. Open the generated URL in your browser and invite the bot to your server.
+4. Verify channel permission overrides to ensure the bot can send messages in the intended notification channel.
 
-No privileged gateway intents are required. ORCA_auto only posts messages
-through the authenticated REST API, so the bot never needs Message Content
-Intent or message-read permissions.
-
-Treat the bot token like a password. Store it only in the local config, keep
-that file out of Git, and never paste the token into an issue, PR, or chat.
+> **Security Note**: Treat your bot token like a password. Store it only in your local configuration file and never commit it to Git.
 
 ## 2. Copy the channel ID
 
-Enable **User Settings → Advanced → Developer Mode** in Discord. Then use
-**Copy Channel ID** on the notification channel. Discord's
-[ID guide](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID)
-shows where the control is.
-
-- `default_channel_id`: destination for queue and worker notifications.
+In Discord, enable **User Settings → Advanced → Developer Mode**, right-click the notification channel, and select **Copy Channel ID**.
 
 ## 3. Configure ORCA_auto
 
-Edit the active `orca_auto.yaml` (normally `config/orca_auto.yaml`):
-
-You can also rerun `orca_auto init`; when it asks whether to keep the existing
-messenger settings, answer **No** and enter the Discord bot values it prompts
-for. The provider is always `discord`, so there is no provider prompt.
+Edit `config/orca_auto.yaml`:
 
 ```yaml
 messenger:
   provider: discord
   discord:
-    bot_token: "YOUR_ORCA_AUTO_BOT_TOKEN"
-    default_channel_id: "NOTIFICATION_CHANNEL_ID"
+    bot_token: "YOUR_DISCORD_BOT_TOKEN"
+    default_channel_id: "YOUR_CHANNEL_ID"
     timeout_seconds: 5.0
     max_attempts: 2
     retry_backoff_seconds: 0.5
 ```
 
-Discord IDs must be quoted positive decimal strings. Protect the local config:
+Restrict file permissions for safety:
 
 ```bash
 chmod 600 config/orca_auto.yaml
 ```
 
-`bot_token` plus `default_channel_id` enables bot-authenticated outbound
-notifications. Leaving either empty disables delivery.
+You can also configure this interactively by running `orca_auto init`.
 
-## 4. Install and verify
+## 4. Apply changes and test
 
-From the repository root:
-
-```bash
-.venv/bin/python -m pip install -e .
-.venv/bin/orca_auto systemd install --user "$(whoami)" --repo "$(pwd)"
-.venv/bin/orca_auto service restart
-.venv/bin/orca_auto service status
-```
-
-ORCA_auto posts a notification when a run is queued and again when it reaches a
-terminal state. The queued card is sent at submission time, so submitting any
-small ORCA input confirms delivery without waiting for the calculation:
+Restart the worker service to apply the configuration:
 
 ```bash
-.venv/bin/orca_auto run-dir <path>
+orca_auto service restart
+orca_auto service status
 ```
 
-Then check the notification channel for the message card.
+Test notification delivery by submitting a job:
+
+```bash
+orca_auto run-dir <job_path>
+```
+
+A notification card will be sent when the job is queued, followed by a summary card upon completion.
 
 ## Troubleshooting
 
-- **Bot is absent from the server:** regenerate/open the OAuth2 bot invite and
-  select the intended server. A token alone does not add a bot to a server.
-- **Notifications do not arrive:** verify `bot_token`, `default_channel_id`, and
-  **Send Messages** and **Embed Links** in that channel.
-- **Discord reports an invalid token:** reset the token if necessary and restart
-  the service.
+- **No notifications received:** Ensure the bot is added to your server and has `Send Messages` and `Embed Links` permissions in the target channel.
+- **Invalid token error:** Regenerate the token in the Developer Portal, update `config/orca_auto.yaml`, and restart the service.

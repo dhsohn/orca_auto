@@ -2,16 +2,9 @@
 
 **English** | [한국어](PUBLIC_CONTRACTS.ko.md)
 
-This document names the ORCA_auto surfaces that users, operators, and future
-contributors may reasonably depend on. It is intentionally narrower than the
-full implementation: internal modules, private helper functions, and runtime
-plumbing may change when the documented behavior stays intact.
+This document defines the public contracts and interfaces of ORCA_auto that users, operators, and integration tools can depend on. Internal modules, private helpers, and runtime implementation details may evolve as long as the documented contract behavior is preserved.
 
-As of 1.0.0, every surface this document names is a committed contract. The
-0.x releases carried a two-tier split — a small committed Stable Core plus an
-accurate-but-movable Experimental remainder. Before the 1.0 tag every
-Experimental surface was either promoted or removed, so the tiers are gone:
-what is documented here is what the project commits to.
+All interfaces documented here are maintained as stable contracts with semantic versioning.
 
 ## Contract Rules
 
