@@ -14,10 +14,10 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 | `init` | 공통 설정 파일(`orca_auto.yaml`)을 생성하거나 갱신합니다. `--config`로 경로를 지정할 수 있습니다. |
 | `run-dir PATH` | 지정된 작업 디렉터리의 입력을 검증하고 큐에 등록한 뒤 즉시 반환합니다. (실제 계산 완료를 대기하지 않음) |
 | `queue list` | 현재 큐의 작업 목록과 전체 활성 시뮬레이션 수를 조회합니다. 스크립트 연동을 위한 `--json` 출력을 지원합니다. |
-| `queue list clear` | 계산 결과 파일은 그대로 보존하면서, 완료/실패/취소된 큐 목록 표시 이력만 정리합니다. |
+| `queue list clear` | 계산 산출물 파일은 그대로 보존하면서, 큐 목록 및 작업 루트의 terminal job_state.json 기록(중복 방지 배리어)을 정리합니다. |
 | `queue cancel TARGET` | 큐 ID, Run ID, 또는 대상 작업 디렉터리 경로를 지정하여 작업을 안전하게 취소합니다. |
 | `index prune` | 디스크에서 실제 경로가 삭제된 인덱스 항목을 확인합니다. `--apply` 플래그를 넘길 때만 실제 정리가 수행됩니다. |
-| `systemd install` | 현재 실행 환경에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. |
+| `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. |
 | `service status` | 등록된 유닛 템플릿과 실제 실행 중인 워커 프로세스의 빌드 일치 여부를 검사합니다. 불일치 시 0이 아닌 종료 코드를 반환합니다. |
 | `service restart` | 활성 계산이나 예약된 작업이 진행 중일 때는 중단을 방지하기 위해 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 사용합니다. |
 
@@ -48,7 +48,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 1. **원자적 작업 등록 (Atomic Submission)**: 작업 등록 응답(`status: queued`)은 입력 스냅샷 생성 및 디스크 큐 저장이 완전히 완료되었음을 의미합니다.
 2. **실행 디렉터리 격리 (Generation Isolation)**: 모든 계산은 작업 디렉터리 하위의 고유한 `generation` 디렉터리에서 격리되어 실행되므로 이전 시도와 결과가 덮어써지지 않습니다.
 3. **무분별한 자동 재시도 방지**: 워커는 비정상 종료된 작업을 임의로 재실행하지 않으며, 정확한 종료 사유를 기록하여 자원 낭비를 방지합니다.
-4. **자원 대기 지원**: RAM Scratch 사용 중 일시적으로 시스템 메모리가 부족한 경우, 작업을 실패시키지 않고 대기(`waiting for resources`) 상태로 큐에 안전하게 유지합니다.
+4. **자원 대기 지원**: RAM Scratch 사용 중 일시적으로 시스템 메모리가 부족한 경우, 작업을 실패시키지 않고 대기 상태(`pending`, 메타데이터 `admission_deferral_reason` 기록)로 큐에 안전하게 유지합니다.
 
 ---
 
@@ -58,7 +58,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 - **메타데이터 래퍼 (Envelope)**: 공통 규격인 `factory/machine-observation` v1 메타데이터 스키마(Envelope)를 준수합니다.
 - **오퍼레이션 및 페이로드**: `chemistry/orca-run` 작업 식별자와 `chemistry/results-bundle` v1 페이로드를 포함합니다.
-- **결과 검증**: 프로세스 종료 코드(0)에만 의존하지 않고, ORCA 출력 로그의 정상 종료 배너(`ORCA TERMINATED NORMALLY`) 및 오류/SCF 미수렴 마커 유무를 검증하여 완료 상태를 판정합니다. 추출된 에너지, 지오메트리 수렴 및 전자 상태 데이터는 검증된 근거에 기반하여 기록됩니다.
+- **결과 검증**: 프로세스 종료 코드(0)에만 의존하지 않고, ORCA 출력 로그의 정상 종료 배너(`ORCA TERMINATED NORMALLY`) 및 치명적 오류 마커 유무를 검사하여 완료(`completed`) 상태를 판정합니다(TS 계산의 경우 추가 stationary point 조건 검사). 이는 모든 수치적 속성의 수렴을 보장하는 것은 아니며, 예컨대 단일점 에너지 출력에 `SCF not fully converged!` 마커가 있을 경우 해당 에너지 필드는 미검증 값 대신 `null`로 생략됩니다. 추출된 화학적 속성은 검증된 근거만을 반영합니다.
 - **도구의 역할 및 범위**: ORCA_auto는 계산의 안정적인 런타임 제어와 구조화된 데이터 추출을 담당하며, 화학적 입력 구성과 이론적 결과 해석은 연구자의 전문 영역입니다.
 
 ---

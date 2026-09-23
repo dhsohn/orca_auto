@@ -17,7 +17,7 @@ orca_auto init --config ~/orca_auto.yaml
 ```
 
 > **Key settings**:
-> - Absolute path to your ORCA executable (`orca.executable`)
+> - Absolute path to your ORCA executable (`orca.paths.orca_executable`)
 > - Root directory for calculation workspaces (`runs_root`)
 > - Maximum concurrent simulations (`scheduler.max_active_simulations`)
 
@@ -28,11 +28,11 @@ orca_auto init --config ~/orca_auto.yaml
 Register and start the systemd worker service so calculations continue reliably even after the terminal session closes:
 
 ```bash
-# Install and enable systemd units for the current user
-orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
+# Install and enable systemd units for the current user (provide repo or runtime path)
+orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
 
 # Check worker and runtime status
-orca_auto service status --config ~/orca_auto.yaml
+orca_auto service status
 ```
 
 ---

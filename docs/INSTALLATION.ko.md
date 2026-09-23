@@ -38,16 +38,25 @@ orca_auto --version
 
 ## 2. 초기 설정 및 시작
 
-설치가 완료되면 설정 파일을 생성하고 워커 서비스를 등록합니다:
+설치가 완료되면 환경 설정 파일을 생성합니다:
 
 ```bash
 # 기본 설정 파일 생성
 orca_auto init --config ~/orca_auto.yaml
-
-# systemd 워커 등록 및 상태 확인
-orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
-orca_auto service status --config ~/orca_auto.yaml
 ```
+
+### systemd 백그라운드 워커 등록
+백그라운드에서 계산을 안정적으로 수행하려면 systemd 유닛을 등록합니다. 설치 명령어(`systemd install`)는 `.venv`가 포함된 소스 체크아웃 경로 또는 빌드된 런타임 경로(`--repo`)를 필요로 합니다:
+
+```bash
+# 현재 사용자 기준으로 systemd 워커 등록 (체크아웃 또는 런타임 경로 지정)
+orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
+
+# 워커 및 런타임 상태 확인
+orca_auto service status
+```
+
+> **참고**: systemd 없이 대화형 세션이나 스크립트로 직접 실행하려면, `orca_auto run-dir`로 작업을 제출하고 포그라운드 워커(`orca_auto queue worker`)를 직접 실행할 수 있습니다.
 
 이후 작업 제출 방법은 [빠른 시작 가이드](QUICKSTART.ko.md)를 참고하세요.
 

@@ -14,10 +14,10 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 | `init` | Creates or updates the shared configuration (`orca_auto.yaml`). Custom paths are specified via `--config`. |
 | `run-dir PATH` | Validates and durably enqueues an ORCA input directory, returning immediately upon acceptance. |
 | `queue list` | Queries queued/active jobs and the global active simulation count. Supports `--json` for automation. |
-| `queue list clear` | Clears terminal (completed, failed, cancelled) queue entries while preserving calculation artifacts on disk. |
+| `queue list clear` | Clears terminal queue records and unlinks job-root run states while preserving generation artifacts on disk. |
 | `queue cancel TARGET` | Cancels a job by queue ID, run ID, or unambiguous directory path alias. |
 | `index prune` | Previews indexed rows whose disk paths no longer exist. Removes them only when `--apply` is passed. |
-| `systemd install` | Installs systemd unit templates for the specified user and runtime. |
+| `systemd install` | Installs systemd unit templates for the specified user and repository or prepared runtime root (`--repo`). |
 | `service status` | Inspects systemd units and verifies worker process freshness against the installed build. Returns non-zero on drift. |
 | `service restart` | Refuses restart if active calculations or reservations exist, preventing accidental data loss. Use `--force` to bypass. |
 
@@ -48,7 +48,7 @@ Configuration files are resolved in the following priority order:
 1. **Atomic Submission**: A successful submission (`status: queued`) guarantees that the input snapshot is created and the job is permanently recorded on disk.
 2. **Generation Isolation**: Calculations run within versioned, generation-isolated directories to prevent state contamination across repeated attempts.
 3. **Explicit Failure Handling**: Failed runs record clear diagnostic exit reasons without attempting automatic, blind retries.
-4. **Capacity Deferral**: When RAM Scratch is enabled, temporary host memory constraints defer launching (`waiting for resources`) rather than failing the calculation.
+4. **Capacity Deferral**: When RAM Scratch is enabled, temporary host memory constraints defer launching (job remains in `pending` with `metadata.admission_deferral_reason` set) rather than failing the calculation.
 
 ---
 
@@ -58,7 +58,7 @@ Upon completion, each job publishes a structured `machine.json` artifact for dow
 
 - **Envelope Schema**: Conforms to the standard `factory/machine-observation` v1 contract.
 - **Operation & Payload**: Emits `chemistry/orca-run` with a `chemistry/results-bundle` v1 payload.
-- **Verification**: Completion is verified through ORCA normal termination markers and output diagnostic scanning rather than process exit codes alone. Extracted chemical properties (energies, stationary points, electronic states) reflect verified evidence without synthetic defaults.
+- **Verification**: Completion (`completed`) verifies normal termination (`ORCA TERMINATED NORMALLY`) without detected fatal crash markers (and for TS calculations, satisfies mode-specific stationary point criteria). It does not guarantee that every numerical property converged; for example, if the final single-point energy line is annotated `SCF not fully converged!`, energy fields are omitted (`null`) rather than populated with unverified numbers. Extracted chemical properties (energies, stationary points, electronic states) reflect verified evidence without synthetic defaults.
 - **Scope Boundary**: ORCA_auto supervises process lifecycle and structures output artifacts; scientific acceptance and chemical validity remain the researcher's responsibility.
 
 ---

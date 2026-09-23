@@ -38,16 +38,25 @@ orca_auto --version
 
 ## 2. Configuration & Service Setup
 
-After installation, initialize your configuration file and register the background worker:
+After installation, initialize your configuration file:
 
 ```bash
 # Initialize configuration
 orca_auto init --config ~/orca_auto.yaml
-
-# Install systemd worker units and verify status
-orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
-orca_auto service status --config ~/orca_auto.yaml
 ```
+
+### Background Execution with systemd
+To supervise workers in the background, register systemd worker units. The installer requires `--repo` pointing to either a local repository checkout (containing `.venv`) or a prepared runtime root:
+
+```bash
+# Register systemd worker units for the current user (from checkout or prepared runtime)
+orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
+
+# Verify worker and runtime status
+orca_auto service status
+```
+
+> **Note**: For interactive sessions or direct command-line use without systemd, you can enqueue jobs with `orca_auto run-dir` and run the supervisor in the foreground via `orca_auto queue worker`.
 
 Continue with the [Quickstart Guide](QUICKSTART.md) to submit and inspect calculations.
 

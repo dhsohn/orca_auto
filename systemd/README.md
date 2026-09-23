@@ -2,7 +2,7 @@
 
 **English** | [한국어](README.ko.md)
 
-ORCA_auto uses `systemd` user-level instances on Linux and WSL to supervise background worker processes.
+ORCA_auto uses system-level templated `systemd` units instantiated per user (`@USER`) on Linux and WSL to supervise background worker processes. Units are installed to `/etc/systemd/system/` and managed with standard `systemctl` / `sudo` or through `orca_auto service` commands (not `systemctl --user`).
 
 ---
 
@@ -27,24 +27,25 @@ orca_auto-runtime@USER.target          # Top-level runtime target
 ## 2. Service Management Commands
 
 ### Install Units
+The installer renders template units into `/etc/systemd/system/`. It requires `--user` and `--repo` (pointing to a repository checkout containing `.venv` or a prepared runtime root):
 ```bash
 # Render and install systemd templates for the current user
-orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
+orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
 ```
 
 ### Check Service Status
 Verifies that running worker processes match the installed systemd unit build:
 ```bash
-orca_auto service status --config ~/orca_auto.yaml
+orca_auto service status
 ```
 
 ### Safe Service Restart
 To protect running calculations from accidental interruption, restarts are only permitted during an idle maintenance window (zero active simulations):
 ```bash
-orca_auto service restart --config ~/orca_auto.yaml
+orca_auto service restart
 
 # Force restart (aborts active calculations; use with caution)
-orca_auto service restart --config ~/orca_auto.yaml --force
+orca_auto service restart --force
 ```
 
 ---

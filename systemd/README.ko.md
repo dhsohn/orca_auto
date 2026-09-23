@@ -2,7 +2,7 @@
 
 [English](README.md) | **한국어**
 
-ORCA_auto는 Linux 및 WSL 환경에서 `systemd`를 활용하여 백그라운드 워커 프로세스를 상주시키고 감독합니다.
+ORCA_auto는 Linux 및 WSL 환경에서 시스템 레벨 템플릿 유닛을 사용자별(`@USER`) 인스턴스로 등록하여 백그라운드 워커 프로세스를 상주시키고 감독합니다. 유닛은 `/etc/systemd/system/`에 설치되며, 사용자 매니저 유닛(`systemctl --user`)이 아닌 일반 `systemctl` / `sudo` 또는 `orca_auto service` 명령어를 통해 제어합니다.
 
 ---
 
@@ -27,24 +27,25 @@ orca_auto-runtime@USER.target          # 런타임 최상위 관리 타깃
 ## 2. 유닛 등록 및 서비스 관리
 
 ### 유닛 등록 (설치)
+설치기는 `/etc/systemd/system/`에 템플릿 유닛을 렌더링합니다. `.venv`가 포함된 소스 체크아웃 경로 또는 빌드된 런타임 루트(`--repo`)와 대상 사용자(`--user`)가 필요합니다:
 ```bash
 # 현재 사용자 기준으로 systemd 유닛 등록 및 활성화
-orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
+orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
 ```
 
 ### 서비스 상태 확인
 실행 중인 워커 프로세스의 빌드 버전과 설치된 systemd 유닛 템플릿의 일치 여부를 검사합니다:
 ```bash
-orca_auto service status --config ~/orca_auto.yaml
+orca_auto service status
 ```
 
 ### 안전한 서비스 재시작
 진행 중인 계산 작업의 중단을 방지하기 위해, 활성 시뮬레이션이 없는 유휴(idle) 상태일 때만 안전하게 재시작됩니다:
 ```bash
-orca_auto service restart --config ~/orca_auto.yaml
+orca_auto service restart
 
 # 진행 중인 계산을 즉시 중단하고 강제 재시작해야 하는 경우 (주의 필요)
-orca_auto service restart --config ~/orca_auto.yaml --force
+orca_auto service restart --force
 ```
 
 ---

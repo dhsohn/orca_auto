@@ -12,12 +12,12 @@ ORCA_auto 설정을 생성하고 백그라운드 워커를 등록한 뒤, 첫 �
 대화형 마법사 또는 기본 템플릿을 통해 설정 파일(`orca_auto.yaml`)을 생성합니다.
 
 ```bash
-# 기본 위치(~/.config/orca_auto/orca_auto.yaml 또는 지정 경로)에 설정 파일 생성
+# 기본 위치(~/orca_auto/config/orca_auto.yaml 또는 지정 경로)에 설정 파일 생성
 orca_auto init --config ~/orca_auto.yaml
 ```
 
 > **주요 설정 항목**:
-> - ORCA 실행 바이너리 절대 경로 (`orca.executable`)
+> - ORCA 실행 바이너리 절대 경로 (`orca.paths.orca_executable`)
 > - 작업 디렉터리가 위치할 최상위 경로 (`runs_root`)
 > - 동시 실행 허용 수 (`scheduler.max_active_simulations`)
 
@@ -28,11 +28,11 @@ orca_auto init --config ~/orca_auto.yaml
 터미널 세션이 종료되어도 백그라운드에서 계산을 안정적으로 수행할 수 있도록 systemd 서비스를 등록하고 상태를 확인합니다.
 
 ```bash
-# systemd 유닛 등록 (현재 사용자 기준)
-orca_auto systemd install --user "$(id -un)" --config ~/orca_auto.yaml
+# systemd 유닛 등록 (현재 사용자 기준, 소스 체크아웃 또는 런타임 경로 지정)
+orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
 
 # 워커 및 런타임 서비스 상태 확인
-orca_auto service status --config ~/orca_auto.yaml
+orca_auto service status
 ```
 
 ---
