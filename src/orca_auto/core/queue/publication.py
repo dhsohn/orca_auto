@@ -93,7 +93,7 @@ def queue_record_sync_metadata(
     return metadata
 
 
-def _publication_lock_path(root: str | Path, queue_id: str) -> Path:
+def queue_record_publication_lock_path(root: str | Path, queue_id: str) -> Path:
     resolved_root = resolve_root_path(root)
     digest = sha256(str(queue_id).encode("utf-8")).hexdigest()
     return resolved_root / _QUEUE_RECORD_PUBLICATION_LOCK_DIR / f"{digest}.lock"
@@ -111,10 +111,11 @@ def queue_record_publication_lock(
     Callers may acquire the queue lock while holding this lock, but must never
     wait for this lock while still holding the queue lock.
     """
-    with file_lock(
-        _publication_lock_path(root, queue_id),
-        timeout_seconds=timeout_seconds,
-    ):
+    lock_path = queue_record_publication_lock_path(root, queue_id)
+    # The lock directory lives under an existing queue root; a missing root
+    # stays missing rather than being created by a publication attempt.
+    lock_path.parent.mkdir(exist_ok=True)
+    with file_lock(lock_path, timeout_seconds=timeout_seconds):
         yield
 
 
@@ -144,6 +145,7 @@ __all__ = [
     "process_start_token",
     "queue_entry_is_claimable",
     "queue_record_publication_lock",
+    "queue_record_publication_lock_path",
     "queue_record_sync_metadata",
     "queue_record_sync_state",
 ]

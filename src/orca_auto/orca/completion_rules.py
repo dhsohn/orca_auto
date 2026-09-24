@@ -1,10 +1,12 @@
+"""Route-line regexes and the completion mode (TS, IRC, Opt, SP) an input asks for."""
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import file_route_lines
+from .input_syntax import file_route_lines
 
 # Only real ORCA TS keywords. No bare `TS` token: ORCA has no `! TS`, so it
 # can only ever match stray text (the SCAN-functional collision class), never

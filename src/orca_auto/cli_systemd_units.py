@@ -13,9 +13,9 @@ from orca_auto import systemd_plan
 from orca_auto.core.utils.coercion import normalize_text
 
 _SERVICE_UNIT_FACTORIES: tuple[tuple[str, Callable[[str], str]], ...] = (
-    ("runtime", systemd_plan._runtime_unit_for_user),
-    ("engines", systemd_plan._engine_workers_unit_for_user),
-    ("worker", systemd_plan._worker_unit_for_user),
+    ("runtime", systemd_plan.runtime_unit_for_user),
+    ("engines", systemd_plan.engine_workers_unit_for_user),
+    ("worker", systemd_plan.worker_unit_for_user),
 )
 _ENABLED_UNIT_FILE_STATES = frozenset({"enabled", "enabled-runtime"})
 _READABLE_UNIT_FILE_STATES = frozenset(
@@ -52,7 +52,7 @@ def default_service_user() -> str:
     # exits 0 on a unit it reports as "not loaded" -- so the command claims to
     # have restarted workers it never touched. Template units cannot catch this
     # either: they load for any instance name. Prefer the invoking account.
-    if systemd_plan._is_root():
+    if systemd_plan.running_as_root():
         invoking_user = normalize_text(os.environ.get("SUDO_USER"))
         if invoking_user and invoking_user != "root":
             return invoking_user
@@ -149,8 +149,8 @@ def run_command(
     use_sudo: bool,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> int:
-    argv = systemd_plan._systemd_command_argv(command, use_sudo=use_sudo)
-    print(f"$ {systemd_plan._format_command(command, use_sudo=use_sudo)}")
+    argv = systemd_plan.systemd_command_argv(command, use_sudo=use_sudo)
+    print(f"$ {systemd_plan.format_command(command, use_sudo=use_sudo)}")
     completed = run(argv, check=False)
     return int(completed.returncode)
 

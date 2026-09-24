@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import pwd
 import re
@@ -10,12 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.files import (
-    YAML_CONFIG_LOAD_EXCEPTIONS,
-    load_shared_config,
-    resolved_admission_root,
-    usable_runs_root_text,
-)
+from orca_auto.core.config.files import resolved_admission_root, usable_runs_root_text
 from orca_auto.core.runtime_bundle import (
     PROCESS_RUNTIME_BUILD_ENV,
     RUNTIME_MANIFEST_NAME,
@@ -52,7 +48,7 @@ class SystemdInstallPlan:
     warnings: tuple[str, ...]
 
 
-def _is_root() -> bool:
+def running_as_root() -> bool:
     return os.geteuid() == 0
 
 
@@ -66,7 +62,7 @@ class SystemdInstallOptions:
     no_enable: bool = False
     no_start: bool = False
     no_sudo: bool = False
-    is_root: Callable[[], bool] = _is_root
+    is_root: Callable[[], bool] = running_as_root
 
 
 def _existing_parent(path: Path) -> Path:
@@ -76,7 +72,7 @@ def _existing_parent(path: Path) -> Path:
     return current
 
 
-def _needs_sudo(unit_dir: Path, *, is_root: Callable[[], bool] = _is_root) -> bool:
+def _needs_sudo(unit_dir: Path, *, is_root: Callable[[], bool] = running_as_root) -> bool:
     if is_root():
         return False
     writable_target = unit_dir if unit_dir.exists() else _existing_parent(unit_dir)
@@ -182,10 +178,11 @@ def _require_explicit_admission_directory(admission_root: Path) -> None:
 def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     if not config.exists():
         return ()
-    try:
-        _, shared = load_shared_config(config)
-    except YAML_CONFIG_LOAD_EXCEPTIONS:
-        return ()
+    # A config that exists but cannot be loaded fails the install: units
+    # rendered without ReadWritePaths would start a worker that cannot write.
+    from orca_auto.orca.config import load_orca_shared_config
+
+    _, shared, _orca_sections = load_orca_shared_config(config)
 
     paths: list[Path] = []
     runs_root = usable_runs_root_text(shared.runs_root)
@@ -212,12 +209,26 @@ def _render_read_write_paths(config: Path) -> str:
     return f"ReadWritePaths={joined}"
 
 
+def _configured_stop_timeout_seconds(config: Path) -> int | None:
+    """The worker's shutdown budget for the configured concurrency, or None without a config."""
+    if not config.exists():
+        return None
+    from orca_auto.core.queue.processes import KILL_TIMEOUT_SECONDS, worker_shutdown_budget_seconds
+    from orca_auto.orca.config import load_orca_shared_config
+
+    _, shared, _orca_sections = load_orca_shared_config(config)
+    budget = worker_shutdown_budget_seconds(shared.scheduler.max_active_simulations)
+    # One extra second so systemd's SIGKILL can never precede the supervisor's own kill wait.
+    return math.ceil(budget + KILL_TIMEOUT_SECONDS) + 1
+
+
 def _render_unit_template(
     template: str, *, repo: Path, config: Path, runtime_build: str = ""
 ) -> str:
     repo_text = _systemd_path_text(repo, label="--repo")
     config_text = _systemd_path_text(config, label="--config")
     read_write_paths = _render_read_write_paths(config)
+    stop_timeout_seconds = _configured_stop_timeout_seconds(config)
     rendered = template.replace("/home/%i/orca_auto", repo_text)
     lines = []
     config_environment_prefix = f"Environment={ORCA_AUTO_CONFIG_ENV_VAR}="
@@ -236,6 +247,8 @@ def _render_unit_template(
             )
         elif line.strip() == _SYSTEMD_READ_WRITE_PLACEHOLDER:
             lines.append(read_write_paths)
+        elif line.startswith("TimeoutStopSec=") and stop_timeout_seconds is not None:
+            lines.append(f"TimeoutStopSec={stop_timeout_seconds}")
         else:
             lines.append(line)
     return "\n".join(lines) + "\n"
@@ -259,15 +272,15 @@ def _normalize_path(value: str | Path) -> Path:
     return Path(value).expanduser().resolve(strict=False)
 
 
-def _runtime_unit_for_user(target_user: str) -> str:
+def runtime_unit_for_user(target_user: str) -> str:
     return f"orca_auto-runtime@{target_user}.target"
 
 
-def _engine_workers_unit_for_user(target_user: str) -> str:
+def engine_workers_unit_for_user(target_user: str) -> str:
     return f"orca_auto-engine-workers@{target_user}.target"
 
 
-def _worker_unit_for_user(target_user: str) -> str:
+def worker_unit_for_user(target_user: str) -> str:
     return f"orca_auto-queue-worker@{target_user}.service"
 
 
@@ -275,8 +288,8 @@ def _enabled_unit_for_args(*, target_user: str, worker_only: bool, no_enable: bo
     if no_enable:
         return None
     if worker_only:
-        return _engine_workers_unit_for_user(target_user)
-    return _runtime_unit_for_user(target_user)
+        return engine_workers_unit_for_user(target_user)
+    return runtime_unit_for_user(target_user)
 
 
 def _systemctl_transition_commands(
@@ -296,15 +309,15 @@ def _systemctl_transition_commands(
     # error into a worker outage.
     commands.append(("systemctl", "enable", enabled_unit))
     opposite_unit = (
-        _runtime_unit_for_user(target_user)
+        runtime_unit_for_user(target_user)
         if worker_only
-        else _engine_workers_unit_for_user(target_user)
+        else engine_workers_unit_for_user(target_user)
     )
     if not no_start:
         # An explicit install transition is an operator-requested recovery.
         # Clear bounded service start-limit counters so they cannot block this
         # operator-requested recovery inside their five-minute windows.
-        commands.append(("systemctl", "reset-failed", _worker_unit_for_user(target_user)))
+        commands.append(("systemctl", "reset-failed", worker_unit_for_user(target_user)))
         # `restart` also starts an inactive unit and reapplies the runtime
         # target's Wants= graph when the requested mode was already active. It
         # does not restart member services that are already running (observed
@@ -313,7 +326,7 @@ def _systemctl_transition_commands(
         # restarts the worker services explicitly.
         commands.append(("systemctl", "restart", enabled_unit))
         desired_units = [
-            _worker_unit_for_user(target_user),
+            worker_unit_for_user(target_user),
         ]
         # Targets use Wants=, so a successful target job does not prove that its
         # services started. Gate destructive cleanup on the actual runtime units.
@@ -321,7 +334,7 @@ def _systemctl_transition_commands(
     # Older worker-only installs enabled the ORCA service directly. Remove only
     # its boot selection after the desired target is ready; stopping this shared
     # service would also stop the freshly restarted runtime.
-    commands.append(("systemctl", "disable", _worker_unit_for_user(target_user)))
+    commands.append(("systemctl", "disable", worker_unit_for_user(target_user)))
     # The opposite target can share live services with the selected target.
     # Disable its boot selection without --now so the successful desired restart
     # remains intact if this final cleanup fails.
@@ -448,7 +461,7 @@ def build_systemd_install_plan(
     no_enable: bool = False,
     no_start: bool = False,
     no_sudo: bool = False,
-    is_root: Callable[[], bool] = _is_root,
+    is_root: Callable[[], bool] = running_as_root,
 ) -> SystemdInstallPlan:
     user_text = normalize_text(target_user)
     if not user_text:
@@ -474,15 +487,15 @@ def build_systemd_install_plan(
     return _build_systemd_install_plan(options)
 
 
-def _systemd_command_argv(command: Sequence[str], *, use_sudo: bool) -> tuple[str, ...]:
+def systemd_command_argv(command: Sequence[str], *, use_sudo: bool) -> tuple[str, ...]:
     return (("sudo",) if use_sudo else ()) + tuple(command)
 
 
-def _format_command(command: Sequence[str], *, use_sudo: bool) -> str:
-    return " ".join(_systemd_command_argv(command, use_sudo=use_sudo))
+def format_command(command: Sequence[str], *, use_sudo: bool) -> str:
+    return " ".join(systemd_command_argv(command, use_sudo=use_sudo))
 
 
-def _print_plan(plan: SystemdInstallPlan) -> None:
+def print_plan(plan: SystemdInstallPlan) -> None:
     print("systemd install plan:")
     print(f"  user: {plan.target_user}")
     print(f"  repo: {plan.repo}")
@@ -498,10 +511,10 @@ def _print_plan(plan: SystemdInstallPlan) -> None:
     if plan.commands:
         print("  run:")
         for command in plan.commands:
-            print(f"    {_format_command(command, use_sudo=plan.use_sudo)}")
+            print(f"    {format_command(command, use_sudo=plan.use_sudo)}")
 
 
-def _print_warnings(plan: SystemdInstallPlan) -> None:
+def print_warnings(plan: SystemdInstallPlan) -> None:
     for warning in plan.warnings:
         print(f"warning: {warning}")
 
@@ -513,4 +526,12 @@ __all__ = [
     "SystemdInstallOptions",
     "SystemdInstallPlan",
     "build_systemd_install_plan",
+    "engine_workers_unit_for_user",
+    "format_command",
+    "print_plan",
+    "print_warnings",
+    "running_as_root",
+    "runtime_unit_for_user",
+    "systemd_command_argv",
+    "worker_unit_for_user",
 ]

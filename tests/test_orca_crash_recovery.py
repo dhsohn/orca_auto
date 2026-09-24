@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -18,25 +17,50 @@ from orca_auto.core.queue.engine.snapshot_intent import (
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.types import QueueStatus
-from orca_auto.orca import execution_binding as binding_mod
+from orca_auto.orca import recovery_rebind as _rebind
 from orca_auto.orca import worker_execution as worker_job
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution_binding import (
+    _confinement,
+    _recovery,
+    _reservation,
+    _rewrite,
+    _snapshot_identity,
     build_orca_execution_snapshot,
     orca_execution_started_evidence,
     verify_orca_execution_snapshot,
 )
-from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.execution_binding import _verify as _verify_stage
+from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.submission import mark_orca_snapshot_owned
+from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
 
 _PRISTINE_XYZ = "2\nH2\nH 0 0 0\nH 0 0 0.74\n"
 _CRASHED_XYZ = "2\noptimizing\nH 0 0 0\nH 0 0 0.80\n"
+# Binding stages that read source bytes or enforce the byte budgets. Patching
+# every one keeps the former single-module monkeypatch semantics.
+_STABLE_READERS = (_confinement, _recovery, _snapshot_identity, _verify_stage)
+_INPUT_BUDGET_USERS = (_confinement, _recovery)
+_AGGREGATE_BUDGET_USERS = (_confinement, _recovery, _rewrite, _snapshot_identity)
 
 
-def _write_executable(path: Path) -> Path:
-    path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    path.chmod(0o755)
-    return path
+def _patch_stable_read(monkeypatch: pytest.MonkeyPatch, reader: Any) -> None:
+    for module in _STABLE_READERS:
+        monkeypatch.setattr(module, "read_stable_regular_file", reader)
+
+
+def _patch_budgets(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    input_bytes: int | None = None,
+    aggregate_bytes: int | None = None,
+) -> None:
+    if input_bytes is not None:
+        for module in _INPUT_BUDGET_USERS:
+            monkeypatch.setattr(module, "MAX_INPUT_SNAPSHOT_BYTES", input_bytes)
+    if aggregate_bytes is not None:
+        for module in _AGGREGATE_BUDGET_USERS:
+            monkeypatch.setattr(module, "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES", aggregate_bytes)
 
 
 def _mutable_job(tmp_path: Path, job_name: str = "job") -> tuple[Path, Path, Path]:
@@ -48,7 +72,7 @@ def _mutable_job(tmp_path: Path, job_name: str = "job") -> tuple[Path, Path, Pat
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 h2.xyz\n", encoding="utf-8")
     executable = tmp_path / "fake-orca"
     if not executable.exists():
-        _write_executable(executable)
+        write_fake_orca(executable)
     return job_dir, selected, executable
 
 
@@ -223,7 +247,7 @@ def test_recovery_materializes_the_exact_validated_seed_bytes(
     crashed = _build(job_dir, selected, executable)
     generation = _crash_generation(crashed)
     seed_path = generation / "h2.xyz"
-    real_read = binding_mod.read_stable_regular_file
+    real_read = _confinement.read_stable_regular_file
     seed_reads = 0
 
     def substitute_on_second_seed_read(path: str | Path, **kwargs: Any) -> bytes:
@@ -234,7 +258,7 @@ def test_recovery_materializes_the_exact_validated_seed_bytes(
                 return b"1\nsubstituted after validation\nHe 0 0 0\n"
         return real_read(path, **kwargs)
 
-    monkeypatch.setattr(binding_mod, "read_stable_regular_file", substitute_on_second_seed_read)
+    _patch_stable_read(monkeypatch, substitute_on_second_seed_read)
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
 
@@ -253,14 +277,14 @@ def test_recovery_atom_guard_rejects_bytes_outside_bound_selected_identity(
     crashed = _build(job_dir, selected, executable)
     generation = _crash_generation(crashed)
     bound_selected = Path(crashed["bound_selected_identity"]["path"])
-    real_read = binding_mod.read_stable_regular_file
+    real_read = _confinement.read_stable_regular_file
 
     def substitute_bound_selected(path: str | Path, **kwargs: Any) -> bytes:
         if Path(path) == bound_selected:
             return b"! HF STO-3G Opt\n* xyz 0 1\nHe 0 0 0\n*\n"
         return real_read(path, **kwargs)
 
-    monkeypatch.setattr(binding_mod, "read_stable_regular_file", substitute_bound_selected)
+    _patch_stable_read(monkeypatch, substitute_bound_selected)
 
     with pytest.raises(ValueError, match="recovery bound selected input snapshot is corrupt"):
         _build(job_dir, selected, executable, recovery_from=crashed)
@@ -276,18 +300,17 @@ def test_recovery_accepts_identity_bound_input_larger_than_one_source_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(binding_mod, "MAX_INPUT_SNAPSHOT_BYTES", 240)
-    monkeypatch.setattr(binding_mod, "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES", 960)
+    _patch_budgets(monkeypatch, input_bytes=240, aggregate_bytes=960)
     job_dir, selected, executable = _mutable_job(tmp_path)
     selected.write_text(
         "! HF STO-3G Opt\n#" + "x" * 200 + "\n* xyzfile 0 1 h2.xyz\n",
         encoding="utf-8",
     )
-    assert selected.stat().st_size <= binding_mod.MAX_INPUT_SNAPSHOT_BYTES
+    assert selected.stat().st_size <= 240
 
     crashed = _build(job_dir, selected, executable)
     bound_selected = Path(crashed["bound_selected_identity"]["path"])
-    assert bound_selected.stat().st_size > binding_mod.MAX_INPUT_SNAPSHOT_BYTES
+    assert bound_selected.stat().st_size > 240
     _crash_generation(crashed)
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
@@ -379,7 +402,7 @@ def test_recovery_build_orders_roles_by_stored_source_paths(tmp_path: Path) -> N
         ),
         encoding="utf-8",
     )
-    executable = _write_executable(tmp_path / "ts-orca")
+    executable = write_fake_orca(tmp_path / "ts-orca")
     crashed = _build(job_dir, selected, executable)
     assert crashed["runtime_mutable_input_roles"] == ["dependency_000001"]
     generation = Path(crashed["execution_dir"])
@@ -467,7 +490,7 @@ def test_recovery_checkpoint_skipped_when_source_already_moreads(tmp_path: Path)
         '! HF STO-3G Opt MORead\n%moinp "guess.gbw"\n* xyzfile 0 1 h2.xyz\n',
         encoding="utf-8",
     )
-    executable = _write_executable(tmp_path / "moread-orca")
+    executable = write_fake_orca(tmp_path / "moread-orca")
     crashed = _build(job_dir, selected, executable)
     generation = Path(crashed["execution_dir"])
     (generation / "h2.out").write_text("interrupted\n", encoding="utf-8")
@@ -511,7 +534,7 @@ def test_recovery_checkpoint_skipped_when_scf_block_already_moreads(
         f"! HF STO-3G Opt\n{scf_block}\n* xyzfile 0 1 h2.xyz\n",
         encoding="utf-8",
     )
-    executable = _write_executable(tmp_path / "moread-scf-orca")
+    executable = write_fake_orca(tmp_path / "moread-scf-orca")
     crashed = _build(job_dir, selected, executable)
     generation = _crash_generation(crashed)
     (generation / "h2.gbw").write_bytes(b"runtime-orbitals")
@@ -531,7 +554,7 @@ def test_recovery_build_rejects_changed_executable_before_reserving_generation(
     job_dir, selected, executable = _mutable_job(tmp_path)
     crashed = _build(job_dir, selected, executable)
     old_generation = _crash_generation(crashed)
-    replacement_executable = _write_executable(tmp_path / "replacement-orca")
+    replacement_executable = write_fake_orca(tmp_path / "replacement-orca")
 
     with pytest.raises(ValueError, match="executable does not match the submitted identity"):
         _build(
@@ -588,7 +611,7 @@ def _hessian_job(tmp_path: Path) -> tuple[Path, Path, Path]:
         ),
         encoding="utf-8",
     )
-    executable = _write_executable(tmp_path / "freq-orca")
+    executable = write_fake_orca(tmp_path / "freq-orca")
     return job_dir, selected, executable
 
 
@@ -671,13 +694,11 @@ def test_recovery_checkpoint_skipped_when_oversized(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
-
     job_dir, selected, executable = _mutable_job(tmp_path)
     crashed = _build(job_dir, selected, executable)
     old_generation = _crash_generation(crashed)
     (old_generation / "h2.gbw").write_bytes(b"x" * 200_000)
-    monkeypatch.setattr(binding, "MAX_INPUT_SNAPSHOT_BYTES", 100_000)
+    _patch_budgets(monkeypatch, input_bytes=100_000)
 
     replacement = _build(job_dir, selected, executable, recovery_from=crashed)
 
@@ -692,7 +713,7 @@ def test_recovery_checkpoint_for_single_point_input(tmp_path: Path) -> None:
     (job_dir / "h2.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
     selected = job_dir / "h2.inp"
     selected.write_text("! HF STO-3G\n* xyzfile 0 1 h2.xyz\n", encoding="utf-8")
-    executable = _write_executable(tmp_path / "sp-orca")
+    executable = write_fake_orca(tmp_path / "sp-orca")
     crashed = _build(job_dir, selected, executable)
     generation = Path(crashed["execution_dir"])
     (generation / "h2.out").write_text("interrupted\n", encoding="utf-8")
@@ -744,6 +765,20 @@ def _worker_cfg(queue_root: Path, executable: Path) -> AppConfig:
     )
 
 
+def _worker_config(tmp_path: Path, queue_root: Path, executable: Path, **overrides: Any) -> Path:
+    """Write the ``orca_auto.yaml`` a worker child loads; the same settings as ``_worker_cfg``."""
+
+    return write_config_file(
+        tmp_path / "orca_auto.yaml",
+        make_app_cfg(
+            queue_root,
+            orca_executable=executable,
+            resources=CommonResourceConfig(max_cores_per_task=1, max_memory_gb_per_task=1),
+            **overrides,
+        ),
+    )
+
+
 def _claimed_mutable_entry(tmp_path: Path) -> tuple[Path, Any, dict[str, Any], Path]:
     queue_root = tmp_path / "queue"
     queue_root.mkdir(exist_ok=True)
@@ -772,7 +807,7 @@ def _claimed_mutable_entry(tmp_path: Path) -> tuple[Path, Any, dict[str, Any], P
         "execution_snapshot": snapshot,
     }
     enqueue(queue_root, str(job_dir), force=True, task_id="task-recovery", metadata=metadata)
-    running = dequeue_next(queue_root)
+    running = claim_next_entry(queue_root)
     assert running is not None
     return queue_root, running, snapshot, executable
 
@@ -791,7 +826,7 @@ def test_rebind_passes_through_a_pristine_claim(tmp_path: Path) -> None:
 
     assert result is running
     (row,) = list_queue(queue_root)
-    assert worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
+    assert _rebind.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
 
 
 def test_rebind_moves_crashed_claim_into_new_generation(tmp_path: Path) -> None:
@@ -808,7 +843,7 @@ def test_rebind_moves_crashed_claim_into_new_generation(tmp_path: Path) -> None:
     replacement = result.metadata["execution_snapshot"]
     assert replacement["generation_name"] != snapshot["generation_name"]
     assert is_visible_generation_name(replacement["generation_name"])
-    assert result.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert result.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
     assert result.metadata["selected_inp"] == replacement["selected_inp"]
     (row,) = list_queue(queue_root)
     assert row.metadata["execution_snapshot"]["generation_name"] == (replacement["generation_name"])
@@ -844,7 +879,7 @@ def test_rebind_honors_a_pending_cancellation(tmp_path: Path) -> None:
     assert result.status is QueueStatus.CANCELLED
     (row,) = list_queue(queue_root)
     assert row.status is QueueStatus.CANCELLED
-    assert worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
+    assert _rebind.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
 
 
@@ -857,7 +892,7 @@ def test_rebind_fails_closed_at_the_recovery_limit(tmp_path: Path) -> None:
     assert update_metadata(
         queue_root,
         str(running.queue_id),
-        {worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: worker_job.RECOVERY_REBIND_LIMIT},
+        {_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY: _rebind.RECOVERY_REBIND_LIMIT},
         expected_entry=running,
     )
     (claimed,) = list_queue(queue_root)
@@ -879,11 +914,9 @@ def test_worker_child_runs_the_replacement_generation(
 ) -> None:
     queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
     _crash_generation(snapshot)
-    cfg = _worker_cfg(queue_root, executable)
-    cfg = replace(cfg, runtime=replace(cfg.runtime, admission_root=str(tmp_path / "admission")))
+    config = _worker_config(tmp_path, queue_root, executable, admission_root=tmp_path / "admission")
     calls: dict[str, Any] = {}
 
-    monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _cb: None)
 
     def fake_execute_orca_run(*args: Any, **kwargs: Any) -> int:
@@ -893,7 +926,7 @@ def test_worker_child_runs_the_replacement_generation(
     monkeypatch.setattr(worker_job, "execute_orca_run", fake_execute_orca_run)
 
     rc = worker_job.run_worker_child_job(
-        config_path="/tmp/config.yaml",
+        config_path=str(config),
         queue_root=queue_root,
         queue_id=str(running.queue_id),
         admission_token=None,
@@ -920,7 +953,7 @@ def test_rebind_consumes_budget_before_building(
     def explode(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("simulated crash during rebuild")
 
-    monkeypatch.setattr(worker_job, "build_orca_execution_snapshot", explode)
+    monkeypatch.setattr(_rebind, "build_orca_execution_snapshot", explode)
 
     with pytest.raises(RuntimeError, match="simulated crash"):
         worker_job._maybe_rebind_recovery_generation(
@@ -930,7 +963,7 @@ def test_rebind_consumes_budget_before_building(
         )
 
     (row,) = list_queue(queue_root)
-    assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert row.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
 
 
@@ -941,7 +974,7 @@ def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
     queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
     old_generation = _crash_generation(snapshot)
     cfg = _worker_cfg(queue_root, executable)
-    real_build = worker_job.build_orca_execution_snapshot
+    real_build = _rebind.build_orca_execution_snapshot
     build_count = 0
 
     def crash_first_build(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -951,7 +984,7 @@ def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
             raise RuntimeError("simulated crash after budget claim")
         return real_build(*args, **kwargs)
 
-    monkeypatch.setattr(worker_job, "build_orca_execution_snapshot", crash_first_build)
+    monkeypatch.setattr(_rebind, "build_orca_execution_snapshot", crash_first_build)
 
     with pytest.raises(RuntimeError, match="simulated crash after budget claim"):
         worker_job._maybe_rebind_recovery_generation(
@@ -961,8 +994,8 @@ def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
         )
 
     (claimed,) = list_queue(queue_root)
-    assert claimed.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
-    durable_claim = claimed.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY]
+    assert claimed.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    durable_claim = claimed.metadata[_rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY]
     assert durable_claim["ordinal"] == 1
     assert durable_claim["source_generation_name"] == snapshot["generation_name"]
     intent_token = durable_claim["intent_token"]
@@ -977,8 +1010,8 @@ def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
     )
 
     assert build_count == 2
-    assert result.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
-    assert result.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY] is None
+    assert result.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert result.metadata[_rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY] is None
     replacement = result.metadata["execution_snapshot"]
     assert replacement[SNAPSHOT_INTENT_TOKEN_KEY] == intent_token
     assert replacement["generation_name"] == target_generation_name
@@ -1002,11 +1035,11 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
     assert update_metadata(
         queue_root,
         str(running.queue_id),
-        {worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: (worker_job.RECOVERY_REBIND_LIMIT - 1)},
+        {_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY: (_rebind.RECOVERY_REBIND_LIMIT - 1)},
         expected_entry=running,
     )
     (penultimate,) = list_queue(queue_root)
-    real_build = worker_job.build_orca_execution_snapshot
+    real_build = _rebind.build_orca_execution_snapshot
     build_count = 0
 
     def crash_first_build(*args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -1016,7 +1049,7 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
             raise RuntimeError("simulated crash after final budget claim")
         return real_build(*args, **kwargs)
 
-    monkeypatch.setattr(worker_job, "build_orca_execution_snapshot", crash_first_build)
+    monkeypatch.setattr(_rebind, "build_orca_execution_snapshot", crash_first_build)
 
     with pytest.raises(RuntimeError, match="simulated crash after final budget claim"):
         worker_job._maybe_rebind_recovery_generation(
@@ -1027,8 +1060,8 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
 
     (claimed,) = list_queue(queue_root)
     assert (
-        claimed.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY]
-        == worker_job.RECOVERY_REBIND_LIMIT
+        claimed.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY]
+        == _rebind.RECOVERY_REBIND_LIMIT
     )
     durable_claim = claimed.metadata.get("recovery_rebind_claim")
     intent_token = (
@@ -1043,8 +1076,7 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
 
     assert build_count == 2
     assert (
-        result.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY]
-        == worker_job.RECOVERY_REBIND_LIMIT
+        result.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == _rebind.RECOVERY_REBIND_LIMIT
     )
     assert result.metadata["execution_snapshot"][SNAPSHOT_INTENT_TOKEN_KEY] == intent_token
 
@@ -1054,7 +1086,7 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
     [
         ("source-generation", 1),
         ("ordinal-zero", 0),
-        ("ordinal-over-limit", worker_job.RECOVERY_REBIND_LIMIT + 1),
+        ("ordinal-over-limit", _rebind.RECOVERY_REBIND_LIMIT + 1),
         ("ordinal-count", 1),
         ("target-format", 1),
         ("target-source", 1),
@@ -1094,8 +1126,8 @@ def test_rebind_rejects_each_invalid_durable_recovery_identity_without_mutation(
         queue_root,
         str(running.queue_id),
         {
-            worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: rebind_count,
-            worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
+            _rebind.RECOVERY_REBIND_COUNT_METADATA_KEY: rebind_count,
+            _rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
         },
         expected_entry=running,
     )
@@ -1120,8 +1152,8 @@ def test_rebind_rejects_each_invalid_durable_recovery_identity_without_mutation(
 
     assert queue_path.read_bytes() == before
     (row,) = list_queue(queue_root)
-    assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == rebind_count
-    assert row.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY] == durable_claim
+    assert row.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == rebind_count
+    assert row.metadata[_rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY] == durable_claim
     assert row.metadata["execution_snapshot"] == snapshot
     assert [
         child
@@ -1139,7 +1171,7 @@ def test_rebind_rejects_boolean_count_with_pending_claim_without_mutation(
     from orca_auto.orca.queue.adapter import update_metadata
 
     durable_claim = {
-        "ordinal": worker_job.RECOVERY_REBIND_LIMIT,
+        "ordinal": _rebind.RECOVERY_REBIND_LIMIT,
         "source_generation_name": snapshot["generation_name"],
         "intent_token": "snapshot_intent-boolean-count-0123456789abcdef",
         "target_generation_name": "20000101-000001-cafebabe",
@@ -1148,8 +1180,8 @@ def test_rebind_rejects_boolean_count_with_pending_claim_without_mutation(
         queue_root,
         str(running.queue_id),
         {
-            worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: True,
-            worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
+            _rebind.RECOVERY_REBIND_COUNT_METADATA_KEY: True,
+            _rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
         },
         expected_entry=running,
     )
@@ -1163,8 +1195,8 @@ def test_rebind_rejects_boolean_count_with_pending_claim_without_mutation(
         )
 
     (row,) = list_queue(queue_root)
-    assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] is True
-    assert row.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY] == durable_claim
+    assert row.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] is True
+    assert row.metadata[_rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY] == durable_claim
     assert row.status is not QueueStatus.FAILED
     assert row.error == ""
     assert row.metadata["execution_snapshot"] == snapshot
@@ -1187,16 +1219,14 @@ def test_child_recovery_records_the_rejection_on_the_failed_queue_row(
     assert update_metadata(
         queue_root,
         str(running.queue_id),
-        {worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: True},
+        {_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY: True},
         expected_entry=running,
     )
-    monkeypatch.setattr(
-        worker_job, "load_config", lambda _path: _worker_cfg(queue_root, _executable)
-    )
+    config = _worker_config(tmp_path, queue_root, _executable)
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
         worker_job.run_worker_child_job(
-            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
         )
 
     (row,) = list_queue(queue_root)
@@ -1217,7 +1247,6 @@ def test_child_recovery_records_a_rejection_raised_after_the_claim_reservation(
 ) -> None:
     queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
     old_generation = _crash_generation(snapshot)
-    cfg = _worker_cfg(queue_root, executable)
     from orca_auto.orca.queue.adapter import update_metadata
 
     # The source path is validated only after the durable claim was reserved,
@@ -1228,18 +1257,18 @@ def test_child_recovery_records_a_rejection_raised_after_the_claim_reservation(
         {"source_selected_inp": ""},
         expected_entry=running,
     )
-    monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
+    config = _worker_config(tmp_path, queue_root, executable)
 
     with pytest.raises(ValueError, match="submission source input path"):
         worker_job.run_worker_child_job(
-            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
         )
 
     (row,) = list_queue(queue_root)
     assert row.status is QueueStatus.FAILED
     assert "submission source input path" in row.error
-    assert row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
-    assert isinstance(row.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY], dict)
+    assert row.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert isinstance(row.metadata[_rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY], dict)
     assert row.metadata["execution_snapshot"] == snapshot
     assert [
         child
@@ -1261,20 +1290,18 @@ def test_child_recovery_leaves_a_requeued_row_alone(
         assert requeue_running_entry(queue_root, str(entry.queue_id), expected_entry=entry)
         if redequeued:
             # Another worker picked the row up again: same identity, new dequeue.
-            next_running = dequeue_next(queue_root)
+            next_running = claim_next_entry(queue_root)
             assert next_running is not None
             assert next_running.queue_id == entry.queue_id
             assert next_running.started_at != entry.started_at
         raise ValueError("ORCA crash recovery found an invalid durable rebind count")
 
     monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", requeue_then_reject)
-    monkeypatch.setattr(
-        worker_job, "load_config", lambda _path: _worker_cfg(queue_root, _executable)
-    )
+    config = _worker_config(tmp_path, queue_root, _executable)
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
         worker_job.run_worker_child_job(
-            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
         )
 
     (row,) = list_queue(queue_root)
@@ -1303,19 +1330,17 @@ def test_child_recovery_fences_the_failure_write_to_its_own_dequeue(
             # The child's pre-mark read still sees its own dequeue; before its
             # mark takes the queue lock the row is requeued and picked up again.
             assert requeue_running_entry(queue_root, queue_id, expected_entry=snapshot)
-            redequeued = dequeue_next(queue_root)
+            redequeued = claim_next_entry(queue_root)
             assert redequeued is not None and redequeued.started_at != running.started_at
         return snapshot
 
     monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", reject)
     monkeypatch.setattr(worker_job, "_queue_entry_by_id", lookup_then_lose_the_row)
-    monkeypatch.setattr(
-        worker_job, "load_config", lambda _path: _worker_cfg(queue_root, _executable)
-    )
+    config = _worker_config(tmp_path, queue_root, _executable)
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
         worker_job.run_worker_child_job(
-            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
         )
 
     assert lookups == 2
@@ -1338,13 +1363,11 @@ def test_child_recovery_does_not_overwrite_a_racing_cancellation(
         raise ValueError("ORCA crash recovery found an invalid durable rebind count")
 
     monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", cancel_then_reject)
-    monkeypatch.setattr(
-        worker_job, "load_config", lambda _path: _worker_cfg(queue_root, _executable)
-    )
+    config = _worker_config(tmp_path, queue_root, _executable)
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
         worker_job.run_worker_child_job(
-            config_path="/unused/config.yaml", queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
         )
 
     (row,) = list_queue(queue_root)
@@ -1409,8 +1432,8 @@ def test_rebind_rejects_noncanonical_intent_token_without_mutation(
         queue_root,
         str(running.queue_id),
         {
-            worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: 1,
-            worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
+            _rebind.RECOVERY_REBIND_COUNT_METADATA_KEY: 1,
+            _rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
         },
         expected_entry=running,
     )
@@ -1471,8 +1494,8 @@ def test_rebind_committed_cancellation_precedes_malformed_recovery_metadata(
         queue_root,
         str(running.queue_id),
         {
-            worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY: rebind_count,
-            worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
+            _rebind.RECOVERY_REBIND_COUNT_METADATA_KEY: rebind_count,
+            _rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY: durable_claim,
         },
         expected_entry=running,
     )
@@ -1499,10 +1522,10 @@ def test_rebind_committed_cancellation_precedes_malformed_recovery_metadata(
     assert result.status is QueueStatus.CANCELLED
     (row,) = list_queue(queue_root)
     assert row.status is QueueStatus.CANCELLED
-    observed_rebind_count = row.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY]
+    observed_rebind_count = row.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY]
     assert observed_rebind_count == rebind_count
     assert type(observed_rebind_count) is type(rebind_count)
-    assert row.metadata[worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY] == durable_claim
+    assert row.metadata[_rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY] == durable_claim
     assert row.metadata["execution_snapshot"] == snapshot
     assert [
         child
@@ -1526,7 +1549,7 @@ def test_rebind_does_not_publish_after_cancellation_commits(
     cfg = _worker_cfg(queue_root, executable)
     from orca_auto.orca.queue.adapter import cancel
 
-    real_update = worker_job.update_metadata
+    real_update = _rebind.update_metadata
     cancellation_committed = False
 
     def cancel_before_publication(
@@ -1543,7 +1566,7 @@ def test_rebind_does_not_publish_after_cancellation_commits(
             cancellation_committed = True
         return real_update(root, queue_id, metadata_update, **kwargs)
 
-    monkeypatch.setattr(worker_job, "update_metadata", cancel_before_publication)
+    monkeypatch.setattr(_rebind, "update_metadata", cancel_before_publication)
 
     with pytest.raises(ValueError, match="could not publish its replacement generation"):
         worker_job._maybe_rebind_recovery_generation(
@@ -1556,7 +1579,7 @@ def test_rebind_does_not_publish_after_cancellation_commits(
     (row,) = list_queue(queue_root)
     assert row.cancel_requested
     assert row.metadata["execution_snapshot"] == snapshot
-    durable_claim = row.metadata.get(worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY)
+    durable_claim = row.metadata.get(_rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY)
     assert isinstance(durable_claim, dict) and durable_claim["ordinal"] == 1
     assert [
         child
@@ -1579,14 +1602,14 @@ def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growt
     cfg = _worker_cfg(queue_root, executable)
     reaction_dir = Path(running.metadata["reaction_dir"])
 
-    for iteration in range(worker_job.RECOVERY_REBIND_LIMIT + 1):
+    for iteration in range(_rebind.RECOVERY_REBIND_LIMIT + 1):
         child_pid = os.fork()
         if child_pid == 0:
 
             def exit_before_identity_bind(*_args: Any, **_kwargs: Any) -> None:
                 os._exit(73)
 
-            binding_mod.bind_snapshot_intent_generation_identities = exit_before_identity_bind
+            _reservation.bind_snapshot_intent_generation_identities = exit_before_identity_bind
             try:
                 current = list_queue(queue_root)[0]
                 worker_job._maybe_rebind_recovery_generation(
@@ -1612,8 +1635,8 @@ def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growt
         assert old_generation.name in visible_generations
 
     (claimed,) = list_queue(queue_root)
-    assert claimed.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
-    durable_claim = claimed.metadata.get(worker_job.RECOVERY_REBIND_CLAIM_METADATA_KEY)
+    assert claimed.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    durable_claim = claimed.metadata.get(_rebind.RECOVERY_REBIND_CLAIM_METADATA_KEY)
     assert isinstance(durable_claim, dict)
     target_generation_name = durable_claim.get("target_generation_name")
     assert isinstance(target_generation_name, str) and is_visible_generation_name(
@@ -1642,7 +1665,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
         def exit_after_snapshot_build(*_args: Any, **_kwargs: Any) -> None:
             os._exit(73)
 
-        worker_job.transition_snapshot_intent = exit_after_snapshot_build
+        _rebind.transition_snapshot_intent = exit_after_snapshot_build
         worker_job._maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
@@ -1655,7 +1678,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
     assert os.waitstatus_to_exitcode(wait_status) == 73
 
     (claimed,) = list_queue(queue_root)
-    assert claimed.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert claimed.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
     durable_claim = claimed.metadata.get("recovery_rebind_claim")
     intent_token = (
         str(durable_claim.get("intent_token") or "") if isinstance(durable_claim, dict) else ""
@@ -1687,7 +1710,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
         cfg_factory=lambda: cfg,
     )
 
-    assert result.metadata[worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
+    assert result.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
     assert result.metadata.get("recovery_rebind_claim") is None
     replacement = result.metadata["execution_snapshot"]
     assert replacement[SNAPSHOT_INTENT_TOKEN_KEY] == intent_token
@@ -1706,7 +1729,7 @@ def test_rebind_rejects_executable_mismatch_before_consuming_budget(
     queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
     old_generation = _crash_generation(snapshot)
     if mismatch_kind == "path":
-        configured_executable = _write_executable(tmp_path / "replacement-orca")
+        configured_executable = write_fake_orca(tmp_path / "replacement-orca")
     elif mismatch_kind == "sha256":
         executable.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
         configured_executable = executable
@@ -1724,7 +1747,7 @@ def test_rebind_rejects_executable_mismatch_before_consuming_budget(
         )
 
     (row,) = list_queue(queue_root)
-    assert worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
+    assert _rebind.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
     assert [
         child
@@ -1750,7 +1773,7 @@ def _sp_job(tmp_path: Path) -> tuple[Path, Path, Path]:
     (job_dir / "h2.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
     selected = job_dir / "h2.inp"
     selected.write_text("! HF STO-3G\n* xyzfile 0 1 h2.xyz\n", encoding="utf-8")
-    executable = _write_executable(tmp_path / "sp-completed-orca")
+    executable = write_fake_orca(tmp_path / "sp-completed-orca")
     return job_dir, selected, executable
 
 
@@ -1776,7 +1799,7 @@ def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> Non
         "execution_snapshot": snapshot,
     }
     enqueue(queue_root, str(job_dir), force=True, task_id="task-completed", metadata=metadata)
-    running = dequeue_next(queue_root)
+    running = claim_next_entry(queue_root)
     assert running is not None
     generation = Path(snapshot["execution_dir"])
     # The crash landed after ORCA finished: a completed, analyzer-verified
@@ -1800,7 +1823,7 @@ def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> Non
 
     assert result is running
     (row,) = list_queue(queue_root)
-    assert worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
+    assert _rebind.RECOVERY_REBIND_COUNT_METADATA_KEY not in row.metadata
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
     # The ordinary context build accepts the finished generation so the
     # completed-adoption path can claim the result.
@@ -1821,7 +1844,7 @@ def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> N
     (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
-    executable = _write_executable(tmp_path / "checkpoint-orca")
+    executable = write_fake_orca(tmp_path / "checkpoint-orca")
     crashed = build_orca_execution_snapshot(
         job_dir,
         selected,
@@ -1903,7 +1926,7 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
     (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
-    executable = _write_executable(tmp_path / "checkpoint-edit-orca")
+    executable = write_fake_orca(tmp_path / "checkpoint-edit-orca")
     crashed = build_orca_execution_snapshot(
         job_dir,
         selected,
@@ -1968,7 +1991,7 @@ def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_o
     (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
-    executable = _write_executable(tmp_path / "checkpoint-orca")
+    executable = write_fake_orca(tmp_path / "checkpoint-orca")
     crashed = build_orca_execution_snapshot(
         job_dir,
         selected,

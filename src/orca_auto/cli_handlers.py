@@ -1,7 +1,14 @@
+"""Top-level command handlers: ``init``, ``run-dir`` and ``index prune|rebuild``.
+
+Each handler composes the domain packages and owns the operator-facing
+surface: ``error:`` lines on stderr, the shared ``emit_json`` document under
+``--json``, and the exit-code rule (0 success or nothing to do, 1 refused or
+failed, 2 argparse usage).
+"""
+
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import stat
 from collections import Counter
@@ -9,12 +16,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from orca_auto.core.commands.run_dir import (
-    use_run_dir_publication_guard,
-    validate_production_run_dir_target,
-)
 from orca_auto.core.config.discovery import (
     engine_config_for_args,
     resolve_shared_config_path,
@@ -22,18 +25,25 @@ from orca_auto.core.config.discovery import (
 )
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
-    load_shared_config,
     shared_runs_root_from_config,
     usable_runs_root_text,
 )
 from orca_auto.core.indexing import (
     JobLocationIndexError,
     JobLocationPruneResult,
+    JobLocationRecord,
     prune_job_locations,
 )
 from orca_auto.core.paths.retired import path_is_retired_workflow_owned
-from orca_auto.core.terminal import emit_error, label, status_text
 from orca_auto.core.utils import normalize_text
+from orca_auto.orca.run_dir_guard import (
+    use_run_dir_publication_guard,
+    validate_production_run_dir_target,
+)
+from orca_auto.terminal import emit_error, emit_json, label, status_text
+
+if TYPE_CHECKING:
+    from orca_auto.orca.job_locations import JobLocationRebuildResult
 
 
 def _configure_orca_logging(args: argparse.Namespace) -> None:
@@ -52,7 +62,9 @@ def cmd_init(args: argparse.Namespace) -> int:
 
     _configure_orca_logging(args)
     args.config = engine_config_for_args(args)
-    return int(_cmd_orca_init(args))
+    # The domain package cannot import the terminal layer; hand it the shared
+    # stderr error line so its refusals render like every other command's.
+    return int(_cmd_orca_init(args, report_error=emit_error))
 
 
 def cmd_orca_run_dir(args: argparse.Namespace) -> int:
@@ -60,7 +72,17 @@ def cmd_orca_run_dir(args: argparse.Namespace) -> int:
 
     _configure_orca_logging(args)
     args.config = engine_config_for_args(args)
-    return int(_cmd_orca_run_dir(args))
+    json_output = bool(getattr(args, "json", False))
+    # With --log-file the submission logger writes nowhere the operator looks;
+    # the terminal error line (and the JSON error document) must not depend on
+    # how logging was configured.
+    return int(
+        _cmd_orca_run_dir(
+            args,
+            report_error=lambda message: emit_error(message, json_output=json_output),
+            emit_json=emit_json,
+        )
+    )
 
 
 def _detect_run_dir_app(target: Path) -> str:
@@ -159,6 +181,7 @@ def _pinned_run_dir_target(raw_target: str | Path) -> Iterator[Path]:
 
 
 def cmd_run_dir(args: Any) -> int:
+    json_output = bool(getattr(args, "json", False))
     try:
         raw_target = normalize_text(getattr(args, "path", None))
         if not raw_target:
@@ -169,7 +192,7 @@ def cmd_run_dir(args: Any) -> int:
         namespace_target = Path(raw_target).expanduser().absolute()
         runs_root = _configured_runs_root_for_run_dir(args)
     except ValueError as exc:
-        emit_error(exc)
+        emit_error(exc, json_output=json_output)
         return 1
 
     try:
@@ -190,7 +213,7 @@ def cmd_run_dir(args: Any) -> int:
                 )
                 publication_contract("central dispatch")
             except ValueError as exc:
-                emit_error(exc)
+                emit_error(exc, json_output=json_output)
                 return 1
 
             args.path = str(pinned_target)
@@ -205,14 +228,15 @@ def cmd_run_dir(args: Any) -> int:
                 ):
                     emit_error(
                         "ORCA run-dir does not support --max-cores or --max-memory-gb. "
-                        "Edit %pal/%maxcore in the selected .inp."
+                        "Edit %pal/%maxcore in the selected .inp.",
+                        json_output=json_output,
                     )
                     return 1
                 if getattr(args, "priority", None) is None:
                     args.priority = 10
                 return int(cmd_orca_run_dir(args))
     except _RunDirTargetChangedError as exc:
-        emit_error(exc)
+        emit_error(exc, json_output=json_output)
         return 1
 
 
@@ -222,22 +246,13 @@ def _index_prune_payload(result: JobLocationPruneResult) -> dict[str, Any]:
         "total": result.total,
         "pruned_count": len(result.pruned),
         "applied": result.applied,
-        "pruned": [
-            {
-                "job_id": record.job_id,
-                "app_name": record.app_name,
-                "status": record.status,
-                "original_run_dir": record.original_run_dir,
-                "latest_known_path": record.latest_known_path,
-            }
-            for record in result.pruned
-        ],
+        "pruned": [_index_row_payload(record) for record in result.pruned],
     }
 
 
 def _emit_index_prune(result: JobLocationPruneResult, *, json_output: bool) -> int:
     if json_output:
-        print(json.dumps(_index_prune_payload(result), ensure_ascii=True, indent=2))
+        emit_json(_index_prune_payload(result))
         return 0
 
     print(f"{label('index:')} {result.index_path}")
@@ -261,7 +276,9 @@ def _emit_index_prune(result: JobLocationPruneResult, *, json_output: bool) -> i
     return 0
 
 
-def cmd_index_prune(args: argparse.Namespace) -> int:
+def _index_root_from_args(args: argparse.Namespace) -> Path | None:
+    """The configured runs root that holds the index, or None after an error."""
+    json_output = bool(getattr(args, "json", False))
     config_path = resolve_shared_config_path(shared_config_text_from_args(args) or None)
     if not config_path:
         emit_error(
@@ -270,31 +287,44 @@ def cmd_index_prune(args: argparse.Namespace) -> int:
                 "Pass --config pointing at an orca_auto.yaml with runs_root, "
                 "or run `orca_auto init`."
             ),
+            json_output=json_output,
         )
-        return 1
+        return None
+    from orca_auto.orca.config import load_orca_shared_config
+
     try:
         # Load through the shared validator so a missing or damaged config
         # names its own failure instead of reading as "not configured".
-        _config, shared = load_shared_config(config_path)
+        _config, shared, _orca_sections = load_orca_shared_config(config_path)
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
         emit_error(
             exc,
             hint="Check the config path and repair the reported state file before retrying.",
+            json_output=json_output,
         )
-        return 1
+        return None
     root_text = usable_runs_root_text(shared.runs_root)
     if not root_text:
         emit_error(
             f"runs_root is missing or invalid in {config_path}",
             hint="Set runs_root to an absolute directory path in the config.",
+            json_output=json_output,
         )
-        return 1
+        return None
     root = Path(root_text).expanduser().resolve()
     if not root.is_dir():
         emit_error(
             f"runs_root does not exist: {root}",
             hint="Check runs_root in the config; the index lives in that directory.",
+            json_output=json_output,
         )
+        return None
+    return root
+
+
+def cmd_index_prune(args: argparse.Namespace) -> int:
+    root = _index_root_from_args(args)
+    if root is None:
         return 1
     try:
         result = prune_job_locations(root, apply=bool(getattr(args, "apply", False)))
@@ -307,9 +337,100 @@ def cmd_index_prune(args: argparse.Namespace) -> int:
                 "Repair the reported path or job_locations.json before retrying; "
                 "nothing was written."
             ),
+            json_output=bool(getattr(args, "json", False)),
         )
         return 1
     try:
         return _emit_index_prune(result, json_output=bool(getattr(args, "json", False)))
+    except BrokenPipeError:
+        return 0
+
+
+def _index_row_payload(record: JobLocationRecord) -> dict[str, Any]:
+    return {
+        "job_id": record.job_id,
+        "app_name": record.app_name,
+        "status": record.status,
+        "original_run_dir": record.original_run_dir,
+        "latest_known_path": record.latest_known_path,
+    }
+
+
+def _index_rebuild_payload(result: JobLocationRebuildResult) -> dict[str, Any]:
+    return {
+        "index_path": result.index_path,
+        "scanned": result.scanned,
+        "total": result.total,
+        "added_count": len(result.added),
+        "updated_count": len(result.updated),
+        "unchanged_count": result.unchanged,
+        "skipped_count": len(result.skipped),
+        "applied": result.applied,
+        "added": [_index_row_payload(record) for record in result.added],
+        "updated": [_index_row_payload(record) for record in result.updated],
+        "skipped": list(result.skipped),
+        "conflicts": [
+            {
+                "job_id": conflict.job_id,
+                "kept_path": conflict.kept_path,
+                "ignored_paths": list(conflict.ignored_paths),
+            }
+            for conflict in result.conflicts
+        ],
+    }
+
+
+def _emit_index_rebuild(result: JobLocationRebuildResult, *, json_output: bool) -> int:
+    if json_output:
+        emit_json(_index_rebuild_payload(result))
+        return 0
+
+    print(f"{label('index:')} {result.index_path}")
+    print(f"{label('scanned:')} {result.scanned}")
+    print(f"{label('rows:')} {result.total}")
+    print(f"{label('added:')} {len(result.added)}")
+    print(f"{label('updated:')} {len(result.updated)}")
+    print(f"{label('unchanged:')} {result.unchanged}")
+    print(f"{label('skipped:')} {len(result.skipped)}")
+    for heading, rows in (("+", result.added), ("~", result.updated)):
+        for record in rows:
+            shown = record.latest_known_path or record.original_run_dir
+            print(f"  {heading} {record.job_id} {status_text(record.status)} {shown}")
+    for job_dir in result.skipped:
+        print(f"  ? {job_dir} (state names no job id)")
+    for conflict in result.conflicts:
+        ignored = ", ".join(conflict.ignored_paths)
+        print(
+            f"{label('conflict:')} {conflict.job_id} kept {conflict.kept_path}; ignored {ignored}"
+        )
+    if not result.added and not result.updated:
+        print("nothing to change.")
+    elif not result.applied:
+        print("dry run: rerun without --dry-run to write these rows.")
+    return 0
+
+
+def cmd_index_rebuild(args: argparse.Namespace) -> int:
+    from orca_auto.orca.job_locations import rebuild_job_location_records
+
+    root = _index_root_from_args(args)
+    if root is None:
+        return 1
+    try:
+        result = rebuild_job_location_records(root, apply=not bool(getattr(args, "dry_run", False)))
+    except (JobLocationIndexError, OSError) as exc:
+        # The walk, the state reads and the single locked rewrite all fail
+        # closed: a damaged index or an unreadable root leaves the file as is.
+        emit_error(
+            exc,
+            hint=(
+                "Repair the reported path or job_locations.json before retrying; "
+                "nothing was written."
+            ),
+            json_output=bool(getattr(args, "json", False)),
+        )
+        return 1
+    try:
+        return _emit_index_rebuild(result, json_output=bool(getattr(args, "json", False)))
     except BrokenPipeError:
         return 0

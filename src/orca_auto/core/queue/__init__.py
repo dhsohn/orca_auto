@@ -1,82 +1,10 @@
-from .priority import normalize_queue_priority
-from .publication import (
-    QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS,
-    QUEUE_RECORD_SYNC_ABORTED,
-    QUEUE_RECORD_SYNC_COMPLETE,
-    QUEUE_RECORD_SYNC_KEY,
-    QUEUE_RECORD_SYNC_OWNER_PID_KEY,
-    QUEUE_RECORD_SYNC_OWNER_START_KEY,
-    QUEUE_RECORD_SYNC_PREPARING,
-    QUEUE_RECORD_SYNC_REPAIR_PENDING,
-    QUEUE_RECORD_SYNC_REPAIRING,
-    QUEUE_RECORD_SYNC_TOKEN_KEY,
-    QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
-    current_process_start_token,
-    process_start_token,
-    queue_entry_is_claimable,
-    queue_record_publication_lock,
-    queue_record_sync_metadata,
-    queue_record_sync_state,
-)
-from .store import (
-    DuplicateQueueEntryError,
-    QueueStore,
-    QueueStoreCorruptError,
-    clear_terminal,
-    correct_terminal_status,
-    dequeue_entry_if_pending,
-    dequeue_next,
-    enqueue,
-    entry_to_dict,
-    get_cancel_requested,
-    list_queue,
-    mark_cancelled,
-    mark_completed,
-    mark_failed,
-    request_cancel,
-    requeue_running_entry,
-    terminal_entry,
-    update_metadata,
-)
-from .types import QueueEntry, QueueStatus
+"""Durable disk queue: store, publication protocol, worker loop, and child execution.
 
-__all__ = [
-    "DuplicateQueueEntryError",
-    "QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS",
-    "QUEUE_RECORD_SYNC_ABORTED",
-    "QUEUE_RECORD_SYNC_COMPLETE",
-    "QUEUE_RECORD_SYNC_KEY",
-    "QUEUE_RECORD_SYNC_OWNER_PID_KEY",
-    "QUEUE_RECORD_SYNC_OWNER_START_KEY",
-    "QUEUE_RECORD_SYNC_PREPARING",
-    "QUEUE_RECORD_SYNC_REPAIR_PENDING",
-    "QUEUE_RECORD_SYNC_REPAIRING",
-    "QUEUE_RECORD_SYNC_TOKEN_KEY",
-    "QUEUE_RECORD_SYNC_UPDATED_AT_KEY",
-    "QueueEntry",
-    "QueueStore",
-    "QueueStoreCorruptError",
-    "QueueStatus",
-    "clear_terminal",
-    "correct_terminal_status",
-    "current_process_start_token",
-    "dequeue_entry_if_pending",
-    "dequeue_next",
-    "enqueue",
-    "entry_to_dict",
-    "get_cancel_requested",
-    "list_queue",
-    "mark_cancelled",
-    "mark_completed",
-    "mark_failed",
-    "normalize_queue_priority",
-    "process_start_token",
-    "queue_entry_is_claimable",
-    "queue_record_publication_lock",
-    "queue_record_sync_metadata",
-    "queue_record_sync_state",
-    "requeue_running_entry",
-    "request_cancel",
-    "terminal_entry",
-    "update_metadata",
-]
+Consumers import the submodule they need (``store``, ``transitions``,
+``publication``, ``persistence``, ...). The package exposes only the error type that the CLI
+layer catches without depending on the store module.
+"""
+
+from .persistence import QueueStoreCorruptError
+
+__all__ = ["QueueStoreCorruptError"]

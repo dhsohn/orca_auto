@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from orca_auto.cli_parsers import build_parser
 from orca_auto.core.config.files import validate_shared_config_sections
-from orca_auto.core.engine_catalog import engine_catalog, get_engine_catalog_entry
+from orca_auto.orca.engine_catalog import engine_catalog, get_engine_catalog_entry
 
 
 @pytest.mark.parametrize(
@@ -48,9 +46,3 @@ def test_retired_engines_are_absent_from_the_catalog(engine: str) -> None:
 def test_workflow_config_is_rejected_even_when_empty(section: dict[str, object]) -> None:
     with pytest.raises(ValueError, match="Unknown top-level config fields"):
         validate_shared_config_sections({"runs_root": "/tmp/runs", "workflow": section})
-
-
-def test_workflow_source_and_extension_package_are_absent() -> None:
-    repo = Path(__file__).resolve().parents[1]
-    assert not (repo / "src/orca_auto/flow").exists()
-    assert not (repo / "extensions/workflows/pyproject.toml").exists()

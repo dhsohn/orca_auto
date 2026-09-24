@@ -1,18 +1,17 @@
-"""Messenger-neutral rich-text document model for outbound notifications.
+"""Messenger-neutral document model for outbound notifications.
 
 Domain notifiers build a :class:`Message` describing *what* to say (a title, a
-severity, and a sequence of labelled fields / free-form lines). Per-messenger
+severity, an optional author, and groups of labelled fields). Per-messenger
 renderers (:mod:`.render_discord`) turn it into the native markup. This keeps
-HTML / Markdown out of the domain code so the active messenger can be swapped
-without touching any notifier.
+Markdown out of the domain code.
 
-Span construction bakes the value-vs-literal distinction in at build time so each
+Span construction bakes the value-vs-literal distinction in at build time so the
 renderer can preserve the intended text semantics:
 
 * :func:`text`, :func:`code` normalise their value with
   ``str(value).strip()``.
-* :func:`raw` keeps the string verbatim (significant leading whitespace, e.g.
-  indented stage rows) and is only HTML-escaped, never stripped.
+* :func:`raw` keeps the string verbatim (significant leading whitespace) and is
+  only Markdown-escaped, never stripped.
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from typing import Literal
 from orca_auto.core.utils.coercion import normalize_text
 
 Severity = Literal["info", "success", "warning", "error"]
-SpanStyle = Literal["plain", "bold", "code"]
+SpanStyle = Literal["plain", "code"]
 
 
 @dataclass(frozen=True)
@@ -62,39 +61,19 @@ class Field:
 
 
 @dataclass(frozen=True)
-class Line:
-    """A free-form line of spans (dividers, cards, notes)."""
-
-    spans: tuple[Span, ...]
-
-
-Item = Field | Line
-
-
-@dataclass(frozen=True)
 class Group:
-    """A paragraph: an optional heading line followed by fields / lines.
+    """A run of fields rendered together."""
 
-    Renderers join groups with a blank line and items within a group with a
-    single newline.
-    """
-
-    heading: tuple[Span, ...] = ()
-    items: tuple[Item, ...] = ()
+    items: tuple[Field, ...] = ()
 
 
 @dataclass(frozen=True)
 class Message:
     """A complete notification.
 
-    ``title`` is the semantic headline (Discord embed title). Renderers own its
-    native representation. Existing builders may
-    still include the same bold title in a decorated first line; renderers
-    detect that form and avoid duplicating it.
-
-    ``author`` is an optional sender identity shown above the title: the embed
-    author line on Discord. It lets a builder drop a redundant "orca_auto …"
-    prefix from the title and surface the identity as chrome instead.
+    ``title`` is the semantic headline (Discord embed title); ``author`` is an
+    optional sender identity shown above it (the embed author line), so builders
+    can surface "orca_auto" as chrome instead of a title prefix.
     """
 
     title: str
@@ -108,19 +87,13 @@ def field_row(label: str, *value: Span, inline: bool = False) -> Field:
     return Field(label=label, value=tuple(value), inline=inline)
 
 
-def line(*spans: Span) -> Line:
-    return Line(spans=tuple(spans))
-
-
-def group(*items: Item, heading: tuple[Span, ...] = ()) -> Group:
-    return Group(heading=heading, items=tuple(items))
+def group(*items: Field) -> Group:
+    return Group(items=tuple(items))
 
 
 __all__ = [
     "Field",
     "Group",
-    "Item",
-    "Line",
     "Message",
     "Severity",
     "Span",
@@ -128,7 +101,6 @@ __all__ = [
     "code",
     "field_row",
     "group",
-    "line",
     "raw",
     "text",
 ]

@@ -1,11 +1,13 @@
+"""``clear_activities``: the ``queue list clear`` payload over the ORCA cleanup."""
+
 from __future__ import annotations
 
 from typing import Any
 
-from orca_auto.core.activity import ActivitySourceRequest
-from orca_auto.core.engine_runtime import engine_runtime_paths
+from orca_auto.activity.model import ActivitySourceRequest
 from orca_auto.core.utils import normalize_text
-from orca_auto.orca.run_cleanup import clear_terminal_entries
+from orca_auto.orca.engine_runtime import engine_runtime_paths
+from orca_auto.orca.run_cleanup import clear_terminal_records
 
 from ._list import resolve_activity_sources
 
@@ -19,12 +21,14 @@ def clear_activities(
         ActivitySourceRequest(shared_config=shared_config, orca_config=orca_config)
     )
     config_path = normalize_text(resolved.orca_config)
-    queue_count, run_count = (0, 0)
-    if config_path:
-        root = engine_runtime_paths(config_path)["allowed_root"]
-        queue_count, run_count = clear_terminal_entries(root)
+    root = engine_runtime_paths(config_path)["allowed_root"]
+    counts = clear_terminal_records(root)
     return {
-        "total_cleared": queue_count + run_count,
-        "cleared": {"orca_queue_entries": queue_count, "orca_run_states": run_count},
+        "total_cleared": counts.queue_entries + counts.run_states,
+        "cleared": {
+            "orca_queue_entries": counts.queue_entries,
+            "orca_run_states": counts.run_states,
+        },
+        "removed_worker_logs": counts.worker_logs,
         "sources": {"orca_config": config_path},
     }

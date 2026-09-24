@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 import pytest
 
 from orca_auto.orca import worker_execution
+from orca_auto.orca.cli_logging import remove_managed_handlers
 from orca_auto.orca.commands import worker_child
 
 
@@ -119,6 +121,30 @@ def test_worker_child_main_treats_a_blank_admission_token_as_absent(
     )
 
     assert captured["admission_token"] is None
+
+
+def test_worker_child_main_configures_logging_so_info_reaches_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root_logger = logging.getLogger()
+    previous_level = root_logger.level
+
+    def fake_run_worker_child_job(**kwargs: Any) -> int:
+        logging.getLogger("orca_auto.orca.worker_execution").info("child job started")
+        return 0
+
+    monkeypatch.setattr(worker_child, "run_worker_child_job", fake_run_worker_child_job)
+    try:
+        rc = worker_child.main(
+            ["--config", "/tmp/orca_auto.yaml", "--queue-root", "/tmp/queue", "--queue-id", "q-1"]
+        )
+    finally:
+        remove_managed_handlers(root_logger)
+        root_logger.setLevel(previous_level)
+
+    assert rc == 0
+    assert "[INFO] orca_auto.orca.worker_execution: child job started" in capsys.readouterr().err
 
 
 def test_spawned_child_command_round_trips_through_the_child_parser(tmp_path: Path) -> None:

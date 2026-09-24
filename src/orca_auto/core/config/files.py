@@ -19,24 +19,24 @@ from .schema import (
     CommonResourceConfig,
     MessengerConfig,
     SchedulerConfig,
-    as_nonempty_str,
     explicit_positive_int,
     messenger_config_from_mapping,
 )
 from .schema import (
     reject_unknown_config_fields as _reject_unknown_config_fields,
 )
-from .scratch import ScratchConfig, scratch_config_from_runtime_mapping
 
 DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
 DEFAULT_SHARED_ADMISSION_DIRNAME = ".admission"
 SECURE_CONFIG_FILE_MODE = 0o600
-_ROOT_CONFIG_FIELDS = frozenset({"messenger", "orca", "resources", "runs_root", "scheduler"})
+# The one engine section. Its contents are the engine's own schema, validated
+# by ``orca_auto.orca.config``; this loader only checks that it is a mapping.
+ENGINE_CONFIG_SECTION = "orca"
+_ROOT_CONFIG_FIELDS = frozenset(
+    {"messenger", ENGINE_CONFIG_SECTION, "resources", "runs_root", "scheduler"}
+)
 _SCHEDULER_CONFIG_FIELDS = frozenset({"admission_root", "max_active_simulations"})
 _RESOURCE_CONFIG_FIELDS = frozenset({"max_cores_per_task", "max_memory_gb_per_task"})
-_ORCA_CONFIG_FIELDS = frozenset({"paths", "runtime"})
-_ORCA_RUNTIME_CONFIG_FIELDS = frozenset({"scratch_min_free_gb", "scratch_root"})
-_ORCA_PATH_CONFIG_FIELDS = frozenset({"orca_executable"})
 YAML_CONFIG_LOAD_EXCEPTIONS = (OSError, ValueError, yaml.YAMLError)
 
 
@@ -168,7 +168,7 @@ def mapping_section(raw: dict[str, Any] | None, key: str) -> dict[str, Any]:
     return section if isinstance(section, dict) else {}
 
 
-def _configured_mapping_section(
+def configured_mapping_section(
     raw: Mapping[str, Any],
     key: str,
     *,
@@ -183,7 +183,7 @@ def _configured_mapping_section(
     return dict(section)
 
 
-def _validate_optional_text_field(
+def validate_optional_text_field(
     raw: Mapping[str, Any],
     key: str,
     *,
@@ -195,20 +195,23 @@ def _validate_optional_text_field(
 
 @dataclass(frozen=True)
 class SharedConfig:
-    """Every validated section of one ``orca_auto.yaml``; defaults already applied.
+    """Every validated top-level section of one ``orca_auto.yaml``; defaults applied.
 
-    ``runs_root`` and ``orca_executable`` are the configured text ("" when
-    omitted). Their path rules are applied by the consumers that require them,
-    because soft consumers (systemd rendering, discovery) must tolerate a
-    missing or invalid root instead of failing the whole file.
+    ``runs_root`` is the configured text ("" when omitted). Its path rules are
+    applied by the consumers that require it, because soft consumers (systemd
+    rendering, discovery) must tolerate a missing or invalid root instead of
+    failing the whole file.
+
+    ``engine_section`` is the raw ``orca`` mapping ({} when omitted). Only its
+    mapping shape is checked here; ``orca_auto.orca.config`` validates its
+    fields.
     """
 
     runs_root: str = ""
-    orca_executable: str = ""
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
-    scratch: ScratchConfig = field(default_factory=ScratchConfig)
     messenger: MessengerConfig = field(default_factory=MessengerConfig)
+    engine_section: dict[str, Any] = field(default_factory=dict)
 
 
 def _scheduler_config_from_mapping(scheduler: Mapping[str, Any]) -> SchedulerConfig:
@@ -259,11 +262,12 @@ def _resource_config_from_mapping(resources: Mapping[str, Any]) -> CommonResourc
 
 
 def validate_shared_config_sections(raw: Mapping[str, Any]) -> SharedConfig:
-    """Validate the complete public shared-config shape in one pass.
+    """Validate the top-level shared-config shape in one pass.
 
     Returns the validated sections so callers never re-parse a section they
-    already validated. ``orca`` holds only ``paths`` and ``runtime``; the
-    ``resources``, ``scheduler`` and ``messenger`` sections are top-level only.
+    already validated. The ``resources``, ``scheduler`` and ``messenger``
+    sections are top-level only; the ``orca`` engine section is returned raw
+    for ``orca_auto.orca.config`` to validate.
     """
 
     messenger_raw = messenger_mapping_from_root(raw)
@@ -272,39 +276,18 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> SharedConfig:
         allowed=_ROOT_CONFIG_FIELDS,
         section="top-level",
     )
-    _validate_optional_text_field(raw, "runs_root", field_name="runs_root")
+    validate_optional_text_field(raw, "runs_root", field_name="runs_root")
 
-    scheduler = _scheduler_config_from_mapping(_configured_mapping_section(raw, "scheduler"))
-    resources = _resource_config_from_mapping(_configured_mapping_section(raw, "resources"))
-
-    orca = _configured_mapping_section(raw, "orca")
-    _reject_unknown_config_fields(orca, allowed=_ORCA_CONFIG_FIELDS, section="orca")
-    orca_runtime = _configured_mapping_section(orca, "runtime", field_name="orca.runtime")
-    _reject_unknown_config_fields(
-        orca_runtime,
-        allowed=_ORCA_RUNTIME_CONFIG_FIELDS,
-        section="orca.runtime",
-    )
-    scratch = scratch_config_from_runtime_mapping(orca_runtime)
-    orca_paths = _configured_mapping_section(orca, "paths", field_name="orca.paths")
-    _reject_unknown_config_fields(
-        orca_paths,
-        allowed=_ORCA_PATH_CONFIG_FIELDS,
-        section="orca.paths",
-    )
-    _validate_optional_text_field(
-        orca_paths,
-        "orca_executable",
-        field_name="orca.paths.orca_executable",
-    )
+    scheduler = _scheduler_config_from_mapping(configured_mapping_section(raw, "scheduler"))
+    resources = _resource_config_from_mapping(configured_mapping_section(raw, "resources"))
+    engine_section = configured_mapping_section(raw, ENGINE_CONFIG_SECTION)
 
     return SharedConfig(
         runs_root=normalize_text(raw.get("runs_root")),
-        orca_executable=as_nonempty_str(orca_paths.get("orca_executable"), ""),
         scheduler=scheduler,
         resources=resources,
-        scratch=scratch,
         messenger=messenger_config_from_mapping(messenger_raw),
+        engine_section=engine_section,
     )
 
 
@@ -316,7 +299,9 @@ def load_shared_config_mapping(
     """Load and validate one shared ``orca_auto.yaml``, returning the raw mapping.
 
     For callers that need the file's own text back (for example to preserve a
-    section verbatim). Consumers of settings use ``load_shared_config``.
+    section verbatim). Consumers of settings use ``load_shared_config``. Only
+    the top-level sections are validated here; ``orca_auto.orca.config`` adds
+    the engine section.
     """
 
     path, raw = load_yaml_mapping(config_path, invalid_message=invalid_message)
@@ -330,7 +315,7 @@ def load_shared_config(
     missing_error: Callable[[Path], Exception] | None = None,
     invalid_message: str = "YAML top-level is not a mapping: {path}",
 ) -> tuple[Path, SharedConfig]:
-    """Require, load, and validate one shared ``orca_auto.yaml`` in a single pass."""
+    """Require, load, and validate the top-level sections of one ``orca_auto.yaml``."""
 
     path = Path(config_path).expanduser().resolve()
     if not path.exists():

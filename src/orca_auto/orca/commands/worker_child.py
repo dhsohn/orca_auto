@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 
+from ..cli_logging import configure_logging
 from ..worker_execution import WORKER_JOB_MODULE, run_worker_child_job
 
 
@@ -18,6 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    configure_logging(args)
     return run_worker_child_job(
         config_path=args.config,
         queue_root=args.queue_root,

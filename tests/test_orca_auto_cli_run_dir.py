@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,6 +13,7 @@ from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import discovery
 from orca_auto.orca.queue import adapter as queue_adapter
 from tests.config_discovery_helpers import isolate_shared_config_discovery
+from tests.conftest import make_queue_entry
 
 
 @pytest.fixture(autouse=True)
@@ -262,3 +264,120 @@ def test_cmd_run_dir_sets_default_orca_priority(
     assert cli_run_dir.cmd_run_dir(args) == 44
     assert args.priority == 10
     assert seen == [args]
+
+
+def _run_dir_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    runs_root = tmp_path / "runs"
+    job = runs_root / "job"
+    job.mkdir(parents=True)
+    (job / "job.inp").write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+    fake_orca = tmp_path / "fake-orca"
+    fake_orca.touch()
+    fake_orca.chmod(0o755)
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(
+        f"runs_root: {runs_root}\norca:\n  paths:\n    orca_executable: {fake_orca}\n",
+        encoding="utf-8",
+    )
+    return runs_root, job, config
+
+
+def test_cli_run_dir_reports_an_invalid_config_without_a_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs_root, job, config = _run_dir_fixture(tmp_path)
+    config.write_text(config.read_text(encoding="utf-8") + "bogus_key: 1\n", encoding="utf-8")
+
+    assert cli_main(["run-dir", str(job), "--config", str(config)]) == 1
+
+    stderr = capsys.readouterr().err
+    assert "Traceback" not in stderr
+    assert "Unknown top-level config fields" in stderr
+    assert not (runs_root / "queue.json").exists()
+
+
+def test_cli_run_dir_reports_a_corrupt_queue_file_without_a_traceback(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs_root, job, config = _run_dir_fixture(tmp_path)
+    queue_file = runs_root / "queue.json"
+    queue_file.write_text("{not json", encoding="utf-8")
+
+    assert cli_main(["run-dir", str(job), "--config", str(config)]) == 1
+
+    stderr = capsys.readouterr().err
+    assert "Traceback" not in stderr
+    assert f"Queue file is not valid JSON: {queue_file}" in stderr
+    assert queue_file.read_text(encoding="utf-8") == "{not json"
+
+
+def test_cli_run_dir_reports_a_failed_submission_on_stderr_even_with_a_log_file(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs_root, job, config = _run_dir_fixture(tmp_path)
+    queue_file = runs_root / "queue.json"
+    queue_file.write_text("{not json", encoding="utf-8")
+    log_file = tmp_path / "submit.log"
+
+    assert (
+        cli_main(["run-dir", str(job), "--config", str(config), "--log-file", str(log_file)]) == 1
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: ")
+    assert f"Queue file is not valid JSON: {queue_file}" in captured.err
+    # The submission log line stays; it is simply no longer the only trace.
+    assert f"Queue file is not valid JSON: {queue_file}" in log_file.read_text(encoding="utf-8")
+
+    assert (
+        cli_main(
+            [
+                "run-dir",
+                str(job),
+                "--config",
+                str(config),
+                "--log-file",
+                str(log_file),
+                "--json",
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert f"Queue file is not valid JSON: {queue_file}" in payload["error"]
+    assert captured.err.startswith("error: ")
+
+
+def test_cli_run_dir_json_success_carries_ok(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runs_root, job, config = _run_dir_fixture(tmp_path)
+    from orca_auto.orca.commands import run_inp as run_inp_command
+
+    def _fake_submit(args: Any) -> Any:
+        entry = make_queue_entry(queue_id="q-ok", task_id="orca-ok", reaction_dir=job)
+        worker = SimpleNamespace(status="inactive", pid=None, log_file=None, detail=None)
+        return SimpleNamespace(
+            status="submitted",
+            stderr="",
+            queued_result=SimpleNamespace(entry=entry, worker_info=worker),
+            context=SimpleNamespace(reaction_dir=job),
+        )
+
+    monkeypatch.setattr(run_inp_command.submission, "submit_reaction_dir_to_queue", _fake_submit)
+
+    assert cli_main(["run-dir", str(job), "--config", str(config), "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["queue_id"] == "q-ok"
+    assert payload["status"] == "queued"

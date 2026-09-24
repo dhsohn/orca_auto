@@ -8,8 +8,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core import machine_observation
-from orca_auto.orca import state_reading
+from orca_auto.orca import machine_observation, state_reading
 from orca_auto.orca.report.publication import write_report_json
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_report_json
@@ -127,7 +126,7 @@ def test_report_hashes_each_available_file_once_per_load(
 
     monkeypatch.setattr(machine_observation.ReceiptDigest, "consume", count_hash)
     monkeypatch.setattr(
-        "orca_auto.core.engine_runner.executable_identity",
+        "orca_auto.orca.engine_runner.executable_identity",
         lambda *_args: pytest.fail("report verification must reuse the input receipt"),
     )
     assert load_report_json(generation, require_consumable_success=True) is not None

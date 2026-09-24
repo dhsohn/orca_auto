@@ -8,7 +8,8 @@ from typing import Any
 
 from orca_auto.core.utils.coercion import normalize_text, positive_int, safe_float, safe_int
 
-SUPPORTED_MESSENGER_PROVIDERS = frozenset({"discord"})
+# The only outbound messenger; ``messenger.provider`` stays accepted in YAML.
+_MESSENGER_PROVIDER = "discord"
 MIN_MESSENGER_TIMEOUT_SECONDS = 0.1
 MAX_MESSENGER_TIMEOUT_SECONDS = 120.0
 MAX_MESSENGER_ATTEMPTS = 10
@@ -292,21 +293,14 @@ def discord_config_from_mapping(raw: object) -> DiscordConfig:
 
 @dataclass(frozen=True)
 class MessengerConfig:
-    """Select the active outbound messenger and own all adapter configuration."""
+    """Own the outbound messenger (Discord bot) configuration."""
 
-    provider: str = "discord"
     discord: DiscordConfig = field(default_factory=DiscordConfig)
 
     @property
-    def normalized_provider(self) -> str:
-        return self.provider.strip().lower() or "discord"
-
-    @property
     def enabled(self) -> bool:
-        """Whether the selected provider can deliver outbound notifications."""
-        if self.normalized_provider == "discord":
-            return self.discord.bot_notification_enabled
-        return False
+        """Whether outbound notifications can be delivered."""
+        return self.discord.bot_notification_enabled
 
 
 def messenger_config_from_mapping(raw: object) -> MessengerConfig:
@@ -325,19 +319,13 @@ def messenger_config_from_mapping(raw: object) -> MessengerConfig:
         adapter_raw = messenger_raw.get(adapter)
         if adapter in messenger_raw and not isinstance(adapter_raw, Mapping):
             raise ValueError(f"messenger.{adapter} must be a mapping when configured.")
-    if "provider" in messenger_raw and (
-        not isinstance(messenger_raw.get("provider"), str)
-        or not str(messenger_raw.get("provider")).strip()
-    ):
-        raise ValueError("messenger.provider must be a non-empty string when configured.")
-    config = MessengerConfig(
-        provider=as_str(messenger_raw.get("provider"), "discord") or "discord",
-        discord=discord_config_from_mapping(messenger_raw.get("discord")),
-    )
-    if config.normalized_provider not in SUPPORTED_MESSENGER_PROVIDERS:
-        supported = ", ".join(sorted(SUPPORTED_MESSENGER_PROVIDERS))
-        raise ValueError(f"Unsupported messenger.provider; expected one of: {supported}.")
-    return config
+    if "provider" in messenger_raw:
+        provider = messenger_raw.get("provider")
+        if not isinstance(provider, str) or not provider.strip():
+            raise ValueError("messenger.provider must be a non-empty string when configured.")
+        if provider.strip().lower() != _MESSENGER_PROVIDER:
+            raise ValueError(f"Unsupported messenger.provider; expected {_MESSENGER_PROVIDER}.")
+    return MessengerConfig(discord=discord_config_from_mapping(messenger_raw.get("discord")))
 
 
 def reject_unknown_config_fields(

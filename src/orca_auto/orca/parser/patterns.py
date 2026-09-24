@@ -48,11 +48,11 @@ _COORD_SECTION_RE = re.compile(
 )
 
 # Thermodynamics
-_ENTHALPY_RE = re.compile(r"Total (?:E|e)nthalpy\s*\.{3,}\s*([-\d.]+)\s*Eh")
-_GIBBS_RE = re.compile(r"Final Gibbs free energy\s*\.{3,}\s*([-\d.]+)\s*Eh")
-_ZPE_RE = re.compile(r"Zero point energy\s*\.{3,}\s*([-\d.]+)\s*Eh")
-_GIBBS_CORRECTION_RE = re.compile(r"G-E\(el\)\s*\.{3,}\s*([-\d.]+)\s*Eh")
-_THERMO_TEMPERATURE_RE = re.compile(r"THERMOCHEMISTRY AT\s+([\d.]+)\s*K")
+ENTHALPY_RE = re.compile(r"Total (?:E|e)nthalpy\s*\.{3,}\s*([-\d.]+)\s*Eh")
+GIBBS_RE = re.compile(r"Final Gibbs free energy\s*\.{3,}\s*([-\d.]+)\s*Eh")
+ZPE_RE = re.compile(r"Zero point energy\s*\.{3,}\s*([-\d.]+)\s*Eh")
+GIBBS_CORRECTION_RE = re.compile(r"G-E\(el\)\s*\.{3,}\s*([-\d.]+)\s*Eh")
+THERMO_TEMPERATURE_RE = re.compile(r"THERMOCHEMISTRY AT\s+([\d.]+)\s*K")
 
 # Program header: "Program Version 5.0.4 -  RELEASE  -"
 _PROGRAM_VERSION_RE = re.compile(r"Program Version\s+([\w.]+)")
@@ -76,7 +76,7 @@ _RUNTIME_RE = re.compile(
 
 # charge / multiplicity: inline, echoed, or file-form geometry directives
 # such as "* xyzfile 0 1 input.xyz" (the trailing path is ignored).
-_CHARGE_MULT_RE = re.compile(
+CHARGE_MULT_RE = re.compile(
     r"^[ \t]*(?:\|[ \t]*\d+>[ \t]*)?\*[ \t]+xyz(?:file)?[ \t]+(-?\d+)[ \t]+(\d+)\b",
     re.IGNORECASE | re.MULTILINE,
 )

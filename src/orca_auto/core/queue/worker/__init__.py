@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import signal as signal
-
 from ..child.process import (
     live_queue_slot_keys_for_slots,
     start_background_process,
@@ -9,21 +7,15 @@ from ..child.process import (
 )
 from ..processes import (
     ManagedProcess,
-    current_worker_pid_payload,
     install_shutdown_signal_handlers,
-    read_worker_pid_file,
-    remove_worker_pid_file,
     terminate_process_group,
-    worker_pid_file_path,
-    write_worker_pid_file,
 )
 from .admission import (
+    WorkerConfig,
     admission_has_capacity,
-    dequeue_next_across_roots,
-    peek_next_across_roots,
-    queue_entry_by_id,
     reserve_dequeued_entry,
     resolve_admission_root,
+    select_next_claimable_entry,
 )
 from .loop import (
     QueueWorkerLoop,
@@ -31,39 +23,40 @@ from .loop import (
     pop_completed_worker_jobs,
 )
 from .models import (
-    BackgroundRunningJob,
+    ProcessBackedJob,
     ReservedQueueEntry,
+    ReserveStatus,
     SlotFillResult,
 )
-from .process import (
-    ChildProcessQueueWorker,
-    PidFileChildProcessQueueWorker,
-    QueueWorkerPidFileMixin,
+from .pid_file import (
+    WORKER_PID_FILE_NAME,
+    current_worker_pid_payload,
+    read_worker_pid_file,
+    remove_worker_pid_file,
+    worker_pid_file_path,
+    write_worker_pid_file,
 )
 
 __all__ = [
-    "BackgroundRunningJob",
-    "ChildProcessQueueWorker",
-    "admission_has_capacity",
+    "WORKER_PID_FILE_NAME",
     "ManagedProcess",
-    "PidFileChildProcessQueueWorker",
+    "ProcessBackedJob",
     "QueueWorkerLoop",
-    "QueueWorkerPidFileMixin",
+    "ReserveStatus",
     "ReservedQueueEntry",
     "SlotFillResult",
+    "WorkerConfig",
+    "admission_has_capacity",
     "current_worker_pid_payload",
-    "dequeue_next_across_roots",
     "fill_worker_slots",
     "install_shutdown_signal_handlers",
     "live_queue_slot_keys_for_slots",
-    "peek_next_across_roots",
     "pop_completed_worker_jobs",
-    "queue_entry_by_id",
     "read_worker_pid_file",
     "remove_worker_pid_file",
     "reserve_dequeued_entry",
     "resolve_admission_root",
-    "signal",
+    "select_next_claimable_entry",
     "start_background_process",
     "status_matches",
     "terminate_process_group",

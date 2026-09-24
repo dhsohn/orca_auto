@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.commands.run_dir import validate_production_run_dir_target
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
     should_exclude_from_production_runs_scan,
 )
+from orca_auto.orca.run_dir_guard import validate_production_run_dir_target
 
 
 def test_normal_runs_path_symlink_escape_fails_closed(tmp_path: Path) -> None:

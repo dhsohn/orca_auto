@@ -69,6 +69,6 @@ journalctl -u "orca_auto-queue-worker@$(id -un)" -f
 
 - **작업 취소**: 대기 중이거나 실행 중인 작업을 안전하게 취소합니다.
   ```bash
-  orca_auto queue cancel <QUEUE_ID_또는_디렉터리명> --config ~/orca_auto.yaml
+  orca_auto queue cancel <QUEUE_ID_OR_DIRECTORY> --config ~/orca_auto.yaml
   ```
 - **결과 확인**: 계산이 완료되면 작업 디렉터리 내에 ORCA의 표준 출력 파일(`job.out`)과 함께, 후속 도구 연동 및 결과 분석용 구조화 데이터 파일(`machine.json`)이 생성됩니다.

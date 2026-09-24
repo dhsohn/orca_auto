@@ -16,7 +16,8 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.queue import adapter, publication_repair
-from tests.queue_worker_helpers import current_orca_queue_metadata, make_queue_worker_cfg
+from tests.conftest import claim_next_entry, make_app_cfg
+from tests.queue_worker_helpers import current_orca_queue_metadata
 
 
 def _pending_entry(root: Path):
@@ -35,7 +36,7 @@ def _pending_entry(root: Path):
 
 
 def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: Path) -> None:
-    cfg = make_queue_worker_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     entry = _pending_entry(tmp_path)
     generation = queue_entry_generation_token(entry)
     with patch.object(
@@ -49,7 +50,7 @@ def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: P
     assert "index unavailable" in metadata["publication_blocked_reason"]
     assert metadata["publication_blocked_scope"] == "orca_queue"
     assert entry.queue_id in metadata["publication_blocked_action"]
-    assert adapter.dequeue_next(tmp_path) is None
+    assert claim_next_entry(tmp_path) is None
 
     with patch.object(publication_repair, "upsert_queued_job_record"):
         assert publication_repair.repair_queue_publication(cfg, tmp_path, blocked)
@@ -57,39 +58,30 @@ def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: P
     metadata = queue_record(adapter, repaired, None, allowed_root=tmp_path).metadata
     assert metadata["publication_blocked_reason"] == ""
     assert queue_entry_generation_token(repaired) == generation
-    assert adapter.dequeue_next(tmp_path) is not None
+    assert claim_next_entry(tmp_path) is not None
 
 
 def test_filtered_list_still_explains_queue_wide_publication_block(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    activity = {
-        "activity_id": "blocked-row",
-        "kind": "job",
-        "engine": "orca",
-        "status": "pending",
-        "metadata": {
-            "queue_id": "blocked-row",
-            "allowed_root": "/runs",
-            "publication_blocked_reason": "index unavailable",
-            "publication_blocked_scope": "orca_queue",
-            "publication_blocked_action": "Restore index access; worker retries, or queue cancel blocked-row.",
-        },
+    # The listing reports blockers for the whole catalog even when the status
+    # filter leaves the page empty; the CLI prints them under the empty table.
+    blocker = {
+        "queue_id": "blocked-row",
+        "allowed_root": "/runs",
+        "scope": "orca_queue",
+        "reason": "index unavailable",
+        "next_action": "Restore index access; worker retries, or queue cancel blocked-row.",
     }
-    request = cli_queue._QueueListRequest(
-        shared_config=None,
-        limit=1,
-        status_values=("completed",),
-        json_output=False,
-    )
-    monkeypatch.setattr(cli_queue, "count_global_active_simulations", lambda *args, **kwargs: 0)
     monkeypatch.setattr(cli_queue, "_layout_interactive", lambda: False)
-    payload = {"activities": [activity], "sources": {}}
-    filtered, activities = cli_queue._filtered_queue_payload(payload, request)
-    assert filtered["count"] == 0
-    assert filtered["admission_blockers"][0]["queue_id"] == "blocked-row"
     cli_queue._print_queue_list_text(
-        payload=payload, filtered_payload=filtered, filtered_activities=activities, request=request
+        payload={
+            "count": 0,
+            "active_simulations": 0,
+            "activities": [],
+            "sources": {},
+            "admission_blockers": [blocker],
+        }
     )
     output = capsys.readouterr().out
     assert "index unavailable" in output
@@ -97,7 +89,7 @@ def test_filtered_list_still_explains_queue_wide_publication_block(
 
 
 def test_old_generation_cannot_publish_a_blocker_on_replacement(tmp_path: Path) -> None:
-    cfg = make_queue_worker_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     entry = _pending_entry(tmp_path)
     from orca_auto.core.queue.store import mutate_entries
 
@@ -115,7 +107,7 @@ def test_old_generation_cannot_publish_a_blocker_on_replacement(tmp_path: Path) 
 
 
 def test_complete_publication_clears_resolved_path_error(tmp_path: Path) -> None:
-    cfg = make_queue_worker_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     entry = _pending_entry(tmp_path)
     assert adapter.update_metadata(
         tmp_path,

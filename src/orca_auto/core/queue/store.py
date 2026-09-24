@@ -1,6 +1,15 @@
+"""Durable queue file: storage, locking, duplicate policy, enqueue/dequeue/clear.
+
+``queue.json`` under one queue root holds every row; every read and write
+goes through :func:`queue_lock`. :class:`QueueStore` binds a root to its
+load/save functions and is the single lock/load/mutate/save primitive that
+the module-level operations and :mod:`.transitions` (cancellation and
+terminal marks) build on.
+"""
+
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -17,18 +26,10 @@ from .deferral import ADMISSION_DEFERRAL_METADATA_KEY, queue_entry_admission_is_
 from .generation import queue_entries_same_generation
 from .priority import normalize_queue_priority
 from .publication import (
-    QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
-    QUEUE_RECORD_SYNC_OWNER_PID_KEY,
-    QUEUE_RECORD_SYNC_OWNER_START_KEY,
-    QUEUE_RECORD_SYNC_PREPARING,
-    QUEUE_RECORD_SYNC_REPAIR_PENDING,
-    QUEUE_RECORD_SYNC_REPAIRING,
-    QUEUE_RECORD_SYNC_TOKEN_KEY,
-    QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     queue_entry_is_claimable,
-    queue_record_publication_lock,
+    queue_record_publication_lock_path,
     queue_record_sync_metadata,
 )
 from .types import ACTIVE_QUEUE_STATUSES, TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
@@ -40,8 +41,6 @@ _TERMINAL_STATUSES = TERMINAL_QUEUE_STATUSES
 _QueueEntryT = TypeVar("_QueueEntryT", bound=QueueEntry)
 _MutationResultT = TypeVar("_MutationResultT")
 _TOKEN_COLLISION_RETRY_LIMIT = 32
-
-_MetadataUpdateFn = Callable[[QueueEntry], Mapping[str, Any] | None]
 
 QueueDuplicatePolicy = Callable[[Sequence[QueueEntry], QueueEntry], None]
 DuplicateErrorFactory = Callable[[str, QueueEntry], Exception]
@@ -124,63 +123,6 @@ def _status_value(status: QueueStatus | str) -> str:
 
 def _status_values(statuses: Collection[QueueStatus | str]) -> set[str]:
     return {_status_value(status) for status in statuses}
-
-
-def _merged_metadata(
-    entry: QueueEntry,
-    *,
-    metadata_update: Mapping[str, Any] | None = None,
-    metadata_update_fn: _MetadataUpdateFn | None = None,
-) -> dict[str, Any]:
-    merged = dict(entry.metadata)
-    if metadata_update:
-        merged.update(metadata_update)
-    if metadata_update_fn is not None:
-        generated_update = metadata_update_fn(entry)
-        if generated_update is not None:
-            if not isinstance(generated_update, Mapping):
-                raise TypeError("metadata update callback must return a mapping or None")
-            merged.update(generated_update)
-    return merged
-
-
-def terminal_entry(
-    entry: QueueEntry,
-    *,
-    status: QueueStatus,
-    error: str | None,
-    finished_at: str | None = None,
-    metadata: Mapping[str, Any] | None = None,
-    cancel_requested: bool | None = None,
-) -> QueueEntry:
-    """Build the terminal row for ``entry``.
-
-    This is the only constructor of COMPLETED/FAILED/CANCELLED rows, so the
-    terminal rules live in one place:
-
-    * ``status`` must be terminal; anything else raises ``ValueError``.
-    * ``finished_at`` defaults to now. An explicit value keeps an
-      authoritative timestamp (an idempotent re-mark, an orphan's state file).
-    * ``cancel_requested`` is cleared by a CANCELLED row (the request has been
-      honored) and preserved otherwise. A caller that records the flag on
-      purpose (a pending row cancelled on request, an ambiguous-identity
-      fence) passes it explicitly.
-    * ``error`` ``None`` keeps the row's current error; a string is stripped.
-    * ``metadata`` ``None`` keeps the row's metadata; a mapping replaces it.
-    """
-    target = QueueStatus(status)
-    if target not in _TERMINAL_STATUSES:
-        raise ValueError(f"terminal_entry requires a terminal status, got {target.value!r}")
-    if cancel_requested is None:
-        cancel_requested = False if target == QueueStatus.CANCELLED else entry.cancel_requested
-    return replace(
-        entry,
-        status=target,
-        finished_at=now_utc_iso() if finished_at is None else finished_at,
-        cancel_requested=cancel_requested,
-        error=entry.error if error is None else error.strip(),
-        metadata=entry.metadata if metadata is None else dict(metadata),
-    )
 
 
 def find_entry_by_key(
@@ -449,6 +391,7 @@ def clear_terminal(
     resolved_root = resolve_root_path(root)
     if not _queue_path(resolved_root).exists():
         return 0
+    removed_ids: list[str] = []
 
     def clear(entries: list[QueueEntry]) -> tuple[int, bool]:
         terminal_entries = [
@@ -483,14 +426,21 @@ def clear_terminal(
         removed_count = len(entries) - len(kept_entries)
         if removed_count <= 0:
             return 0, False
+        kept_ids = {entry.queue_id for entry in kept_entries}
+        removed_ids.extend(entry.queue_id for entry in entries if entry.queue_id not in kept_ids)
         entries[:] = kept_entries
         return removed_count, True
 
-    return QueueStore.for_root(
+    removed_count = QueueStore.for_root(
         resolved_root,
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
     ).mutate_entries(clear)
+    # A removed row's publication lock file has no owner left; a row that
+    # never went through the publication lock has no file to remove.
+    for queue_id in removed_ids:
+        queue_record_publication_lock_path(resolved_root, queue_id).unlink(missing_ok=True)
+    return removed_count
 
 
 def enqueue(
@@ -570,41 +520,6 @@ def _claimed(entry: QueueEntry) -> QueueEntry:
     )
 
 
-def dequeue_next(
-    root: str | Path,
-    *,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-) -> QueueEntry | None:
-    def dequeue(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
-        # Within one queue file the row position is the arrival order: rows are
-        # only ever appended under the queue lock. The wall-clock enqueued_at
-        # is not monotonic (WSL2 skew corrections step it backwards), so it
-        # must not reorder same-priority dispatch.
-        pending = [
-            (entry.priority, index, entry)
-            for index, entry in enumerate(entries)
-            if entry.status == QueueStatus.PENDING
-            and not entry.cancel_requested
-            and queue_entry_is_claimable(entry)
-            and not queue_entry_admission_is_deferred(entry)
-            and (accept_entry_fn is None or accept_entry_fn(entry))
-        ]
-        if not pending:
-            return None, False
-        _, index, current = min(pending, key=lambda item: (item[0], item[1]))
-        updated = _claimed(current)
-        entries[index] = updated
-        return updated, True
-
-    return QueueStore.for_root(
-        root,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-    ).mutate_entries(dequeue)
-
-
 def dequeue_entry_if_pending(
     root: str | Path,
     queue_id: str,
@@ -634,143 +549,6 @@ def dequeue_entry_if_pending(
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
     ).mutate_entry_by_id(queue_id, dequeue, missing_result=None)
-
-
-def request_cancel(
-    root: str | Path,
-    queue_id: str,
-    *,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    expected_entry: QueueEntry | None = None,
-    pending_metadata_update_fn: _MetadataUpdateFn | None = None,
-    before_pending_cancel_fn: Callable[[QueueEntry], Any] | None = None,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-) -> QueueEntry | None:
-    def accepts_cancel(entry: QueueEntry) -> bool:
-        if accept_entry_fn is not None and not accept_entry_fn(entry):
-            return False
-        if expected_entry is not None and not queue_entries_same_generation(
-            entry,
-            expected_entry,
-        ):
-            return False
-        return True
-
-    def pending_cancel_metadata(entry: QueueEntry, *, finished_at: str) -> dict[str, Any]:
-        metadata = dict(entry.metadata)
-        sync_state = str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
-        if sync_state in {
-            QUEUE_RECORD_SYNC_PREPARING,
-            QUEUE_RECORD_SYNC_REPAIR_PENDING,
-            QUEUE_RECORD_SYNC_REPAIRING,
-        }:
-            # Cancellation owns the per-entry publication lock here. Revoke
-            # the publisher's fencing token before releasing it so a
-            # publisher that had not started its side effects cannot resume.
-            # ABORTED is a forward fence, not a cross-store rollback: a
-            # process killed between state, index, and notification writes
-            # may have left an outcome-unknown partial record. Terminal
-            # reconciliation owns that artifact; cancellation guarantees
-            # only that no publisher can add a late write after this point.
-            metadata.update(
-                {
-                    QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_ABORTED,
-                    QUEUE_RECORD_SYNC_UPDATED_AT_KEY: finished_at,
-                    QUEUE_RECORD_SYNC_OWNER_PID_KEY: 0,
-                    QUEUE_RECORD_SYNC_OWNER_START_KEY: "",
-                    QUEUE_RECORD_SYNC_TOKEN_KEY: "",
-                }
-            )
-        return metadata
-
-    def cancelled_pending_entry(entry: QueueEntry, *, finished_at: str) -> QueueEntry:
-        candidate = terminal_entry(
-            entry,
-            status=QueueStatus.CANCELLED,
-            error=None,
-            finished_at=finished_at,
-            metadata=pending_cancel_metadata(entry, finished_at=finished_at),
-            cancel_requested=True,
-        )
-        return replace(
-            candidate,
-            metadata=_merged_metadata(
-                candidate,
-                metadata_update_fn=pending_metadata_update_fn,
-            ),
-        )
-
-    def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
-        if not accepts_cancel(entry):
-            return None, None
-        if entry.status == QueueStatus.PENDING:
-            finished_at = now_utc_iso()
-            updated = cancelled_pending_entry(
-                entry,
-                finished_at=finished_at,
-            )
-        elif entry.status == QueueStatus.RUNNING:
-            updated = replace(entry, cancel_requested=True)
-        else:
-            return None, None
-        return updated, updated
-
-    queue_store = QueueStore.for_root(
-        root,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-    )
-    # Publication holds this same entry-scoped lock across its ownership check,
-    # external side effects, and COMPLETE transition. Therefore cancellation
-    # either revokes ownership before any side effect or terminalizes only after
-    # publication has fully completed.
-    with queue_record_publication_lock(queue_store.root, queue_id):
-        if before_pending_cancel_fn is not None:
-            # Persist the dequeue fence before invoking the cross-store
-            # publication callback. Keep both locks through the final queue
-            # transition so no successor, worker claim, or metadata mutation
-            # can interleave. If publication or the final save fails, the
-            # pending row remains durably cancel-requested and a retry can
-            # idempotently finish the exact same generation.
-            with queue_lock(queue_store.root):
-                entries = queue_store.load_entries_fn(queue_store.root)
-                for index, entry in enumerate(entries):
-                    if not isinstance(entry, QueueEntry) or entry.queue_id != queue_id:
-                        continue
-                    if not accepts_cancel(entry):
-                        return None
-                    if entry.status == QueueStatus.RUNNING:
-                        updated = replace(entry, cancel_requested=True)
-                        entries[index] = updated
-                        queue_store.save_entries_fn(queue_store.root, entries)
-                        return updated
-                    if entry.status != QueueStatus.PENDING:
-                        return None
-
-                    finished_at = now_utc_iso()
-                    fenced = replace(
-                        entry,
-                        cancel_requested=True,
-                        metadata=pending_cancel_metadata(
-                            entry,
-                            finished_at=finished_at,
-                        ),
-                    )
-                    if fenced != entry:
-                        entries[index] = fenced
-                        queue_store.save_entries_fn(queue_store.root, entries)
-
-                    updated = cancelled_pending_entry(
-                        fenced,
-                        finished_at=finished_at,
-                    )
-                    before_pending_cancel_fn(updated)
-                    entries[index] = updated
-                    queue_store.save_entries_fn(queue_store.root, entries)
-                    return updated
-                return None
-        return queue_store.mutate_entry_by_id(queue_id, update, missing_result=None)
 
 
 class QueueCancellationProbe:
@@ -882,297 +660,3 @@ def update_metadata(
         load_entries_fn=load_entries_fn,
         save_entries_fn=save_entries_fn,
     ).mutate_entry_by_id(queue_id, update, missing_result=None)
-
-
-def requeue_running_entry(
-    root: str | Path,
-    queue_id: str,
-    *,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    expected_entry: QueueEntry | None = None,
-    expected_task_id: str | None = None,
-    cancel_metadata_update_fn: _MetadataUpdateFn | None = None,
-    requeue_metadata_update: Mapping[str, Any] | None = None,
-) -> QueueEntry | None:
-    def requeue(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
-        for index, entry in enumerate(entries):
-            if (
-                entry.queue_id != queue_id
-                or entry.status != QueueStatus.RUNNING
-                or (accept_entry_fn is not None and not accept_entry_fn(entry))
-                or (
-                    expected_entry is not None
-                    and not queue_entries_same_generation(entry, expected_entry)
-                )
-                or (expected_task_id is not None and entry.task_id != expected_task_id)
-            ):
-                continue
-            if entry.cancel_requested:
-                # A cancel was requested while this entry was running. Requeueing it
-                # for resume would clear cancel_requested and let the worker dequeue
-                # and resume the very job the user cancelled. Honor the cancellation
-                # instead so the stop is terminal. Workers deliver cancellation as a
-                # SIGTERM that the run interprets as a worker-shutdown requeue, so this
-                # is the chokepoint that keeps "cancel" from turning into "resume".
-                # Clear cancel_requested: it has now been honored, so the terminal
-                # entry should not keep advertising a pending cancellation.
-                candidate = terminal_entry(entry, status=QueueStatus.CANCELLED, error=None)
-                updated = replace(
-                    candidate,
-                    metadata=_merged_metadata(
-                        candidate,
-                        metadata_update_fn=cancel_metadata_update_fn,
-                    ),
-                )
-                entries[index] = updated
-                return updated, True
-            updated = replace(
-                entry,
-                status=QueueStatus.PENDING,
-                started_at="",
-                cancel_requested=False,
-                error="",
-                metadata=_merged_metadata(entry, metadata_update=requeue_metadata_update),
-            )
-            entries[index] = updated
-            return updated, True
-        return None, False
-
-    return QueueStore.for_root(
-        root,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-    ).mutate_entries(requeue)
-
-
-def _mark_status(
-    root: str | Path,
-    queue_id: str,
-    *,
-    status: QueueStatus,
-    error: str = "",
-    metadata_update: dict[str, Any] | None = None,
-    metadata_update_fn: _MetadataUpdateFn | None = None,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    expected_entry: QueueEntry | None = None,
-    expected_task_id: str | None = None,
-    before_update_fn: Callable[[], Any] | None = None,
-    require_cancel_requested: bool = False,
-) -> QueueEntry | None:
-    def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
-        if accept_entry_fn is not None and not accept_entry_fn(entry):
-            return None, None
-        if expected_entry is not None and not queue_entries_same_generation(
-            entry,
-            expected_entry,
-        ):
-            return None, None
-        if expected_task_id is not None and entry.task_id != expected_task_id:
-            return None, None
-        if status != QueueStatus.CANCELLED and entry.cancel_requested:
-            # Cancellation and terminal completion race under the same queue
-            # mutation lock. Once cancellation is acknowledged, a completed or
-            # failed writer must not overwrite it; its owner can retry and take
-            # the cancelled branch against the durable flag.
-            return None, None
-        if entry.status in _TERMINAL_STATUSES:
-            # Idempotent replays of the authoritative terminal status must
-            # still repair artifacts/indexes under the same generation lock.
-            # A conflicting terminal writer is rejected and can reconcile to
-            # the durable status through its explicit fallback path.
-            if entry.status != status:
-                return None, None
-            merged = _merged_metadata(
-                entry,
-                metadata_update=metadata_update,
-                metadata_update_fn=metadata_update_fn,
-            )
-            if before_update_fn is not None:
-                before_update_fn()
-            updated = terminal_entry(
-                entry,
-                status=status,
-                error=error.strip() or None,
-                finished_at=entry.finished_at,
-                metadata=merged,
-            )
-            return updated, (updated if updated != entry else None)
-        if (
-            status == QueueStatus.CANCELLED
-            and require_cancel_requested
-            and not entry.cancel_requested
-        ):
-            return None, None
-        merged = _merged_metadata(
-            entry,
-            metadata_update=metadata_update,
-            metadata_update_fn=metadata_update_fn,
-        )
-        if before_update_fn is not None:
-            before_update_fn()
-        updated = terminal_entry(entry, status=status, error=error, metadata=merged)
-        return updated, updated
-
-    return QueueStore.for_root(
-        root,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-    ).mutate_entry_by_id(queue_id, update, missing_result=None)
-
-
-def correct_terminal_status(
-    root: str | Path,
-    queue_id: str,
-    *,
-    status: QueueStatus,
-    error: str | None = None,
-    metadata_update: Mapping[str, Any] | None = None,
-    metadata_update_fn: _MetadataUpdateFn | None = None,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    expected_entry: QueueEntry | None = None,
-    expected_task_id: str | None = None,
-) -> QueueEntry | None:
-    """Correct an already-terminal row to another terminal status.
-
-    This is the recovery-only terminal -> terminal transition: a durable
-    state file proved a different outcome than the row records. Active rows
-    are refused; they must go through ``mark_*``/``request_cancel`` so their
-    side-effect evidence is written in the same queue mutation. The row is
-    built by :func:`terminal_entry` (``finished_at`` is re-stamped; ``error``
-    ``None`` keeps the recorded error; ``cancel_requested`` is left as
-    recorded) and ``metadata_update``/``metadata_update_fn`` are merged under
-    the same queue lock.
-    """
-    target = QueueStatus(status)
-    if target not in _TERMINAL_STATUSES:
-        raise ValueError(
-            f"correct_terminal_status requires a terminal status, got {target.value!r}"
-        )
-
-    def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
-        if entry.status not in _TERMINAL_STATUSES:
-            return None, None
-        if accept_entry_fn is not None and not accept_entry_fn(entry):
-            return None, None
-        if expected_entry is not None and not queue_entries_same_generation(
-            entry,
-            expected_entry,
-        ):
-            return None, None
-        if expected_task_id is not None and entry.task_id != expected_task_id:
-            return None, None
-        merged = _merged_metadata(
-            entry,
-            metadata_update=metadata_update,
-            metadata_update_fn=metadata_update_fn,
-        )
-        updated = terminal_entry(
-            entry,
-            status=target,
-            error=error,
-            metadata=merged,
-            cancel_requested=entry.cancel_requested,
-        )
-        return updated, updated
-
-    return QueueStore.for_root(
-        root,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-    ).mutate_entry_by_id(queue_id, update, missing_result=None)
-
-
-def mark_completed(
-    root: str | Path,
-    queue_id: str,
-    *,
-    metadata_update: dict[str, Any] | None = None,
-    metadata_update_fn: _MetadataUpdateFn | None = None,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    expected_entry: QueueEntry | None = None,
-    expected_task_id: str | None = None,
-    before_update_fn: Callable[[], Any] | None = None,
-) -> QueueEntry | None:
-    return _mark_status(
-        root,
-        queue_id,
-        status=QueueStatus.COMPLETED,
-        metadata_update=metadata_update,
-        metadata_update_fn=metadata_update_fn,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-        accept_entry_fn=accept_entry_fn,
-        expected_entry=expected_entry,
-        expected_task_id=expected_task_id,
-        before_update_fn=before_update_fn,
-    )
-
-
-def mark_failed(
-    root: str | Path,
-    queue_id: str,
-    *,
-    error: str,
-    metadata_update: dict[str, Any] | None = None,
-    metadata_update_fn: _MetadataUpdateFn | None = None,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    expected_entry: QueueEntry | None = None,
-    expected_task_id: str | None = None,
-    before_update_fn: Callable[[], Any] | None = None,
-) -> QueueEntry | None:
-    return _mark_status(
-        root,
-        queue_id,
-        status=QueueStatus.FAILED,
-        error=error,
-        metadata_update=metadata_update,
-        metadata_update_fn=metadata_update_fn,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-        accept_entry_fn=accept_entry_fn,
-        expected_entry=expected_entry,
-        expected_task_id=expected_task_id,
-        before_update_fn=before_update_fn,
-    )
-
-
-def mark_cancelled(
-    root: str | Path,
-    queue_id: str,
-    *,
-    error: str = "",
-    metadata_update: dict[str, Any] | None = None,
-    metadata_update_fn: _MetadataUpdateFn | None = None,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    expected_entry: QueueEntry | None = None,
-    expected_task_id: str | None = None,
-    before_update_fn: Callable[[], Any] | None = None,
-    require_cancel_requested: bool = False,
-) -> QueueEntry | None:
-    return _mark_status(
-        root,
-        queue_id,
-        status=QueueStatus.CANCELLED,
-        error=error,
-        metadata_update=metadata_update,
-        metadata_update_fn=metadata_update_fn,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
-        accept_entry_fn=accept_entry_fn,
-        expected_entry=expected_entry,
-        expected_task_id=expected_task_id,
-        before_update_fn=before_update_fn,
-        require_cancel_requested=require_cancel_requested,
-    )

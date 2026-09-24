@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
-from orca_auto.core.engine_process import atomic_write_confined_bytes
+from orca_auto.core.confined_io import atomic_write_confined_bytes
 
 from .. import evidence
 from ..frequencies import ModeSummary, mode_summaries

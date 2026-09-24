@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import QUEUE_FILE as QUEUE_FILE_NAME
-from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
+from orca_auto.core.queue import transitions as _queue_transitions
 from orca_auto.core.queue.deferral import (
     ADMISSION_DEFERRAL_METADATA_KEY,
     admission_deferral_update,
@@ -28,6 +28,7 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import now_utc_iso, timestamped_token
+from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from .entries import (
     ACTIVE_STATUSES,
@@ -50,7 +51,7 @@ from .entries import (
     queue_entry_status,
     queue_entry_task_id,
 )
-from .orphans import reconcile_orphaned_running_entries
+from .orphans import reconcile_dead_running_rows_for_dir, reconcile_orphaned_running_entries
 from .terminal_replay import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
     TERMINAL_REPLAY_METADATA_KEY,
@@ -78,9 +79,7 @@ __all__ = [
     "cancel",
     "cancel_requested_ids",
     "cancellation_probe",
-    "clear_terminal",
     "dequeue_entry_if_pending",
-    "dequeue_next",
     "enqueue",
     "get_active_entry_for_reaction_dir",
     "get_entry_by_id",
@@ -219,10 +218,18 @@ def enqueue(
     metadata: dict[str, Any] | None = None,
     before_commit_fn: Callable[[], Any] | None = None,
     after_commit_fn: Callable[[], Any] | None = None,
+    admission_root: Path | None = None,
 ) -> QueueEntry:
-    """Add a reaction directory to the ORCA queue."""
+    """Add a reaction directory to the ORCA queue.
+
+    RUNNING-row reconciliation belongs to the worker. A submission only recovers
+    this directory's own rows, and only when ``admission_root`` is given so the
+    worker's live-slot protection can be applied; see
+    ``reconcile_dead_running_rows_for_dir``.
+    """
     resolved = str(Path(reaction_dir).expanduser().resolve())
-    reconcile_orphaned_running_entries(allowed_root)
+    if admission_root is not None:
+        reconcile_dead_running_rows_for_dir(allowed_root, resolved, admission_root=admission_root)
     normalized_priority = normalize_queue_priority(priority)
     normalized_task_id = normalize_text(task_id)
     normalized_task_kind = normalize_text(task_kind) or QUEUE_TASK_KIND
@@ -307,39 +314,6 @@ def _immutable_publication_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in metadata.items() if key not in lease_keys}
 
 
-def dequeue_next(
-    allowed_root: Path,
-    *,
-    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-) -> QueueEntry | None:
-    """Return the highest-priority pending entry and mark it running.
-
-    Only canonical ORCA rows outside retired workflow directories are eligible.
-    ``accept_entry_fn`` may narrow that set further.
-    """
-
-    def accepts_orca(entry: QueueEntry) -> bool:
-        return (
-            is_orca_queue_entry(entry)
-            and not queue_entry_is_retired_workflow_owned(entry, allowed_root)
-            and (accept_entry_fn is None or accept_entry_fn(entry))
-        )
-
-    entry = _queue_store.dequeue_next(
-        allowed_root,
-        save_entries_fn=_queue_store.save_entries,
-        accept_entry_fn=accepts_orca,
-    )
-    if entry is None:
-        return None
-    logger.info(
-        "Dequeued: %s (queue_id=%s)",
-        queue_entry_reaction_dir(entry),
-        queue_entry_id(entry),
-    )
-    return entry
-
-
 def dequeue_entry_if_pending(
     allowed_root: Path,
     queue_id: str,
@@ -415,7 +389,7 @@ def mark_completed(
     if run_id is not None:
         merged_metadata["run_id"] = run_id
     return (
-        _queue_store.mark_completed(
+        _queue_transitions.mark_completed(
             allowed_root,
             queue_id,
             metadata_update=merged_metadata or None,
@@ -470,7 +444,7 @@ def mark_failed(
     if run_id is not None:
         merged_metadata["run_id"] = run_id
     return (
-        _queue_store.mark_failed(
+        _queue_transitions.mark_failed(
             allowed_root,
             queue_id,
             error=normalized_error,
@@ -518,7 +492,7 @@ def mark_cancelled(
 ) -> bool:
     """Mark a running queue entry as cancelled after the worker stops it."""
     return (
-        _queue_store.mark_cancelled(
+        _queue_transitions.mark_cancelled(
             allowed_root,
             queue_id,
             error="",
@@ -564,7 +538,7 @@ def requeue_running_entry(
     requeued so a cancelled job is not resumed (see core queue store).
     """
     return (
-        _queue_store.requeue_running_entry(
+        _queue_transitions.requeue_running_entry(
             allowed_root,
             queue_id,
             requeue_metadata_update=(
@@ -601,7 +575,7 @@ def cancel(
     expected_entry: QueueEntry | None = None,
 ) -> QueueEntry | None:
     """Cancel a queue entry."""
-    entry = _queue_store.request_cancel(
+    entry = _queue_transitions.request_cancel(
         allowed_root,
         queue_id,
         pending_metadata_update_fn=terminal_replay_metadata_update_fn(
@@ -713,22 +687,6 @@ def get_cancel_requested(
     )
 
 
-def clear_terminal(allowed_root: Path, *, keep_last: int = 0) -> int:
-    """Remove completed/failed/cancelled entries. Returns count removed."""
-    removed_count = _queue_store.clear_terminal(
-        allowed_root,
-        keep_last=keep_last,
-        retain_entry_fn=_has_pending_terminal_replay,
-        select_entry_fn=lambda entry: (
-            is_orca_queue_entry(entry)
-            and not queue_entry_is_retired_workflow_owned(entry, allowed_root)
-        ),
-        save_entries_fn=_queue_store.save_entries,
-    )
-    logger.info("Cleared %d terminal entries", removed_count)
-    return removed_count
-
-
 def update_metadata(
     allowed_root: Path,
     queue_id: str,
@@ -790,7 +748,7 @@ def update_terminal(
     target_status = normalize_text(status).lower()
     if target_status not in TERMINAL_STATUSES:
         return False
-    updated = _queue_store.correct_terminal_status(
+    updated = _queue_transitions.correct_terminal_status(
         allowed_root,
         queue_id,
         status=QueueStatus(target_status),

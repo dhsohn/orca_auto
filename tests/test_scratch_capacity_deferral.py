@@ -11,12 +11,13 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core import engine_scratch as scratch_mod
-from orca_auto.core.config import CommonResourceConfig, ScratchConfig
+from orca_auto.core.config import CommonResourceConfig
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
     EngineScratchWorkspace,
 )
+from orca_auto.core.engine_scratch import _policy as policy_mod
+from orca_auto.core.engine_scratch import _workspace as workspace_mod
 from orca_auto.core.queue.deferral import (
     ADMISSION_DEFERRAL_INTERVAL_SECONDS,
     ADMISSION_DEFERRAL_METADATA_KEY,
@@ -26,23 +27,25 @@ from orca_auto.core.queue.deferral import (
 )
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.core.queue.worker.admission import peek_next_across_roots
+from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.orca import execution as run_inp_execution
+from orca_auto.orca import scratch_config as config_scratch_mod
 from orca_auto.orca import worker_execution as worker_job
-from orca_auto.orca.config import AppConfig, PathsConfig
+from orca_auto.orca.config import AppConfig, PathsConfig, load_config
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
     orca_execution_started_evidence,
 )
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult
 from orca_auto.orca.queue.adapter import (
-    dequeue_next,
     enqueue,
     list_queue,
     queue_entries_same_publication_generation,
 )
 from orca_auto.orca.run_context import RunExecutionContext
+from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state_reading import load_state, state_path
+from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
 
 _REFUSAL = "engine scratch cannot guarantee RAM headroom without swap: available_memory=1"
 
@@ -134,17 +137,21 @@ def _bound_orca_metadata(tmp_path: Path, reaction_dir: Path) -> dict[str, Any]:
     }
 
 
-def _child_cfg(queue_root: Path, admission_root: Path) -> Any:
-    return SimpleNamespace(
-        runtime=SimpleNamespace(
-            allowed_root=str(queue_root),
-            admission_root=str(admission_root),
-            admission_limit=1,
+def _child_config(tmp_path: Path, queue_root: Path, **overrides: Any) -> Path:
+    """The child's ``orca_auto.yaml``: one admission slot and ``fake-orca`` as the executable."""
+
+    executable = tmp_path / "fake-orca"
+    if not executable.exists():
+        write_fake_orca(executable)
+    return write_config_file(
+        tmp_path / "orca_auto.yaml",
+        make_app_cfg(
+            queue_root,
+            orca_executable=executable,
             max_concurrent=1,
-            resolved_admission_root=str(admission_root),
-            resolved_admission_limit=1,
+            admission_root=tmp_path / "admission",
+            **overrides,
         ),
-        resources=CommonResourceConfig(),
     )
 
 
@@ -155,18 +162,25 @@ def _run_child_with(
     queue_id: str,
     execute: Any,
 ) -> int:
-    monkeypatch.setattr(
-        worker_job, "load_config", lambda _path: _child_cfg(queue_root, tmp_path / "admission")
-    )
+    config = _child_config(tmp_path, queue_root)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
     monkeypatch.setattr(worker_job, "execute_orca_run", execute)
     return worker_job.run_worker_child_job(
-        config_path="/tmp/config.yaml",
+        config_path=str(config),
         queue_root=queue_root,
         queue_id=queue_id,
         admission_token="slot-deferral",
         await_parent_admission_handoff_fn=lambda *_args: True,
     )
+
+
+def _deferral_is_due(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the deferral count as due at both the selection and the by-id claim."""
+    import orca_auto.core.queue.store as store_mod
+    import orca_auto.core.queue.worker.admission as admission_mod
+
+    for module in (store_mod, admission_mod):
+        monkeypatch.setattr(module, "queue_entry_admission_is_deferred", lambda _entry: False)
 
 
 def _refuse(*_args: Any, **_kwargs: Any) -> int:
@@ -190,7 +204,7 @@ def test_capacity_refusal_returns_the_row_to_the_queue_without_touching_its_gene
         task_id="task-deferred",
         metadata=_bound_orca_metadata(tmp_path, rxn),
     )
-    running = dequeue_next(queue_root)
+    running = claim_next_entry(queue_root)
     assert running is not None
     listing_before = _generation_listing(rxn)
 
@@ -236,34 +250,29 @@ def test_deferred_row_is_skipped_until_due_and_does_not_block_the_row_behind_it(
         task_id="task-small",
         metadata=_bound_orca_metadata(tmp_path, queue_root / "small"),
     )
-    assert dequeue_next(queue_root) is not None
+    assert claim_next_entry(queue_root) is not None
     _run_child_with(monkeypatch, tmp_path, queue_root, big.queue_id, _refuse)
 
     def peek(accept_entry_fn: Any) -> Any:
-        # None takes the single-root fast path; ORCA workers pass a filter.
-        return peek_next_across_roots(
-            (queue_root,),
-            list_queue_fn=list_queue,
-            select_all_rows=True,
-            accept_entry_fn=accept_entry_fn,
-        )
+        # The worker's preview: the row its by-id claim would take.
+        return select_next_claimable_entry(list_queue(queue_root), accept_entry_fn=accept_entry_fn)
 
     for accept_entry_fn in (None, lambda _entry: True):
         peeked = peek(accept_entry_fn)
-        assert peeked is not None and peeked[1].queue_id == small.queue_id
-    claimed = dequeue_next(queue_root)
+        assert peeked is not None and peeked.queue_id == small.queue_id
+    claimed = claim_next_entry(queue_root)
     assert claimed is not None and claimed.queue_id == small.queue_id
     # Only the deferred row is left: the worker sees an idle queue before it
     # reserves a slot, instead of respawning the row on every poll.
-    assert dequeue_next(queue_root) is None
+    assert claim_next_entry(queue_root) is None
     for accept_entry_fn in (None, lambda _entry: True):
         assert peek(accept_entry_fn) is None
 
     clock.now += timedelta(seconds=ADMISSION_DEFERRAL_INTERVAL_SECONDS)
     for accept_entry_fn in (None, lambda _entry: True):
         peeked = peek(accept_entry_fn)
-        assert peeked is not None and peeked[1].queue_id == big.queue_id
-    due = dequeue_next(queue_root)
+        assert peeked is not None and peeked.queue_id == big.queue_id
+    due = claim_next_entry(queue_root)
     assert due is not None and due.queue_id == big.queue_id
 
 
@@ -282,14 +291,12 @@ def test_claim_removes_the_deferral_so_a_later_requeue_is_not_mislabelled(
         task_id="task-relabel",
         metadata=_bound_orca_metadata(tmp_path, rxn),
     )
-    first_claim = dequeue_next(queue_root)
+    first_claim = claim_next_entry(queue_root)
     assert first_claim is not None
     _run_child_with(monkeypatch, tmp_path, queue_root, entry.queue_id, _refuse)
-    import orca_auto.core.queue.store as store_mod
+    _deferral_is_due(monkeypatch)
 
-    monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
-
-    reclaimed = dequeue_next(queue_root)
+    reclaimed = claim_next_entry(queue_root)
 
     assert reclaimed is not None
     assert ADMISSION_DEFERRAL_METADATA_KEY not in reclaimed.metadata
@@ -317,7 +324,7 @@ def test_cancel_requested_while_deferring_wins_over_the_requeue(
         task_id="task-cancel",
         metadata=_bound_orca_metadata(tmp_path, rxn),
     )
-    assert dequeue_next(queue_root) is not None
+    assert claim_next_entry(queue_root) is not None
     cancel(queue_root, entry.queue_id)
 
     rc = _run_child_with(monkeypatch, tmp_path, queue_root, entry.queue_id, _refuse)
@@ -341,7 +348,7 @@ def test_other_scratch_failures_still_fail_the_row(
         task_id="task-unsafe",
         metadata=_bound_orca_metadata(tmp_path, rxn),
     )
-    assert dequeue_next(queue_root) is not None
+    assert claim_next_entry(queue_root) is not None
 
     rc = _run_child_with(monkeypatch, tmp_path, queue_root, entry.queue_id, lambda *_a, **_k: 1)
 
@@ -379,11 +386,11 @@ def _scratch_run(
 ) -> tuple[Path, Path, list[Any], Any]:
     shm = tmp_path / "shm"
     shm.mkdir()
-    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", shm)
     monkeypatch.setattr(
-        scratch_mod, "_linux_available_memory_bytes", lambda: available_memory_bytes
+        workspace_mod, "_linux_available_memory_bytes", lambda: available_memory_bytes
     )
-    monkeypatch.setattr(scratch_mod, "_filesystem_free_bytes", lambda _descriptor: 2 * 1024**3)
+    monkeypatch.setattr(workspace_mod, "_filesystem_free_bytes", lambda _descriptor: 2 * 1024**3)
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
     inp = reaction_dir / "rxn.inp"
@@ -592,10 +599,10 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
 
     shm = tmp_path / "shm"
     shm.mkdir()
-    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
-    monkeypatch.setattr(scratch_mod, "_filesystem_free_bytes", lambda _descriptor: 2 * 1024**3)
+    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(workspace_mod, "_filesystem_free_bytes", lambda _descriptor: 2 * 1024**3)
     available = {"bytes": 1}
-    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: available["bytes"])
+    monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", lambda: available["bytes"])
     notifications: list[Any] = []
     monkeypatch.setattr(
         run_inp_execution,
@@ -618,24 +625,27 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
         task_id="task-real-deferral",
         metadata=_bound_orca_metadata(tmp_path, rxn),
     )
-    cfg = _child_cfg(queue_root, admission_root)
-    cfg.paths = SimpleNamespace(orca_executable=str(tmp_path / "fake-orca"))
-    cfg.scratch = SimpleNamespace(enabled=True, root=str(shm / "orca_auto"), min_free_gb=1)
-    monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
+    # The loader confines scratch roots to /dev/shm; relocate that check with the runtime's.
+    monkeypatch.setattr(config_scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
+    config = _child_config(
+        tmp_path, queue_root, scratch=ScratchConfig(root=str(shm / "orca_auto"), min_free_gb=1)
+    )
+    cfg = load_config(str(config))
+    assert cfg.scratch.enabled
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
 
     def run_child() -> int:
         token = _try_reserve_admission_slot(cfg)
         assert token is not None
         return worker_job.run_worker_child_job(
-            config_path="/tmp/config.yaml",
+            config_path=str(config),
             queue_root=queue_root,
             queue_id=entry.queue_id,
             admission_token=token,
             await_parent_admission_handoff_fn=lambda *_args: True,
         )
 
-    running = dequeue_next(queue_root)
+    running = claim_next_entry(queue_root)
     assert running is not None
     # The job root keeps its run.lock file as after any run; started-execution
     # evidence is judged on the generation directory alone.
@@ -656,10 +666,8 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     # Memory came back. The same generation is claimed again and runs once;
     # no recovery rebind was spent on a job that had never started.
     available["bytes"] = 2**63
-    import orca_auto.core.queue.store as store_mod
-
-    monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
-    reclaimed = dequeue_next(queue_root)
+    _deferral_is_due(monkeypatch)
+    reclaimed = claim_next_entry(queue_root)
     assert reclaimed is not None
     for slot in list_slots(admission_root):
         from orca_auto.core.admission import release_slot
@@ -710,7 +718,7 @@ def test_queue_list_shows_why_an_orca_row_waits(
         encoding="utf-8",
     )
     assert main(["run-dir", str(job_dir), "--config", str(config)]) == 0
-    claimed = dequeue_next(runs_root)
+    claimed = claim_next_entry(runs_root)
     assert claimed is not None
     assert requeue_running_entry(
         runs_root, claimed.queue_id, expected_entry=claimed, admission_deferral_reason=_REFUSAL
@@ -730,10 +738,8 @@ def test_queue_list_shows_why_an_orca_row_waits(
     assert "(waiting for resources)" in text
 
     # Claimed again: the row no longer waits, and says so.
-    import orca_auto.core.queue.store as store_mod
-
-    monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
-    assert dequeue_next(runs_root) is not None
+    _deferral_is_due(monkeypatch)
+    assert claim_next_entry(runs_root) is not None
     row, text = listed()
     assert row["metadata"]["admission_deferral_reason"] == ""
     assert "(waiting for resources)" not in text

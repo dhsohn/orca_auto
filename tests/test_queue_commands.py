@@ -3,87 +3,101 @@
 from __future__ import annotations
 
 import argparse
-import tempfile
-import unittest
-from dataclasses import replace
+import logging
+from collections.abc import Callable
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import Any
 
+import pytest
+
+from orca_auto.core.queue.worker.pid_file import write_worker_pid_file
+from orca_auto.orca.cli_logging import remove_managed_handlers
+from orca_auto.orca.commands import queue as queue_command
 from orca_auto.orca.commands.queue import cmd_queue_worker
-from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
+from orca_auto.orca.config import load_config
 
 
-def _make_cfg(tmp: str) -> AppConfig:
-    return AppConfig(runtime=OrcaRuntimeConfig(allowed_root=tmp))
+class _FakeWorker:
+    """Records the constructor call and answers ``run`` with a fixed exit code."""
+
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    exit_code = 0
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        type(self).calls.append((args, kwargs))
+
+    def run(self) -> int:
+        return type(self).exit_code
 
 
-def _make_args(tmp: str, **overrides):
-    defaults = {
-        "config": str(Path(tmp) / "config.yaml"),
-    }
-    defaults.update(overrides)
-    return argparse.Namespace(**defaults)
+@pytest.fixture
+def fake_worker(monkeypatch: pytest.MonkeyPatch) -> type[_FakeWorker]:
+    _FakeWorker.calls = []
+    _FakeWorker.exit_code = 0
+    monkeypatch.setattr(queue_command, "OrcaQueueWorker", _FakeWorker)
+    return _FakeWorker
 
 
-class TestCmdQueueWorker(unittest.TestCase):
-    @patch("orca_auto.orca.commands.queue.load_config")
-    @patch("orca_auto.orca.commands.queue.read_worker_pid", return_value=12345)
-    def test_worker_already_running(self, mock_pid: MagicMock, mock_load: MagicMock) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            mock_load.return_value = _make_cfg(tmp)
-            args = _make_args(tmp)
+def test_worker_already_running(
+    tmp_path: Path,
+    config_path: Callable[..., Path],
+    fake_worker: type[_FakeWorker],
+) -> None:
+    config = config_path()
+    # A live worker pid file under the configured runs root refuses a second worker.
+    write_worker_pid_file(tmp_path)
 
-            with patch("orca_auto.orca.commands.queue.OrcaQueueWorker") as worker_class:
-                rc = cmd_queue_worker(args)
-                worker_class.assert_not_called()
-            mock_pid.assert_called_once_with(Path(tmp).resolve())
+    rc = cmd_queue_worker(argparse.Namespace(config=str(config)))
 
-        self.assertEqual(rc, 1)
+    assert rc == 1
+    assert fake_worker.calls == []
 
-    @patch("orca_auto.orca.commands.queue.load_config")
-    @patch("orca_auto.orca.commands.queue.read_worker_pid", return_value=None)
-    @patch("orca_auto.orca.commands.queue.OrcaQueueWorker")
-    def test_worker_runs_in_foreground_only(
-        self,
-        mock_worker_cls: MagicMock,
-        mock_pid: MagicMock,
-        mock_load: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            mock_load.return_value = _make_cfg(tmp)
-            mock_worker_cls.return_value.run.return_value = 7
-            args = _make_args(tmp)
 
-            rc = cmd_queue_worker(args)
+def test_worker_runs_in_foreground_only(
+    config_path: Callable[..., Path],
+    fake_worker: type[_FakeWorker],
+) -> None:
+    config = config_path()
+    fake_worker.exit_code = 7
 
-        self.assertEqual(rc, 7)
-        mock_worker_cls.assert_called_once_with(
-            mock_load.return_value,
-            args.config,
-            max_concurrent=4,
-        )
+    rc = cmd_queue_worker(argparse.Namespace(config=str(config)))
 
-    @patch("orca_auto.orca.commands.queue.load_config")
-    @patch("orca_auto.orca.commands.queue.read_worker_pid", return_value=None)
-    @patch("orca_auto.orca.commands.queue.OrcaQueueWorker")
-    def test_worker_uses_config_max_concurrent_when_flag_omitted(
-        self,
-        mock_worker_cls: MagicMock,
-        mock_pid: MagicMock,
-        mock_load: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = _make_cfg(tmp)
-            cfg = replace(cfg, runtime=replace(cfg.runtime, max_concurrent=6))
-            mock_load.return_value = cfg
-            mock_worker_cls.return_value.run.return_value = 0
-            args = _make_args(tmp)
+    assert rc == 7
+    assert fake_worker.calls == [
+        ((load_config(str(config)), str(config)), {"max_concurrent": 4}),
+    ]
 
-            rc = cmd_queue_worker(args)
 
-        self.assertEqual(rc, 0)
-        mock_worker_cls.assert_called_once_with(
-            cfg,
-            args.config,
-            max_concurrent=6,
-        )
+def test_worker_uses_config_max_concurrent_when_flag_omitted(
+    config_path: Callable[..., Path],
+    fake_worker: type[_FakeWorker],
+) -> None:
+    config = config_path(max_concurrent=6)
+
+    rc = cmd_queue_worker(argparse.Namespace(config=str(config)))
+
+    assert rc == 0
+    assert fake_worker.calls == [
+        ((load_config(str(config)), str(config)), {"max_concurrent": 6}),
+    ]
+
+
+def test_main_configures_logging_so_worker_info_reaches_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root_logger = logging.getLogger()
+    previous_level = root_logger.level
+
+    def fake_cmd_queue_worker(args: argparse.Namespace) -> int:
+        logging.getLogger("orca_auto.orca.queue.worker").info("Queue worker started")
+        return 0
+
+    monkeypatch.setattr(queue_command, "cmd_queue_worker", fake_cmd_queue_worker)
+    try:
+        assert queue_command.main(["--config", "/tmp/orca_auto.yaml"]) == 0
+    finally:
+        remove_managed_handlers(root_logger)
+        root_logger.setLevel(previous_level)
+
+    assert "[INFO] orca_auto.orca.queue.worker: Queue worker started" in capsys.readouterr().err

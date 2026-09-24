@@ -1,4 +1,4 @@
-.PHONY: check check-packages test clean structural-tests
+.PHONY: check check-packages test clean
 
 check:
 	bash scripts/check.sh
@@ -10,6 +10,3 @@ check-packages:
 
 clean:
 	bash scripts/clean_artifacts.sh
-
-structural-tests:
-	bash scripts/audit_structural_tests.sh

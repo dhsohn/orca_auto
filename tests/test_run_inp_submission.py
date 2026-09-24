@@ -12,10 +12,8 @@ from typing import Any, Literal, Self
 import pytest
 
 import orca_auto.orca.submission as submission_mod
-from orca_auto.core.commands.run_dir import use_run_dir_publication_guard
 from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.core.messaging import discord_bot as discord_bot_mod
-from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.publication import (
@@ -27,11 +25,14 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import submission as run_inp
-from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
+from orca_auto.orca.config import CommonResourceConfig
 from orca_auto.orca.input_artifacts import OrcaSelectedInputArtifacts
 from orca_auto.orca.notifications import notify_queue_enqueued_event
 from orca_auto.orca.queue import adapter as queue_adapter
+from orca_auto.orca.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.orca.queue import publication_repair
+from orca_auto.orca.run_dir_guard import use_run_dir_publication_guard
+from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
 
 
 def test_submit_without_selectable_inp_fails_cleanly(
@@ -62,14 +63,22 @@ def test_submit_without_selectable_inp_fails_cleanly(
     assert "No .inp file selected" in result.stderr
 
 
-def _real_submission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Any]:
-    fake_orca = tmp_path / "fake_orca"
-    fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
-    fake_orca.chmod(0o755)
-    cfg = AppConfig(
-        runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)),
-        paths=PathsConfig(orca_executable=str(fake_orca)),
-        resources=CommonResourceConfig(max_cores_per_task=2, max_memory_gb_per_task=4),
+def _real_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    messenger: MessengerConfig | None = None,
+) -> tuple[Path, Any]:
+    """A real ``orca_auto.yaml`` under ``tmp_path`` that ``load_config`` reads for every call."""
+
+    config = write_config_file(
+        tmp_path / "orca_auto.yaml",
+        make_app_cfg(
+            tmp_path,
+            orca_executable=write_fake_orca(tmp_path / "fake_orca", "#!/bin/sh\n"),
+            resources=CommonResourceConfig(max_cores_per_task=2, max_memory_gb_per_task=4),
+            messenger=messenger,
+        ),
     )
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
@@ -77,11 +86,10 @@ def _real_submission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[P
         "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(run_inp, "load_config", lambda _path: cfg)
     monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(run_inp, "read_worker_pid", lambda _root: None)
     args = SimpleNamespace(
-        config=str(tmp_path / "orca_auto.yaml"),
+        config=str(config),
         reaction_dir=str(reaction_dir),
         force=False,
         priority=7,
@@ -221,7 +229,7 @@ def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
 
-    cfg = run_inp.load_config("")
+    cfg = run_inp.load_config(args.config)
     assert publication_repair.repair_queue_publication(cfg, tmp_path, entry)
     [repaired] = queue_adapter.list_queue(tmp_path)
     assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
@@ -255,10 +263,12 @@ def test_notification_delivery_failure_does_not_park_queue_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _reaction_dir, args = _real_submission(tmp_path, monkeypatch)
-    cfg = run_inp.load_config("")
-    cfg.messenger = MessengerConfig(
-        discord=DiscordConfig(bot_token="synthetic-token", default_channel_id="123")
+    _reaction_dir, args = _real_submission(
+        tmp_path,
+        monkeypatch,
+        messenger=MessengerConfig(
+            discord=DiscordConfig(bot_token="synthetic-token", default_channel_id="123")
+        ),
     )
     monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", lambda *_args, **_kwargs: False)
 
@@ -276,14 +286,16 @@ def test_truncated_discord_response_does_not_park_queue_publication(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _reaction_dir, args = _real_submission(tmp_path, monkeypatch)
-    cfg = run_inp.load_config("")
-    cfg.messenger = MessengerConfig(
-        discord=DiscordConfig(
-            bot_token="synthetic-token",
-            default_channel_id="123",
-            max_attempts=1,
-        )
+    _reaction_dir, args = _real_submission(
+        tmp_path,
+        monkeypatch,
+        messenger=MessengerConfig(
+            discord=DiscordConfig(
+                bot_token="synthetic-token",
+                default_channel_id="123",
+                max_attempts=1,
+            )
+        ),
     )
 
     class _TruncatedResponse:
@@ -621,7 +633,7 @@ def test_ambiguous_postcommit_rows_fail_closed_and_remain_unclaimable(
     assert all(
         entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED for entry in entries
     )
-    assert queue_adapter.dequeue_next(tmp_path) is None
+    assert claim_next_entry(tmp_path) is None
 
 
 def test_duplicate_error_after_commit_is_recovered_as_same_submission(
@@ -645,7 +657,7 @@ def test_duplicate_error_after_commit_is_recovered_as_same_submission(
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
 
-    cfg = run_inp.load_config("")
+    cfg = run_inp.load_config(args.config)
     assert publication_repair.repair_queue_publication(cfg, tmp_path, entry)
     [repaired] = queue_adapter.list_queue(tmp_path)
     assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
@@ -693,3 +705,37 @@ def test_cancellation_waits_for_publication_boundary(
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.status == QueueStatus.CANCELLED
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+
+
+def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.orca.queue.orphans import DeadRunningRowUnjudgeableError
+
+    context = SimpleNamespace(
+        cfg=None,
+        allowed_root=tmp_path,
+        reaction_dir=tmp_path / "job",
+        selected_inp=None,
+    )
+    message = (
+        f"{tmp_path / 'job'} has a RUNNING queue row left by a dead worker, and whether a "
+        f"live slot still protects it cannot be judged: Admission slot file is not valid JSON: "
+        f"{tmp_path / 'admission_slots.json'}. Repair or remove "
+        f"{tmp_path / 'admission_slots.json'} before resubmitting."
+    )
+
+    def raise_unjudgeable(*_args: Any, **_kwargs: Any) -> Any:
+        raise DeadRunningRowUnjudgeableError(message)
+
+    monkeypatch.setattr(
+        submission_mod, "resolve_submission_context", lambda *_args, **_kwargs: context
+    )
+    monkeypatch.setattr(submission_mod, "find_submission_conflict", lambda *_args: None)
+    monkeypatch.setattr(submission_mod, "create_queued_submission", raise_unjudgeable)
+
+    result = submission_mod.submit_reaction_dir_to_queue(SimpleNamespace())
+
+    assert result.status == "failed"
+    assert result.reason == "submission_conflict"
+    assert result.stderr == message

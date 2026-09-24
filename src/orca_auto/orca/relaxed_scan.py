@@ -1,3 +1,5 @@
+"""Relaxed-scan inputs (``%geom Scan`` coordinates) and the scan surface ORCA prints."""
+
 from __future__ import annotations
 
 import math
@@ -6,7 +8,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import active_orca_line_text, find_block
+from .input_blocks import find_block
+from .input_syntax import active_orca_line_text
 from .parser import KCAL_PER_HARTREE
 from .parser.io import open_orca_text
 

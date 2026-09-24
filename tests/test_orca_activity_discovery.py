@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto import cli_queue
 from orca_auto.activity import list_activities
-from orca_auto.core.indexing import JobLocationRecord, upsert_job_location
+from orca_auto.core.indexing import JobLocationRecord, list_job_locations, upsert_job_location
 from orca_auto.core.queue.persistence import save_entries
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import run_snapshot
@@ -59,7 +59,9 @@ def test_ordinary_activity_uses_index_without_recursive_discovery(
     assert [item["activity_id"] for item in result["activities"]] == ["tracked"]
 
 
-def test_explicit_refresh_discovers_unindexed_runs(tmp_path: Path) -> None:
+def test_explicit_refresh_discovers_and_indexes_unindexed_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = tmp_path / "runs"
     config = tmp_path / "config.yaml"
     config.write_text(f"runs_root: {root}\n")
@@ -67,6 +69,15 @@ def test_explicit_refresh_discovers_unindexed_runs(tmp_path: Path) -> None:
     _write_run(root, "untracked", indexed=False)
     result = list_activities(orca_config=str(config), refresh=True)
     assert {item["activity_id"] for item in result["activities"]} == {"tracked", "untracked"}
+    # The discovery is now an index row, so the next ordinary list needs no walk.
+    assert {row.job_id for row in list_job_locations(root)} == {"tracked", "untracked"}
+    monkeypatch.setattr(
+        run_snapshot,
+        "iter_production_runs_artifacts",
+        lambda *args, **kwargs: pytest.fail("ordinary queue list traversed the run tree"),
+    )
+    plain = list_activities(orca_config=str(config))
+    assert {item["activity_id"] for item in plain["activities"]} == {"tracked", "untracked"}
 
 
 def test_refresh_is_available_without_workflows(monkeypatch: pytest.MonkeyPatch) -> None:

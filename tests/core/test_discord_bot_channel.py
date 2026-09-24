@@ -270,17 +270,16 @@ def test_discord_bot_channel_reports_unserializable_payload_as_request_error(
     assert "\udcff" not in caplog.text
 
 
-def test_registry_always_builds_discord_bot_channel() -> None:
-    complete = MessengerConfig(provider="discord", discord=_bot_config())
+def test_build_channel_uses_bot_only_when_token_and_channel_are_set() -> None:
+    complete = MessengerConfig(discord=_bot_config())
     assert isinstance(build_channel(complete), DiscordBotChannel)
 
-    # An incomplete bot config still resolves to the bot channel; it fails closed
-    # at send time rather than routing through another transport.
-    incomplete_bot = MessengerConfig(
-        provider="discord",
-        discord=DiscordConfig(bot_token="token"),
-    )
-    assert isinstance(build_channel(incomplete_bot), DiscordBotChannel)
+    # An incomplete bot config resolves to the disabled null channel, so no
+    # transport is ever constructed for it.
+    incomplete_bot = MessengerConfig(discord=DiscordConfig(bot_token="token"))
+    channel = build_channel(incomplete_bot)
+    assert not isinstance(channel, DiscordBotChannel)
+    assert not channel.enabled
 
 
 # --------------------------------------------------------------------------- #

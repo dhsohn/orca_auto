@@ -34,7 +34,7 @@ def test_default_entry_resource_request_uses_common_resource_caps() -> None:
     )
     entry = SimpleNamespace(metadata={"resource_request": {"max_cores": "4"}})
 
-    from orca_auto.core.indexing.engine_records import resource_dict
+    from orca_auto.orca.job_locations import resource_dict
 
     def caps(config: Any) -> dict[str, int]:
         return resource_requests.engine_resource_caps(config, resource_dict_fn=resource_dict)

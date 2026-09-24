@@ -1,8 +1,9 @@
 """Messenger-neutral notification contracts (Discord outbound).
 
 Domain code builds a :class:`Message` (see :mod:`.richtext`) and sends it through
-a :class:`MessageChannel` resolved by :func:`build_channel`. Discord markup and
-transport live in the adapter modules so the channel is resolved from config.
+the :class:`MessageChannel` returned by :func:`build_channel`: the Discord bot
+adapter when its config is complete, otherwise a null channel that skips every
+send. Discord markup and transport live in the adapter modules.
 """
 
 from __future__ import annotations
@@ -10,30 +11,26 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from .channel import MessageChannel, SendResult
+from .channel import DisabledChannel, MessageChannel, SendResult, build_channel
 from .render_discord import render_discord_embed
 from .richtext import (
     Field,
     Group,
-    Line,
     Message,
     Severity,
     Span,
     code,
     field_row,
     group,
-    line,
     raw,
     text,
 )
 
 if TYPE_CHECKING:
     from .discord_bot import DiscordBotChannel
-    from .registry import build_channel
 
 _LAZY_EXPORTS = {
     "DiscordBotChannel": (".discord_bot", "DiscordBotChannel"),
-    "build_channel": (".registry", "build_channel"),
 }
 
 
@@ -48,10 +45,10 @@ def __getattr__(name: str) -> Any:
 
 
 __all__ = [
+    "DisabledChannel",
     "DiscordBotChannel",
     "Field",
     "Group",
-    "Line",
     "Message",
     "MessageChannel",
     "SendResult",
@@ -61,7 +58,6 @@ __all__ = [
     "code",
     "field_row",
     "group",
-    "line",
     "raw",
     "render_discord_embed",
     "text",

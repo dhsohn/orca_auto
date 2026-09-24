@@ -178,24 +178,36 @@ type = "forbidden"
 source_modules = ["orca_auto.cli_worker_supervision"]
 forbidden_modules = ["orca_auto.cli_workers"]
 
+# ORCA input handling is layered: line syntax, then geometry/%block structure,
+# then external-file reference scanning, then whole-input validation. Syntax
+# and blocks never see reference scanning; nothing here reaches runtime consumers.
 [[tool.importlinter.contracts]]
-name = "ORCA input syntax never imports reference scanning"
-type = "forbidden"
-source_modules = ["orca_auto.orca.input_blocks"]
-forbidden_modules = ["orca_auto.orca.input_references"]
+name = "ORCA input syntax and blocks never import reference scanning or validation"
+type = "layers"
+layers = [
+    "orca_auto.orca.input_validation",
+    "orca_auto.orca.input_references",
+    "orca_auto.orca.input_blocks",
+    "orca_auto.orca.input_syntax",
+]
 
 [[tool.importlinter.contracts]]
-name = "ORCA input reference scanning stays below runtime consumers"
+name = "ORCA input reference scanning and validation stay below runtime consumers"
 type = "forbidden"
-source_modules = ["orca_auto.orca.input_references"]
+source_modules = [
+    "orca_auto.orca.input_syntax",
+    "orca_auto.orca.input_blocks",
+    "orca_auto.orca.input_references",
+    "orca_auto.orca.input_validation",
+]
 forbidden_modules = [
     "orca_auto.orca.execution_binding",
     "orca_auto.orca.scratch",
 ]
 
 # The top-level CLI modules are the outermost layer: they compose the domain
-# packages, and no domain package may reach back up into them. Shared terminal
-# presentation and config discovery live in core.
+# packages, and no domain package may reach back up into them. Config discovery
+# lives in core.
 [[tool.importlinter.contracts]]
 name = "Domain packages never import the top-level CLI layer"
 type = "forbidden"
@@ -223,6 +235,7 @@ forbidden_modules = [
     "orca_auto.cli_worker_supervision",
     "orca_auto.cli_workers",
     "orca_auto.systemd_plan",
+    "orca_auto.terminal",
     "orca_auto.terminal_table",
 ]
 

@@ -144,6 +144,13 @@ def iter_phase_table_rows(
         yield phase, match
 
 
+def attempt_detail_text(path_points: Sequence[PathPoint], *parts: str) -> str:
+    """Attempt-chain detail cell: ``"N path pts"`` plus the non-empty driver ``parts``."""
+    cells = [f"{len(path_points)} path pts"] if path_points else []
+    cells.extend(part for part in parts if part)
+    return ", ".join(cells)
+
+
 def path_marker_index(points: Sequence[PathPoint], marker: str) -> int | None:
     """Index of the first point whose ``marker`` or ``label`` equals ``marker``."""
     marker = marker.upper()
@@ -217,6 +224,7 @@ __all__ = [
     "IrcPathPoint",
     "NebPathPoint",
     "PathPoint",
+    "attempt_detail_text",
     "iter_phase_table_rows",
     "parse_path_summary",
     "path_marker_index",

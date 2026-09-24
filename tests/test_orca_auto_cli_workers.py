@@ -31,7 +31,7 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         "_install_supervisor_signal_handlers",
         "_poll_supervised_workers",
         "_restart_or_stop_worker",
-        "_run_worker_supervisor",
+        "run_worker_supervisor",
         "_spawn_supervised_worker",
         "_supervise_worker_processes",
         "_terminate_process",
@@ -157,7 +157,7 @@ def test_cmd_orca_run_dir_uses_discovered_shared_config(
 
     import orca_auto.orca.commands.run_inp as run_inp_cmd
 
-    def _fake_cmd_run_inp(args: argparse.Namespace) -> int:
+    def _fake_cmd_run_inp(args: argparse.Namespace, **_seams: object) -> int:
         captured.append((getattr(args, "config", None), getattr(args, "path", "")))
         return 31
 
@@ -191,7 +191,7 @@ def test_cmd_queue_worker_returns_supervisor_status(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(unified_cli, "_build_worker_specs", lambda args: specs)
     monkeypatch.setattr(
         worker_supervision,
-        "_run_worker_supervisor",
+        "run_worker_supervisor",
         lambda built_specs: 0 if built_specs == specs else 1,
     )
 
@@ -220,7 +220,7 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
             command="/home/user/orca_auto/.venv/bin/python -m orca_auto.orca.commands.queue --config /tmp/orca_auto.yaml",
         ),
     )
-    monkeypatch.setattr(worker_supervision, "_run_worker_supervisor", lambda built_specs: 99)
+    monkeypatch.setattr(worker_supervision, "run_worker_supervisor", lambda built_specs: 99)
 
     result = unified_cli.cmd_queue_worker(
         SimpleNamespace(orca_auto_config="/tmp/orca_auto.yaml", json=False)
@@ -256,6 +256,7 @@ def test_cmd_queue_worker_json_outputs_commands(
 
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
     assert payload["workers"][0]["app"] == "orca"
     assert payload["workers"][0]["argv"][2] == "orca_auto.orca.commands.queue"
 
@@ -289,7 +290,7 @@ def test_detect_existing_orca_worker_conflict_edges(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import orca_auto.orca.config as orca_config
-    import orca_auto.orca.engine as orca_engine
+    import orca_auto.orca.queue.orphans as orca_orphans
 
     args = argparse.Namespace(orca_auto_config="/tmp/orca_auto.yaml")
 
@@ -319,7 +320,7 @@ def test_detect_existing_orca_worker_conflict_edges(
         "load_config",
         lambda path: SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(allowed_root))),
     )
-    monkeypatch.setattr(orca_engine, "read_worker_pid", lambda root: None)
+    monkeypatch.setattr(orca_orphans, "read_worker_pid", lambda root: None)
     assert (
         worker_conflicts._detect_existing_orca_worker_conflict(
             [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
@@ -328,7 +329,7 @@ def test_detect_existing_orca_worker_conflict_edges(
         is None
     )
 
-    monkeypatch.setattr(orca_engine, "read_worker_pid", lambda root: 43210)
+    monkeypatch.setattr(orca_orphans, "read_worker_pid", lambda root: 43210)
     monkeypatch.setattr(
         worker_conflicts, "_read_process_command", lambda pid: ("python", "worker.py")
     )

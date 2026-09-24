@@ -1,35 +1,53 @@
+"""ORCA activity records read from real queue, state and index files.
+
+``orca_records`` is driven through a real ``orca_auto.yaml`` (``config_path``),
+real queue rows, ``job_state.json`` files and ``job_locations.json``; a live
+run is one that holds ``run.lock`` for real.
+"""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from orca_auto import activity
 from orca_auto.activity import _cancel as _activity_cancel
-from orca_auto.activity import _list as _activity_list
 from orca_auto.activity import _orca as _activity_orca
-from orca_auto.core import activity as _activity_model
-from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
-from orca_auto.core.config import discovery
+from orca_auto.activity import model as _activity_model
+from orca_auto.core.activity_index import DB_NAME as ACTIVITY_INDEX_DB_NAME
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca import run_status
+from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE
+from orca_auto.orca.config import AppConfig
+from orca_auto.orca.job_locations import upsert_job_record
+from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.run_lock import acquire_run_lock
+from orca_auto.orca.run_snapshot import RunSnapshot
+from orca_auto.orca.statuses import RunStatus
+from tests.conftest import make_queue_entry, write_run_state
 
 
-def _shared_config(tmp_path: Path) -> tuple[Path, Path]:
-    runs_root = tmp_path / "runs"
-    runs_root.mkdir()
-    config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
-    return config_path, runs_root
+@pytest.fixture
+def allowed(queue_root: Path) -> Path:
+    return queue_root
 
 
-def test_activity_helper_edges_and_discovery_paths(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from orca_auto.core.utils import mapping_or_empty
+@pytest.fixture
+def orca_config(allowed: Path, config_path: Callable[..., Path]) -> str:
+    return str(config_path(runs_root=allowed))
+
+
+def _records_by_id(config: str) -> dict[str, _activity_model.ActivityRecord]:
+    return {row.activity_id: row for row in _activity_orca.orca_records(config_path=config)}
+
+
+def test_activity_helper_edges_and_discovery_paths(tmp_path: Path) -> None:
+    from orca_auto.core.utils.coercion import mapping_or_empty
 
     assert mapping_or_empty({"a": 1}) == {"a": 1}
     assert mapping_or_empty(["not", "mapping"]) == {}
@@ -75,47 +93,34 @@ def test_activity_helper_edges_and_discovery_paths(
     [(False, "pending"), (True, "running")],
 )
 def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    allowed: Path,
+    orca_config: str,
     run_lock_held: bool,
     expected_status: str,
 ) -> None:
-    allowed = tmp_path / "orca"
-    allowed.mkdir()
     reaction_dir = allowed / "rxn-read-only"
     reaction_dir.mkdir()
-    entry = QueueEntry(
+    entry = make_queue_entry(
         queue_id="q-read-only",
-        app_name="orca_auto_orca",
         task_id="task-read-only",
-        task_kind="orca_run_inp",
-        engine="orca",
+        reaction_dir=reaction_dir,
         status=QueueStatus.RUNNING,
         priority=1,
         enqueued_at="2026-04-26T00:00:00+00:00",
         started_at="2026-04-26T00:01:00+00:00",
-        metadata={"reaction_dir": str(reaction_dir)},
     )
     queue_store.save_entries(allowed, [entry])
     queue_path = allowed / queue_store.QUEUE_FILE_NAME
     before = queue_path.read_bytes()
 
-    from orca_auto.orca import run_snapshot
+    if run_lock_held:
+        with acquire_run_lock(reaction_dir):
+            rows = _activity_orca.orca_records(config_path=orca_config)
+    else:
+        rows = _activity_orca.orca_records(config_path=orca_config)
 
-    monkeypatch.setattr(
-        _activity_orca,
-        "engine_runtime_paths",
-        lambda config_path: {"allowed_root": allowed},
-    )
-    monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root, **kwargs: [])
-    monkeypatch.setattr(
-        _activity_orca,
-        "run_lock_is_held",
-        lambda *args, **kwargs: run_lock_held,
-    )
-
-    rows = _activity_orca.orca_records(config_path="/tmp/cfg.yaml")
-
+    # The listing reports the dead running row as pending (or running while a
+    # child holds run.lock) without rewriting it: recovery belongs to the worker.
     assert queue_path.read_bytes() == before
     (persisted,) = queue_store.load_entries(allowed)
     assert persisted.status == QueueStatus.RUNNING
@@ -125,257 +130,213 @@ def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
 
 
 def test_orca_records_merge_queue_entries_and_snapshots(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    allowed: Path,
+    orca_config: str,
+    app_cfg: Callable[..., AppConfig],
 ) -> None:
-    allowed = tmp_path / "orca"
-    allowed.mkdir()
     reaction_dir = allowed / "rxn-1"
-    reaction_dir.mkdir()
     orphan_dir = allowed / "orphan"
-    orphan_dir.mkdir()
+    write_run_state(
+        reaction_dir,
+        status=RunStatus.COMPLETED,
+        job_id="task-1",
+        run_id="run-1",
+        selected_inp=reaction_dir / "rxn.inp",
+    )
+    orphan = write_run_state(
+        orphan_dir,
+        status=RunStatus.FAILED,
+        job_id="task-orphan",
+        run_id="run-2",
+        selected_inp=orphan_dir / "orphan.inp",
+    )
+    # The orphan directory is known only through the job-location index.
+    upsert_job_record(
+        app_cfg(runs_root=allowed),
+        job_id="task-orphan",
+        status="failed",
+        job_dir=orphan_dir,
+        job_type="sp",
+        selected_input_xyz="",
+    )
     entries = [
-        QueueEntry(
+        make_queue_entry(
             queue_id="q-1",
-            app_name="orca_auto_orca",
             task_id="task-1",
-            task_kind="orca_run_inp",
-            engine="orca",
+            reaction_dir=reaction_dir,
             status=QueueStatus.RUNNING,
             priority=3,
             enqueued_at="2026-04-26T00:00:00+00:00",
             started_at="2026-04-26T00:01:00+00:00",
-            metadata={
-                "run_id": "run-1",
-                "reaction_dir": str(reaction_dir),
-                "job_type": "opt",
-                "selected_inp": "rxn.inp",
-            },
+            metadata={"run_id": "run-1", "job_type": "opt", "selected_inp": "rxn.inp"},
         ),
-        QueueEntry(
+        make_queue_entry(
             queue_id="q-2",
-            app_name="orca_auto_orca",
             task_id="task-2",
-            task_kind="orca_run_inp",
-            engine="orca",
+            reaction_dir=allowed / "missing",
             status=QueueStatus.RUNNING,
             priority=4,
             enqueued_at="2026-04-26T00:02:00+00:00",
             cancel_requested=True,
-            metadata={"reaction_dir": str(tmp_path / "missing")},
         ),
         QueueEntry(
-            queue_id="xtb-foreign",
-            app_name="orca_auto_xtb",
-            task_id="xtb-task",
-            task_kind="xtb_sp",
-            engine="xtb",
+            queue_id="other-foreign",
+            app_name="orca_auto_other",
+            task_id="other-task",
+            task_kind="other_sp",
+            engine="other",
             status=QueueStatus.PENDING,
             priority=1,
             enqueued_at="2026-04-26T00:03:00+00:00",
-            metadata={"job_type": "sp", "job_dir": str(tmp_path / "xtb")},
+            metadata={"job_type": "sp", "job_dir": str(allowed / "other")},
         ),
     ]
-    snapshots = [
-        SimpleNamespace(
-            key="snap-1",
-            run_id="run-1",
-            reaction_dir=reaction_dir,
-            status="completed",
-            name="tracked-name",
-            completed_at="2026-04-26T01:00:00+00:00",
-            updated_at="",
-            started_at="2026-04-26T00:00:00+00:00",
-            attempts=2,
-            selected_inp_name="rxn.inp",
-            job_type="opt",
-        ),
-        SimpleNamespace(
-            key="snap-2",
-            run_id="run-2",
-            reaction_dir=orphan_dir,
-            status="failed",
-            name="",
-            completed_at="",
-            updated_at="2026-04-26T02:00:00+00:00",
-            started_at="2026-04-26T01:30:00+00:00",
-            attempts=1,
-            selected_inp_name="orphan.inp",
-            job_type="sp",
-        ),
-    ]
-    reconciled: list[Path] = []
+    queue_store.save_entries(allowed, entries)
+    queue_path = allowed / queue_store.QUEUE_FILE_NAME
+    before = queue_path.read_bytes()
 
-    from orca_auto.orca import run_snapshot
-    from orca_auto.orca.queue import adapter as queue_adapter
+    by_id = _records_by_id(orca_config)
 
-    monkeypatch.setattr(
-        _activity_orca,
-        "engine_runtime_paths",
-        lambda config_path: {"allowed_root": allowed},
-    )
-    monkeypatch.setattr(
-        queue_adapter, "reconcile_orphaned_running_entries", lambda root: reconciled.append(root)
-    )
-    monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
-    monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root, **kwargs: snapshots)
-
-    rows = _activity_orca.orca_records(
-        config_path="/tmp/cfg.yaml",
-    )
-
-    assert reconciled == []
-    by_id = {row.activity_id: row for row in rows}
-    assert "xtb-foreign" not in by_id
+    assert queue_path.read_bytes() == before
+    assert "other-foreign" not in by_id
     assert by_id["q-1"].status == "completed"
-    assert by_id["q-1"].label == "tracked-name"
+    assert by_id["q-1"].label == "rxn-1"
     assert by_id["q-1"].metadata["elapsed_started_at"] == "2026-04-26T00:01:00+00:00"
     assert by_id["q-2"].status == "cancel_requested"
     assert by_id["q-2"].metadata["elapsed_started_at"] == "2026-04-26T00:02:00+00:00"
     assert by_id["run-2"].status == "failed"
-    assert by_id["run-2"].metadata["elapsed_started_at"] == "2026-04-26T01:30:00+00:00"
+    assert by_id["run-2"].metadata["elapsed_started_at"] == orphan["started_at"]
     assert by_id["run-2"].metadata["selected_inp_name"] == "orphan.inp"
+    assert set(by_id) == {"q-1", "q-2", "run-2"}
+    # The per-job worker log is a top-level row key taken from queue metadata;
+    # a row known only through its state file has none.
+    assert by_id["q-1"].worker_log == ""
+    assert by_id["run-2"].worker_log == ""
+    assert by_id["q-1"].to_dict()["worker_log"] == ""
+
+
+def test_clear_activities_reports_removed_worker_logs(allowed: Path, orca_config: str) -> None:
+    from tests.conftest import enqueue_entry
+
+    entry = enqueue_entry(
+        allowed,
+        make_queue_entry(
+            queue_id="q-done", reaction_dir=allowed / "rxn-done", status=QueueStatus.COMPLETED
+        ),
+    )
+    log = Path(entry.metadata["worker_log"])
+    log.parent.mkdir(parents=True)
+    log.write_text("done\n", encoding="utf-8")
+
+    payload = activity.clear_activities(orca_config=orca_config)
+
+    assert payload["cleared"]["orca_queue_entries"] == 1
+    assert payload["removed_worker_logs"] == 1
+    assert not log.exists()
+
+
+def test_queue_record_lifts_worker_log_to_the_row(allowed: Path, orca_config: str) -> None:
+    entry = make_queue_entry(
+        queue_id="q-logged",
+        reaction_dir=allowed / "rxn-logged",
+        status=QueueStatus.RUNNING,
+        metadata={"worker_log": str(allowed / "logs" / "q-logged.log")},
+    )
+    queue_store.save_entries(allowed, [entry])
+
+    row = _records_by_id(orca_config)["q-logged"]
+
+    assert row.worker_log == str(allowed / "logs" / "q-logged.log")
+    payload = row.to_dict()
+    assert payload["worker_log"] == row.worker_log
+    assert "worker_log" not in payload["metadata"]
 
 
 def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    allowed: Path,
+    orca_config: str,
 ) -> None:
     # A cancelled queue entry whose run state still reads "running" must not keep
     # showing the job as in progress: the stale snapshot is superseded by the
     # terminal queue outcome and should not be listed as a separate active row.
-    allowed = tmp_path / "orca"
-    allowed.mkdir()
     reaction_dir = allowed / "ts3"
-    reaction_dir.mkdir()
-    entries = [
-        QueueEntry(
-            queue_id="q-cancel",
-            app_name="orca_auto_orca",
-            task_id="task-ts3",
-            task_kind="orca_run_inp",
-            engine="orca",
-            status=QueueStatus.CANCELLED,
-            priority=3,
-            enqueued_at="2026-04-26T00:00:00+00:00",
-            started_at="2026-04-26T00:01:00+00:00",
-            finished_at="2026-04-26T00:05:00+00:00",
-            metadata={"reaction_dir": str(reaction_dir)},
-        ),
-    ]
-    snapshots = [
-        SimpleNamespace(
-            key="snap-stale",
-            run_id="",
-            reaction_dir=reaction_dir,
-            status="running",
-            name="ts3",
-            completed_at="",
-            updated_at="2026-04-26T00:04:00+00:00",
-            started_at="2026-04-26T00:01:00+00:00",
-            attempts=1,
-            selected_inp_name="ts3.inp",
-            job_type="optts",
-        ),
-    ]
-
-    from orca_auto.orca import run_snapshot
-    from orca_auto.orca.queue import adapter as queue_adapter
-
-    monkeypatch.setattr(
-        _activity_orca,
-        "engine_runtime_paths",
-        lambda config_path: {"allowed_root": allowed},
+    write_run_state(
+        reaction_dir,
+        status=RunStatus.RUNNING,
+        job_id="task-ts3",
+        selected_inp=reaction_dir / "ts3.inp",
     )
-    monkeypatch.setattr(queue_adapter, "reconcile_orphaned_running_entries", lambda root: None)
-    monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
-    monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root, **kwargs: snapshots)
-
-    rows = _activity_orca.orca_records(
-        config_path="/tmp/cfg.yaml",
+    queue_store.save_entries(
+        allowed,
+        [
+            make_queue_entry(
+                queue_id="q-cancel",
+                task_id="task-ts3",
+                reaction_dir=reaction_dir,
+                status=QueueStatus.CANCELLED,
+                priority=3,
+                enqueued_at="2026-04-26T00:00:00+00:00",
+                started_at="2026-04-26T00:01:00+00:00",
+                finished_at="2026-04-26T00:05:00+00:00",
+            )
+        ],
     )
+
+    rows = _activity_orca.orca_records(config_path=orca_config)
 
     # Only the cancelled queue record remains; the stale running snapshot is gone.
     assert {row.activity_id: row.status for row in rows} == {"q-cancel": "cancelled"}
 
 
 def test_orca_records_keep_live_snapshot_despite_terminal_entry(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    allowed: Path,
+    orca_config: str,
 ) -> None:
     # A genuinely live re-run that shares a reaction dir with an older terminal
     # queue entry must NOT be suppressed: the live run lock means it is in progress,
     # so the snapshot row is kept alongside the terminal queue row.
-    allowed = tmp_path / "orca"
-    allowed.mkdir()
     reaction_dir = allowed / "ts4"
-    reaction_dir.mkdir()
-    entries = [
-        QueueEntry(
-            queue_id="q-done",
-            app_name="orca_auto_orca",
-            task_id="task-ts4",
-            task_kind="orca_run_inp",
-            engine="orca",
-            status=QueueStatus.COMPLETED,
-            priority=3,
-            enqueued_at="2026-04-26T00:00:00+00:00",
-            started_at="2026-04-26T00:01:00+00:00",
-            finished_at="2026-04-26T00:05:00+00:00",
-            metadata={"reaction_dir": str(reaction_dir)},
-        ),
-    ]
-    snapshots = [
-        SimpleNamespace(
-            key="snap-live",
-            run_id="",
-            reaction_dir=reaction_dir,
-            status="running",
-            name="ts4",
-            completed_at="",
-            updated_at="2026-04-26T00:10:00+00:00",
-            started_at="2026-04-26T00:09:00+00:00",
-            attempts=1,
-            selected_inp_name="ts4.inp",
-            job_type="optts",
-        ),
-    ]
-
-    from orca_auto.orca import run_snapshot
-    from orca_auto.orca.queue import adapter as queue_adapter
-
-    monkeypatch.setattr(
-        _activity_orca,
-        "engine_runtime_paths",
-        lambda config_path: {"allowed_root": allowed},
+    live = write_run_state(
+        reaction_dir,
+        status=RunStatus.RUNNING,
+        job_id="task-ts4-rerun",
+        selected_inp=reaction_dir / "ts4.inp",
     )
-    monkeypatch.setattr(queue_adapter, "reconcile_orphaned_running_entries", lambda root: None)
-    monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
-    monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root, **kwargs: snapshots)
-    # A live run lock holds the dir -> the snapshot is a genuine in-progress re-run.
-    monkeypatch.setattr(_activity_orca, "run_lock_is_held", lambda *a, **k: True)
-
-    rows = _activity_orca.orca_records(
-        config_path="/tmp/cfg.yaml",
+    queue_store.save_entries(
+        allowed,
+        [
+            make_queue_entry(
+                queue_id="q-done",
+                task_id="task-ts4",
+                reaction_dir=reaction_dir,
+                status=QueueStatus.COMPLETED,
+                priority=3,
+                enqueued_at="2026-04-26T00:00:00+00:00",
+                started_at="2026-04-26T00:01:00+00:00",
+                finished_at="2026-04-26T00:05:00+00:00",
+            )
+        ],
     )
+
+    with acquire_run_lock(reaction_dir):
+        rows = _activity_orca.orca_records(config_path=orca_config)
 
     # Both the terminal queue row and the live running snapshot row are present.
     assert {row.activity_id: row.status for row in rows} == {
         "q-done": "completed",
-        "ts4": "running",
+        live["run_id"]: "running",
     }
 
 
-def test_snapshot_display_status_marks_dead_running_as_failed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from orca_auto.orca.run_snapshot import RunSnapshot
+def test_snapshot_display_status_marks_dead_running_as_failed(tmp_path: Path) -> None:
+    reaction_dir = tmp_path / "rxn"
+    reaction_dir.mkdir()
 
     def _snap(status: str) -> RunSnapshot:
         return RunSnapshot(
             key="k",
             name="rxn",
-            reaction_dir=Path("/tmp/rxn"),
+            reaction_dir=reaction_dir,
             run_id="r",
             status=status,
             started_at="",
@@ -388,20 +349,17 @@ def test_snapshot_display_status_marks_dead_running_as_failed(
     running = _snap("running")
 
     # No live run lock -> the run is gone; show it as failed, not in progress.
-    monkeypatch.setattr(_activity_orca, "run_lock_is_held", lambda *a, **k: False)
-    assert _activity_orca._snapshot_display_status(running) == "failed"
+    assert run_status.snapshot_display_status(running) == "failed"
 
     # A live run lock -> genuinely running, leave it as running.
-    monkeypatch.setattr(_activity_orca, "run_lock_is_held", lambda *a, **k: True)
-    assert _activity_orca._snapshot_display_status(running) == "running"
+    with acquire_run_lock(reaction_dir):
+        assert run_status.snapshot_display_status(running) == "running"
 
     # Terminal statuses are never reinterpreted, regardless of the lock.
-    done = _snap("completed")
-    monkeypatch.setattr(_activity_orca, "run_lock_is_held", lambda *a, **k: False)
-    assert _activity_orca._snapshot_display_status(done) == "completed"
+    assert run_status.snapshot_display_status(_snap("completed")) == "completed"
 
 
-def test_match_activity_record_and_cancel_error_edges(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_match_activity_record_and_cancel_error_edges() -> None:
     records = [
         activity.ActivityRecord(
             "a",
@@ -437,75 +395,54 @@ def test_match_activity_record_and_cancel_error_edges(monkeypatch: pytest.Monkey
     with pytest.raises(LookupError, match="not found"):
         _activity_cancel.match_activity_record(records, "missing")
 
-    def collect_one(record: activity.ActivityRecord) -> None:
-        monkeypatch.setattr(
-            _activity_list, "collect_activity_records", lambda *args, **kwargs: [record]
+    def cancel_with(record: activity.ActivityRecord) -> dict[str, Any]:
+        request = activity.ActivityCancelRequest(
+            target=record.cancel_target, sources=activity.ActivitySourceRequest()
+        )
+        return _activity_cancel.cancel_orca_activity(
+            record, activity.ResolvedActivitySources(None), request
         )
 
-    monkeypatch.setattr(
-        _activity_list,
-        "resolve_activity_sources",
-        lambda request: _activity_model.ResolvedActivitySources(None),
-    )
-
-    collect_one(
-        activity.ActivityRecord(
-            "orca", "job", "orca", "running", "O", ORCA_AUTO_ORCA_SOURCE, "", "", "orca-q"
-        )
-    )
     with pytest.raises(ValueError, match="orca_auto_config"):
-        activity.cancel_activity(target="orca-q")
-
-    collect_one(
-        activity.ActivityRecord("bad", "job", "x", "running", "B", "unknown", "", "", "bad-q")
-    )
+        cancel_with(
+            activity.ActivityRecord(
+                "orca", "job", "orca", "running", "O", ORCA_AUTO_ORCA_SOURCE, "", "", "orca-q"
+            )
+        )
     with pytest.raises(ValueError, match="Unsupported activity source"):
-        activity.cancel_activity(target="bad-q")
+        cancel_with(
+            activity.ActivityRecord("bad", "job", "x", "running", "B", "unknown", "", "", "bad-q")
+        )
 
 
-def test_cancel_activity_routes_orca_targets(monkeypatch: pytest.MonkeyPatch) -> None:
-    records = {
-        "orca-q": activity.ActivityRecord(
-            "orca-q", "job", "orca", "running", "O", ORCA_AUTO_ORCA_SOURCE, "", "", "orca-q"
-        ),
-    }
-    monkeypatch.setattr(
-        _activity_list,
-        "collect_activity_records",
-        lambda *args, **kwargs: list(records.values()),
-    )
-    monkeypatch.setattr(
-        _activity_cancel, "cancel_orca_target", lambda **kwargs: {"status": "", **kwargs}
-    )
+def test_cancel_activity_routes_orca_targets(allowed: Path, orca_config: str) -> None:
+    reaction_dir = allowed / "rxn"
+    reaction_dir.mkdir()
+    entry = enqueue(allowed, str(reaction_dir), task_id="task-cancel")
 
-    orca_payload = activity.cancel_activity(target="orca-q", orca_config="/tmp/orca.yaml")
+    orca_payload = activity.cancel_activity(target=entry.queue_id, orca_config=orca_config)
 
-    assert orca_payload["status"] == "failed"
-    assert orca_payload["result"]["target"] == "orca-q"
-    assert orca_payload["result"]["config_path"] == str(Path("/tmp/orca.yaml").resolve())
+    assert orca_payload["status"] == "cancelled"
+    assert orca_payload["activity_id"] == entry.queue_id
+    assert orca_payload["source"] == ORCA_AUTO_ORCA_SOURCE
+    assert orca_payload["result"]["queue_id"] == entry.queue_id
+    assert orca_payload["result"]["job_id"] == "task-cancel"
+    [cancelled] = list_queue(allowed)
+    assert cancelled.status is QueueStatus.CANCELLED
 
 
-def test_list_activities_autodiscovers_defaults_when_no_args(monkeypatch) -> None:
-    monkeypatch.setattr(
-        discovery,
-        "resolve_shared_config_path",
-        lambda explicit: "/tmp/orca_auto.yaml",
-    )
-    captured: dict[str, Any] = {}
-
-    def fake_collect(
-        resolved: activity.ResolvedActivitySources, request: activity.ActivityListRequest
-    ) -> list[activity.ActivityRecord]:
-        captured.update(vars(resolved))
-        assert request.indexed
-        return []
-
-    monkeypatch.setattr(_activity_list, "collect_activity_records", fake_collect)
+def test_list_activities_autodiscovers_defaults_when_no_args(
+    allowed: Path,
+    orca_config: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(ORCA_AUTO_CONFIG_ENV_VAR, orca_config)
 
     payload = activity.list_activities()
 
     assert payload["count"] == 0
-    assert payload["sources"] == {
-        "orca_config": "/tmp/orca_auto.yaml",
-    }
-    assert captured["orca_config"] == "/tmp/orca_auto.yaml"
+    assert payload["activities"] == []
+    assert payload["sources"] == {"orca_config": str(Path(orca_config).resolve())}
+    # The default listing is the indexed projection, which materializes under
+    # the runs root.
+    assert (allowed / ACTIVITY_INDEX_DB_NAME).exists()

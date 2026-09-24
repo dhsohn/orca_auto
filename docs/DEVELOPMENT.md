@@ -51,6 +51,9 @@ bash examples/fake_orca_smoke/run.sh
 ```
 
 - **Unit & Integration Tests**: Tests use lightweight fake ORCA binaries and isolated temporary fixtures (`tmp_path`). You do not need a commercial ORCA installation to run the test suite.
+- **Shared Fixtures**: `tests/conftest.py` provides the fake ORCA executable, `AppConfig`/`orca_auto.yaml`, queue-entry and run-state fixtures and the plain builders behind them; new tests take these instead of rebuilding them.
+- **Markers**: `os.fsync`/`os.fdatasync` are no-ops in every test unless it is marked `@pytest.mark.real_fsync`; `@pytest.mark.slow` marks the tests that stage the package in an isolated interpreter.
+- **Docs Parity**: `make check` runs `scripts/check_docs_parity.py`, which fails when an `X.md`/`X.ko.md` pair drifts in heading levels, tables, fenced code blocks or relative links; prose may differ.
 - **Real-Engine Acceptance**: If you modify engine execution or scientific output parsing behavior, record a bounded real-engine run according to [VALIDATION.md](VALIDATION.md).
 
 ---

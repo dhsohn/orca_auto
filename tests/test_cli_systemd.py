@@ -202,8 +202,13 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert "ProtectSystem=full" in worker_content
     assert "ProtectHome=read-only" in worker_content
     assert "UMask=0077" in worker_content
-    assert "KillMode=control-group" in worker_content
-    assert "TimeoutStopSec=30" in worker_content
+    # systemd stops only the supervisor; it forwards the stop to the worker,
+    # which owns its children's shutdown. The stop budget is the worker's own:
+    # 4 jobs x (10 s + 5 s) + 15 s margin + the supervisor's 5 s kill wait.
+    assert "KillMode=mixed" in worker_content
+    assert "KillMode=control-group" not in worker_content
+    assert "TimeoutStopSec=87" in worker_content
+    assert "TimeoutStopSec=30" not in worker_content
     assert "StartLimitIntervalSec=300" in worker_content
     assert "StartLimitBurst=3" in worker_content
     assert "Restart=on-failure" in worker_content
@@ -431,6 +436,43 @@ def test_systemd_rejects_orca_scoped_admission_override(
         )
 
 
+def test_systemd_stop_timeout_follows_configured_concurrency(tmp_path: Path) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        "\n".join(
+            [
+                f"runs_root: {repo / 'orca_runs'}",
+                "scheduler:",
+                f"  admission_root: {repo / 'admission'}",
+                "  max_active_simulations: 2",
+                "messenger:",
+                "  discord:",
+                "    bot_token: token",
+                "    default_channel_id: '123'",
+                "orca:",
+                "  paths:",
+                f"    orca_executable: {repo / 'orca'}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = systemd_plan.build_systemd_install_plan(
+        target_user="alice",
+        repo=repo,
+        config=config_path,
+        unit_dir=tmp_path / "units",
+        is_root=lambda: True,
+    )
+
+    unit_by_name = {unit.name: unit for unit in plan.units}
+    worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
+    # 2 jobs x (10 s + 5 s) + 15 s margin + 5 s supervisor kill wait.
+    assert "TimeoutStopSec=57\n" in worker_content
+    assert "TimeoutStopSec=87" not in worker_content
+
+
 def test_systemd_rejects_non_mapping_orca_scheduler(tmp_path: Path) -> None:
     repo, config_path = _make_repo(tmp_path)
     config_path.write_text(
@@ -491,6 +533,41 @@ def test_systemd_read_write_paths_omit_invalid_runs_root(tmp_path: Path) -> None
     # A cwd-derived path must not be granted; the placeholder comment stays.
     assert "ReadWritePaths=" not in worker_content
     assert "# ReadWritePaths omitted" in worker_content
+
+
+def test_systemd_install_fails_closed_on_a_config_that_does_not_load(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo, config_path = _make_repo(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8") + "bogus_key: 1\n", encoding="utf-8"
+    )
+    unit_dir = tmp_path / "units"
+
+    result = cli_systemd_apply.cmd_systemd_install(
+        Namespace(
+            target_user="alice",
+            repo=str(repo),
+            config=str(config_path),
+            unit_dir=str(unit_dir),
+            worker_only=False,
+            no_enable=True,
+            no_start=False,
+            dry_run=False,
+            no_sudo=True,
+        ),
+        deps=cli_systemd_apply.SystemdInstallCliDeps(
+            run=lambda argv, **_kwargs: pytest.fail("no systemctl call for a broken config"),
+            is_root=lambda: True,
+        ),
+    )
+
+    assert result == 1
+    assert not unit_dir.exists()
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert "Unknown top-level config fields" in captured.err
 
 
 def test_rendered_systemd_units_pass_systemd_analyze_verify(tmp_path: Path) -> None:
@@ -804,10 +881,17 @@ def test_cmd_systemd_install_dry_run_does_not_write_units(
     assert "systemctl is-active --quiet orca_auto-queue-worker@alice.service" in captured
 
 
-@pytest.mark.parametrize("content", [None, "messenger: [\n"])
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        (None, "runtime config preflight failed"),
+        ("messenger: [\n", "Invalid YAML syntax"),
+    ],
+)
 def test_live_systemd_install_rejects_missing_or_invalid_runtime_config(
     tmp_path: Path,
     content: str | None,
+    message: str,
 ) -> None:
     repo, config_path = _make_repo(tmp_path)
     if content is None:
@@ -815,7 +899,7 @@ def test_live_systemd_install_rejects_missing_or_invalid_runtime_config(
     else:
         config_path.write_text(content, encoding="utf-8")
 
-    with pytest.raises(ValueError, match="runtime config preflight failed"):
+    with pytest.raises(ValueError, match=message):
         systemd_plan.build_systemd_install_plan(
             target_user="alice",
             repo=repo,
@@ -1103,7 +1187,9 @@ def test_cmd_service_status_gates_on_stale_worker_process(capsys: Any) -> None:
     assert result == 1
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert payload["ok"] is True
+    # ``ok`` mirrors the exit code, so a stale worker fails the JSON verdict too.
+    assert payload["ok"] is False
+    assert payload["error"] == "a worker runs stale code or could not be judged"
     assert payload["worker_staleness"] == verdict
     assert "orca_auto-queue-worker@alice.service (pid 4242)" in captured.err
     assert "started 1970-01-11T10:00:00Z" in captured.err
@@ -1572,9 +1658,7 @@ def test_run_command_uses_shared_systemd_argv_and_display(
     assert cli_systemd_units.run_command(command, use_sudo=True, run=fake_run) == 0
 
     assert commands == [("sudo", "systemctl", "daemon-reload")]
-    assert capsys.readouterr().out == (
-        f"$ {systemd_plan._format_command(command, use_sudo=True)}\n"
-    )
+    assert capsys.readouterr().out == (f"$ {systemd_plan.format_command(command, use_sudo=True)}\n")
 
 
 def test_cmd_service_status_returns_failure_when_any_unit_failed(capsys: Any) -> None:

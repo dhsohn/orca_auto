@@ -187,6 +187,7 @@ def test_atomic_write_json_fsyncs_parent_dir_after_replace(
     assert events == ["replace", "fsync_parent"]
 
 
+@pytest.mark.real_fsync
 def test_fsync_parent_dir_opens_fsyncs_and_closes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -215,6 +216,7 @@ def test_fsync_parent_dir_opens_fsyncs_and_closes(
     assert events == [("open", tmp_path), ("fsync", 42), ("close", 42)]
 
 
+@pytest.mark.real_fsync
 def test_fsync_parent_dir_propagates_open_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -234,6 +236,7 @@ def test_fsync_parent_dir_propagates_open_error(
         persistence._fsync_parent_dir(path)
 
 
+@pytest.mark.real_fsync
 def test_fsync_parent_dir_closes_after_fsync_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

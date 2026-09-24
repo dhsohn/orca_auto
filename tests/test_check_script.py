@@ -24,6 +24,8 @@ def _copy_check_script(tmp_path: Path) -> tuple[Path, Path]:
     # This suite tests venv lifecycle, not import graph analysis (covered by the
     # staged-hook tests). Keep the analyzer stub inside the copied checkout.
     (scripts / "check_imports.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    # Likewise the docs parity gate: it has its own suite (test_check_docs_parity).
+    (scripts / "check_docs_parity.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
     return repo, script
 
 

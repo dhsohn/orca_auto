@@ -2,23 +2,24 @@
 
 Builders turn a lifecycle event into a messenger-neutral
 :class:`~orca_auto.core.messaging.Message`; the ``notify_*`` helpers deliver it
-through a :class:`~orca_auto.core.messaging.MessageChannel` resolved from config.
-Each per-messenger renderer owns the native markup, so switching the active
-messenger changes only where the message goes, not what these builders emit.
-The identity is carried on ``Message.author`` (the Discord embed author line),
-keeping it out of the title.
+through the :class:`~orca_auto.core.messaging.MessageChannel` that
+:func:`notification_channel` resolves from the app config. The Discord renderer
+owns the native markup, so these builders never see it. The identity is carried
+on ``Message.author`` (the Discord embed author line), keeping it out of the
+title.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from orca_auto.core.messaging import (
     Message,
     MessageChannel,
     Severity,
+    build_channel,
     code,
     field_row,
     group,
@@ -36,6 +37,11 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+
+def notification_channel(cfg: Any) -> MessageChannel:
+    """Resolve the outbound channel for ``cfg.messenger`` (a null channel when unset)."""
+    return build_channel(cfg.messenger, logger=logger)
 
 
 # --------------------------------------------------------------------------- #
@@ -168,6 +174,7 @@ def _log_delivery(kind: str, sent: bool, **context: object) -> None:
 
 
 __all__ = [
+    "notification_channel",
     "notify_queue_enqueued_event",
     "notify_run_finished_event",
     "notify_run_started_event",

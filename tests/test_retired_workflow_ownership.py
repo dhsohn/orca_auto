@@ -7,13 +7,17 @@ from pathlib import Path
 
 import pytest
 
+from orca_auto import activity
 from orca_auto.cli import main as cli_main
 from orca_auto.core.queue import store
+from orca_auto.core.queue.persistence import entry_to_dict
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import worker_execution
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.queue import adapter
+from orca_auto.orca.run_cleanup import clear_terminal_queue_entries, clear_terminal_records
 from orca_auto.orca.submission import create_queued_submission
+from tests.conftest import claim_next_entry
 
 
 def _fixture(tmp_path: Path, *, ownership: str = "marker") -> tuple[AppConfig, Path, QueueEntry]:
@@ -99,7 +103,7 @@ def test_retired_cancel_and_clear_preserve_queue_and_artifacts(
     store.save_entries(tmp_path, [entry])
     before = _files(tmp_path)
     assert adapter.cancel(tmp_path, entry.queue_id, expected_entry=entry) is None
-    assert adapter.clear_terminal(tmp_path) == 0
+    assert clear_terminal_queue_entries(tmp_path) == (0, 0)
     assert _files(tmp_path) == before
 
 
@@ -118,7 +122,7 @@ def test_retired_pending_row_does_not_block_next_standalone_job(
         metadata={"reaction_dir": str(ordinary_dir), "_orca_auto_queued_record_sync": "complete"},
     )
     store.save_entries(tmp_path, [retired, ordinary])
-    selected = adapter.dequeue_next(tmp_path)
+    selected = claim_next_entry(tmp_path)
     assert selected is not None and selected.queue_id == ordinary.queue_id
     remaining = {row.queue_id: row for row in store.list_queue(tmp_path)}
     assert remaining[retired.queue_id] == retired
@@ -129,7 +133,6 @@ def test_retired_pending_row_does_not_block_next_standalone_job(
 def test_retired_terminal_state_is_not_removed_by_run_cleanup(
     tmp_path: Path, ownership: str
 ) -> None:
-    from orca_auto.orca.run_cleanup import clear_terminal_entries
     from orca_auto.orca.state import save_state
     from orca_auto.orca.state_reading import state_path
 
@@ -151,7 +154,7 @@ def test_retired_terminal_state_is_not_removed_by_run_cleanup(
     )
     original_state = state_path(job).read_bytes()
     original_queue = (tmp_path / "queue.json").read_bytes()
-    assert clear_terminal_entries(tmp_path) == (0, 0)
+    assert clear_terminal_records(tmp_path) == (0, 0, 0)
     assert state_path(job).read_bytes() == original_state
     assert (tmp_path / "queue.json").read_bytes() == original_queue
 
@@ -202,3 +205,43 @@ def test_public_run_dir_preserves_metadata_owned_job_and_allows_standalone(
     for relative_path, data in before.items():
         if relative_path.startswith(str(job.relative_to(tmp_path)) + "/"):
             assert (tmp_path / relative_path).read_bytes() == data
+
+
+def _standalone_queue(tmp_path: Path) -> tuple[Path, Path]:
+    root = tmp_path / "runs"
+    root.mkdir()
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(f"runs_root: {root}\n", encoding="utf-8")
+    entry = QueueEntry(
+        queue_id="standalone-job",
+        task_id="standalone-task",
+        app_name="orca_auto_orca",
+        engine="orca",
+        task_kind="orca_run_inp",
+        status=QueueStatus.PENDING,
+        priority=0,
+        enqueued_at="2026-01-01T00:00:00Z",
+        metadata={"reaction_dir": str(root / "standalone")},
+    )
+    (root / "queue.json").write_text(json.dumps([entry_to_dict(entry)]), encoding="utf-8")
+    return config, root
+
+
+@pytest.mark.parametrize("evidence", ["registry", "workspace"])
+def test_unrelated_retired_state_does_not_block_standalone_orca(
+    tmp_path: Path, evidence: str
+) -> None:
+    config, root = _standalone_queue(tmp_path)
+    if evidence == "registry":
+        marker = root / "workflow_registry.json"
+    else:
+        retired = root / "retired"
+        retired.mkdir()
+        marker = retired / "workflow.json"
+    marker.write_text("preserved retired evidence", encoding="utf-8")
+    before = (root / "queue.json").read_bytes()
+    payload = activity.list_activities(shared_config=str(config), refresh=True)
+    assert [row["activity_id"] for row in payload["activities"]] == ["standalone-job"]
+    assert activity.clear_activities(shared_config=str(config))["total_cleared"] == 0
+    assert (root / "queue.json").read_bytes() == before
+    assert marker.read_text(encoding="utf-8") == "preserved retired evidence"

@@ -14,6 +14,7 @@ from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_ent
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import save_state
 from orca_auto.orca.state_reading import load_state, state_path
+from tests.conftest import claim_next_entry
 
 
 def _snapshot(
@@ -304,18 +305,49 @@ def test_cleanup_and_renamed_state_writer_share_pinned_directory_lock(
     assert current_state["status"] == "running"
 
 
-def test_clear_terminal_entries_reports_queue_and_run_state_counts(tmp_path: Path) -> None:
+def test_clear_terminal_records_reports_queue_run_state_and_log_counts(tmp_path: Path) -> None:
     allowed_root = tmp_path / "orca_runs"
     allowed_root.mkdir()
 
     with (
-        patch("orca_auto.orca.run_cleanup.clear_terminal", return_value=2),
+        patch("orca_auto.orca.run_cleanup.clear_terminal_queue_entries", return_value=(2, 1)),
         patch(
             "orca_auto.orca.run_cleanup.clear_terminal_run_states",
             return_value=3,
         ),
     ):
-        assert run_cleanup.clear_terminal_entries(allowed_root) == (2, 3)
+        assert run_cleanup.clear_terminal_records(allowed_root) == (2, 3, 1)
+
+
+def test_clear_removes_the_worker_log_of_every_cleared_row_and_keeps_retained_ones(
+    queue_root: Path,
+) -> None:
+    from orca_auto.core.queue.types import QueueStatus
+    from tests.conftest import enqueue_entry, make_queue_entry
+
+    def enqueue(queue_id: str, status: QueueStatus) -> Path:
+        entry = enqueue_entry(
+            queue_root,
+            make_queue_entry(queue_id=queue_id, reaction_dir=queue_root / queue_id, status=status),
+        )
+        log = Path(entry.metadata["worker_log"])
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("worker output\n", encoding="utf-8")
+        return log
+
+    completed_log = enqueue("q-completed", QueueStatus.COMPLETED)
+    failed_log = enqueue("q-failed", QueueStatus.FAILED)
+    running_log = enqueue("q-running", QueueStatus.RUNNING)
+    # A cleared row whose log was already gone counts as a row, not a log.
+    enqueue("q-cancelled", QueueStatus.CANCELLED).unlink()
+
+    counts = run_cleanup.clear_terminal_records(queue_root)
+
+    assert counts == (3, 0, 2)
+    assert not completed_log.exists()
+    assert not failed_log.exists()
+    assert running_log.read_text(encoding="utf-8") == "worker output\n"
+    assert [entry.queue_id for entry in queue_adapter.list_queue(queue_root)] == ["q-running"]
 
 
 def test_clear_terminal_state_preserves_active_queue_finalization_window(
@@ -325,7 +357,7 @@ def test_clear_terminal_state_preserves_active_queue_finalization_window(
     reaction_dir = allowed_root / "rxn_finalizing"
     allowed_root.mkdir()
     entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
-    assert queue_adapter.dequeue_next(allowed_root) is not None
+    assert claim_next_entry(allowed_root) is not None
     _write_state(reaction_dir, run_id="run-finalizing", status="completed")
 
     assert run_cleanup.clear_terminal_run_states(allowed_root) == 0
@@ -365,7 +397,7 @@ def test_clear_terminal_state_rechecks_queue_marker_before_unlink(
                 str(reaction_dir),
                 task_id="task-cleanup-race",
             )
-            running = queue_adapter.dequeue_next(allowed_root)
+            running = claim_next_entry(allowed_root)
             assert running is not None
             assert queue_adapter.mark_failed(
                 allowed_root,
@@ -384,7 +416,7 @@ def test_clear_terminal_state_rechecks_queue_marker_before_unlink(
     assert terminal_replay_marker_from_entry(terminal) is not None
 
 
-def test_clear_terminal_entries_removes_cancelled_queue_stale_running_state(
+def test_clear_terminal_records_removes_cancelled_queue_stale_running_state(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
@@ -393,7 +425,7 @@ def test_clear_terminal_entries_removes_cancelled_queue_stale_running_state(
     _write_state(reaction_dir, run_id="run_cancelled", status="running")
 
     entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
-    queue_adapter.dequeue_next(allowed_root)
+    claim_next_entry(allowed_root)
     queue_adapter.cancel(allowed_root, entry.queue_id)
     queue_adapter.requeue_running_entry(allowed_root, entry.queue_id)
     assert queue_adapter.update_metadata(
@@ -404,13 +436,13 @@ def test_clear_terminal_entries_removes_cancelled_queue_stale_running_state(
 
     assert state_path(reaction_dir).exists()
 
-    assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 1)
+    assert run_cleanup.clear_terminal_records(allowed_root) == (1, 1, 0)
 
     assert queue_adapter.list_queue(allowed_root) == []
     assert not state_path(reaction_dir).exists()
 
 
-def test_clear_terminal_entries_removes_cancelled_queue_cancelled_run_state(
+def test_clear_terminal_records_removes_cancelled_queue_cancelled_run_state(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
@@ -419,13 +451,13 @@ def test_clear_terminal_entries_removes_cancelled_queue_cancelled_run_state(
     _write_state(reaction_dir, run_id="run_cancelled", status="cancelled")
 
     entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
-    queue_adapter.dequeue_next(allowed_root)
+    claim_next_entry(allowed_root)
     assert queue_adapter.mark_cancelled(
         allowed_root,
         entry.queue_id,
         metadata_update={"run_id": "run_cancelled"},
     )
-    assert run_cleanup.clear_terminal_entries(allowed_root) == (0, 0)
+    assert run_cleanup.clear_terminal_records(allowed_root) == (0, 0, 0)
     assert len(queue_adapter.list_queue(allowed_root)) == 1
     assert state_path(reaction_dir).exists()
 
@@ -437,13 +469,13 @@ def test_clear_terminal_entries_removes_cancelled_queue_cancelled_run_state(
 
     assert state_path(reaction_dir).exists()
 
-    assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 1)
+    assert run_cleanup.clear_terminal_records(allowed_root) == (1, 1, 0)
 
     assert queue_adapter.list_queue(allowed_root) == []
     assert not state_path(reaction_dir).exists()
 
 
-def test_clear_terminal_entries_keeps_live_running_state_despite_terminal_queue(
+def test_clear_terminal_records_keeps_live_running_state_despite_terminal_queue(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
@@ -452,7 +484,7 @@ def test_clear_terminal_entries_keeps_live_running_state_despite_terminal_queue(
     _write_state(reaction_dir, run_id="run_live", status="running")
 
     entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
-    queue_adapter.dequeue_next(allowed_root)
+    claim_next_entry(allowed_root)
     queue_adapter.cancel(allowed_root, entry.queue_id)
     queue_adapter.requeue_running_entry(allowed_root, entry.queue_id)
     assert queue_adapter.update_metadata(
@@ -462,13 +494,13 @@ def test_clear_terminal_entries_keeps_live_running_state_despite_terminal_queue(
     )
 
     with patch("orca_auto.orca.run_cleanup.run_lock_is_held", return_value=True):
-        assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 0)
+        assert run_cleanup.clear_terminal_records(allowed_root) == (1, 0, 0)
 
     assert queue_adapter.list_queue(allowed_root) == []
     assert state_path(reaction_dir).exists()
 
 
-def test_clear_terminal_entries_keeps_state_when_same_dir_has_active_entry(
+def test_clear_terminal_records_keeps_state_when_same_dir_has_active_entry(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
@@ -485,8 +517,23 @@ def test_clear_terminal_entries_keeps_state_when_same_dir_has_active_entry(
     )
     active_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir), force=True)
 
-    assert run_cleanup.clear_terminal_entries(allowed_root) == (1, 0)
+    assert run_cleanup.clear_terminal_records(allowed_root) == (1, 0, 0)
 
     remaining = queue_adapter.list_queue(allowed_root)
     assert [entry.queue_id for entry in remaining] == [active_entry.queue_id]
     assert state_path(reaction_dir).exists()
+
+
+def test_clear_does_not_follow_a_symlinked_logs_directory(tmp_path, monkeypatch) -> None:
+    from orca_auto.orca import run_cleanup
+
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "q1.log"
+    victim.write_text("keep me", encoding="utf-8")
+    (runs_root / "logs").symlink_to(outside)
+
+    assert run_cleanup._remove_worker_log(runs_root, "q1") is False
+    assert victim.read_text(encoding="utf-8") == "keep me"

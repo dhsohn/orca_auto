@@ -11,16 +11,11 @@ from pathlib import Path
 from types import FrameType, SimpleNamespace, TracebackType
 from typing import Any, Self
 
-from orca_auto.core.engine_process import (
+from orca_auto.core.confined_io import (
     atomic_write_confined_bytes,
     open_confined_log,
     require_confined_regular_file,
     thread_limited_env,
-)
-from orca_auto.core.engine_runner import (
-    confined_output_identity,
-    executable_identity,
-    open_pinned_executable,
 )
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
@@ -40,6 +35,11 @@ from orca_auto.core.queue.processes import (
     terminate_process_group,
 )
 from orca_auto.core.utils.persistence import open_pinned_readonly
+from orca_auto.orca.engine_runner import (
+    confined_output_identity,
+    executable_identity,
+    open_pinned_executable,
+)
 
 from .scratch import OrcaScratchPolicy
 

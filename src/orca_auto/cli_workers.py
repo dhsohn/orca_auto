@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from collections.abc import Sequence
@@ -16,8 +15,8 @@ from orca_auto.core.config.discovery import (
     resolve_shared_config_path,
     shared_config_text_from_args,
 )
-from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
+from orca_auto.terminal import emit_error, emit_json
 
 LOGGER = logging.getLogger(__name__)
 
@@ -36,12 +35,36 @@ def worker_module_command(
     return [sys.executable, "-m", module_name, "--config", config_path, *tail_argv]
 
 
+def _orca_worker_stop_timeout_seconds(config_path: str) -> float:
+    """The worker's shutdown budget for its configured concurrency.
+
+    A config that does not load keeps the spec default; the worker itself then
+    fails at startup on the same config and the budget is never exercised.
+    """
+    from orca_auto.core.queue.processes import worker_shutdown_budget_seconds
+
+    try:
+        from orca_auto.orca.config import load_config as _load_orca_config
+
+        cfg = _load_orca_config(config_path)
+    except Exception:  # noqa: BLE001
+        LOGGER.debug(
+            "failed to read the ORCA worker concurrency for its stop budget", exc_info=True
+        )
+        return cli_worker_supervision.WorkerSpec.stop_timeout_seconds
+    return worker_shutdown_budget_seconds(cfg.runtime.max_concurrent)
+
+
 def _orca_worker_spec(*, config_path: str) -> cli_worker_supervision.WorkerSpec:
     argv = worker_module_command(
         config_path=config_path,
         module_name=ORCA_QUEUE_WORKER_MODULE,
     )
-    return cli_worker_supervision.WorkerSpec(app=ORCA_WORKER_APP, argv=tuple(argv))
+    return cli_worker_supervision.WorkerSpec(
+        app=ORCA_WORKER_APP,
+        argv=tuple(argv),
+        stop_timeout_seconds=_orca_worker_stop_timeout_seconds(config_path),
+    )
 
 
 def _build_worker_specs(args: Any) -> list[cli_worker_supervision.WorkerSpec]:
@@ -75,7 +98,7 @@ def _read_process_command(pid: int) -> tuple[str, ...]:
 def _format_command_argv(command_argv: Sequence[str]) -> str:
     if not command_argv:
         return "<unavailable>"
-    return cli_worker_supervision._quoted_command(command_argv)
+    return cli_worker_supervision.quoted_command(command_argv)
 
 
 def _detect_existing_orca_worker_conflict(
@@ -92,7 +115,7 @@ def _detect_existing_orca_worker_conflict(
 
     try:
         from orca_auto.orca.config import load_config as _load_orca_config
-        from orca_auto.orca.engine import read_worker_pid as _read_orca_worker_pid
+        from orca_auto.orca.queue.orphans import read_worker_pid as _read_orca_worker_pid
 
         cfg = _load_orca_config(str(config_path))
     except Exception:  # noqa: BLE001
@@ -128,7 +151,7 @@ def _emit_supervisor_specs_json(
     key: str,
     specs: Sequence[cli_worker_supervision.WorkerSpec],
 ) -> int:
-    print(json.dumps({key: [spec.to_dict() for spec in specs]}, ensure_ascii=True, indent=2))
+    emit_json({key: [spec.to_dict() for spec in specs]})
     return 0
 
 
@@ -146,4 +169,4 @@ def cmd_queue_worker(args: Any) -> int:
     if conflict is not None:
         return _emit_existing_orca_worker_conflict(conflict)
 
-    return cli_worker_supervision._run_worker_supervisor(specs)
+    return cli_worker_supervision.run_worker_supervisor(specs)

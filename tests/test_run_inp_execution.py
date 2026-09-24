@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from orca_auto.orca import execution as run_inp_execution
+from orca_auto.orca import output_adoption
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import save_state
@@ -202,21 +203,21 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
     )
     monkeypatch.setattr(run_inp_execution, "_admission_context", fake_admission)
     monkeypatch.setattr(
-        run_inp_execution,
+        output_adoption,
         "existing_completed_out",
         lambda _selected_inp: {"out_path": reaction_dir / "rxn.out"},
     )
     monkeypatch.setattr(
-        run_inp_execution,
+        output_adoption,
         "load_or_create_state",
         lambda *_args, **_kwargs: (state, False),
     )
     monkeypatch.setattr(
-        run_inp_execution,
+        output_adoption,
         "save_state",
         lambda _reaction_dir, current_state: saved_states.append(dict(current_state)),
     )
-    monkeypatch.setattr(run_inp_execution, "_exit_with_result", exit_with_result)
+    monkeypatch.setattr(output_adoption, "_exit_with_result", exit_with_result)
     context = RunExecutionContext(
         reaction_dir=reaction_dir,
         selected_inp=selected_inp,

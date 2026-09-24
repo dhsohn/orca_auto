@@ -12,16 +12,21 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 | 명령어 | 동작 및 세부 설명 |
 | :--- | :--- |
 | `init` | 공통 설정 파일(`orca_auto.yaml`)을 생성하거나 갱신합니다. `--config`로 경로를 지정할 수 있습니다. |
-| `run-dir PATH` | 지정된 작업 디렉터리의 입력을 검증하고 큐에 등록한 뒤 즉시 반환합니다. (실제 계산 완료를 대기하지 않음) |
-| `queue list` | 현재 큐의 작업 목록과 전체 활성 시뮬레이션 수를 조회합니다. 스크립트 연동을 위한 `--json` 출력을 지원합니다. |
-| `queue list clear` | 계산 산출물 파일은 그대로 보존하면서, 큐 목록 및 작업 루트의 terminal job_state.json 기록(중복 방지 배리어)을 정리합니다. |
-| `queue cancel TARGET` | 큐 ID, Run ID, 또는 대상 작업 디렉터리 경로를 지정하여 작업을 안전하게 취소합니다. |
+| `run-dir PATH` | 지정된 작업 디렉터리의 입력을 검증하고 큐에 등록한 뒤 즉시 반환합니다. (실제 계산 완료를 대기하지 않음) 설정 파일을 읽을 수 없거나(`invalid_config`) `queue.json`이 손상된 경우(`queue_store_corrupt`) `error:` 한 줄과 종료 코드 1로 보고합니다. |
+| `queue list` | 현재 큐의 작업 목록과 전체 활성 시뮬레이션 수를 조회합니다. 스크립트 연동을 위한 `--json` 출력을 지원합니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 아무것도 만들지 않고 종료 코드 1을 반환합니다. `admission_slots.json`이 손상되면 `admission_blockers` 항목(scope `admission_store`)으로 보고하고 `active_simulations`는 목록 자체의 집계로 대체하며, 각 행은 `worker_log`를 포함합니다. |
+| `queue list clear` | 계산 산출물 파일은 그대로 보존하면서, 큐 목록 및 작업 루트의 terminal job_state.json 기록(중복 방지 배리어)을 정리합니다. 정리된 행의 워커 로그와 publication lock 파일도 함께 제거합니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 종료 코드 1을 반환합니다. |
+| `queue cancel TARGET` | 큐 ID, Run ID, 또는 대상 작업 디렉터리 경로를 지정하여 작업을 안전하게 취소합니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 종료 코드 1을 반환합니다. |
 | `index prune` | 디스크에서 실제 경로가 삭제된 인덱스 항목을 확인합니다. `--apply` 플래그를 넘길 때만 실제 정리가 수행됩니다. |
-| `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. |
-| `service status` | 등록된 유닛의 상태와 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지(freshness) 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 0이 아닌 종료 코드를 반환합니다. |
-| `service restart` | 활성 계산이나 예약된 작업이 진행 중일 때는 중단을 방지하기 위해 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 사용합니다. |
+| `index rebuild` | `runs_root` 아래의 모든 `job_state.json`에서 `job_locations.json` 항목을 다시 유도합니다. 작업 ID 기준으로 추가·갱신만 하며 삭제하지 않습니다. `--dry-run`은 기록 없이 결과만 출력합니다. |
+| `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. 설정 파일이 존재하지만 읽을 수 없으면 유닛을 쓰지 않고 종료 코드 1을 반환하며, `TimeoutStopSec`은 `scheduler.max_active_simulations`에서 계산해 렌더링합니다. |
+| `service status` | 등록된 유닛의 상태와 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지(freshness) 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 종료 코드 1(`--json`에서는 `ok: false`)을 반환합니다. |
+| `service restart` | 활성 계산이나 예약된 작업이 진행 중일 때는 중단을 방지하기 위해 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 사용합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
 | `scratch list` | `orca.runtime.scratch_root` 아래의 RAM scratch 워크스페이스 목록과, 비활성(non-live) 워크스페이스가 새 scratch 실행을 막고 있는지 표시합니다. 차단 항목이 있어도 종료 코드는 0이며 `--json`을 지원합니다. |
-| `scratch clear NAME` / `--all-stale` | 비활성(`stale`, `unverifiable`, `invalid-manifest`) scratch 워크스페이스를 제거합니다. 실행 중(live)인 워크스페이스는 거부하며, 제거된 항목이 없거나 거부된 대상이 있으면 종료 코드 1을 반환합니다. |
+| `scratch clear NAME` / `--all-stale` | 비활성(`stale`, `unverifiable`, `invalid-manifest`) scratch 워크스페이스를 제거합니다. 실행 중(live)인 워크스페이스는 거부하며, 거부된 대상이 있으면 종료 코드 1을 반환하고 `--all-stale`에서 제거할 항목이 없으면 0을 반환합니다. durable generation의 publication 임시 파일은 manifest가 유효하고 generation이 `runs_root` 아래에 있을 때만 정리하며, 그 외에는 경로를 건드리지 않고 `durable_note`에 사유를 기록합니다. |
+
+### JSON 출력과 종료 코드
+- 모든 `--json` 문서는 `ok`를 포함하며, 명령이 종료 코드 0으로 끝날 때만 `true`입니다. 실패한 명령은 stdout에 `{"ok": false, "error": "<message>"}`를 출력하고 stderr에도 `error:` 줄을 기록합니다.
+- 종료 코드 0은 성공 또는 처리할 것이 없음, 1은 거부·실패·잘못된 명령, 2는 argparse 사용법 오류입니다. `sudo`/`systemctl`의 원래 종료 코드는 그대로 전달하지 않습니다.
 
 ### `run-dir` 세부 동작 규격
 - 디렉터리 내에서 가장 최근에 수정된 적합한 `.inp` 파일을 자동 선택하며, 수정 시각이 동일한 경우 파일명 알파벳 순으로 결정합니다.

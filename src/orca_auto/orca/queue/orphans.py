@@ -7,16 +7,19 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engines import entry_matches_engine_identity
+from orca_auto.core.admission import AdmissionStore, AdmissionStoreCorruptError
 from orca_auto.core.queue import store as _queue_store
+from orca_auto.core.queue import transitions as _queue_transitions
+from orca_auto.core.queue.child.process import live_queue_slot_keys_for_slots
 from orca_auto.core.queue.types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
-from orca_auto.core.utils.process_tracking import read_pid_file, run_lock_is_held
+from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
+from orca_auto.core.utils.process_tracking import run_lock_is_held
+from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from ..job_locations._generation import payload_matches_queue_generation
 from ..state_reading import load_state
 from ..statuses import RunStatus
 from .entries import (
-    WORKER_PID_FILE_NAME,
     queue_entry_id,
     queue_entry_is_retired_workflow_owned,
     queue_entry_reaction_dir,
@@ -31,7 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 def read_worker_pid(allowed_root: Path) -> int | None:
-    return read_pid_file(allowed_root / WORKER_PID_FILE_NAME)
+    """The live pid recorded by the ORCA queue worker under *allowed_root*, if any."""
+    return read_worker_pid_file(allowed_root)
 
 
 def apply_terminal_reconciliation(
@@ -44,7 +48,7 @@ def apply_terminal_reconciliation(
 ) -> QueueEntry:
     """Orphan variant of the terminal row: the state file, not a worker, decides.
 
-    The row itself comes from ``store.terminal_entry``; only the evidence
+    The row itself comes from ``transitions.terminal_entry``; only the evidence
     mapping is orphan-specific: the state's ``run_id`` and ``completed_at``
     are authoritative when present, a COMPLETED row drops any stale error, and
     the other statuses keep the recorded error unless the state names one.
@@ -59,7 +63,7 @@ def apply_terminal_reconciliation(
         updated_error = ""
     else:
         updated_error = None
-    updated = _queue_store.terminal_entry(
+    updated = _queue_transitions.terminal_entry(
         entry,
         status=target,
         error=updated_error,
@@ -150,8 +154,13 @@ def reconcile_orphaned_running_entries(
     ignore_worker_pid: bool = False,
     protected_queue_keys: set[tuple[str, str]] | None = None,
     protected_queue_ids: set[str] | None = None,
+    only_reaction_dirs: frozenset[str] | None = None,
 ) -> int:
-    """Reconcile queue entries stuck as running after worker/process loss."""
+    """Reconcile queue entries stuck as running after worker/process loss.
+
+    ``only_reaction_dirs`` (resolved paths) narrows the pass to rows of those
+    directories; every other running row is left untouched.
+    """
     if not ignore_worker_pid and read_worker_pid(allowed_root) is not None:
         return 0
 
@@ -171,6 +180,8 @@ def reconcile_orphaned_running_entries(
             if not normalized_dir or not Path(normalized_dir).is_relative_to(
                 allowed_root.expanduser().resolve()
             ):
+                continue
+            if only_reaction_dirs is not None and normalized_dir not in only_reaction_dirs:
                 continue
             if queue_entry_is_retired_workflow_owned(entry, allowed_root):
                 continue
@@ -198,6 +209,84 @@ def reconcile_orphaned_running_entries(
         if changed:
             _queue_store.save_entries(allowed_root, entries)
     return changed
+
+
+class DeadRunningRowUnjudgeableError(ValueError):
+    """The submitted directory has a dead RUNNING row whose slot protection cannot be read."""
+
+
+def _has_running_row_for_dir(allowed_root: Path, normalized_dir: str) -> bool:
+    with _queue_store.queue_lock(allowed_root):
+        entries = _queue_store.load_entries(allowed_root)
+    for entry in entries:
+        if not entry_matches_engine_identity(entry, "orca"):
+            continue
+        if queue_entry_status(entry) != QueueStatus.RUNNING.value:
+            continue
+        reaction_dir = str(queue_entry_reaction_dir(entry) or "").strip()
+        if reaction_dir and str(Path(reaction_dir).expanduser().resolve()) == normalized_dir:
+            return True
+    return False
+
+
+def reconcile_dead_running_rows_for_dir(
+    allowed_root: Path,
+    reaction_dir: str,
+    *,
+    admission_root: Path,
+) -> int:
+    """Submitter-side fallback: recover *reaction_dir*'s running rows left by a dead worker.
+
+    The worker is the owner of RUNNING-row reconciliation (``replay.reconcile_worker_state``);
+    a submission does not sweep the queue. It is allowed to touch only the rows
+    of the directory being submitted, and only when every protection the worker
+    applies also holds here:
+
+    * no queue worker is alive (``queue_worker.pid``) -- a live worker is already
+      responsible for these rows and its child may hold a slot it has not yet
+      attached to its row;
+    * the row is not tied to an admission slot of a live owner (the worker's
+      ``live_queue_slot_keys_for_slots`` predicate; read without normalising the
+      admission file, so the submitter never mutates admission state and a slot
+      the worker would first have to recover stays protective);
+    * ``run.lock`` is not held and the run state belongs to this queue generation
+      (``_reconcile_entry``).
+
+    The queue is read first: a directory with no RUNNING row of its own has
+    nothing to recover and never touches ``admission_slots.json``, so a damaged
+    admission file cannot block a fresh submission. When the directory does
+    have a RUNNING row and the admission file cannot be read, the row's
+    protection cannot be judged and this submission fails closed with
+    ``DeadRunningRowUnjudgeableError`` naming the file.
+
+    Without this pass a directory whose worker died mid-run could not be
+    resubmitted until a worker restarted, because its stale RUNNING row rejects
+    the new submission as an active duplicate.
+    """
+    if read_worker_pid(allowed_root) is not None:
+        return 0
+    normalized_dir = str(Path(reaction_dir).expanduser().resolve())
+    if not _has_running_row_for_dir(allowed_root, normalized_dir):
+        return 0
+    try:
+        protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
+            admission_root,
+            list_slots_fn=lambda root: AdmissionStore.for_root(root).list_slots(
+                normalize_file=False
+            ),
+        )
+    except AdmissionStoreCorruptError as exc:
+        raise DeadRunningRowUnjudgeableError(
+            f"{reaction_dir} has a RUNNING queue row left by a dead worker, and whether a "
+            f"live slot still protects it cannot be judged: {exc}. Repair or remove "
+            f"{AdmissionStore.for_root(admission_root).path} before resubmitting."
+        ) from exc
+    return reconcile_orphaned_running_entries(
+        allowed_root,
+        protected_queue_keys=protected_queue_keys,
+        protected_queue_ids=protected_queue_ids,
+        only_reaction_dirs=frozenset({normalized_dir}),
+    )
 
 
 def _reconcile_entry(
@@ -249,7 +338,7 @@ def _reconcile_entry(
         # strand the entry forever: dequeue skips cancel_requested entries, so it
         # would never be re-run, and no path transitions a PENDING+cancel_requested
         # entry to a terminal state. Honor the cancellation instead, mirroring
-        # store.requeue_running_entry's cancel chokepoint, and clear the flag so the
+        # transitions.requeue_running_entry's cancel chokepoint, and clear the flag so the
         # terminal entry stops advertising a pending cancellation (the
         # CANCELLED row constructor clears it).
         updated = apply_terminal_reconciliation(

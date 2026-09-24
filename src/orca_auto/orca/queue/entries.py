@@ -14,9 +14,8 @@ from orca_auto.core.statuses import TERMINAL_STATUSES as TERMINAL_STATUSES
 from orca_auto.core.utils import normalize_bool as _shared_normalize_bool
 from orca_auto.core.utils import normalize_text as _shared_normalize_text
 
-from ...core.app_ids import ORCA_AUTO_ORCA_APP_NAME
+from ..app_ids import ORCA_AUTO_ORCA_APP_NAME
 
-WORKER_PID_FILE_NAME = "queue_worker.pid"
 QUEUE_APP_NAME = ORCA_AUTO_ORCA_APP_NAME
 QUEUE_ENGINE = "orca"
 QUEUE_TASK_KIND = "orca_run_inp"

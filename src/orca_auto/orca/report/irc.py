@@ -15,7 +15,6 @@ from ..evidence import (
     final_out_path,
     parsed_final_output,
     parsed_frequency_analysis,
-    parsed_optimization_progress,
     parsed_output_facts,
 )
 from ..frequencies import (
@@ -23,8 +22,7 @@ from ..frequencies import (
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_blocks import file_route_lines
-from ..orca_opt_progress import OptProgress
+from ..input_syntax import file_route_lines
 from ..parser import OrcaResult
 from ..statuses import RunStatus
 from .attempts import (
@@ -35,6 +33,7 @@ from .attempts import (
     attempts_table_html,
     duration_text,
     latest_attempt_with_content,
+    latest_optimization_progress,
     parse_attempt_output,
     terminal_actions_html,
     with_details,
@@ -45,6 +44,7 @@ from .frequencies import (
 from .path import (
     IrcPathPoint,
     PathPoint,
+    attempt_detail_text,
     iter_phase_table_rows,
     parse_path_summary,
     path_marker_index,
@@ -188,7 +188,10 @@ def collect_irc_report_data(
     attempts = attempt_dicts(state)
     rows = with_details(
         attempt_report_rows(attempts, "initial IRC"),
-        [_attempt_detail(parse_attempt_output(attempt, parse_irc_output)) for attempt in attempts],
+        [
+            _irc_attempt_detail(parse_attempt_output(attempt, parse_irc_output))
+            for attempt in attempts
+        ],
     )
     parsed = (
         latest_attempt_with_content(attempts, parse_irc_output, _has_irc_content)
@@ -349,11 +352,11 @@ def irc_report_component(
             sections.append((_optimization_section_title(data), opt_html))
     if data.mode_summaries:
         sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
-    chart = _path_chart_svg(data) or (
+    chart = _irc_path_chart_svg(data) or (
         '<p class="muted">No IRC path-summary points were parsed from the attempt outputs.</p>'
     )
     sections.append(
-        ("IRC path profile", chart + path_table_html(data.path_points, _PATH_TABLE_COLUMNS))
+        ("IRC path profile", chart + path_table_html(data.path_points, _IRC_PATH_TABLE_COLUMNS))
     )
     settings_html = settings_table_html(data.settings)
     if settings_html:
@@ -367,7 +370,7 @@ def irc_report_component(
         )
         sections.append(("Attempt chain", attempts_html))
     return ReportComponent(
-        metrics_html=_metric_cards(
+        metrics_html=_irc_metric_cards(
             data,
             include_attempts=include_attempt_metric,
             include_common=include_common_metric,
@@ -433,25 +436,19 @@ def _parse_irc_path_summary(text: str) -> tuple[IrcPathPoint, ...]:
     )
 
 
-def _attempt_detail(parsed: IrcParsedOutput | None) -> str:
+def _irc_attempt_detail(parsed: IrcParsedOutput | None) -> str:
     if parsed is None:
         return ""
-    parts = []
-    if parsed.path_points:
-        parts.append(f"{len(parsed.path_points)} path pts")
-    if parsed.iterations:
-        parts.append(f"{len(parsed.iterations)} IRC iter")
-    return ", ".join(parts)
-
-
-def _has_opt_steps(progress: OptProgress) -> bool:
-    return bool(progress.steps)
+    return attempt_detail_text(
+        parsed.path_points,
+        f"{len(parsed.iterations)} IRC iter" if parsed.iterations else "",
+    )
 
 
 def _latest_opt_progress(
     attempts: Sequence[Mapping[str, Any]],
 ) -> tuple[tuple[tuple[int, float], ...], bool]:
-    progress = latest_attempt_with_content(attempts, parsed_optimization_progress, _has_opt_steps)
+    progress = latest_optimization_progress(attempts)
     if progress is None or not progress.steps:
         return (), False
     steps = tuple((step.cycle, step.energy_hartree) for step in progress.steps)
@@ -472,7 +469,9 @@ def _path_endpoints(
     return points[0], points[-1]
 
 
-def _path_chart_svg(data: IrcReportData) -> str:
+# IRC-specific chart highlights (endpoints + TS) and metric cards; the NEB
+# report has its own versions in neb.py with different labels and cards.
+def _irc_path_chart_svg(data: IrcReportData) -> str:
     points = data.path_points
     if len(points) < 2:
         return ""
@@ -549,7 +548,7 @@ def _calculation_summary_html(data: IrcReportData) -> str:
     )
 
 
-def _metric_cards(
+def _irc_metric_cards(
     data: IrcReportData,
     *,
     include_attempts: bool = True,
@@ -609,7 +608,7 @@ def _metric_cards(
     return "".join(cards)
 
 
-_PATH_TABLE_COLUMNS: tuple[tuple[str, Callable[[PathPoint], str]], ...] = (
+_IRC_PATH_TABLE_COLUMNS: tuple[tuple[str, Callable[[PathPoint], str]], ...] = (
     ("Step", lambda point: html.escape(point.label)),
     ("E / Eh", lambda point: f"{point.energy_hartree:.6f}"),
     ("ΔE / kcal·mol⁻¹", lambda point: f"{point.relative_kcal:+.2f}"),

@@ -6,14 +6,6 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.queue import enqueue_publication as driver
-from orca_auto.core.queue.enqueue_publication import (
-    EnqueuePublicationOutcomeUnknown,
-    EnqueuePublicationSpec,
-    _recover_committed_enqueue,
-    repair_enqueue_publication,
-    run_enqueue_publication,
-)
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_KEY,
@@ -31,6 +23,14 @@ from orca_auto.core.queue.store import (
     list_queue,
 )
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.orca.queue import enqueue_publication as driver
+from orca_auto.orca.queue.enqueue_publication import (
+    EnqueuePublicationOutcomeUnknown,
+    EnqueuePublicationSpec,
+    _recover_committed_enqueue,
+    repair_enqueue_publication,
+    run_enqueue_publication,
+)
 
 
 def _allow_duplicates(*_args: Any, **_kwargs: Any) -> None:

@@ -1,24 +1,16 @@
+"""Restart-input rewriting: seed ``%moinp`` from a checkpoint or geometry from the last xyz."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 from orca_auto.core.utils.persistence import atomic_write_text
 
-from .input_blocks import (
-    BLOCK_START_RE,
-    GEOM_HEADER_RE,
-    MOINP_RE,
-    checkpoint_file_looks_intact,
-)
-from .input_blocks import (
-    ensure_route_keywords as _ensure_route_keywords,
-)
-from .input_blocks import (
-    replace_geometry_with_xyzfile as _replace_geometry_with_xyzfile,
-)
-from .input_blocks import (
-    set_moinp as _set_moinp,
-)
+from .input_blocks import BLOCK_START_RE, GEOM_HEADER_RE
+from .input_blocks import replace_geometry_with_xyzfile as _replace_geometry_with_xyzfile
+from .input_references import MOINP_RE, checkpoint_file_looks_intact
+from .input_references import set_moinp as _set_moinp
+from .input_syntax import ensure_route_keywords as _ensure_route_keywords
 from .resource_directives import (
     ensure_submission_resource_request,
     maxcore_mb_per_core,

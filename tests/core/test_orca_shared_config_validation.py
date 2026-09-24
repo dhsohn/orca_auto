@@ -8,6 +8,10 @@ from typing import Any
 import pytest
 
 from orca_auto.orca.config import load_config as load_orca_config
+from orca_auto.orca.config import (
+    load_orca_shared_config_mapping,
+    validate_orca_shared_config,
+)
 
 Loader = Callable[[str], Any]
 
@@ -395,3 +399,104 @@ def test_shared_engine_loaders_reject_invalid_execution_limits(
 
     with pytest.raises(ValueError, match=message):
         loader(str(config_path))
+
+
+def test_orca_sections_return_every_configured_model() -> None:
+    shared, orca_sections = validate_orca_shared_config(
+        {
+            "runs_root": "/tmp/runs",
+            "orca": {
+                "runtime": {"scratch_root": "/dev/shm/orca-scratch", "scratch_min_free_gb": 2},
+                "paths": {"orca_executable": "/opt/orca/orca"},
+            },
+        }
+    )
+
+    assert shared.runs_root == "/tmp/runs"
+    assert orca_sections.orca_executable == "/opt/orca/orca"
+    assert orca_sections.scratch.root == "/dev/shm/orca-scratch"
+    assert orca_sections.scratch.min_free_gb == 2
+
+
+def test_orca_sections_apply_defaults_once() -> None:
+    _shared, orca_sections = validate_orca_shared_config({})
+
+    assert orca_sections.orca_executable == ""
+    assert not orca_sections.scratch.enabled
+
+
+@pytest.mark.parametrize("section", ["scheduler", "resources", "messenger"])
+@pytest.mark.parametrize("invalid", [None, "disabled", [], {"admission_root": "/tmp/shared"}])
+def test_engine_scoped_shared_sections_are_rejected(section: str, invalid: object) -> None:
+    # resources, messenger and scheduler are top-level only; an orca.* copy is
+    # rejected before any inheritance question can arise.
+    raw = {
+        "scheduler": {"max_active_simulations": 1, "admission_root": "/tmp/shared"},
+        "orca": {section: invalid},
+    }
+
+    with pytest.raises(ValueError, match="Unknown orca config fields are not supported"):
+        validate_orca_shared_config(raw)
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (
+            {"orca": {"runtime": {"max_concurrent": 2}}},
+            "Unknown orca.runtime config fields are not supported",
+        ),
+        (
+            {"orca": {"paths": {"executable": "/tmp/orca"}}},
+            "Unknown orca.paths config fields are not supported",
+        ),
+    ],
+)
+def test_orca_section_validation_rejects_unknown_fields(
+    raw: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validate_orca_shared_config(raw)
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            "orca:\n  runtime:\n    scratch_min_free_gb: 8\n",
+            "orca.runtime.scratch_min_free_gb requires orca.runtime.scratch_root",
+        ),
+        (
+            "orca:\n  runtime:\n    scratch_root: /tmp/orca-scratch\n",
+            "orca.runtime.scratch_root must be a dedicated directory below /dev/shm",
+        ),
+        (
+            "orca:\n  runtime:\n    scratch_root: /dev/shm/orca-scratch\n"
+            "    scratch_min_free_gb: 0\n",
+            "orca.runtime.scratch_min_free_gb must be an integer >= 1",
+        ),
+    ],
+)
+def test_complete_orca_loader_rejects_malformed_scratch_controls(
+    tmp_path: Path,
+    payload: str,
+    message: str,
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        load_orca_shared_config_mapping(config_path)
+
+
+def test_orca_section_errors_do_not_echo_misplaced_credentials(tmp_path: Path) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(
+        "orca:\n  runtime:\n    scratch_root: misplaced-credential\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError) as captured:
+        load_orca_shared_config_mapping(config_path)
+
+    assert "misplaced-credential" not in str(captured.value)

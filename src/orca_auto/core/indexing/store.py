@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from ..activity_index import published_source
 from ..utils.coercion import normalize_text
@@ -71,7 +72,13 @@ def _record_from_dict(raw: dict[str, Any]) -> JobLocationRecord:
     )
 
 
-def _load_records(root: Path) -> list[JobLocationRecord]:
+def load_job_locations(root: Path) -> list[JobLocationRecord]:
+    """Read the index rows without taking the index lock.
+
+    Callers that need the rows and the file's identity to agree hold
+    ``JOB_LOCATION_INDEX_LOCK_NAME`` around this call; ``list_job_locations`` is
+    the self-locking reader.
+    """
     raw = load_json_list_file(
         _index_path(root),
         corrupt_error=JobLocationIndexCorruptError,
@@ -165,7 +172,7 @@ def prune_job_locations(root: str | Path, *, apply: bool) -> JobLocationPruneRes
     """
     resolved_root = resolve_root_path(root)
     with file_lock(_lock_path(resolved_root)):
-        records = _load_records(resolved_root)
+        records = load_job_locations(resolved_root)
         kept: list[JobLocationRecord] = []
         pruned: list[JobLocationRecord] = []
         for record in records:
@@ -184,7 +191,7 @@ def prune_job_locations(root: str | Path, *, apply: bool) -> JobLocationPruneRes
 def list_job_locations(root: str | Path) -> list[JobLocationRecord]:
     resolved_root = resolve_root_path(root)
     with file_lock(_lock_path(resolved_root)):
-        return _load_records(resolved_root)
+        return load_job_locations(resolved_root)
 
 
 def get_job_location(root: str | Path, job_id: str) -> JobLocationRecord | None:
@@ -193,47 +200,149 @@ def get_job_location(root: str | Path, job_id: str) -> JobLocationRecord | None:
         return None
     resolved_root = resolve_root_path(root)
     with file_lock(_lock_path(resolved_root)):
-        for record in _load_records(resolved_root):
+        for record in load_job_locations(resolved_root):
             if record.job_id == target:
                 return record
     return None
 
 
-def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocationRecord:
-    resolved_root = resolve_root_path(root)
-    with file_lock(_lock_path(resolved_root)):
-        records = _load_records(resolved_root)
-        replacement = JobLocationRecord(
-            job_id=normalize_index_text(record.job_id),
-            app_name=normalize_index_text(record.app_name),
-            job_type=normalize_index_text(record.job_type),
-            status=normalize_index_text(record.status),
-            original_run_dir=normalize_index_text(record.original_run_dir),
-            molecule_key=normalize_index_text(record.molecule_key),
-            selected_input_xyz=normalize_index_text(record.selected_input_xyz),
-            latest_known_path=normalize_index_text(record.latest_known_path),
-            resource_request=_normalize_resource_payload(record.resource_request),
-            resource_actual=_normalize_resource_payload(record.resource_actual),
-        )
+def _normalized_record(record: JobLocationRecord) -> JobLocationRecord:
+    return JobLocationRecord(
+        job_id=normalize_index_text(record.job_id),
+        app_name=normalize_index_text(record.app_name),
+        job_type=normalize_index_text(record.job_type),
+        status=normalize_index_text(record.status),
+        original_run_dir=normalize_index_text(record.original_run_dir),
+        molecule_key=normalize_index_text(record.molecule_key),
+        selected_input_xyz=normalize_index_text(record.selected_input_xyz),
+        latest_known_path=normalize_index_text(record.latest_known_path),
+        resource_request=_normalize_resource_payload(record.resource_request),
+        resource_actual=_normalize_resource_payload(record.resource_actual),
+    )
 
-        updated = False
-        for index, existing in enumerate(records):
-            if existing.job_id != replacement.job_id:
+
+@dataclass(frozen=True)
+class JobLocationUpsertResult:
+    index_path: str
+    total: int
+    added: tuple[JobLocationRecord, ...]
+    updated: tuple[JobLocationRecord, ...]
+    unchanged: int
+    applied: bool
+
+
+_CandidateT = TypeVar("_CandidateT")
+
+
+def _merge_locked(
+    resolved_root: Path,
+    items: Iterable[tuple[str, _CandidateT]],
+    *,
+    decide: Callable[[JobLocationRecord | None, _CandidateT], JobLocationRecord | None],
+    apply: bool,
+) -> JobLocationUpsertResult:
+    """One lock, one write: ``decide`` sees each job id's row as it is right now.
+
+    ``decide(existing, candidate)`` returns the row to store, or ``None`` to
+    leave that job id alone (counted as unchanged). A replacement equal to the
+    loaded row is unchanged too; when nothing changes the file bytes are left
+    exactly as they were.
+    """
+    with file_lock(_lock_path(resolved_root)):
+        merged = load_job_locations(resolved_root)
+        slots: dict[str, int] = {}
+        for index, existing in enumerate(merged):
+            slots.setdefault(existing.job_id, index)
+        added: list[JobLocationRecord] = []
+        updated: list[JobLocationRecord] = []
+        unchanged = 0
+        for job_id, candidate in items:
+            key = normalize_index_text(job_id)
+            slot = slots.get(key)
+            current = merged[slot] if slot is not None else None
+            decided = decide(current, candidate)
+            if decided is None:
+                unchanged += 1
                 continue
-            if existing == replacement:
-                # The loaded row already equals the normalized replacement,
-                # so every reader would see the same record: skip the
-                # whole-index atomic write and its fsync. Bytes on disk that
-                # differ only in formatting or unknown keys stay as they are
-                # until a row actually changes.
-                return replacement
-            records[index] = replacement
-            updated = True
-            break
-        if not updated:
-            records.append(replacement)
-        _save_records(resolved_root, records)
-        return replacement
+            replacement = _normalized_record(decided)
+            if replacement.job_id != key:
+                raise JobLocationIndexError(
+                    f"Job location merge changed the job id: {key!r} -> {replacement.job_id!r}"
+                )
+            if slot is None:
+                slots[key] = len(merged)
+                merged.append(replacement)
+                added.append(replacement)
+            elif merged[slot] == replacement:
+                unchanged += 1
+            else:
+                merged[slot] = replacement
+                updated.append(replacement)
+        applied = bool(apply and (added or updated))
+        if applied:
+            _save_records(resolved_root, merged)
+    return JobLocationUpsertResult(
+        index_path=str(_index_path(resolved_root)),
+        total=len(merged),
+        added=tuple(added),
+        updated=tuple(updated),
+        unchanged=unchanged,
+        applied=applied,
+    )
+
+
+def upsert_job_locations(
+    root: str | Path, records: Iterable[JobLocationRecord], *, apply: bool = True
+) -> JobLocationUpsertResult:
+    """Merge ``records`` into the index by job id under one lock and one write.
+
+    A row whose job id is already indexed is replaced in place; a new job id is
+    appended, so submission order is preserved for path-alias resolution. A
+    replacement equal to the loaded row is counted as unchanged and, when no
+    row changes at all, the file bytes are left exactly as they were (no
+    atomic rewrite, no projection publication). Without ``apply`` nothing is
+    written and the result only reports what would change. A caller that must
+    compare against the row as it is at write time uses
+    ``merge_job_locations`` instead.
+    """
+    normalized = [_normalized_record(record) for record in records]
+    return _merge_locked(
+        resolve_root_path(root),
+        ((record.job_id, record) for record in normalized),
+        decide=lambda _existing, record: record,
+        apply=apply,
+    )
+
+
+def merge_job_locations(
+    root: str | Path,
+    candidates: Mapping[str, _CandidateT],
+    *,
+    decide: Callable[[JobLocationRecord | None, _CandidateT], JobLocationRecord | None],
+    apply: bool = True,
+) -> JobLocationUpsertResult:
+    """Decide each job id's row under the index lock, against the row as it is then.
+
+    ``candidates`` maps a job id to whatever the caller collected for it
+    without the lock; ``decide(existing, candidate)`` is called inside the lock
+    with the currently indexed row (``None`` when the id is unindexed) and
+    returns the row to store, or ``None`` to leave the index alone for that
+    id. A row that lands between the caller's plan and this merge is therefore
+    seen by ``decide`` rather than overwritten. Counting and writing follow
+    ``upsert_job_locations``.
+    """
+    return _merge_locked(
+        resolve_root_path(root),
+        candidates.items(),
+        decide=decide,
+        apply=apply,
+    )
+
+
+def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocationRecord:
+    replacement = _normalized_record(record)
+    upsert_job_locations(root, (replacement,))
+    return replacement
 
 
 def resolve_job_location(root: str | Path, lookup_target: str) -> JobLocationRecord | None:
@@ -245,7 +354,7 @@ def resolve_job_location(root: str | Path, lookup_target: str) -> JobLocationRec
     candidate_path = _resolve_candidate_path(target)
 
     with file_lock(_lock_path(resolved_root)):
-        records = _load_records(resolved_root)
+        records = load_job_locations(resolved_root)
 
     for record in records:
         if record.job_id == target:

@@ -135,7 +135,7 @@ def test_existing_lock_with_absent_slots_file_is_idle_without_initializing_it(
     assert not (site.admission / "admission_slots.json").exists()
 
 
-@pytest.mark.parametrize("engine", ["orca", "xtb", "crest"])
+@pytest.mark.parametrize("engine", ["orca", "other"])
 def test_active_cross_engine_reservation_blocks_restart(tmp_path: Path, engine: str) -> None:
     site = _site(tmp_path)
     _reserve(site, source=f"orca_auto.{engine}.queue_worker")
@@ -501,7 +501,8 @@ def test_reservation_waits_through_entire_restart_and_resumes_after_exit(
                 restart_guard=guard,
             ),
         )
-        assert result == (0 if failure_index is None else 5)
+        # A failed systemctl step exits 1; its raw code is reported, not returned.
+        assert result == (0 if failure_index is None else 1)
         assert len(mutations) == (3 if failure_index is None else failure_index + 1)
         assert parent.poll(5), "reservation stayed blocked after restart returned"
         outcome, token = parent.recv()

@@ -12,7 +12,7 @@ from ..completion_rules import OPT_ROUTE_RE, TS_ROUTE_RE
 from ..evidence import (
     structure_kind,
 )
-from ..input_blocks import file_route_lines
+from ..input_syntax import file_route_lines
 from ..relaxed_scan import first_scan_coordinate_spec
 from .irc import (
     IrcReportData,

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..inp_rewriter import prepare_checkpoint_restart_input, resume_checkpoint_input_path
-from ..state_machine import decide_attempt_outcome
+from ..state import decide_attempt_outcome
 from ..statuses import AnalyzerStatus
 from ..types import RunFinishedNotification, RunState
 

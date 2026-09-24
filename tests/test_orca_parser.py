@@ -504,7 +504,7 @@ def test_parser_reads_charge_multiplicity_from_geometry(
                 "|  1> ! B3LYP def2-SVP Opt",
                 "|  1> # previous input: * xyz 0 1",
                 f"{prefix}* {geometry} -1 2"
-                + (" conformer.xyz" if geometry.lower() == "xyzfile" else ""),
+                + (" geometry.xyz" if geometry.lower() == "xyzfile" else ""),
                 "CARTESIAN COORDINATES (ANGSTROEM)",
                 "---------------------------------",
                 "  C      0.000000    0.000000    0.000000",

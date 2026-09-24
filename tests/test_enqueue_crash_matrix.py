@@ -34,7 +34,6 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.queue import enqueue_publication as core_enqueue_publication
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
@@ -45,8 +44,11 @@ from orca_auto.core.queue.publication import (
     queue_entry_is_claimable,
     queue_record_sync_metadata,
 )
-from orca_auto.core.queue.store import dequeue_next, list_queue, request_cancel
+from orca_auto.core.queue.store import list_queue
+from orca_auto.core.queue.transitions import request_cancel
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.orca.queue import enqueue_publication as core_enqueue_publication
+from tests.conftest import claim_next_entry
 
 FOREIGN_TOKEN = "foreign-lease-token"
 
@@ -89,22 +91,15 @@ def _single_row(queue_root: Path) -> Any:
 
 def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
     from orca_auto.orca import submission as orca_submission
-    from orca_auto.orca.config import (
-        AppConfig,
-        CommonResourceConfig,
-        OrcaRuntimeConfig,
-        PathsConfig,
-    )
+    from orca_auto.orca.config import CommonResourceConfig
     from orca_auto.orca.queue import publication_repair
+    from tests.conftest import make_app_cfg, write_config_file, write_fake_orca
 
     root = tmp_path / "orca"
     root.mkdir()
-    fake_orca = root / "fake_orca"
-    fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
-    fake_orca.chmod(0o755)
-    cfg = AppConfig(
-        runtime=OrcaRuntimeConfig(allowed_root=str(root)),
-        paths=PathsConfig(orca_executable=str(fake_orca)),
+    cfg = make_app_cfg(
+        root,
+        orca_executable=write_fake_orca(root / "fake_orca"),
         resources=CommonResourceConfig(max_cores_per_task=2, max_memory_gb_per_task=4),
     )
     reaction_dir = root / "rxn"
@@ -126,7 +121,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
         notifications.append("sent")
         return True
 
-    monkeypatch.setattr(orca_submission, "load_config", lambda _path: cfg)
+    write_config_file(root / "orca_auto.yaml", cfg)
     monkeypatch.setattr(orca_submission, "notify_queue_enqueued_event", count_notification)
     monkeypatch.setattr(orca_submission, "read_worker_pid", lambda _root: None)
     monkeypatch.setattr(orca_submission, "upsert_queued_job_record", controllable_upsert)
@@ -297,7 +292,7 @@ def test_committed_but_lost_enqueue_parks_and_worker_repair_publishes(
     assert parked.status == QueueStatus.PENDING
     assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
     assert queue_entry_is_claimable(parked) is False
-    assert dequeue_next(harness.queue_root) is None
+    assert claim_next_entry(harness.queue_root) is None
     assert not harness.record_published()
     assert harness.notification_count() == 0
 
@@ -325,7 +320,7 @@ def test_publish_failure_parks_then_worker_repair_completes(
     assert parked.status == QueueStatus.PENDING
     assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
     assert queue_entry_is_claimable(parked) is False
-    assert dequeue_next(harness.queue_root) is None
+    assert claim_next_entry(harness.queue_root) is None
 
     harness.set_publish_failing(False)
     assert harness.repair(parked)
@@ -388,6 +383,6 @@ def test_ambiguous_rows_are_all_fenced_and_reported_outcome_unknown(
     assert len(rows) == 2
     assert all(row.status == QueueStatus.CANCELLED for row in rows)
     assert all(row.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED for row in rows)
-    assert dequeue_next(harness.queue_root) is None
+    assert claim_next_entry(harness.queue_root) is None
     assert not harness.record_published()
     assert harness.notification_count() == 0

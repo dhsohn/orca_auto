@@ -1,3 +1,14 @@
+"""Submit an ORCA input directory to the durable queue.
+
+``create_queued_submission`` runs the staged pipeline (prepare inputs, build
+the execution snapshot, validate its intent, assemble queue metadata, publish
+the row with its job record and notification, own the snapshot);
+``submit_reaction_dir_to_queue`` wraps it for the CLI with conflict detection
+and one-line failure reporting. The smaller helpers here (worker status,
+queue metadata, job-record upsert, notification) are shared with the queue
+worker and the CLI status views.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -6,11 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.commands.run_dir import (
-    active_run_dir_pinned_target,
-    assert_run_dir_publication_allowed,
-)
-from orca_auto.core.messaging import build_channel
+from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
@@ -20,18 +27,22 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
-from orca_auto.core.queue.enqueue_publication import (
-    EnqueuePublicationOutcomeUnknown,
-    EnqueuePublicationSpec,
-    run_enqueue_publication,
-)
+from orca_auto.core.queue.persistence import QueueStoreCorruptError
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.persistence import timestamped_token
+from orca_auto.orca.queue.enqueue_publication import (
+    EnqueuePublicationOutcomeUnknown,
+    EnqueuePublicationSpec,
+    run_enqueue_publication,
+)
+from orca_auto.orca.run_dir_guard import (
+    active_run_dir_pinned_target,
+    assert_run_dir_publication_allowed,
+)
 
 from .config import load_config
-from .engine import read_worker_pid
 from .execution import active_direct_run_error, select_latest_inp
 from .execution_binding import (
     build_orca_execution_snapshot,
@@ -39,9 +50,12 @@ from .execution_binding import (
 )
 from .inp_rewriter import prepare_submission_resource_request, read_resource_request_from_input
 from .input_artifacts import OrcaSelectedInputArtifacts, selected_input_artifacts
-from .notifications import notify_queue_enqueued_event
+from .job_locations import resolve_job_metadata, upsert_job_record
+from .notifications import notification_channel, notify_queue_enqueued_event
 from .queue import adapter as queue_adapter
+from .queue.adapter import DuplicateEntryError
 from .queue.entries import queue_entry_is_retired_workflow_owned
+from .queue.orphans import DeadRunningRowUnjudgeableError, read_worker_pid
 from .resource_directives import PreparedSubmissionResourceInput
 from .run_context import WorkerStatusInfo, resolve_submission_context
 from .types import QueueEnqueuedNotification
@@ -240,8 +254,6 @@ def upsert_queued_job_record(
     job_id: str,
     queue_metadata: dict[str, Any] | None = None,
 ) -> None:
-    from .job_locations import resolve_job_metadata, upsert_job_record
-
     artifacts = selected_input_artifacts(selected_inp)
     selected_input = artifacts.selected_input_path
     metadata = dict(queue_metadata or {})
@@ -325,15 +337,29 @@ def worker_status_with_detail(
     )
 
 
-def create_queued_submission(
-    cfg: Any,
-    args: Any,
-    reaction_dir: Path,
-    *,
-    selected_inp: Path | None = None,
-) -> QueuedSubmissionResult:
-    from .job_locations import resolve_job_metadata
+@dataclass(frozen=True)
+class _PreparedSubmissionInputs:
+    """What the input-preparation stage settled before any snapshot exists."""
 
+    selected_inp: Path
+    artifacts: OrcaSelectedInputArtifacts
+    job_type: str
+    molecule_key: str
+    prepared_input: PreparedSubmissionResourceInput
+    priority: int
+    force: bool
+
+
+@dataclass(frozen=True)
+class _SnapshotIntent:
+    """The snapshot-intent ledger entry a freshly built snapshot points at."""
+
+    root: Path
+    token: str
+
+
+def _submission_queue_root(cfg: Any, reaction_dir: Path) -> Path:
+    """Stage 0: the queue root, after refusing retired-workflow targets."""
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
     resolved_reaction_dir = reaction_dir.expanduser().resolve()
     if path_is_retired_workflow_owned(resolved_reaction_dir, allowed_root) or any(
@@ -347,6 +373,17 @@ def create_queued_submission(
         raise ValueError(
             "Workflow directories are retired; submit a standalone ORCA input directory"
         )
+    return allowed_root
+
+
+def _prepare_submission_inputs(
+    cfg: Any,
+    args: Any,
+    reaction_dir: Path,
+    *,
+    selected_inp: Path | None,
+) -> _PreparedSubmissionInputs:
+    """Stage 1: select and inspect the input; nothing durable is written yet."""
     if selected_inp is None:
         try:
             selected_inp = select_latest_inp(reaction_dir)
@@ -360,87 +397,144 @@ def create_queued_submission(
     job_type, molecule_key = resolve_job_metadata(artifacts.selected_inp, reaction_dir)
     prepared_input = prepared_resource_input_from_selected_inp(cfg, selected_inp, logger=logger)
     assert selected_inp is not None
-    execution_snapshot = build_orca_execution_snapshot(
-        reaction_dir,
-        selected_inp,
-        selected_input_xyz=artifacts.selected_input_xyz,
-        resource_request=prepared_input.resource_request,
-        orca_executable=cfg.paths.orca_executable,
-        queue_root=allowed_root,
-        snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
-        normalized_selected_payload=prepared_input.normalized_payload,
-        source_selected_sha256=prepared_input.source_sha256,
+    return _PreparedSubmissionInputs(
+        selected_inp=selected_inp,
+        artifacts=artifacts,
+        job_type=job_type,
+        molecule_key=molecule_key,
+        prepared_input=prepared_input,
+        priority=priority,
+        force=force,
     )
-    try:
-        if not isinstance(execution_snapshot, dict):
-            raise RuntimeError("ORCA submission has no execution snapshot")
-        intent_root = (
-            Path(str(execution_snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or ""))
-            .expanduser()
-            .resolve()
-        )
-        intent_token = str(execution_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
-        if intent_root != allowed_root or not intent_token:
-            raise RuntimeError("ORCA submission snapshot intent does not match its queue root")
-        queue_metadata = build_queue_metadata(
-            artifacts=artifacts,
-            job_type=job_type,
-            molecule_key=molecule_key,
-            resource_request=prepared_input.resource_request,
-            execution_snapshot=execution_snapshot,
-        )
-        # Post-commit recovery matches the same job directory stamped by the adapter.
-        queue_metadata["reaction_dir"] = str(reaction_dir.expanduser().resolve())
-        task_id = timestamped_token("orca", token_bytes=16)
-        transition_snapshot_intent(
-            intent_root,
-            intent_token,
-            target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
-            expected_states={SNAPSHOT_INTENT_STATE_CREATING},
-        )
-    except BaseException:
-        cleanup_unowned_orca_execution_snapshot(
-            _snapshot_cleanup_job_dir(reaction_dir, execution_snapshot),
-            execution_snapshot,
-        )
-        raise
 
-    def cleanup_submission_snapshot() -> None:
-        cleanup_unowned_orca_execution_snapshot(
-            _snapshot_cleanup_job_dir(reaction_dir, execution_snapshot),
-            execution_snapshot,
-        )
 
+def _build_execution_snapshot(
+    cfg: Any,
+    reaction_dir: Path,
+    inputs: _PreparedSubmissionInputs,
+    *,
+    queue_root: Path,
+) -> dict[str, Any]:
+    """Stage 2: materialize the immutable generation and its CREATING intent."""
+    return build_orca_execution_snapshot(
+        reaction_dir,
+        inputs.selected_inp,
+        selected_input_xyz=inputs.artifacts.selected_input_xyz,
+        resource_request=inputs.prepared_input.resource_request,
+        orca_executable=cfg.paths.orca_executable,
+        queue_root=queue_root,
+        snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
+        normalized_selected_payload=inputs.prepared_input.normalized_payload,
+        source_selected_sha256=inputs.prepared_input.source_sha256,
+    )
+
+
+def _validated_snapshot_intent(execution_snapshot: Any, *, queue_root: Path) -> _SnapshotIntent:
+    """Stage 3: the snapshot must name an intent under this queue root."""
+    if not isinstance(execution_snapshot, dict):
+        raise RuntimeError("ORCA submission has no execution snapshot")
+    intent_root = (
+        Path(str(execution_snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or ""))
+        .expanduser()
+        .resolve()
+    )
+    intent_token = str(execution_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
+    if intent_root != queue_root or not intent_token:
+        raise RuntimeError("ORCA submission snapshot intent does not match its queue root")
+    return _SnapshotIntent(root=intent_root, token=intent_token)
+
+
+def _assemble_queue_metadata(
+    reaction_dir: Path,
+    inputs: _PreparedSubmissionInputs,
+    execution_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Stage 4: the queue row's metadata, stamped with the job directory."""
+    queue_metadata = build_queue_metadata(
+        artifacts=inputs.artifacts,
+        job_type=inputs.job_type,
+        molecule_key=inputs.molecule_key,
+        resource_request=inputs.prepared_input.resource_request,
+        execution_snapshot=execution_snapshot,
+    )
+    # Post-commit recovery matches the same job directory stamped by the adapter.
+    queue_metadata["reaction_dir"] = str(reaction_dir.expanduser().resolve())
+    return queue_metadata
+
+
+def _cleanup_submission_snapshot(reaction_dir: Path, execution_snapshot: Any) -> None:
+    """Compensation: remove a generation the queue never took ownership of."""
+    cleanup_unowned_orca_execution_snapshot(
+        _snapshot_cleanup_job_dir(reaction_dir, execution_snapshot),
+        execution_snapshot,
+    )
+
+
+def _record_and_notify_queued_entry(
+    cfg: Any,
+    current: QueueEntry,
+    *,
+    reaction_dir: Path,
+    selected_inp: Path,
+    queue_metadata: dict[str, Any],
+    detail_warnings: list[str],
+) -> None:
+    """Stage 6 (inside publication): job record upsert, then the notification."""
+    side_effect_warning: str | None = None
+    current_task_id = queue_adapter.queue_entry_task_id(current)
+    if current_task_id:
+        side_effect_warning = record_queued_job_side_effect(
+            cfg,
+            reaction_dir=reaction_dir,
+            selected_inp=selected_inp,
+            job_id=str(current_task_id),
+            queue_metadata=queue_metadata,
+        )
+    notification_result = QueuedSubmissionResult(
+        entry=current,
+        reaction_dir=reaction_dir,
+        selected_inp=selected_inp,
+        queue_metadata=queue_metadata,
+        worker_info=_publication_worker_placeholder(),
+    )
+    if not notify_queued_submission(cfg, notification_result):
+        detail_warnings.append(
+            "queued notification delivery failed; state/index recorded and "
+            "notification was not retried (at-most-once delivery)"
+        )
+    if side_effect_warning:
+        # The queue row is durably committed but its published record is
+        # incomplete; raising here makes the driver park the lease for the
+        # worker repair pass instead of marking the publication COMPLETE.
+        raise _QueuedRecordPartiallyPublished(side_effect_warning)
+
+
+def _publish_submission(
+    cfg: Any,
+    reaction_dir: Path,
+    inputs: _PreparedSubmissionInputs,
+    *,
+    queue_root: Path,
+    task_id: str,
+    queue_metadata: dict[str, Any],
+    execution_snapshot: dict[str, Any],
+) -> tuple[Any, list[str]]:
+    """Stage 5: commit the queue row through the generic publication driver.
+
+    Returns the publication outcome and the warnings the record/notify stage
+    collected while the row was being published.
+    """
     detail_warnings: list[str] = []
 
     def publish(current: QueueEntry) -> None:
-        side_effect_warning: str | None = None
-        current_task_id = queue_adapter.queue_entry_task_id(current)
-        if current_task_id:
-            side_effect_warning = record_queued_job_side_effect(
-                cfg,
-                reaction_dir=reaction_dir,
-                selected_inp=selected_inp,
-                job_id=str(current_task_id),
-                queue_metadata=queue_metadata,
-            )
-        notification_result = QueuedSubmissionResult(
-            entry=current,
+        _record_and_notify_queued_entry(
+            cfg,
+            current,
             reaction_dir=reaction_dir,
-            selected_inp=selected_inp,
+            selected_inp=inputs.selected_inp,
             queue_metadata=queue_metadata,
-            worker_info=_publication_worker_placeholder(),
+            detail_warnings=detail_warnings,
         )
-        if not notify_queued_submission(cfg, notification_result):
-            detail_warnings.append(
-                "queued notification delivery failed; state/index recorded and "
-                "notification was not retried (at-most-once delivery)"
-            )
-        if side_effect_warning:
-            # The queue row is durably committed but its published record is
-            # incomplete; raising here makes the driver park the lease for the
-            # worker repair pass instead of marking the publication COMPLETE.
-            raise _QueuedRecordPartiallyPublished(side_effect_warning)
 
     def mark_failed_via_adapter(root: Path, queue_id: str, **kwargs: Any) -> Any:
         # The adapter's mark_failed installs the administrative fence-only
@@ -457,21 +551,22 @@ def create_queued_submission(
             root,
             str(reaction_dir),
             priority=kwargs["priority"],
-            force=force,
+            force=inputs.force,
             task_id=kwargs["task_id"],
             task_kind=kwargs["task_kind"],
             metadata=kwargs["metadata"],
             before_commit_fn=kwargs.get("before_commit_fn"),
             after_commit_fn=kwargs.get("after_commit_fn"),
+            admission_root=Path(cfg.runtime.resolved_admission_root),
         )
 
     spec = EnqueuePublicationSpec(
-        queue_root=allowed_root,
+        queue_root=queue_root,
         app_name=queue_adapter.QUEUE_APP_NAME,
         task_id=task_id,
         task_kind=queue_adapter.QUEUE_TASK_KIND,
         engine=queue_adapter.QUEUE_ENGINE,
-        priority=priority,
+        priority=inputs.priority,
         metadata=queue_metadata,
         label="ORCA",
         publish=publish,
@@ -486,31 +581,83 @@ def create_queued_submission(
         # Ambiguity-fenced rows keep the administrative fence-only marker so a
         # successor generation stays blocked until the duplicates are cleared.
         ambiguous_fence_metadata={queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
-        on_compensated_failure=cleanup_submission_snapshot,
+        on_compensated_failure=lambda: _cleanup_submission_snapshot(
+            reaction_dir, execution_snapshot
+        ),
         job_dir_metadata_key="reaction_dir",
         same_generation=queue_adapter.queue_entries_same_publication_generation,
     )
-    outcome = run_enqueue_publication(spec)
+    return run_enqueue_publication(spec), detail_warnings
+
+
+def _submission_worker_info(
+    queue_root: Path, entry: Any, warnings: list[str | None]
+) -> WorkerStatusInfo:
+    """The worker status reported back to the submitter, with every warning."""
+    worker_info = worker_status_with_log_file(
+        worker_status_for_submission(queue_root),
+        queue_entry_worker_log(entry),
+    )
+    for warning in warnings:
+        worker_info = worker_status_with_detail(worker_info, warning)
+    return worker_info
+
+
+def create_queued_submission(
+    cfg: Any,
+    args: Any,
+    reaction_dir: Path,
+    *,
+    selected_inp: Path | None = None,
+) -> QueuedSubmissionResult:
+    """Submit one ORCA input directory to the durable queue.
+
+    Stages, in order: prepare inputs, build the execution snapshot, validate
+    its intent, assemble the queue metadata, publish the row (which records
+    the job and notifies), then take ownership of the snapshot. A failure
+    between snapshot creation and publication removes the unowned generation;
+    a compensated publication failure removes it through the driver.
+    """
+    queue_root = _submission_queue_root(cfg, reaction_dir)
+    inputs = _prepare_submission_inputs(cfg, args, reaction_dir, selected_inp=selected_inp)
+    execution_snapshot = _build_execution_snapshot(cfg, reaction_dir, inputs, queue_root=queue_root)
+    try:
+        intent = _validated_snapshot_intent(execution_snapshot, queue_root=queue_root)
+        queue_metadata = _assemble_queue_metadata(reaction_dir, inputs, execution_snapshot)
+        task_id = timestamped_token("orca", token_bytes=16)
+        transition_snapshot_intent(
+            intent.root,
+            intent.token,
+            target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
+            expected_states={SNAPSHOT_INTENT_STATE_CREATING},
+        )
+    except BaseException:
+        _cleanup_submission_snapshot(reaction_dir, execution_snapshot)
+        raise
+    outcome, detail_warnings = _publish_submission(
+        cfg,
+        reaction_dir,
+        inputs,
+        queue_root=queue_root,
+        task_id=task_id,
+        queue_metadata=queue_metadata,
+        execution_snapshot=execution_snapshot,
+    )
     entry = outcome.entry
-    marker_warning = mark_orca_snapshot_owned(intent_root, intent_token)
+    marker_warning = mark_orca_snapshot_owned(intent.root, intent.token)
     if outcome.cancelled:
         raise QueuePublicationCancelledError(
             f"ORCA queue entry was cancelled before publication: {entry.queue_id}"
         )
-
-    worker_info = worker_status_with_log_file(
-        worker_status_for_submission(allowed_root),
-        queue_entry_worker_log(entry),
+    worker_info = _submission_worker_info(
+        queue_root,
+        entry,
+        [marker_warning, *detail_warnings, *outcome.warnings],
     )
-    worker_info = worker_status_with_detail(worker_info, marker_warning)
-    for warning in detail_warnings:
-        worker_info = worker_status_with_detail(worker_info, warning)
-    for warning in outcome.warnings:
-        worker_info = worker_status_with_detail(worker_info, warning)
     return QueuedSubmissionResult(
         entry=entry,
         reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
+        selected_inp=inputs.selected_inp,
         queue_metadata=queue_metadata,
         worker_info=worker_info,
     )
@@ -521,7 +668,7 @@ def notify_queued_submission(
     result: QueuedSubmissionResult,
 ) -> bool:
     notification = build_queue_enqueued_notification(result.entry)
-    channel = build_channel(cfg.messenger)
+    channel = notification_channel(cfg)
     delivered = bool(notify_queue_enqueued_event(channel, notification))
     # A disabled channel is an intentional no-op, not a failed delivery.
     return delivered or not channel.enabled
@@ -534,13 +681,22 @@ def _publication_worker_placeholder() -> WorkerStatusInfo:
 def submit_reaction_dir_to_queue(
     args: Any,
 ) -> DirectQueueSubmission:
-    context = resolve_submission_context(
-        args,
-        cfg=None,
-        load_config_fn=load_config,
-        select_latest_inp_fn=select_latest_inp,
-        logger=logger,
-    )
+    try:
+        context = resolve_submission_context(
+            args,
+            cfg=None,
+            load_config_fn=load_config,
+            select_latest_inp_fn=select_latest_inp,
+            logger=logger,
+        )
+    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
+        # A missing, unreadable or invalid config is reported like every other
+        # submission failure: one message, no traceback.
+        return DirectQueueSubmission(
+            status="failed",
+            reason="invalid_config",
+            stderr=str(exc),
+        )
     if context is None:
         return DirectQueueSubmission(
             status="failed",
@@ -548,10 +704,18 @@ def submit_reaction_dir_to_queue(
             stderr="failed to resolve ORCA submission target",
         )
 
-    conflict_error = find_submission_conflict(
-        context.allowed_root,
-        context.reaction_dir,
-    )
+    try:
+        conflict_error = find_submission_conflict(
+            context.allowed_root,
+            context.reaction_dir,
+        )
+    except QueueStoreCorruptError as exc:
+        return DirectQueueSubmission(
+            status="failed",
+            reason="queue_store_corrupt",
+            stderr=str(exc),
+            context=context,
+        )
     if conflict_error is not None:
         return DirectQueueSubmission(
             status="failed",
@@ -561,15 +725,16 @@ def submit_reaction_dir_to_queue(
         )
 
     try:
-        from .queue.adapter import DuplicateEntryError
-
         queued = create_queued_submission(
             context.cfg,
             args,
             context.reaction_dir,
             selected_inp=context.selected_inp,
         )
-    except DuplicateEntryError as exc:
+    except (DuplicateEntryError, DeadRunningRowUnjudgeableError) as exc:
+        # Both are this directory's own queue row standing in the way: an
+        # active duplicate, or a dead RUNNING row whose slot protection cannot
+        # be read. The message carries the hint; no traceback.
         return DirectQueueSubmission(
             status="failed",
             reason="submission_conflict",

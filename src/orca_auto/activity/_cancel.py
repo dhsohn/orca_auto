@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from orca_auto.core.activity import ActivityCancelRequest, ActivityRecord, ResolvedActivitySources
+from orca_auto.activity.model import ActivityCancelRequest, ActivityRecord, ResolvedActivitySources
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca.direct_cancel import cancel_target as cancel_orca_target
 

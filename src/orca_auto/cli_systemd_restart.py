@@ -1,3 +1,9 @@
+"""``orca_auto service restart``: restart the selected target in an idle window.
+
+Every refusal and every failed ``sudo``/``systemctl`` step exits 1 with an
+``error:`` line; raw tool exit codes are never passed through.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -10,7 +16,7 @@ from typing import Any
 
 from orca_auto import cli_systemd_units, systemd_plan
 from orca_auto.cli_systemd_restart_guard import guard_service_restart
-from orca_auto.core.terminal import emit_error
+from orca_auto.terminal import emit_error
 
 
 def _sudo_available(*, which: Callable[[str], str | None] = shutil.which) -> bool:
@@ -79,7 +85,7 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
     deps = deps or ServiceRestartDeps()
     which = deps.which or shutil.which
     run = deps.run or subprocess.run
-    is_root = deps.is_root or systemd_plan._is_root
+    is_root = deps.is_root or systemd_plan.running_as_root
     restart_unit_for_user = deps.restart_unit_for_user or _restart_unit_for_user
 
     if not cli_systemd_units.systemctl_available(which=which):
@@ -109,7 +115,8 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
             emit_error(f"sudo authentication failed: {exc}")
             return 1
         if authenticated.returncode != 0:
-            return int(authenticated.returncode)
+            emit_error(f"sudo authentication failed (exit status {authenticated.returncode})")
+            return 1
 
     def mutation_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
         if use_sudo and argv[0] == "sudo":
@@ -128,7 +135,13 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
     try:
         with guard:
             mutation_started = True
-            return _restart_selected_units(unit, worker_units, use_sudo=use_sudo, run=mutation_run)
+            failed = _restart_selected_units(
+                unit, worker_units, use_sudo=use_sudo, run=mutation_run
+            )
+            if failed is None:
+                return 0
+            emit_error(f"{failed} failed. Some services may have changed; check service status.")
+            return 1
     except (OSError, ValueError) as exc:
         detail = str(exc).rstrip(". ")
         if mutation_started:
@@ -150,35 +163,31 @@ def _restart_selected_units(
     *,
     use_sudo: bool,
     run: Callable[..., subprocess.CompletedProcess[Any]],
-) -> int:
-    for reset_unit in worker_units:
-        print(f"Resetting service failure state for {reset_unit}")
-        rc = cli_systemd_units.run_command(
+) -> str | None:
+    """Run the restart steps in order; return the first failed step's description."""
+    steps: list[tuple[str, tuple[str, ...]]] = [
+        (
+            f"Resetting service failure state for {reset_unit}",
             ("systemctl", "reset-failed", reset_unit),
-            use_sudo=use_sudo,
-            run=run,
         )
-        if rc != 0:
-            return rc
-
-    print(f"Restarting {unit}")
-    rc = cli_systemd_units.run_command(("systemctl", "restart", unit), use_sudo=use_sudo, run=run)
-    if rc != 0:
-        return rc
-
+        for reset_unit in worker_units
+    ]
+    steps.append((f"Restarting {unit}", ("systemctl", "restart", unit)))
     # Restarting a target does not reload its already-running ORCA worker.
     # Restart the service explicitly so the selected runtime reaches the process.
-    for worker_unit in worker_units:
-        print(f"Restarting {worker_unit}")
-        rc = cli_systemd_units.run_command(
-            ("systemctl", "restart", worker_unit), use_sudo=use_sudo, run=run
-        )
+    steps.extend(
+        (f"Restarting {worker_unit}", ("systemctl", "restart", worker_unit))
+        for worker_unit in worker_units
+    )
+    for title, command in steps:
+        print(title)
+        rc = cli_systemd_units.run_command(command, use_sudo=use_sudo, run=run)
         if rc != 0:
-            return rc
+            return f"`{' '.join(command)}` (exit status {rc})"
 
     print("Restart requested successfully.")
     print("Check status with: orca_auto service status")
-    return 0
+    return None
 
 
 __all__ = ["ServiceRestartDeps", "cmd_service_restart"]

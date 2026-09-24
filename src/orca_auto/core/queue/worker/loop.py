@@ -3,16 +3,18 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable, MutableMapping
-from typing import Generic, TypeVar
+from typing import Any, TypeVar
 
-from ..processes import install_shutdown_signal_handlers
-from .models import ReserveStatus, SlotFillResult
+from ..processes import (
+    install_shutdown_signal_handlers,
+    request_process_group_stop,
+    terminate_process_group,
+)
+from .models import ProcessBackedJob, ReservedQueueEntry, ReserveStatus, SlotFillResult
 
 LOGGER = logging.getLogger(__name__)
 
 T = TypeVar("T")
-JobT = TypeVar("JobT")
-ReservedT = TypeVar("ReservedT")
 
 
 def fill_worker_slots(
@@ -78,7 +80,15 @@ def pop_completed_worker_jobs(
     return len(completed)
 
 
-class QueueWorkerLoop(Generic[JobT, ReservedT]):
+class QueueWorkerLoop:
+    """The poll loop of a queue worker that supervises one child process per job.
+
+    Subclasses reserve and start work (``_reserve_next_entry``,
+    ``_start_reserved``), finalize exited children and stop running ones. The
+    loop owns the iteration order (reap, cancel pass, admit, sleep), the
+    shutdown sweep and the signal handlers.
+    """
+
     def __init__(
         self,
         *,
@@ -89,13 +99,17 @@ class QueueWorkerLoop(Generic[JobT, ReservedT]):
         self.max_concurrent = max(1, int(max_concurrent))
         self.poll_interval_seconds = float(poll_interval_seconds)
         self._sleep_fn = sleep_fn or time.sleep
-        self._running: dict[str, JobT] = {}
+        self._running: dict[str, Any] = {}
         self._shutdown_requested = False
 
     def run(self) -> int:
         self._install_signal_handlers()
-        self._before_run()
         try:
+            try:
+                self._before_run()
+            except Exception as exc:  # noqa: BLE001 - any startup failure is one error line
+                LOGGER.error("Queue worker startup failed: %s", exc)
+                return 1
             while not self._shutdown_requested:
                 self._run_iteration()
         except KeyboardInterrupt:
@@ -112,8 +126,12 @@ class QueueWorkerLoop(Generic[JobT, ReservedT]):
         blocked_message: str | None = None,
     ) -> int:
         self._install_signal_handlers()
-        self._before_run()
         try:
+            try:
+                self._before_run()
+            except Exception as exc:  # noqa: BLE001 - same one-line surface as run()
+                LOGGER.error("Queue worker startup failed: %s", exc)
+                return 1
             outcome = self._fill_slots(max_new_jobs=1)
             if outcome == "idle":
                 if idle_message:
@@ -176,7 +194,7 @@ class QueueWorkerLoop(Generic[JobT, ReservedT]):
             retained_completed_ids=retained_completed_ids,
         )
 
-    def _on_finalize_error(self, queue_id: str, job: JobT, rc: int, exc: Exception) -> bool:
+    def _on_finalize_error(self, queue_id: str, job: Any, rc: int, exc: Exception) -> bool:
         del job
         LOGGER.error(
             "worker job finalize failed; keeping job for retry: queue_id=%s rc=%s",
@@ -186,7 +204,7 @@ class QueueWorkerLoop(Generic[JobT, ReservedT]):
         )
         return False
 
-    def _running_jobs(self) -> list[tuple[str, JobT]]:
+    def _running_jobs(self) -> list[tuple[str, Any]]:
         return list(self._running.items())
 
     def _discard_running_job(self, queue_id: str) -> None:
@@ -201,19 +219,83 @@ class QueueWorkerLoop(Generic[JobT, ReservedT]):
 
         install_shutdown_signal_handlers(request_shutdown)
 
-    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedT | None]:
+    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
         raise NotImplementedError
 
-    def _start_reserved(self, reserved: ReservedT) -> bool | None:
+    def _start_reserved(self, reserved: ReservedQueueEntry) -> bool | None:
         raise NotImplementedError
 
-    def _poll_job(self, job: JobT) -> int | None:
-        raise NotImplementedError
+    def _poll_job(self, job: ProcessBackedJob) -> int | None:
+        return job.process.poll()
 
-    def _finalize_completed_job(self, queue_id: str, job: JobT, rc: int) -> None:
+    def _finalize_completed_job(self, queue_id: str, job: Any, rc: int) -> None:
         raise NotImplementedError
 
     def _shutdown_all(self) -> None:
+        if not self._running:
+            return
+        # Reap any child that already finished (e.g. it completed during the final
+        # poll interval, before the shutdown-triggered loop exit) through the normal
+        # completion path first. Otherwise such a job -- still tracked as running --
+        # would be force-terminated and requeued below, and needlessly re-executed
+        # from scratch on the next worker start.
+        retained_completed_ids: set[str] = set()
+        self._check_completed_jobs(retained_completed_ids=retained_completed_ids)
+        jobs_to_shutdown = [
+            (queue_id, job)
+            for queue_id, job in self._running_jobs()
+            if queue_id not in retained_completed_ids
+        ]
+        if not jobs_to_shutdown:
+            return
+        self._before_shutdown_all(len(jobs_to_shutdown))
+        # Ask every child to stop before waiting on any of them: a responsive
+        # child exits during the first job's wait and costs nothing later. A
+        # child that ignores SIGTERM still costs its full graceful and kill
+        # periods when its turn comes, which is what the shutdown budget assumes.
+        # Each job's own stop below still waits, escalates and requeues in sequence.
+        for queue_id, job in jobs_to_shutdown:
+            process = getattr(job, "process", None)
+            if process is None:
+                continue
+            try:
+                request_process_group_stop(process)
+            except Exception:
+                LOGGER.exception("Requesting the stop of job %s's child failed", queue_id)
+        for queue_id, job in jobs_to_shutdown:
+            try:
+                self._shutdown_running_job(queue_id, job)
+            except Exception:
+                # One job's shutdown failing must not leave the remaining
+                # children running unsupervised, nor this one: the child runs
+                # in its own session and receives no signal aimed at the
+                # worker, so stop it here as a last resort. Its row and slot
+                # are reconciled on the next worker start.
+                LOGGER.exception("Shutting down running job %s failed", queue_id)
+                self._stop_child_as_last_resort(queue_id, job)
+            self._discard_running_job(queue_id)
+
+    def _stop_child_as_last_resort(self, queue_id: str, job: ProcessBackedJob) -> None:
+        process = getattr(job, "process", None)
+        if process is None:
+            return
+        try:
+            stopped = terminate_process_group(process)
+        except Exception:
+            LOGGER.exception("Stopping the child of job %s as a last resort failed", queue_id)
+            return
+        if stopped is not True:
+            LOGGER.error(
+                "Child of job %s could not be confirmed stopped by the worker's last-resort "
+                "stop; inspect its process group before the next worker start, which "
+                "reconciles its queue row and admission slot",
+                queue_id,
+            )
+
+    def _before_shutdown_all(self, running_count: int) -> None:
+        del running_count
+
+    def _shutdown_running_job(self, queue_id: str, job: Any) -> None:
         raise NotImplementedError
 
 

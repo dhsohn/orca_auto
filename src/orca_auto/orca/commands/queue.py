@@ -6,8 +6,9 @@ import argparse
 import logging
 from pathlib import Path
 
+from ..cli_logging import configure_logging
 from ..config import load_config
-from ..engine import read_worker_pid
+from ..queue.orphans import read_worker_pid
 from ..queue.worker import OrcaQueueWorker
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,9 @@ def cmd_queue_worker(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    return cmd_queue_worker(build_parser().parse_args(argv))
+    args = build_parser().parse_args(argv)
+    configure_logging(args)
+    return cmd_queue_worker(args)
 
 
 __all__ = ["QUEUE_WORKER_MODULE", "build_parser", "cmd_queue_worker", "main"]

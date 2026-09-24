@@ -78,4 +78,4 @@ jobs:
         run: |
           .venv/bin/python -m pip install -r .machine-contracts/requirements.txt
           .venv/bin/python -m pytest -q \
-            tests/test_state.py::TestState::test_write_report_files_json_fields
+            tests/test_state.py::test_write_report_files_json_fields

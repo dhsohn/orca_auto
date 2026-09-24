@@ -6,19 +6,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from ...core.engine_runner import (
-    confined_output_identity,
-    verify_confined_output_identity,
-)
 from ...core.engine_scratch import (
     attach_scratch_provenance_mapping_to_exception,
     scratch_provenance_from_exception,
 )
 from ..completion_rules import detect_completion_mode
+from ..engine_runner import (
+    confined_output_identity,
+    verify_confined_output_identity,
+)
 from ..orca_runner import WorkerShutdownInterrupt
 from ..out_analyzer import OutAnalysis, analyze_output
-from ..state import now_utc_iso, save_state
-from ..state_machine import decide_attempt_outcome
+from ..state import decide_attempt_outcome, now_utc_iso, save_state
 from ..statuses import AnalyzerStatus, RunStatus
 from ..types import (
     AttemptRecord,

@@ -12,9 +12,8 @@ from typing import Any
 import pytest
 import yaml
 
-from orca_auto import activity_labels, terminal_table
+from orca_auto import activity_labels, terminal, terminal_table
 from orca_auto import cli_queue as unified_cli
-from orca_auto.core import terminal
 from orca_auto.core.queue import QueueStoreCorruptError
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
@@ -193,6 +192,34 @@ def test_queue_elapsed_prefers_attempt_anchor_metadata() -> None:
     )
 
 
+def _fake_listing(
+    monkeypatch: pytest.MonkeyPatch,
+    activities: list[dict[str, Any]],
+    *,
+    active_simulations: int,
+    blockers: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Stand in for ``list_activities`` with an already filtered and paged payload.
+
+    The CLI renders that payload as is; the captured keyword arguments show
+    what it asked the listing for.
+    """
+    captured: dict[str, Any] = {}
+
+    def fake(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "count": len(activities),
+            "active_simulations": active_simulations,
+            "activities": activities,
+            "sources": {"orca_config": "/tmp/orca_auto.yaml"},
+            **({"admission_blockers": blockers} if blockers else {}),
+        }
+
+    monkeypatch.setattr(unified_cli, "list_activities", fake)
+    return captured
+
+
 def test_cmd_queue_list_filters_text_output(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -200,46 +227,24 @@ def test_cmd_queue_list_filters_text_output(
     monkeypatch.setattr(
         activity_labels, "queue_table_now", lambda: datetime(2026, 4, 26, 3, 0, 0, tzinfo=UTC)
     )
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: {
-            "count": 3,
-            "activities": [
-                {
-                    "activity_id": "orca-history-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "completed",
-                    "label": "orca-history-1",
-                    "source": "orca_auto_orca",
-                    "submitted_at": "2026-04-26T01:00:00+00:00",
-                    "updated_at": "2026-04-26T01:00:00+00:00",
-                },
-                {
-                    "activity_id": "orca-opt-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "rxn-a",
-                    "source": "orca_auto_orca",
-                    "submitted_at": "2026-04-26T02:00:00+00:00",
-                    "updated_at": "2026-04-26T02:30:00+00:00",
-                    "metadata": {"task_kind": "opt"},
-                },
-                {
-                    "activity_id": "orca-pending-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "pending",
-                    "label": "mol-a",
-                    "source": "orca_auto_orca",
-                    "submitted_at": "2026-04-26T02:15:00+00:00",
-                    "updated_at": "2026-04-26T02:15:00+00:00",
-                },
-            ],
-            "sources": {},
-        },
+    # The status filter is the listing's job: the CLI forwards it and prints
+    # exactly the page it gets back, so the page holds only the running row.
+    captured = _fake_listing(
+        monkeypatch,
+        [
+            {
+                "activity_id": "orca-opt-q-1",
+                "kind": "job",
+                "engine": "orca",
+                "status": "running",
+                "label": "rxn-a",
+                "source": "orca_auto_orca",
+                "submitted_at": "2026-04-26T02:00:00+00:00",
+                "updated_at": "2026-04-26T02:30:00+00:00",
+                "metadata": {"task_kind": "opt"},
+            },
+        ],
+        active_simulations=1,
     )
 
     result = unified_cli.cmd_queue_list(
@@ -253,6 +258,8 @@ def test_cmd_queue_list_filters_text_output(
     )
 
     assert result == 0
+    assert captured["statuses"] == ("running",)
+    assert captured["limit"] == 0
     stdout = capsys.readouterr().out
     assert "active_simulations: 1" in stdout
     assert (
@@ -266,8 +273,6 @@ def test_cmd_queue_list_filters_text_output(
     assert "orca-opt-q-1" in stdout
     assert "Opt" in stdout
     assert "01:00:00" in stdout
-    assert "orca-pending-q-1" not in stdout
-    assert "orca-history-1" not in stdout
 
 
 def test_cmd_queue_list_tty_renders_styled_view(
@@ -457,27 +462,8 @@ def test_cmd_queue_list_reports_empty_filtered_results(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: {
-            "count": 1,
-            "activities": [
-                {
-                    "activity_id": "orca-history-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "reaction-case",
-                    "source": "orca_auto_orca",
-                    "submitted_at": "2026-04-26T01:00:00+00:00",
-                    "updated_at": "2026-04-26T01:00:00+00:00",
-                    "metadata": {"job_type": "opt"},
-                }
-            ],
-            "sources": {},
-        },
-    )
+    # An empty page still carries the catalog-wide active count.
+    captured = _fake_listing(monkeypatch, [], active_simulations=1)
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
@@ -490,42 +476,37 @@ def test_cmd_queue_list_reports_empty_filtered_results(
     )
 
     assert result == 0
+    assert captured["statuses"] == ("failed",)
     stdout = capsys.readouterr().out
     assert "active_simulations: 1" in stdout
     assert "No matching activities." in stdout
     assert "Status" not in stdout
 
 
-def test_cmd_queue_list_json_filters_payload(
+def test_cmd_queue_list_json_emits_the_listing_payload_unchanged(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: {
-            "count": 2,
-            "activities": [
-                {
-                    "activity_id": "orca-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "ts-1",
-                    "source": "orca_auto_orca",
-                },
-                {
-                    "activity_id": "orca-history-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "queued",
-                    "label": "orca-history-1",
-                    "source": "orca_auto_orca",
-                },
-            ],
-            "sources": {"orca_config": "/tmp/orca_auto.yaml"},
+    page = [
+        {
+            "activity_id": "orca-q-1",
+            "kind": "job",
+            "engine": "orca",
+            "status": "running",
+            "label": "ts-1",
+            "source": "orca_auto_orca",
         },
-    )
+    ]
+    blockers = [
+        {
+            "queue_id": "blocked-row",
+            "allowed_root": "/runs",
+            "scope": "orca_queue",
+            "reason": "index unavailable",
+            "next_action": "Restore index access.",
+        }
+    ]
+    captured = _fake_listing(monkeypatch, page, active_simulations=1, blockers=blockers)
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
@@ -538,59 +519,37 @@ def test_cmd_queue_list_json_filters_payload(
     )
 
     assert result == 0
+    assert captured["statuses"] == ("running",)
     payload = json.loads(capsys.readouterr().out)
-    assert payload["count"] == 1
-    assert payload["active_simulations"] == 1
-    assert payload["activities"][0]["activity_id"] == "orca-q-1"
-    assert payload["sources"]["orca_config"] == "/tmp/orca_auto.yaml"
+    assert payload == {
+        "ok": True,
+        "count": 1,
+        "active_simulations": 1,
+        "activities": page,
+        "sources": {"orca_config": "/tmp/orca_auto.yaml"},
+        "admission_blockers": blockers,
+    }
 
 
-def test_cmd_queue_list_uses_global_active_simulation_count_from_full_payload(
+def test_cmd_queue_list_reports_the_listing_active_count_not_the_page(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: {
-            "count": 3,
-            "activities": [
-                {
-                    "activity_id": "orca-opt-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "rxn-a",
-                    "source": "orca_auto_orca",
-                },
-                {
-                    "activity_id": "orca-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "ts-a",
-                    "source": "orca_auto_orca",
-                },
-                {
-                    "activity_id": "orca-opt-q-2",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "rxn-b",
-                    "source": "orca_auto_orca",
-                },
-            ],
-            "sources": {"orca_config": "/tmp/orca_auto.yaml"},
-        },
+    # A one-row page cannot shrink the global count: the CLI never recounts.
+    captured = _fake_listing(
+        monkeypatch,
+        [
+            {
+                "activity_id": "orca-opt-q-1",
+                "kind": "job",
+                "engine": "orca",
+                "status": "running",
+                "label": "rxn-a",
+                "source": "orca_auto_orca",
+            },
+        ],
+        active_simulations=7,
     )
-
-    def _fake_count(items: list[dict[str, Any]], *, config_path: str | None = None) -> int:
-        captured["items"] = items
-        captured["config_path"] = config_path
-        return 7
-
-    monkeypatch.setattr(unified_cli, "count_global_active_simulations", _fake_count)
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
@@ -607,72 +566,36 @@ def test_cmd_queue_list_uses_global_active_simulation_count_from_full_payload(
     assert payload["count"] == 1
     assert payload["active_simulations"] == 7
     assert payload["activities"][0]["activity_id"] == "orca-opt-q-1"
-    assert len(captured["items"]) == 3
-    assert captured["config_path"] == "/tmp/orca_auto.yaml"
+    assert captured["limit"] == 1
+    assert captured["orca_config"] is None
 
 
-def test_cmd_queue_list_applies_limit_after_filters(
+def test_cmd_queue_list_forwards_limit_and_statuses_to_the_listing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(
-        unified_cli,
-        "list_activities",
-        lambda **kwargs: {
-            "count": 4,
-            "activities": [
-                {
-                    "activity_id": "orca-pending-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "pending",
-                    "label": "mol-a",
-                    "source": "orca_auto_orca",
-                },
-                {
-                    "activity_id": "orca-opt-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "rxn-a",
-                    "source": "orca_auto_orca",
-                },
-                {
-                    "activity_id": "orca-q-1",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "ts-a",
-                    "source": "orca_auto_orca",
-                },
-                {
-                    "activity_id": "orca-opt-q-2",
-                    "kind": "job",
-                    "engine": "orca",
-                    "status": "running",
-                    "label": "rxn-b",
-                    "source": "orca_auto_orca",
-                },
-            ],
-            "sources": {},
-        },
-    )
+    captured = _fake_listing(monkeypatch, [], active_simulations=3)
 
     result = unified_cli.cmd_queue_list(
         SimpleNamespace(
             orca_auto_config=None,
             limit=1,
-            refresh=False,
-            status=["running"],
+            refresh=True,
+            status=["Running", "running", " FAILED "],
             json=True,
         )
     )
 
     assert result == 0
+    assert captured == {
+        "limit": 1,
+        "statuses": ("running", "failed"),
+        "refresh": True,
+        "orca_config": None,
+    }
     payload = json.loads(capsys.readouterr().out)
-    assert payload["count"] == 1
+    assert payload["count"] == 0
     assert payload["active_simulations"] == 3
-    assert payload["activities"][0]["activity_id"] == "orca-opt-q-1"
 
 
 def test_cmd_queue_list_clear_text_output(
@@ -740,8 +663,49 @@ def test_cmd_queue_list_clear_json_output(
 
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
     assert payload["total_cleared"] == 0
     assert payload["sources"]["orca_config"] == "/tmp/orca_auto.yaml"
+
+
+def test_cmd_queue_list_text_names_the_worker_log_of_running_and_failed_rows_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def row(activity_id: str, status: str, worker_log: str) -> dict[str, Any]:
+        return {
+            "activity_id": activity_id,
+            "kind": "job",
+            "engine": "orca",
+            "status": status,
+            "label": activity_id,
+            "source": "orca_auto_orca",
+            "worker_log": worker_log,
+            "metadata": {},
+        }
+
+    _fake_listing(
+        monkeypatch,
+        [
+            row("q-run", "running", "/runs/logs/q-run.log"),
+            row("q-failed", "failed", "/runs/logs/q-failed.log"),
+            row("q-done", "completed", "/runs/logs/q-done.log"),
+            row("q-pending", "pending", ""),
+        ],
+        active_simulations=1,
+    )
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(orca_auto_config=None, limit=0, refresh=False, status=None, json=False)
+    )
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "worker_log: q-run /runs/logs/q-run.log" in out
+    assert "worker_log: q-failed /runs/logs/q-failed.log" in out
+    assert "q-done.log" not in out
+    # The note sits under the table, never inside a width-capped cell.
+    assert out.index("q-pending") < out.index("worker_log: q-run")
 
 
 def test_cmd_queue_list_clear_rejects_filters(
@@ -833,7 +797,8 @@ def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceba
 
     captured = capsys.readouterr()
     assert result == 1
-    assert captured.out == ""
+    # --json keeps the human line on stderr and adds the error document on stdout.
+    assert json.loads(captured.out) == {"ok": False, "error": str(failure)}
     assert captured.err.startswith("error: ")
     assert "hint: Check the config path" in captured.err
     assert "Traceback" not in captured.err
@@ -847,11 +812,6 @@ def test_cmd_queue_list_treats_closed_output_pipe_separately_from_state_errors(
         unified_cli,
         "list_activities",
         lambda **_kwargs: {"activities": [], "sources": {}},
-    )
-    monkeypatch.setattr(
-        unified_cli,
-        "count_global_active_simulations",
-        lambda *_args, **_kwargs: 0,
     )
     monkeypatch.setattr(
         unified_cli,
@@ -1034,7 +994,7 @@ def test_cmd_queue_cancel_reports_expected_state_errors_without_traceback(
 
     captured = capsys.readouterr()
     assert result == 1
-    assert captured.out == ""
+    assert json.loads(captured.out) == {"ok": False, "error": str(failure)}
     assert captured.err.startswith("error: ")
     assert "hint: Check the configured runtime state" in captured.err
     assert "Traceback" not in captured.err
@@ -1101,9 +1061,131 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
 
     assert result == 1
     captured = capsys.readouterr()
-    assert captured.out == ""
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "error": f"runs_root does not exist: {tmp_path / 'does_not_exist_root'}",
+    }
     assert "runs_root does not exist" in captured.err
     assert "does_not_exist_root" in captured.err
+
+
+def test_cmd_queue_list_clear_rejects_a_missing_runs_root_without_creating_it(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    missing_root = tmp_path / "typo_runs"
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(f"runs_root: {missing_root}\n", encoding="utf-8")
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action="clear",
+            orca_auto_config=str(config),
+            limit=0,
+            refresh=False,
+            status=None,
+            json=False,
+        )
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "runs_root does not exist" in captured.err
+    assert not missing_root.exists()
+
+
+@pytest.mark.parametrize("action", [None, "clear"])
+def test_cmd_queue_list_fails_when_no_config_is_discoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    action: str | None,
+) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=action,
+            orca_auto_config=None,
+            limit=0,
+            refresh=False,
+            status=None,
+            json=False,
+        )
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: No orca_auto.yaml found: pass --config, set ")
+    assert "ORCA_AUTO_CONFIG" in captured.err
+    assert "~/orca_auto/config/orca_auto.yaml" in captured.err
+
+
+def test_cmd_queue_cancel_fails_when_no_config_is_discoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
+
+    result = unified_cli.cmd_queue_cancel(
+        SimpleNamespace(target="orca-q-1", orca_auto_config=None, json=False)
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: No orca_auto.yaml found: pass --config, set ")
+    assert "Activity target not found" not in captured.err
+
+
+def test_cmd_queue_list_reports_a_corrupt_admission_store_as_a_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "runs"
+    admission_root = root / ".admission"
+    admission_root.mkdir(parents=True)
+    slots_file = admission_root / "admission_slots.json"
+    slots_file.write_text("{not json", encoding="utf-8")
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(f"runs_root: {root}\n", encoding="utf-8")
+    monkeypatch.setattr(unified_cli, "_layout_interactive", lambda: False)
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=None,
+            orca_auto_config=str(config),
+            limit=0,
+            refresh=False,
+            status=None,
+            json=False,
+        )
+    )
+
+    assert result == 0
+    stdout = capsys.readouterr().out
+    assert f"admission_blocked: ORCA queue {root} (queue_id=*)" in stdout
+    assert f"Admission slot file is not valid JSON: {slots_file}" in stdout
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=None,
+            orca_auto_config=str(config),
+            limit=0,
+            refresh=False,
+            status=None,
+            json=True,
+        )
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [blocker["scope"] for blocker in payload["admission_blockers"]] == ["admission_store"]
+    assert str(slots_file) in payload["admission_blockers"][0]["reason"]
 
 
 #: One transition in the shape `_stored_cancellation_transitions` accepts.

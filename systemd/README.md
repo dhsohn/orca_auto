@@ -27,7 +27,7 @@ orca_auto-runtime@USER.target          # Top-level runtime target
 ## 2. Service Management Commands
 
 ### Install Units
-The installer renders template units into `/etc/systemd/system/`. It requires `--user` and `--repo` (pointing to a repository checkout containing `.venv` or a prepared runtime root). `--config` defaults to the target user's `~/orca_auto/config/orca_auto.yaml`; the unit binds that path through `ORCA_AUTO_CONFIG` and its `ExecStart` runs `queue worker` without engine options:
+The installer renders template units into `/etc/systemd/system/`. It requires `--user` and `--repo` (pointing to a repository checkout containing `.venv` or a prepared runtime root). `--config` defaults to the target user's `~/orca_auto/config/orca_auto.yaml`; the unit binds that path through `ORCA_AUTO_CONFIG`, its `ExecStart` runs `queue worker` without engine options, and `TimeoutStopSec` is rendered from the configured `scheduler.max_active_simulations` (see below). A config that exists but does not load fails the install before any unit is written:
 ```bash
 # Render and install systemd templates for the current user
 orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
@@ -47,6 +47,9 @@ orca_auto service restart
 # Force restart (aborts active calculations; use with caution)
 orca_auto service restart --force
 ```
+
+### Stop Behaviour
+`systemctl stop` sends SIGTERM only to the supervisor (`KillMode=mixed`). The supervisor forwards the stop to the queue worker, which sends SIGTERM to every ORCA child at once, waits up to 10 s for each, SIGKILLs what is still running and requeues its row. `TimeoutStopSec` is rendered at install time as `scheduler.max_active_simulations` × 15 s + 27 s (87 s for the default of 4); only when it expires does systemd SIGKILL the whole control group.
 
 ---
 

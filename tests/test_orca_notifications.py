@@ -117,7 +117,7 @@ def test_notify_returns_false_when_send_fails() -> None:
 
 
 def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:
-    """provider=discord config -> build_channel -> notify_* -> bot embed POST."""
+    """Complete Discord config -> build_channel -> notify_* -> bot embed POST."""
     import json
 
     from orca_auto.core.config import DiscordConfig, MessengerConfig
@@ -147,10 +147,7 @@ def test_discord_provider_end_to_end_posts_embed(monkeypatch) -> None:
 
     monkeypatch.setattr(discord_mod, "urlopen", fake_urlopen)
     channel = build_channel(
-        MessengerConfig(
-            provider="discord",
-            discord=DiscordConfig(bot_token="test-bot-token", default_channel_id="123"),
-        )
+        MessengerConfig(discord=DiscordConfig(bot_token="test-bot-token", default_channel_id="123"))
     )
     assert notify_run_started_event(channel, _started_event()) is True
 

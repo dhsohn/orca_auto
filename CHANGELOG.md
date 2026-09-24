@@ -44,13 +44,31 @@ and [RUNTIME](docs/RUNTIME.md).
   written; existing `admission_slots.json` rows that contain it still load,
   while 7.0.x readers reject rows written without it (roll back only with an
   empty slot file, see RELEASE).
+- `core.messaging.registry`, the `MessengerConfig.provider` and
+  `normalized_provider` attributes and `SUPPORTED_MESSENGER_PROVIDERS` (YAML
+  `messenger.provider: discord` is still accepted and any other value is still
+  rejected), `core/activity_icons.py`, the `activity_view` helpers
+  `filter_activity_items`, `count_active_simulations`,
+  `count_global_active_simulations` and `activity_counter_config_path`, and
+  `orca.queue.cancellation` / `orca.queue.worker_runtime` (folded into
+  `OrcaQueueWorker`). Unused richtext `Line`, `Group.heading` and bold spans
+  are gone.
+- Worker plumbing without a second implementation: `EngineQueueRuntime`,
+  `orca/engine.py`, `ChildQueueWorkerDeps`, the pid-file mixin,
+  `BackgroundRunningJob` and the worker `TypeVar`s; the adapter wrappers
+  `dequeue_next`, `clear_terminal` and `clear_terminal_entries`; the
+  `core/engines`, `core/commands` and `core/state` packages
+  (`orca.state_machine` folded into `orca.state`); the duplicate
+  `AdmissionStore.reconcile_stale_slots` method;
+  `SharedConfig.orca_executable`/`scratch`; `scripts/audit_structural_tests.sh`
+  with `make structural-tests`.
 
 ### Changed
 
 - Worker entry points are `python -m orca_auto.orca.commands.queue --config …`
   (parent) and `python -m orca_auto.orca.commands.worker_child --config …
   --queue-root … --queue-id … [--admission-token …]` (child); the parent
-  constructs `EngineQueueRuntime` directly and `engine_catalog.py` keeps only
+  constructs `OrcaQueueWorker` directly and `engine_catalog.py` keeps only
   persisted identity fields.
 - `service status` worker freshness compares process evidence with the checkout
   HEAD or the installed runtime build id; a stale worker row without a checkout
@@ -77,6 +95,95 @@ and [RUNTIME](docs/RUNTIME.md).
 - `OrcaRuntimeConfig` is frozen; the queue worker derives its effective
   concurrency with `dataclasses.replace`. Optimization-convergence reads share
   the output line iterator instead of `str.splitlines()`.
+- `OrcaQueueWorker` (`orca/queue/worker.py`) is the only queue worker: it owns
+  the pid file and singleton lock, admission (the slot is reserved before the
+  row is claimed by id with the previewed row as `expected_entry`), child
+  start and attach, terminal finalization, cancellation, shutdown and orphan
+  reconciliation as methods. Its base `core.queue.worker.QueueWorkerLoop`
+  orders the passes (reap, cancel, admit, sleep), the shutdown sweep and the
+  signal handlers and knows a job only as a process-backed record; tests
+  substitute `_start_background_process` and `sleep_fn`, there is no injected
+  dependency bag. `orca/queue/roots.py` owns root selection, listing and the
+  by-id fenced claim; `read_worker_pid` lives in `orca/queue/orphans.py`.
+  `queue/replay.py` is only the replay engine (work items, strict finish,
+  reconcile pipeline, generation owners) and takes its state explicitly;
+  `queue/run_state_replay.py` synthesizes terminal `job_state.json` under
+  `run.lock`; `publication_repair.repair_queue_publications(cfg)` is the
+  publication-repair entry point.
+- RUNNING-row reconciliation is worker-owned: a submission no longer sweeps
+  every RUNNING row; it recovers only its own directory's dead row
+  (`orphans.reconcile_dead_running_rows_for_dir`) when no worker pid is live,
+  under the worker's admission-slot protection predicate; the admission file is
+  read only when such a row exists, and an unreadable one fails that submission
+  with a message naming `admission_slots.json`.
+- `queue list --refresh` persists its discoveries through the same rebuild as
+  `index rebuild`; a run whose state names neither a job id nor a run id cannot
+  be indexed. The SQLite projection keys location rows by job id
+  (`SCHEMA_VERSION` 2; an older projection is dropped and rebuilt). Listing
+  filters and pages once, with the indexed path bounded per status; `--limit 0`
+  stays unbounded.
+- Messaging: `build_channel(messenger)` returns `DiscordBotChannel` when the bot
+  token and channel id are set, else a null `DisabledChannel`;
+  `orca.notifications.notification_channel(cfg)` is the one resolver. An
+  unsupported `messenger.provider` is reported as `expected discord`; Discord
+  embeds carry fields only (no `description`). The status icon map lives in
+  `activity_labels.py`.
+- `core/utils/stable_fs.py` is the one fd-pinned directory/file primitive set
+  used by `core/engine_scratch/` and `core/queue/engine/input_snapshot.py`
+  (the stricter identity rule of each former copy is kept); a scratch entry
+  that disappears or turns into a symlink between listing and opening is
+  reported as `EngineScratchError` instead of a raw `OSError`.
+  `orca/execution_binding.py` became the package `orca/execution_binding/`
+  with the same public names.
+- `make check` runs `scripts/check_docs_parity.py`, which requires each
+  `X.md`/`X.ko.md` pair to keep the same heading levels, tables and row counts,
+  fenced code blocks (comments may differ) and relative links.
+- `validate_unambiguous_orca_directives` uses the shared block primitive;
+  tokens after an inline `end` are no longer counted as `%pal` content.
+- `cli.main` removes the managed root log handler when a command returns, so an
+  in-process caller's next command never writes to a closed stream.
+- Package layout: `core/` holds generic infrastructure only. The ORCA-only
+  modules moved to `orca/` (`engine_catalog`, `engine_runtime`,
+  `engine_runner`, `engine_artifacts`, `geometry_limits`,
+  `machine_observation`, `run_dir_guard`, `scratch_config`,
+  `queue/enqueue_publication`, `queue/identity`); `core/config/files.py`
+  keeps the generic sections and hands the raw `orca` section to
+  `orca/config.py`, and `shared_runs_root_from_config` raises on an invalid
+  `orca.*` field instead of returning `None`. `core/activity.py` became
+  `activity/model.py`, `core/terminal.py` became the top-level `terminal.py`,
+  `core/engine_process.py` became `core/confined_io.py`, the worker pid-file
+  helpers live in `core/queue/worker/pid_file.py` under one
+  `WORKER_PID_FILE_NAME`, and the run-status and snapshot-supersession rules
+  moved from `activity/_orca.py` to `orca/run_status.py`.
+- Module splits: `core/engine_scratch.py` became the package
+  `core/engine_scratch/` (errors, constants, policy, reports, fs shims,
+  manifest, staging, publication, workspace, inspect);
+  `core/queue/transitions.py` holds the cancel and terminal transitions while
+  `store.py` keeps storage, duplicate policy and enqueue/dequeue/clear;
+  `orca/recovery_rebind.py` holds the crash-recovery rebind and
+  `orca/output_adoption.py` the existing-output adoption verdict;
+  `input_blocks` split into `input_syntax`, `input_blocks`, `input_references`
+  and `input_validation` under an import-linter layers contract;
+  `job_locations` split into `_records`, `_artifacts_to_records` and
+  `_rebuild`; the IRC/NEB report helpers merged into `report/attempts.py` and
+  `report/path.py` with `orca/report/__init__` a pure facade.
+- Every `--json` document carries `ok` (`true` exactly when the command exits
+  0) through one `emit_json` helper; a failed command prints
+  `{"ok": false, "error": "<message>"}` on stdout and still writes the
+  `error:` line to stderr. Exit codes: 0 for success or nothing to do, 1 for a
+  refused, failed or invalid command, 2 for an argparse usage error.
+  `service status` exits 1 (`ok: false`) for a stale or undetermined worker;
+  `service restart` reports a failed `sudo`/`systemctl` step as exit 1 with an
+  `error:` line naming the command; `queue worker --json` carries `ok`.
+- `queue list` rows carry `worker_log` (`<runs_root>/logs/<queue_id>.log`);
+  the text view lists it under the table for running and failed rows.
+  `queue list clear` removes the worker log of every cleared row and reports
+  `removed_worker_logs`.
+- Test suite: `tests/conftest.py` is the shared foundation (fake ORCA, config,
+  queue-entry and run-state fixtures plus the plain builders behind them);
+  `os.fsync`/`os.fdatasync` are no-ops unless a test is marked `real_fsync`,
+  `slow` marks the isolated-interpreter acceptance, and the
+  `unittest.TestCase` modules were converted to pytest-style tests.
 
 ### Fixed
 
@@ -87,6 +194,40 @@ and [RUNTIME](docs/RUNTIME.md).
   attempt.
 - The child's cancel finalization of `job_state.json` runs under `run.lock` and
   is skipped when the lock is held; the parent replay then settles the row.
+- The queue worker and its children install a log handler again: the journal
+  carries the worker's INFO lifecycle lines (`Queue worker started/stopped`,
+  orphan reconciliation, intent sweeps) with its warnings and errors, and each
+  child's INFO lines go to its `worker_log` file. A failed startup
+  reconciliation is one `Queue worker startup failed: <reason>` line with
+  exit 1 and the pid file removed; the supervisor restarts the worker up to
+  its cap.
+- Configuration problems fail closed instead of listing an empty queue or
+  writing units: `queue list`, `queue list clear` and `queue cancel` exit 1
+  without a discoverable config (`No orca_auto.yaml found: …`) or an existing
+  `runs_root`, creating nothing; `systemd install` exits 1 and writes no units
+  when the config exists but does not load; `run-dir` reports a config that
+  does not load (`invalid_config`) or a corrupt `queue.json`
+  (`queue_store_corrupt`) as one `error:` line with exit 1 instead of a
+  traceback, also with `--log-file`; `init` prints its refusals on stderr.
+- `queue list` reports a corrupt `admission_slots.json` as an
+  `admission_blockers` entry (scope `admission_store`, queue id `*`) and falls
+  back to the listing's own active count.
+- `file_lock` no longer creates the lock's parent directories (the admission
+  store creates its own `.admission` directory beneath an existing root);
+  `queue list clear` removes the `.queue-publication-locks/<sha256>.lock` file
+  of every cleared row.
+- `scratch clear` cleans the publication temp files of the durable generation
+  only when the manifest was valid and the generation lies under the
+  configured `runs_root`; an invalid or foreign manifest path is reported in
+  `durable_note` and left alone.
+- Stopping the worker: the supervisor's stop budget is the worker's own worst
+  case (15 s per job plus 6 s of poll latency and a 15 s requeue margin), the worker asks every child
+  to stop before waiting on any of them, the unit uses `KillMode=mixed` so
+  `systemctl stop` signals only the supervisor, and `systemd install` renders
+  `TimeoutStopSec` from `scheduler.max_active_simulations` (15 s per job plus
+  27 s; 87 s for the default 4). Reinstall the units to pick this up.
+- An attach refusal is handled once: the row fails with
+  `admission_slot_missing` and the reserved slot is released a single time.
 
 ### Added
 
@@ -97,7 +238,21 @@ and [RUNTIME](docs/RUNTIME.md).
 - `orca_auto scratch clear NAME | --all-stale [--config PATH] [--json]`
   removes `stale`, `unverifiable` or `invalid-manifest` workspaces through the
   worker's own removal path. Live workspaces are refused; the command exits 1
-  when nothing was removed or any target was refused.
+  when any target was refused, and `--all-stale` with nothing to remove exits
+  0 with `removed_count` 0.
+- The worker logs one WARNING at start when `max_concurrent` ×
+  `resources.max_cores_per_task` exceeds the CPUs it may use
+  (`sched_getaffinity`), naming both numbers; it does not refuse to start.
+- `orca_auto index rebuild [--config PATH] [--dry-run] [--json]` re-derives
+  `job_locations.json` rows from every `job_state.json` under `runs_root`
+  (`report.json` outranks the state for identity), adding or updating rows by
+  job id and never removing one; a job id found in several directories keeps
+  the directory the row already points at, never turns a finished row back into
+  a running one, and is reported as a `conflict:`. It exits 0 also when nothing changes and 1 on
+  an unconfigured or damaged config, a missing `runs_root`, a corrupt index or
+  an OS error; `--json` reports `index_path`, `scanned`, `total`,
+  `added_count`, `updated_count`, `unchanged_count`, `skipped_count`, `applied`
+  and the `added`, `updated` and `skipped` rows.
 
 ## [7.0.1] - 2026-09-24
 

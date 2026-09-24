@@ -14,10 +14,9 @@ from orca_auto.core.artifacts import (
     RUN_REPORT_HTML_FILE,
     SI_BLOCK_MD_FILE,
 )
-from orca_auto.core.engine_process import (
-    read_confined_text,
-)
-from orca_auto.core.machine_observation import (
+from orca_auto.core.confined_io import atomic_write_confined_bytes, read_confined_text
+from orca_auto.core.utils import copy_dict_or_empty as _dict
+from orca_auto.orca.machine_observation import (
     MACHINE_CONTRACT_NAME,
     MACHINE_CONTRACT_VERSION,
     RESULTS_PAYLOAD_CONTRACT_NAME,
@@ -27,16 +26,48 @@ from orca_auto.core.machine_observation import (
     machine_json_bytes,
     required_delivery_complete,
 )
-from orca_auto.core.utils import copy_dict_or_empty as _dict
 
 from .. import state_reading as _state_reading
 from ..report_fields import report_result_fields
-from ..state import _normalized_payload_from_state, _retired_generation, _write_generation_bytes
+from ..state import normalized_payload_from_state, retired_generation, write_generation_bytes
 from ..types import RunFinalResult, RunState
-from . import write_job_html_report
+from .composer import compose_job_report_html
 from .si import write_si_block
 
 logger = logging.getLogger(__name__)
+
+
+def write_job_html_report(
+    reaction_dir: Path,
+    state: Mapping[str, Any],
+    *,
+    generation_target: tuple[Path, tuple[int, int]],
+) -> Path | None:
+    """Write ``job_report.html``; ``None`` when the job type has no HTML report.
+
+    The report lands inside the verified execution generation. When the current
+    job type has no HTML report, a stale ``job_report.html`` in that generation
+    is removed so links cannot surface an obsolete report. The exception path deliberately does NOT remove it: a
+    transient parse error must not destroy the last valid report.
+    """
+    path = generation_target[0] / RUN_REPORT_HTML_FILE
+    try:
+        rendered = compose_job_report_html(reaction_dir, state)
+        if rendered is None:
+            path.unlink(missing_ok=True)
+            return None
+        atomic_write_confined_bytes(
+            generation_target[0],
+            path,
+            rendered.encode("utf-8"),
+            label="ORCA generation artifact",
+            mode=0o600,
+            expected_parent_identity=generation_target[1],
+        )
+        return path
+    except Exception:  # noqa: BLE001
+        logger.warning("Job HTML report generation failed for %s", reaction_dir, exc_info=True)
+        return None
 
 
 def _machine_observation(
@@ -193,7 +224,7 @@ def write_report_json(
             "execution_provenance": _dict(report_payload.get("execution_provenance")),
             "final_result": cast(RunFinalResult | None, report_payload.get("final_result")),
         }
-        payload = _normalized_payload_from_state(reaction_dir, state)
+        payload = normalized_payload_from_state(reaction_dir, state)
     if generation_target is None:
         generation_target = _state_reading.verified_generation_artifact_target(
             reaction_dir, payload
@@ -216,7 +247,7 @@ def write_report_json(
         if existing_text.encode("utf-8") == observation_bytes:
             return path
         raise RuntimeError(f"terminal machine observation is immutable: {path}")
-    _write_generation_bytes(generation_target, path, observation_bytes)
+    write_generation_bytes(generation_target, path, observation_bytes)
     return path
 
 
@@ -251,7 +282,7 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
     its state and queue record still carry the outcome.
     """
 
-    report_payload = _normalized_payload_from_state(reaction_dir, state)
+    report_payload = normalized_payload_from_state(reaction_dir, state)
     generation_target = _state_reading.verified_generation_artifact_target(
         reaction_dir, report_payload
     )
@@ -277,7 +308,7 @@ def write_report_files(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str
                 generation_target[0],
             )
         return existing_reports
-    if _retired_generation(generation_target[0]):
+    if retired_generation(generation_target[0]):
         return {}
     reports: dict[str, str] = {}
     html_path = write_job_html_report(reaction_dir, state, generation_target=generation_target)

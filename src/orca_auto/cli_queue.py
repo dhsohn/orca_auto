@@ -1,6 +1,13 @@
+"""``orca_auto queue list|cancel``: the operator surface over the activity catalog.
+
+Text output is a status-tinted table on a TTY and a byte-stable plain table on
+a pipe; ``--json`` prints the listing/clear/cancel payload through the shared
+``emit_json`` document. Failures reach stderr as ``error:`` lines and, under
+``--json``, stdout as ``{"ok": false, "error": ...}``.
+"""
+
 from __future__ import annotations
 
-import json
 import sys
 from collections import Counter
 from collections.abc import Sequence
@@ -8,18 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto import activity_labels, terminal_table
+from orca_auto import activity_labels, terminal, terminal_table
 from orca_auto import activity_rendering as _activity_rendering
 from orca_auto.activity import cancel_activity, clear_activities, list_activities
-from orca_auto.activity_view import (
-    activity_counter_config_path,
-    count_global_active_simulations,
-    filter_activity_items,
-    normalize_activity_filter_values,
-)
+from orca_auto.activity_labels import activity_status_icon
+from orca_auto.activity_view import normalize_activity_filter_values
 from orca_auto.core import statuses as _s
-from orca_auto.core import terminal
-from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.activity_index import ActivityIndexError
 from orca_auto.core.config import discovery
 from orca_auto.core.config.discovery import (
@@ -28,8 +29,8 @@ from orca_auto.core.config.discovery import (
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS, shared_runs_root_from_config
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
-from orca_auto.core.terminal import emit_error
 from orca_auto.core.utils import normalize_text
+from orca_auto.terminal import emit_error, emit_json
 
 _QUEUE_STATE_ERRORS: tuple[type[Exception], ...] = (
     ActivityIndexError,
@@ -46,18 +47,6 @@ class _QueueListRequest:
     limit: int
     status_values: tuple[str, ...]
     json_output: bool
-
-
-def _activity_counter_config_path(
-    *,
-    payload: dict[str, Any],
-    config_hint: str | None,
-) -> str | None:
-    return activity_counter_config_path(
-        payload,
-        config_hints=(config_hint,),
-        prefer_hints=True,
-    )
 
 
 def _stdout_isatty() -> bool:
@@ -251,7 +240,7 @@ def _queue_list_clear_payload(args: Any, request: _QueueListRequest) -> dict[str
 
 def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int:
     if json_output:
-        print(json.dumps(payload, ensure_ascii=True, indent=2))
+        emit_json(payload)
         return 0
     for line in _activity_rendering.queue_clear_lines(payload):
         print(line)
@@ -267,6 +256,8 @@ def _missing_runs_root(args: Any, request: _QueueListRequest) -> str | None:
 
 
 def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
+    # ``list_activities`` owns the status filter and the page; its payload is
+    # rendered as is, so the count, rows and summaries can never disagree.
     return list_activities(
         limit=request.limit,
         statuses=request.status_values,
@@ -275,64 +266,12 @@ def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]
     )
 
 
-def _filtered_queue_payload(
-    payload: dict[str, Any],
-    request: _QueueListRequest,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    activities = filter_activity_items(
-        payload.get("activities", []),
-        statuses=request.status_values,
-    )
-    limited_activities = activities[: request.limit] if request.limit > 0 else list(activities)
-    if "active_simulations" in payload:
-        active_simulations = int(payload["active_simulations"])
-    else:
-        active_simulations = count_global_active_simulations(
-            payload.get("activities", []),
-            config_path=_activity_counter_config_path(
-                payload=payload, config_hint=request.shared_config
-            ),
-        )
-    blockers = []
-    for item in payload.get("activities", []):
-        metadata = item.get("metadata", {})
-        reason = normalize_text(metadata.get("publication_blocked_reason"))
-        if reason:
-            blockers.append(
-                {
-                    "queue_id": metadata.get("queue_id", item.get("activity_id", "")),
-                    "allowed_root": metadata.get("allowed_root", ""),
-                    "scope": metadata.get("publication_blocked_scope", ""),
-                    "reason": reason,
-                    "next_action": metadata.get("publication_blocked_action", ""),
-                }
-            )
-    if "admission_blockers" in payload:
-        blockers = list(payload["admission_blockers"])
-    return {
-        "count": len(limited_activities),
-        "active_simulations": active_simulations,
-        "activities": [dict(item) for item in limited_activities],
-        "sources": dict(payload.get("sources", {})),
-        **({"admission_blockers": blockers} if blockers else {}),
-    }, activities
-
-
-def _print_queue_list_text(
-    *,
-    payload: dict[str, Any],
-    filtered_payload: dict[str, Any],
-    filtered_activities: Sequence[dict[str, Any]],
-    request: _QueueListRequest,
-) -> int:
+def _print_queue_list_text(*, payload: dict[str, Any]) -> int:
     tty = _layout_interactive()
     term_width = terminal_table.terminal_max_width()
     rail_width = terminal_table.display_width(_QUEUE_RAIL)
-    display_items = list(filtered_activities)
-    if request.limit > 0:
-        display_items = display_items[: request.limit]
-    display_rows = [(0, item) for item in display_items]
-    active_simulations = filtered_payload["active_simulations"]
+    display_rows = [(0, item) for item in payload.get("activities", [])]
+    active_simulations = int(payload.get("active_simulations", 0))
     lines = _queue_list_text_lines(
         display_rows,
         active_simulations=active_simulations,
@@ -353,7 +292,7 @@ def _print_queue_list_text(
         print(lines[0])
 
     blocker_lines = _activity_rendering.queue_admission_blocker_lines(
-        filtered_payload.get("admission_blockers", [])
+        payload.get("admission_blockers", [])
     )
     if not display_rows:
         print(lines[1])
@@ -367,6 +306,7 @@ def _print_queue_list_text(
     # without such a row.
     pending_cancel_lines = [
         *_activity_rendering.queue_pending_cancel_lines(display_rows),
+        *_activity_rendering.queue_worker_log_lines(display_rows),
         *blocker_lines,
     ]
 
@@ -374,7 +314,8 @@ def _print_queue_list_text(
     # onto display_rows so each data row is tinted by its status. On a non-TTY
     # this stays byte-for-byte identical to the historical output (paint is a
     # no-op) except for those trailing note lines, so pipes/scripts are
-    # unaffected unless a row holds undrained cancel transitions.
+    # unaffected unless a row holds undrained cancel transitions or a
+    # running/failed row names its worker log.
     if not tty:
         print(terminal.paint(lines[1], terminal.BOLD))
         print(lines[2])
@@ -406,36 +347,40 @@ def _print_queue_list_text(
     return 0
 
 
-def _emit_queue_list_once(
-    payload: dict[str, Any],
-    filtered_payload: dict[str, Any],
-    filtered_activities: Sequence[dict[str, Any]],
-    request: _QueueListRequest,
-) -> int:
+def _emit_queue_list_once(payload: dict[str, Any], request: _QueueListRequest) -> int:
     if request.json_output:
-        print(json.dumps(filtered_payload, ensure_ascii=True, indent=2))
+        emit_json(payload)
         return 0
-    return _print_queue_list_text(
-        payload=payload,
-        filtered_payload=filtered_payload,
-        filtered_activities=filtered_activities,
-        request=request,
-    )
+    return _print_queue_list_text(payload=payload)
 
 
 def cmd_queue_list(args: Any) -> int:
+    json_output = bool(getattr(args, "json", False))
     try:
         request = _queue_list_request(args)
     except _QUEUE_STATE_ERRORS as exc:
         emit_error(
             exc,
             hint="Check the config path and repair the reported state file before retrying.",
+            json_output=json_output,
+        )
+        return 1
+
+    missing_root = _missing_runs_root(args, request)
+    if missing_root is not None:
+        emit_error(
+            f"runs_root does not exist: {missing_root}",
+            hint="Check runs_root in the config; a typo here would otherwise list as an empty queue.",
+            json_output=json_output,
         )
         return 1
 
     if normalize_text(getattr(args, "action", None)).lower() == "clear":
         if getattr(args, "status", None) or request.limit != 0:
-            emit_error("`orca_auto queue list clear` does not support --status/--limit filters.")
+            emit_error(
+                "`orca_auto queue list clear` does not support --status/--limit filters.",
+                json_output=json_output,
+            )
             return 1
         try:
             clear_payload = _queue_list_clear_payload(args, request)
@@ -443,6 +388,7 @@ def cmd_queue_list(args: Any) -> int:
             emit_error(
                 exc,
                 hint="Check the config path and repair the reported state file before retrying.",
+                json_output=json_output,
             )
             return 1
         try:
@@ -450,29 +396,17 @@ def cmd_queue_list(args: Any) -> int:
         except BrokenPipeError:
             return 0
 
-    missing_root = _missing_runs_root(args, request)
-    if missing_root is not None:
-        emit_error(
-            f"runs_root does not exist: {missing_root}",
-            hint="Check runs_root in the config; a typo here would otherwise list as an empty queue.",
-        )
-        return 1
     try:
         payload = _queue_list_payload(args, request)
-        filtered_payload, filtered_activities = _filtered_queue_payload(payload, request)
     except _QUEUE_STATE_ERRORS as exc:
         emit_error(
             exc,
             hint="Check the config path and repair the reported state file before retrying.",
+            json_output=json_output,
         )
         return 1
     try:
-        return _emit_queue_list_once(
-            payload,
-            filtered_payload,
-            filtered_activities,
-            request,
-        )
+        return _emit_queue_list_once(payload, request)
     except BrokenPipeError:
         return 0
 
@@ -480,15 +414,19 @@ def cmd_queue_list(args: Any) -> int:
 def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
     result = payload.get("result", {})
     if result.get("returncode", 0) != 0 or payload.get("status") == _s.STATUS_FAILED:
-        emit_error(
+        message = (
             normalize_text(result.get("stderr"))
             or normalize_text(result.get("reason"))
-            or "Cancellation failed.",
-            hint="Run `orca_auto queue list` to inspect the current target state.",
+            or "Cancellation failed."
         )
+        if json_output:
+            # The target's payload still describes what was found; keep it
+            # beside the verdict rather than replacing it with a bare error.
+            emit_json(payload, ok=False, error=message)
+        emit_error(message, hint="Run `orca_auto queue list` to inspect the current target state.")
         return 1
     if json_output:
-        print(json.dumps(payload, ensure_ascii=True, indent=2))
+        emit_json(payload)
         return 0
 
     print(f"{terminal.label('activity_id:')} {payload.get('activity_id', '-')}")
@@ -503,6 +441,7 @@ def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
 
 def cmd_queue_cancel(args: Any) -> int:
     shared_config = shared_config_text_from_args(args) or None
+    json_output = bool(getattr(args, "json", False))
     try:
         payload = cancel_activity(
             target=args.target,
@@ -515,10 +454,11 @@ def cmd_queue_cancel(args: Any) -> int:
                 "Check the configured runtime state, then run `orca_auto queue list` "
                 "to see valid targets."
             ),
+            json_output=json_output,
         )
         return 1
 
     try:
-        return _emit_queue_cancel(payload, json_output=bool(getattr(args, "json", False)))
+        return _emit_queue_cancel(payload, json_output=json_output)
     except BrokenPipeError:
         return 0

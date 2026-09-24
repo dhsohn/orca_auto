@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from orca_auto.core.config.schema import positive_int_mapping
+
 from .metadata import entry_metadata_value
 
 
@@ -18,8 +20,6 @@ def engine_resource_caps(
 
 
 def coerce_resource_request(value: Any) -> dict[str, int]:
-    from orca_auto.core.config.schema import positive_int_mapping
-
     return positive_int_mapping(value)
 
 

@@ -36,9 +36,9 @@ graph TD
 
 | 패키지/모듈 | 주요 역할 및 책임 |
 | :--- | :--- |
-| **`cli*.py`, `activity/`** | 사용자 명령어 파싱, 텍스트/JSON 포맷팅, 큐 및 서비스 상태 조회, 작업 취소 인터페이스 |
-| **`orca/`** | ORCA 입력(`.inp`) 파싱 및 자원 판별, 실행 준비, 출력 로그 해석 및 수렴 판정, 결과 보고서(`machine.json`) 생성 |
-| **`core/`** | 디스크 큐 저장소, 동시 실행 슬롯 관리(admission), 프로세스 감독(supervisor), systemd 서비스 연동, 파일시스템 잠금 |
+| **`cli*.py`, `activity/`, `terminal.py`** | 사용자 명령어 파싱, 텍스트/JSON 포맷팅과 ANSI 스타일(`terminal.py`), activity 레코드 모델(`activity/model.py`), 큐 및 서비스 상태 조회, 작업 취소 인터페이스 |
+| **`orca/`** | ORCA 전용 로직 전부: 엔진 카탈로그와 런타임 루트, scratch 설정, 입력(`.inp`) 파싱 및 자원 판별, 실행 준비, 큐 워커, 출력 로그 해석 및 수렴 판정, 실행 상태·스냅샷 대체 규칙(`run_status.py`), 결과 보고서(`machine.json`) 생성 |
+| **`core/`** | 범용 인프라만 담당: 디스크 큐 저장소, 실행 슬롯(admission), 프로세스 그룹 감독과 워커 pid 파일(`queue/worker/pid_file.py`), 경로가 제한된 파일 I/O(`confined_io.py`), 설정 로더, 인덱스 저장소, systemd 서비스 연동, 파일시스템 잠금 |
 
 > **ORCA_auto 7.0 구조**: 7.0부터 기존 xTB/CREST 연계 워크플로우(`flow/`)가 공식 제거되었습니다. 현재 코어 엔진 카탈로그에는 단독 `orca` 엔진만 포함되어 구조가 대폭 단순화되었습니다.
 
@@ -65,25 +65,30 @@ graph TD
 
 ### 워커의 책임과 자식 실행
 
-`OrcaQueueWorker`가 ORCA 취소·종료·복구 연결과 replay 상태를 소유한다.
-공통 기반 클래스는 프로세스 감독·실행 슬롯 예약·PID 파일 생명주기를 맡는다.
-워커는 타입이 지정된 의존성을 생성 시 한 번 조립하며, 테스트에서는 프로세스 생성과
-대기 함수를 직접 교체할 수 있다. 부모 진입점은
+`OrcaQueueWorker`(`orca/queue/worker.py`)가 유일한 큐 워커다. PID 파일과 단일
+실행 잠금의 생명주기, 실행 슬롯 예약(행을 ID로 인수하기 전에 슬롯을 먼저 예약하며,
+미리 읽은 행을 `expected_entry`로 사용), 자식 시작과 슬롯 연결, 종료 확정, 취소,
+셧다운, 고아 행 정리를 모두 소유한다. 기반 클래스 `core.queue.worker.QueueWorkerLoop`는
+패스 순서(회수, 취소, 수용, 대기), 셧다운 sweep, 시그널 핸들러만 담당하며 작업을
+프로세스가 딸린 레코드로만 안다. 테스트는 `_start_background_process`와 `sleep_fn`을
+교체하며, 주입되는 의존성 묶음은 없다. 부모 진입점은
 `python -m orca_auto.orca.commands.queue --config …`, 자식 진입점은
 `python -m orca_auto.orca.commands.worker_child --config … --queue-root …
---queue-id … [--admission-token …]`이다. 부모는 구체적인 ORCA 설정·큐 항목 타입으로
-`EngineQueueRuntime`을 직접 생성하며, 선택한 generation을 인수할 때 비교하는
-키워드 전용 `expected_entry` 인자도 그대로 전달한다.
+--queue-id … [--admission-token …]`이다.
 
 취소 관찰은 변경되지 않은 큐 스냅샷을 재사용한다. 종료 알림은 영속 전송 claim과
 제한된 백그라운드 전송을 사용한다. 알림은 best effort이며 실행 슬롯을 붙잡지 않는다.
 
-워커 CLI는 설정 로드, PID 확인, ORCA 워커 생성·실행을 직접 수행한다.
-`EngineQueueRuntime`은 루트 선택·큐 조회·수용량 확인을 담당하며 자식 시작이나
-종료 정책 콜백을 받지 않는다. ORCA의 슬롯 메타데이터 연결과 종료 세대 표시는
-`queue/replay.py`, 자식 중지·재대기는 `queue/worker.py`, 취소 완료 처리는
-`queue/cancellation.py`가 소유한다. 각 경로는 선택한 큐 행과 작업 식별자를
-구체적인 어댑터에 전달한다. 종료 재처리가 끝난 뒤 실행 슬롯을 해제한다.
+워커 CLI는 설정 로드, PID 확인(`orca/queue/orphans.py`의 `read_worker_pid`),
+ORCA 워커 생성·실행을 직접 수행한다. `orca/queue/roots.py`가 루트 선택, 행 나열,
+ID 기준 fenced 인수를 소유하며 큐 선두 위치로 행을 인수하는 일은 없다.
+`queue/replay.py`는 재처리 엔진(작업 항목, 엄격한 마무리, 정리 파이프라인,
+generation 소유자 결정)만 담당하며 상태를 인자로 명시적으로 받고,
+`queue/run_state_replay.py`는 `run.lock` 아래에서 종료 `job_state.json`을
+합성한다. 각 경로는 선택한 큐 행과 작업 식별자를 구체적인 어댑터에 전달한다.
+종료 재처리가 끝난 뒤 실행 슬롯을 해제한다. RUNNING 행 정리는 워커가 소유한다:
+제출은 큐 전체를 훑지 않으며, 살아 있는 워커 pid가 없을 때 자기 디렉터리의
+죽은 행만 복구한다.
 
 ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행권 인계 대기,
 해당 generation 실행을 직접 수행한다. 성공·중단·예외 모두 최종 슬롯 해제는
@@ -95,7 +100,7 @@ ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행�
 
 ## 4. 모니터링 및 운영 아키텍처
 
-- **SQLite 조회 캐시**: 대량의 계산 이력이 쌓여도 빠른 조회가 가능하도록 SQLite 기반 activity 인덱스를 운영합니다. 파일시스템에 직접적인 변경이 일어난 경우 `--refresh` 플래그로 인덱스를 갱신할 수 있습니다.
+- **SQLite 조회 캐시**: 대량의 계산 이력이 쌓여도 빠른 조회가 가능하도록 SQLite 기반 activity 인덱스를 운영합니다. 이 캐시는 위치 항목을 작업 ID 기준으로 관리하며, `job_locations.json` 자체는 디스크의 실행 상태에서 `index rebuild`로 재구성할 수 있고 `--refresh`는 같은 재구성으로 미등록 실행을 기록합니다. 목록이 적용하는 실행 상태·스냅샷 대체 규칙은 CLI 계층이 아니라 `orca/run_status.py`에 있습니다.
 - **Scratch 운영 명령**: `orca_auto scratch list`와 `scratch clear`로 비활성(non-live) RAM scratch 워크스페이스를 점검·제거합니다. stale, unverifiable, invalid-manifest 워크스페이스가 하나라도 남아 있으면 이후의 모든 scratch 실행이 차단(fail-closed)됩니다.
 - **불변 휠 런타임 (Prepared Wheel Runtime)**: 프로덕션 서버 환경에서는 Git 체크아웃 대신 검증된 불변 wheel 런타임을 독립 경로에 설치하여, 운영 중 소스 코드 변경으로 인한 혼선을 원천 차단할 수 있습니다. ([docs/RUNTIME.md](RUNTIME.md) 참고)
 - **과거 데이터 보호**: 7.0에서 지원 종료된 이전 워크플로우 디렉터리는 과거 계산 데이터를 보존하기 위해 읽기 전용으로 보호되며, 해당 디렉터리에서 새로운 실행이 시작되는 것을 방지합니다.

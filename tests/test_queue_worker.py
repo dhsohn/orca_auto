@@ -1,21 +1,33 @@
-"""Tests for orca_auto.orca.queue.worker foreground worker job execution helpers."""
+"""Behaviour of ``orca_auto.orca.queue.worker``: admission, finalization, cancellation, shutdown.
+
+Every test drives the worker against real queue, admission and run-state
+files and reads the outcome back from them. Children are fakes reached only
+through the two OS seams a stop goes through (``os.killpg`` and the pid probe),
+or real ``sleep`` processes when the exit path itself is under test. Faults are
+injected as states the worker can meet in production: a held ``run.lock`` (an
+ORCA instance still owns the directory), a read-only queue root, an unreadable
+job index, an engine launch pending under a live owner.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import subprocess
-import tempfile
-import unittest
-from dataclasses import replace
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from threading import Event
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
+
+import pytest
 
 from orca_auto.core.admission import (
     active_slot_count,
-    clear_slot_engine_process,
     get_slot,
     list_slots,
     prepare_slot_engine_process,
@@ -23,3422 +35,3028 @@ from orca_auto.core.admission import (
     reserve_slot,
     set_slot_engine_process,
 )
-from orca_auto.core.config import DiscordConfig, MessengerConfig
-from orca_auto.core.queue.processes import terminate_process_group as _terminate_process
+from orca_auto.core.admission import store as admission_store
+from orca_auto.core.messaging.channel import SendResult
+from orca_auto.core.queue import processes as queue_processes
+from orca_auto.core.queue.processes import (
+    ManagedProcess,
+    ProcessGroupTerminationDeps,
+    terminate_process_group,
+)
+from orca_auto.core.queue.publication import (
+    QUEUE_RECORD_SYNC_PREPARING,
+    queue_record_publication_lock_path,
+    queue_record_sync_metadata,
+)
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.queue.worker.models import ReservedQueueEntry
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
-from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
-from orca_auto.orca.engine import read_worker_pid
-from orca_auto.orca.queue import cancellation as cancellation_mod
+from orca_auto.core.utils.lock import file_lock
+from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
+from orca_auto.orca.config import AppConfig
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
-from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
 from orca_auto.orca.queue.adapter import (
     DuplicateEntryError,
     cancel,
-    dequeue_next,
     enqueue,
     list_queue,
     mark_failed,
     queue_entry_reaction_dir,
 )
-from orca_auto.orca.queue.models import OrcaRunningJob as _RunningJob
+from orca_auto.orca.queue.models import OrcaRunningJob, TerminalReplayWorkItem
+from orca_auto.orca.queue.orphans import read_worker_pid
 from orca_auto.orca.queue.replay import TerminalQueueMarkResult
-from orca_auto.orca.queue.worker import (
-    DEFAULT_MAX_CONCURRENT,
-    OrcaQueueWorker,
-)
-from orca_auto.orca.queue.worker_tracking import (
-    notify_terminal_job_from_state as _notify_terminal_job_from_state,
-)
-from orca_auto.orca.state import (
-    finalize_state,
-    new_state,
-    save_state,
-)
+from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+from orca_auto.orca.queue.worker import DEFAULT_MAX_CONCURRENT, OrcaQueueWorker
+from orca_auto.orca.queue.worker_tracking import notify_terminal_job_from_state
+from orca_auto.orca.state import finalize_state, new_state, save_state
 from orca_auto.orca.state_reading import load_state, report_json_path
+from orca_auto.orca.statuses import RunStatus
+from orca_auto.orca.types import RunFinalResult
+from tests.conftest import (
+    RecordingChannel,
+    claim_next_entry,
+    enqueue_entry,
+    make_app_cfg,
+    make_queue_entry,
+    write_run_state,
+)
 from tests.engine_artifact_helpers import orca_artifact_payload
-from tests.process_helpers import patch_missing_process_group, preserved_signal_handlers
+from tests.process_helpers import FakeManagedProcess, missing_process_group
 from tests.queue_worker_helpers import (
-    current_orca_queue_metadata as _current_orca_queue_metadata,
+    current_orca_queue_metadata,
+    reconcile_statuses,
+    run_terminal_replay,
+    write_completed_run_state,
 )
-from tests.queue_worker_helpers import make_queue_worker_cfg as _make_cfg
-from tests.queue_worker_helpers import reconcile_statuses as _reconcile_statuses
-from tests.queue_worker_helpers import run_terminal_replay as _run_terminal_replay
-from tests.queue_worker_helpers import (
-    write_completed_run_state as _write_completed_run_state,
-)
+
+WORKER_LOGGER = "orca_auto.orca.queue.worker"
+
+# ---------------------------------------------------------------------------
+# Fakes: children behind the OS seams, a recording child starter
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FakeChildren:
+    """Children with fake pids behind the two OS seams a stop reaches them through.
+
+    ``terminate_process_group`` runs for real: it polls, signals the group via
+    ``os.killpg``, waits and escalates. Only the kernel's answers are faked: a
+    SIGTERM makes the child exit with its configured code (after its own stop
+    handling, when given), a SIGKILL ends it regardless, a stubborn child
+    ignores both, and the pid probe reports what the registry says.
+    """
+
+    by_pid: dict[int, FakeManagedProcess] = field(default_factory=dict)
+    exit_codes: dict[int, int] = field(default_factory=dict)
+    stop_hooks: dict[int, Callable[[], None]] = field(default_factory=dict)
+    stubborn: set[int] = field(default_factory=set)
+    sigterm_ignorers: set[int] = field(default_factory=set)
+    signals: list[tuple[int, int]] = field(default_factory=list)
+    next_pid: int = 40001
+
+    def spawn(
+        self,
+        *,
+        exited: int | None = None,
+        exit_code: int = -signal.SIGTERM,
+        on_stop: Callable[[], None] | None = None,
+        stubborn: bool = False,
+        ignores_sigterm: bool = False,
+    ) -> FakeManagedProcess:
+        pid = self.next_pid
+        self.next_pid += 1
+        process = FakeManagedProcess(pid=pid, poll_result=exited)
+        if stubborn:
+            self.stubborn.add(pid)
+            process.wait_side_effects = [
+                subprocess.TimeoutExpired(cmd="child", timeout=1),
+                subprocess.TimeoutExpired(cmd="child", timeout=1),
+            ]
+        elif ignores_sigterm:
+            self.sigterm_ignorers.add(pid)
+            process.wait_side_effects = [subprocess.TimeoutExpired(cmd="child", timeout=1)]
+        self.by_pid[pid] = process
+        self.exit_codes[pid] = exit_code
+        if on_stop is not None:
+            self.stop_hooks[pid] = on_stop
+        return process
+
+    def killpg(self, pgid: int, signum: int) -> None:
+        child = self.by_pid.get(pgid)
+        if child is None or child.poll_result is not None:
+            raise ProcessLookupError(f"no process group {pgid}")
+        if signum == 0:
+            return
+        self.signals.append((pgid, signum))
+        if pgid in self.stubborn or (pgid in self.sigterm_ignorers and signum == signal.SIGTERM):
+            return
+        if signum == signal.SIGTERM:
+            hook = self.stop_hooks.get(pgid)
+            if hook is not None:
+                hook()
+            child.poll_result = self.exit_codes[pgid]
+        elif signum == signal.SIGKILL:
+            child.poll_result = -signal.SIGKILL
+
+    def pid_exists(self, pid: int) -> bool:
+        child = self.by_pid.get(pid)
+        return child is not None and child.poll_result is None
+
+    def stopped(self, process: FakeManagedProcess) -> bool:
+        return process.poll_result is not None and (process.pid, signal.SIGTERM) in self.signals
+
+
+class SequencedPollProcess(FakeManagedProcess):
+    """A child whose successive ``poll`` answers are scripted (the leader exits mid-check)."""
+
+    def __init__(self, polls: list[int | None], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._polls = list(polls)
+
+    def poll(self) -> int | None:
+        if len(self._polls) > 1:
+            return self._polls.pop(0)
+        return self._polls[0]
+
+
+@dataclass
+class StartedChild:
+    queue_root: Path
+    entry: QueueEntry
+    admission_token: str
+    process: FakeManagedProcess
+
+
+@dataclass
+class ChildStarter:
+    """The worker's ``_start_background_process`` seam, spawning fake children."""
+
+    children: FakeChildren
+    started: list[StartedChild] = field(default_factory=list)
+    error: Exception | None = None
+
+    def __call__(
+        self,
+        *,
+        queue_root: Path,
+        entry: QueueEntry,
+        admission_token: str,
+    ) -> ManagedProcess:
+        if self.error is not None:
+            raise self.error
+        process = self.children.spawn()
+        self.started.append(StartedChild(queue_root, entry, admission_token, process))
+        return process
+
+
+@dataclass
+class SpawnCall:
+    args: list[str]
+    log_path: Path | None
+    process: FakeManagedProcess
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_children(monkeypatch: pytest.MonkeyPatch) -> FakeChildren:
+    children = FakeChildren()
+    real_start_ticks = admission_store._process_start_ticks
+
+    def start_ticks(pid: int) -> int | None:
+        # A fake pid has no /proc entry; give it a stable identity so the
+        # admission store can attach it as a slot owner. Real pids stay real.
+        return pid if pid in children.by_pid else real_start_ticks(pid)
+
+    real_kill = os.kill
+
+    def kill(pid: int, signum: int) -> None:
+        # The admission store probes slot owners with ``os.kill(pid, 0)``; a
+        # fake child is one process, so signalling it is signalling its group.
+        if pid not in children.by_pid:
+            real_kill(pid, signum)
+            return
+        children.killpg(pid, signum)
+
+    monkeypatch.setattr(os, "kill", kill)
+    monkeypatch.setattr(os, "killpg", children.killpg)
+    monkeypatch.setattr(queue_processes, "_pid_exists", children.pid_exists)
+    monkeypatch.setattr(admission_store, "_process_start_ticks", start_ticks)
+    return children
+
+
+@pytest.fixture
+def child_starter(fake_children: FakeChildren) -> ChildStarter:
+    return ChildStarter(fake_children)
+
+
+@pytest.fixture
+def fake_popen(monkeypatch: pytest.MonkeyPatch, fake_children: FakeChildren) -> list[SpawnCall]:
+    """Replace ``subprocess.Popen`` (the spawn itself) and record what the worker launched."""
+
+    calls: list[SpawnCall] = []
+
+    def popen(args: list[str], **kwargs: Any) -> FakeManagedProcess:
+        fileno = getattr(kwargs.get("stdout"), "fileno", None)
+        log_path = Path(os.readlink(f"/proc/self/fd/{fileno()}")) if fileno else None
+        process = fake_children.spawn()
+        calls.append(SpawnCall(list(args), log_path, process))
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    return calls
+
+
+@pytest.fixture
+def sleeping_child() -> Iterator[Callable[[], subprocess.Popen[bytes]]]:
+    """Spawn real ``sleep`` children in their own session; whatever survives is killed."""
+
+    children: list[subprocess.Popen[bytes]] = []
+
+    def spawn() -> subprocess.Popen[bytes]:
+        process = subprocess.Popen(["sleep", "60"], start_new_session=True)
+        children.append(process)
+        return process
+
+    yield spawn
+    for process in children:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+@pytest.fixture
+def worker_cfg(app_cfg: Callable[..., AppConfig], queue_root: Path) -> AppConfig:
+    return app_cfg(runs_root=queue_root)
+
+
+@pytest.fixture
+def make_worker(
+    worker_cfg: AppConfig,
+    queue_root: Path,
+    preserved_signals: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[..., OrcaQueueWorker]:
+    """Factory: ``make_worker(max_concurrent=2, cfg=None, start=None, sleep=None)``."""
+
+    del preserved_signals
+
+    def factory(
+        *,
+        max_concurrent: int = 2,
+        cfg: AppConfig | None = None,
+        start: ChildStarter | None = None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> OrcaQueueWorker:
+        config_path = str(queue_root / "config.yaml")
+        worker = OrcaQueueWorker(
+            cfg or worker_cfg, config_path, max_concurrent=max_concurrent, sleep_fn=sleep
+        )
+        if start is not None:
+            monkeypatch.setattr(worker, "_start_background_process", start)
+        return worker
+
+    return factory
+
+
+@pytest.fixture
+def worker(make_worker: Callable[..., OrcaQueueWorker]) -> OrcaQueueWorker:
+    return make_worker()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def _command_arg(command: list[str], flag: str) -> str:
     return command[command.index(flag) + 1]
 
 
-class TestTerminateProcess(unittest.TestCase):
-    def setUp(self) -> None:
-        self._killpg_patcher = patch_missing_process_group(
-            "orca_auto.core.queue.processes.os.killpg"
-        )
-        self._pid_exists_patcher = patch(
-            "orca_auto.core.queue.processes._pid_exists",
-            return_value=False,
-        )
-        self._killpg_patcher.start()
-        self._pid_exists_patcher.start()
+def reserve_job_slot(
+    root: Path, limit: int, entry: QueueEntry, reaction_dir: Path, **extra: Any
+) -> str:
+    token = reserve_slot(
+        root,
+        limit,
+        work_dir=str(reaction_dir),
+        queue_id=entry.queue_id,
+        source="queue_worker",
+        state="reserved",
+        **extra,
+    )
+    assert token is not None
+    return token
 
-    def tearDown(self) -> None:
-        self._pid_exists_patcher.stop()
-        self._killpg_patcher.stop()
 
-    def test_already_terminated(self) -> None:
-        proc = MagicMock()
-        proc.poll.return_value = 0
-        _terminate_process(proc)
-        proc.terminate.assert_not_called()
+def pending_launch_slot(root: Path, limit: int, entry: QueueEntry, reaction_dir: Path) -> str:
+    """A slot whose engine launch is pending under this (live) process: recovery must refuse."""
 
-    def test_terminate_success(self) -> None:
-        proc = MagicMock()
-        proc.poll.return_value = None
-        proc.pid = 1234
-        proc.poll.side_effect = [None, 0, 0]
-        _terminate_process(proc)
-        proc.terminate.assert_called_once()
-        proc.kill.assert_not_called()
+    token = reserve_job_slot(
+        root,
+        limit,
+        entry,
+        reaction_dir,
+        owner_pid=os.getpid(),
+        engine_process_state="idle",
+        engine_launch_gated=True,
+    )
+    assert prepare_slot_engine_process(root, token) is not None
+    return token
 
-    def test_terminate_ignores_errors(self) -> None:
-        proc = MagicMock()
-        proc.poll.return_value = None
-        proc.pid = 1234
-        proc.terminate.side_effect = RuntimeError("nope")
-        proc.poll.side_effect = [None, 0, 0]
-        _terminate_process(proc)
-        proc.terminate.assert_called_once()
 
-    def test_terminate_does_not_signal_reused_pid(self) -> None:
-        proc = MagicMock()
-        proc.pid = 1234
-        proc.poll.side_effect = [None, 0]
+def running_job(
+    worker: OrcaQueueWorker,
+    entry: QueueEntry,
+    reaction_dir: Path | str,
+    process: ManagedProcess,
+    admission_token: str,
+    *,
+    task_id: str | None = None,
+) -> OrcaRunningJob:
+    return OrcaRunningJob(
+        queue_root=worker.allowed_root,
+        queue_id=entry.queue_id,
+        reaction_dir=str(reaction_dir),
+        process=process,
+        admission_token=admission_token,
+        task_id=entry.task_id if task_id is None else task_id,
+    )
 
-        with patch(
-            "orca_auto.core.queue.processes._pid_exists",
-            return_value=True,
-        ):
-            assert _terminate_process(proc)
 
-        proc.terminate.assert_not_called()
-        proc.kill.assert_not_called()
+def queue_statuses(root: Path) -> dict[str, QueueStatus]:
+    return {row.queue_id: row.status for row in list_queue(root)}
 
-    def test_escalate_to_kill(self) -> None:
-        proc = MagicMock()
-        proc.poll.return_value = None
-        proc.pid = 1234
-        proc.poll.side_effect = [None] * 8
-        proc.wait.side_effect = [
+
+def queue_row(root: Path, queue_id: str) -> QueueEntry:
+    return next(row for row in list_queue(root) if row.queue_id == queue_id)
+
+
+def admission_file_identity(root: Path) -> tuple[int, int]:
+    status = (root / "admission_slots.json").stat()
+    return (status.st_ino, status.st_mtime_ns)
+
+
+def job_record(root: Path, job_id: str) -> dict[str, Any] | None:
+    path = root / "job_locations.json"
+    if not path.exists():
+        return None
+    records = json.loads(path.read_text(encoding="utf-8"))
+    return next((record for record in records if record.get("job_id") == job_id), None)
+
+
+def save_child_state(
+    reaction_dir: Path, job_id: str, status: str, final_result: RunFinalResult | None = None
+) -> None:
+    """The ``job_state.json`` a child left behind, as it would have written it."""
+
+    state = new_state(reaction_dir, reaction_dir / "job.inp")
+    state["job_id"] = job_id
+    state["status"] = status
+    if final_result is not None:
+        state["final_result"] = final_result
+    save_state(reaction_dir, state)
+
+
+def replay_item(root: Path, queue_id: str, reaction_dir: Path, *, resolved: bool = True) -> Any:
+    return TerminalReplayWorkItem(
+        queue_root=root,
+        queue_id=queue_id,
+        reaction_dir=str(reaction_dir),
+        reaction_key=str(reaction_dir.resolve()) if resolved else str(reaction_dir),
+        task_id=f"task-{queue_id}",
+        observed_status="failed",
+        selected_inp="",
+        error="",
+    )
+
+
+def awaited_send(channel: RecordingChannel, *, sent: bool = True) -> Event:
+    """Deliveries happen on a background thread; the event fires when one lands."""
+
+    delivered = Event()
+
+    def on_send(_message: object) -> SendResult | None:
+        delivered.set()
+        return None if sent else SendResult(sent=False)
+
+    channel.on_send = on_send
+    return delivered
+
+
+@contextmanager
+def held_run_lock(reaction_dir: Path) -> Iterator[None]:
+    """Hold ``run.lock`` so the terminal run-state writers refuse (an ORCA instance owns the dir)."""
+
+    with file_lock(reaction_dir / RUN_LOCK_FILE_NAME, timeout_seconds=0.0):
+        yield
+
+
+@contextmanager
+def read_only(directory: Path) -> Iterator[None]:
+    """Refuse new files under ``directory`` (existing files stay readable)."""
+
+    if os.geteuid() == 0:
+        pytest.skip("a read-only directory does not refuse writes to root")
+    directory.chmod(0o500)
+    try:
+        yield
+    finally:
+        directory.chmod(0o700)
+
+
+def insert_pending_successor(root: Path, reaction_dir: Path, *, queue_id: str) -> QueueEntry:
+    # The enqueue fence refuses a same-directory successor while the prior
+    # generation is unpublished; the worker gate is the second barrier for
+    # the windows that fence does not cover, so the row is written directly.
+    rows = list_queue(root)
+    template = next(row for row in rows if queue_entry_reaction_dir(row) == str(reaction_dir))
+    successor = replace(
+        template,
+        queue_id=queue_id,
+        task_id=f"task-{queue_id}",
+        status=QueueStatus.PENDING,
+        started_at="",
+        finished_at="",
+        error="",
+        cancel_requested=False,
+        metadata={
+            **{k: v for k, v in template.metadata.items() if k != "orca_terminal_replay"},
+            **current_orca_queue_metadata(reaction_dir),
+        },
+    )
+    save_entries_core(root, [*rows, successor])
+    return successor
+
+
+# ---------------------------------------------------------------------------
+# terminate_process_group
+# ---------------------------------------------------------------------------
+
+_NO_LIVE_PIDS = ProcessGroupTerminationDeps(pid_exists=lambda _pid: False)
+
+
+def _terminate(process: ManagedProcess, deps: ProcessGroupTerminationDeps = _NO_LIVE_PIDS) -> bool:
+    return terminate_process_group(process, killpg_fn=missing_process_group, deps=deps)
+
+
+def test_already_terminated() -> None:
+    process = FakeManagedProcess(poll_result=0)
+    assert _terminate(process) is True
+    assert process.terminate_calls == 0
+
+
+def test_terminate_success() -> None:
+    process = SequencedPollProcess([None, 0, 0], pid=1234)
+    assert _terminate(process) is True
+    assert (process.terminate_calls, process.kill_calls) == (1, 0)
+
+
+def test_terminate_ignores_errors() -> None:
+    process = SequencedPollProcess([None, 0, 0], pid=1234, terminate_error=RuntimeError("nope"))
+    assert _terminate(process) is True
+    assert process.terminate_calls == 1
+
+
+def test_terminate_does_not_signal_reused_pid() -> None:
+    process = SequencedPollProcess([None, 0], pid=1234)
+    assert _terminate(process, ProcessGroupTerminationDeps(pid_exists=lambda _pid: True)) is True
+    assert (process.terminate_calls, process.kill_calls) == (0, 0)
+
+
+def test_escalate_to_kill() -> None:
+    process = FakeManagedProcess(
+        pid=1234,
+        wait_side_effects=[
             subprocess.TimeoutExpired(cmd="worker", timeout=10),
             subprocess.TimeoutExpired(cmd="worker", timeout=5),
-        ]
-        _terminate_process(proc)
-        proc.terminate.assert_called_once()
-        proc.kill.assert_called_once()
-
-
-class TestReadWorkerPid(unittest.TestCase):
-    def test_no_pid_file(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self.assertIsNone(read_worker_pid(Path(tmp)))
-
-    def test_stale_pid(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            pid_path = root / "queue_worker.pid"
-            pid_path.write_text("999999999")  # non-existent pid
-            result = read_worker_pid(root)
-            self.assertIsNone(result)
-            # PID file should be cleaned up
-            self.assertFalse(pid_path.exists())
-
-    def test_invalid_pid_content(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            pid_path = root / "queue_worker.pid"
-            pid_path.write_text("not_a_number")
-            self.assertIsNone(read_worker_pid(root))
-
-
-class TestQueueWorkerInit(unittest.TestCase):
-    def test_max_concurrent_floor(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(Path(tmp) / "config.yaml"), max_concurrent=0)
-            self.assertEqual(worker.max_concurrent, 1)
-
-    def test_default_init(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(Path(tmp) / "config.yaml"))
-            self.assertEqual(worker.max_concurrent, DEFAULT_MAX_CONCURRENT)
-            self.assertFalse(worker._shutdown_requested)
-            self.assertEqual(len(worker._running), 0)
-
-
-class TestQueueWorkerMethods(unittest.TestCase):
-    def setUp(self) -> None:
-        self._ticks_patcher = patch(
-            "orca_auto.core.admission.store._process_start_ticks",
-            side_effect=lambda pid: max(1, int(pid)),
-        )
-        self._ticks_patcher.start()
-        self._signal_guard = preserved_signal_handlers(signal.SIGTERM, signal.SIGINT)
-        self._signal_guard.__enter__()
-        self._tmpdir = tempfile.TemporaryDirectory()
-        self.root = Path(self._tmpdir.name)
-        self.cfg = _make_cfg(self._tmpdir.name)
-        self.worker = OrcaQueueWorker(self.cfg, str(self.root / "config.yaml"), max_concurrent=2)
-
-    def tearDown(self) -> None:
-        self._signal_guard.__exit__(None, None, None)
-        self._tmpdir.cleanup()
-        self._ticks_patcher.stop()
-
-    def test_pid_file_write_and_remove(self) -> None:
-        self.worker._write_pid_file()
-        pid_path = self.worker._pid_file_path()
-        self.assertTrue(pid_path.exists())
-        payload = json.loads(pid_path.read_text(encoding="utf-8"))
-        self.assertIsInstance(payload.get("pid"), int)
-        self.worker._remove_pid_file()
-        self.assertFalse(pid_path.exists())
-
-    def test_remove_pid_file_missing(self) -> None:
-        # Should not raise
-        self.worker._remove_pid_file()
-
-    def test_pid_file_path(self) -> None:
-        path = self.worker._pid_file_path()
-        self.assertEqual(path.name, "queue_worker.pid")
-        self.assertEqual(path.parent, self.root)
-
-    def test_install_signal_handlers(self) -> None:
-        with patch("orca_auto.core.queue.worker.signal.signal"):
-            self.worker._install_signal_handlers()
-
-    def test_fill_slots_empty_queue(self) -> None:
-        self.worker._fill_slots()
-        self.assertEqual(len(self.worker._running), 0)
-
-    @patch("orca_auto.orca.queue.worker.start_background_process")
-    def test_fill_slots_idle_poll_leaves_admission_file_untouched(
-        self, mock_start_background_process: MagicMock
-    ) -> None:
-        # Capacity must remain: at the limit main also skips the write, which
-        # would make the assertion vacuous. One live slot out of two stays.
-        token = reserve_slot(self.worker.admission_root, 2, source="queue_worker", state="reserved")
-        assert token is not None
-        try:
-            self.assertEqual(self.worker.admission_limit, 2)
-            self.assertEqual(len(list_slots(self.worker.admission_root)), 1)
-            admission_file = self.root / "admission_slots.json"
-            before = admission_file.stat()
-
-            status = self.worker._fill_slots()
-
-            after = admission_file.stat()
-            self.assertEqual(status, "idle")
-            self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
-            slots = json.loads(admission_file.read_text(encoding="utf-8"))
-            self.assertEqual([slot["token"] for slot in slots], [token])
-            self.assertEqual(len(self.worker._running), 0)
-            mock_start_background_process.assert_not_called()
-        finally:
-            release_slot(self.worker.admission_root, token)
-
-    def test_admission_reservation_moves_the_admission_file_to_a_new_inode(self) -> None:
-        # Positive control for the idle-poll probe above: a real reservation
-        # write replaces the admission file, so an unchanged inode is evidence
-        # that no reservation happened.
-        first = reserve_slot(self.worker.admission_root, 2, source="probe", state="reserved")
-        assert first is not None
-        admission_file = self.root / "admission_slots.json"
-        before = admission_file.stat()
-        second = reserve_slot(self.worker.admission_root, 2, source="probe", state="reserved")
-        try:
-            after = admission_file.stat()
-            self.assertIsNotNone(second)
-            # The atomic replace may reuse the freed inode number, so the probe
-            # the idle-poll test relies on is the (inode, mtime_ns) pair.
-            self.assertNotEqual(
-                (after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns)
-            )
-            self.assertEqual(len(list_slots(self.worker.admission_root)), 2)
-        finally:
-            release_slot(self.worker.admission_root, first)
-            if second is not None:
-                release_slot(self.worker.admission_root, second)
-
-    @patch("orca_auto.orca.queue.worker.start_background_process")
-    def test_start_job(self, mock_start_background_process: MagicMock) -> None:
-        mock_proc = MagicMock()
-        mock_proc.pid = 4321
-        mock_start_background_process.return_value = mock_proc
-        entry = QueueEntry(
-            queue_id="q_test",
-            app_name="orca_auto_orca",
-            task_id="task_test_123",
-            task_kind="orca_run_inp",
-            engine="orca",
-            metadata={
-                "reaction_dir": str(self.root / "mol_A"),
-                "force": False,
-                "worker_log": "/tmp/unsafe-worker.log",
-            },
-        )
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        self.worker._start_job(self.root, entry, admission_token=token or "")
-        self.assertIn("q_test", self.worker._running)
-        mock_start_background_process.assert_called_once()
-        command = mock_start_background_process.call_args.args[0]
-        self.assertEqual(
-            mock_start_background_process.call_args.kwargs["log_path"],
-            str((self.root / "logs" / "q_test.log").resolve()),
-        )
-        self.assertIn("orca_auto.orca.commands.worker_child", command)
-        self.assertNotIn("--engine", command)
-        self.assertEqual(_command_arg(command, "--queue-root"), str(self.root))
-        self.assertEqual(_command_arg(command, "--queue-id"), "q_test")
-        self.assertEqual(_command_arg(command, "--admission-token"), token or "")
-        self.assertNotIn("--reaction-dir", command)
-
-    @patch("orca_auto.orca.queue.worker_tracking.upsert_job_record")
-    @patch(
-        "orca_auto.orca.queue.worker_tracking.resolve_job_metadata",
-        side_effect=AssertionError("should use queue metadata"),
+        ],
     )
-    @patch("orca_auto.orca.queue.worker.start_background_process")
-    def test_start_job_prefers_queue_metadata_for_tracking(
-        self,
-        mock_start_background_process: MagicMock,
-        mock_resolve_job_metadata: MagicMock,
-        mock_upsert_job_record: MagicMock,
-    ) -> None:
-        reaction_dir = self.root / "mol_meta"
+    assert _terminate(process) is False
+    assert (process.terminate_calls, process.kill_calls) == (1, 1)
+
+
+# ---------------------------------------------------------------------------
+# read_worker_pid
+# ---------------------------------------------------------------------------
+
+
+def test_no_pid_file(tmp_path: Path) -> None:
+    assert read_worker_pid(tmp_path) is None
+
+
+def test_stale_pid(tmp_path: Path) -> None:
+    pid_path = tmp_path / "queue_worker.pid"
+    pid_path.write_text("999999999")  # non-existent pid
+    assert read_worker_pid(tmp_path) is None
+    # PID file should be cleaned up
+    assert not pid_path.exists()
+
+
+def test_invalid_pid_content(tmp_path: Path) -> None:
+    (tmp_path / "queue_worker.pid").write_text("not_a_number")
+    assert read_worker_pid(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# Construction
+# ---------------------------------------------------------------------------
+
+
+def test_max_concurrent_floor(tmp_path: Path) -> None:
+    worker = OrcaQueueWorker(
+        make_app_cfg(tmp_path), str(tmp_path / "config.yaml"), max_concurrent=0
+    )
+    assert worker.max_concurrent == 1
+
+
+def test_default_init(tmp_path: Path) -> None:
+    worker = OrcaQueueWorker(make_app_cfg(tmp_path), str(tmp_path / "config.yaml"))
+    assert worker.max_concurrent == DEFAULT_MAX_CONCURRENT
+    assert not worker._shutdown_requested
+    assert len(worker._running) == 0
+
+
+def test_queue_worker_does_not_mutate_config_max_concurrent(tmp_path: Path) -> None:
+    cfg = make_app_cfg(tmp_path)
+    original_max_concurrent = cfg.runtime.max_concurrent
+
+    worker = OrcaQueueWorker(cfg, str(tmp_path / "config.yaml"), max_concurrent=2)
+
+    assert cfg.runtime.max_concurrent == original_max_concurrent
+    assert worker.cfg is not cfg
+    assert worker.cfg.runtime is not cfg.runtime
+    assert worker.cfg.runtime.max_concurrent == 2
+    assert worker.max_concurrent == 2
+    assert worker.admission_limit == 2
+
+
+def test_queue_worker_does_not_mutate_config_with_explicit_admission_limit(tmp_path: Path) -> None:
+    cfg = make_app_cfg(tmp_path)
+    cfg = replace(cfg, runtime=replace(cfg.runtime, admission_limit=5))
+    original_max_concurrent = cfg.runtime.max_concurrent
+
+    worker = OrcaQueueWorker(cfg, str(tmp_path / "config.yaml"), max_concurrent=2)
+
+    assert worker.cfg is cfg
+    assert cfg.runtime.max_concurrent == original_max_concurrent
+    assert worker.max_concurrent == 2
+    assert worker.admission_limit == 5
+
+
+# ---------------------------------------------------------------------------
+# PID file and signal handlers
+# ---------------------------------------------------------------------------
+
+
+def test_pid_file_write_and_remove(worker: OrcaQueueWorker) -> None:
+    worker._write_pid_file()
+    pid_path = worker._pid_file_path()
+    assert pid_path.exists()
+    payload = json.loads(pid_path.read_text(encoding="utf-8"))
+    assert isinstance(payload.get("pid"), int)
+    worker._remove_pid_file()
+    assert not pid_path.exists()
+
+
+def test_remove_pid_file_missing(worker: OrcaQueueWorker) -> None:
+    pid_path = worker._pid_file_path()
+    assert not pid_path.exists()
+
+    worker._remove_pid_file()
+
+    # A missing pid file is not an error and nothing is created in its place.
+    assert not pid_path.exists()
+    assert sorted(p.name for p in pid_path.parent.iterdir()) == []
+
+
+def test_pid_file_path(worker: OrcaQueueWorker, queue_root: Path) -> None:
+    path = worker._pid_file_path()
+    assert path.name == "queue_worker.pid"
+    assert path.parent == queue_root.resolve()
+
+
+def test_install_signal_handlers(worker: OrcaQueueWorker) -> None:
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+
+    worker._install_signal_handlers()
+
+    installed = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    assert all(installed[sig] is not before[sig] for sig in installed)
+    handler = installed[signal.SIGTERM]
+    assert callable(handler)
+    assert not worker._shutdown_requested
+    handler(signal.SIGTERM, None)
+    assert worker._shutdown_requested
+
+
+def test_run_keyboard_interrupt(make_worker: Callable[..., OrcaQueueWorker]) -> None:
+    def interrupt(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    worker = make_worker(sleep=interrupt)
+
+    assert worker.run() == 0
+
+    assert all(signal.getsignal(sig) is not before[sig] for sig in before)
+    # PID file should be cleaned up
+    assert not worker._pid_file_path().exists()
+
+
+def test_run_shutdown_flag(make_worker: Callable[..., OrcaQueueWorker]) -> None:
+    workers: list[OrcaQueueWorker] = []
+
+    def request_stop(_seconds: float) -> None:
+        workers[0]._shutdown_requested = True
+
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    workers.append(make_worker(sleep=request_stop))
+
+    assert workers[0].run() == 0
+
+    assert all(signal.getsignal(sig) is not before[sig] for sig in before)
+
+
+# ---------------------------------------------------------------------------
+# Admission and child start
+# ---------------------------------------------------------------------------
+
+
+def test_fill_slots_empty_queue(worker: OrcaQueueWorker) -> None:
+    worker._fill_slots()
+    assert len(worker._running) == 0
+
+
+def test_fill_slots_idle_poll_leaves_admission_file_untouched(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(start=child_starter)
+    # Capacity must remain: at the limit main also skips the write, which
+    # would make the assertion vacuous. One live slot out of two stays.
+    token = reserve_slot(worker.admission_root, 2, source="queue_worker", state="reserved")
+    assert token is not None
+    assert worker.admission_limit == 2
+    assert len(list_slots(worker.admission_root)) == 1
+    before = admission_file_identity(queue_root)
+
+    status = worker._fill_slots()
+
+    assert status == "idle"
+    assert admission_file_identity(queue_root) == before
+    slots = json.loads((queue_root / "admission_slots.json").read_text(encoding="utf-8"))
+    assert [slot["token"] for slot in slots] == [token]
+    assert len(worker._running) == 0
+    assert child_starter.started == []
+
+
+def test_admission_reservation_moves_the_admission_file_to_a_new_inode(
+    worker: OrcaQueueWorker, queue_root: Path
+) -> None:
+    # Positive control for the idle-poll probe above: a real reservation
+    # write replaces the admission file, so an unchanged inode is evidence
+    # that no reservation happened.
+    first = reserve_slot(worker.admission_root, 2, source="probe", state="reserved")
+    assert first is not None
+    before = admission_file_identity(queue_root)
+    second = reserve_slot(worker.admission_root, 2, source="probe", state="reserved")
+    assert second is not None
+    # The atomic replace may reuse the freed inode number, so the probe
+    # the idle-poll test relies on is the (inode, mtime_ns) pair.
+    assert admission_file_identity(queue_root) != before
+    assert len(list_slots(worker.admission_root)) == 2
+
+
+def test_start_job(worker: OrcaQueueWorker, fake_popen: list[SpawnCall], queue_root: Path) -> None:
+    entry = QueueEntry(
+        queue_id="q_test",
+        app_name="orca_auto_orca",
+        task_id="task_test_123",
+        task_kind="orca_run_inp",
+        engine="orca",
+        metadata={
+            "reaction_dir": str(queue_root / "mol_A"),
+            "force": False,
+            "worker_log": "/tmp/unsafe-worker.log",
+        },
+    )
+    token = reserve_slot(queue_root, worker.max_concurrent, source="queue_worker", state="reserved")
+    assert token is not None
+
+    worker._start_job(queue_root, entry, admission_token=token)
+
+    assert "q_test" in worker._running
+    [spawned] = fake_popen
+    assert worker._running["q_test"].process is spawned.process
+    log_path = (queue_root / "logs" / "q_test.log").resolve()
+    assert spawned.log_path == log_path
+    assert log_path.exists()
+    command = spawned.args
+    assert "orca_auto.orca.commands.worker_child" in command
+    assert "--engine" not in command
+    assert _command_arg(command, "--queue-root") == str(queue_root)
+    assert _command_arg(command, "--queue-id") == "q_test"
+    assert _command_arg(command, "--admission-token") == token
+    assert "--reaction-dir" not in command
+
+
+def test_start_job_prefers_queue_metadata_for_tracking(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(start=child_starter)
+    reaction_dir = queue_root / "mol_meta"
+    reaction_dir.mkdir()
+    selected_inp = reaction_dir / "rxn.inp"
+    # Derived from this input the job would be an "opt" of molecule "rxn";
+    # the queue row carries a different identity, which must win.
+    selected_inp.write_text("! Opt\n", encoding="utf-8")
+    entry = QueueEntry(
+        queue_id="q_meta",
+        app_name="orca_auto_orca",
+        task_id="task_meta_123",
+        task_kind="orca_run_inp",
+        engine="orca",
+        metadata={
+            "reaction_dir": str(reaction_dir),
+            "force": False,
+            "selected_inp": str(selected_inp),
+            "selected_input_xyz": str(selected_inp),
+            "job_type": "freq",
+            "molecule_key": "queue-H2",
+            "resource_request": {"max_cores": 4, "max_memory_gb": 12},
+            "resource_actual": {"max_cores": 3, "max_memory_gb": 11},
+        },
+    )
+    token = reserve_slot(queue_root, worker.max_concurrent, source="queue_worker", state="reserved")
+    assert token is not None
+
+    worker._start_job(queue_root, entry, admission_token=token)
+
+    record = job_record(queue_root, "task_meta_123")
+    assert record is not None
+    assert record["status"] == "running"
+    assert Path(record["original_run_dir"]) == reaction_dir.resolve()
+    assert record["job_type"] == "orca_freq"
+    assert record["selected_input_xyz"] == str(selected_inp)
+    assert record["molecule_key"] == "queue-H2"
+    assert record["resource_request"] == {"max_cores": 4, "max_memory_gb": 12}
+    assert record["resource_actual"] == {"max_cores": 3, "max_memory_gb": 11}
+
+
+def test_start_job_oserror(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    child_starter.error = OSError("spawn failed")
+    worker = make_worker(start=child_starter)
+    rxn = queue_root / "mol_err"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    claim_next_entry(queue_root)
+
+    assert worker._start_job(queue_root, entry, admission_token=token) is False
+
+    assert entry.queue_id not in worker._running
+    assert active_slot_count(queue_root) == 0
+    [failed] = list_queue(queue_root)
+    assert (failed.status, failed.error) == (QueueStatus.FAILED, "spawn failed")
+
+
+def test_start_job_attach_error_releases_slot_and_terminates_process(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    fake_children: FakeChildren,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The slot vanished between reservation and attach (an operator cleared
+    # the admission file): the child must not run without admission.
+    worker = make_worker(start=child_starter)
+    rxn = queue_root / "mol_attach_err"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    claim_next_entry(queue_root)
+    release_slot(queue_root, token)
+    release_calls: list[str] = []
+    real_release = worker._release_admission_slot
+
+    def counted_release(admission_token: str) -> object:
+        release_calls.append(admission_token)
+        return real_release(admission_token)
+
+    monkeypatch.setattr(worker, "_release_admission_slot", counted_release)
+
+    assert worker._start_job(queue_root, entry, admission_token=token) is False
+
+    assert entry.queue_id not in worker._running
+    [started] = child_starter.started
+    assert fake_children.stopped(started.process)
+    assert active_slot_count(queue_root) == 0
+    [updated] = list_queue(queue_root)
+    assert updated.status == QueueStatus.FAILED
+    # Handled exactly once: the specific refusal reason survives and the slot
+    # is released once (a second release of the same token would return False).
+    assert updated.error == "admission_slot_missing"
+    assert release_calls == [token]
+
+
+def test_start_error_does_not_fail_replacement_generation(
+    worker: OrcaQueueWorker, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_start_error_replacement"
+    rxn.mkdir()
+    selected = enqueue(queue_root, str(rxn), task_id="task-a")
+    running = claim_next_entry(queue_root)
+    assert running is not None
+    token = reserve_job_slot(queue_root, 2, selected, rxn)
+    replacement = replace(running, task_id="task-b")
+    save_entries_core(queue_root, [replacement])
+
+    worker._mark_entry_failed_and_release(queue_root, running, token, error="worker start failed")
+
+    [durable] = list_queue(queue_root)
+    assert (durable.task_id, durable.status) == ("task-b", QueueStatus.RUNNING)
+    assert active_slot_count(queue_root) == 0
+
+
+def test_fill_slots_starts_pending_jobs(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(start=child_starter)
+    rxn = queue_root / "mol_A"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), metadata=current_orca_queue_metadata(rxn))
+
+    worker._fill_slots()
+
+    assert list(worker._running) == [entry.queue_id]
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.RUNNING}
+
+
+def test_fill_slots_does_not_reclaim_a_row_whose_previous_job_is_still_tracked(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    # A child stopped by an external SIGTERM requeues its own row for resume
+    # and only then exits; the requeue is applied directly here. Until the
+    # parent has seen that exit and released the slot, the row must not start
+    # a second job under the same queue id: that would replace the tracked
+    # job and strand its admission slot.
+    worker = make_worker(start=child_starter)
+    rxn = queue_root / "mol_requeued"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), metadata=current_orca_queue_metadata(rxn))
+    behind = queue_root / "mol_behind"
+    behind.mkdir()
+
+    worker._fill_slots()
+    tracked = worker._running[entry.queue_id]
+    assert queue_worker_mod.requeue_running_entry(queue_root, entry.queue_id)
+    behind_entry = enqueue(queue_root, str(behind), metadata=current_orca_queue_metadata(behind))
+
+    worker._fill_slots()
+
+    assert len(child_starter.started) == 2
+    assert worker._running[entry.queue_id] is tracked
+    statuses = queue_statuses(queue_root)
+    assert statuses[entry.queue_id] == QueueStatus.PENDING
+    # The row behind it is unaffected and takes the free slot.
+    assert statuses[behind_entry.queue_id] == QueueStatus.RUNNING
+    assert worker._running[behind_entry.queue_id].process is child_starter.started[1].process
+
+
+def test_fill_slots_with_only_a_tracked_pending_row_leaves_admission_untouched(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(start=child_starter)
+    rxn = queue_root / "mol_requeued_only"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), metadata=current_orca_queue_metadata(rxn))
+    worker._fill_slots()
+    assert queue_worker_mod.requeue_running_entry(queue_root, entry.queue_id)
+    before = admission_file_identity(queue_root)
+
+    status = worker._fill_slots()
+
+    assert status == "idle"
+    assert admission_file_identity(queue_root) == before
+    assert len(child_starter.started) == 1
+    [row] = list_queue(queue_root)
+    assert row.status == QueueStatus.PENDING
+
+
+def test_fill_slots_attaches_queue_identity_to_reserved_slot(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(max_concurrent=1, start=child_starter)
+    rxn = queue_root / "mol_identity"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), metadata=current_orca_queue_metadata(rxn))
+
+    worker._fill_slots()
+
+    [slot] = list_slots(queue_root)
+    [started] = child_starter.started
+    assert slot.queue_id == entry.queue_id
+    assert slot.app_name == entry.app_name
+    assert slot.task_id == entry.task_id
+    assert slot.state == "active"
+    assert slot.owner_pid == started.process.pid
+    assert slot.work_dir == str(rxn)
+
+
+def test_fill_slots_preserves_task_id_across_slot_and_worker_handoff(
+    make_worker: Callable[..., OrcaQueueWorker], fake_popen: list[SpawnCall], queue_root: Path
+) -> None:
+    worker = make_worker(max_concurrent=1)
+    rxn = queue_root / "mol_task_identity"
+    rxn.mkdir()
+    entry = enqueue(
+        queue_root,
+        str(rxn),
+        task_id="orca_task_preserved_123",
+        metadata=current_orca_queue_metadata(rxn),
+    )
+    assert entry.queue_id != entry.task_id
+
+    worker._fill_slots()
+
+    [slot] = list_slots(queue_root)
+    assert slot.queue_id == entry.queue_id
+    assert slot.task_id == entry.task_id
+    assert slot.queue_id != slot.task_id
+    [spawned] = fake_popen
+    assert spawned.log_path == (queue_root / "logs" / f"{entry.queue_id}.log").resolve()
+    assert _command_arg(spawned.args, "--admission-token") == slot.token
+    assert _command_arg(spawned.args, "--queue-id") == entry.queue_id
+    assert "--admission-task-id" not in spawned.args
+    assert "--admission-app-name" not in spawned.args
+
+
+def test_fill_slots_respects_max_concurrent(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(max_concurrent=1, start=child_starter)
+    for name in ("a", "b"):
+        d = queue_root / name
+        d.mkdir()
+        enqueue(queue_root, str(d), metadata=current_orca_queue_metadata(d))
+
+    worker._fill_slots()
+
+    assert len(worker._running) == 1
+    assert sorted(queue_statuses(queue_root).values(), key=str) == [
+        QueueStatus.PENDING,
+        QueueStatus.RUNNING,
+    ]
+
+
+def test_fill_slots_fills_all_available_capacity(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(max_concurrent=3, start=child_starter)
+    for name in ("p1", "p2", "p3", "p4"):
+        reaction_dir = queue_root / name
         reaction_dir.mkdir()
-        selected_inp = reaction_dir / "rxn.inp"
-        selected_inp.write_text("! Opt\n", encoding="utf-8")
-        mock_proc = MagicMock()
-        mock_proc.pid = 4322
-        mock_start_background_process.return_value = mock_proc
-        entry = QueueEntry(
-            queue_id="q_meta",
-            app_name="orca_auto_orca",
-            task_id="task_meta_123",
-            task_kind="orca_run_inp",
-            engine="orca",
-            metadata={
-                "reaction_dir": str(reaction_dir),
-                "force": False,
-                "selected_inp": str(selected_inp),
-                "selected_input_xyz": str(selected_inp),
-                "job_type": "opt",
-                "molecule_key": "H2",
-                "resource_request": {"max_cores": 4, "max_memory_gb": 12},
-                "resource_actual": {"max_cores": 4, "max_memory_gb": 12},
-            },
-        )
+        enqueue(queue_root, str(reaction_dir), metadata=current_orca_queue_metadata(reaction_dir))
 
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        self.worker._start_job(self.root, entry, admission_token=token or "")
+    worker._fill_slots()
 
-        mock_resolve_job_metadata.assert_not_called()
-        mock_upsert_job_record.assert_called_once_with(
-            self.worker.cfg,
-            job_id="task_meta_123",
-            status="running",
-            job_dir=reaction_dir.resolve(),
-            job_type="opt",
-            selected_input_xyz=str(selected_inp),
-            molecule_key="H2",
-            resource_request={"max_cores": 4, "max_memory_gb": 12},
-            resource_actual={"max_cores": 4, "max_memory_gb": 12},
-        )
+    queue_by_name = {
+        Path(queue_entry_reaction_dir(entry)).name: entry.status.value
+        for entry in list_queue(queue_root)
+    }
+    assert len(worker._running) == 3
+    assert len(child_starter.started) == 3
+    assert queue_by_name == {"p1": "running", "p2": "running", "p3": "running", "p4": "pending"}
 
-    @patch(
-        "orca_auto.orca.queue.worker.start_background_process",
-        side_effect=OSError("spawn failed"),
+
+def test_fill_slots_refills_immediately_after_completion(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    fake_children: FakeChildren,
+    queue_root: Path,
+) -> None:
+    worker = make_worker(max_concurrent=1, start=child_starter)
+    first_dir = queue_root / "first"
+    second_dir = queue_root / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    completed_entry = enqueue(
+        queue_root,
+        str(first_dir),
+        task_id="task_terminal_123",
+        metadata=current_orca_queue_metadata(first_dir),
     )
-    def test_start_job_oserror(self, mock_start_background_process: MagicMock) -> None:
-        rxn = self.root / "mol_err"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        dequeue_next(self.root)
-        self.worker._start_job(self.root, entry, admission_token=token or "")
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        self.assertEqual(active_slot_count(self.root), 0)
-
-    @patch(
-        "orca_auto.orca.queue.replay.update_slot_metadata",
-        side_effect=RuntimeError("metadata store down"),
+    pending_entry = enqueue(
+        queue_root, str(second_dir), metadata=current_orca_queue_metadata(second_dir)
     )
-    @patch("orca_auto.orca.queue.worker.start_background_process")
-    def test_start_job_attach_error_releases_slot_and_terminates_process(
-        self,
-        mock_start_background_process: MagicMock,
-        _mock_update_slot_metadata: MagicMock,
-    ) -> None:
-        mock_proc = MagicMock()
-        mock_proc.pid = 4323
-        mock_start_background_process.return_value = mock_proc
-        rxn = self.root / "mol_attach_err"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
+    claim_next_entry(queue_root)
+    write_completed_run_state(first_dir)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, completed_entry, first_dir)
+    worker._running[completed_entry.queue_id] = running_job(
+        worker, completed_entry, first_dir, fake_children.spawn(exited=0), token, task_id=None
+    )
+
+    worker._check_completed_jobs()
+    worker._fill_slots()
+
+    queue_by_name = {
+        Path(queue_entry_reaction_dir(entry)).name: entry.status.value
+        for entry in list_queue(queue_root)
+    }
+    assert len(child_starter.started) == 1
+    assert list(worker._running) == [pending_entry.queue_id]
+    assert queue_by_name == {"first": "completed", "second": "running"}
+
+
+def test_fill_slots_respects_admission_slots_without_run_lock(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(max_concurrent=1, start=child_starter)
+    queued = queue_root / "queued_only"
+    queued.mkdir()
+    entry = enqueue(queue_root, str(queued), metadata=current_orca_queue_metadata(queued))
+    token = reserve_slot(
+        worker.admission_root,
+        1,
+        work_dir=str(queue_root / "reserved_hold"),
+        source="queue_worker",
+        state="reserved",
+    )
+    assert token is not None
+
+    worker._fill_slots()
+
+    assert len(worker._running) == 0
+    assert child_starter.started == []
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+
+
+def test_fill_slots_counts_existing_worker_admission_slot_once(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    fake_children: FakeChildren,
+    queue_root: Path,
+) -> None:
+    worker = make_worker(max_concurrent=2, start=child_starter)
+    active_dir = queue_root / "already_running"
+    token = reserve_slot(
+        queue_root,
+        worker.max_concurrent,
+        work_dir=str(active_dir),
+        queue_id="q_existing",
+        source="queue_worker",
+        state="reserved",
+    )
+    assert token is not None
+    worker._running["q_existing"] = OrcaRunningJob(
+        queue_root=worker.allowed_root,
+        queue_id="q_existing",
+        reaction_dir=str(active_dir),
+        process=fake_children.spawn(),
+        admission_token=token,
+    )
+    queued = queue_root / "queued_only"
+    queued.mkdir()
+    enqueue(queue_root, str(queued), metadata=current_orca_queue_metadata(queued))
+
+    worker._fill_slots()
+
+    assert len(worker._running) == 2
+    assert len(child_starter.started) == 1
+
+
+# ---------------------------------------------------------------------------
+# Completion and terminal finalization
+# ---------------------------------------------------------------------------
+
+
+def test_check_completed_jobs_success(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_done"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    claim_next_entry(queue_root)
+    write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exited=0), token, task_id=None
+    )
+
+    worker._check_completed_jobs()
+
+    assert len(worker._running) == 0
+    assert active_slot_count(queue_root) == 0
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
+
+
+def test_check_completed_jobs_leaves_a_deferred_child_pending(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    queue_root: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The child was refused RAM scratch before ORCA started, returned its
+    # own row to the queue and exited non-zero. That exit code must not
+    # fail the pending row, and the slot must become reusable.
+    rxn = queue_root / "mol_deferred"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    claim_next_entry(queue_root)
+    assert queue_worker_mod.requeue_running_entry(
+        queue_root,
+        entry.queue_id,
+        admission_deferral_reason="engine scratch cannot guarantee RAM headroom",
+    )
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exited=75), token, task_id=None
+    )
+
+    with caplog.at_level(logging.WARNING, logger=WORKER_LOGGER):
+        worker._check_completed_jobs()
+
+    assert len(worker._running) == 0
+    assert active_slot_count(queue_root) == 0
+    [updated] = list_queue(queue_root)
+    assert (updated.status, updated.error) == (QueueStatus.PENDING, "")
+    assert any(
+        "waits in the queue" in record.getMessage() and "RAM headroom" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not (rxn / "job_state.json").exists()
+
+
+def test_check_completed_jobs_failure(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_fail"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exited=1), "slot_fail", task_id=None
+    )
+
+    worker._check_completed_jobs()
+
+    assert len(worker._running) == 0
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
+
+
+def test_check_completed_jobs_still_running(
+    worker: OrcaQueueWorker, fake_children: FakeChildren
+) -> None:
+    worker._running["q_run"] = OrcaRunningJob(
+        queue_root=worker.allowed_root,
+        queue_id="q_run",
+        reaction_dir="/tmp/r",
+        process=fake_children.spawn(),
+        admission_token="slot_run",
+    )
+    worker._check_completed_jobs()
+    assert len(worker._running) == 1
+
+
+def test_completed_job_retries_when_engine_recovery_raises(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    sleeping_child: Callable[[], subprocess.Popen[bytes]],
+    queue_root: Path,
+) -> None:
+    # The slot records an engine launch pending under a live owner, so the
+    # engine identity cannot be recovered yet. The exited job must be retained
+    # (row running, slot held) until recovery succeeds; here the owner dies.
+    rxn = queue_root / "mol_recovery_retry"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-recovery")
+    claim_next_entry(queue_root)
+    owner = sleeping_child()
+    token = reserve_job_slot(
+        queue_root,
+        worker.max_concurrent,
+        entry,
+        rxn,
+        owner_pid=owner.pid,
+        engine_process_state="idle",
+        engine_launch_gated=True,
+    )
+    assert prepare_slot_engine_process(queue_root, token) is not None
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exited=1), token
+    )
+
+    worker._check_completed_jobs()
+
+    assert entry.queue_id in worker._running
+    assert active_slot_count(queue_root) == 1
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.RUNNING}
+
+    owner.kill()
+    owner.wait()
+    worker._check_completed_jobs()
+
+    assert entry.queue_id not in worker._running
+    assert active_slot_count(queue_root) == 0
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
+
+
+def test_failed_state_write_leaves_durable_replay_for_worker_restart(
+    make_worker: Callable[..., OrcaQueueWorker], fake_children: FakeChildren, queue_root: Path
+) -> None:
+    worker = make_worker()
+    rxn = queue_root / "mol_durable_restart"
+    rxn.mkdir()
+    old_state = new_state(rxn, rxn / "task-a.inp")
+    old_state["job_id"] = "task-a"
+    finalize_state(
+        rxn,
+        old_state,
+        status=STATUS_COMPLETED,
+        final_result={"status": STATUS_COMPLETED, "reason": "normal_termination"},
+    )
+    entry = enqueue(queue_root, str(rxn), force=True, task_id="task-b")
+    claim_next_entry(queue_root)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
+
+    # Another ORCA instance holds the directory: the failed run state cannot be written.
+    with held_run_lock(rxn), pytest.raises(RuntimeError, match="already running"):
+        worker._finalize_completed_job(entry.queue_id, job, rc=1)
+
+    assert active_slot_count(queue_root) == 1
+    [terminal] = list_queue(queue_root)
+    assert terminal.status == QueueStatus.FAILED
+    marker = terminal.metadata.get("orca_terminal_replay")
+    assert isinstance(marker, dict)
+    assert marker["task_id"] == "task-b"
+    assert marker["observed_state"]["job_id"] == "task-a"
+
+    restarted = make_worker()
+    run_terminal_replay(restarted, queue_root, terminal)
+
+    written = load_state(rxn)
+    assert written is not None
+    assert (written["job_id"], written["status"]) == ("task-b", STATUS_FAILED)
+    [replayed] = list_queue(queue_root)
+    assert replayed.metadata.get("orca_terminal_replay") is None
+
+
+def test_terminal_side_effect_failure_withholds_only_the_same_directory(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    fake_children: FakeChildren,
+    queue_root: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    worker = make_worker(start=child_starter)
+    rxn = queue_root / "mol_terminal_replay_barrier"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-a")
+    claim_next_entry(queue_root)
+    token = reserve_job_slot(queue_root, 2, entry, rxn)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exited=1), token
+    )
+    unrelated = queue_root / "mol_unrelated"
+    unrelated.mkdir()
+
+    with held_run_lock(rxn):
+        worker._check_completed_jobs()
+
+        assert entry.queue_id in worker._running
+        assert active_slot_count(queue_root) == 1
+        [pending_replay] = list_queue(queue_root)
+        assert isinstance(pending_replay.metadata.get("orca_terminal_replay"), dict)
+        with pytest.raises(DuplicateEntryError):
+            enqueue(queue_root, str(rxn), force=True, task_id="task-b")
+        # One of two slots is free, so what holds the successor back is the
+        # replay barrier, not capacity. With nothing else pending the poll
+        # is idle and leaves the admission file alone.
+        successor = insert_pending_successor(queue_root, rxn, queue_id="q_forced_successor")
+        before = admission_file_identity(queue_root)
+        with caplog.at_level(logging.WARNING, logger=WORKER_LOGGER):
+            assert worker._fill_slots() == "idle"
+        assert admission_file_identity(queue_root) == before
+        assert any(str(rxn.resolve()) in record.getMessage() for record in caplog.records)
+        assert child_starter.started == []
+
+        # An unrelated job queued behind the withheld row is admitted.
+        other = enqueue(
+            queue_root,
+            str(unrelated),
+            task_id="task-unrelated",
+            metadata=current_orca_queue_metadata(unrelated),
         )
-        self.assertIsNotNone(token)
-        dequeue_next(self.root)
+        assert worker._fill_slots() == "processed"
+        assert other.queue_id in worker._running
+        assert successor.queue_id not in worker._running
+        statuses = queue_statuses(queue_root)
+        assert statuses[successor.queue_id] == QueueStatus.PENDING
+        assert statuses[other.queue_id] == QueueStatus.RUNNING
+        assert len(child_starter.started) == 1
 
-        self.assertFalse(self.worker._start_job(self.root, entry, admission_token=token or ""))
+    worker._check_completed_jobs()
 
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        mock_proc.terminate.assert_called_once()
-        self.assertEqual(active_slot_count(self.root), 0)
-        [updated] = list_queue(self.root)
-        self.assertEqual(updated.status.value, "failed")
+    assert entry.queue_id not in worker._running
+    assert queue_row(queue_root, entry.queue_id).metadata.get("orca_terminal_replay") is None
+    written = load_state(rxn)
+    assert written is not None
+    assert (written["job_id"], written["status"]) == ("task-a", STATUS_FAILED)
+    # The previous generation is published: its successor may start.
+    assert worker._fill_slots() == "processed"
+    assert successor.queue_id in worker._running
+    assert len(child_starter.started) == 2
 
-    def test_check_completed_jobs_success(self) -> None:
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = 0
-        rxn = self.root / "mol_done"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        dequeue_next(self.root)
-        self.worker._running["q_done"] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token=token or "",
-        )
-        self.worker._check_completed_jobs()
-        self.assertEqual(len(self.worker._running), 0)
-        self.assertEqual(active_slot_count(self.root), 0)
 
-    def test_check_completed_jobs_leaves_a_deferred_child_pending(self) -> None:
-        # The child was refused RAM scratch before ORCA started, returned its
-        # own row to the queue and exited non-zero. That exit code must not
-        # fail the pending row, and the slot must become reusable.
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = 75
-        rxn = self.root / "mol_deferred"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        dequeue_next(self.root)
-        self.assertTrue(
-            queue_worker_mod.requeue_running_entry(
-                self.root,
-                entry.queue_id,
-                admission_deferral_reason="engine scratch cannot guarantee RAM headroom",
-            )
-        )
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token=token or "",
-        )
+def test_pending_replay_without_a_slot_does_not_pause_unrelated_jobs(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    # A replay found by reconciliation holds no slot and retries only every
+    # minute; it used to pause the whole queue for as long as it lasted.
+    worker = make_worker(max_concurrent=1, start=child_starter)
+    withheld_dir = queue_root / "mol_replay_pending"
+    unrelated = queue_root / "mol_replay_unrelated"
+    withheld_row = enqueue(
+        queue_root,
+        str(withheld_dir),
+        task_id="task-withheld",
+        metadata=current_orca_queue_metadata(withheld_dir),
+    )
+    other = enqueue(
+        queue_root,
+        str(unrelated),
+        task_id="task-unrelated",
+        metadata=current_orca_queue_metadata(unrelated),
+    )
+    item = replay_item(queue_root, "q_closed_generation", withheld_dir)
+    worker.replay_state.pending_replays[item.key] = item
 
-        with self.assertLogs("orca_auto.orca.queue.replay", level="WARNING") as logs:
-            self.worker._check_completed_jobs()
+    assert worker._fill_slots() == "processed"
 
-        self.assertEqual(len(self.worker._running), 0)
-        self.assertEqual(active_slot_count(self.root), 0)
-        [updated] = list_queue(self.root)
-        self.assertEqual(updated.status.value, "pending")
-        self.assertEqual(updated.error, "")
-        self.assertTrue(
-            any("waits in the queue" in line and "RAM headroom" in line for line in logs.output)
-        )
-        self.assertFalse((rxn / "job_state.json").exists())
+    assert list(worker._running) == [other.queue_id]
+    assert queue_statuses(queue_root)[withheld_row.queue_id] == QueueStatus.PENDING
 
-    def test_check_completed_jobs_failure(self) -> None:
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = 1
-        rxn = self.root / "mol_fail"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        self.worker._running["q_fail"] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_fail",
-        )
-        self.worker._check_completed_jobs()
-        self.assertEqual(len(self.worker._running), 0)
 
-    def test_completed_job_retries_when_engine_recovery_raises(self) -> None:
-        rxn = self.root / "mol_recovery_retry"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-recovery")
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = 1
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
+def test_unpublished_generation_without_a_directory_pauses_all_admission(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    fake_children: FakeChildren,
+    queue_root: Path,
+) -> None:
+    worker = make_worker(start=child_starter)
+    unrelated = queue_root / "mol_unknown_key_unrelated"
+    other = enqueue(
+        queue_root,
+        str(unrelated),
+        task_id="task-unrelated",
+        metadata=current_orca_queue_metadata(unrelated),
+    )
+    job = OrcaRunningJob(
+        queue_root=worker.allowed_root,
+        queue_id="q_unknown_directory",
+        reaction_dir="",
+        process=fake_children.spawn(),
+        admission_token="slot_unknown_directory",
+    )
+    job.terminal_finalize_pending = True
+    worker._running[job.queue_id] = job
 
-        with (
-            patch.object(
-                replay_mod,
-                "recover_slot_engine_process",
-                side_effect=[RuntimeError("engine recovery failed"), True],
-            ) as recover,
-            patch.object(
-                replay_mod,
-                "mark_terminal_queue_entry",
-                wraps=replay_mod.mark_terminal_queue_entry,
-            ) as mark_terminal,
-            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
-            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
-        ):
-            self.worker._check_completed_jobs()
-            self.assertIn(entry.queue_id, self.worker._running)
-            self.assertEqual(active_slot_count(self.root), 1)
-            [still_running] = list_queue(self.root)
-            self.assertEqual(still_running.status, QueueStatus.RUNNING)
-            mark_terminal.assert_not_called()
+    assert worker._fill_slots() == "blocked"
 
-            self.worker._check_completed_jobs()
+    assert child_starter.started == []
+    assert list(worker._running) == [job.queue_id]
+    [row] = list_queue(queue_root)
+    assert (row.queue_id, row.status) == (other.queue_id, QueueStatus.PENDING)
 
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        self.assertEqual(active_slot_count(self.root), 0)
-        [failed] = list_queue(self.root)
-        self.assertEqual(failed.status, QueueStatus.FAILED)
-        self.assertEqual(recover.call_count, 2)
-        mark_terminal.assert_called_once()
 
-    def test_failed_state_write_leaves_durable_replay_for_worker_restart(self) -> None:
-        rxn = self.root / "mol_durable_restart"
-        rxn.mkdir()
-        old_state = new_state(rxn, rxn / "task-a.inp")
-        old_state["job_id"] = "task-a"
-        finalize_state(
-            rxn,
-            old_state,
-            status=STATUS_COMPLETED,
-            final_result={"status": STATUS_COMPLETED, "reason": "normal_termination"},
-        )
-        entry = enqueue(self.root, str(rxn), force=True, task_id="task-b")
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
+def test_publication_repair_failure_still_pauses_all_admission(
+    make_worker: Callable[..., OrcaQueueWorker], child_starter: ChildStarter, queue_root: Path
+) -> None:
+    worker = make_worker(start=child_starter)
+    unrelated = queue_root / "mol_repair_failure_unrelated"
+    other = enqueue(
+        queue_root,
+        str(unrelated),
+        task_id="task-unrelated",
+        metadata=current_orca_queue_metadata(unrelated),
+    )
 
-        with (
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(
-                replay_mod,
-                "record_failed_run_state",
-                side_effect=OSError("state write failed"),
-            ),
-            patch.object(self.worker, "_release_admission_slot") as release,
-        ):
-            with self.assertRaisesRegex(OSError, "state write failed"):
-                self.worker._finalize_completed_job(entry.queue_id, job, rc=1)
-
-        release.assert_not_called()
-        self.assertEqual(active_slot_count(self.root), 1)
-        [terminal] = list_queue(self.root)
-        self.assertEqual(terminal.status, QueueStatus.FAILED)
-        marker = terminal.metadata.get("orca_terminal_replay")
-        assert isinstance(marker, dict)
-        self.assertEqual(marker["task_id"], "task-b")
-        self.assertEqual(marker["observed_state"]["job_id"], "task-a")
-
-        restarted = OrcaQueueWorker(
-            self.cfg,
-            str(self.root / "config.yaml"),
-            max_concurrent=2,
-        )
-        with (
-            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
-            patch.object(
-                worker_tracking_mod,
-                "notify_terminal_job_from_state",
-                return_value=False,
-            ),
-        ):
-            _run_terminal_replay(restarted, self.root, terminal)
-
-        written = load_state(rxn)
-        assert written is not None
-        self.assertEqual(written["job_id"], "task-b")
-        self.assertEqual(written["status"], STATUS_FAILED)
-        [replayed] = list_queue(self.root)
-        self.assertIsNone(replayed.metadata.get("orca_terminal_replay"))
-
-    def _insert_pending_successor(self, reaction_dir: Path, *, queue_id: str) -> QueueEntry:
-        # The enqueue fence refuses a same-directory successor while the prior
-        # generation is unpublished; the worker gate is the second barrier for
-        # the windows that fence does not cover, so the row is written directly.
-        rows = list_queue(self.root)
-        template = next(row for row in rows if queue_entry_reaction_dir(row) == str(reaction_dir))
-        successor = replace(
-            template,
-            queue_id=queue_id,
-            task_id=f"task-{queue_id}",
-            status=QueueStatus.PENDING,
-            started_at="",
-            finished_at="",
-            error="",
-            cancel_requested=False,
+    # A second row's queued-record publication was interrupted and another
+    # actor holds its publication lock, so the repair cannot claim it.
+    unpublished = queue_root / "mol_repair_pending"
+    unpublished.mkdir()
+    row = enqueue_entry(
+        queue_root,
+        make_queue_entry(
+            reaction_dir=unpublished,
+            task_id="task-unpublished",
             metadata={
-                **{
-                    key: value
-                    for key, value in template.metadata.items()
-                    if key != "orca_terminal_replay"
-                },
-                **_current_orca_queue_metadata(reaction_dir),
+                **current_orca_queue_metadata(unpublished),
+                **queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_PREPARING, token="record_sync_test", owner_pid=0
+                ),
             },
-        )
-        save_entries_core(self.root, [*rows, successor])
-        return successor
+        ),
+    )
+    lock_path = queue_record_publication_lock_path(queue_root, row.queue_id)
+    lock_path.parent.mkdir(exist_ok=True)
 
-    def test_terminal_side_effect_failure_withholds_only_the_same_directory(self) -> None:
-        rxn = self.root / "mol_terminal_replay_barrier"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-a")
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            2,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = 1
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-        self.worker.max_concurrent = 2
-        self.worker._running[entry.queue_id] = job
-        unrelated = self.root / "mol_unrelated"
-        unrelated.mkdir()
+    with file_lock(lock_path, timeout_seconds=0.0):
+        assert worker._fill_slots() == "blocked"
 
-        def started_process(*_args: Any, **_kwargs: Any) -> MagicMock:
-            started = MagicMock()
-            started.pid = os.getpid()
-            started.poll.return_value = None
-            return started
+    assert child_starter.started == []
+    assert queue_statuses(queue_root) == {
+        other.queue_id: QueueStatus.PENDING,
+        row.queue_id: QueueStatus.PENDING,
+    }
 
-        with (
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(
-                worker_tracking_mod,
-                "upsert_terminal_job_record",
-                side_effect=[False, True],
-            ) as upsert,
-            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
-            patch(
-                "orca_auto.orca.queue.worker.start_background_process",
-                side_effect=started_process,
-            ) as start,
-        ):
-            self.worker._check_completed_jobs()
+    # Positive control: once the lock is free the repair lands and admission resumes.
+    assert worker._fill_slots() == "processed"
+    assert other.queue_id in worker._running
 
-            self.assertIn(entry.queue_id, self.worker._running)
-            self.assertEqual(active_slot_count(self.root), 1)
-            [pending_replay] = list_queue(self.root)
-            self.assertIsInstance(
-                pending_replay.metadata.get("orca_terminal_replay"),
-                dict,
-            )
-            with self.assertRaises(DuplicateEntryError):
-                enqueue(self.root, str(rxn), force=True, task_id="task-b")
-            # One of two slots is free, so what holds the successor back is the
-            # replay barrier, not capacity. With nothing else pending the poll
-            # is idle and leaves the admission file alone.
-            successor = self._insert_pending_successor(rxn, queue_id="q_forced_successor")
-            admission_file = self.root / "admission_slots.json"
-            before = admission_file.stat()
-            with self.assertLogs("orca_auto.orca.queue.worker", level="WARNING") as logs:
-                self.assertEqual(self.worker._fill_slots(), "idle")
-            after = admission_file.stat()
-            self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
-            self.assertTrue(any(str(rxn.resolve()) in line for line in logs.output))
-            start.assert_not_called()
 
-            # An unrelated job queued behind the withheld row is admitted.
-            other = enqueue(
-                self.root,
-                str(unrelated),
-                task_id="task-unrelated",
-                metadata=_current_orca_queue_metadata(unrelated),
-            )
-            self.assertEqual(self.worker._fill_slots(), "processed")
-            self.assertIn(other.queue_id, self.worker._running)
-            self.assertNotIn(successor.queue_id, self.worker._running)
-            statuses = {row.queue_id: row.status for row in list_queue(self.root)}
-            self.assertEqual(statuses[successor.queue_id], QueueStatus.PENDING)
-            self.assertEqual(statuses[other.queue_id], QueueStatus.RUNNING)
-            self.assertEqual(start.call_count, 1)
+def test_withheld_directory_is_matched_through_a_symlinked_spelling(
+    worker: OrcaQueueWorker, queue_root: Path
+) -> None:
+    withheld_dir = queue_root / "mol_symlink_target"
+    withheld_dir.mkdir()
+    alias = queue_root / "mol_symlink_alias"
+    alias.symlink_to(withheld_dir, target_is_directory=True)
+    state = worker.replay_state
+    state.admission_withheld_keys = frozenset({str(withheld_dir.resolve())})
 
-            self.worker._check_completed_jobs()
-
-            self.assertEqual(upsert.call_count, 2)
-            self.assertNotIn(entry.queue_id, self.worker._running)
-            replayed = next(row for row in list_queue(self.root) if row.queue_id == entry.queue_id)
-            self.assertIsNone(replayed.metadata.get("orca_terminal_replay"))
-            # The previous generation is published: its successor may start.
-            self.assertEqual(self.worker._fill_slots(), "processed")
-            self.assertIn(successor.queue_id, self.worker._running)
-            self.assertEqual(start.call_count, 2)
-
-    def test_pending_replay_without_a_slot_does_not_pause_unrelated_jobs(self) -> None:
-        # A replay found by reconciliation holds no slot and retries only every
-        # minute; it used to pause the whole queue for as long as it lasted.
-        self.worker.max_concurrent = 1
-        withheld_dir = self.root / "mol_replay_pending"
-        unrelated = self.root / "mol_replay_unrelated"
-        withheld_row = enqueue(
-            self.root,
-            str(withheld_dir),
-            task_id="task-withheld",
-            metadata=_current_orca_queue_metadata(withheld_dir),
-        )
-        other = enqueue(
-            self.root,
-            str(unrelated),
-            task_id="task-unrelated",
-            metadata=_current_orca_queue_metadata(unrelated),
-        )
-        item = replay_mod.TerminalReplayWorkItem(
-            queue_root=self.root,
-            queue_id="q_closed_generation",
-            reaction_dir=str(withheld_dir),
-            reaction_key=str(withheld_dir.resolve()),
-            task_id="task-closed",
-            observed_status="failed",
-            selected_inp="",
-            error="",
-        )
-        self.worker.replay_state.pending_replays[item.key] = item
-
-        with patch("orca_auto.orca.queue.worker.start_background_process") as start:
-            started = MagicMock()
-            started.pid = os.getpid()
-            started.poll.return_value = None
-            start.return_value = started
-            self.assertEqual(self.worker._fill_slots(), "processed")
-
-        self.assertEqual(list(self.worker._running), [other.queue_id])
-        statuses = {row.queue_id: row.status for row in list_queue(self.root)}
-        self.assertEqual(statuses[withheld_row.queue_id], QueueStatus.PENDING)
-
-    def test_unpublished_generation_without_a_directory_pauses_all_admission(self) -> None:
-        unrelated = self.root / "mol_unknown_key_unrelated"
-        other = enqueue(
-            self.root,
-            str(unrelated),
-            task_id="task-unrelated",
-            metadata=_current_orca_queue_metadata(unrelated),
-        )
-        process = MagicMock()
-        process.poll.return_value = None
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id="q_unknown_directory",
-            reaction_dir="",
-            process=process,
-            admission_token="slot_unknown_directory",
-        )
-        job.terminal_finalize_pending = True
-        self.worker.max_concurrent = 2
-        self.worker._running[job.queue_id] = job
-
-        with patch("orca_auto.orca.queue.worker.start_background_process") as start:
-            self.assertEqual(self.worker._fill_slots(), "blocked")
-
-        start.assert_not_called()
-        [row] = list_queue(self.root)
-        self.assertEqual((row.queue_id, row.status), (other.queue_id, QueueStatus.PENDING))
-
-    def test_publication_repair_failure_still_pauses_all_admission(self) -> None:
-        unrelated = self.root / "mol_repair_failure_unrelated"
-        enqueue(
-            self.root,
-            str(unrelated),
-            task_id="task-unrelated",
-            metadata=_current_orca_queue_metadata(unrelated),
-        )
-
-        with (
-            patch.object(
-                queue_worker_mod.publication_repair,
-                "repair_queue_publications",
-                return_value=False,
-            ),
-            patch("orca_auto.orca.queue.worker.start_background_process") as start,
-        ):
-            self.assertEqual(self.worker._fill_slots(), "blocked")
-
-        start.assert_not_called()
-
-    def test_withheld_directory_is_matched_through_a_symlinked_spelling(self) -> None:
-        withheld_dir = self.root / "mol_symlink_target"
-        withheld_dir.mkdir()
-        alias = self.root / "mol_symlink_alias"
-        alias.symlink_to(withheld_dir, target_is_directory=True)
-        state = self.worker.replay_state
-        state.admission_withheld_keys = frozenset({str(withheld_dir.resolve())})
-
-        def row(reaction_dir: str) -> QueueEntry:
-            return QueueEntry(
-                queue_id="q_candidate",
-                app_name="orca_auto_orca",
-                task_id="task-candidate",
-                task_kind="orca_run_inp",
-                engine="orca",
-                metadata={"reaction_dir": reaction_dir},
-            )
-
-        self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, row(str(alias))))
-        self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, row("")))
-        self.assertFalse(
-            replay_mod.entry_waits_for_terminal_replay(self.worker, row(str(self.root / "other")))
-        )
-        state.admission_withheld_keys = frozenset()
-        self.assertFalse(replay_mod.entry_waits_for_terminal_replay(self.worker, row("")))
-
-    def test_row_whose_directory_cannot_be_resolved_is_withheld_while_any_is(self) -> None:
-        state = self.worker.replay_state
-        state.admission_withheld_keys = frozenset({str(self.root / "mol_withheld")})
-        candidate = QueueEntry(
-            queue_id="q_unresolvable",
+    def row(reaction_dir: str) -> QueueEntry:
+        return QueueEntry(
+            queue_id="q_candidate",
             app_name="orca_auto_orca",
-            task_id="task-unresolvable",
+            task_id="task-candidate",
             task_kind="orca_run_inp",
             engine="orca",
-            metadata={"reaction_dir": str(self.root / "mol_elsewhere")},
+            metadata={"reaction_dir": reaction_dir},
         )
 
-        with patch.object(replay_mod, "reaction_generation_key", side_effect=OSError("loop")):
-            self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, candidate))
-            state.admission_withheld_keys = frozenset()
-            self.assertFalse(replay_mod.entry_waits_for_terminal_replay(self.worker, candidate))
+    assert worker._entry_waits_for_terminal_replay(row(str(alias)))
+    assert worker._entry_waits_for_terminal_replay(row(""))
+    assert not worker._entry_waits_for_terminal_replay(row(str(queue_root / "other")))
+    state.admission_withheld_keys = frozenset()
+    assert not worker._entry_waits_for_terminal_replay(row(""))
 
-    def test_withheld_keys_follow_a_directory_retargeted_after_the_replay_item_was_built(
-        self,
-    ) -> None:
-        # The item froze its key when it was built. If the path is moved and the
-        # old spelling becomes a symlink, a successor submitted through that
-        # spelling resolves to the new location, which must be withheld as well.
-        moved = self.root / "proj_moved" / "job"
-        moved.mkdir(parents=True)
-        (self.root / "proj").symlink_to(self.root / "proj_moved", target_is_directory=True)
-        item = replay_mod.TerminalReplayWorkItem(
-            queue_root=self.root,
-            queue_id="q_retargeted",
-            reaction_dir=str(self.root / "proj" / "job"),
-            reaction_key=str(self.root / "proj" / "job"),
-            task_id="task-retargeted",
-            observed_status="failed",
-            selected_inp="",
-            error="",
+
+def test_row_whose_directory_cannot_be_resolved_is_withheld_while_any_is(
+    worker: OrcaQueueWorker, queue_root: Path
+) -> None:
+    state = worker.replay_state
+    state.admission_withheld_keys = frozenset({str(queue_root / "mol_withheld")})
+    # The row's directory is spelled through a user that does not exist:
+    # it has no resolvable identity.
+    candidate = QueueEntry(
+        queue_id="q_unresolvable",
+        app_name="orca_auto_orca",
+        task_id="task-unresolvable",
+        task_kind="orca_run_inp",
+        engine="orca",
+        metadata={"reaction_dir": "~no_such_user_orca_auto/mol_elsewhere"},
+    )
+
+    assert worker._entry_waits_for_terminal_replay(candidate)
+    state.admission_withheld_keys = frozenset()
+    assert not worker._entry_waits_for_terminal_replay(candidate)
+
+
+def test_withheld_keys_follow_a_directory_retargeted_after_the_replay_item_was_built(
+    worker: OrcaQueueWorker, queue_root: Path
+) -> None:
+    # The item froze its key when it was built. If the path is moved and the
+    # old spelling becomes a symlink, a successor submitted through that
+    # spelling resolves to the new location, which must be withheld as well.
+    moved = queue_root / "proj_moved" / "job"
+    moved.mkdir(parents=True)
+    (queue_root / "proj").symlink_to(queue_root / "proj_moved", target_is_directory=True)
+    item = replay_item(queue_root, "q_retargeted", queue_root / "proj" / "job", resolved=False)
+    worker.replay_state.pending_replays[item.key] = item
+
+    assert worker._unresolved_terminal_reaction_keys() == frozenset(
+        {str(queue_root / "proj" / "job"), str(moved.resolve())}
+    )
+
+
+def test_exited_job_awaiting_finalize_retry_withholds_its_directory_without_an_item(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    fake_children: FakeChildren,
+    queue_root: Path,
+) -> None:
+    # Finalization failed before any replay item existed (for example engine
+    # process recovery raised): only the retry flag and the job's own
+    # directory identify what must be withheld.
+    worker = make_worker(start=child_starter)
+    retained_dir = queue_root / "mol_retry_only"
+    unrelated = queue_root / "mol_retry_only_unrelated"
+    same_dir_row = enqueue(
+        queue_root,
+        str(retained_dir),
+        task_id="task-same-dir",
+        metadata=current_orca_queue_metadata(retained_dir),
+    )
+    other = enqueue(
+        queue_root,
+        str(unrelated),
+        task_id="task-unrelated",
+        metadata=current_orca_queue_metadata(unrelated),
+    )
+    job = OrcaRunningJob(
+        queue_root=worker.allowed_root,
+        queue_id="q_retry_only",
+        reaction_dir=str(retained_dir),
+        process=fake_children.spawn(exited=1),
+        admission_token="slot_retry_only",
+    )
+    job.terminal_finalize_pending = True
+    worker._running[job.queue_id] = job
+
+    assert worker._fill_slots() == "processed"
+
+    assert other.queue_id in worker._running
+    assert same_dir_row.queue_id not in worker._running
+    assert queue_statuses(queue_root)[same_dir_row.queue_id] == QueueStatus.PENDING
+
+
+def test_withheld_directories_are_logged_when_the_set_changes_not_on_every_poll(
+    worker: OrcaQueueWorker, queue_root: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    withheld_dir = queue_root / "mol_logged_once"
+    withheld_dir.mkdir()
+    item = replay_item(queue_root, "q_logged_once", withheld_dir)
+    state = worker.replay_state
+    state.pending_replays[item.key] = item
+
+    with caplog.at_level(logging.INFO, logger=WORKER_LOGGER):
+        for _ in range(3):
+            worker._fill_slots()
+        state.pending_replays.clear()
+        for _ in range(3):
+            worker._fill_slots()
+
+    records = [record for record in caplog.records if record.name == WORKER_LOGGER]
+    assert [record.levelname for record in records] == ["WARNING", "INFO"]
+    assert str(withheld_dir.resolve()) in records[0].getMessage()
+
+
+def test_finalize_clears_active_engine_record_before_mark_and_release(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_active_engine_finalize"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-active-engine")
+    claim_next_entry(queue_root)
+    write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
+    token = reserve_job_slot(
+        queue_root, worker.max_concurrent, entry, rxn, engine_process_state="idle"
+    )
+    prepare_slot_engine_process(queue_root, token)
+    # The recorded engine group is gone (the child exited with it): recovery
+    # must clear the active record before anything terminal is published.
+    set_slot_engine_process(queue_root, token, pid=424242, pgid=424242, process_start_ticks=10101)
+    job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
+    seen_at_mark: list[tuple[str | None, int]] = []
+    real_mark = replay_mod.mark_terminal_queue_entry
+
+    def mark(*args: Any, **kwargs: Any) -> TerminalQueueMarkResult:
+        current = get_slot(queue_root, token)
+        seen_at_mark.append(
+            (current.engine_process_state if current else None, active_slot_count(queue_root))
         )
-        self.worker.replay_state.pending_replays[item.key] = item
+        return real_mark(*args, **kwargs)
 
-        self.assertEqual(
-            replay_mod.unresolved_terminal_reaction_keys(self.worker),
-            frozenset({str(self.root / "proj" / "job"), str(moved.resolve())}),
-        )
-
-    def test_exited_job_awaiting_finalize_retry_withholds_its_directory_without_an_item(
-        self,
-    ) -> None:
-        # Finalization failed before any replay item existed (for example engine
-        # process recovery raised): only the retry flag and the job's own
-        # directory identify what must be withheld.
-        retained_dir = self.root / "mol_retry_only"
-        unrelated = self.root / "mol_retry_only_unrelated"
-        same_dir_row = enqueue(
-            self.root,
-            str(retained_dir),
-            task_id="task-same-dir",
-            metadata=_current_orca_queue_metadata(retained_dir),
-        )
-        other = enqueue(
-            self.root,
-            str(unrelated),
-            task_id="task-unrelated",
-            metadata=_current_orca_queue_metadata(unrelated),
-        )
-        process = MagicMock()
-        process.poll.return_value = 1
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id="q_retry_only",
-            reaction_dir=str(retained_dir),
-            process=process,
-            admission_token="slot_retry_only",
-        )
-        job.terminal_finalize_pending = True
-        self.worker.max_concurrent = 2
-        self.worker._running[job.queue_id] = job
-
-        with patch("orca_auto.orca.queue.worker.start_background_process") as start:
-            started = MagicMock()
-            started.pid = os.getpid()
-            started.poll.return_value = None
-            start.return_value = started
-            self.assertEqual(self.worker._fill_slots(), "processed")
-
-        self.assertIn(other.queue_id, self.worker._running)
-        self.assertNotIn(same_dir_row.queue_id, self.worker._running)
-        statuses = {row.queue_id: row.status for row in list_queue(self.root)}
-        self.assertEqual(statuses[same_dir_row.queue_id], QueueStatus.PENDING)
-
-    def test_withheld_directories_are_logged_when_the_set_changes_not_on_every_poll(
-        self,
-    ) -> None:
-        withheld_dir = self.root / "mol_logged_once"
-        withheld_dir.mkdir()
-        item = replay_mod.TerminalReplayWorkItem(
-            queue_root=self.root,
-            queue_id="q_logged_once",
-            reaction_dir=str(withheld_dir),
-            reaction_key=str(withheld_dir.resolve()),
-            task_id="task-logged-once",
-            observed_status="failed",
-            selected_inp="",
-            error="",
-        )
-        state = self.worker.replay_state
-        state.pending_replays[item.key] = item
-
-        with self.assertLogs("orca_auto.orca.queue.worker", level="INFO") as logs:
-            for _ in range(3):
-                self.worker._fill_slots()
-            state.pending_replays.clear()
-            for _ in range(3):
-                self.worker._fill_slots()
-
-        self.assertEqual(
-            [record.levelname for record in logs.records],
-            ["WARNING", "INFO"],
-        )
-        self.assertIn(str(withheld_dir.resolve()), logs.records[0].getMessage())
-
-    def test_finalize_clears_active_engine_record_before_mark_and_release(self) -> None:
-        rxn = self.root / "mol_active_engine_finalize"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-active-engine")
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-            engine_process_state="idle",
-        )
-        self.assertIsNotNone(token)
-        prepare_slot_engine_process(self.root, token or "")
-        set_slot_engine_process(
-            self.root,
-            token or "",
-            pid=424242,
-            pgid=424242,
-            process_start_ticks=10101,
-        )
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-        events: list[str] = []
-
-        def recover(root: Path, current_token: str) -> bool:
-            active = get_slot(root, current_token)
-            assert active is not None
-            assert active.engine_process_state == "active"
-            clear_slot_engine_process(
-                root,
-                current_token,
-                expected_pid=active.engine_pid,
-                expected_process_start_ticks=active.engine_process_start_ticks,
-                expected_process_boot_id=active.engine_process_boot_id,
-                next_state="idle",
-            )
-            events.append("recover")
-            return True
-
-        real_mark = replay_mod.mark_terminal_queue_entry
-
-        def mark(*args: Any, **kwargs: Any) -> TerminalQueueMarkResult:
-            current = get_slot(self.root, token or "")
-            assert current is not None
-            assert current.engine_process_state == "idle"
-            events.append("mark")
-            return real_mark(*args, **kwargs)
-
-        def release(current_token: str) -> None:
-            current = get_slot(self.root, current_token)
-            assert current is not None
-            assert current.engine_process_state == "idle"
-            events.append("release")
-            release_slot(self.root, current_token)
-
-        with (
-            patch.object(replay_mod, "recover_slot_engine_process", side_effect=recover),
-            patch.object(
-                replay_mod,
-                "mark_terminal_queue_entry",
-                side_effect=mark,
-            ),
-            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
-            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
-            patch.object(
-                self.worker,
-                "_release_admission_slot",
-                side_effect=release,
-            ),
-        ):
-            self.worker._finalize_completed_job(entry.queue_id, job, rc=0)
-
-        self.assertEqual(events, ["recover", "mark", "release"])
-        self.assertEqual(active_slot_count(self.root), 0)
-        [completed] = list_queue(self.root)
-        self.assertEqual(completed.status, QueueStatus.COMPLETED)
-
-    def test_finalize_does_not_publish_without_persisted_marker_after_mark(self) -> None:
-        rxn = self.root / "mol_mark_snapshot"
-        rxn.mkdir()
-        selected_inp = rxn / "task-b.inp"
-        snapshot = QueueEntry(
-            queue_id="queue-snapshot",
-            app_name="orca_auto_orca",
-            task_id="task-b",
-            task_kind="orca_run_inp",
-            engine="orca",
-            status=QueueStatus.RUNNING,
-            metadata={
-                "reaction_dir": str(rxn),
-                "selected_inp": str(selected_inp),
-            },
-        )
-        result = TerminalQueueMarkResult(
-            marked=True,
-            status=STATUS_FAILED,
-            expected_job_id="task-b",
-            current_entry=snapshot,
-            queue_root=self.root,
-            run_id=None,
-        )
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=snapshot.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token="slot-snapshot",
-            task_id="task-stale",
-        )
-        events: list[str] = []
-
-        def mark(*_args: object, **_kwargs: object) -> TerminalQueueMarkResult:
-            events.append("mark")
-            return result
-
-        with (
-            patch.object(
-                replay_mod,
-                "recover_slot_engine_process",
-                side_effect=lambda *_args: events.append("recover"),
-            ),
-            patch.object(
-                replay_mod,
-                "mark_terminal_queue_entry",
-                side_effect=mark,
-            ),
-            patch.object(
-                replay_mod,
-                "record_failed_run_state",
-            ) as record_failed,
-            patch.object(
-                replay_mod,
-                "update_terminal",
-            ) as update,
-            patch.object(
-                replay_mod,
-                "_run_terminal_replay_side_effects",
-                side_effect=lambda *_args, **_kwargs: events.append("side-effects"),
-            ) as side_effects,
-            patch.object(
-                replay_mod,
-                "_clear_terminal_replay_marker_or_confirm_absent",
-                side_effect=lambda *_args: events.append("clear"),
-            ),
-            patch.object(
-                replay_mod,
-                "queue_entry_by_id",
-                return_value=None,
-            ),
-            patch.object(
-                self.worker,
-                "_release_admission_slot",
-                side_effect=lambda _token: events.append("release"),
-            ),
-        ):
-            self.worker._finalize_completed_job(snapshot.queue_id, job, rc=1)
-
-        record_failed.assert_not_called()
-        update.assert_not_called()
-        side_effects.assert_not_called()
-        self.assertEqual(events, ["recover", "mark", "release"])
-
-    def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(self) -> None:
-        rxn = self.root / "mol_stale_finalizer"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-stale-finalizer")
-        running = dequeue_next(self.root)
-        assert running is not None
-        self.assertTrue(
-            mark_failed(
-                self.root,
-                entry.queue_id,
-                error="first_owner",
-                expected_entry=running,
-            )
-        )
-        self.assertTrue(
-            replay_mod.update_queue_metadata(
-                self.root,
-                entry.queue_id,
-                {"orca_terminal_replay": None},
-            )
-        )
-        [closed] = list_queue(self.root)
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token="slot-stale-finalizer",
-            task_id=entry.task_id,
-        )
-
-        with (
-            patch.object(replay_mod, "recover_slot_engine_process"),
-            patch.object(replay_mod, "record_failed_run_state") as record_failed,
-            patch.object(self.worker, "_release_admission_slot") as release,
-        ):
-            self.worker._finalize_completed_job(entry.queue_id, job, rc=1)
-
-        record_failed.assert_not_called()
-        release.assert_called_once_with(job.admission_token)
-        self.assertEqual(list_queue(self.root), [closed])
-        self.assertIsNone(closed.metadata.get("orca_terminal_replay"))
-
-    def test_finalize_child_exit_recovers_once_and_releases_on_benign_mark_noop(
-        self,
-    ) -> None:
-        result = TerminalQueueMarkResult(
-            marked=False,
-            status=None,
-            expected_job_id="task-moved",
-            current_entry=None,
-            queue_root=self.root,
-        )
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id="queue-moved",
-            reaction_dir=str(self.root / "moved"),
-            process=MagicMock(),
-            admission_token="slot-moved",
-            task_id="task-moved",
-        )
-        with (
-            patch.object(replay_mod, "recover_slot_engine_process") as recover,
-            patch.object(
-                replay_mod,
-                "mark_terminal_queue_entry",
-                return_value=result,
-            ),
-            patch.object(
-                replay_mod,
-                "_run_terminal_replay_side_effects",
-            ) as side_effects,
-            patch.object(self.worker, "_release_admission_slot") as release,
-        ):
-            replay_mod.finalize_child_exit(self.worker, job, rc=1)
-
-        recover.assert_called_once_with(self.worker.admission_root, job.admission_token)
-        side_effects.assert_not_called()
-        release.assert_called_once_with(job.admission_token)
-
-    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
-    def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
-        self,
-        mock_upsert_terminal: MagicMock,
-    ) -> None:
-        # The child died after fencing its launch but before publishing the
-        # engine record. The gate wrapper never received its release byte, so
-        # no engine ran: the finalizer must clear the pending record and
-        # release the slot instead of retrying forever with reconcile paused.
-        rxn = self.root / "mol_pending_launch"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-pending-launch")
-        dequeue_next(self.root)
-        child = subprocess.Popen(["sleep", "60"])
-        try:
-            token = reserve_slot(
-                self.root,
-                self.worker.max_concurrent,
-                work_dir=str(rxn),
-                queue_id=entry.queue_id,
-                source="queue_worker",
-                state="reserved",
-                owner_pid=child.pid,
-                engine_process_state="idle",
-                engine_launch_gated=True,
-            )
-            self.assertIsNotNone(token)
-            self.assertIsNotNone(prepare_slot_engine_process(self.root, token or ""))
-        finally:
-            child.kill()
-            child.wait()
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-
-        self.worker._finalize_completed_job(entry.queue_id, job, rc=1)
-
-        mock_upsert_terminal.assert_called_once()
-        [failed] = list_queue(self.root)
-        self.assertEqual(failed.status, QueueStatus.FAILED)
-        self.assertEqual(active_slot_count(self.root), 0)
-        self.assertIsNone(get_slot(self.root, token or ""))
-
-    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
-    def test_finalize_finished_job_marks_completed_and_releases_slot(
-        self,
-        mock_upsert_terminal: MagicMock,
-    ) -> None:
-        rxn = self.root / "mol_completed"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-
-        self.worker._finalize_completed_job(
-            entry.queue_id,
-            _RunningJob(
-                queue_root=self.worker.allowed_root,
-                queue_id=entry.queue_id,
-                reaction_dir=str(rxn),
-                process=MagicMock(),
-                admission_token=token or "",
-                task_id=entry.task_id,
-            ),
-            rc=0,
-        )
-
-        queue_entries = list_queue(self.root)
-        self.assertEqual(queue_entries[0].status.value, "completed")
-        mock_upsert_terminal.assert_called_once()
-        self.assertEqual(active_slot_count(self.root), 0)
-
-    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
-    @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=True)
-    def test_finalize_finished_job_sends_parent_terminal_notification_when_unmarked(
-        self,
-        mock_notify: MagicMock,
-        mock_upsert_terminal: MagicMock,
-    ) -> None:
-        from threading import Event
-
-        delivered = Event()
-
-        def notify(*_args: object) -> bool:
-            delivered.set()
-            return True
-
-        mock_notify.side_effect = notify
-        cfg = AppConfig(
-            runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
-            messenger=MessengerConfig(
-                discord=DiscordConfig(bot_token="token", default_channel_id="123")
-            ),
-        )
-        worker = OrcaQueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
-        rxn = self.root / "mol_terminal_notify"
-        rxn.mkdir()
-        _write_completed_run_state(rxn)
-        entry = enqueue(self.root, str(rxn), task_id="task_terminal_123")
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-
-        worker._finalize_completed_job(
-            entry.queue_id,
-            _RunningJob(
-                queue_root=worker.allowed_root,
-                queue_id=entry.queue_id,
-                reaction_dir=str(rxn),
-                process=MagicMock(),
-                admission_token=token or "",
-                task_id=entry.task_id,
-            ),
-            rc=0,
-        )
-
-        mock_upsert_terminal.assert_called_once()
-        self.assertTrue(delivered.wait(1))
-        mock_notify.assert_called_once()
-        saved = load_state(rxn)
-        assert saved is not None
-        final_result = saved["final_result"]
-        assert final_result is not None
-        self.assertIn("finished_notification_claimed_at", final_result)
-        self.assertNotIn("finished_notification_sent_at", final_result)
-
-    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
-    @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=False)
-    def test_finalize_finished_job_releases_slot_when_terminal_notification_fails(
-        self,
-        mock_notify: MagicMock,
-        mock_upsert_terminal: MagicMock,
-    ) -> None:
-        from threading import Event
-
-        delivered = Event()
-
-        def notify(*_args: object) -> bool:
-            delivered.set()
-            return False
-
-        mock_notify.side_effect = notify
-        cfg = AppConfig(
-            runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
-            messenger=MessengerConfig(
-                discord=DiscordConfig(bot_token="token", default_channel_id="123")
-            ),
-        )
-        worker = OrcaQueueWorker(cfg, str(self.root / "config.yaml"), max_concurrent=2)
-        rxn = self.root / "mol_terminal_notify_failed"
-        rxn.mkdir()
-        _write_completed_run_state(rxn)
-        entry = enqueue(self.root, str(rxn), task_id="task_terminal_123")
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        job = _RunningJob(
-            queue_root=worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-
+    with patch.object(replay_mod, "mark_terminal_queue_entry", side_effect=mark):
         worker._finalize_completed_job(entry.queue_id, job, rc=0)
 
-        mock_upsert_terminal.assert_called_once()
-        self.assertTrue(delivered.wait(1))
-        mock_notify.assert_called_once()
-        [completed] = list_queue(self.root)
-        self.assertEqual(completed.status, QueueStatus.COMPLETED)
-        self.assertIsNone(completed.metadata.get("orca_terminal_replay"))
-        self.assertEqual(active_slot_count(self.root), 0)
-        self.assertNotIn(entry.queue_id, worker._running)
-        saved = load_state(rxn)
-        assert saved is not None
-        final_result = saved["final_result"]
-        assert final_result is not None
-        self.assertNotIn("finished_notification_sent_at", final_result)
+    # At mark time the engine record was already idle and the slot still held.
+    assert seen_at_mark == [("idle", 1)]
+    assert active_slot_count(queue_root) == 0
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
 
-    @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=True)
-    def test_terminal_notification_skips_when_state_already_marked(
-        self,
-        mock_notify: MagicMock,
-    ) -> None:
-        cfg = AppConfig(
-            runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
-            messenger=MessengerConfig(
-                discord=DiscordConfig(bot_token="token", default_channel_id="123")
-            ),
-        )
-        rxn = self.root / "mol_terminal_already_marked"
-        rxn.mkdir()
-        _write_completed_run_state(rxn)
-        state = load_state(rxn)
-        assert state is not None
-        final_result = state["final_result"]
-        assert final_result is not None
-        final_result["finished_notification_sent_at"] = "2026-05-29T12:02:00+00:00"
-        finalize_state(rxn, state, status="completed", final_result=final_result)
 
-        self.assertFalse(_notify_terminal_job_from_state(cfg, str(rxn)))
-        mock_notify.assert_not_called()
+def test_finalize_does_not_publish_without_persisted_marker_after_mark(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_mark_snapshot"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-b")
+    claim_next_entry(queue_root)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
+    real_mark = replay_mod.mark_terminal_queue_entry
 
-    @patch("orca_auto.orca.queue.worker_tracking.notify_run_finished_event", return_value=True)
-    def test_terminal_notification_rejects_previous_generation_state(
-        self,
-        mock_notify: MagicMock,
-    ) -> None:
-        cfg = AppConfig(
-            runtime=OrcaRuntimeConfig(allowed_root=str(self.root)),
-            messenger=MessengerConfig(
-                discord=DiscordConfig(bot_token="token", default_channel_id="123")
-            ),
-        )
-        rxn = self.root / "mol_terminal_stale_generation"
-        rxn.mkdir()
-        _write_completed_run_state(rxn)
+    def mark_then_lose_the_row(*args: Any, **kwargs: Any) -> TerminalQueueMarkResult:
+        result = real_mark(*args, **kwargs)
+        # Another actor removed the row right after the mark: no durable marker remains.
+        save_entries_core(queue_root, [])
+        return result
 
-        self.assertFalse(
-            _notify_terminal_job_from_state(
-                cfg,
-                str(rxn),
-                expected_job_id="task-b",
-            )
-        )
-        mock_notify.assert_not_called()
+    with patch.object(replay_mod, "mark_terminal_queue_entry", side_effect=mark_then_lose_the_row):
+        worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
-    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
-    def test_finalize_finished_job_marks_failed_run(
-        self,
-        mock_upsert_terminal: MagicMock,
-    ) -> None:
-        rxn = self.root / "mol_failed"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
+    # Nothing was published for the vanished generation, and the slot is free.
+    assert not (rxn / "job_state.json").exists()
+    assert job_record(queue_root, "task-b") is None
+    assert list_queue(queue_root) == []
+    assert active_slot_count(queue_root) == 0
 
-        self.worker._finalize_completed_job(
-            entry.queue_id,
-            _RunningJob(
-                queue_root=self.worker.allowed_root,
-                queue_id=entry.queue_id,
-                reaction_dir=str(rxn),
-                process=MagicMock(),
-                admission_token=token or "",
-            ),
-            rc=2,
-        )
 
-        queue_entries = list_queue(self.root)
-        self.assertEqual(queue_entries[0].status.value, "failed")
-        mock_upsert_terminal.assert_called_once()
-
-    def test_finalize_finished_job_synthesizes_current_generation_failure_state(
-        self,
-    ) -> None:
-        rxn = self.root / "mol_failed_before_current_state"
-        rxn.mkdir()
-        previous = new_state(rxn, rxn / "task-a.inp")
-        previous["job_id"] = "task-a"
-        previous_run_id = previous["run_id"]
-        finalize_state(
-            rxn,
-            previous,
-            status=STATUS_COMPLETED,
-            final_result={
-                "status": STATUS_COMPLETED,
-                "reason": "normal_termination",
-                "completed_at": "2026-07-10T00:00:00+00:00",
-            },
-        )
-        entry = enqueue(
-            self.root,
-            str(rxn),
-            force=True,
-            task_id="task-b",
-        )
-        dequeue_next(self.root)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=MagicMock(),
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-        self.worker.cfg.messenger = MessengerConfig(
-            discord=DiscordConfig(bot_token="token", default_channel_id="123")
-        )
-
-        with patch.object(
-            worker_tracking_mod,
-            "notify_run_finished_event",
-            return_value=True,
-        ) as notify:
-            self.worker._finalize_completed_job(entry.queue_id, job, rc=1)
-
-        terminal = {item.queue_id: item for item in list_queue(self.root)}[entry.queue_id]
-        self.assertEqual(terminal.status, QueueStatus.FAILED)
-        self.assertTrue(terminal.metadata.get("run_id"))
-        self.assertNotEqual(terminal.metadata.get("run_id"), previous_run_id)
-        written = load_state(rxn)
-        assert written is not None
-        self.assertEqual(written["job_id"], "task-b")
-        self.assertEqual(written["run_id"], terminal.metadata["run_id"])
-        self.assertEqual(written["status"], "failed")
-        final_result = written["final_result"]
-        assert final_result is not None
-        self.assertEqual(final_result["status"], "failed")
-        self.assertEqual(final_result["reason"], "exit_code=1")
-        records = json.loads((self.root / "job_locations.json").read_text(encoding="utf-8"))
-        current_record = next(record for record in records if record["job_id"] == "task-b")
-        self.assertEqual(current_record["status"], "failed")
-        self.assertNotEqual(current_record["job_id"], "task-a")
-        notify.assert_called_once()
-
-        _run_terminal_replay(self.worker, self.root, terminal)
-        _run_terminal_replay(self.worker, self.root, terminal)
-
-        notify.assert_called_once()
-        key = (str(self.root.resolve()), entry.queue_id)
-        reconcile_statuses = _reconcile_statuses(self.worker)
-        self.assertEqual(reconcile_statuses[key], "failed")
-
-    @patch("orca_auto.orca.queue.worker_tracking.upsert_terminal_job_record")
-    def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
-        self,
-        mock_upsert_terminal: MagicMock,
-    ) -> None:
-        rxn = self.root / "mol_cancel_requested_before_exit"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-
-        self.worker._finalize_completed_job(
-            entry.queue_id,
-            _RunningJob(
-                queue_root=self.worker.allowed_root,
-                queue_id=entry.queue_id,
-                reaction_dir=str(rxn),
-                process=MagicMock(),
-                admission_token=token or "",
-            ),
-            rc=143,
-        )
-
-        queue_entries = list_queue(self.root)
-        self.assertEqual(queue_entries[0].status.value, "cancelled")
-        self.assertFalse(queue_entries[0].cancel_requested)
-        self.assertTrue(queue_entries[0].metadata.get("run_id"))
-        written = load_state(rxn)
-        assert written is not None
-        self.assertEqual(written["job_id"], entry.task_id)
-        self.assertEqual(written["run_id"], queue_entries[0].metadata["run_id"])
-        self.assertEqual(written["status"], STATUS_CANCELLED)
-        final_result = written["final_result"]
-        assert final_result is not None
-        self.assertEqual(final_result["status"], STATUS_CANCELLED)
-        mock_upsert_terminal.assert_called_once()
-        self.assertEqual(active_slot_count(self.root), 0)
-
-    def test_check_completed_jobs_still_running(self) -> None:
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running["q_run"] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id="q_run",
-            reaction_dir="/tmp/r",
-            process=mock_proc,
-            admission_token="slot_run",
-        )
-        self.worker._check_completed_jobs()
-        self.assertEqual(len(self.worker._running), 1)
-
-    @patch(
-        "orca_auto.orca.queue.replay.mark_cancelled",
-        wraps=replay_mod.mark_cancelled,
+def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_stale_finalizer"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-stale-finalizer")
+    running = claim_next_entry(queue_root)
+    assert running is not None
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    assert mark_failed(queue_root, entry.queue_id, error="first_owner", expected_entry=running)
+    assert replay_mod.update_queue_metadata(
+        queue_root, entry.queue_id, {"orca_terminal_replay": None}
     )
-    def test_check_cancel_requests(self, mock_mark_cancelled: MagicMock) -> None:
-        rxn = self.root / "mol_cancel"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
+    [closed] = list_queue(queue_root)
+    job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
 
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        mock_proc.wait.return_value = 0
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_cancel",
-        )
+    worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
-        def terminate(process: MagicMock) -> bool:
-            process.poll.return_value = 0
-            return True
+    assert not (rxn / "job_state.json").exists()
+    assert active_slot_count(queue_root) == 0
+    assert list_queue(queue_root) == [closed]
+    assert closed.metadata.get("orca_terminal_replay") is None
 
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate):
-            self.worker._check_cancel_requests()
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        mock_mark_cancelled.assert_called_once()
-        self.assertEqual(mock_mark_cancelled.call_args.args, (self.root, entry.queue_id))
-        self.assertNotIn("metadata_update", mock_mark_cancelled.call_args.kwargs)
-        [cancelled] = list_queue(self.root)
-        self.assertEqual(cancelled.status, QueueStatus.CANCELLED)
-        self.assertIsNone(cancelled.metadata.get("orca_terminal_replay"))
 
-    @patch("orca_auto.orca.queue.replay.mark_cancelled", return_value=True)
-    def test_check_cancel_requests_retains_live_job_when_termination_fails(
-        self,
-        mock_mark_cancelled: MagicMock,
-    ) -> None:
-        rxn = self.root / "mol_cancel_live"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_cancel_live",
-        )
+def test_finalize_completed_job_recovers_once_and_releases_on_benign_mark_noop(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The row was moved or removed by another actor: nothing to mark, slot freed.
+    moved = queue_root / "moved"
+    token = reserve_slot(
+        queue_root,
+        worker.max_concurrent,
+        work_dir=str(moved),
+        queue_id="queue-moved",
+        source="queue_worker",
+        state="reserved",
+    )
+    assert token is not None
+    job = OrcaRunningJob(
+        queue_root=worker.allowed_root,
+        queue_id="queue-moved",
+        reaction_dir=str(moved),
+        process=fake_children.spawn(exited=1),
+        admission_token=token,
+        task_id="task-moved",
+    )
 
-        with patch("orca_auto.orca.queue.replay.terminate_process", return_value=False):
-            self.worker._check_cancel_requests()
+    worker._finalize_completed_job(job.queue_id, job, rc=1)
 
-        self.assertIn(entry.queue_id, self.worker._running)
-        mock_mark_cancelled.assert_not_called()
+    assert not moved.exists()
+    assert job_record(queue_root, "task-moved") is None
+    assert active_slot_count(queue_root) == 0
 
-    @patch("orca_auto.orca.queue.replay.mark_cancelled", return_value=True)
-    def test_check_cancel_requests_ignores_replacement_generation(
-        self,
-        mock_mark_cancelled: MagicMock,
-    ) -> None:
-        rxn = self.root / "mol_cancel_replacement"
-        rxn.mkdir()
-        selected = enqueue(self.root, str(rxn), task_id="task-a")
-        running = dequeue_next(self.root)
-        assert running is not None
-        replacement = replace(
-            running,
-            task_id="task-b",
-            cancel_requested=True,
-        )
-        save_entries_core(self.root, [replacement])
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[selected.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=selected.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot-a",
-            task_id="task-a",
-        )
 
-        with patch("orca_auto.orca.queue.replay.terminate_process") as terminate:
-            self.worker._check_cancel_requests()
+def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    sleeping_child: Callable[[], subprocess.Popen[bytes]],
+    queue_root: Path,
+) -> None:
+    # The child died after fencing its launch but before publishing the
+    # engine record. The gate wrapper never received its release byte, so
+    # no engine ran: the finalizer must clear the pending record and
+    # release the slot instead of retrying forever with reconcile paused.
+    rxn = queue_root / "mol_pending_launch"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-pending-launch")
+    claim_next_entry(queue_root)
+    child = sleeping_child()
+    token = reserve_job_slot(
+        queue_root,
+        worker.max_concurrent,
+        entry,
+        rxn,
+        owner_pid=child.pid,
+        engine_process_state="idle",
+        engine_launch_gated=True,
+    )
+    assert prepare_slot_engine_process(queue_root, token) is not None
+    child.kill()
+    child.wait()
+    job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
 
-        terminate.assert_not_called()
-        mock_mark_cancelled.assert_not_called()
-        self.assertIn(selected.queue_id, self.worker._running)
-        [durable] = list_queue(self.root)
-        self.assertEqual(durable.task_id, "task-b")
-        self.assertTrue(durable.cancel_requested)
+    worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
-    def test_start_error_does_not_fail_replacement_generation(self) -> None:
-        rxn = self.root / "mol_start_error_replacement"
-        rxn.mkdir()
-        selected = enqueue(self.root, str(rxn), task_id="task-a")
-        running = dequeue_next(self.root)
-        assert running is not None
-        token = reserve_slot(
-            self.root,
-            2,
-            work_dir=str(rxn),
-            queue_id=selected.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        assert token is not None
-        replacement = replace(running, task_id="task-b")
-        save_entries_core(self.root, [replacement])
+    record = job_record(queue_root, "task-pending-launch")
+    assert record is not None and record["status"] == "failed"
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
+    assert active_slot_count(queue_root) == 0
+    assert get_slot(queue_root, token) is None
 
-        self.worker._mark_entry_failed_and_release(
-            self.root,
-            running,
-            token,
-            error="worker start failed",
-            mark_failed_fn=mark_failed,
-        )
 
-        [durable] = list_queue(self.root)
-        self.assertEqual(durable.task_id, "task-b")
-        self.assertEqual(durable.status, QueueStatus.RUNNING)
-        self.assertEqual(active_slot_count(self.root), 0)
+def test_finalize_finished_job_marks_completed_and_releases_slot(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_completed"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
 
-    def test_cancel_finalizes_state_before_deferred_slot_release(self) -> None:
-        rxn = self.root / "mol_cancel_order"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-cancel-order")
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = None
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-        events: list[str] = []
+    worker._finalize_completed_job(
+        entry.queue_id, running_job(worker, entry, rxn, fake_children.spawn(exited=0), token), rc=0
+    )
 
-        def terminate(current: MagicMock) -> bool:
-            events.append("terminate")
-            current.poll.return_value = 0
-            return True
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
+    record = job_record(queue_root, entry.task_id)
+    assert record is not None and record["status"] == "completed"
+    assert active_slot_count(queue_root) == 0
 
-        def finalize(*_args: object, **_kwargs: object) -> bool:
-            events.append("finalize")
-            [cancelled_entry] = list_queue(self.root)
-            self.assertEqual(cancelled_entry.status, QueueStatus.CANCELLED)
-            self.assertEqual(active_slot_count(self.root), 1)
-            return True
 
-        def release(token_to_release: str) -> None:
-            events.append("release")
-            release_slot(self.root, token_to_release)
+def test_finalize_finished_job_sends_parent_terminal_notification_when_unmarked(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    recording_channel: RecordingChannel,
+    queue_root: Path,
+) -> None:
+    delivered = awaited_send(recording_channel)
+    rxn = queue_root / "mol_terminal_notify"
+    rxn.mkdir()
+    write_completed_run_state(rxn)
+    entry = enqueue(queue_root, str(rxn), task_id="task_terminal_123")
+    claim_next_entry(queue_root)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
 
-        with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(
-                replay_mod,
-                "recover_slot_engine_process",
-                side_effect=lambda *_args: events.append("recover"),
-            ),
-            patch.object(
-                replay_mod,
-                "_run_terminal_replay_side_effects",
-                side_effect=finalize,
-            ) as finalize_cancelled,
-            patch.object(
-                self.worker,
-                "_release_admission_slot",
-                side_effect=release,
-            ),
-        ):
-            self.assertTrue(
-                cancellation_mod.cancel_running_job(
-                    self.worker,
-                    entry.queue_id,
-                    job,
-                )
+    worker._finalize_completed_job(
+        entry.queue_id, running_job(worker, entry, rxn, fake_children.spawn(exited=0), token), rc=0
+    )
+
+    record = job_record(queue_root, "task_terminal_123")
+    assert record is not None and record["status"] == "completed"
+    assert delivered.wait(1)
+    assert len(recording_channel.sends) == 1
+    saved = load_state(rxn)
+    assert saved is not None
+    final_result = saved["final_result"]
+    assert final_result is not None
+    assert "finished_notification_claimed_at" in final_result
+    assert "finished_notification_sent_at" not in final_result
+
+
+def test_finalize_finished_job_releases_slot_when_terminal_notification_fails(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    recording_channel: RecordingChannel,
+    queue_root: Path,
+) -> None:
+    delivered = awaited_send(recording_channel, sent=False)
+    rxn = queue_root / "mol_terminal_notify_failed"
+    rxn.mkdir()
+    write_completed_run_state(rxn)
+    entry = enqueue(queue_root, str(rxn), task_id="task_terminal_123")
+    claim_next_entry(queue_root)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
+
+    worker._finalize_completed_job(entry.queue_id, job, rc=0)
+
+    record = job_record(queue_root, "task_terminal_123")
+    assert record is not None and record["status"] == "completed"
+    assert delivered.wait(1)
+    assert len(recording_channel.sends) == 1
+    [completed] = list_queue(queue_root)
+    assert completed.status == QueueStatus.COMPLETED
+    assert completed.metadata.get("orca_terminal_replay") is None
+    assert active_slot_count(queue_root) == 0
+    assert entry.queue_id not in worker._running
+    saved = load_state(rxn)
+    assert saved is not None
+    final_result = saved["final_result"]
+    assert final_result is not None
+    assert "finished_notification_sent_at" not in final_result
+
+
+def test_terminal_notification_skips_when_state_already_marked(
+    worker_cfg: AppConfig, recording_channel: RecordingChannel, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_terminal_already_marked"
+    rxn.mkdir()
+    write_completed_run_state(rxn)
+    state = load_state(rxn)
+    assert state is not None
+    final_result = state["final_result"]
+    assert final_result is not None
+    final_result["finished_notification_sent_at"] = "2026-05-29T12:02:00+00:00"
+    finalize_state(rxn, state, status="completed", final_result=final_result)
+
+    assert notify_terminal_job_from_state(worker_cfg, str(rxn)) is False
+    assert recording_channel.sends == []
+
+
+def test_terminal_notification_rejects_previous_generation_state(
+    worker_cfg: AppConfig, recording_channel: RecordingChannel, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_terminal_stale_generation"
+    rxn.mkdir()
+    write_completed_run_state(rxn)
+
+    assert notify_terminal_job_from_state(worker_cfg, str(rxn), expected_job_id="task-b") is False
+    assert recording_channel.sends == []
+
+
+def test_finalize_finished_job_marks_failed_run(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_failed"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+
+    worker._finalize_completed_job(
+        entry.queue_id,
+        running_job(worker, entry, rxn, fake_children.spawn(exited=2), token),
+        rc=2,
+    )
+
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
+    record = job_record(queue_root, entry.task_id)
+    assert record is not None and record["status"] == "failed"
+
+
+def test_finalize_finished_job_synthesizes_current_generation_failure_state(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    recording_channel: RecordingChannel,
+    queue_root: Path,
+) -> None:
+    delivered = awaited_send(recording_channel)
+    rxn = queue_root / "mol_failed_before_current_state"
+    rxn.mkdir()
+    previous = new_state(rxn, rxn / "task-a.inp")
+    previous["job_id"] = "task-a"
+    previous_run_id = previous["run_id"]
+    finalize_state(
+        rxn,
+        previous,
+        status=STATUS_COMPLETED,
+        final_result={
+            "status": STATUS_COMPLETED,
+            "reason": "normal_termination",
+            "completed_at": "2026-07-10T00:00:00+00:00",
+        },
+    )
+    entry = enqueue(queue_root, str(rxn), force=True, task_id="task-b")
+    claim_next_entry(queue_root)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
+
+    worker._finalize_completed_job(entry.queue_id, job, rc=1)
+
+    terminal = queue_row(queue_root, entry.queue_id)
+    assert terminal.status == QueueStatus.FAILED
+    assert terminal.metadata.get("run_id")
+    assert terminal.metadata.get("run_id") != previous_run_id
+    written = load_state(rxn)
+    assert written is not None
+    assert written["job_id"] == "task-b"
+    assert written["run_id"] == terminal.metadata["run_id"]
+    assert written["status"] == "failed"
+    final_result = written["final_result"]
+    assert final_result is not None
+    assert (final_result["status"], final_result["reason"]) == ("failed", "exit_code=1")
+    current_record = job_record(queue_root, "task-b")
+    assert current_record is not None
+    assert current_record["status"] == "failed"
+    assert delivered.wait(1)
+    assert len(recording_channel.sends) == 1
+
+    run_terminal_replay(worker, queue_root, terminal)
+    run_terminal_replay(worker, queue_root, terminal)
+
+    assert len(recording_channel.sends) == 1
+    key = (str(queue_root.resolve()), entry.queue_id)
+    assert reconcile_statuses(worker)[key] == "failed"
+
+
+def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_requested_before_exit"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+
+    worker._finalize_completed_job(
+        entry.queue_id,
+        running_job(worker, entry, rxn, fake_children.spawn(exited=143), token),
+        rc=143,
+    )
+
+    [cancelled] = list_queue(queue_root)
+    assert cancelled.status == QueueStatus.CANCELLED
+    assert not cancelled.cancel_requested
+    assert cancelled.metadata.get("run_id")
+    written = load_state(rxn)
+    assert written is not None
+    assert written["job_id"] == entry.task_id
+    assert written["run_id"] == cancelled.metadata["run_id"]
+    assert written["status"] == STATUS_CANCELLED
+    final_result = written["final_result"]
+    assert final_result is not None
+    assert final_result["status"] == STATUS_CANCELLED
+    record = job_record(queue_root, entry.task_id)
+    assert record is not None and record["status"] == "cancelled"
+    assert active_slot_count(queue_root) == 0
+
+
+# ---------------------------------------------------------------------------
+# Cancellation
+# ---------------------------------------------------------------------------
+
+
+def test_check_cancel_requests(
+    worker: OrcaQueueWorker,
+    sleeping_child: Callable[[], subprocess.Popen[bytes]],
+    queue_root: Path,
+) -> None:
+    rxn = queue_root / "mol_cancel"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    child = sleeping_child()
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, child, "slot_cancel", task_id=None
+    )
+
+    worker._check_cancel_requests()
+
+    assert child.poll() == -signal.SIGTERM
+    assert entry.queue_id not in worker._running
+    [cancelled] = list_queue(queue_root)
+    assert cancelled.status == QueueStatus.CANCELLED
+    assert not cancelled.cancel_requested
+    assert cancelled.metadata.get("orca_terminal_replay") is None
+    written = load_state(rxn)
+    assert written is not None
+    assert written["status"] == STATUS_CANCELLED
+
+
+def test_check_cancel_requests_retains_live_job_when_termination_fails(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_live"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    child = fake_children.spawn(stubborn=True)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, child, "slot_cancel_live", task_id=None
+    )
+
+    worker._check_cancel_requests()
+
+    assert [signum for _pid, signum in fake_children.signals] == [signal.SIGTERM, signal.SIGKILL]
+    assert child.poll_result is None
+    assert entry.queue_id in worker._running
+    [row] = list_queue(queue_root)
+    assert (row.status, row.cancel_requested) == (QueueStatus.RUNNING, True)
+
+
+def test_check_cancel_requests_ignores_replacement_generation(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_replacement"
+    rxn.mkdir()
+    selected = enqueue(queue_root, str(rxn), task_id="task-a")
+    running = claim_next_entry(queue_root)
+    assert running is not None
+    replacement = replace(running, task_id="task-b", cancel_requested=True)
+    save_entries_core(queue_root, [replacement])
+    child = fake_children.spawn()
+    worker._running[selected.queue_id] = running_job(
+        worker, selected, rxn, child, "slot-a", task_id="task-a"
+    )
+
+    worker._check_cancel_requests()
+
+    assert fake_children.signals == []
+    assert child.poll_result is None
+    assert selected.queue_id in worker._running
+    [durable] = list_queue(queue_root)
+    assert (durable.task_id, durable.status, durable.cancel_requested) == (
+        "task-b",
+        QueueStatus.RUNNING,
+        True,
+    )
+
+
+def test_cancel_finalizes_state_before_deferred_slot_release(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_order"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-cancel-order")
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    child = fake_children.spawn(exit_code=0)
+    job = running_job(worker, entry, rxn, child, token)
+    seen_at_finalize: list[tuple[int | None, QueueStatus, int]] = []
+    real_side_effects = replay_mod._run_terminal_replay_side_effects
+
+    def side_effects(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
+        [row] = list_queue(queue_root)
+        seen_at_finalize.append((child.poll_result, row.status, active_slot_count(queue_root)))
+        real_side_effects(cfg, item)
+
+    with patch.object(
+        replay_mod, "_run_terminal_replay_side_effects", side_effect=side_effects
+    ) as finalize_cancelled:
+        assert worker._cancel_running_job(entry.queue_id, job) is True
+
+    # By the time the terminal side effects ran, the child had been stopped,
+    # the row was durably cancelled and the slot was still held.
+    assert seen_at_finalize == [(0, QueueStatus.CANCELLED, 1)]
+    assert active_slot_count(queue_root) == 0
+    item = finalize_cancelled.call_args.args[1]
+    assert (item.queue_id, item.task_id, item.state_prepared) == (
+        entry.queue_id,
+        entry.task_id,
+        True,
+    )
+
+
+def test_cancel_mark_failure_retains_queue_slot_and_skips_finalization(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The row's generation moved on under the job (another submission
+    # replaced task-a with task-b): the durable cancel mark must refuse.
+    rxn = queue_root / "mol_cancel_mark_failure"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-a")
+    running = claim_next_entry(queue_root)
+    assert running is not None
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    save_entries_core(queue_root, [replace(running, task_id="task-b", cancel_requested=True)])
+    job = running_job(worker, entry, rxn, fake_children.spawn(exit_code=0), token)
+
+    assert worker._cancel_running_job(entry.queue_id, job) is False
+
+    assert active_slot_count(queue_root) == 1
+    [still_running] = list_queue(queue_root)
+    assert (still_running.status, still_running.task_id) == (QueueStatus.RUNNING, "task-b")
+    assert not (rxn / "job_state.json").exists()
+
+
+def test_cancel_mark_false_completion_retry_keeps_running_entry_slot(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_mark_false_retry"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-cancel-mark-false-retry")
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=0), token
+    )
+
+    with (
+        # Cancel marks from the worker; the completion retry marks through the
+        # replay engine's terminal mark. Both refuse here.
+        patch.object(queue_worker_mod, "mark_cancelled", return_value=False),
+        patch.object(replay_mod, "mark_cancelled", return_value=False),
+    ):
+        worker._check_cancel_requests()
+        assert entry.queue_id in worker._running
+        assert active_slot_count(queue_root) == 1
+
+        worker._check_completed_jobs()
+
+    assert entry.queue_id in worker._running
+    assert active_slot_count(queue_root) == 1
+    [still_running] = list_queue(queue_root)
+    assert (still_running.status, still_running.cancel_requested) == (QueueStatus.RUNNING, True)
+
+
+def test_cancel_mark_false_releases_after_concurrent_terminal_transition(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_mark_false_terminal_race"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-cancel-terminal-race")
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exited=0), token
+    )
+    real_mark_cancelled = replay_mod.mark_cancelled
+
+    def terminalize_then_report_false(*args: Any, **kwargs: Any) -> bool:
+        assert real_mark_cancelled(*args, **kwargs)
+        return False
+
+    # The completion path marks through the replay engine's terminal mark;
+    # here the row turns terminal but the caller is told nothing changed.
+    with patch.object(replay_mod, "mark_cancelled", side_effect=terminalize_then_report_false):
+        worker._check_completed_jobs()
+
+    written = load_state(rxn)
+    assert written is not None
+    assert (written["job_id"], written["status"]) == (entry.task_id, STATUS_CANCELLED)
+    assert entry.queue_id not in worker._running
+    assert active_slot_count(queue_root) == 0
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.CANCELLED}
+
+
+def test_cancel_mark_exception_isolated_and_retried_by_completion(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_mark_exception_retry"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-cancel-mark-exception-retry")
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=0), token
+    )
+
+    # The queue file cannot be rewritten while the cancel is processed.
+    with read_only(queue_root):
+        worker._check_cancel_requests()
+        assert entry.queue_id in worker._running
+        assert active_slot_count(queue_root) == 1
+        [still_running] = list_queue(queue_root)
+        assert still_running.status == QueueStatus.RUNNING
+
+    worker._check_completed_jobs()
+
+    assert entry.queue_id not in worker._running
+    assert active_slot_count(queue_root) == 0
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.CANCELLED}
+    written = load_state(rxn)
+    assert written is not None
+    assert written["status"] == STATUS_CANCELLED
+
+
+def test_cancel_state_failure_retains_slot_after_terminal_mark(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    recording_channel: RecordingChannel,
+    queue_root: Path,
+) -> None:
+    delivered = awaited_send(recording_channel)
+    rxn = queue_root / "mol_cancel_state_failure"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-cancel-state-failure")
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    job = running_job(worker, entry, rxn, fake_children.spawn(exit_code=0), token)
+    worker._running[entry.queue_id] = job
+
+    # The cancelled run state cannot be written while another instance owns the directory.
+    with held_run_lock(rxn):
+        assert worker._cancel_running_job(entry.queue_id, job) is False
+        assert active_slot_count(queue_root) == 1
+        assert job_record(queue_root, entry.task_id) is None
+        assert recording_channel.sends == []
+        [cancelled_entry] = list_queue(queue_root)
+        assert cancelled_entry.status == QueueStatus.CANCELLED
+        assert job.pending_terminal_replay is not None
+
+    worker._check_completed_jobs()
+
+    assert active_slot_count(queue_root) == 0
+    assert entry.queue_id not in worker._running
+    written = load_state(rxn)
+    assert written is not None
+    assert (written["job_id"], written["status"]) == (entry.task_id, STATUS_CANCELLED)
+    record = job_record(queue_root, entry.task_id)
+    assert record is not None and record["status"] == "cancelled"
+    assert delivered.wait(1)
+    assert len(recording_channel.sends) == 1
+
+
+def test_cancel_side_effect_failure_withholds_its_directory_until_strict_replay(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_replay_barrier"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-cancel-a")
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    token = reserve_job_slot(queue_root, 2, entry, rxn)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=0), token
+    )
+
+    with held_run_lock(rxn):
+        worker._check_cancel_requests()
+
+        assert entry.queue_id in worker._running
+        assert active_slot_count(queue_root) == 1
+        [pending_replay] = list_queue(queue_root)
+        assert pending_replay.status == QueueStatus.CANCELLED
+        assert isinstance(pending_replay.metadata.get("orca_terminal_replay"), dict)
+        successor = insert_pending_successor(queue_root, rxn, queue_id="q_cancel_successor")
+        assert worker._unresolved_terminal_reaction_keys() == frozenset({str(rxn.resolve())})
+        assert worker._fill_slots() == "idle"
+        assert successor.queue_id not in worker._running
+
+    worker._check_completed_jobs()
+
+    assert entry.queue_id not in worker._running
+    assert active_slot_count(queue_root) == 0
+    assert queue_row(queue_root, entry.queue_id).metadata.get("orca_terminal_replay") is None
+    record = job_record(queue_root, "task-cancel-a")
+    assert record is not None and record["status"] == "cancelled"
+    assert worker._unresolved_terminal_reaction_keys() == frozenset()
+
+
+def test_cancel_recovery_failure_retains_queue_slot_and_skips_mark(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_cancel_recovery_failure"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-cancel-recovery-failure")
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    # The engine launch is still pending under a live owner: recovery must refuse.
+    token = pending_launch_slot(queue_root, worker.max_concurrent, entry, rxn)
+    child = fake_children.spawn(exit_code=0)
+    job = running_job(worker, entry, rxn, child, token)
+
+    assert worker._cancel_running_job(entry.queue_id, job) is False
+
+    assert child.poll_result == 0
+    assert active_slot_count(queue_root) == 1
+    [still_running] = list_queue(queue_root)
+    assert (still_running.status, still_running.cancel_requested) == (QueueStatus.RUNNING, True)
+    assert not (rxn / "job_state.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Shutdown
+# ---------------------------------------------------------------------------
+
+
+def test_shutdown_asks_every_child_to_stop_before_escalating_on_any(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The first child ignores SIGTERM for its whole graceful period. The
+    # second must already have been asked to stop before the first is
+    # SIGKILLed, so the graceful periods overlap instead of adding up.
+    rxn_slow = queue_root / "mol_shut_slow"
+    rxn_slow.mkdir()
+    rxn_fast = queue_root / "mol_shut_fast"
+    rxn_fast.mkdir()
+    slow_entry = enqueue(queue_root, str(rxn_slow))
+    fast_entry = enqueue(queue_root, str(rxn_fast))
+    claim_next_entry(queue_root)
+    claim_next_entry(queue_root)
+    slow_child = fake_children.spawn(ignores_sigterm=True)
+    fast_child = fake_children.spawn()
+    worker._running[slow_entry.queue_id] = running_job(
+        worker, slow_entry, rxn_slow, slow_child, "slot_slow", task_id=None
+    )
+    worker._running[fast_entry.queue_id] = running_job(
+        worker, fast_entry, rxn_fast, fast_child, "slot_fast", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    signals = fake_children.signals
+    # Both children are asked to stop up front; the slow one is asked again
+    # in its own turn and then escalated. The fast child's request precedes
+    # that escalation, so it stopped during the slow child's graceful period.
+    assert signals[:2] == [(slow_child.pid, signal.SIGTERM), (fast_child.pid, signal.SIGTERM)]
+    assert signals.index((fast_child.pid, signal.SIGTERM)) < signals.index(
+        (slow_child.pid, signal.SIGKILL)
+    )
+    assert signals[-1] == (slow_child.pid, signal.SIGKILL)
+    assert slow_child.poll_result == -signal.SIGKILL
+    assert fake_children.stopped(fast_child)
+    assert worker._running == {}
+    statuses = queue_statuses(queue_root)
+    assert statuses[slow_entry.queue_id] == QueueStatus.PENDING
+    assert statuses[fast_entry.queue_id] == QueueStatus.PENDING
+
+
+def test_start_warns_when_concurrency_exceeds_host_cores(
+    make_worker: Callable[..., OrcaQueueWorker],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    worker = make_worker(max_concurrent=2)
+    cores_per_task = int(worker.cfg.resources.max_cores_per_task)
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(cores_per_task)))
+
+    with caplog.at_level(logging.WARNING, logger=WORKER_LOGGER):
+        worker._before_run()
+
+    [record] = [r for r in caplog.records if "oversubscribe" in r.getMessage()]
+    message = record.getMessage()
+    assert (
+        f"max_concurrent=2 x max_cores_per_task={cores_per_task} requests {2 * cores_per_task} cores"
+        in message
+    )
+    assert f"this worker can use {cores_per_task}" in message
+
+
+def test_start_stays_quiet_when_concurrency_fits_host_cores(
+    make_worker: Callable[..., OrcaQueueWorker],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    worker = make_worker(max_concurrent=2)
+    cores_per_task = int(worker.cfg.resources.max_cores_per_task)
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(2 * cores_per_task)))
+
+    with caplog.at_level(logging.WARNING, logger=WORKER_LOGGER):
+        worker._before_run()
+
+    assert not [r for r in caplog.records if "oversubscribe" in r.getMessage()]
+
+
+def test_shutdown_all_empty(worker: OrcaQueueWorker) -> None:
+    worker._shutdown_all()
+    assert len(worker._running) == 0
+
+
+def test_shutdown_all_with_running(
+    worker: OrcaQueueWorker,
+    sleeping_child: Callable[[], subprocess.Popen[bytes]],
+    queue_root: Path,
+) -> None:
+    rxn = queue_root / "mol_shut"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    child = sleeping_child()
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, child, "slot_shutdown", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert child.poll() == -signal.SIGTERM
+    assert len(worker._running) == 0
+    [row] = list_queue(queue_root)
+    assert (row.status, row.started_at) == (QueueStatus.PENDING, "")
+
+
+def test_shutdown_does_not_requeue_a_replacement_generation(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The shutdown requeue is fenced to the generation the job was started
+    # for: a row that another submission has since replaced stays untouched.
+    rxn = queue_root / "mol_shut_replaced"
+    rxn.mkdir()
+    selected = enqueue(queue_root, str(rxn), task_id="task-a")
+    running = claim_next_entry(queue_root)
+    assert running is not None
+    save_entries_core(queue_root, [replace(running, task_id="task-b")])
+    child = fake_children.spawn()
+    worker._running[selected.queue_id] = running_job(
+        worker, selected, rxn, child, "slot-a", task_id="task-a"
+    )
+
+    worker._shutdown_all()
+
+    assert fake_children.stopped(child)
+    assert len(worker._running) == 0
+    [durable] = list_queue(queue_root)
+    assert (durable.task_id, durable.status) == ("task-b", QueueStatus.RUNNING)
+
+
+def test_shutdown_finalizes_cancel_requested_job(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # A cancel pending when the worker shuts down must be finalized (terminal +
+    # run state written), not requeued for resume: the shutdown path routes it
+    # through the same cancel finalization as the proactive loop.
+    rxn = queue_root / "mol_shut_cancel"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    save_child_state(rxn, entry.task_id, "running")
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=0), "slot_shut_cancel", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert entry.queue_id not in worker._running
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.CANCELLED}
+    written = load_state(rxn)
+    assert written is not None
+    assert written["final_result"] is not None
+    assert written["final_result"]["status"] == "cancelled"
+
+
+def test_shutdown_finalizes_a_child_that_finished_instead_of_requeueing(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The child was still alive at the last poll but had already finished
+    # ORCA and was writing its state/report; it exits 0 during the grace
+    # window. Requeueing it would re-run (force rows) or unbind (plain rows)
+    # a completed generation, so it takes the normal completion path.
+    rxn = queue_root / "mol_shut_done"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    save_child_state(
+        rxn,
+        entry.task_id,
+        "completed",
+        {"status": "completed", "reason": "normal_termination", "analyzer_status": "completed"},
+    )
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=0), "slot_shut_done", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert entry.queue_id not in worker._running
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
+
+
+def test_shutdown_finalizes_a_child_that_finished_failed(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # A failed run also reached its own conclusion (state, report and
+    # notification written) and exits 1; requeueing it would re-run a
+    # generation the user was already told failed.
+    rxn = queue_root / "mol_shut_failed"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    save_child_state(
+        rxn,
+        entry.task_id,
+        "failed",
+        {"status": "failed", "reason": "retry_limit_reached", "analyzer_status": "incomplete"},
+    )
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=1), "slot_shut_failed", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert entry.queue_id not in worker._running
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
+
+
+def test_shutdown_leaves_a_self_requeued_child_pending(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The common graceful-stop path: the child was stopped mid-run, requeued
+    # its own row and exited 0. The completion path must not touch the
+    # pending row and must still release the slot.
+    rxn = queue_root / "mol_shut_self"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+
+    def requeue_own_row() -> None:
+        queue_worker_mod.requeue_running_entry(queue_root, entry.queue_id)
+
+    worker._running[entry.queue_id] = running_job(
+        worker,
+        entry,
+        rxn,
+        fake_children.spawn(exit_code=0, on_stop=requeue_own_row),
+        token,
+    )
+
+    worker._shutdown_all()
+
+    assert entry.queue_id not in worker._running
+    assert active_slot_count(queue_root) == 0
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+
+
+def test_shutdown_continues_with_the_next_job_when_finalizing_one_fails(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    rxn_done = queue_root / "mol_shut_done_raise"
+    rxn_done.mkdir()
+    rxn_live = queue_root / "mol_shut_live"
+    rxn_live.mkdir()
+    done_entry = enqueue(queue_root, str(rxn_done))
+    live_entry = enqueue(queue_root, str(rxn_live))
+    claim_next_entry(queue_root)
+    claim_next_entry(queue_root)
+    # The finished child left a terminal run state, so it is eligible for
+    # the completion path; publishing it then fails on an unreadable job index.
+    save_child_state(
+        rxn_done,
+        done_entry.task_id,
+        "completed",
+        {"status": "completed", "reason": "normal_termination", "analyzer_status": "completed"},
+    )
+    done_token = reserve_job_slot(queue_root, worker.max_concurrent, done_entry, rxn_done)
+    (queue_root / "job_locations.json").mkdir()
+    done_child = fake_children.spawn(exit_code=0)
+    live_child = fake_children.spawn()
+    worker._running[done_entry.queue_id] = running_job(
+        worker, done_entry, rxn_done, done_child, done_token, task_id=None
+    )
+    worker._running[live_entry.queue_id] = running_job(
+        worker, live_entry, rxn_live, live_child, "slot_live", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert fake_children.stopped(done_child) and fake_children.stopped(live_child)
+    assert len(worker._running) == 0
+    statuses = queue_statuses(queue_root)
+    # The finished job keeps its durable terminal owner (row and slot) for
+    # the next worker start; the live one is requeued for resume.
+    assert statuses[done_entry.queue_id] == QueueStatus.COMPLETED
+    assert terminal_replay_marker_from_entry(queue_row(queue_root, done_entry.queue_id))
+    assert get_slot(queue_root, done_token) is not None
+    assert statuses[live_entry.queue_id] == QueueStatus.PENDING
+
+
+def test_shutdown_continues_with_the_next_job_when_terminating_one_fails(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # An exception before the completion path (here from termination
+    # itself) must not leave the remaining children running unsupervised.
+    rxn_broken = queue_root / "mol_shut_term_raise"
+    rxn_broken.mkdir()
+    rxn_live = queue_root / "mol_shut_live_2"
+    rxn_live.mkdir()
+    broken_entry = enqueue(queue_root, str(rxn_broken))
+    live_entry = enqueue(queue_root, str(rxn_live))
+    claim_next_entry(queue_root)
+    claim_next_entry(queue_root)
+    broken_child = fake_children.spawn()
+    live_child = fake_children.spawn()
+    worker._running[broken_entry.queue_id] = running_job(
+        worker, broken_entry, rxn_broken, broken_child, "slot_term_raise", task_id=None
+    )
+    worker._running[live_entry.queue_id] = running_job(
+        worker, live_entry, rxn_live, live_child, "slot_live_2", task_id=None
+    )
+
+    def terminate(process: ManagedProcess) -> bool:
+        if process is broken_child:
+            raise RuntimeError("simulated termination failure")
+        return terminate_process_group(process)
+
+    with patch.object(queue_worker_mod, "terminate_process_group", side_effect=terminate):
+        worker._shutdown_all()
+
+    assert len(worker._running) == 0
+    # The core last resort stopped the child whose engine-level shutdown
+    # raised, and the next job was still shut down normally.
+    assert fake_children.stopped(broken_child) and fake_children.stopped(live_child)
+    statuses = queue_statuses(queue_root)
+    assert statuses[broken_entry.queue_id] == QueueStatus.RUNNING
+    assert statuses[live_entry.queue_id] == QueueStatus.PENDING
+
+
+def test_shutdown_requeues_a_child_that_died_handling_the_stop(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The child caught the stop but its own requeue write raised, so it
+    # exited 1 with the row still running and a non-terminal run state.
+    # That is an interrupted calculation, not a failed one.
+    rxn = queue_root / "mol_shut_interrupted"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    save_child_state(rxn, entry.task_id, "running")
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=1), "slot_shut_interrupted", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+    written = load_state(rxn)
+    assert written is not None
+    assert written["status"] == "running"
+
+
+def test_shutdown_tolerates_a_failed_cancel_read_and_still_stops_the_child(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The queue read that precedes termination raised; the child must still
+    # be stopped and requeued through the ordinary path (the store-level
+    # requeue honors a pending cancel on its own), and the next job is
+    # still shut down.
+    rxn_broken = queue_root / "mol_shut_pre_raise"
+    rxn_broken.mkdir()
+    rxn_live = queue_root / "mol_shut_live_3"
+    rxn_live.mkdir()
+    broken_entry = enqueue(queue_root, str(rxn_broken))
+    live_entry = enqueue(queue_root, str(rxn_live))
+    claim_next_entry(queue_root)
+    claim_next_entry(queue_root)
+    broken_child = fake_children.spawn()
+    live_child = fake_children.spawn()
+    worker._running[broken_entry.queue_id] = running_job(
+        worker, broken_entry, rxn_broken, broken_child, "slot_pre_raise", task_id=None
+    )
+    worker._running[live_entry.queue_id] = running_job(
+        worker, live_entry, rxn_live, live_child, "slot_live_3", task_id=None
+    )
+    real_get_cancel_requested = queue_worker_mod.get_cancel_requested
+
+    def get_cancel_requested(queue_root_arg: Path, queue_id: str, **kwargs: Any) -> bool:
+        if queue_id == broken_entry.queue_id:
+            raise RuntimeError("simulated queue read failure")
+        return real_get_cancel_requested(queue_root_arg, queue_id, **kwargs)
+
+    with patch.object(queue_worker_mod, "get_cancel_requested", side_effect=get_cancel_requested):
+        worker._shutdown_all()
+
+    assert len(worker._running) == 0
+    # Handled at the engine layer: the ordinary termination path ran for both jobs.
+    assert fake_children.stopped(broken_child) and fake_children.stopped(live_child)
+    assert broken_child.poll_result == -signal.SIGTERM
+    assert queue_statuses(queue_root) == {
+        broken_entry.queue_id: QueueStatus.PENDING,
+        live_entry.queue_id: QueueStatus.PENDING,
+    }
+
+
+def test_shutdown_finalizes_a_child_whose_row_is_already_terminal(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The child recorded its own rejection on the row (crash recovery) and
+    # exited 1 without writing a run state; the row is terminal, so the
+    # completion path (a no-op mark plus slot release) applies, not requeue.
+    rxn = queue_root / "mol_shut_row_terminal"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    assert replay_mod.mark_failed(
+        queue_root,
+        entry.queue_id,
+        error="crash recovery rejected: simulated",
+        expected_task_id=entry.task_id,
+    )
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=1), "slot_row_terminal", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert entry.queue_id not in worker._running
+    row = queue_row(queue_root, entry.queue_id)
+    assert row.status == QueueStatus.FAILED
+    # The completion path really ran: the replay marker was consumed and
+    # the failed run state was written for the row's task.
+    assert terminal_replay_marker_from_entry(row) is None
+    written = load_state(rxn)
+    assert written is not None
+    assert (written["status"], written["job_id"]) == ("failed", entry.task_id)
+
+
+def test_shutdown_tolerated_cancel_read_still_honors_a_pending_cancel(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # The claim the tolerance rests on: with the cancel flag unreadable,
+    # the ordinary requeue still turns a cancel-requested row into
+    # cancelled (with its replay marker) rather than pending.
+    rxn = queue_root / "mol_shut_pre_raise_cancel"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    cancel(queue_root, entry.queue_id)
+    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(), token, task_id=None
+    )
+
+    with patch.object(
+        queue_worker_mod,
+        "get_cancel_requested",
+        side_effect=RuntimeError("simulated queue read failure"),
+    ):
+        worker._shutdown_all()
+
+    assert entry.queue_id not in worker._running
+    assert active_slot_count(queue_root) == 0
+    row = queue_row(queue_root, entry.queue_id)
+    assert (row.status, row.cancel_requested) == (QueueStatus.CANCELLED, False)
+    assert terminal_replay_marker_from_entry(row) is not None
+
+
+def test_shutdown_ignores_a_terminal_state_left_by_an_earlier_task(
+    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+) -> None:
+    # A completed state from a previous submission in the same directory
+    # does not conclude the current child's run.
+    rxn = queue_root / "mol_shut_stale_state"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    save_child_state(
+        rxn,
+        "task-from-an-earlier-submission",
+        "completed",
+        {"status": "completed", "reason": "normal_termination"},
+    )
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, fake_children.spawn(exit_code=0), "slot_stale_state", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+
+
+def test_shutdown_requeues_a_child_killed_mid_run(
+    worker: OrcaQueueWorker,
+    sleeping_child: Callable[[], subprocess.Popen[bytes]],
+    queue_root: Path,
+) -> None:
+    # A child killed by a signal (SIGKILL after the grace window, or a death
+    # before its stop handler was installed) exits negative and keeps the
+    # resume path.
+    rxn = queue_root / "mol_shut_killed"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    child = sleeping_child()
+    worker._running[entry.queue_id] = running_job(
+        worker, entry, rxn, child, "slot_shut_killed", task_id=None
+    )
+
+    worker._shutdown_all()
+
+    assert child.poll() == -signal.SIGTERM
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_orphaned_running_ignores_root_report_even_with_worker_pid_file(
+    worker: OrcaQueueWorker, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_done"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    worker._write_pid_file()
+    report_json_path(rxn).write_text(
+        json.dumps(
+            orca_artifact_payload(
+                job_id=entry.task_id,
+                run_id="run_done_1",
+                reaction_dir=str(rxn),
+                status="completed",
+                final_result={
+                    "status": "completed",
+                    "completed_at": "2026-03-10T04:59:59+00:00",
+                },
             )
+        ),
+        encoding="utf-8",
+    )
 
-        self.assertEqual(events, ["terminate", "recover", "finalize", "release"])
-        self.assertEqual(active_slot_count(self.root), 0)
-        replay_item = finalize_cancelled.call_args.args[1]
-        self.assertEqual(replay_item.queue_id, entry.queue_id)
-        self.assertEqual(replay_item.task_id, entry.task_id)
-        self.assertTrue(replay_item.state_prepared)
+    worker._reconcile_worker_state()
 
-    def test_cancel_mark_failure_retains_queue_slot_and_skips_finalization(self) -> None:
-        rxn = self.root / "mol_cancel_mark_failure"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-cancel-mark-failure")
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = None
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
+    queue_data = json.loads((queue_root / "queue.json").read_text(encoding="utf-8"))
+    found = next(item for item in queue_data if item["queue_id"] == entry.queue_id)
+    assert found["status"] == "pending"
+    assert "run_id" not in found["metadata"]
 
-        def terminate(current: MagicMock) -> bool:
-            current.poll.return_value = 0
-            return True
 
-        with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(replay_mod, "mark_cancelled", return_value=False),
-            patch.object(self.worker, "_release_admission_slot") as release,
-        ):
-            self.assertFalse(
-                cancellation_mod.cancel_running_job(
-                    self.worker,
-                    entry.queue_id,
-                    job,
-                )
-            )
+# ---------------------------------------------------------------------------
+# Worker lifecycle: singleton lock, startup failure, reconciliation cadence,
+# child start and shutdown sweep (ported from the former generic base tests)
+# ---------------------------------------------------------------------------
 
-        release.assert_not_called()
-        self.assertEqual(active_slot_count(self.root), 1)
-        [still_running] = list_queue(self.root)
-        self.assertEqual(still_running.status, QueueStatus.RUNNING)
 
-    def test_cancel_mark_false_completion_retry_keeps_running_entry_slot(self) -> None:
-        rxn = self.root / "mol_cancel_mark_false_retry"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-cancel-mark-false-retry")
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
+class _RecordingWorker(OrcaQueueWorker):
+    """Records finalize/shutdown per job; the child seams stay inert."""
 
-        def terminate(current: MagicMock) -> bool:
-            current.poll.return_value = 0
-            return True
+    def __init__(
+        self, cfg: AppConfig, calls: list[tuple[str, str]], *, fail_finalize: bool = False
+    ) -> None:
+        super().__init__(cfg, "/tmp/config.yaml", max_concurrent=2, sleep_fn=lambda _seconds: None)
+        self.calls = calls
+        self.fail_finalize = fail_finalize
 
-        with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(replay_mod, "mark_cancelled", return_value=False),
-        ):
-            self.worker._check_cancel_requests()
-            self.assertIn(entry.queue_id, self.worker._running)
-            self.assertEqual(active_slot_count(self.root), 1)
+    def _finalize_completed_job(self, queue_id: str, job: OrcaRunningJob, rc: int) -> None:
+        self.calls.append(("finalize", queue_id))
+        if self.fail_finalize:
+            raise RuntimeError("finalize failed once")
 
-            self.worker._check_completed_jobs()
+    def _shutdown_running_job(self, queue_id: str, job: OrcaRunningJob) -> None:
+        self.calls.append(("shutdown", queue_id))
 
-        self.assertIn(entry.queue_id, self.worker._running)
-        self.assertEqual(active_slot_count(self.root), 1)
-        [still_running] = list_queue(self.root)
-        self.assertEqual(still_running.status, QueueStatus.RUNNING)
-        self.assertTrue(still_running.cancel_requested)
 
-    def test_cancel_mark_false_releases_after_concurrent_terminal_transition(self) -> None:
-        rxn = self.root / "mol_cancel_mark_false_terminal_race"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-cancel-terminal-race")
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = 0
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-        real_mark_cancelled = replay_mod.mark_cancelled
+def _plain_entry(queue_id: str) -> QueueEntry:
+    return QueueEntry(queue_id, "orca_auto_orca", "task-1", "orca_run_inp", "orca")
 
-        def terminalize_then_report_false(*args: Any, **kwargs: Any) -> bool:
-            self.assertTrue(real_mark_cancelled(*args, **kwargs))
+
+def test_start_reserved_finalizes_snapshot_intent_before_start(
+    worker: OrcaQueueWorker, queue_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reconciled: list[tuple[Path, ...]] = []
+    events: list[str] = []
+
+    def reconcile_snapshots(roots: tuple[Path, ...]) -> int:
+        reconciled.append(roots)
+        return 0
+
+    def start_job(*_args: Any, **_kwargs: Any) -> bool:
+        events.append("start")
+        return True
+
+    monkeypatch.setattr(
+        queue_worker_mod, "snapshot_runtime_roots_for_cfg", lambda _cfg: (queue_root,)
+    )
+    monkeypatch.setattr(
+        queue_worker_mod, "reconcile_orphaned_snapshot_generations", reconcile_snapshots
+    )
+    monkeypatch.setattr(
+        queue_worker_mod, "finalize_queued_snapshot_intent", lambda *_args: events.append("intent")
+    )
+    monkeypatch.setattr(worker, "_start_job", start_job)
+    monkeypatch.setattr(replay_mod, "reconcile_worker_state", lambda *_args, **_kwargs: None)
+
+    assert worker._start_reserved(ReservedQueueEntry(queue_root, _plain_entry("q-1"), "slot"))
+    assert events == ["intent", "start"]
+    # Abandoned pre-enqueue snapshots are swept on the first reconcile only,
+    # then at most once per interval.
+    worker._reconcile_worker_state()
+    worker._reconcile_worker_state()
+    assert reconciled == [(queue_root,)]
+
+
+def test_idle_state_reconciliation_is_throttled(
+    worker_cfg: AppConfig, queue_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [0.0]
+    reconcile_calls: list[float] = []
+    sleep_calls: list[float] = []
+
+    class _Worker(OrcaQueueWorker):
+        def _reconcile_worker_state(self) -> None:
+            reconcile_calls.append(now[0])
+
+    monkeypatch.setattr(queue_worker_mod.time, "monotonic", lambda: now[0])
+    worker = _Worker(worker_cfg, str(queue_root / "config.yaml"), sleep_fn=sleep_calls.append)
+    monkeypatch.setattr(worker, "_write_pid_file", lambda: None)
+
+    worker._before_run()
+    worker._sleep()
+    now[0] = 59.0
+    worker._sleep()
+    now[0] = 60.0
+    worker._sleep()
+
+    assert reconcile_calls == [0.0, 60.0]
+    assert sleep_calls == [5.0, 5.0, 5.0]
+
+
+def test_shutdown_all_reaps_finished_job_before_requeuing(
+    worker_cfg: AppConfig, queue_root: Path
+) -> None:
+    # A child that finished during the final poll interval must be reaped through
+    # the normal completion path at shutdown, not force-terminated and requeued
+    # (which would needlessly re-run a completed job on the next worker start).
+    calls: list[tuple[str, str]] = []
+    worker = _RecordingWorker(worker_cfg, calls)
+    finished = running_job(
+        worker, _plain_entry("done"), queue_root, FakeManagedProcess(poll_result=0), "slot-done"
+    )
+    still_running = running_job(
+        worker, _plain_entry("busy"), queue_root, FakeManagedProcess(), "slot-busy"
+    )
+    worker._running = {"done": finished, "busy": still_running}
+
+    worker._shutdown_all()
+
+    assert ("finalize", "done") in calls
+    assert ("shutdown", "done") not in calls
+    assert ("shutdown", "busy") in calls
+    assert worker._running == {}
+
+
+def test_shutdown_all_does_not_requeue_exited_job_after_finalize_failure(
+    worker_cfg: AppConfig, queue_root: Path
+) -> None:
+    calls: list[tuple[str, str]] = []
+    worker = _RecordingWorker(worker_cfg, calls, fail_finalize=True)
+    finished = running_job(
+        worker, _plain_entry("done"), queue_root, FakeManagedProcess(poll_result=0), "slot-done"
+    )
+    still_running = running_job(
+        worker, _plain_entry("busy"), queue_root, FakeManagedProcess(), "slot-busy"
+    )
+    worker._running = {"done": finished, "busy": still_running}
+
+    worker._shutdown_all()
+
+    assert ("finalize", "done") in calls
+    assert ("shutdown", "done") not in calls
+    assert ("shutdown", "busy") in calls
+    assert worker._running == {"done": finished}
+
+
+def test_run_once_returns_error_when_singleton_lock_held(
+    worker: OrcaQueueWorker,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    lock_calls: list[tuple[Path, float]] = []
+
+    def locked_file_lock(path: Path, *, timeout_seconds: float) -> object:
+        lock_calls.append((path, timeout_seconds))
+        raise TimeoutError("held")
+
+    monkeypatch.setattr(queue_worker_mod, "file_lock", locked_file_lock)
+
+    assert worker.run_once(idle_message=None, blocked_message=None) == 1
+
+    assert "queue worker already running" in capsys.readouterr().err
+    assert lock_calls == [(queue_root.resolve() / "queue_worker.pid.lock", 0.0)]
+    assert not worker._pid_file_path().exists()
+
+
+def test_run_reports_startup_failure_and_removes_pid_file(
+    worker_cfg: AppConfig,
+    queue_root: Path,
+    preserved_signals: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    del preserved_signals
+
+    class _StartupFailingWorker(OrcaQueueWorker):
+        def _reconcile_worker_state(self) -> None:
+            raise TimeoutError("admission lock held by service restart")
+
+    worker = _StartupFailingWorker(worker_cfg, str(queue_root / "config.yaml"))
+
+    with caplog.at_level(logging.ERROR):
+        rc = worker.run()
+
+    assert rc == 1
+    errors = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert [record.getMessage() for record in errors] == [
+        "Queue worker startup failed: admission lock held by service restart"
+    ]
+    assert errors[0].exc_info is None
+    assert not worker._pid_file_path().exists()
+
+
+def test_rejected_attach_terminates_child_and_reports_start_error(
+    worker_cfg: AppConfig, queue_root: Path, fake_children: FakeChildren
+) -> None:
+    start_errors: list[tuple[Path, str, str]] = []
+    process = fake_children.spawn()
+
+    class RejectingWorker(OrcaQueueWorker):
+        def _start_background_process(self, **_kwargs: Any) -> ManagedProcess:
+            return process
+
+        def _on_worker_process_started(self, *_args: Any, **_kwargs: Any) -> bool:
             return False
 
-        with (
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(
-                replay_mod,
-                "mark_cancelled",
-                side_effect=terminalize_then_report_false,
-            ),
-            patch.object(
-                replay_mod,
-                "record_cancelled_run_state",
-                wraps=replay_mod.record_cancelled_run_state,
-            ) as record_state,
-            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
-            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
-        ):
-            self.worker._check_completed_jobs()
-
-        record_state.assert_called_once()
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        self.assertEqual(active_slot_count(self.root), 0)
-        [cancelled_entry] = list_queue(self.root)
-        self.assertEqual(cancelled_entry.status, QueueStatus.CANCELLED)
-
-    def test_cancel_mark_exception_isolated_and_retried_by_completion(self) -> None:
-        rxn = self.root / "mol_cancel_mark_exception_retry"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-cancel-mark-exception-retry")
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-        real_mark_cancelled = replay_mod.mark_cancelled
-        mark_attempts = 0
-
-        def terminate(current: MagicMock) -> bool:
-            current.poll.return_value = 0
-            return True
-
-        def flaky_mark_cancelled(*args: Any, **kwargs: Any) -> bool:
-            nonlocal mark_attempts
-            mark_attempts += 1
-            if mark_attempts == 1:
-                raise OSError("queue write failed")
-            return real_mark_cancelled(*args, **kwargs)
-
-        with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(replay_mod, "mark_cancelled", side_effect=flaky_mark_cancelled),
-            patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
-            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
-        ):
-            self.worker._check_cancel_requests()
-            self.assertIn(entry.queue_id, self.worker._running)
-            self.assertEqual(active_slot_count(self.root), 1)
-            [still_running] = list_queue(self.root)
-            self.assertEqual(still_running.status, QueueStatus.RUNNING)
-
-            self.worker._check_completed_jobs()
-
-        self.assertEqual(mark_attempts, 2)
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        self.assertEqual(active_slot_count(self.root), 0)
-        [cancelled_entry] = list_queue(self.root)
-        self.assertEqual(cancelled_entry.status, QueueStatus.CANCELLED)
-
-    def test_cancel_state_failure_retains_slot_after_terminal_mark(self) -> None:
-        rxn = self.root / "mol_cancel_state_failure"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-cancel-state-failure")
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = None
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-        self.worker._running[entry.queue_id] = job
-        real_record_cancelled = replay_mod.record_cancelled_run_state
-        record_attempts = 0
-        released: list[str] = []
-
-        def terminate(current: MagicMock) -> bool:
-            current.poll.return_value = 0
-            return True
-
-        def record_cancelled(*args: Any, **kwargs: Any) -> tuple[str | None, str | None]:
-            nonlocal record_attempts
-            record_attempts += 1
-            if record_attempts == 1:
-                raise OSError("state store unavailable")
-            return real_record_cancelled(*args, **kwargs)
-
-        def release(current_token: str) -> None:
-            released.append(current_token)
-            release_slot(self.root, current_token)
-
-        with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(
-                replay_mod,
-                "record_cancelled_run_state",
-                side_effect=record_cancelled,
-            ),
-            patch.object(
-                worker_tracking_mod,
-                "upsert_terminal_job_record",
-                return_value=True,
-            ) as upsert,
-            patch.object(
-                worker_tracking_mod,
-                "notify_terminal_job_from_state",
-                return_value=False,
-            ) as notify,
-            patch.object(
-                self.worker,
-                "_release_admission_slot",
-                side_effect=release,
-            ),
-        ):
-            self.assertFalse(
-                cancellation_mod.cancel_running_job(
-                    self.worker,
-                    entry.queue_id,
-                    job,
-                )
-            )
-            self.assertEqual(released, [])
-            upsert.assert_not_called()
-            notify.assert_not_called()
-            self.assertEqual(active_slot_count(self.root), 1)
-            [cancelled_entry] = list_queue(self.root)
-            self.assertEqual(cancelled_entry.status, QueueStatus.CANCELLED)
-            self.assertIsNotNone(job.pending_terminal_replay)
-
-            self.worker._check_completed_jobs()
-
-        self.assertEqual(record_attempts, 2)
-        self.assertEqual(released, [token])
-        self.assertEqual(active_slot_count(self.root), 0)
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        written = load_state(rxn)
-        assert written is not None
-        self.assertEqual(written["job_id"], entry.task_id)
-        self.assertEqual(written["status"], STATUS_CANCELLED)
-        upsert.assert_called_once()
-        notify.assert_called_once()
-
-    def test_cancel_side_effect_failure_withholds_its_directory_until_strict_replay(self) -> None:
-        rxn = self.root / "mol_cancel_replay_barrier"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-cancel-a")
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            2,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = None
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-        self.worker.max_concurrent = 2
-        self.worker._running[entry.queue_id] = job
-
-        def terminate(current: MagicMock) -> bool:
-            current.poll.return_value = 0
-            return True
-
-        with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(
-                worker_tracking_mod,
-                "upsert_terminal_job_record",
-                side_effect=[False, True],
-            ) as upsert,
-            patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
-        ):
-            self.worker._check_cancel_requests()
-
-            self.assertIn(entry.queue_id, self.worker._running)
-            self.assertEqual(active_slot_count(self.root), 1)
-            [pending_replay] = list_queue(self.root)
-            self.assertEqual(pending_replay.status, QueueStatus.CANCELLED)
-            self.assertIsInstance(
-                pending_replay.metadata.get("orca_terminal_replay"),
-                dict,
-            )
-            successor = self._insert_pending_successor(rxn, queue_id="q_cancel_successor")
-            self.assertEqual(
-                replay_mod.unresolved_terminal_reaction_keys(self.worker),
-                frozenset({str(rxn.resolve())}),
-            )
-            self.assertEqual(self.worker._fill_slots(), "idle")
-            self.assertNotIn(successor.queue_id, self.worker._running)
-
-            self.worker._check_completed_jobs()
-
-        self.assertEqual(upsert.call_count, 2)
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        self.assertEqual(active_slot_count(self.root), 0)
-        replayed = next(row for row in list_queue(self.root) if row.queue_id == entry.queue_id)
-        self.assertIsNone(replayed.metadata.get("orca_terminal_replay"))
-        self.assertEqual(replay_mod.unresolved_terminal_reaction_keys(self.worker), frozenset())
-
-    def test_cancel_recovery_failure_retains_queue_slot_and_skips_mark(self) -> None:
-        rxn = self.root / "mol_cancel_recovery_failure"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn), task_id="task-cancel-recovery-failure")
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-        token = reserve_slot(
-            self.root,
-            self.worker.max_concurrent,
-            work_dir=str(rxn),
-            queue_id=entry.queue_id,
-            source="queue_worker",
-            state="reserved",
-        )
-        self.assertIsNotNone(token)
-        process = MagicMock()
-        process.poll.return_value = None
-        job = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=process,
-            admission_token=token or "",
-            task_id=entry.task_id,
-        )
-
-        def terminate(current: MagicMock) -> bool:
-            current.poll.return_value = 0
-            return True
-
-        with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(
-                replay_mod,
-                "recover_slot_engine_process",
-                side_effect=RuntimeError("engine recovery failed"),
-            ),
-            patch.object(replay_mod, "mark_cancelled") as mark_cancelled_entry,
-            patch.object(self.worker, "_release_admission_slot") as release,
-        ):
-            self.assertFalse(
-                cancellation_mod.cancel_running_job(
-                    self.worker,
-                    entry.queue_id,
-                    job,
-                )
-            )
-
-        mark_cancelled_entry.assert_not_called()
-        release.assert_not_called()
-        self.assertEqual(active_slot_count(self.root), 1)
-        [still_running] = list_queue(self.root)
-        self.assertEqual(still_running.status, QueueStatus.RUNNING)
-
-    def test_shutdown_all_empty(self) -> None:
-        self.worker._shutdown_all()
-        self.assertEqual(len(self.worker._running), 0)
-
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
-    def test_shutdown_all_with_running(self, mock_requeue: MagicMock) -> None:
-        rxn = self.root / "mol_shut"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_shutdown",
-        )
-        with patch("orca_auto.orca.queue.replay.terminate_process", return_value=True):
-            self.worker._shutdown_all()
-        self.assertEqual(len(self.worker._running), 0)
-        mock_requeue.assert_called_once()
-        self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
-        self.assertEqual(mock_requeue.call_args.kwargs["expected_entry"].task_id, entry.task_id)
-
-    def test_shutdown_finalizes_cancel_requested_job(self) -> None:
-        # A cancel pending when the worker shuts down must be finalized (terminal +
-        # run state written), not requeued for resume: the shutdown path routes it
-        # through the same cancel finalization as the proactive loop.
-        rxn = self.root / "mol_shut_cancel"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-
-        state = new_state(rxn, rxn / "job.inp")
-        state["job_id"] = entry.task_id
-        state["status"] = "running"
-        save_state(rxn, state)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_shut_cancel",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = 0
-            return True
-
-        with (
-            patch(
-                "orca_auto.orca.queue.replay.terminate_process",
-                side_effect=terminate_process,
-            ),
-            patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
-        ):
-            self.worker._shutdown_all()
-
-        mock_requeue.assert_not_called()
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        self.assertEqual(queue_entries[entry.queue_id].status.value, "cancelled")
-        written = load_state(rxn)
-        assert written is not None
-        assert written["final_result"] is not None
-        self.assertEqual(written["final_result"]["status"], "cancelled")
-
-    def test_shutdown_finalizes_a_child_that_finished_instead_of_requeueing(self) -> None:
-        # The child was still alive at the last poll but had already finished
-        # ORCA and was writing its state/report; it exits 0 during the grace
-        # window. Requeueing it would re-run (force rows) or unbind (plain rows)
-        # a completed generation, so it takes the normal completion path.
-        rxn = self.root / "mol_shut_done"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-
-        state = new_state(rxn, rxn / "job.inp")
-        state["job_id"] = entry.task_id
-        state["status"] = "completed"
-        state["final_result"] = {
-            "status": "completed",
-            "reason": "normal_termination",
-            "analyzer_status": "completed",
-        }
-        save_state(rxn, state)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_shut_done",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = 0
-            return True
-
-        with (
-            patch(
-                "orca_auto.orca.queue.replay.terminate_process",
-                side_effect=terminate_process,
-            ),
-            patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
-        ):
-            self.worker._shutdown_all()
-
-        mock_requeue.assert_not_called()
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        self.assertEqual(queue_entries[entry.queue_id].status.value, "completed")
-
-    def test_shutdown_finalizes_a_child_that_finished_failed(self) -> None:
-        # A failed run also reached its own conclusion (state, report and
-        # notification written) and exits 1; requeueing it would re-run a
-        # generation the user was already told failed.
-        rxn = self.root / "mol_shut_failed"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-
-        state = new_state(rxn, rxn / "job.inp")
-        state["job_id"] = entry.task_id
-        state["status"] = "failed"
-        state["final_result"] = {
-            "status": "failed",
-            "reason": "retry_limit_reached",
-            "analyzer_status": "incomplete",
-        }
-        save_state(rxn, state)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_shut_failed",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = 1
-            return True
-
-        with (
-            patch(
-                "orca_auto.orca.queue.replay.terminate_process",
-                side_effect=terminate_process,
-            ),
-            patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
-        ):
-            self.worker._shutdown_all()
-
-        mock_requeue.assert_not_called()
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        self.assertEqual(queue_entries[entry.queue_id].status.value, "failed")
-
-    def test_shutdown_leaves_a_self_requeued_child_pending(self) -> None:
-        # The common graceful-stop path: the child was stopped mid-run, requeued
-        # its own row and exited 0. The completion path must not touch the
-        # pending row and must still release the slot.
-        rxn = self.root / "mol_shut_self"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_shut_self",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            # The child honors the stop by requeueing its own row first.
-            queue_worker_mod.requeue_running_entry(self.root, entry.queue_id)
-            process.poll.return_value = 0
-            return True
-
-        released: list[str] = []
-        with (
-            patch(
-                "orca_auto.orca.queue.replay.terminate_process",
-                side_effect=terminate_process,
-            ),
-            patch.object(self.worker, "_release_admission_slot", side_effect=released.append),
-        ):
-            self.worker._shutdown_all()
-
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        self.assertEqual(released, ["slot_shut_self"])
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        self.assertEqual(queue_entries[entry.queue_id].status.value, "pending")
-
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
-    def test_shutdown_continues_with_the_next_job_when_finalizing_one_fails(
-        self, mock_requeue: MagicMock
-    ) -> None:
-        rxn_done = self.root / "mol_shut_done_raise"
-        rxn_done.mkdir()
-        rxn_live = self.root / "mol_shut_live"
-        rxn_live.mkdir()
-        done_entry = enqueue(self.root, str(rxn_done))
-        live_entry = enqueue(self.root, str(rxn_live))
-        dequeue_next(self.root)
-        dequeue_next(self.root)
-
-        # The finished child left a terminal run state, so it is eligible for
-        # the completion path; that path is then made to fail.
-        state = new_state(rxn_done, rxn_done / "job.inp")
-        state["job_id"] = done_entry.task_id
-        state["status"] = "completed"
-        state["final_result"] = {
-            "status": "completed",
-            "reason": "normal_termination",
-            "analyzer_status": "completed",
-        }
-        save_state(rxn_done, state)
-
-        done_proc = MagicMock()
-        done_proc.poll.return_value = 0
-        live_proc = MagicMock()
-        live_proc.poll.return_value = None
-        self.worker._running[done_entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=done_entry.queue_id,
-            reaction_dir=str(rxn_done),
-            process=done_proc,
-            admission_token="slot_done_raise",
-        )
-        self.worker._running[live_entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=live_entry.queue_id,
-            reaction_dir=str(rxn_live),
-            process=live_proc,
-            admission_token="slot_live",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            if process is live_proc:
-                process.poll.return_value = -15
-            return True
-
-        with (
-            patch(
-                "orca_auto.orca.queue.replay.terminate_process",
-                side_effect=terminate_process,
-            ),
-            patch(
-                "orca_auto.orca.queue.replay.finalize_completed_job",
-                side_effect=RuntimeError("finalize failed"),
-            ),
-            patch.object(self.worker, "_check_completed_jobs"),
-        ):
-            self.worker._shutdown_all()
-
-        self.assertEqual(len(self.worker._running), 0)
-        mock_requeue.assert_called_once()
-        self.assertEqual(mock_requeue.call_args.args, (self.root, live_entry.queue_id))
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        # The finished job's row is left for the next worker start, not requeued.
-        self.assertEqual(queue_entries[done_entry.queue_id].status.value, "running")
-
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
-    def test_shutdown_continues_with_the_next_job_when_terminating_one_fails(
-        self, mock_requeue: MagicMock
-    ) -> None:
-        # An exception before the completion path (here from termination
-        # itself) must not leave the remaining children running unsupervised.
-        rxn_broken = self.root / "mol_shut_term_raise"
-        rxn_broken.mkdir()
-        rxn_live = self.root / "mol_shut_live_2"
-        rxn_live.mkdir()
-        broken_entry = enqueue(self.root, str(rxn_broken))
-        live_entry = enqueue(self.root, str(rxn_live))
-        dequeue_next(self.root)
-        dequeue_next(self.root)
-
-        broken_proc = MagicMock()
-        broken_proc.poll.return_value = None
-        live_proc = MagicMock()
-        live_proc.poll.return_value = None
-        self.worker._running[broken_entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=broken_entry.queue_id,
-            reaction_dir=str(rxn_broken),
-            process=broken_proc,
-            admission_token="slot_term_raise",
-        )
-        self.worker._running[live_entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=live_entry.queue_id,
-            reaction_dir=str(rxn_live),
-            process=live_proc,
-            admission_token="slot_live_2",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            if process is broken_proc:
-                raise RuntimeError("simulated termination failure")
-            process.poll.return_value = -15
-            return True
-
-        last_resort: list[MagicMock] = []
-
-        def last_resort_terminate(process: MagicMock) -> bool:
-            last_resort.append(process)
-            return True
-
-        with (
-            patch(
-                "orca_auto.orca.queue.replay.terminate_process",
-                side_effect=terminate_process,
-            ),
-            patch(
-                "orca_auto.core.queue.worker.process.terminate_process_group",
-                side_effect=last_resort_terminate,
-            ),
-            patch.object(self.worker, "_check_completed_jobs"),
-        ):
-            self.worker._shutdown_all()
-
-        self.assertEqual(len(self.worker._running), 0)
-        # The core last resort stopped the child whose engine-level shutdown
-        # raised, and the next job was still shut down normally.
-        self.assertEqual(last_resort, [broken_proc])
-        mock_requeue.assert_called_once()
-        self.assertEqual(mock_requeue.call_args.args, (self.root, live_entry.queue_id))
-
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
-    def test_shutdown_requeues_a_child_that_died_handling_the_stop(
-        self, mock_requeue: MagicMock
-    ) -> None:
-        # The child caught the stop but its own requeue write raised, so it
-        # exited 1 with the row still running and a non-terminal run state.
-        # That is an interrupted calculation, not a failed one.
-        rxn = self.root / "mol_shut_interrupted"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-
-        state = new_state(rxn, rxn / "job.inp")
-        state["job_id"] = entry.task_id
-        state["status"] = "running"
-        save_state(rxn, state)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_shut_interrupted",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = 1
-            return True
-
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
-            self.worker._shutdown_all()
-
-        mock_requeue.assert_called_once()
-        self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        self.assertEqual(queue_entries[entry.queue_id].status.value, "running")
-
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
-    def test_shutdown_tolerates_a_failed_cancel_read_and_still_stops_the_child(
-        self, mock_requeue: MagicMock
-    ) -> None:
-        # The queue read that precedes termination raised; the child must still
-        # be stopped and requeued through the ordinary path (the store-level
-        # requeue honors a pending cancel on its own), and the next job is
-        # still shut down.
-        rxn_broken = self.root / "mol_shut_pre_raise"
-        rxn_broken.mkdir()
-        rxn_live = self.root / "mol_shut_live_3"
-        rxn_live.mkdir()
-        broken_entry = enqueue(self.root, str(rxn_broken))
-        live_entry = enqueue(self.root, str(rxn_live))
-        dequeue_next(self.root)
-        dequeue_next(self.root)
-
-        broken_proc = MagicMock()
-        broken_proc.poll.return_value = None
-        live_proc = MagicMock()
-        live_proc.poll.return_value = None
-        self.worker._running[broken_entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=broken_entry.queue_id,
-            reaction_dir=str(rxn_broken),
-            process=broken_proc,
-            admission_token="slot_pre_raise",
-        )
-        self.worker._running[live_entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=live_entry.queue_id,
-            reaction_dir=str(rxn_live),
-            process=live_proc,
-            admission_token="slot_live_3",
-        )
-        real_get_cancel_requested = queue_worker_mod.get_cancel_requested
-
-        def get_cancel_requested(queue_root: Path, queue_id: str, **kwargs: Any) -> bool:
-            if queue_id == broken_entry.queue_id:
-                raise RuntimeError("simulated queue read failure")
-            return real_get_cancel_requested(queue_root, queue_id, **kwargs)
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = -15
-            return True
-
-        last_resort: list[MagicMock] = []
-
-        def last_resort_terminate(process: MagicMock) -> bool:
-            last_resort.append(process)
-            return True
-
-        with (
-            patch.object(
-                queue_worker_mod, "get_cancel_requested", side_effect=get_cancel_requested
-            ),
-            patch(
-                "orca_auto.orca.queue.replay.terminate_process",
-                side_effect=terminate_process,
-            ),
-            patch(
-                "orca_auto.core.queue.worker.process.terminate_process_group",
-                side_effect=last_resort_terminate,
-            ),
-            patch.object(self.worker, "_check_completed_jobs"),
-        ):
-            self.worker._shutdown_all()
-
-        self.assertEqual(len(self.worker._running), 0)
-        # Handled at the engine layer: the ordinary termination path ran for
-        # both jobs and the core last resort was not needed.
-        self.assertEqual(last_resort, [])
-        self.assertEqual(broken_proc.poll.return_value, -15)
-        self.assertEqual(mock_requeue.call_count, 2)
-        self.assertEqual(
-            sorted(call.args[1] for call in mock_requeue.call_args_list),
-            sorted([broken_entry.queue_id, live_entry.queue_id]),
-        )
-
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
-    def test_shutdown_finalizes_a_child_whose_row_is_already_terminal(
-        self, mock_requeue: MagicMock
-    ) -> None:
-        # The child recorded its own rejection on the row (crash recovery) and
-        # exited 1 without writing a run state; the row is terminal, so the
-        # completion path (a no-op mark plus slot release) applies, not requeue.
-        rxn = self.root / "mol_shut_row_terminal"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        self.assertTrue(
-            replay_mod.mark_failed(
-                self.root,
-                entry.queue_id,
-                error="crash recovery rejected: simulated",
-                expected_task_id=entry.task_id,
-            )
-        )
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_row_terminal",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = 1
-            return True
-
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
-            self.worker._shutdown_all()
-
-        mock_requeue.assert_not_called()
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        self.assertEqual(queue_entries[entry.queue_id].status.value, "failed")
-        # The completion path really ran: the replay marker was consumed and
-        # the failed run state was written for the row's task.
-        from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
-
-        self.assertIsNone(terminal_replay_marker_from_entry(queue_entries[entry.queue_id]))
-        written = load_state(rxn)
-        assert written is not None
-        self.assertEqual(written["status"], "failed")
-        self.assertEqual(written["job_id"], entry.task_id)
-
-    def test_shutdown_tolerated_cancel_read_still_honors_a_pending_cancel(self) -> None:
-        # The claim the tolerance rests on: with the cancel flag unreadable,
-        # the ordinary requeue still turns a cancel-requested row into
-        # cancelled (with its replay marker) rather than pending.
-        rxn = self.root / "mol_shut_pre_raise_cancel"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        cancel(self.root, entry.queue_id)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_pre_raise_cancel",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = -15
-            return True
-
-        released: list[str] = []
-        with (
-            patch.object(
-                queue_worker_mod,
-                "get_cancel_requested",
-                side_effect=RuntimeError("simulated queue read failure"),
-            ),
-            patch(
-                "orca_auto.orca.queue.replay.terminate_process",
-                side_effect=terminate_process,
-            ),
-            patch.object(self.worker, "_release_admission_slot", side_effect=released.append),
-        ):
-            self.worker._shutdown_all()
-
-        from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
-
-        self.assertNotIn(entry.queue_id, self.worker._running)
-        self.assertEqual(released, ["slot_pre_raise_cancel"])
-        queue_entries = {e.queue_id: e for e in list_queue(self.root)}
-        self.assertEqual(queue_entries[entry.queue_id].status.value, "cancelled")
-        self.assertFalse(queue_entries[entry.queue_id].cancel_requested)
-        self.assertIsNotNone(terminal_replay_marker_from_entry(queue_entries[entry.queue_id]))
-
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
-    def test_shutdown_ignores_a_terminal_state_left_by_an_earlier_task(
-        self, mock_requeue: MagicMock
-    ) -> None:
-        # A completed state from a previous submission in the same directory
-        # does not conclude the current child's run.
-        rxn = self.root / "mol_shut_stale_state"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-
-        state = new_state(rxn, rxn / "job.inp")
-        state["job_id"] = "task-from-an-earlier-submission"
-        state["status"] = "completed"
-        state["final_result"] = {"status": "completed", "reason": "normal_termination"}
-        save_state(rxn, state)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_stale_state",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = 0
-            return True
-
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
-            self.worker._shutdown_all()
-
-        mock_requeue.assert_called_once()
-        self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
-
-    @patch("orca_auto.orca.queue.worker.requeue_running_entry", return_value=True)
-    def test_shutdown_requeues_a_child_killed_mid_run(self, mock_requeue: MagicMock) -> None:
-        # A child killed by a signal (SIGKILL after the grace window, or a death
-        # before its stop handler was installed) exits negative and keeps the
-        # resume path.
-        rxn = self.root / "mol_shut_killed"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-
-        mock_proc = MagicMock()
-        mock_proc.poll.return_value = None
-        self.worker._running[entry.queue_id] = _RunningJob(
-            queue_root=self.worker.allowed_root,
-            queue_id=entry.queue_id,
-            reaction_dir=str(rxn),
-            process=mock_proc,
-            admission_token="slot_shut_killed",
-        )
-
-        def terminate_process(process: MagicMock) -> bool:
-            process.poll.return_value = -15
-            return True
-
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
-            self.worker._shutdown_all()
-
-        mock_requeue.assert_called_once()
-        self.assertEqual(mock_requeue.call_args.args, (self.root, entry.queue_id))
-
-    @patch("orca_auto.core.queue.worker.signal.signal")
-    def test_run_keyboard_interrupt(
-        self,
-        mock_signal: MagicMock,
-    ) -> None:
-        mock_sleep = MagicMock(side_effect=KeyboardInterrupt)
-        self.worker = OrcaQueueWorker(
-            self.cfg,
-            str(self.root / "config.yaml"),
-            max_concurrent=2,
-            deps=replace(self.worker.deps, sleep=mock_sleep),
-        )
-        rc = self.worker.run()
-        self.assertEqual(rc, 0)
-        self.assertGreaterEqual(mock_signal.call_count, 2)
-        # PID file should be cleaned up
-        self.assertFalse(self.worker._pid_file_path().exists())
-
-    @patch("orca_auto.core.queue.worker.signal.signal")
-    def test_run_shutdown_flag(
-        self,
-        mock_signal: MagicMock,
-    ) -> None:
-        mock_sleep = MagicMock()
-        self.worker = OrcaQueueWorker(
-            self.cfg,
-            str(self.root / "config.yaml"),
-            max_concurrent=2,
-            deps=replace(self.worker.deps, sleep=mock_sleep),
-        )
-
-        def set_shutdown(*a):
-            self.worker._shutdown_requested = True
-
-        mock_sleep.side_effect = set_shutdown
-        rc = self.worker.run()
-        self.assertEqual(rc, 0)
-        self.assertGreaterEqual(mock_signal.call_count, 2)
-
-    def test_reconcile_orphaned_running_ignores_root_report_even_with_worker_pid_file(
-        self,
-    ) -> None:
-        rxn = self.root / "mol_done"
-        rxn.mkdir()
-        entry = enqueue(self.root, str(rxn))
-        dequeue_next(self.root)
-        self.worker._write_pid_file()
-
-        report_json_path(rxn).write_text(
-            json.dumps(
-                orca_artifact_payload(
-                    job_id=entry.task_id,
-                    run_id="run_done_1",
-                    reaction_dir=str(rxn),
-                    status="completed",
-                    final_result={
-                        "status": "completed",
-                        "completed_at": "2026-03-10T04:59:59+00:00",
-                    },
-                )
-            ),
-            encoding="utf-8",
-        )
-
-        self.worker._reconcile_worker_state()
-
-        queue_data = json.loads((self.root / "queue.json").read_text(encoding="utf-8"))
-        found = next(item for item in queue_data if item["queue_id"] == entry.queue_id)
-        self.assertEqual(found["status"], "pending")
-        self.assertNotIn("run_id", found["metadata"])
-
-
-class TestFillSlots(unittest.TestCase):
-    def setUp(self) -> None:
-        self._ticks_patcher = patch(
-            "orca_auto.core.admission.store._process_start_ticks",
-            side_effect=lambda pid: max(1, int(pid)),
-        )
-        self._ticks_patcher.start()
-
-    def tearDown(self) -> None:
-        self._ticks_patcher.stop()
-
-    def test_queue_worker_does_not_mutate_config_max_concurrent(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            original_max_concurrent = cfg.runtime.max_concurrent
-
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
-
-            self.assertEqual(cfg.runtime.max_concurrent, original_max_concurrent)
-            self.assertIsNot(worker.cfg, cfg)
-            self.assertIsNot(worker.cfg.runtime, cfg.runtime)
-            self.assertEqual(worker.cfg.runtime.max_concurrent, 2)
-            self.assertEqual(worker.max_concurrent, 2)
-            self.assertEqual(worker.admission_limit, 2)
-
-    def test_queue_worker_does_not_mutate_config_with_explicit_admission_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            cfg = replace(cfg, runtime=replace(cfg.runtime, admission_limit=5))
-            original_max_concurrent = cfg.runtime.max_concurrent
-
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
-
-            self.assertIs(worker.cfg, cfg)
-            self.assertEqual(cfg.runtime.max_concurrent, original_max_concurrent)
-            self.assertEqual(worker.max_concurrent, 2)
-            self.assertEqual(worker.admission_limit, 5)
-
-    def test_fill_slots_starts_pending_jobs(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
-
-            rxn = root / "mol_A"
-            rxn.mkdir()
-            enqueue(root, str(rxn), metadata=_current_orca_queue_metadata(rxn))
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                mock_proc = MagicMock()
-                mock_proc.pid = 4101
-                mock_start_background_process.return_value = mock_proc
-                worker._fill_slots()
-                self.assertEqual(len(worker._running), 1)
-
-    def test_fill_slots_does_not_reclaim_a_row_whose_previous_job_is_still_tracked(self) -> None:
-        # A child stopped by an external SIGTERM requeues its own row for resume
-        # and only then exits; the requeue is applied directly here. Until the
-        # parent has seen that exit and released the slot, the row must not start
-        # a second job under the same queue id: that would replace the tracked
-        # job and strand its admission slot.
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
-            rxn = root / "mol_requeued"
-            rxn.mkdir()
-            entry = enqueue(root, str(rxn), metadata=_current_orca_queue_metadata(rxn))
-            behind = root / "mol_behind"
-            behind.mkdir()
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                first_proc = MagicMock()
-                first_proc.pid = 4201
-                first_proc.poll.return_value = None
-                behind_proc = MagicMock()
-                behind_proc.pid = 4202
-                behind_proc.poll.return_value = None
-                mock_start_background_process.side_effect = [first_proc, behind_proc]
-                worker._fill_slots()
-                tracked = worker._running[entry.queue_id]
-                self.assertTrue(queue_worker_mod.requeue_running_entry(root, entry.queue_id))
-                behind_entry = enqueue(
-                    root, str(behind), metadata=_current_orca_queue_metadata(behind)
-                )
-
-                worker._fill_slots()
-
-                self.assertEqual(mock_start_background_process.call_count, 2)
-
-            self.assertIs(worker._running[entry.queue_id], tracked)
-            statuses = {row.queue_id: row.status.value for row in list_queue(root)}
-            self.assertEqual(statuses[entry.queue_id], "pending")
-            # The row behind it is unaffected and takes the free slot.
-            self.assertEqual(statuses[behind_entry.queue_id], "running")
-            self.assertIs(worker._running[behind_entry.queue_id].process, behind_proc)
-
-    def test_fill_slots_with_only_a_tracked_pending_row_leaves_admission_untouched(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
-            rxn = root / "mol_requeued_only"
-            rxn.mkdir()
-            entry = enqueue(root, str(rxn), metadata=_current_orca_queue_metadata(rxn))
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                proc = MagicMock()
-                proc.pid = 4301
-                proc.poll.return_value = None
-                mock_start_background_process.return_value = proc
-                worker._fill_slots()
-                self.assertTrue(queue_worker_mod.requeue_running_entry(root, entry.queue_id))
-                admission_file = root / "admission_slots.json"
-                before = admission_file.stat()
-
-                status = worker._fill_slots()
-
-                after = admission_file.stat()
-                self.assertEqual(mock_start_background_process.call_count, 1)
-
-            self.assertEqual(status, "idle")
-            self.assertEqual((after.st_ino, after.st_mtime_ns), (before.st_ino, before.st_mtime_ns))
-            [row] = list_queue(root)
-            self.assertEqual(row.status.value, "pending")
-
-    def test_fill_slots_attaches_queue_identity_to_reserved_slot(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
-
-            rxn = root / "mol_identity"
-            rxn.mkdir()
-            entry = enqueue(
-                root,
-                str(rxn),
-                metadata=_current_orca_queue_metadata(rxn),
-            )
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                mock_proc = MagicMock()
-                mock_proc.pid = os.getpid()
-                mock_start_background_process.return_value = mock_proc
-                worker._fill_slots()
-
-            slots = list_slots(root)
-            self.assertEqual(len(slots), 1)
-            self.assertEqual(slots[0].queue_id, entry.queue_id)
-            self.assertEqual(slots[0].app_name, entry.app_name)
-            self.assertEqual(slots[0].task_id, entry.task_id)
-            self.assertEqual(slots[0].state, "active")
-            self.assertEqual(slots[0].owner_pid, os.getpid())
-            self.assertEqual(slots[0].work_dir, str(rxn))
-
-    def test_fill_slots_preserves_task_id_across_slot_and_worker_handoff(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
-
-            rxn = root / "mol_task_identity"
-            rxn.mkdir()
-            entry = enqueue(
-                root,
-                str(rxn),
-                task_id="orca_task_preserved_123",
-                metadata=_current_orca_queue_metadata(rxn),
-            )
-            self.assertNotEqual(entry.queue_id, entry.task_id)
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                mock_proc = MagicMock()
-                mock_proc.pid = os.getpid()
-                mock_start_background_process.return_value = mock_proc
-                worker._fill_slots()
-
-            slots = list_slots(root)
-            self.assertEqual(len(slots), 1)
-            self.assertEqual(slots[0].queue_id, entry.queue_id)
-            self.assertEqual(slots[0].task_id, entry.task_id)
-            self.assertNotEqual(slots[0].queue_id, slots[0].task_id)
-            command = mock_start_background_process.call_args.args[0]
-            self.assertEqual(
-                mock_start_background_process.call_args.kwargs["log_path"],
-                str((root / "logs" / f"{entry.queue_id}.log").resolve()),
-            )
-            self.assertEqual(
-                _command_arg(command, "--admission-token"),
-                slots[0].token,
-            )
-            self.assertEqual(
-                _command_arg(command, "--queue-id"),
-                entry.queue_id,
-            )
-            self.assertNotIn("--admission-task-id", command)
-            self.assertNotIn("--admission-app-name", command)
-
-    def test_fill_slots_respects_max_concurrent(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
-
-            for name in ("a", "b"):
-                d = root / name
-                d.mkdir()
-                enqueue(root, str(d), metadata=_current_orca_queue_metadata(d))
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                mock_proc = MagicMock()
-                mock_proc.pid = 4102
-                mock_start_background_process.return_value = mock_proc
-                worker._fill_slots()
-                self.assertEqual(len(worker._running), 1)
-
-    def test_fill_slots_fills_all_available_capacity(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=3)
-
-            for name in ("p1", "p2", "p3", "p4"):
-                reaction_dir = root / name
-                reaction_dir.mkdir()
-                enqueue(
-                    root,
-                    str(reaction_dir),
-                    metadata=_current_orca_queue_metadata(reaction_dir),
-                )
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                mock_start_background_process.side_effect = [
-                    MagicMock(pid=4103),
-                    MagicMock(pid=4104),
-                    MagicMock(pid=4105),
-                ]
-                worker._fill_slots()
-
-            queue_by_name = {
-                Path(queue_entry_reaction_dir(entry)).name: entry.status.value
-                for entry in list_queue(root)
-            }
-            self.assertEqual(len(worker._running), 3)
-            self.assertEqual(mock_start_background_process.call_count, 3)
-            self.assertEqual(
-                queue_by_name,
-                {
-                    "p1": "running",
-                    "p2": "running",
-                    "p3": "running",
-                    "p4": "pending",
-                },
-            )
-
-    def test_fill_slots_refills_immediately_after_completion(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
-
-            first_dir = root / "first"
-            second_dir = root / "second"
-            first_dir.mkdir()
-            second_dir.mkdir()
-
-            completed_entry = enqueue(
-                root,
-                str(first_dir),
-                task_id="task_terminal_123",
-                metadata=_current_orca_queue_metadata(first_dir),
-            )
-            pending_entry = enqueue(
-                root,
-                str(second_dir),
-                metadata=_current_orca_queue_metadata(second_dir),
-            )
-            dequeue_next(root)
-            _write_completed_run_state(first_dir)
-
-            completed_proc = MagicMock()
-            completed_proc.poll.return_value = 0
-            completion_token = reserve_slot(
-                root,
-                worker.max_concurrent,
-                work_dir=str(first_dir),
-                queue_id=completed_entry.queue_id,
-                source="queue_worker",
-                state="reserved",
-            )
-            self.assertIsNotNone(completion_token)
-            worker._running[completed_entry.queue_id] = _RunningJob(
-                queue_root=worker.allowed_root,
-                queue_id=completed_entry.queue_id,
-                reaction_dir=str(first_dir),
-                process=completed_proc,
-                admission_token=completion_token or "",
-            )
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                mock_start_background_process.return_value = MagicMock(pid=4106)
-                worker._check_completed_jobs()
-                worker._fill_slots()
-
-            queue_by_name = {
-                Path(queue_entry_reaction_dir(entry)).name: entry.status.value
-                for entry in list_queue(root)
-            }
-            self.assertEqual(mock_start_background_process.call_count, 1)
-            self.assertEqual(len(worker._running), 1)
-            self.assertIn(pending_entry.queue_id, worker._running)
-            self.assertNotIn(completed_entry.queue_id, worker._running)
-            self.assertEqual(
-                queue_by_name,
-                {
-                    "first": "completed",
-                    "second": "running",
-                },
-            )
-
-    def test_fill_slots_respects_admission_slots_without_run_lock(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=1)
-
-            queued = root / "queued_only"
-            queued.mkdir()
-            enqueue(
-                root,
-                str(queued),
-                metadata=_current_orca_queue_metadata(queued),
-            )
-
-            token = reserve_slot(
-                worker.admission_root,
-                1,
-                work_dir=str(root / "reserved_hold"),
-                source="queue_worker",
-                state="reserved",
-            )
-            self.assertIsNotNone(token)
-            try:
-                with patch(
-                    "orca_auto.orca.queue.worker.start_background_process"
-                ) as mock_start_background_process:
-                    worker._fill_slots()
-            finally:
-                release_slot(worker.admission_root, token or "")
-
-            self.assertEqual(len(worker._running), 0)
-            mock_start_background_process.assert_not_called()
-
-    def test_fill_slots_counts_existing_worker_admission_slot_once(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)
-
-            active_dir = root / "already_running"
-            token = reserve_slot(
-                root,
-                worker.max_concurrent,
-                work_dir=str(active_dir),
-                queue_id="q_existing",
-                source="queue_worker",
-                state="reserved",
-            )
-            self.assertIsNotNone(token)
-            worker._running["q_existing"] = _RunningJob(
-                queue_root=worker.allowed_root,
-                queue_id="q_existing",
-                reaction_dir=str(active_dir),
-                process=MagicMock(),
-                admission_token=token or "",
-            )
-
-            queued = root / "queued_only"
-            queued.mkdir()
-            enqueue(
-                root,
-                str(queued),
-                metadata=_current_orca_queue_metadata(queued),
-            )
-
-            with patch(
-                "orca_auto.orca.queue.worker.start_background_process"
-            ) as mock_start_background_process:
-                mock_proc = MagicMock()
-                mock_proc.pid = 4108
-                mock_start_background_process.return_value = mock_proc
-                worker._fill_slots()
-
-            self.assertEqual(len(worker._running), 2)
-            mock_start_background_process.assert_called_once()
+        def _handle_worker_start_error(
+            self, queue_root: Path, entry: QueueEntry, admission_token: str, exc: OSError
+        ) -> None:
+            start_errors.append((queue_root, admission_token, str(exc)))
+
+    worker = RejectingWorker(worker_cfg, str(queue_root / "config.yaml"), max_concurrent=1)
+
+    assert not worker._start_job(queue_root, _plain_entry("queue-reject"), admission_token="slot-1")
+    assert fake_children.stopped(process)
+    assert start_errors == [(queue_root, "slot-1", "admission_slot_missing")]
+    assert worker._running == {}

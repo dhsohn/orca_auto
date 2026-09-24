@@ -7,18 +7,10 @@ from typing import Any
 
 from orca_auto.core.admission import AdmissionStoreCorruptError, read_active_slot_count
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
-from orca_auto.core.engine_runtime import engine_runtime_paths
-from orca_auto.core.statuses import (
-    STATUS_CANCEL_REQUESTED,
-    STATUS_RETRYING,
-    STATUS_RUNNING,
-)
 from orca_auto.core.utils import normalize_text
+from orca_auto.orca.engine_runtime import engine_runtime_paths
 
 LOGGER = logging.getLogger(__name__)
-
-ACTIVE_SIMULATION_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING, STATUS_CANCEL_REQUESTED})
-ActivityItem = dict[str, Any]
 
 
 def normalize_activity_filter_values(values: Sequence[str] | None) -> tuple[str, ...]:
@@ -35,66 +27,17 @@ def normalize_activity_filter_values(values: Sequence[str] | None) -> tuple[str,
     return tuple(normalized)
 
 
-def filter_activity_items(
-    items: Sequence[dict[str, Any]],
-    *,
-    statuses: Sequence[str] | None = None,
-) -> list[dict[str, Any]]:
-    status_filter = set(normalize_activity_filter_values(statuses))
+def global_active_simulations(
+    *, config_path: str | None, fallback: int
+) -> tuple[int, dict[str, Any] | None]:
+    """The admission store's live slot count, else the catalog's own count.
 
-    filtered: list[dict[str, Any]] = []
-    for item in items:
-        status = normalize_text(item.get("status")).lower()
-        if status_filter and status not in status_filter:
-            continue
-        filtered.append(dict(item))
-    return filtered
-
-
-def count_active_simulations(items: Sequence[dict[str, Any]]) -> int:
-    total = 0
-    for item in items:
-        if normalize_text(item.get("kind")).lower() != "job":
-            continue
-        status = normalize_text(item.get("status")).lower()
-        if status in ACTIVE_SIMULATION_STATUSES:
-            total += 1
-    return total
-
-
-def activity_counter_config_path(
-    payload: dict[str, Any],
-    *,
-    config_hints: Sequence[str | None] = (),
-    prefer_hints: bool = False,
-) -> str | None:
-    def first_source_config() -> str | None:
-        sources = payload.get("sources")
-        if not isinstance(sources, dict):
-            return None
-        for key in ("orca_config",):
-            source_text = normalize_text(sources.get(key))
-            if source_text:
-                return source_text
-        return None
-
-    def first_hint_config() -> str | None:
-        for value in config_hints:
-            text = normalize_text(value)
-            if text:
-                return text
-        return None
-
-    if prefer_hints:
-        return first_hint_config() or first_source_config()
-    return first_source_config() or first_hint_config()
-
-
-def count_global_active_simulations(
-    items: Sequence[dict[str, Any]],
-    *,
-    config_path: str | None = None,
-) -> int:
+    The slot count is the global truth across every consumer of the runtime;
+    ``fallback`` is the listing's count of active job rows, used only when no
+    admission root is configured or its store cannot be read. A corrupt store
+    is returned as an ``admission_blockers`` payload next to the fallback
+    count: the worker admits nothing while that file does not load.
+    """
     config_text = normalize_text(config_path)
     if config_text:
         try:
@@ -109,11 +52,22 @@ def count_global_active_simulations(
         admission_root = runtime_paths.get("admission_root")
         if isinstance(admission_root, Path):
             try:
-                return max(0, int(read_active_slot_count(admission_root)))
-            except (AdmissionStoreCorruptError, OSError) as exc:
+                return max(0, int(read_active_slot_count(admission_root))), None
+            except AdmissionStoreCorruptError as exc:
+                return max(0, int(fallback)), {
+                    "queue_id": "*",
+                    "allowed_root": str(runtime_paths.get("allowed_root", "")),
+                    "scope": "admission_store",
+                    "reason": str(exc),
+                    "next_action": (
+                        "Repair or remove the admission slot file; "
+                        "the worker admits no job until it loads."
+                    ),
+                }
+            except OSError as exc:
                 LOGGER.debug(
                     "active_simulation_slot_count_failed: admission_root=%s error=%s",
                     admission_root,
                     exc,
                 )
-    return count_active_simulations(items)
+    return max(0, int(fallback)), None

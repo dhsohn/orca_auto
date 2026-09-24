@@ -275,7 +275,8 @@ def test_cmd_service_restart_stops_when_reset_failed_cannot_clear_start_limit() 
         ),
     )
 
-    assert result == 5
+    # A failed step exits 1 rather than passing the raw systemctl code through.
+    assert result == 1
     assert commands == [
         ("systemctl", "reset-failed", "orca_auto-queue-worker@alice.service"),
     ]

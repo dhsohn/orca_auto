@@ -12,7 +12,7 @@ from typing import Any, TypeVar, cast
 
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis_text
-from .input_blocks import file_route_lines
+from .input_syntax import file_route_lines
 from .orca_opt_progress import OptProgress, parse_opt_progress_text
 from .parser import OrcaResult, parse_orca_output_text
 from .parser.io import read_orca_text

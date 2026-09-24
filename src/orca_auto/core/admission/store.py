@@ -1,3 +1,13 @@
+"""Admission slot file: capacity reservations and engine-process ownership.
+
+``admission_slots.json`` under one admission root records every reserved
+slot; every read and write goes through :func:`admission_lock`.
+:class:`AdmissionStore` is the lock/load/mutate/save primitive bound to one
+root, and the module-level functions are the slot operations built on it
+(reserve, activate, release, engine-process fencing, metadata updates and
+the liveness-filtered reads).
+"""
+
 from __future__ import annotations
 
 import os
@@ -276,17 +286,21 @@ def _metadata_updated_slot(
 @contextmanager
 def admission_lock(root: str | Path) -> Iterator[None]:
     resolved_root = resolve_root_path(root)
+    # The store owns its directory (by default ``<runs_root>/.admission``)
+    # beneath an already existing root; a missing runs root stays missing.
+    resolved_root.mkdir(exist_ok=True)
     with file_lock(_lock_path(resolved_root)):
         yield
 
 
 @dataclass(frozen=True)
 class AdmissionStore:
-    """Persistence facade for one admission root.
+    """Lock/load/mutate/save primitive for one admission root.
 
-    Module-level functions remain the public API. New code can use this object
-    to keep root resolution and lock/load/save mutation semantics in one place
-    instead of repeating that pattern at each call site.
+    The module-level functions are the slot operations and the public API;
+    every one of them runs through this object so the lock discipline and the
+    liveness filter live in one place. Callers hold an instance only to reach
+    ``path`` or a non-normalizing ``list_slots`` read.
     """
 
     root: Path
@@ -313,15 +327,6 @@ class AdmissionStore:
 
     def _load_live_slots(self) -> list[AdmissionSlot]:
         return [slot for slot in self.load_slots_fn(self.root) if _slot_owner_alive(slot)]
-
-    def reconcile_stale_slots(self) -> int:
-        with admission_lock(self.root):
-            slots = self.load_slots_fn(self.root)
-            kept = [slot for slot in slots if _slot_owner_alive(slot)]
-            removed = len(slots) - len(kept)
-            if removed:
-                self.save_slots_fn(self.root, kept)
-            return removed
 
     def list_slots(self, *, normalize_file: bool = False) -> list[AdmissionSlot]:
         with admission_lock(self.root):
@@ -384,7 +389,16 @@ class AdmissionStore:
 
 
 def reconcile_stale_slots(root: str | Path) -> int:
-    return AdmissionStore.for_root(root).reconcile_stale_slots()
+    """Drop slots whose owner is dead; return how many were removed."""
+
+    def reconcile(slots: list[AdmissionSlot]) -> tuple[int, bool]:
+        kept = [slot for slot in slots if _slot_owner_alive(slot)]
+        removed = len(slots) - len(kept)
+        if removed:
+            slots[:] = kept
+        return removed, bool(removed)
+
+    return AdmissionStore.for_root(root).mutate_all_slots(reconcile)
 
 
 def list_slots(root: str | Path) -> list[AdmissionSlot]:

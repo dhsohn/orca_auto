@@ -6,6 +6,14 @@ from typing import Any, cast
 import pytest
 
 from orca_auto import cli_worker_supervision as worker_supervision
+from orca_auto import cli_workers
+from orca_auto.core.queue.processes import (
+    GRACEFUL_TIMEOUT_SECONDS,
+    KILL_TIMEOUT_SECONDS,
+    SHUTDOWN_MARGIN_SECONDS,
+    SHUTDOWN_POLL_LATENCY_SECONDS,
+    worker_shutdown_budget_seconds,
+)
 
 
 class _FakeWorkerProcess:
@@ -47,6 +55,32 @@ class _HangingWorkerProcess:
 
     def terminate(self) -> None:
         self.terminate_calls += 1
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+        self._returncode = -9
+
+
+class _SlowStoppingWorkerProcess:
+    """A worker parent still stopping its children: it exits ``exits_after`` seconds after SIGTERM."""
+
+    def __init__(self, clock: _FakeTime, *, exits_after: float) -> None:
+        self._clock = clock
+        self._exits_after = exits_after
+        self._terminated_at: float | None = None
+        self.terminate_calls = 0
+        self.kill_calls = 0
+        self._returncode: int | None = None
+
+    def poll(self) -> int | None:
+        if self._returncode is None and self._terminated_at is not None:
+            if self._clock.monotonic() - self._terminated_at >= self._exits_after:
+                self._returncode = 0
+        return self._returncode
+
+    def terminate(self) -> None:
+        self.terminate_calls += 1
+        self._terminated_at = self._clock.monotonic()
 
     def kill(self) -> None:
         self.kill_calls += 1
@@ -109,7 +143,7 @@ def test_run_worker_supervisor_staggers_initial_worker_starts(
         lambda _processes, _shutdown: 0,
     )
 
-    result = worker_supervision._run_worker_supervisor(
+    result = worker_supervision.run_worker_supervisor(
         [
             worker_supervision.WorkerSpec(app="finite_demo", argv=("finite_demo", "worker")),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
@@ -156,7 +190,7 @@ def test_run_worker_supervisor_keeps_siblings_running_after_clean_exit(
     monkeypatch.setattr(worker_supervision.signal, "signal", _fake_signal)
     monkeypatch.setattr(worker_supervision.time, "sleep", _fake_sleep)
 
-    result = worker_supervision._run_worker_supervisor(
+    result = worker_supervision.run_worker_supervisor(
         [
             worker_supervision.WorkerSpec(app="finite_demo", argv=("finite_demo", "worker")),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
@@ -203,7 +237,7 @@ def test_run_worker_supervisor_stops_after_finite_finite_demo_clean_exit(
     monkeypatch.setattr(worker_supervision.signal, "signal", _fake_signal)
     monkeypatch.setattr(worker_supervision.time, "sleep", _fail_sleep)
 
-    result = worker_supervision._run_worker_supervisor(
+    result = worker_supervision.run_worker_supervisor(
         [
             worker_supervision.WorkerSpec(
                 app="finite_demo",
@@ -260,7 +294,7 @@ def test_run_worker_supervisor_restarts_workers_after_failure(
     monkeypatch.setattr(worker_supervision.signal, "signal", _fake_signal)
     monkeypatch.setattr(worker_supervision.time, "sleep", _fake_sleep)
 
-    result = worker_supervision._run_worker_supervisor(
+    result = worker_supervision.run_worker_supervisor(
         [
             worker_supervision.WorkerSpec(app="finite_demo", argv=("finite_demo", "worker")),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
@@ -311,7 +345,7 @@ def test_run_worker_supervisor_stops_after_repeated_startup_failures(
     monkeypatch.setattr(worker_supervision.signal, "signal", _fake_signal)
     monkeypatch.setattr(worker_supervision.time, "sleep", _fake_sleep)
 
-    result = worker_supervision._run_worker_supervisor(
+    result = worker_supervision.run_worker_supervisor(
         [
             worker_supervision.WorkerSpec(app="finite_demo", argv=("finite_demo", "worker")),
             worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker")),
@@ -396,8 +430,108 @@ def test_terminate_process_kills_after_grace_period(monkeypatch: pytest.MonkeyPa
     fake_time = _FakeTime()
     monkeypatch.setattr(worker_supervision, "time", fake_time)
 
-    worker_supervision._terminate_process(cast(Any, process))
+    worker_supervision._terminate_process(cast(Any, process), stop_timeout_seconds=10.0)
 
     assert process.terminate_calls == 1
     assert process.kill_calls == 1
     assert fake_time.sleep_calls
+    assert fake_time.current >= 10.0
+
+
+def test_worker_shutdown_budget_covers_every_child_stop_plus_requeue() -> None:
+    per_child = GRACEFUL_TIMEOUT_SECONDS + KILL_TIMEOUT_SECONDS
+    fixed = SHUTDOWN_POLL_LATENCY_SECONDS + SHUTDOWN_MARGIN_SECONDS
+    assert worker_shutdown_budget_seconds(1) == per_child + fixed
+    assert worker_shutdown_budget_seconds(4) == 4 * per_child + fixed
+    assert worker_shutdown_budget_seconds(0) == worker_shutdown_budget_seconds(1)
+    # The spec default is the budget for the default scheduler concurrency.
+    assert worker_supervision.WorkerSpec(
+        app="orca", argv=("orca",)
+    ).stop_timeout_seconds == worker_shutdown_budget_seconds(4)
+
+
+def test_terminate_process_waits_for_the_worker_shutdown_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One child ignores SIGTERM for its whole graceful period, so the worker
+    # parent only finishes stopping it and requeueing its row after
+    # SIGTERM + SIGKILL: longer than the old fixed 10 s supervisor wait.
+    fake_time = _FakeTime()
+    monkeypatch.setattr(worker_supervision, "time", fake_time)
+    exits_after = GRACEFUL_TIMEOUT_SECONDS + KILL_TIMEOUT_SECONDS + 2.0
+    budget = worker_shutdown_budget_seconds(1)
+    assert 10.0 < exits_after < budget
+
+    process = _SlowStoppingWorkerProcess(fake_time, exits_after=exits_after)
+    worker_supervision._terminate_process(cast(Any, process), stop_timeout_seconds=budget)
+
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 0
+    assert process.poll() == 0
+
+    # The old budget would have killed the parent mid-shutdown.
+    old_process = _SlowStoppingWorkerProcess(fake_time, exits_after=exits_after)
+    worker_supervision._terminate_process(cast(Any, old_process), stop_timeout_seconds=10.0)
+    assert old_process.kill_calls == 1
+
+
+def test_run_worker_supervisor_gives_the_worker_its_shutdown_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_time = _FakeTime()
+    exits_after = GRACEFUL_TIMEOUT_SECONDS + KILL_TIMEOUT_SECONDS + 2.0
+    process = _SlowStoppingWorkerProcess(fake_time, exits_after=exits_after)
+    installed_handlers: dict[int, Any] = {}
+
+    def _fake_sleep(seconds: float) -> None:
+        fake_time.sleep(seconds)
+        if len(fake_time.sleep_calls) == 1:
+            installed_handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+    monkeypatch.setattr(worker_supervision.subprocess, "Popen", lambda *a, **k: process)
+    monkeypatch.setattr(worker_supervision.signal, "getsignal", lambda sig: None)
+    monkeypatch.setattr(
+        worker_supervision.signal,
+        "signal",
+        lambda sig, handler: installed_handlers.__setitem__(sig, handler),
+    )
+    monkeypatch.setattr(worker_supervision.time, "sleep", _fake_sleep)
+    monkeypatch.setattr(worker_supervision.time, "monotonic", fake_time.monotonic)
+
+    result = worker_supervision.run_worker_supervisor(
+        [
+            worker_supervision.WorkerSpec(
+                app="orca",
+                argv=("orca", "worker"),
+                stop_timeout_seconds=worker_shutdown_budget_seconds(1),
+            )
+        ],
+        startup_stagger_seconds=0,
+    )
+
+    assert result == 0
+    assert process.terminate_calls == 1
+    assert process.kill_calls == 0
+
+
+def test_orca_worker_spec_stop_timeout_follows_configured_concurrency(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.conftest import make_app_cfg, write_config_file, write_fake_orca
+
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    cfg = make_app_cfg(
+        runs_root=runs_root,
+        orca_executable=write_fake_orca(tmp_path / "fake_orca.py"),
+        max_concurrent=3,
+    )
+    config_path = write_config_file(tmp_path / "orca_auto.yaml", cfg)
+
+    spec = cli_workers._orca_worker_spec(config_path=str(config_path))
+
+    assert spec.stop_timeout_seconds == worker_shutdown_budget_seconds(3)
+    assert spec.to_dict()["stop_timeout_seconds"] == worker_shutdown_budget_seconds(3)
+    # An unreadable config keeps the default budget; the worker fails on it anyway.
+    missing = cli_workers._orca_worker_spec(config_path=str(tmp_path / "missing.yaml"))
+    assert missing.stop_timeout_seconds == worker_shutdown_budget_seconds(4)

@@ -12,6 +12,11 @@ from typing import Any
 
 from orca_auto.core.indexing.roots import runtime_roots_for_cfg
 from orca_auto.core.paths.retired import path_is_retired_workflow_owned
+from orca_auto.core.queue import store as _queue_store
+from orca_auto.core.queue.engine.input_snapshot import (
+    bind_direct_generation_owner,
+    cleanup_unowned_direct_generation_directory,
+)
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.lock import file_lock
@@ -296,8 +301,6 @@ def bind_snapshot_intent_generation_identities(
         if marker["state"] != SNAPSHOT_INTENT_STATE_CREATING:
             raise ValueError("Direct visible generation identities must be bound while creating")
         identities: dict[str, dict[str, int]] = {}
-        from .input_snapshot import bind_direct_generation_owner
-
         for generation_path in _validated_generation_paths(
             resolved_root,
             marker["generation_paths"],
@@ -603,8 +606,6 @@ def _remove_generation(
         if (int(details.st_dev), int(details.st_ino)) != generation_identity:
             raise ValueError("Visible generation directory identity changed")
         parent_details = validated.parent.stat()
-        from .input_snapshot import cleanup_unowned_direct_generation_directory
-
         cleanup_unowned_direct_generation_directory(
             validated.parent,
             namespace=validated.name,
@@ -641,13 +642,15 @@ def reconcile_orphaned_snapshot_generations(
         try:
             with file_lock(root / _MAINTENANCE_LOCK_NAME, timeout_seconds=0.0):
                 if list_queue_fn is None:
-                    from orca_auto.core.queue.store import load_entries, queue_lock
-
-                    queue_context: AbstractContextManager[Any] = queue_lock(root)
+                    queue_context: AbstractContextManager[Any] = _queue_store.queue_lock(root)
                 else:
                     queue_context = nullcontext()
                 with queue_context:
-                    entries = load_entries(root) if list_queue_fn is None else list_queue_fn(root)
+                    entries = (
+                        _queue_store.load_entries(root)
+                        if list_queue_fn is None
+                        else list_queue_fn(root)
+                    )
                     with file_lock(root / _MUTATION_LOCK_NAME):
                         for intent_path in _bounded_intent_paths(resolved_intent_dir):
                             try:

@@ -299,12 +299,12 @@ def test_resolve_job_location_path_alias_selects_newest_generation(tmp_path: Pat
     second_generation.mkdir(parents=True)
     first_generation.mkdir()
     first = _record(
-        "xtbmd-first",
+        "md-first",
         original_run_dir=str(job_dir),
         latest_known_path=str(first_generation),
     )
     second = _record(
-        "xtbmd-second",
+        "md-second",
         original_run_dir=str(job_dir),
         latest_known_path=str(second_generation),
     )
@@ -433,3 +433,103 @@ def test_prune_job_locations_corrupt_index_fails_closed(tmp_path: Path) -> None:
         prune_job_locations(tmp_path, apply=True)
 
     assert _index_path(tmp_path).read_text(encoding="utf-8") == corrupt_text
+
+
+def test_upsert_job_locations_merges_by_job_id_under_one_write(tmp_path: Path) -> None:
+    from orca_auto.core.indexing.store import upsert_job_locations
+
+    first = JobLocationRecord(
+        job_id="a", app_name="orca", job_type="orca_sp", status="queued", original_run_dir="/a"
+    )
+    second = JobLocationRecord(
+        job_id="b", app_name="orca", job_type="orca_sp", status="queued", original_run_dir="/b"
+    )
+    upsert_job_locations(tmp_path, [first, second])
+    index_path = tmp_path / "job_locations.json"
+    before = index_path.read_bytes()
+
+    preview = upsert_job_locations(
+        tmp_path,
+        [
+            JobLocationRecord(
+                job_id=" a ",
+                app_name="orca",
+                job_type="orca_sp",
+                status="completed",
+                original_run_dir="/a",
+            ),
+            second,
+            JobLocationRecord(
+                job_id="c",
+                app_name="orca",
+                job_type="orca_sp",
+                status="queued",
+                original_run_dir="/c",
+            ),
+        ],
+        apply=False,
+    )
+    assert preview.applied is False
+    assert [row.job_id for row in preview.updated] == ["a"]
+    assert [row.job_id for row in preview.added] == ["c"]
+    assert preview.unchanged == 1
+    assert preview.total == 3
+    assert index_path.read_bytes() == before
+
+    applied = upsert_job_locations(tmp_path, [second, second], apply=True)
+    assert (applied.added, applied.updated, applied.unchanged, applied.applied) == (
+        (),
+        (),
+        2,
+        False,
+    )
+    assert index_path.read_bytes() == before
+
+
+def test_merge_job_locations_decides_under_the_lock_against_the_current_row(
+    tmp_path: Path,
+) -> None:
+    from unittest.mock import patch
+
+    from orca_auto.core.indexing.store import JobLocationIndexError, merge_job_locations
+
+    def row(job_id: str, status: str) -> JobLocationRecord:
+        return JobLocationRecord(
+            job_id=job_id,
+            app_name="orca",
+            job_type="orca_sp",
+            status=status,
+            original_run_dir=f"/{job_id}",
+        )
+
+    upsert_job_location(tmp_path, row("a", "running"))
+    seen: list[tuple[str, JobLocationRecord | None]] = []
+
+    def decide(existing: JobLocationRecord | None, candidate: str) -> JobLocationRecord | None:
+        seen.append((candidate, existing))
+        if existing is not None and existing.status == "completed":
+            return None  # the current row wins; leave it alone
+        return row(candidate, "completed")
+
+    # The decision is made against the row as it is now, not as a caller planned it.
+    with patch.object(indexing_store, "file_lock", wraps=indexing_store.file_lock) as locked:
+        result = merge_job_locations(tmp_path, {"a": "a", "b": "b"}, decide=decide)
+    assert locked.call_count == 1
+    assert [candidate for candidate, _existing in seen] == ["a", "b"]
+    assert seen[0][1] is not None and seen[0][1].status == "running"
+    assert seen[1][1] is None
+    assert [record.job_id for record in result.updated] == ["a"]
+    assert [record.job_id for record in result.added] == ["b"]
+    assert result.applied is True
+
+    # A row the decision leaves alone counts as unchanged and writes nothing.
+    index_path = tmp_path / "job_locations.json"
+    before = index_path.read_bytes()
+    again = merge_job_locations(tmp_path, {"a": "a"}, decide=decide)
+    assert (again.added, again.updated, again.unchanged, again.applied) == ((), (), 1, False)
+    assert index_path.read_bytes() == before
+
+    # A decision may not move a candidate to another job id.
+    with pytest.raises(JobLocationIndexError):
+        merge_job_locations(tmp_path, {"a": "zzz"}, decide=lambda _existing, _c: row("zzz", "x"))
+    assert index_path.read_bytes() == before

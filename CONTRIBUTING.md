@@ -84,8 +84,8 @@ the configuration template to `~/orca_auto/config/orca_auto.yaml` when that file
 does not exist; a checkout-local `config/orca_auto.yaml` is not discovered.
 
 `make test` runs `scripts/check.sh`, which creates or repairs `.venv`, installs
-`.[dev]`, then runs Ruff, Ruff format check, mypy, import-linter, and the
-coverage-gated pytest suite. The repository ships one distribution, `orca_auto`.
+`.[dev]`, then runs Ruff, Ruff format check, mypy, import-linter, the docs
+parity gate (`scripts/check_docs_parity.py`) and the coverage-gated pytest suite. The repository ships one distribution, `orca_auto`.
 For a manual development install, use `python -m pip install -e '.[dev]'`.
 Run `make check-packages` for package or installation changes. Version 7 removes
 the former workflows extension; see the [upgrade guide](docs/RELEASE.md#upgrading-to-70).

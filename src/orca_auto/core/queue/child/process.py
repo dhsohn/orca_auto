@@ -5,7 +5,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engine_process import open_confined_log
+from orca_auto.core.confined_io import open_confined_log
 
 from ..types import QueueEntry, QueueStatus
 

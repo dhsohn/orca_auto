@@ -11,10 +11,10 @@ from typing import Any, cast
 
 import pytest
 
-from orca_auto.core.config import ScratchConfig
 from orca_auto.orca import execution as run_inp_execution
 from orca_auto.orca.config import AppConfig, PathsConfig
 from orca_auto.orca.run_context import RunExecutionContext
+from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.types import AttemptRecord

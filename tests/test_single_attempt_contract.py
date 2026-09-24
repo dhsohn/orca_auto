@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from orca_auto.orca.attempt.engine import run_attempts
-from orca_auto.orca.input_blocks import validate_supported_xyz_geometry_syntax
-from orca_auto.orca.state import new_state
-from orca_auto.orca.state_machine import decide_attempt_outcome
+from orca_auto.orca.input_syntax import orca_route_tokens
+from orca_auto.orca.input_validation import validate_supported_xyz_geometry_syntax
+from orca_auto.orca.state import decide_attempt_outcome, new_state
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.types import RunFinishedNotification
 
@@ -25,9 +25,12 @@ def test_direct_scants_is_rejected(keyword: str) -> None:
 
 @pytest.mark.parametrize("route", ["! r2SCAN-3c Opt", "! Opt # ScanTS", "# ! ScanTS"])
 def test_scants_comments_and_scan_functionals_are_not_rejected(route: str) -> None:
-    validate_supported_xyz_geometry_syntax(
-        [route, "* xyz 0 1", "H 0 0 0", "H 0 0 0.74", "*"], label="input"
-    )
+    lines = [route, "* xyz 0 1", "H 0 0 0", "H 0 0 0.74", "*"]
+
+    # Accepted: validation completes without raising ...
+    validate_supported_xyz_geometry_syntax(lines, label="input")
+    # ... because neither a comment nor a scan functional yields a ScanTS route token.
+    assert "scants" not in {token.value.lower() for token in orca_route_tokens(route)}
 
 
 def test_calculation_api_has_no_retry_policy(tmp_path: Path) -> None:
