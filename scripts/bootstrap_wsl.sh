@@ -73,14 +73,17 @@ VENV_PY="$ROOT/.venv/bin/python"
 "$VENV_PY" -m pip install --upgrade pip
 "$VENV_PY" -m pip install -e .
 
-CONFIG="$ROOT/config/orca_auto.yaml"
+# Discovery reads --config, ORCA_AUTO_CONFIG, then this home default; a
+# checkout-relative config/orca_auto.yaml is not discovered.
+CONFIG="$HOME/orca_auto/config/orca_auto.yaml"
 if [[ ! -f "$CONFIG" ]]; then
+  mkdir -p "$(dirname "$CONFIG")"
   cp "$ROOT/config/orca_auto.yaml.example" "$CONFIG"
-  echo "[bootstrap] Created config/orca_auto.yaml from example template."
-  echo "[bootstrap] Edit config/orca_auto.yaml and replace the /home/user/... example paths before first run."
+  echo "[bootstrap] Created $CONFIG from example template."
+  echo "[bootstrap] Edit $CONFIG and replace the /home/user/... example paths before first run."
 fi
 chmod 600 "$CONFIG"
-echo "[bootstrap] Secured config/orca_auto.yaml permissions to 600."
+echo "[bootstrap] Secured $CONFIG permissions to 600."
 
 echo "[bootstrap] Done."
 echo "[bootstrap] Next: source .venv/bin/activate"

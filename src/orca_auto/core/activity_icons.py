@@ -11,21 +11,16 @@ from orca_auto.core import statuses as _s
 
 _ACTIVITY_STATUS_ICONS = {
     _s.STATUS_CREATED: "🆕",
-    _s.STATUS_PLANNED: "⏳",
     _s.STATUS_PENDING: "⏳",
     _s.STATUS_QUEUED: "⏳",
-    _s.STATUS_SUBMITTED: "📤",
     _s.STATUS_RUNNING: "▶",
     _s.STATUS_RETRYING: "🔄",
     _s.STATUS_CANCEL_REQUESTED: "⏹",
     _s.STATUS_COMPLETED: "✅",
     _s.STATUS_FAILED: "❌",
-    _s.STATUS_CANCEL_FAILED: "❌",
-    _s.STATUS_SUBMISSION_FAILED: "❌",
     _s.STATUS_REPAIR_BLOCKED: "❌",
     _s.STATUS_CANCELLED: "⛔",
-    # ORCA run results can report a bare "error" status (a failure variant).
-    "error": "❌",
+    _s.STATUS_ERROR: "❌",
 }
 
 _FALLBACK_ICON = "•"

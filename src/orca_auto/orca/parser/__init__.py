@@ -10,15 +10,12 @@ import re
 from dataclasses import dataclass, field
 
 from ..orca_chemistry import build_formula as _build_formula
-from ..output_status import coarse_orca_status, last_optimization_convergence
+from ..output_status import iter_output_lines, last_optimization_convergence
 from .extractors import (
     AtomRow,
 )
 from .extractors import (
     parse_coordinates as _parse_coordinates,
-)
-from .extractors import (
-    parse_frequencies as _parse_frequencies,
 )
 from .extractors import (
     parse_input_line as _parse_input_line,
@@ -82,15 +79,12 @@ class OrcaResult:
     energy_ev: float | None = None
     energy_kcalmol: float | None = None
     opt_converged: bool | None = None
-    has_imaginary_freq: bool | None = None
-    lowest_freq_cm1: float | None = None
     enthalpy: float | None = None
     gibbs_energy: float | None = None
     zpe_correction: float | None = None
     gibbs_correction: float | None = None
     thermo_temperature_k: float | None = None
     wall_time_seconds: int | None = None
-    status: str = "completed"
     input_line: str = ""
     orca_version: str = ""
     solvation: str = ""
@@ -132,13 +126,11 @@ def parse_orca_output_text(text: str, *, source_path: str) -> OrcaResult:
     _populate_coordinates(result, text)
     _populate_energy(result, final_energy)
     _populate_convergence(result, text)
-    _populate_frequencies(result, text)
     _populate_thermodynamics(
         result,
         _final_stage_text(text, final_energy, published_energy=result.energy_hartree),
     )
     result.wall_time_seconds = _parse_wall_time(text)
-    result.status = _parse_status(text, result)
 
     return result
 
@@ -197,7 +189,7 @@ def _populate_energy(result: OrcaResult, final_energy: re.Match[str] | None) -> 
 
 
 def _populate_convergence(result: OrcaResult, text: str) -> None:
-    result.opt_converged = last_optimization_convergence(text.splitlines())
+    result.opt_converged = last_optimization_convergence(iter_output_lines(text))
 
 
 def _final_stage_text(
@@ -220,19 +212,11 @@ def _final_stage_text(
     has no block (an ``OptTS`` without ``Freq``) publishes none rather than an
     earlier geometry's values. Without a published final energy (none printed,
     unparseable, or annotated as an unconverged SCF) there is no stage to bind
-    to and nothing is published. The imaginary-mode fields keep their
-    whole-file last-block selection so that a failed run without a published
-    final energy still reports its last frequency block.
+    to and nothing is published.
     """
     if final_energy is None or published_energy is None:
         return None
     return text[final_energy.end() :]
-
-
-def _populate_frequencies(result: OrcaResult, text: str) -> None:
-    has_imag, lowest = _parse_frequencies(text)
-    result.has_imaginary_freq = has_imag
-    result.lowest_freq_cm1 = lowest
 
 
 def _populate_thermodynamics(result: OrcaResult, stage_text: str | None) -> None:
@@ -259,11 +243,3 @@ def _populate_thermodynamics(result: OrcaResult, stage_text: str | None) -> None
     temperature_match = _THERMO_TEMPERATURE_RE.search(stage_text)
     if temperature_match:
         result.thermo_temperature_k = float(temperature_match.group(1))
-
-
-def _parse_status(text: str, result: OrcaResult) -> str:
-    return coarse_orca_status(
-        text,
-        opt_converged=result.opt_converged,
-        wall_time_seconds=result.wall_time_seconds,
-    )

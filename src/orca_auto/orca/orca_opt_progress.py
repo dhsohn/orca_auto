@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .orca_chemistry import build_formula
-from .output_status import last_optimization_convergence
+from .output_status import iter_output_lines, last_optimization_convergence
 from .parser.extractors import (
     parse_coordinates,
     parse_input_line,
@@ -61,7 +61,7 @@ def parse_opt_progress_text(text: str, *, source_path: str) -> OptProgress:
         formula=formula,
         method=method,
         basis_set=basis_set,
-        is_converged=last_optimization_convergence(text.splitlines()) is True,
+        is_converged=last_optimization_convergence(iter_output_lines(text)) is True,
     )
 
     for cycle_num, energy, _ in parse_optimization_cycles(text):

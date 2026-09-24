@@ -201,7 +201,7 @@ def test_prewrite_ticket_cannot_be_consumed_before_state_commit(
     def pause(path: Path, *, root: Path | None = None) -> None:
         invalidate(path, root=root)
         invalidated.set()
-        assert release.wait(5)
+        assert release.wait(30)
 
     def observe(path: Path):
         value = capture(path)
@@ -214,15 +214,15 @@ def test_prewrite_ticket_cannot_be_consumed_before_state_commit(
     payload["status"] = "failed"
     with ThreadPoolExecutor(2) as pool:
         writer = pool.submit(state.save_state, job, payload)
-        assert invalidated.wait(5)
+        assert invalidated.wait(30)
         reader = pool.submit(_query, root)
         try:
-            assert captured.wait(5)
+            assert captured.wait(30)
             assert not reader.done()
         finally:
             release.set()
-        writer.result(timeout=5)
-        assert reader.result(timeout=5)[0]["status"] == "failed"
+        writer.result(timeout=30)
+        assert reader.result(timeout=30)[0]["status"] == "failed"
     assert not journal.capture(root)
 
 

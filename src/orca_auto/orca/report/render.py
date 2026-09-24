@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..parser import KCAL_PER_HARTREE
+from ..statuses import RunStatus
 
 # Molar gas constant R in kcal·mol⁻¹·K⁻¹ (CODATA 8.314462618 J·mol⁻¹·K⁻¹),
 # used for Boltzmann populations: p_i ∝ exp(−ΔG_i / (R·T)).
@@ -105,7 +106,7 @@ def badge(text: str, kind: str) -> str:
 
 
 def status_badge_kind(status: str) -> str:
-    return {"completed": "ok", "failed": "bad"}.get(status, "muted")
+    return {RunStatus.COMPLETED.value: "ok", RunStatus.FAILED.value: "bad"}.get(status, "muted")
 
 
 def status_badges(status: str, reason: str) -> list[tuple[str, str]]:

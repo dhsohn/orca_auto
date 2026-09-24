@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..evidence import final_out_name, parsed_frequency_analysis
 from ..frequencies import (
     ModeSummary,
     find_frequency_analysis,
@@ -28,6 +29,7 @@ from .attempts import (
     attempt_actions,
     attempt_dicts,
     attempt_role,
+    attempts_metric_card,
     attempts_table_html,
     duration_text,
     terminal_actions_html,
@@ -130,16 +132,15 @@ def collect_scan_report_data(
         else None
     )
 
-    analysis, frequency_attempt_index = find_frequency_analysis(attempts)
+    analysis, frequency_attempt_index = find_frequency_analysis(
+        attempts, parse_analysis_fn=parsed_frequency_analysis
+    )
     alignment_pair: tuple[int, int] | None = None
     if scan_spec is not None and scan_spec.kind == "B" and len(scan_spec.atoms) == 2:
         alignment_pair = (scan_spec.atoms[0], scan_spec.atoms[1])
 
     final_result = state.get("final_result")
     final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
-    last_out = str(final_payload.get("last_out_path") or "").strip()
-    if not last_out and attempts:
-        last_out = str(attempts[-1].get("out_path") or "").strip()
 
     return ScanReportData(
         title=reaction_dir.name or str(reaction_dir),
@@ -160,7 +161,7 @@ def collect_scan_report_data(
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, alignment_pair) if analysis is not None else (),
         frequency_attempt_index=frequency_attempt_index,
-        last_out_name=Path(last_out).name if last_out else "",
+        last_out_name=final_out_name(state),
     )
 
 
@@ -255,13 +256,7 @@ def _metric_cards(
             )
         )
     if include_attempts:
-        cards.append(
-            metric_card(
-                "Attempts",
-                str(len(data.attempts)),
-                data.total_duration_text and f"total wall time {data.total_duration_text}",
-            )
-        )
+        cards.append(attempts_metric_card(data.attempts, data.total_duration_text))
     return "".join(cards)
 
 

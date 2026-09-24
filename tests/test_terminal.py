@@ -20,9 +20,9 @@ def test_activity_status_icon_known_and_fallback() -> None:
     assert activity_status_icon("RUNNING") == "▶"
     assert activity_status_icon("cancelled") == "⛔"
     assert activity_status_icon("failed") == "❌"
-    assert activity_status_icon("submission_failed") == "❌"
+    assert activity_status_icon("error") == "❌"
     assert activity_status_icon("repair_blocked") == "❌"
-    assert activity_status_icon("submitted") == "📤"
+    assert activity_status_icon("submitted") == "•"
     assert activity_status_icon("mystery") == "•"
     assert activity_status_icon(None) == "•"
 

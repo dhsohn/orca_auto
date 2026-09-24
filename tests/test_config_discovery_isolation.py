@@ -10,38 +10,49 @@ from orca_auto import cli_workers
 from orca_auto.activity import _cancel
 from orca_auto.cli import main
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR, ORCA_AUTO_ORCA_APP_NAME
-from orca_auto.core.config import discovery, engines
+from orca_auto.core.config import discovery
 from orca_auto.core.queue.persistence import entry_to_dict
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.commands import init
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
 
-@pytest.mark.parametrize("installation", ["source", "wheel"])
-def test_init_new_config_default_matches_installation_layout(
-    installation: str,
+def test_new_config_default_is_the_home_path_in_every_installation_layout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    # A checkout, a wheel, and a prepared runtime all resolve to the same
+    # place: no package-relative location is probed.
     home = tmp_path / "home"
-    if installation == "source":
-        package = tmp_path / "checkout" / "src" / "orca_auto"
-        expected = tmp_path / "checkout" / "config" / "orca_auto.yaml"
-    else:
-        package = tmp_path / "venv" / "lib" / "python3.13" / "site-packages" / "orca_auto"
-        expected = home / "orca_auto" / "config" / "orca_auto.yaml"
-    module = package / "core" / "config" / "discovery.py"
-    module.parent.mkdir(parents=True)
-    monkeypatch.setattr(discovery, "__file__", str(module))
+    expected = home / "orca_auto" / "config" / "orca_auto.yaml"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv(ORCA_AUTO_CONFIG_ENV_VAR, raising=False)
 
     assert init._resolve_init_config_path(SimpleNamespace()) == expected
-    assert engines.default_shared_config_path() == str(expected)
+    assert discovery.default_shared_config_path() == str(expected)
     assert discovery.resolve_shared_config_path(None) is None
     expected.parent.mkdir(parents=True, exist_ok=True)
     expected.write_text("{}\n", encoding="utf-8")
     assert discovery.resolve_shared_config_path(None) == str(expected)
+
+
+def test_checkout_config_is_not_discovered(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
+    checkout = tmp_path / "checkout"
+    module = checkout / "src" / "orca_auto" / "core" / "config" / "discovery.py"
+    module.parent.mkdir(parents=True)
+    planted = checkout / "config" / "orca_auto.yaml"
+    planted.parent.mkdir()
+    planted.write_text("runs_root: /tmp/planted-runs\n", encoding="utf-8")
+    monkeypatch.setattr(discovery, "__file__", str(module))
+
+    assert discovery.resolve_shared_config_path(None) is None
+    assert discovery.default_shared_config_path() == str(
+        Path.home() / "orca_auto" / "config" / "orca_auto.yaml"
+    )
 
 
 def test_seal_reaches_every_binding_of_the_resolver(
@@ -54,8 +65,6 @@ def test_seal_reaches_every_binding_of_the_resolver(
     planted.parent.mkdir(parents=True)
     planted.write_text("runs_root: /tmp/planted-runs\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(planted_home))
-    monkeypatch.setattr(discovery, "repo_root", lambda: tmp_path / "planted-no-repo")
-    monkeypatch.setattr(engines, "repo_root", lambda: tmp_path / "planted-no-repo")
     assert discovery.resolve_shared_config_path(None) == str(planted.resolve())
 
     isolate_shared_config_discovery(monkeypatch, tmp_path)
@@ -64,30 +73,26 @@ def test_seal_reaches_every_binding_of_the_resolver(
     # cli_workers binds the resolver by from-import; the seal must still reach it.
     assert cli_workers.resolve_shared_config_path(None) is None
     assert discovery.engine_config_for_args(SimpleNamespace()) is None
-    # engines bound repo_root at import time; the seal patches that binding too.
-    assert not Path(engines.default_shared_config_path()).exists()
+    assert not Path(discovery.default_shared_config_path()).exists()
 
     explicit = tmp_path / "explicit.yaml"
     assert discovery.resolve_shared_config_path(str(explicit)) == str(explicit.resolve())
 
 
-@pytest.mark.parametrize("selected", ["repo", "home", "env", "explicit"])
+@pytest.mark.parametrize("selected", ["home", "env", "explicit"])
 def test_queue_list_and_cancel_use_the_same_discovered_config(
     selected: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    repo = isolate_shared_config_discovery(monkeypatch, tmp_path)
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
     configs = {
-        "repo": repo / "config" / "orca_auto.yaml",
         "home": Path.home() / "orca_auto" / "config" / "orca_auto.yaml",
         "env": tmp_path / "env.yaml",
         "explicit": tmp_path / "explicit.yaml",
     }
     for name, config in configs.items():
-        if selected == "home" and name == "repo":
-            continue
         runs = tmp_path / f"{name}-runs"
         runs.mkdir()
         config.parent.mkdir(parents=True, exist_ok=True)

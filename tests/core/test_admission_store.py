@@ -394,7 +394,6 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
             "acquired_at": "2026-04-19T00:00:00+00:00",
             "app_name": "",
             "task_id": "",
-            "workflow_id": "",
             "state": "active",
             "work_dir": "",
             "queue_id": "",
@@ -781,8 +780,11 @@ def test_retired_workflow_slot_identity_remains_readable_and_occupies_capacity(
     token = store.reserve_slot(tmp_path, 1, source="orca_auto.flow.cli.workflow")
     assert token is not None
     [current] = store.list_all_slots(tmp_path)
-    retained = replace(current, workflow_id="retired-workflow")
-    store._save_slots(tmp_path, [retained])
-    assert store.list_slots(tmp_path) == [retained]
+    # Production slot files still carry the retired ``workflow_id`` column;
+    # it must load without being rewritten into the record.
+    raw = {**store._slot_to_dict(current), "workflow_id": "retired-workflow"}
+    (tmp_path / store.ADMISSION_FILE_NAME).write_text(json.dumps([raw]), encoding="utf-8")
+    assert store.list_slots(tmp_path) == [current]
     assert store.reserve_slot(tmp_path, 1, source="orca_auto.orca.queue_worker") is None
-    assert store.get_slot(tmp_path, token) == retained
+    assert store.get_slot(tmp_path, token) == current
+    assert "workflow_id" not in store._slot_to_dict(current)

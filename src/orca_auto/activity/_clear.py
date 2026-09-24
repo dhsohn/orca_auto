@@ -7,7 +7,7 @@ from orca_auto.core.engine_runtime import engine_runtime_paths
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca.run_cleanup import clear_terminal_entries
 
-from . import _sources
+from ._list import resolve_activity_sources
 
 
 def clear_activities(
@@ -15,13 +15,13 @@ def clear_activities(
     shared_config: str | None = None,
     orca_config: str | None = None,
 ) -> dict[str, Any]:
-    resolved = _sources.resolve_activity_source_request(
+    resolved = resolve_activity_sources(
         ActivitySourceRequest(shared_config=shared_config, orca_config=orca_config)
     )
     config_path = normalize_text(resolved.orca_config)
     queue_count, run_count = (0, 0)
     if config_path:
-        root = engine_runtime_paths(config_path, engine="orca")["allowed_root"]
+        root = engine_runtime_paths(config_path)["allowed_root"]
         queue_count, run_count = clear_terminal_entries(root)
     return {
         "total_cleared": queue_count + run_count,

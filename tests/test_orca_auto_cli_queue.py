@@ -111,9 +111,7 @@ def test_queue_list_stays_plain_under_force_color_pipe(
                 orca_auto_config=None,
                 limit=0,
                 refresh=False,
-                engine=None,
                 status=None,
-                kind=None,
                 json=False,
             )
         )
@@ -249,9 +247,7 @@ def test_cmd_queue_list_filters_text_output(
             orca_auto_config=None,
             limit=0,
             refresh=False,
-            engine=["orca"],
             status=["running"],
-            kind=["job"],
             json=False,
         )
     )
@@ -333,9 +329,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
                 orca_auto_config=None,
                 limit=0,
                 refresh=False,
-                engine=None,
                 status=None,
-                kind=None,
                 json=False,
             )
         )
@@ -414,9 +408,7 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
         orca_auto_config=None,
         limit=0,
         refresh=False,
-        engine=None,
         status=None,
-        kind=None,
         json=False,
     )
 
@@ -492,9 +484,7 @@ def test_cmd_queue_list_reports_empty_filtered_results(
             orca_auto_config=None,
             limit=0,
             refresh=False,
-            engine=["orca"],
             status=["failed"],
-            kind=["job"],
             json=False,
         )
     )
@@ -542,9 +532,7 @@ def test_cmd_queue_list_json_filters_payload(
             orca_auto_config=None,
             limit=0,
             refresh=False,
-            engine=["orca"],
             status=["running"],
-            kind=None,
             json=True,
         )
     )
@@ -609,9 +597,7 @@ def test_cmd_queue_list_uses_global_active_simulation_count_from_full_payload(
             orca_auto_config=None,
             limit=1,
             refresh=False,
-            engine=["orca"],
             status=["running"],
-            kind=["job"],
             json=True,
         )
     )
@@ -677,9 +663,7 @@ def test_cmd_queue_list_applies_limit_after_filters(
             orca_auto_config=None,
             limit=1,
             refresh=False,
-            engine=["orca"],
             status=["running"],
-            kind=["job"],
             json=True,
         )
     )
@@ -714,9 +698,7 @@ def test_cmd_queue_list_clear_text_output(
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
-            engine=None,
             status=None,
-            kind=None,
             json=False,
         )
     )
@@ -751,9 +733,7 @@ def test_cmd_queue_list_clear_json_output(
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
-            engine=None,
             status=None,
-            kind=None,
             json=True,
         )
     )
@@ -780,9 +760,7 @@ def test_cmd_queue_list_clear_rejects_filters(
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
-            engine=["orca"],
-            status=None,
-            kind=None,
+            status=["running"],
             json=False,
         )
     )
@@ -790,7 +768,7 @@ def test_cmd_queue_list_clear_rejects_filters(
     assert result == 1
     assert (
         capsys.readouterr().err
-        == "error: `orca_auto queue list clear` does not support --engine/--status/--kind/--limit filters.\n"
+        == "error: `orca_auto queue list clear` does not support --status/--limit filters.\n"
     )
 
 
@@ -810,9 +788,7 @@ def test_cmd_queue_list_clear_rejects_negative_limit_fail_closed(
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=-1,
             refresh=False,
-            engine=None,
             status=None,
-            kind=None,
             json=False,
         )
     )
@@ -820,7 +796,7 @@ def test_cmd_queue_list_clear_rejects_negative_limit_fail_closed(
     assert result == 1
     assert (
         capsys.readouterr().err
-        == "error: `orca_auto queue list clear` does not support --engine/--status/--kind/--limit filters.\n"
+        == "error: `orca_auto queue list clear` does not support --status/--limit filters.\n"
     )
 
 
@@ -850,9 +826,7 @@ def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceba
             orca_auto_config="/tmp/missing-or-corrupt.yaml",
             limit=0,
             refresh=False,
-            engine=None,
             status=None,
-            kind=None,
             json=True,
         )
     )
@@ -891,9 +865,7 @@ def test_cmd_queue_list_treats_closed_output_pipe_separately_from_state_errors(
             orca_auto_config=None,
             limit=0,
             refresh=False,
-            engine=None,
             status=None,
-            kind=None,
             json=False,
         )
     )
@@ -1122,9 +1094,7 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
             orca_auto_config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
-            engine=None,
             status=None,
-            kind=None,
             json=True,
         )
     )

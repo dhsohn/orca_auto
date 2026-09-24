@@ -10,15 +10,12 @@ from typing import Any
 import pytest
 
 from orca_auto import cli as unified_cli
-from orca_auto import cli_workers as cli_worker_specs
 from orca_auto.activity import _cancel as activity_cancel
 from orca_auto.core.engine_catalog import (
-    activity_engine_entries,
     engine_catalog,
-    known_engine_ids,
-    supervised_engine_entries,
+    find_engine_catalog_entry,
+    get_engine_catalog_entry,
 )
-from orca_auto.core.engines.registry import get_engine_definition
 
 
 def _subparser(
@@ -35,17 +32,11 @@ def _subparser(
     return action.choices[name]
 
 
-def _option_choices(parser: argparse.ArgumentParser, option: str) -> list[str]:
-    action = parser._option_string_actions[option]
-    assert action.choices is not None
-    return [str(choice) for choice in action.choices]
-
-
 def test_engine_catalog_is_import_safe() -> None:
     script = """
 import sys
 from orca_auto.core.engine_catalog import engine_catalog
-assert all(entry.definition_module not in sys.modules for entry in engine_catalog())
+assert tuple(entry.engine_id for entry in engine_catalog()) == ("orca",)
 assert not any(name.startswith(('orca_auto.flow', 'orca_auto.orca')) for name in sys.modules)
 """
     env = dict(os.environ)
@@ -57,8 +48,8 @@ assert not any(name.startswith(('orca_auto.flow', 'orca_auto.orca')) for name in
 @pytest.mark.parametrize(
     "module_name",
     [
-        "orca_auto.core.engines.queue_worker",
-        "orca_auto.core.engines.worker_child",
+        "orca_auto.orca.commands.queue",
+        "orca_auto.orca.commands.worker_child",
     ],
 )
 def test_engine_entrypoint_module_runs_without_eager_import_warning(module_name: str) -> None:
@@ -84,20 +75,25 @@ def test_engine_entrypoint_module_runs_without_eager_import_warning(module_name:
     assert "RuntimeWarning" not in result.stderr
 
 
-def test_catalog_preserves_public_engine_and_routing_orders() -> None:
-    assert known_engine_ids() == ("orca",)
-    assert tuple(entry.engine_id for entry in supervised_engine_entries()) == ("orca",)
-    assert tuple(entry.engine_id for entry in activity_engine_entries()) == ("orca",)
-    assert engine_catalog()[0].task_kinds == ("orca_run_inp",)
+def test_catalog_holds_exactly_the_orca_identity() -> None:
+    (entry,) = engine_catalog()
+    assert entry.engine_id == "orca"
+    assert entry.app_id == "orca_auto_orca"
+    assert entry.source_id == "orca_auto_orca"
+    assert entry.task_kinds == ("orca_run_inp",)
+    # Persisted ``source`` label in admission_slots.json; not a module path.
+    assert entry.admission_source == "orca_auto.orca.queue_worker"
+    assert entry.engine_launch_gated is True
 
 
-def test_every_catalog_engine_has_registry_supervision_and_admission_metadata() -> None:
-    for entry in engine_catalog():
-        assert get_engine_definition(entry.engine_id).engine == entry.engine_id
-        assert cli_worker_specs._ENGINE_WORKER_MODULES[entry.engine_id] == entry.worker_module
-        assert entry.engine_id in known_engine_ids()
-        assert entry.admission_source
-        assert entry.app_id
+def test_catalog_lookup_normalizes_and_rejects_unknown_engines() -> None:
+    assert find_engine_catalog_entry(" ORCA ") is engine_catalog()[0]
+    assert find_engine_catalog_entry("xtb") is None
+    assert get_engine_catalog_entry("orca") is engine_catalog()[0]
+    with pytest.raises(ValueError, match=r"unsupported engine: xtb \(supported: orca\)"):
+        get_engine_catalog_entry("xtb")
+    with pytest.raises(ValueError, match="unsupported engine: <blank>"):
+        get_engine_catalog_entry(None)
 
 
 def test_orca_worker_reservation_uses_catalog_identity(
@@ -128,11 +124,13 @@ def test_orca_worker_reservation_uses_catalog_identity(
     assert captured[0]["limit"] == cfg.runtime.resolved_admission_limit
 
 
-def test_every_catalog_engine_has_queue_filter_list_cancel_and_clear_coverage() -> None:
+def test_queue_list_and_worker_have_no_engine_selection_options() -> None:
     parser = unified_cli.build_parser()
     queue_parser = _subparser(parser, dest="command", name="queue")
     list_parser = _subparser(queue_parser, dest="queue_command", name="list")
     worker_parser = _subparser(queue_parser, dest="queue_command", name="worker")
-    assert _option_choices(list_parser, "--engine") == ["orca"]
-    assert _option_choices(worker_parser, "--app") == ["orca"]
+    assert "--engine" not in list_parser._option_string_actions
+    assert "--kind" not in list_parser._option_string_actions
+    assert "--status" in list_parser._option_string_actions
+    assert "--app" not in worker_parser._option_string_actions
     assert callable(activity_cancel.cancel_orca_target)

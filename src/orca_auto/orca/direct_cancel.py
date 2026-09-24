@@ -4,8 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.commands.queue import display_status
 from orca_auto.core.engines import command_result as _engine_models
+from orca_auto.core.queue.types import QueueStatus, effective_queue_status
+from orca_auto.core.statuses import STATUS_FAILED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
 from .queue.entries import queue_entry_is_retired_workflow_owned
@@ -42,7 +43,7 @@ def _failure_payload(
     if stderr and not stderr.endswith("\n"):
         stderr += "\n"
     return _engine_models.InternalEngineCommandResult(
-        status="failed",
+        status=STATUS_FAILED,
         reason=reason,
         returncode=1,
         command_argv=command_argv,
@@ -73,7 +74,7 @@ def _find_orca_cancel_entry(request: _OrcaDirectCancelRequest) -> tuple[Path, An
     from orca_auto.core.engine_runtime import engine_runtime_paths
     from orca_auto.orca.queue import adapter as queue_adapter
 
-    allowed_root = engine_runtime_paths(request.config_path, engine="orca")["allowed_root"]
+    allowed_root = engine_runtime_paths(request.config_path)["allowed_root"]
     matched = queue_adapter.find_entry_by_target(
         queue_adapter.list_queue(allowed_root),
         request.target,
@@ -112,7 +113,7 @@ def _cancel_success_payload(
 ) -> dict[str, Any]:
     from orca_auto.orca.queue import adapter as queue_adapter
 
-    status = display_status(updated)
+    status = effective_queue_status(updated)
     parsed_stdout = _engine_models._text_fields(
         {
             "status": status,
@@ -173,7 +174,7 @@ def cancel_target(
                 current is None
                 or not _cancel_request_targets_exact_entry(request, current)
                 or not queue_adapter.queue_entries_same_publication_generation(current, matched)
-                or queue_adapter.queue_entry_status(current) != "cancelled"
+                or queue_adapter.queue_entry_status(current) != QueueStatus.CANCELLED.value
             ):
                 return _failure_payload(
                     command_argv=request.command_argv,
@@ -194,7 +195,7 @@ def cancel_target(
                     current is not None
                     and queue_adapter.queue_entries_same_publication_generation(current, matched)
                     and (
-                        queue_adapter.queue_entry_status(current) == "cancelled"
+                        queue_adapter.queue_entry_status(current) == QueueStatus.CANCELLED.value
                         or (
                             queue_adapter.queue_entry_status(current)
                             in queue_adapter.ACTIVE_STATUSES

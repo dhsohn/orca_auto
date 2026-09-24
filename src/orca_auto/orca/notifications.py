@@ -26,6 +26,8 @@ from orca_auto.core.messaging import (
     text,
 )
 
+from .statuses import RunStatus
+
 if TYPE_CHECKING:
     from .types import (
         QueueEnqueuedNotification,
@@ -49,7 +51,10 @@ def run_started_message(event: RunStartedNotification) -> Message:
     fields = [
         field_row("Job", text(reaction_dir.name or reaction_dir.as_posix())),
         field_row(
-            "Attempt", raw(f"#{event['attempt_index']} ("), code(status or "running"), raw(")")
+            "Attempt",
+            raw(f"#{event['attempt_index']} ("),
+            code(status or RunStatus.RUNNING.value),
+            raw(")"),
         ),
         field_row("Input", code(current_inp.name)),
     ]
@@ -68,12 +73,12 @@ def run_finished_message(event: RunFinishedNotification) -> Message:
     reaction_dir = Path(event["reaction_dir"])
     status = str(event["status"]).strip().lower()
     title = {
-        "completed": "ORCA completed",
-        "cancelled": "ORCA cancelled",
+        RunStatus.COMPLETED.value: "ORCA completed",
+        RunStatus.CANCELLED.value: "ORCA cancelled",
     }.get(status, "ORCA failed")
-    if status == "completed":
+    if status == RunStatus.COMPLETED.value:
         severity: Severity = "success"
-    elif status == "cancelled":
+    elif status == RunStatus.CANCELLED.value:
         severity = "warning"
     else:
         severity = "error"

@@ -15,34 +15,27 @@ def test_normalize_activity_filter_values_deduplicates_case_insensitively() -> N
     )
 
 
-def test_filter_activity_items_applies_normalized_engine_status_and_kind_filters() -> None:
+def test_filter_activity_items_applies_normalized_status_filters() -> None:
     items: list[dict[str, Any]] = [
-        {"activity_id": "orca_1", "engine": "ORCA", "status": " Running ", "kind": "job"},
-        {"activity_id": "xtb_1", "engine": "xtb", "status": "running", "kind": "job"},
-        {"activity_id": "wf_1", "engine": "workflow", "status": "running", "kind": "workflow"},
+        {"activity_id": "orca_1", "engine": "orca", "status": " Running ", "kind": "job"},
+        {"activity_id": "orca_2", "engine": "orca", "status": "completed", "kind": "job"},
+        {"activity_id": "orca_3", "engine": "orca", "status": "RUNNING", "kind": "job"},
     ]
 
-    filtered = activity_view.filter_activity_items(
-        items,
-        engines=["orca"],
-        statuses=["running"],
-        kinds=["job"],
-    )
+    filtered = activity_view.filter_activity_items(items, statuses=[" running "])
 
-    assert [item["activity_id"] for item in filtered] == ["orca_1"]
+    assert [item["activity_id"] for item in filtered] == ["orca_1", "orca_3"]
     assert filtered[0] is not items[0]
 
 
 def test_count_global_active_simulations_uses_orca_runtime_paths(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str | None]] = []
+    calls: list[str] = []
     admission_root = Path("/tmp/orca_auto-admission")
 
-    def fake_engine_runtime_paths(
-        config_path: str, *, engine: str | None = None
-    ) -> dict[str, Path]:
-        calls.append((config_path, engine))
+    def fake_engine_runtime_paths(config_path: str) -> dict[str, Path]:
+        calls.append(config_path)
         return {"admission_root": admission_root}
 
     monkeypatch.setattr(activity_view, "engine_runtime_paths", fake_engine_runtime_paths)
@@ -54,7 +47,7 @@ def test_count_global_active_simulations_uses_orca_runtime_paths(
         )
         == 5
     )
-    assert calls == [("/tmp/orca_auto.yaml", "orca")]
+    assert calls == ["/tmp/orca_auto.yaml"]
 
 
 def test_activity_counter_config_path_prioritizes_sources_or_hints() -> None:

@@ -6,6 +6,99 @@ This project follows a lightweight [Keep a Changelog](https://keepachangelog.com
 style. Version numbers are recorded in `pyproject.toml`; release procedure lives
 in [docs/RELEASE.md](docs/RELEASE.md).
 
+## [Unreleased]
+
+The next release is a major version: the removals marked *public contract*
+below change CLI options, the configuration discovery order and the worker
+unit `ExecStart`. Upgrading requires reinstalling the systemd units with
+`orca_auto systemd install` during an idle window and restarting under the
+admission guard; see [Upgrading to the next major](docs/RELEASE.md#upgrading-to-the-next-major)
+and [RUNTIME](docs/RUNTIME.md).
+
+### Removed
+
+- Public contract: `queue worker --app`, `queue list --engine` and
+  `queue list --kind` are removed; each accepted a single value. The worker
+  unit `ExecStart` no longer passes `--app orca`, and `service restart`
+  refuses a unit whose installed `ExecStart` still carries it until the units
+  are reinstalled with `orca_auto systemd install`. Reinstall the units before
+  any restart: a unit still passing `--app orca` cannot start the new worker.
+- Public contract: configuration discovery no longer probes a checkout-local
+  `config/orca_auto.yaml`. The order is `--config`, `ORCA_AUTO_CONFIG`, then
+  `~/orca_auto/config/orca_auto.yaml`. `systemd install --config` defaults to
+  the target user's `~/orca_auto/config/orca_auto.yaml`, `scripts/bootstrap_wsl.sh`
+  writes the template there, and worker subprocesses no longer receive a
+  checkout `PYTHONPATH`.
+- `service status` no longer reports `version_drift` and no longer fails on
+  editable-install metadata drift; its exit code depends only on unit health
+  and worker freshness.
+- Engine registry and definition layers (`core/engines/{registry,definitions,
+  definition_builder,queue_worker,worker_child}.py`), engine-section
+  configuration inheritance (`core/config/engines.py`) and caller-less code:
+  the `orca/job_locations` contract-payload modules, `core/notifications/`,
+  `core/messaging/config_io.py`, `core/config/bounded_yaml.py` (its
+  duplicate-key loader moved into `core/config/files.py`),
+  `core/commands/queue.py`, `OrcaResult.status/has_imaginary_freq/lowest_freq_cm1`,
+  `coarse_orca_status`, `EngineScratchPolicy.publish_name` and unused
+  process, queue and status helpers. `AdmissionSlot.workflow_id` is no longer
+  written; existing `admission_slots.json` rows that contain it still load,
+  while 7.0.x readers reject rows written without it (roll back only with an
+  empty slot file, see RELEASE).
+
+### Changed
+
+- Worker entry points are `python -m orca_auto.orca.commands.queue --config …`
+  (parent) and `python -m orca_auto.orca.commands.worker_child --config …
+  --queue-root … --queue-id … [--admission-token …]` (child); the parent
+  constructs `EngineQueueRuntime` directly and `engine_catalog.py` keeps only
+  persisted identity fields.
+- `service status` worker freshness compares process evidence with the checkout
+  HEAD or the installed runtime build id; a stale worker row without a checkout
+  update time is reported as undetermined.
+- Status vocabulary: `RunStatus.CANCELLED` is added, `finalize_state` accepts
+  only terminal statuses, terminal and active status sets have one definition,
+  and terminal queue rows are built only by `core.queue.store.terminal_entry`
+  (plus `correct_terminal_status` for recovery corrections), enforced by a
+  static test. `queue list` summaries count `created` run snapshots in the
+  queued group.
+- Output analysis shares one imaginary-frequency count (`orca/frequencies.py`)
+  between the completion verifier and reports, one `.out` decoder (BOM/UTF-16
+  sniffing) between the verifier, reports and relaxed-scan parsing, and one
+  IRC/NEB path parser; report parsers decode each output file once. The shared
+  decoder replaces an invalid byte with U+FFFD instead of dropping it, so a
+  termination banner or frequency line corrupted mid-word no longer counts as
+  evidence; BOM-less UTF-16 is recognised by NUL bytes confined to one byte
+  parity, so a zero-filled hole in a UTF-8 output stays UTF-8.
+- Input parsing: geometry and `%block` scanners share the comment-aware
+  tokenizer; a malformed relaxed-scan sub-block without `end` keeps its last
+  coordinate row.
+- Shared configuration is validated in one pass into a `SharedConfig` bundle;
+  `orca_auto init` prompts apply the loader's path rules.
+- `OrcaRuntimeConfig` is frozen; the queue worker derives its effective
+  concurrency with `dataclasses.replace`. Optimization-convergence reads share
+  the output line iterator instead of `str.splitlines()`.
+
+### Fixed
+
+- A comment-only line inside an inline `* xyz … *` block is no longer counted
+  as an atom for the Hessian and atom-count admission limits.
+- The report "last output" footer follows the evidence rule: it is omitted when
+  the recorded final output is missing on disk instead of naming an earlier
+  attempt.
+- The child's cancel finalization of `job_state.json` runs under `run.lock` and
+  is skipped when the lock is held; the parent replay then settles the row.
+
+### Added
+
+- `orca_auto scratch list [--config PATH] [--json]` reports the RAM-scratch
+  workspaces under `orca.runtime.scratch_root` and whether any non-live
+  workspace blocks new scratch launches. It exits 0 even when blockers exist
+  and 1 when scratch is not configured or the root is unreadable.
+- `orca_auto scratch clear NAME | --all-stale [--config PATH] [--json]`
+  removes `stale`, `unverifiable` or `invalid-manifest` workspaces through the
+  worker's own removal path. Live workspaces are refused; the command exits 1
+  when nothing was removed or any target was refused.
+
 ## [7.0.1] - 2026-09-24
 
 ### Changed

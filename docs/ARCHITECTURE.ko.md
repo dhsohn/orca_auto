@@ -68,9 +68,12 @@ graph TD
 `OrcaQueueWorker`가 ORCA 취소·종료·복구 연결과 replay 상태를 소유한다.
 공통 기반 클래스는 프로세스 감독·실행 슬롯 예약·PID 파일 생명주기를 맡는다.
 워커는 타입이 지정된 의존성을 생성 시 한 번 조립하며, 테스트에서는 프로세스 생성과
-대기 함수를 직접 교체할 수 있다. `EngineDefinition[AppConfig]`는 설정·큐 항목 타입과
-선택한 generation을 인수할 때 비교하는 키워드 전용 `expected_entry` 인자를
-런타임까지 유지한다.
+대기 함수를 직접 교체할 수 있다. 부모 진입점은
+`python -m orca_auto.orca.commands.queue --config …`, 자식 진입점은
+`python -m orca_auto.orca.commands.worker_child --config … --queue-root …
+--queue-id … [--admission-token …]`이다. 부모는 구체적인 ORCA 설정·큐 항목 타입으로
+`EngineQueueRuntime`을 직접 생성하며, 선택한 generation을 인수할 때 비교하는
+키워드 전용 `expected_entry` 인자도 그대로 전달한다.
 
 취소 관찰은 변경되지 않은 큐 스냅샷을 재사용한다. 종료 알림은 영속 전송 claim과
 제한된 백그라운드 전송을 사용한다. 알림은 best effort이며 실행 슬롯을 붙잡지 않는다.
@@ -93,5 +96,6 @@ ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행�
 ## 4. 모니터링 및 운영 아키텍처
 
 - **SQLite 조회 캐시**: 대량의 계산 이력이 쌓여도 빠른 조회가 가능하도록 SQLite 기반 activity 인덱스를 운영합니다. 파일시스템에 직접적인 변경이 일어난 경우 `--refresh` 플래그로 인덱스를 갱신할 수 있습니다.
+- **Scratch 운영 명령**: `orca_auto scratch list`와 `scratch clear`로 비활성(non-live) RAM scratch 워크스페이스를 점검·제거합니다. stale, unverifiable, invalid-manifest 워크스페이스가 하나라도 남아 있으면 이후의 모든 scratch 실행이 차단(fail-closed)됩니다.
 - **불변 휠 런타임 (Prepared Wheel Runtime)**: 프로덕션 서버 환경에서는 Git 체크아웃 대신 검증된 불변 wheel 런타임을 독립 경로에 설치하여, 운영 중 소스 코드 변경으로 인한 혼선을 원천 차단할 수 있습니다. ([docs/RUNTIME.md](RUNTIME.md) 참고)
 - **과거 데이터 보호**: 7.0에서 지원 종료된 이전 워크플로우 디렉터리는 과거 계산 데이터를 보존하기 위해 읽기 전용으로 보호되며, 해당 디렉터리에서 새로운 실행이 시작되는 것을 방지합니다.

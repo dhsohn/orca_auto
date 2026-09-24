@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Callable
 from typing import Any
 
 
@@ -56,7 +57,25 @@ def build_parser() -> argparse.ArgumentParser:
     return _build_parser()
 
 
-def main(argv: list[str] | None = None) -> int:
+def dispatches_queue_worker(args: argparse.Namespace) -> bool:
+    """Whether the parsed command line runs the ``queue worker`` supervisor."""
+    from orca_auto.cli_workers import cmd_queue_worker
+
+    return getattr(args, "func", None) is cmd_queue_worker
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    before_queue_worker: Callable[[], None] | None = None,
+) -> int:
+    """Parse and dispatch one command.
+
+    ``before_queue_worker`` runs after parsing and only when the parsed command
+    dispatches to the queue worker. The module entry point uses it to publish
+    process evidence before the worker starts, bound to the parser's own
+    dispatch rather than to a raw ``sys.argv`` prefix.
+    """
     from orca_auto.core import terminal
 
     parser = build_parser()
@@ -66,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "func", None):
         parser.print_help()
         return 0
+    if before_queue_worker is not None and dispatches_queue_worker(args):
+        before_queue_worker()
 
     original_stdout = sys.stdout
     guarded_stdout = _BrokenPipeGuardedStdout(original_stdout)
@@ -86,5 +107,4 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     from orca_auto._process_evidence import exec_with_import_source_evidence
 
-    exec_with_import_source_evidence()
-    raise SystemExit(main())
+    raise SystemExit(main(before_queue_worker=exec_with_import_source_evidence))

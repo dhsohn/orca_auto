@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -879,7 +880,7 @@ def test_worker_child_runs_the_replacement_generation(
     queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
     _crash_generation(snapshot)
     cfg = _worker_cfg(queue_root, executable)
-    cfg.runtime.admission_root = str(tmp_path / "admission")
+    cfg = replace(cfg, runtime=replace(cfg.runtime, admission_root=str(tmp_path / "admission")))
     calls: dict[str, Any] = {}
 
     monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)

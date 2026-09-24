@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from orca_auto.orca.relaxed_scan import (
+    first_scan_coordinate_spec,
     parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
 )
@@ -280,3 +281,63 @@ def _write_surface_out(path: Path, rows: list[str]) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_parse_scan_actual_surface_reads_a_utf16_output_like_its_utf8_twin(
+    tmp_path: Path,
+) -> None:
+    # The scan table used to be read as UTF-8 regardless of the file's
+    # encoding while the verdict and the frequency analysis sniffed it.
+    text = "\n".join(
+        [
+            "The Calculated Surface using the 'Actual Energy'",
+            "   1.86000000 -100.00000000",
+            "   1.91000000 -99.50000000",
+            "   1.96000000 -99.80000000",
+            "The Calculated Surface using the SCF energy",
+            "   1.86000000 -101.00000000",
+            "",
+        ]
+    )
+    utf8 = tmp_path / "utf8.out"
+    utf8.write_text(text, encoding="utf-8")
+    utf16 = tmp_path / "utf16.out"
+    utf16.write_text(text, encoding="utf-16")
+
+    expected = parse_scan_actual_surface(utf8)
+
+    assert [point.index for point in expected] == [1, 2, 3]
+    assert parse_scan_actual_surface(utf16) == expected
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "%geom\n  Scan\n    B 0 1 = 1.20, 3.00, 10\n  end\nend\n",
+        # The scan sub-block's ``end`` doubles as the %geom ``end``.
+        "%geom\n  Scan\n    B 0 1 = 1.20, 3.00, 10\nend\n",
+        # No ``end`` at all: the geometry section cuts the block. The shared
+        # block rule still yields the coordinate row.
+        "%geom\n  Scan\n    B 0 1 = 1.20, 3.00, 10\n",
+    ],
+    ids=["closed", "shared-end", "cut-by-geometry"],
+)
+def test_first_scan_coordinate_spec_follows_the_shared_block_rule(
+    tmp_path: Path, body: str
+) -> None:
+    inp = tmp_path / "scan.inp"
+    inp.write_text("! Opt B3LYP def2-SVP\n" + body + "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
+
+    spec = first_scan_coordinate_spec(inp)
+
+    assert spec is not None
+    assert (spec.kind, spec.atoms, spec.start, spec.end, spec.points) == ("B", (0, 1), 1.2, 3.0, 10)
+
+
+def test_first_scan_coordinate_spec_ignores_scan_outside_geom(tmp_path: Path) -> None:
+    inp = tmp_path / "scan.inp"
+    inp.write_text(
+        "! Opt\n%geom\n  MaxIter 50\nend\n  Scan\n    B 0 1 = 1.20, 3.00, 10\n  end\n* xyz 0 1\n*\n"
+    )
+
+    assert first_scan_coordinate_spec(inp) is None

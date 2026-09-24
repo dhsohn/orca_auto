@@ -6,12 +6,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import active_orca_line_text, find_block_range
+from .input_blocks import active_orca_line_text, find_block
 from .parser import KCAL_PER_HARTREE
+from .parser.io import open_orca_text
 
 _FLOAT_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?")
-_GEOM_SCAN_START_RE = re.compile(r"^\s*scan\s*$", re.IGNORECASE)
-_GEOM_END_RE = re.compile(r"^\s*end\s*$", re.IGNORECASE)
 _SIMPLE_SCAN_COORD_LINE_RE = re.compile(
     rf"^(?P<prefix>\s*\S+(?:\s+\d+)+\s*=\s*)"
     rf"(?P<start>{_FLOAT_RE.pattern})(?P<sep1>\s*,\s*)"
@@ -120,7 +119,8 @@ def parse_scan_actual_surface(out_path: Path) -> list[ScanSurfacePoint]:
     # the right step geometry.
     row_number = 0
     try:
-        with out_path.open("r", encoding="utf-8", errors="ignore") as handle:
+        # Decoded by the parser's rule so the table matches the verdict's text.
+        with open_orca_text(out_path) as handle:
             for line in handle:
                 upper = line.upper()
                 if "THE CALCULATED SURFACE USING THE 'ACTUAL ENERGY'" in upper:
@@ -225,27 +225,28 @@ def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     return None
 
 
-def _scan_subblock_end(lines: list[str], start: int, stop: int) -> int:
-    for idx in range(start, stop):
-        if _GEOM_END_RE.match(active_orca_line_text(lines[idx])):
-            return idx + 1
-    return stop
-
-
 def _simple_scan_coord_line_indices(lines: list[str]) -> list[int]:
-    block = find_block_range(lines, "geom")
+    """Line indices of simple scan coordinates inside ``%geom`` ``scan ... end`` sub-blocks.
+
+    Uses the package's shared block rule: :func:`find_block` already keeps the
+    nested ``scan`` rows and their closing ``end`` row as body rows of the
+    ``%geom`` block, so no separate end-of-sub-block rule is needed here.
+    """
+    block = find_block(lines, "geom")
     if block is None:
         return []
-    start, end, _needs_close = block
     indices: list[int] = []
-    i = start + 1
-    while i < end:
-        if not _GEOM_SCAN_START_RE.match(active_orca_line_text(lines[i])):
-            i += 1
+    in_scan = False
+    for row in block.rows:
+        if row.line_index == block.start:
             continue
-        scan_end = _scan_subblock_end(lines, i + 1, end)
-        for idx in range(i + 1, scan_end - 1):
-            if _SIMPLE_SCAN_COORD_LINE_RE.match(active_orca_line_text(lines[idx])):
-                indices.append(idx)
-        i = scan_end
+        single = row.tokens[0].value.lower() if len(row.tokens) == 1 else ""
+        if not in_scan:
+            in_scan = single == "scan"
+            continue
+        if single == "end":
+            in_scan = False
+            continue
+        if _SIMPLE_SCAN_COORD_LINE_RE.match(active_orca_line_text(lines[row.line_index])):
+            indices.append(row.line_index)
     return indices

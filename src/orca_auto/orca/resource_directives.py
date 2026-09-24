@@ -9,10 +9,9 @@ from pathlib import Path
 from orca_auto.core.engine_process import atomic_write_confined_bytes
 
 from .input_blocks import (
-    BLOCK_START_RE,
-    GEOM_HEADER_RE,
     active_orca_directive_text,
     find_route_idx,
+    iter_blocks,
     orca_route_line,
     set_block_key_value,
 )
@@ -76,38 +75,16 @@ def _read_nprocs_from_pal_shorthand(lines: list[str]) -> int | None:
 
 
 def _read_nprocs_from_pal_block(lines: list[str]) -> int | None:
-    in_pal_block = False
-    values: list[int] = []
-    for line in lines:
-        active_line = active_orca_directive_text(line)
-        block_match = BLOCK_START_RE.match(active_line)
-        if block_match is not None:
-            in_pal_block = _is_block_start(block_match, "pal")
-            if not in_pal_block:
-                continue
-            remainder = active_line[block_match.end() :] if block_match else ""
-            inline_value = read_nprocs_from_text(remainder)
-            if inline_value is not None:
-                values.append(inline_value)
-            if re.search(r"\bend\b", remainder, re.IGNORECASE):
-                in_pal_block = False
-            continue
-
-        if not in_pal_block:
-            continue
-
-        if ends_pal_block(active_line):
-            in_pal_block = False
-            continue
-
-        value = read_nprocs_from_text(active_line)
-        if value is not None:
-            values.append(value)
+    # ``iter_blocks`` owns the block-termination rule (inline ``end``, ``end``
+    # lines, the next ``%`` directive or the geometry section cutting an
+    # unterminated block) and already drops ``# ... #`` and trailing comments.
+    values = [
+        value
+        for block in iter_blocks(lines, "pal")
+        for row in block.rows
+        if (value := read_nprocs_from_text(row.text)) is not None
+    ]
     return max(values) if values else None
-
-
-def _is_block_start(block_match: re.Match[str] | None, name: str) -> bool:
-    return bool(block_match and block_match.group(1).lower() == name)
 
 
 def read_nprocs_from_text(text: str) -> int | None:
@@ -120,15 +97,6 @@ def read_nprocs_from_text(text: str) -> int | None:
         if value > 0:
             values.append(value)
     return max(values) if values else None
-
-
-def ends_pal_block(line: str) -> bool:
-    stripped = line.strip()
-    if stripped.lower() == "end":
-        return True
-    if BLOCK_START_RE.match(line):
-        return True
-    return bool(GEOM_HEADER_RE.match(stripped))
 
 
 def maxcore_mb_per_core(*, max_memory_gb: int, max_cores: int) -> int:

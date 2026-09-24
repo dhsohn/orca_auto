@@ -27,14 +27,14 @@ orca_auto-runtime@USER.target          # Top-level runtime target
 ## 2. Service Management Commands
 
 ### Install Units
-The installer renders template units into `/etc/systemd/system/`. It requires `--user` and `--repo` (pointing to a repository checkout containing `.venv` or a prepared runtime root):
+The installer renders template units into `/etc/systemd/system/`. It requires `--user` and `--repo` (pointing to a repository checkout containing `.venv` or a prepared runtime root). `--config` defaults to the target user's `~/orca_auto/config/orca_auto.yaml`; the unit binds that path through `ORCA_AUTO_CONFIG` and its `ExecStart` runs `queue worker` without engine options:
 ```bash
 # Render and install systemd templates for the current user
 orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
 ```
 
 ### Check Service Status
-Verifies that running worker processes match the installed systemd unit build:
+Verifies unit health and that running worker processes match the checkout HEAD or the installed runtime build. Returns non-zero when a unit is unhealthy or a worker is stale or undetermined:
 ```bash
 orca_auto service status
 ```

@@ -19,7 +19,7 @@ def _sudo_available(*, which: Callable[[str], str | None] = shutil.which) -> boo
 
 def _restartable_worker_units(target_user: str) -> tuple[str, ...]:
     """Return the ORCA worker that must reload code after a target restart."""
-    return (dict(cli_systemd_units._service_units_for_user(target_user))["worker"],)
+    return (dict(cli_systemd_units.service_units_for_user(target_user))["worker"],)
 
 
 def _require_current_restart_units(
@@ -27,11 +27,11 @@ def _require_current_restart_units(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> None:
-    required_units = (dict(cli_systemd_units._service_units_for_user(target_user))["engines"],)
+    required_units = (dict(cli_systemd_units.service_units_for_user(target_user))["engines"],)
     missing = tuple(
         unit
         for unit in required_units
-        if cli_systemd_units._unit_load_state(unit, run=run) == "not-found"
+        if cli_systemd_units.unit_load_state(unit, run=run) == "not-found"
     )
     if not missing:
         return
@@ -48,15 +48,15 @@ def _restart_unit_for_user(
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> str:
     _require_current_restart_units(target_user, run=run)
-    units_by_role = dict(cli_systemd_units._service_units_for_user(target_user))
+    units_by_role = dict(cli_systemd_units.service_units_for_user(target_user))
 
     def enabled_state(label: str) -> str | None:
-        return cli_systemd_units._query_systemctl("is-enabled", units_by_role[label], run=run)
+        return cli_systemd_units.query_systemctl("is-enabled", units_by_role[label], run=run)
 
-    mode = cli_systemd_units._select_service_mode(
+    mode = cli_systemd_units.select_service_mode(
         enabled_state=enabled_state,
         runtime_active=lambda: (
-            cli_systemd_units._query_systemctl("is-active", units_by_role["runtime"], run=run)
+            cli_systemd_units.query_systemctl("is-active", units_by_role["runtime"], run=run)
             == "active"
         ),
     )
@@ -82,7 +82,7 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
     is_root = deps.is_root or systemd_plan._is_root
     restart_unit_for_user = deps.restart_unit_for_user or _restart_unit_for_user
 
-    if not cli_systemd_units._systemctl_available(which=which):
+    if not cli_systemd_units.systemctl_available(which=which):
         emit_error("systemctl is not available in this environment")
         return 1
     use_sudo = not is_root()
@@ -90,8 +90,8 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
         emit_error("sudo is required to restart system services; rerun as root")
         return 1
 
-    target_user = cli_systemd_units._service_target_user(
-        args, default_service_user=deps.default_service_user
+    target_user = cli_systemd_units.service_target_user(
+        args, default_user=deps.default_service_user
     )
     try:
         unit = restart_unit_for_user(target_user, run=run)
@@ -153,7 +153,7 @@ def _restart_selected_units(
 ) -> int:
     for reset_unit in worker_units:
         print(f"Resetting service failure state for {reset_unit}")
-        rc = cli_systemd_units._run_command(
+        rc = cli_systemd_units.run_command(
             ("systemctl", "reset-failed", reset_unit),
             use_sudo=use_sudo,
             run=run,
@@ -162,7 +162,7 @@ def _restart_selected_units(
             return rc
 
     print(f"Restarting {unit}")
-    rc = cli_systemd_units._run_command(("systemctl", "restart", unit), use_sudo=use_sudo, run=run)
+    rc = cli_systemd_units.run_command(("systemctl", "restart", unit), use_sudo=use_sudo, run=run)
     if rc != 0:
         return rc
 
@@ -170,7 +170,7 @@ def _restart_selected_units(
     # Restart the service explicitly so the selected runtime reaches the process.
     for worker_unit in worker_units:
         print(f"Restarting {worker_unit}")
-        rc = cli_systemd_units._run_command(
+        rc = cli_systemd_units.run_command(
             ("systemctl", "restart", worker_unit), use_sudo=use_sudo, run=run
         )
         if rc != 0:

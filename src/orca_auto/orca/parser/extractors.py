@@ -9,8 +9,6 @@ from .patterns import (
     _COORD_SECTION_RE,
     _COORD_XYZ_LINE_RE,
     _CPCM_TOKEN_RE,
-    _FREQ_SECTION_RE,
-    _FREQ_VALUE_RE,
     _INPUT_LINE_RE,
     _METHOD_KEYWORDS,
     _OPT_CYCLE_RE,
@@ -131,32 +129,6 @@ def parse_solvation(text: str, tokens: list[str]) -> str:
     if cpcm_seen:
         return f"CPCM({cpcm_solvent})" if cpcm_solvent else "CPCM"
     return ""
-
-
-def parse_frequencies(text: str) -> tuple[bool | None, float | None]:
-    """Extract imaginary frequency status and lowest frequency.
-
-    Returns:
-        (has_imaginary_freq, lowest_freq_cm1)
-    """
-    section_matches = list(_FREQ_SECTION_RE.finditer(text))
-    if not section_matches:
-        return (None, None)
-
-    section = section_matches[-1].group(1)
-    freq_values = [float(v) for v in _FREQ_VALUE_RE.findall(section)]
-
-    if not freq_values:
-        return (None, None)
-
-    # Exclude translational/rotational modes near 0.0 cm^-1 (absolute value < 10 cm^-1)
-    real_freqs = [f for f in freq_values if abs(f) > 10.0]
-    if not real_freqs:
-        return (False, None)
-
-    lowest = min(real_freqs)
-    has_imaginary = lowest < 0.0
-    return (has_imaginary, lowest)
 
 
 def parse_wall_time(text: str) -> int | None:

@@ -19,7 +19,6 @@ from .richtext import (
     Message,
     Severity,
     Span,
-    bold,
     code,
     field_row,
     group,
@@ -29,14 +28,12 @@ from .richtext import (
 )
 
 if TYPE_CHECKING:
-    from .config_io import build_channel_from_config_path
     from .discord_bot import DiscordBotChannel
     from .registry import build_channel
 
 _LAZY_EXPORTS = {
     "DiscordBotChannel": (".discord_bot", "DiscordBotChannel"),
     "build_channel": (".registry", "build_channel"),
-    "build_channel_from_config_path": (".config_io", "build_channel_from_config_path"),
 }
 
 
@@ -60,9 +57,7 @@ __all__ = [
     "SendResult",
     "Severity",
     "Span",
-    "bold",
     "build_channel",
-    "build_channel_from_config_path",
     "code",
     "field_row",
     "group",

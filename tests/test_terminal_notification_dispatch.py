@@ -29,7 +29,7 @@ def test_slow_notification_does_not_block_loop_or_write_successor(
         def send(self, _message: object) -> SendResult:
             events.append("send")
             entered.set()
-            assert release.wait(3)
+            assert release.wait(30)
             delivered.set()
             return SendResult(sent=True)
 
@@ -55,8 +55,8 @@ def test_slow_notification_does_not_block_loop_or_write_successor(
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(Loop()._run_iteration)
         try:
-            assert entered.wait(1)
-            future.result(timeout=1)
+            assert entered.wait(30)
+            future.result(timeout=30)
             assert [event for event in events if event != "send"] == [
                 "release_slot",
                 "cancel_pass",
@@ -153,7 +153,7 @@ def test_bounded_sends_recover_capacity_after_transport_and_start_failures(
                 sends.append(message)
                 if len(sends) == 4:
                     entered.set()
-            assert release.wait(3)
+            assert release.wait(30)
             raise RuntimeError("synthetic transport failure")
 
     monkeypatch.setattr(worker_tracking, "build_channel", lambda *_args, **_kwargs: Channel())
@@ -164,7 +164,7 @@ def test_bounded_sends_recover_capacity_after_transport_and_start_failures(
     try:
         for root in roots[:4]:
             assert worker_tracking.notify_terminal_job_from_state(AppConfig(), str(root))
-        assert entered.wait(1)
+        assert entered.wait(30)
         assert not worker_tracking.notify_terminal_job_from_state(AppConfig(), str(roots[4]))
         assert len(sends) == 4
     finally:

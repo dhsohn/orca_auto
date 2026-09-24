@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from orca_auto.orca.completion_rules import CompletionMode
+from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.output_status import last_optimization_convergence
@@ -64,7 +65,6 @@ def test_last_optimization_verdict_agrees_across_consumers(
     assert analysis.markers["last_opt_converged"] is converged
     assert analysis.status.value == ("completed" if converged else "geom_not_converged")
     assert result.opt_converged is converged
-    assert result.status == ("completed" if converged else "failed")
     assert progress.is_converged is converged
     assert len(progress.steps) == 2
     assert report is not None
@@ -110,30 +110,6 @@ def test_annotated_final_energy_is_not_published(tmp_path: Path) -> None:
     assert result.thermo_temperature_k is None
 
 
-def test_error_termination_is_classified_as_failed(tmp_path: Path) -> None:
-    out_file = tmp_path / "error_case.out"
-    out_file.write_text(
-        "\n".join(
-            [
-                "! B3LYP def2-SVP Opt",
-                "* xyz 0 1",
-                "C 0.0 0.0 0.0",
-                "H 0.0 0.0 1.0",
-                "*",
-                "",
-                "ORCA finished by error termination in SCF gradient",
-                "[file orca_tools/qcmsg.cpp, line 394]:",
-                "  .... aborting the run",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    result = parse_orca_output(str(out_file))
-
-    assert result.status == "failed"
-
-
 def test_utf16_completed_output_is_parsed(tmp_path: Path) -> None:
     out_file = tmp_path / "utf16_completed.out"
     out_file.write_text(
@@ -154,7 +130,6 @@ def test_utf16_completed_output_is_parsed(tmp_path: Path) -> None:
 
     result = parse_orca_output(str(out_file))
 
-    assert result.status == "completed"
     assert result.method == "B3LYP"
 
 
@@ -182,13 +157,12 @@ def test_parse_orca_output_reads_output_once(
 
     result = parse_orca_output(str(out_file))
 
-    assert result.status == "completed"
     assert result.method == "B3LYP"
     assert result.energy_hartree == pytest.approx(-100.123456)
     assert output_opens == 1
 
 
-def test_parse_frequencies_uses_final_vibrational_frequency_block(tmp_path: Path) -> None:
+def test_frequency_analysis_uses_final_vibrational_frequency_block(tmp_path: Path) -> None:
     out_file = tmp_path / "multi_freq.out"
     out_file.write_text(
         "\n".join(
@@ -210,10 +184,11 @@ def test_parse_frequencies_uses_final_vibrational_frequency_block(tmp_path: Path
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    analysis = parse_frequency_analysis(out_file)
 
-    assert result.has_imaginary_freq is False
-    assert result.lowest_freq_cm1 == pytest.approx(130.0)
+    assert analysis is not None
+    assert analysis.frequencies == pytest.approx((-5.0, 130.0))
+    assert analysis.imaginary_count() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -658,8 +633,10 @@ def test_parser_binds_thermochemistry_to_the_final_energy_stage(tmp_path: Path) 
     assert result.gibbs_energy == pytest.approx(-100.30)
     assert result.gibbs_correction == pytest.approx(-0.10)
     assert result.thermo_temperature_k == pytest.approx(350.0)
-    assert result.has_imaginary_freq is True
-    assert result.lowest_freq_cm1 == pytest.approx(-420.0)
+    analysis = parse_frequency_analysis(out_file)
+    assert analysis is not None
+    assert analysis.frequencies == pytest.approx((0.0, -420.0))
+    assert analysis.imaginary_count() == 1
 
 
 def test_parser_publishes_no_thermochemistry_when_the_final_stage_has_none(

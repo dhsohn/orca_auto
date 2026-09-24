@@ -23,6 +23,7 @@ from .store import (
     QueueStore,
     QueueStoreCorruptError,
     clear_terminal,
+    correct_terminal_status,
     dequeue_entry_if_pending,
     dequeue_next,
     enqueue,
@@ -34,6 +35,7 @@ from .store import (
     mark_failed,
     request_cancel,
     requeue_running_entry,
+    terminal_entry,
     update_metadata,
 )
 from .types import QueueEntry, QueueStatus
@@ -56,6 +58,7 @@ __all__ = [
     "QueueStoreCorruptError",
     "QueueStatus",
     "clear_terminal",
+    "correct_terminal_status",
     "current_process_start_token",
     "dequeue_entry_if_pending",
     "dequeue_next",
@@ -74,5 +77,6 @@ __all__ = [
     "queue_record_sync_state",
     "requeue_running_entry",
     "request_cancel",
+    "terminal_entry",
     "update_metadata",
 ]

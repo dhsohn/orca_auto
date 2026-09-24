@@ -19,7 +19,7 @@ from orca_auto.core.queue.generation import (
 from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
-from orca_auto.orca.engine import ENGINE_DEFINITION
+from orca_auto.orca.engine import ENGINE_RUNTIME
 from orca_auto.orca.evidence import collect_structure_evidence
 from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress
@@ -181,7 +181,7 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert list_slots(admission_root) == []
     assert not worker_pid_file_path(
         allowed_root,
-        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
+        ENGINE_RUNTIME.worker_pid_file_name,
     ).exists()
 
     execution_snapshot = completed.metadata["execution_snapshot"]
@@ -546,7 +546,7 @@ def test_orca_queue_worker_rejects_incomplete_or_conflicting_termination_evidenc
     assert list_slots(admission_root) == []
     assert not worker_pid_file_path(
         allowed_root,
-        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
+        ENGINE_RUNTIME.worker_pid_file_name,
     ).exists()
 
     execution_snapshot = failed.metadata["execution_snapshot"]
@@ -641,7 +641,7 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert list_slots(admission_root) == []
     assert not worker_pid_file_path(
         allowed_root,
-        ENGINE_DEFINITION.queue_functions.worker_pid_file_name,
+        ENGINE_RUNTIME.worker_pid_file_name,
     ).exists()
 
     execution_snapshot = completed.metadata["execution_snapshot"]

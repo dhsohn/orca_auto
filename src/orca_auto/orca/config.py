@@ -3,48 +3,36 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from orca_auto.core.config import (
     CommonResourceConfig,
     MessengerConfig,
     ScratchConfig,
-    scratch_config_from_runtime_mapping,
 )
-from orca_auto.core.config import engines as _config_engines
 from orca_auto.core.config.files import (
+    SharedConfig,
     default_shared_admission_root,
-    engine_config_mapping,
-    load_required_shared_config_mapping,
-    messenger_mapping_from_root,
-    runs_root_from_mapping,
+    load_shared_config,
     validated_runs_root_text,
 )
-from orca_auto.core.config.schema import (
-    OrcaRuntimeConfig,
-    messenger_config_from_mapping,
-)
+from orca_auto.core.config.schema import OrcaRuntimeConfig
 
 from .config_validation import _validate_config
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_TEMPLATE_RELATIVE_PATH = Path("config") / "orca_auto.yaml.example"
 _TEMPLATE_ALLOWED_ROOT = "/path/to/orca_runs"
 _TEMPLATE_ORCA_EXECUTABLE = "/path/to/orca/orca"
 
 
-def _config_template_path() -> Path:
-    repo_root = Path(__file__).resolve().parents[3]
-    return repo_root / _CONFIG_TEMPLATE_RELATIVE_PATH
-
-
 def _missing_config_error(path: Path) -> ValueError:
-    template_path = _config_template_path()
+    # The package may be a wheel or prepared runtime, so no checkout-relative
+    # template path can be promised here.
     return ValueError(
         "Config file not found: "
-        f"{path}. Copy {template_path} to {path} and set explicit Linux paths for "
-        "runs_root and orca.paths.orca_executable."
+        f"{path}. Run `orca_auto init --config {path}` or copy "
+        f"config/orca_auto.yaml.example from the ORCA_auto source tree to {path} and set "
+        "explicit Linux paths for runs_root and orca.paths.orca_executable."
     )
 
 
@@ -79,48 +67,14 @@ class AppConfig:
     messenger: MessengerConfig = field(default_factory=MessengerConfig)
 
 
-def _load_raw_config(path: Path) -> dict[str, Any]:
-    _, parsed = load_required_shared_config_mapping(
-        path,
-        missing_error=_missing_config_error,
-        invalid_message="Config file is invalid: {path}",
-    )
-    return parsed
-
-
-def _section_mapping(raw: dict[str, Any], key: str) -> dict[str, Any]:
-    section = raw.get(key, {})
-    return section if isinstance(section, dict) else {}
-
-
-def _required_config_paths(
-    path: Path,
-    runs_root: str,
-    paths_raw: dict[str, Any],
-) -> str:
-    orca_executable = _config_engines.as_nonempty_str(paths_raw.get("orca_executable"), "")
+def _require_configured_paths(path: Path, shared: SharedConfig) -> None:
     missing_keys: list[str] = []
-    if not runs_root:
+    if not shared.runs_root:
         missing_keys.append("runs_root")
-    if not orca_executable:
+    if not shared.orca_executable:
         missing_keys.append("orca.paths.orca_executable")
     if missing_keys:
         raise _missing_required_settings_error(path, missing_keys)
-    return orca_executable
-
-
-def _scheduler_runtime_settings(
-    scheduler_raw: dict[str, Any],
-    runs_root: str,
-) -> tuple[int, str, int | None]:
-    scheduler_enabled = bool(scheduler_raw)
-    settings = _config_engines.scheduler_runtime_settings(
-        scheduler_raw,
-        default_max_active=OrcaRuntimeConfig.max_concurrent,
-        default_admission_root=default_shared_admission_root(runs_root),
-        admission_limit_enabled=scheduler_enabled,
-    )
-    return settings.max_active, settings.admission_root, settings.admission_limit
 
 
 def _placeholder_keys(cfg: AppConfig) -> list[str]:
@@ -133,37 +87,28 @@ def _placeholder_keys(cfg: AppConfig) -> list[str]:
 
 
 def load_config(config_path: str) -> AppConfig:
-    path = Path(config_path).expanduser().resolve()
-    raw = _load_raw_config(path)
-    runs_root_raw = _config_engines.as_nonempty_str(runs_root_from_mapping(raw), "")
-    runs_root = validated_runs_root_text(runs_root_raw) if runs_root_raw else ""
-    raw = engine_config_mapping(raw, "orca", inherit_keys=("resources", "messenger", "scheduler"))
-    scheduler_raw = _section_mapping(raw, "scheduler")
-    runtime_raw = _section_mapping(raw, "runtime")
-    paths_raw = _section_mapping(raw, "paths")
-    messenger_raw = messenger_mapping_from_root(raw)
-    resources_raw = _section_mapping(raw, "resources")
+    """Load the worker configuration: one shared validation pass plus path checks."""
 
-    orca_executable = _required_config_paths(path, runs_root, paths_raw)
-    max_concurrent, admission_root, admission_limit = _scheduler_runtime_settings(
-        scheduler_raw,
-        runs_root,
+    path, shared = load_shared_config(
+        config_path,
+        missing_error=_missing_config_error,
+        invalid_message="Config file is invalid: {path}",
     )
-    messenger_cfg = messenger_config_from_mapping(messenger_raw)
+    runs_root = validated_runs_root_text(shared.runs_root) if shared.runs_root else ""
+    _require_configured_paths(path, shared)
 
     cfg = AppConfig(
         runtime=OrcaRuntimeConfig(
             allowed_root=runs_root,
-            max_concurrent=max_concurrent,
-            admission_root=admission_root,
-            admission_limit=admission_limit,
+            max_concurrent=shared.scheduler.max_active_simulations,
+            admission_root=shared.scheduler.admission_root
+            or default_shared_admission_root(runs_root),
+            admission_limit=shared.scheduler.admission_limit,
         ),
-        paths=PathsConfig(
-            orca_executable=orca_executable,
-        ),
-        resources=_config_engines.resource_config_from_mapping(resources_raw),
-        scratch=scratch_config_from_runtime_mapping(runtime_raw),
-        messenger=messenger_cfg,
+        paths=PathsConfig(orca_executable=shared.orca_executable),
+        resources=shared.resources,
+        scratch=shared.scratch,
+        messenger=shared.messenger,
     )
     placeholder_keys = _placeholder_keys(cfg)
     if placeholder_keys:

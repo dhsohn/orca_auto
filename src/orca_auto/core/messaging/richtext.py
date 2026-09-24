@@ -9,7 +9,7 @@ without touching any notifier.
 Span construction bakes the value-vs-literal distinction in at build time so each
 renderer can preserve the intended text semantics:
 
-* :func:`text`, :func:`bold`, :func:`code` normalise their value with
+* :func:`text`, :func:`code` normalise their value with
   ``str(value).strip()``.
 * :func:`raw` keeps the string verbatim (significant leading whitespace, e.g.
   indented stage rows) and is only HTML-escaped, never stripped.
@@ -42,10 +42,6 @@ def text(value: object) -> Span:
 def raw(value: object) -> Span:
     """Literal plain span kept verbatim — preserves significant whitespace."""
     return Span(str(value), "plain")
-
-
-def bold(value: object) -> Span:
-    return Span(normalize_text(value), "bold")
 
 
 def code(value: object) -> Span:
@@ -129,7 +125,6 @@ __all__ = [
     "Severity",
     "Span",
     "SpanStyle",
-    "bold",
     "code",
     "field_row",
     "group",

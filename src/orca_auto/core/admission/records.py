@@ -14,7 +14,6 @@ class AdmissionSlot:
     acquired_at: str
     app_name: str = ""
     task_id: str = ""
-    workflow_id: str = ""  # Retired durable field; retained for existing slot readers.
     state: str = "active"
     work_dir: str = ""
     queue_id: str = ""
@@ -110,8 +109,11 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
     # default.  Treating them as gated would make same-boot recovery discard a
     # potentially running process in the Popen-to-record interval.
     legacy_optional_fields = {"engine_launch_gated"}
+    # ``workflow_id`` is a retired durable field: existing slot files still
+    # carry it, so it is tolerated on read and never written again.
+    retired_fields = {"workflow_id"}
     missing = expected_fields - set(raw) - legacy_optional_fields
-    unknown = set(raw) - expected_fields
+    unknown = set(raw) - expected_fields - retired_fields
     if missing or unknown:
         raise ValueError(
             "Admission slot fields do not match the canonical schema: "
@@ -143,7 +145,6 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
         owner_boot_id=owner_boot_id,
         app_name=str(raw.get("app_name", "")).strip(),
         task_id=str(raw.get("task_id", "")).strip(),
-        workflow_id=str(raw.get("workflow_id", "")).strip(),
         state=str(raw.get("state", "active")).strip() or "active",
         work_dir=str(raw.get("work_dir", "")).strip(),
         queue_id=str(raw.get("queue_id", "")).strip(),

@@ -5,7 +5,8 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.report import irc, write_job_html_report
+from orca_auto.orca import evidence
+from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.irc import collect_irc_report_data, parse_irc_output
 from orca_auto.orca.report.publication import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
@@ -273,7 +274,7 @@ def test_collect_irc_report_data_skips_contentless_final_attempt(tmp_path: Path)
     [(True, None), (True, "empty"), (True, "freq"), (True, "missing"), (False, "empty")],
     ids=["complete", "trailing-empty", "trailing-freq", "trailing-missing", "only-empty"],
 )
-def test_irc_report_reads_each_attempt_once_for_path_details_and_selection(
+def test_irc_report_decodes_each_attempt_output_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     initial_has_data: bool,
@@ -301,14 +302,16 @@ def test_irc_report_reads_each_attempt_once_for_path_details_and_selection(
         state["attempts"].append({"index": 2, "out_path": str(trailing_out)})
         state["final_result"]["last_out_path"] = str(trailing_out)
 
+    # Every IRC fact (path table, final result, frequencies, optimization
+    # progress) comes from one decoded snapshot per attempt output.
     read_paths: list[str] = []
-    original_read = irc.read_orca_text
+    original_read = evidence.read_orca_text
 
     def tracked_read(path: str) -> str:
         read_paths.append(path)
         return original_read(path)
 
-    monkeypatch.setattr(irc, "read_orca_text", tracked_read)
+    monkeypatch.setattr(evidence, "read_orca_text", tracked_read)
 
     data = collect_irc_report_data(tmp_path, state)
 
@@ -320,6 +323,26 @@ def test_irc_report_reads_each_attempt_once_for_path_details_and_selection(
         assert data.attempts[-1].detail == ""
     assert data.imaginary_count == (1 if trailing_kind == "freq" else None)
     assert sorted(read_paths) == sorted(existing_outputs)
+
+
+def test_irc_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP IRC")
+    out_path = tmp_path / "rxn.out"
+    _write_out(out_path, route="! B3LYP def2-SVP IRC")
+    missing_out = tmp_path / "rxn_retry.out"
+    state = _state(tmp_path, out_path, extra_attempts=[{"index": 2, "out_path": str(missing_out)}])
+    state["final_result"]["last_out_path"] = str(missing_out)
+
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "IRC path profile" in text
+    assert "last output:" not in text
+    assert "rxn_retry.out" not in text
+    assert "<code>rxn.out</code>" not in text
 
 
 def test_irc_report_html_renders_path_profile(tmp_path: Path) -> None:

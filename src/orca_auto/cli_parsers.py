@@ -17,13 +17,12 @@ import difflib
 import re
 from typing import NoReturn, cast
 
-from orca_auto import cli_handlers, cli_queue, cli_workers
+from orca_auto import cli_handlers, cli_queue, cli_scratch, cli_workers
 from orca_auto._version import package_version
 from orca_auto.cli_systemd_apply import cmd_systemd_install
 from orca_auto.cli_systemd_restart import cmd_service_restart
 from orca_auto.cli_systemd_status import cmd_service_status
 from orca_auto.core.commands.worker_options import add_worker_common_cli_options
-from orca_auto.core.engine_catalog import known_engine_ids
 from orca_auto.core.terminal import emit_error
 from orca_auto.systemd_plan import DEFAULT_SYSTEMD_UNIT_DIR
 
@@ -159,19 +158,7 @@ def _add_queue_list_parser(
         help="Discover unindexed ORCA runs",
     )
     list_parser.add_argument(
-        "--engine",
-        action="append",
-        choices=list(known_engine_ids()),
-        help="Filter by engine; may be passed more than once",
-    )
-    list_parser.add_argument(
         "--status", action="append", help="Filter by status; may be passed more than once"
-    )
-    list_parser.add_argument(
-        "--kind",
-        action="append",
-        choices=["job"],
-        help="Filter by activity kind; may be passed more than once",
     )
     add_json_argument(list_parser)
     list_parser.set_defaults(func=cli_queue.cmd_queue_list)
@@ -193,12 +180,6 @@ def _add_queue_cancel_parser(
 
 
 def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--app",
-        action="append",
-        choices=["orca"],
-        help="Worker app to supervise (default: orca)",
-    )
     add_worker_common_cli_options(
         parser, json_help="Print worker commands as JSON without starting them"
     )
@@ -249,6 +230,54 @@ def add_index_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     )
     add_json_argument(prune_parser)
     prune_parser.set_defaults(func=cli_handlers.cmd_index_prune)
+
+
+def add_scratch_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    scratch_parser = subparsers.add_parser(
+        "scratch",
+        help="Inspect or clear RAM scratch workspaces under orca.runtime.scratch_root.",
+    )
+    scratch_subparsers = scratch_parser.add_subparsers(dest="scratch_command", required=True)
+
+    list_parser = scratch_subparsers.add_parser(
+        "list",
+        help="List scratch workspaces and whether they block new scratch launches.",
+    )
+    list_parser.add_argument(
+        "--orca_auto-config",
+        "--config",
+        dest="orca_auto_config",
+        help="Path to shared orca_auto.yaml",
+    )
+    add_json_argument(list_parser)
+    list_parser.set_defaults(func=cli_scratch.cmd_scratch_list)
+
+    clear_parser = scratch_subparsers.add_parser(
+        "clear",
+        help=(
+            "Remove one named non-live scratch workspace, or every non-live one with "
+            "--all-stale; live workspaces are never removed."
+        ),
+    )
+    clear_parser.add_argument(
+        "name",
+        nargs="?",
+        default=None,
+        help="Workspace directory name as printed by `scratch list` (attempt-...)",
+    )
+    clear_parser.add_argument(
+        "--all-stale",
+        action="store_true",
+        help="Remove every stale, unverifiable, or invalid-manifest workspace",
+    )
+    clear_parser.add_argument(
+        "--orca_auto-config",
+        "--config",
+        dest="orca_auto_config",
+        help="Path to shared orca_auto.yaml",
+    )
+    add_json_argument(clear_parser)
+    clear_parser.set_defaults(func=cli_scratch.cmd_scratch_clear)
 
 
 def add_systemd_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -345,9 +374,11 @@ _EXAMPLES_EPILOG = """\
 examples:
   orca_auto init
   orca_auto run-dir /home/user/orca_runs/sample_rxn
-  orca_auto queue list --engine orca
+  orca_auto queue list --status running
   orca_auto queue cancel <target>
   orca_auto index prune --apply
+  orca_auto scratch list
+  orca_auto scratch clear attempt-<pid>-<token>
   orca_auto service status
 """
 
@@ -381,6 +412,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_run_dir_parser(subparsers)
     add_init_parser(subparsers)
     add_index_parser(subparsers)
+    add_scratch_parser(subparsers)
     add_systemd_parser(subparsers)
     add_service_parser(subparsers)
     return parser

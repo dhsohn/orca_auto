@@ -115,19 +115,15 @@ def test_build_parser_parses_unified_queue_commands() -> None:
         [
             "queue",
             "list",
-            "--engine",
-            "orca",
             "--status",
             "running",
-            "--kind",
-            "job",
         ]
     )
     assert list_args.command == "queue"
     assert list_args.queue_command == "list"
-    assert list_args.engine == ["orca"]
     assert list_args.status == ["running"]
-    assert list_args.kind == ["job"]
+    assert not hasattr(list_args, "engine")
+    assert not hasattr(list_args, "kind")
     assert list_args.func is cli_queue.cmd_queue_list
 
     clear_args = parser.parse_args(["queue", "list", "clear", "--json"])
@@ -436,12 +432,11 @@ def test_main_dispatches_unified_queue_list(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(cli_queue, "cmd_queue_list", fake_cmd)
 
-    result = unified_cli.main(["queue", "list", "--engine", "orca", "--status", "running"])
+    result = unified_cli.main(["queue", "list", "--status", "running"])
 
     assert result == 17
     assert len(seen) == 1
     assert seen[0].queue_command == "list"
-    assert seen[0].engine == ["orca"]
     assert seen[0].status == ["running"]
 
 

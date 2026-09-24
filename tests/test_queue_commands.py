@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -73,7 +74,7 @@ class TestCmdQueueWorker(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _make_cfg(tmp)
-            cfg.runtime.max_concurrent = 6
+            cfg = replace(cfg, runtime=replace(cfg.runtime, max_concurrent=6))
             mock_load.return_value = cfg
             mock_worker_cls.return_value.run.return_value = 0
             args = _make_args(tmp)

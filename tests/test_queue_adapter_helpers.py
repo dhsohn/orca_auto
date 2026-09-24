@@ -185,7 +185,7 @@ def test_apply_terminal_reconciliation_updates_fields_and_clears_completed_error
         error="stale_error",
     )
     with patch(
-        "orca_auto.orca.queue.orphans.now_utc_iso",
+        "orca_auto.core.queue.store.now_utc_iso",
         return_value="2026-03-10T06:00:00+00:00",
     ):
         completed_entry = queue_orphans.apply_terminal_reconciliation(

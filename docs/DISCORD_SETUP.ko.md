@@ -22,7 +22,7 @@ Discord 설정의 **고급 → 개발자 모드**를 활성화한 후, 알림을
 
 ## 3. ORCA_auto 설정
 
-`config/orca_auto.yaml` 파일에 복사한 토큰과 채널 ID를 입력합니다:
+`~/orca_auto/config/orca_auto.yaml`(또는 `--config` / `ORCA_AUTO_CONFIG`로 지정한 파일)에 복사한 토큰과 채널 ID를 입력합니다:
 
 ```yaml
 messenger:
@@ -38,7 +38,7 @@ messenger:
 설정 파일 권한을 안전하게 제한합니다:
 
 ```bash
-chmod 600 config/orca_auto.yaml
+chmod 600 ~/orca_auto/config/orca_auto.yaml
 ```
 
 대화형으로 설정하려면 `orca_auto init` 명령을 실행하여 설정할 수도 있습니다.
@@ -63,4 +63,4 @@ orca_auto run-dir <job_path>
 ## 문제 해결
 
 - **채널에 알림이 오지 않는 경우**: 봇이 해당 채널에 초대되어 있는지, 그리고 `Send Messages` 및 `Embed Links` 권한이 허용되어 있는지 확인하세요.
-- **잘못된 토큰 오류**: Developer Portal에서 봇 토큰을 재발급(Reset Token)받아 설정 파일에 반영한 뒤 서비스를 재시작하세요.
+- **잘못된 토큰 오류**: Developer Portal에서 봇 토큰을 재발급(Reset Token)받아 `~/orca_auto/config/orca_auto.yaml`에 반영한 뒤 서비스를 재시작하세요.

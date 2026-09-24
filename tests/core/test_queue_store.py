@@ -2207,3 +2207,285 @@ def test_distinct_second_generations_still_order_by_name(tmp_path: Path) -> None
     children = visible_generation_children(job_dir)
 
     assert [entry.name for entry in children] == [newer.name, older.name]
+
+
+def _terminal_source_entry(**overrides: object) -> store.QueueEntry:
+    base: dict[str, object] = {
+        "queue_id": "q-terminal",
+        "app_name": "app",
+        "task_id": "task",
+        "task_kind": "kind",
+        "engine": "engine",
+        "status": QueueStatus.RUNNING,
+        "enqueued_at": "2026-04-19T00:00:00+00:00",
+        "started_at": "2026-04-19T00:00:01+00:00",
+        "finished_at": "",
+        "cancel_requested": False,
+        "error": "recorded",
+        "metadata": {"reaction_dir": "/tmp/rxn"},
+    }
+    base.update(overrides)
+    return store.QueueEntry(**base)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("status", [QueueStatus.PENDING, QueueStatus.RUNNING])
+def test_terminal_entry_rejects_non_terminal_status(status: QueueStatus) -> None:
+    with pytest.raises(ValueError, match="terminal status"):
+        store.terminal_entry(_terminal_source_entry(), status=status, error=None)
+
+
+def test_terminal_entry_finished_at_defaults_to_now_and_keeps_an_explicit_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    source = _terminal_source_entry()
+
+    stamped = store.terminal_entry(source, status=QueueStatus.COMPLETED, error="")
+    assert stamped.status == QueueStatus.COMPLETED
+    assert stamped.finished_at == "2026-04-19T00:00:01+00:00"
+
+    kept = store.terminal_entry(
+        source,
+        status=QueueStatus.FAILED,
+        error="boom",
+        finished_at="2026-01-01T00:00:00+00:00",
+    )
+    assert kept.finished_at == "2026-01-01T00:00:00+00:00"
+    # Only the terminal fields change; identity and lifecycle stamps are kept.
+    assert (kept.queue_id, kept.task_id, kept.enqueued_at, kept.started_at) == (
+        source.queue_id,
+        source.task_id,
+        source.enqueued_at,
+        source.started_at,
+    )
+
+
+def test_terminal_entry_clears_cancel_requested_only_for_cancelled_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    requested = _terminal_source_entry(cancel_requested=True)
+
+    cancelled = store.terminal_entry(requested, status=QueueStatus.CANCELLED, error=None)
+    assert cancelled.cancel_requested is False
+
+    failed = store.terminal_entry(requested, status=QueueStatus.FAILED, error="boom")
+    assert failed.cancel_requested is True
+    completed = store.terminal_entry(requested, status=QueueStatus.COMPLETED, error="")
+    assert completed.cancel_requested is True
+
+    # A writer that records the flag on purpose (pending-row cancellation, the
+    # ambiguous enqueue fence) overrides the default rule explicitly.
+    fenced = store.terminal_entry(
+        _terminal_source_entry(cancel_requested=False),
+        status=QueueStatus.CANCELLED,
+        error=None,
+        cancel_requested=True,
+    )
+    assert fenced.cancel_requested is True
+
+
+def test_terminal_entry_error_and_metadata_rules(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    source = _terminal_source_entry()
+
+    kept = store.terminal_entry(source, status=QueueStatus.FAILED, error=None)
+    assert kept.error == "recorded"
+    assert kept.metadata == source.metadata
+
+    stripped = store.terminal_entry(source, status=QueueStatus.FAILED, error="  boom \n")
+    assert stripped.error == "boom"
+    cleared = store.terminal_entry(source, status=QueueStatus.COMPLETED, error="")
+    assert cleared.error == ""
+
+    replaced = store.terminal_entry(
+        source,
+        status=QueueStatus.COMPLETED,
+        error="",
+        metadata={"run_id": "run-1"},
+    )
+    assert replaced.metadata == {"run_id": "run-1"}
+    assert source.metadata == {"reaction_dir": "/tmp/rxn"}
+
+
+def _failed_row(tmp_path: Path) -> store.QueueEntry:
+    submitted = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="task",
+        task_kind="kind",
+        engine="engine",
+    )
+    assert store.dequeue_next(tmp_path) is not None
+    failed = store.mark_failed(tmp_path, submitted.queue_id, error="crashed")
+    assert failed is not None
+    return failed
+
+
+def test_correct_terminal_status_refuses_non_terminal_row(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    submitted = store.enqueue(
+        tmp_path,
+        app_name="app",
+        task_id="task",
+        task_kind="kind",
+        engine="engine",
+    )
+    running = store.dequeue_next(tmp_path)
+    assert running is not None
+
+    assert (
+        store.correct_terminal_status(
+            tmp_path,
+            submitted.queue_id,
+            status=QueueStatus.COMPLETED,
+        )
+        is None
+    )
+    assert store.list_queue(tmp_path) == [running]
+    with pytest.raises(ValueError, match="terminal status"):
+        store.correct_terminal_status(
+            tmp_path,
+            submitted.queue_id,
+            status=QueueStatus.RUNNING,
+        )
+
+
+def test_correct_terminal_status_refuses_generation_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    failed = _failed_row(tmp_path)
+    stale_generation = replace(failed, task_id="replacement-task")
+
+    assert (
+        store.correct_terminal_status(
+            tmp_path,
+            failed.queue_id,
+            status=QueueStatus.COMPLETED,
+            expected_entry=stale_generation,
+        )
+        is None
+    )
+    assert store.list_queue(tmp_path) == [failed]
+
+
+def test_correct_terminal_status_refuses_task_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    failed = _failed_row(tmp_path)
+
+    assert (
+        store.correct_terminal_status(
+            tmp_path,
+            failed.queue_id,
+            status=QueueStatus.COMPLETED,
+            expected_task_id="other-task",
+        )
+        is None
+    )
+    assert (
+        store.correct_terminal_status(
+            tmp_path,
+            failed.queue_id,
+            status=QueueStatus.COMPLETED,
+            accept_entry_fn=lambda _entry: False,
+        )
+        is None
+    )
+    assert store.correct_terminal_status(tmp_path, "missing", status=QueueStatus.COMPLETED) is None
+    assert store.list_queue(tmp_path) == [failed]
+
+
+def test_correct_terminal_status_rebuilds_the_row_and_merges_metadata_under_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_deterministic_helpers(monkeypatch)
+    failed = _failed_row(tmp_path)
+    lock_held = False
+
+    @contextmanager
+    def mutation_lock(_root: Path, *, timeout_seconds: float = 10.0):
+        nonlocal lock_held
+        del timeout_seconds
+        lock_held = True
+        try:
+            yield
+        finally:
+            lock_held = False
+
+    monkeypatch.setattr(store, "queue_lock", mutation_lock)
+
+    def metadata_update(current: store.QueueEntry) -> dict[str, object]:
+        assert lock_held is True
+        assert current == failed
+        return {"seen_status": current.status.value}
+
+    corrected = store.correct_terminal_status(
+        tmp_path,
+        failed.queue_id,
+        status=QueueStatus.COMPLETED,
+        metadata_update={"run_id": "run-1"},
+        metadata_update_fn=metadata_update,
+        expected_entry=failed,
+        expected_task_id=failed.task_id,
+    )
+
+    assert corrected is not None
+    assert corrected.status == QueueStatus.COMPLETED
+    # ``error`` None keeps the recorded error; ``finished_at`` is re-stamped.
+    assert corrected.error == "crashed"
+    assert corrected.finished_at != failed.finished_at
+    assert corrected.metadata["run_id"] == "run-1"
+    assert corrected.metadata["seen_status"] == "failed"
+    assert store.list_queue(tmp_path) == [corrected]
+
+
+def test_terminal_rows_are_built_only_by_store_terminal_entry() -> None:
+    """Static contract: no writer may build a terminal row around ``terminal_entry``.
+
+    ``replace(..., status=QueueStatus.<terminal>)`` encodes the terminal rules
+    (finished_at, cancel_requested, error) at the call site. Every writer must
+    go through ``store.terminal_entry`` so the rules cannot silently diverge.
+    """
+    import ast
+
+    package_root = Path(store.__file__).resolve().parents[2]
+    terminal_names = {status.name for status in store.TERMINAL_QUEUE_STATUSES}
+    offenders: list[str] = []
+    for source_path in sorted(package_root.rglob("*.py")):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            callee = node.func
+            callee_name = (
+                callee.id
+                if isinstance(callee, ast.Name)
+                else callee.attr
+                if isinstance(callee, ast.Attribute)
+                else ""
+            )
+            if callee_name != "replace":
+                continue
+            for keyword in node.keywords:
+                value = keyword.value
+                if (
+                    keyword.arg == "status"
+                    and isinstance(value, ast.Attribute)
+                    and isinstance(value.value, ast.Name)
+                    and value.value.id == "QueueStatus"
+                    and value.attr in terminal_names
+                ):
+                    offenders.append(f"{source_path.relative_to(package_root)}:{node.lineno}")
+
+    # ``terminal_entry`` itself passes its validated ``status`` variable, so a
+    # literal terminal status in a ``replace`` call is always a bypass.
+    assert offenders == [], offenders

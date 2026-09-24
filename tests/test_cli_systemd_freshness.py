@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from orca_auto import _process_evidence, cli_systemd_freshness, cli_systemd_units
+from orca_auto import (
+    _process_evidence,
+    cli_systemd_freshness,
+    cli_systemd_freshness_checkout,
+    cli_systemd_units,
+)
 
 
 def _make_fake_git_checkout(source_root: Path) -> None:
@@ -37,6 +42,37 @@ def _process_file_reader(
     return _read
 
 
+_IMPORT_SOURCE_RELATIVE = "src/orca_auto/_process_evidence.py"
+
+
+def _editable_checkout(tmp_path: Path, name: str = "checkout") -> tuple[Path, Path]:
+    """A fake Git checkout holding the source file the worker process imports."""
+    source_root = tmp_path / name
+    _make_fake_git_checkout(source_root)
+    import_source = source_root / _IMPORT_SOURCE_RELATIVE
+    import_source.parent.mkdir(parents=True)
+    import_source.write_text("# process evidence\n", encoding="utf-8")
+    return source_root, import_source
+
+
+def _tracking_reply(source_root: Path, git_args: list[str]) -> str | None:
+    """Answer the git queries that locate a clean, tracked import source."""
+    if git_args == ["rev-parse", "--show-toplevel"]:
+        return str(source_root)
+    if git_args == ["ls-files", "--error-unmatch", "--", _IMPORT_SOURCE_RELATIVE]:
+        return _IMPORT_SOURCE_RELATIVE
+    if git_args == ["status", "--porcelain=v1", "--untracked-files=all", "--", "src/orca_auto"]:
+        return ""
+    return None
+
+
+def _unpinned_unit_reply(argv: list[str]) -> subprocess.CompletedProcess[str] | None:
+    """An editable unit declares no runtime pin in its Environment."""
+    if "--property=Environment" in argv:
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+    return None
+
+
 def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
     tmp_path: Path,
 ) -> None:
@@ -46,8 +82,7 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
     head_update_epoch = 1_785_747_750
     head_commit_epoch = head_update_epoch - 86_400
     head_sha = "a" * 40
-    source_root = tmp_path / "checkout"
-    _make_fake_git_checkout(source_root)
+    source_root, import_source = _editable_checkout(tmp_path)
     start_stamps = {
         "orca_auto-queue-worker@alice.service": "Mon 2026-08-03 08:02:30 UTC",
         "orca_auto-queue-worker@bob.service": "Mon 2026-08-03 10:02:30 UTC",
@@ -65,11 +100,13 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         del check, stdout, stderr, text
+        if (unpinned := _unpinned_unit_reply(argv)) is not None:
+            return unpinned
         if argv[0] == "git":
             assert argv[1:3] == ["-C", str(source_root)]
             git_args = argv[3:]
-            if git_args == ["rev-parse", "--show-toplevel"]:
-                value = str(source_root)
+            if (reply := _tracking_reply(source_root, git_args)) is not None:
+                value = reply
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
             elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
@@ -110,7 +147,7 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
     verdict = cli_systemd_freshness.collect_worker_staleness(
         statuses,
         run=_fake_run,
-        source_root=source_root,
+        read_process_file=_process_file_reader({41: import_source, 42: import_source}),
     )
 
     assert verdict is not None
@@ -133,8 +170,7 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
 def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
     tmp_path: Path,
 ) -> None:
-    source_root = tmp_path / "checkout"
-    _make_fake_git_checkout(source_root)
+    source_root, import_source = _editable_checkout(tmp_path)
     old_sha = "a" * 40
     new_sha = "b" * 40
     old_update_epoch = 1_785_744_000
@@ -155,13 +191,15 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
     ) -> subprocess.CompletedProcess[str]:
         nonlocal head_moved
         del check, stdout, stderr, text
+        if (unpinned := _unpinned_unit_reply(argv)) is not None:
+            return unpinned
         if argv[0] == "git":
             assert argv[1:3] == ["-C", str(source_root)]
             git_args = argv[3:]
             head_sha = new_sha if head_moved else old_sha
             update_epoch = new_update_epoch if head_moved else old_update_epoch
-            if git_args == ["rev-parse", "--show-toplevel"]:
-                value = str(source_root)
+            if (reply := _tracking_reply(source_root, git_args)) is not None:
+                value = reply
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
             elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
@@ -199,7 +237,7 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
     verdict = cli_systemd_freshness.collect_worker_staleness(
         statuses,
         run=_fake_run,
-        source_root=source_root,
+        read_process_file=_process_file_reader({41: import_source, 42: import_source}),
     )
 
     assert verdict is not None
@@ -715,8 +753,7 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
 def test_collect_worker_staleness_fails_closed_without_checkout_update_evidence(
     tmp_path: Path,
 ) -> None:
-    source_root = tmp_path / "checkout-without-reflog"
-    (source_root / ".git").mkdir(parents=True)
+    source_root, import_source = _editable_checkout(tmp_path, "checkout-without-reflog")
     head_sha = "c" * 40
     unit = "orca_auto-queue-worker@alice.service"
 
@@ -730,8 +767,8 @@ def test_collect_worker_staleness_fails_closed_without_checkout_update_evidence(
         del check, stdout, stderr, text
         if argv[0] == "git":
             git_args = argv[3:]
-            if git_args == ["rev-parse", "--show-toplevel"]:
-                value = str(source_root)
+            if (reply := _tracking_reply(source_root, git_args)) is not None:
+                value = reply
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
             else:
@@ -766,7 +803,7 @@ def test_collect_worker_staleness_fails_closed_without_checkout_update_evidence(
             ),
         ),
         run=_fake_run,
-        source_root=source_root,
+        read_process_file=_process_file_reader({88: import_source}),
     )
 
     assert verdict is not None
@@ -780,8 +817,7 @@ def test_collect_worker_staleness_fails_closed_without_checkout_update_evidence(
 def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_starts(
     tmp_path: Path,
 ) -> None:
-    source_root = tmp_path / "checkout"
-    (source_root / ".git").mkdir(parents=True)
+    source_root, import_source = _editable_checkout(tmp_path)
 
     def _fake_run(
         argv: list[str],
@@ -791,6 +827,10 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         del check, stdout, stderr, text
+        if argv[0] == "git":
+            reply = _tracking_reply(source_root, argv[3:])
+            assert reply is not None, argv
+            return subprocess.CompletedProcess(argv, 0, stdout=f"{reply}\n", stderr="")
         if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
             return subprocess.CompletedProcess(argv, 0, stdout="41\n", stderr="")
         # An empty ExecMainStartTimestamp is what systemd reports when it has
@@ -821,7 +861,7 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_
     verdict = cli_systemd_freshness.collect_worker_staleness(
         statuses,
         run=_fake_run,
-        source_root=source_root,
+        read_process_file=_process_file_reader({41: import_source}),
     )
 
     # The inactive second worker is not a running process to judge, while the
@@ -834,22 +874,34 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_
     assert "cannot read unit start time" in verdict["undetermined"][0]["detail"]
 
 
-def test_collect_worker_staleness_returns_none_outside_a_git_checkout(tmp_path: Path) -> None:
-    source_root = tmp_path / "wheel-install"
-    source_root.mkdir()
+def test_collect_worker_staleness_returns_none_without_active_workers() -> None:
+    statuses = (
+        cli_systemd_units.ServiceUnitStatus(
+            label="engines",
+            unit="orca_auto-engine-workers@alice.target",
+            active="active",
+            enabled="enabled",
+        ),
+        cli_systemd_units.ServiceUnitStatus(
+            label="worker",
+            unit="orca_auto-queue-worker@alice.service",
+            active="inactive",
+            enabled="enabled",
+        ),
+    )
 
     verdict = cli_systemd_freshness.collect_worker_staleness(
-        (),
-        run=lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0),
-        source_root=source_root,
+        statuses,
+        run=lambda *args, **kwargs: pytest.fail("no process to inspect"),
+        read_process_file=lambda path: pytest.fail("no process to inspect"),
     )
 
     assert verdict is None
 
 
 def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: Path) -> None:
-    source_root = tmp_path / "checkout"
-    (source_root / ".git").mkdir(parents=True)
+    source_root, import_source = _editable_checkout(tmp_path)
+    unit = "orca_auto-queue-worker@alice.service"
 
     def _fake_run(
         argv: list[str],
@@ -859,18 +911,37 @@ def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: P
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         del check, stdout, stderr, text
-        assert argv[0] == "git"
-        return subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal: bad revision\n")
+        if argv[0] == "git":
+            # The checkout is located and clean, but its HEAD history is unreadable.
+            if (reply := _tracking_reply(source_root, argv[3:])) is not None:
+                return subprocess.CompletedProcess(argv, 0, stdout=f"{reply}\n", stderr="")
+            return subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal: bad revision\n")
+        if argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="41\n", stderr="")
+        assert argv[:4] == ["systemctl", "show", "--property=ExecMainStartTimestamp", "--value"]
+        return subprocess.CompletedProcess(
+            argv, 0, stdout="Mon 2026-08-03 10:02:30 UTC\n", stderr=""
+        )
 
     verdict = cli_systemd_freshness.collect_worker_staleness(
-        (),
+        (
+            cli_systemd_units.ServiceUnitStatus(
+                label="worker",
+                unit=unit,
+                active="active",
+                enabled="enabled",
+            ),
+        ),
         run=_fake_run,
-        source_root=source_root,
+        read_process_file=_process_file_reader({41: import_source}),
     )
 
     assert verdict is not None
     assert verdict["head_commit_epoch"] is None
     assert verdict["stale"] == []
+    assert verdict["workers"] == []
+    assert verdict["undetermined"][0]["unit"] == unit
+    assert verdict["undetermined"][0]["source_root"] == str(source_root)
     assert "cannot read checkout HEAD" in verdict["undetermined"][0]["detail"]
     assert "fatal: bad revision" in verdict["undetermined"][0]["detail"]
 
@@ -885,8 +956,7 @@ def test_collect_worker_staleness_counts_a_same_sha_checkout_as_an_update(tmp_pa
     head_commit_epoch = first_deploy_epoch - 86_400
     head_sha = "b" * 40
     older_sha = "c" * 40
-    source_root = tmp_path / "checkout"
-    _make_fake_git_checkout(source_root)
+    source_root, import_source = _editable_checkout(tmp_path)
     # The worker started an hour after the first deploy (09:02:30 UTC) and an
     # hour before the same-SHA move (11:02:30 UTC).
     start_stamps = {"orca_auto-queue-worker@alice.service": "Mon 2026-08-03 10:02:30 UTC"}
@@ -900,10 +970,12 @@ def test_collect_worker_staleness_counts_a_same_sha_checkout_as_an_update(tmp_pa
         text: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         del check, stdout, stderr, text
+        if (unpinned := _unpinned_unit_reply(argv)) is not None:
+            return unpinned
         if argv[0] == "git":
             git_args = argv[3:]
-            if git_args == ["rev-parse", "--show-toplevel"]:
-                value = str(source_root)
+            if (reply := _tracking_reply(source_root, git_args)) is not None:
+                value = reply
             elif git_args == ["rev-parse", "--verify", "HEAD^{commit}"]:
                 value = head_sha
             elif git_args == ["reflog", "--date=unix", "--format=%H%x00%gd%x00%gs"]:
@@ -937,7 +1009,7 @@ def test_collect_worker_staleness_counts_a_same_sha_checkout_as_an_update(tmp_pa
     verdict = cli_systemd_freshness.collect_worker_staleness(
         statuses,
         run=_fake_run,
-        source_root=source_root,
+        read_process_file=_process_file_reader({41: import_source}),
     )
 
     assert verdict is not None
@@ -961,7 +1033,7 @@ def test_head_update_epoch_counts_a_same_sha_reset_as_an_update() -> None:
     )
     # A forced checkout carries the same subject as a no-op one; it counts too.
     assert (
-        cli_systemd_freshness._head_update_epoch_from_reflog(forced, head_sha=head_sha)
+        cli_systemd_freshness_checkout.head_update_epoch_from_reflog(forced, head_sha=head_sha)
         == 1785754950
     )
     head_sha = "b" * 40
@@ -973,7 +1045,7 @@ def test_head_update_epoch_counts_a_same_sha_reset_as_an_update() -> None:
     )
 
     assert (
-        cli_systemd_freshness._head_update_epoch_from_reflog(reflog, head_sha=head_sha)
+        cli_systemd_freshness_checkout.head_update_epoch_from_reflog(reflog, head_sha=head_sha)
         == 1785754950
     )
 
@@ -992,15 +1064,15 @@ def test_head_update_epoch_counts_a_round_trip_through_another_commit() -> None:
     )
 
     assert (
-        cli_systemd_freshness._head_update_epoch_from_reflog(reflog, head_sha=head_sha)
+        cli_systemd_freshness_checkout.head_update_epoch_from_reflog(reflog, head_sha=head_sha)
         == 1785754950
     )
 
 
 def test_head_update_epoch_rejects_a_reflog_that_does_not_name_head() -> None:
     with pytest.raises(ValueError, match="does not match"):
-        cli_systemd_freshness._head_update_epoch_from_reflog(
+        cli_systemd_freshness_checkout.head_update_epoch_from_reflog(
             "c" * 40 + "\0HEAD@{1785747750}\0checkout: moving from main to main", head_sha="b" * 40
         )
     with pytest.raises(ValueError, match="no HEAD reflog entry"):
-        cli_systemd_freshness._head_update_epoch_from_reflog("", head_sha="b" * 40)
+        cli_systemd_freshness_checkout.head_update_epoch_from_reflog("", head_sha="b" * 40)

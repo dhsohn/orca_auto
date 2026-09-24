@@ -174,3 +174,25 @@ class TestParseXyzFileFailsClosed(unittest.TestCase):
             xyz = Path(td) / "mol.xyz"
             xyz.write_text("2\ncomment\nO 0.0 0.0 0.0\n???GARBAGE\n")
             self.assertEqual(_parse_xyz_file(xyz), [])
+
+
+class TestInlineGeometryComments(unittest.TestCase):
+    # The formula parser shares the comment-aware geometry scanner, so ORCA
+    # comment lines inside ``* xyz ... *`` are neither atoms nor parse errors.
+
+    def test_comment_lines_inside_inline_xyz_are_not_atoms(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            inp = Path(td) / "rxn.inp"
+            inp.write_text(
+                "! Opt\n* xyz 0 1 # neutral singlet\n# fragment A\nC 0 0 0\n"
+                "C 1 0 0 # note\n  # fragment B #\nH 2 0 0\nH 3 0 0\nO 4 0 0\n* # done\n"
+            )
+            self.assertEqual(_parse_formula_from_inp(inp), "C2H2O")
+
+    def test_xyzfile_reference_ignores_trailing_comment(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            xyz = Path(td) / "mol.xyz"
+            xyz.write_text("2\ncomment\nC 0 0 0\nH 1 0 0\n")
+            inp = Path(td) / "rxn.inp"
+            inp.write_text('! Opt\n* xyzfile 0 1 "mol.xyz" # geometry\n')
+            self.assertEqual(_parse_formula_from_inp(inp), "CH")

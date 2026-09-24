@@ -45,6 +45,7 @@ from .input_blocks import (
     OrcaFileReference,
     checkpoint_file_looks_intact,
     ensure_route_keywords,
+    find_geometry_block,
     orca_input_requests_moread,
     orca_moinp_references,
     orca_route_line,
@@ -141,27 +142,21 @@ def _render_bound_reference(reference: OrcaFileReference, relative_path: str) ->
 
 
 def _inline_geometry_atom_count(selected_text: str) -> int | None:
-    lines = io.StringIO(selected_text)
-    for line in lines:
-        match = GEOM_HEADER_RE.match(line.strip())
-        if match is None:
-            continue
-        if match.group(1).lower() == "xyzfile":
-            return None
-        atom_count = 0
-        for atom_line in lines:
-            stripped = atom_line.strip()
-            if stripped == "*":
-                break
-            if not stripped:
-                continue
-            atom_count += 1
-            if atom_count > MAX_ADMISSION_ATOMS:
-                raise ValueError(
-                    f"ORCA molecule exceeds the server atom-count limit of {MAX_ADMISSION_ATOMS}"
-                )
-        return atom_count
-    return None
+    """Atom rows of the inline ``* xyz`` block; ``None`` for ``xyzfile`` or no geometry.
+
+    Rows come from the shared comment-aware geometry scanner, so a comment-only
+    line inside the block is not an atom and cannot trip the admission limits.
+    """
+
+    block = find_geometry_block(selected_text.splitlines())
+    if block is None or block.kind != "xyz":
+        return None
+    atom_count = len(block.atom_rows)
+    if atom_count > MAX_ADMISSION_ATOMS:
+        raise ValueError(
+            f"ORCA molecule exceeds the server atom-count limit of {MAX_ADMISSION_ATOMS}"
+        )
+    return atom_count
 
 
 def _route_requests_hessian(lines: list[str]) -> bool:
@@ -226,6 +221,9 @@ def _strict_xyz_atom_row(path: Path, line: str) -> str:
 
 
 def _xyz_atom_lines(path: Path, payload: bytes, *, max_atoms: int) -> list[str]:
+    # ``payload`` is a standard XYZ file (count / comment / atom rows), not ORCA
+    # input syntax: ``#`` is not a comment marker there, so the ORCA line
+    # tokenizer deliberately does not apply and every declared row stays strict.
     atom_count = _validated_xyz_atom_count(path, payload, max_atoms=max_atoms)
     try:
         lines = payload.decode("utf-8", errors="strict").splitlines()
@@ -251,21 +249,14 @@ def _inline_geometry_atom_signature(path: Path, payload: bytes) -> tuple[str, ..
         lines = payload.decode("utf-8", errors="strict").splitlines()
     except UnicodeError as exc:
         raise ValueError(f"ORCA inline geometry must be UTF-8 text: {path}") from exc
-    for index, line in enumerate(lines):
-        match = GEOM_HEADER_RE.match(line.strip())
-        if match is None:
-            continue
-        if match.group(1).lower() != "xyz":
-            raise ValueError(f"ORCA recovery bound input has no inline geometry: {path}")
-        signature: list[str] = []
-        for atom_line in lines[index + 1 :]:
-            if atom_line.strip() == "*":
-                if not signature:
-                    raise ValueError(f"ORCA recovery bound input has an empty geometry: {path}")
-                return tuple(signature)
-            signature.append(_strict_xyz_atom_row(path, atom_line))
-        break
-    raise ValueError(f"ORCA recovery bound input has no complete inline geometry: {path}")
+    block = find_geometry_block(lines)
+    if block is not None and block.kind != "xyz":
+        raise ValueError(f"ORCA recovery bound input has no inline geometry: {path}")
+    if block is None or block.terminator_index is None:
+        raise ValueError(f"ORCA recovery bound input has no complete inline geometry: {path}")
+    if not block.atom_rows:
+        raise ValueError(f"ORCA recovery bound input has an empty geometry: {path}")
+    return tuple(_strict_xyz_atom_row(path, text) for _index, text in block.atom_rows)
 
 
 def _reference_source(job_dir: Path, selected_inp: Path, reference: str) -> Path:

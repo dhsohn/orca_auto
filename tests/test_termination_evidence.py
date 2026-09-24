@@ -6,11 +6,7 @@ import pytest
 
 from orca_auto.orca.completion_rules import CompletionMode
 from orca_auto.orca.out_analyzer import analyze_output
-from orca_auto.orca.output_status import (
-    coarse_orca_status,
-    has_error_termination,
-    has_normal_termination,
-)
+from orca_auto.orca.output_status import has_error_termination, has_normal_termination
 from orca_auto.orca.parser import parse_orca_output
 
 NORMAL = "****ORCA TERMINATED NORMALLY****"
@@ -37,8 +33,6 @@ def test_terminal_error_blocks_normal_completion(
     assert result.markers["terminated_normally"] is True
     assert result.markers["generic_error_termination"] is True
     assert result.markers["final_frequency_section"] is False
-    assert coarse_orca_status(text) == "failed"
-    assert parse_orca_output(str(out)).status == "failed"
 
 
 @pytest.mark.parametrize("prefix", ["# ", "  # ", "|  27> # ", "  | 2> "])
@@ -49,14 +43,12 @@ def test_quoted_termination_markers_are_not_execution_evidence(
     text = newline.join([prefix + ERROR, prefix + "FATAL ERROR: check syntax", prefix + NORMAL])
     assert not has_normal_termination(text)
     assert not has_error_termination(text)
-    assert coarse_orca_status(text) == "running"
     out = tmp_path / "echo.out"
     out.write_bytes(text.encode())
     mode = CompletionMode("opt", False, "! SP")
     assert analyze_output(out, mode).status == "incomplete"
     out.write_bytes((text + newline + NORMAL + newline).encode())
     assert analyze_output(out, mode).status == "completed"
-    assert coarse_orca_status(text + newline + NORMAL) == "completed"
 
 
 @pytest.mark.parametrize("quoted", [ERROR, NORMAL])
@@ -87,9 +79,15 @@ def test_tail_cut_inside_input_echo_does_not_create_termination_evidence(
         "Error in GEOM block - check syntax!",
     ],
 )
-def test_existing_terminal_diagnostics_keep_their_failure_meaning(diagnostic: str) -> None:
+def test_existing_terminal_diagnostics_keep_their_failure_meaning(
+    tmp_path: Path, diagnostic: str
+) -> None:
     assert has_error_termination(diagnostic)
-    assert coarse_orca_status(diagnostic + "\n" + NORMAL) == "failed"
+    out = tmp_path / "diagnostic.out"
+    out.write_text(diagnostic + "\n" + NORMAL + "\n")
+    result = analyze_output(out, CompletionMode("opt", False, "! SP"))
+    assert result.status == "unknown_failure"
+    assert result.reason == "error_termination"
 
 
 def test_specific_ts_failure_reason_survives_generic_termination(tmp_path: Path) -> None:

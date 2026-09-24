@@ -173,15 +173,3 @@ def test_pid_reader_rejects_incomplete_or_unverifiable_identity(tmp_path: Path) 
         is None
     )
     assert not scoped_path.exists()
-
-
-def test_memory_limit_preexec_applies_address_space_limit() -> None:
-    calls: list[tuple[int, tuple[int, int]]] = []
-
-    process_utils.memory_limit_preexec(
-        3,
-        setrlimit_fn=lambda kind, limits: calls.append((kind, limits)),
-        limit_resource=9,
-    )()
-
-    assert calls == [(9, (3 * 1024 * 1024 * 1024, 3 * 1024 * 1024 * 1024))]

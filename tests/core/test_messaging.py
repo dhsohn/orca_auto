@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -17,9 +16,8 @@ from orca_auto.core.messaging import (
     DiscordBotChannel,
     Message,
     Severity,
-    bold,
+    Span,
     build_channel,
-    build_channel_from_config_path,
     code,
     field_row,
     group,
@@ -76,7 +74,7 @@ def test_render_discord_embed_maps_fields() -> None:
 def test_render_discord_embed_routes_lines_and_headings_to_description() -> None:
     message = Message(
         title="T",
-        groups=(group(line(raw("hello "), code("world")), heading=(bold("Section"),)),),
+        groups=(group(line(raw("hello "), code("world")), heading=(Span("Section", "bold"),)),),
     )
     embed = render_discord_embed(message)
     assert embed["description"] == "**Section**\nhello `world`"
@@ -199,26 +197,3 @@ def test_messenger_config_from_mapping() -> None:
 def test_messenger_config_rejects_malformed_sections(raw: object, expected: str) -> None:
     with pytest.raises(ValueError, match=expected):
         messenger_config_from_mapping(raw)
-
-
-@pytest.mark.parametrize(
-    ("payload", "message"),
-    [
-        ("schedulr: {}\n", "Unknown top-level config fields are not supported"),
-        ("scheduler: []\n", "scheduler section must be a mapping"),
-        (
-            "messenger:\n  discord:\n    bot_token: []\n",
-            "messenger.discord.bot_token must be a string",
-        ),
-    ],
-)
-def test_messenger_channel_loader_rejects_invalid_shared_config_before_selection(
-    tmp_path: Path,
-    payload: str,
-    message: str,
-) -> None:
-    config_path = tmp_path / "orca_auto.yaml"
-    config_path.write_text(payload, encoding="utf-8")
-
-    with pytest.raises(ValueError, match=message):
-        build_channel_from_config_path(config_path)

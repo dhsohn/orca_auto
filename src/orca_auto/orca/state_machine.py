@@ -6,10 +6,10 @@ from pathlib import Path
 
 from .state import new_state, save_state
 from .state_reading import load_state
-from .statuses import AnalyzerStatus, RunStatus
+from .statuses import ACTIVE_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
 from .types import RunState
 
-RESUMABLE_RUN_STATUSES = frozenset({RunStatus.RUNNING.value, RunStatus.RETRYING.value})
+RESUMABLE_RUN_STATUSES = ACTIVE_RUN_STATUS_VALUES
 RESUMABLE_FAILED_REASONS = frozenset({"interrupted_by_user", "worker_shutdown", "crashed_recovery"})
 
 

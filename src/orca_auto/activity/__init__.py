@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from typing import Any
 
 from orca_auto.core.activity import (
@@ -10,44 +9,12 @@ from orca_auto.core.activity import (
     ActivitySourceRequest,
     ResolvedActivitySources,
 )
+from orca_auto.core.statuses import STATUS_FAILED
 
 from . import _cancel as _activity_cancel
-from . import _clear as _activity_clear
-from . import _collectors as _activity_collectors
 from . import _list as _activity_list
-from . import _sources as _activity_sources
-
-
-def list_activities(
-    *,
-    shared_config: str | None = None,
-    refresh: bool = False,
-    limit: int = 0,
-    orca_config: str | None = None,
-    engines: Sequence[str] = (),
-    statuses: Sequence[str] = (),
-    kinds: Sequence[str] = (),
-) -> dict[str, Any]:
-    return _activity_list.list_activities(
-        shared_config=shared_config,
-        refresh=refresh,
-        limit=limit,
-        orca_config=orca_config,
-        engines=engines,
-        statuses=statuses,
-        kinds=kinds,
-    )
-
-
-def clear_activities(
-    *,
-    shared_config: str | None = None,
-    orca_config: str | None = None,
-) -> dict[str, Any]:
-    return _activity_clear.clear_activities(
-        shared_config=shared_config,
-        orca_config=orca_config,
-    )
+from ._clear import clear_activities
+from ._list import list_activities
 
 
 def cancel_activity(
@@ -63,17 +30,16 @@ def cancel_activity(
             orca_config=orca_config,
         ),
     )
-    resolved = _activity_sources.resolve_activity_source_request(request.sources)
+    resolved = _activity_list.resolve_activity_sources(request.sources)
     record = _activity_cancel.match_activity_record(
-        _activity_collectors.collect_activity_records(
-            refresh=False,
-            orca_config=resolved.orca_config,
+        _activity_list.collect_activity_records(
+            resolved, ActivityListRequest(sources=request.sources, refresh=False)
         ),
         request.target,
     )
 
     result = _activity_cancel.cancel_orca_activity(record, resolved, request)
-    return _activity_cancel.cancel_activity_payload(record, result, fallback_status="failed")
+    return _activity_cancel.cancel_activity_payload(record, result, fallback_status=STATUS_FAILED)
 
 
 __all__ = [

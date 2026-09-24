@@ -262,7 +262,9 @@ def test_core_default_worker_plan_is_orca_only(core_only: _CoreOnlyInstallation)
     _assert_success(result)
     workers = json.loads(result.stdout)["workers"]
     assert [worker["app"] for worker in workers] == ["orca"]
-    assert workers[0]["argv"][-2:] == ["--engine", "orca"]
+    assert workers[0]["argv"][1:3] == ["-m", "orca_auto.orca.commands.queue"]
+    assert workers[0]["argv"][-2] == "--config"
+    assert "--engine" not in workers[0]["argv"]
     assert core_only.snapshot() == before
 
 
@@ -308,7 +310,7 @@ def test_core_worker_runs_fake_orca_child_without_workflow_files(
     assert machines[0].read_bytes() == machine_bytes
 
 
-@pytest.mark.parametrize("operation", ["scaffold", "worker", "run-dir", "mixed-run-dir"])
+@pytest.mark.parametrize("operation", ["scaffold", "run-dir", "mixed-run-dir"])
 def test_explicit_workflows_refuse_before_runtime_mutation(
     core_only: _CoreOnlyInstallation, operation: str
 ) -> None:
@@ -322,10 +324,8 @@ def test_explicit_workflows_refuse_before_runtime_mutation(
                 "! HF STO-3G\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
             )
         command = ("run-dir", str(target), "--json")
-    elif operation == "scaffold":
-        command = ("scaffold", "scan-ts", str(target))
     else:
-        command = ("queue", "worker", "--app", "workflow", "--json")
+        command = ("scaffold", "scan-ts", str(target))
     before = core_only.snapshot()
     _assert_workflows_unavailable(core_only.cli(*command))
     assert core_only.snapshot() == before

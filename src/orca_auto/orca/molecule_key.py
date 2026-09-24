@@ -6,7 +6,7 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from .inp_rewriter import GEOM_HEADER_RE
+from .input_blocks import OrcaGeometryBlock, find_geometry_block
 
 logger = logging.getLogger(__name__)
 
@@ -53,41 +53,32 @@ def _parse_formula_from_inp(inp_path: Path) -> str | None:
     except OSError:
         return None
 
-    for idx, line in enumerate(lines):
-        m = GEOM_HEADER_RE.match(line.strip())
-        if not m:
-            continue
-
-        geom_type = m.group(1).lower()
-        if geom_type == "xyzfile":
-            filename = m.group(4)
-            if not filename:
-                return None
-            filename = filename.strip().strip('"').strip("'")
-            xyz_path = Path(filename)
-            if not xyz_path.is_absolute():
-                xyz_path = inp_path.parent / xyz_path
-            atoms = _parse_xyz_file(xyz_path)
-        else:
-            atoms = _parse_inline_xyz(lines, idx + 1)
-
-        return _atoms_to_hill_formula(atoms)
-
-    return None
+    # The shared geometry scanner reads the header, the xyzfile reference and
+    # the inline atom rows through the ORCA comment tokenizer, so this key
+    # sees the same atoms as execution binding does.
+    block = find_geometry_block(lines)
+    if block is None:
+        return None
+    if block.kind == "xyzfile":
+        if not block.reference:
+            return None
+        xyz_path = Path(block.reference)
+        if not xyz_path.is_absolute():
+            xyz_path = inp_path.parent / xyz_path
+        atoms = _parse_xyz_file(xyz_path)
+    else:
+        atoms = _parse_inline_xyz(block)
+    return _atoms_to_hill_formula(atoms)
 
 
-def _parse_inline_xyz(lines: list[str], start: int) -> list[str]:
+def _parse_inline_xyz(block: OrcaGeometryBlock) -> list[str]:
     # A silently skipped line would yield a plausible but wrong formula, so a
-    # non-atom line inside the geometry block fails closed to "no formula"
-    # (the caller then falls back to the directory-name key).
+    # non-atom row inside the geometry block fails closed to "no formula"
+    # (the caller then falls back to the directory-name key). Comment-only
+    # lines are not rows: the tokenizer already dropped them.
     atoms: list[str] = []
-    for i in range(start, len(lines)):
-        stripped = lines[i].strip()
-        if stripped == "*":
-            break
-        if not stripped:
-            continue
-        m = ATOM_LINE_RE.match(stripped)
+    for _index, text in block.atom_rows:
+        m = ATOM_LINE_RE.match(text)
         if m is None:
             logger.warning("Unparseable inline geometry line for molecule key")
             return []

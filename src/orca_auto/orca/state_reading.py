@@ -22,6 +22,7 @@ from orca_auto.core.machine_observation import (
 )
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
@@ -30,6 +31,7 @@ from .generation_validation import (
     require_generation_selected_input,
 )
 from .report_fields import report_result_fields
+from .statuses import ACTIVE_RUN_STATUS_VALUES, RunStatus
 from .types import RunFinalResult, RunState
 
 STATE_FILE_NAME = RUN_STATE_FILE
@@ -216,16 +218,18 @@ def load_generation_state(
 
 
 def machine_lifecycle(status: str) -> tuple[str, str]:
+    """Map a run/queue status to the report ``(phase, outcome)`` pair."""
+
     normalized = status.strip().lower()
-    if normalized in {"created", "pending", "queued"}:
+    if normalized in {RunStatus.CREATED.value, STATUS_PENDING, STATUS_QUEUED}:
         return "queued", "pending"
-    if normalized in {"running", "retrying"}:
+    if normalized in ACTIVE_RUN_STATUS_VALUES:
         return "running", "pending"
-    if normalized == "completed":
+    if normalized == RunStatus.COMPLETED.value:
         return "finished", "succeeded"
-    if normalized == "cancelled":
+    if normalized == RunStatus.CANCELLED.value:
         return "finished", "cancelled"
-    if normalized == "failed":
+    if normalized == RunStatus.FAILED.value:
         return "finished", "failed"
     return "finished", "uncertain"
 

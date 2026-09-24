@@ -178,6 +178,29 @@ def test_collect_opt_report_skips_contentless_final_attempt(tmp_path: Path) -> N
     assert data.opt_converged
 
 
+def test_opt_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path)
+    missing_out = tmp_path / "rxn_retry.out"
+    state = _state(tmp_path, out_path, reason="normal_termination")
+    state["attempts"].append({"index": 2, "out_path": str(missing_out)})
+    state["final_result"]["last_out_path"] = str(missing_out)
+
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Optimization convergence" in text
+    # The recorded final output is gone: the footer names nothing rather than
+    # the earlier attempt's file or the missing one.
+    assert "last output:" not in text
+    assert "rxn_retry.out" not in text
+    assert "<code>rxn.out</code>" not in text
+
+
 def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:
     _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"

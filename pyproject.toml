@@ -115,8 +115,8 @@ warn_return_any = true
 warn_unused_ignores = true
 
 # Layering is enforced by import-linter (`lint-imports`, run by scripts/check.sh
-# and therefore by CI). Engine wiring crosses layers only through lazy string
-# module paths (core/engine_catalog.py).
+# and therefore by CI). Worker entry points live in orca/commands; core never
+# imports orca.
 [tool.importlinter]
 root_packages = ["orca_auto"]
 exclude_type_checking_imports = true
@@ -128,12 +128,6 @@ layers = [
     "orca_auto.orca",
     "orca_auto.core",
 ]
-
-[[tool.importlinter.contracts]]
-name = "Messaging never imports the notification layer"
-type = "forbidden"
-source_modules = ["orca_auto.core.messaging"]
-forbidden_modules = ["orca_auto.core.notifications"]
 
 [[tool.importlinter.contracts]]
 name = "ORCA domain and worker policy never import CLI commands"
@@ -166,21 +160,17 @@ source_modules = [
 forbidden_modules = ["orca_auto.orca.report"]
 
 [[tool.importlinter.contracts]]
-name = "Systemd CLI layers: independent command owners over freshness over units over plan"
+name = "Systemd CLI layers: command owners over restart guard over freshness policy over freshness models over evidence over units over plan"
 type = "layers"
 layers = [
     "orca_auto.cli_systemd_apply | orca_auto.cli_systemd_restart | orca_auto.cli_systemd_status",
     "orca_auto.cli_systemd_restart_guard",
     "orca_auto.cli_systemd_freshness",
+    "orca_auto.cli_systemd_freshness_checkout | orca_auto.cli_systemd_freshness_runtime",
+    "orca_auto.cli_systemd_evidence",
     "orca_auto.cli_systemd_units",
     "orca_auto.systemd_plan",
 ]
-
-[[tool.importlinter.contracts]]
-name = "Bounded YAML substrate never imports config policy"
-type = "forbidden"
-source_modules = ["orca_auto.core.config.bounded_yaml"]
-forbidden_modules = ["orca_auto.core.config.files"]
 
 [[tool.importlinter.contracts]]
 name = "Worker process supervision stays below CLI assembly"
@@ -220,8 +210,12 @@ forbidden_modules = [
     "orca_auto.cli_handlers",
     "orca_auto.cli_parsers",
     "orca_auto.cli_queue",
+    "orca_auto.cli_scratch",
     "orca_auto.cli_systemd_apply",
+    "orca_auto.cli_systemd_evidence",
     "orca_auto.cli_systemd_freshness",
+    "orca_auto.cli_systemd_freshness_checkout",
+    "orca_auto.cli_systemd_freshness_runtime",
     "orca_auto.cli_systemd_restart",
     "orca_auto.cli_systemd_restart_guard",
     "orca_auto.cli_systemd_status",

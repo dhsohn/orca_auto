@@ -6,7 +6,7 @@ from collections.abc import Mapping, Set
 from dataclasses import dataclass, field
 from typing import Any
 
-from orca_auto.core.utils.coercion import normalize_text, safe_float, safe_int
+from orca_auto.core.utils.coercion import normalize_text, positive_int, safe_float, safe_int
 
 SUPPORTED_MESSENGER_PROVIDERS = frozenset({"discord"})
 MIN_MESSENGER_TIMEOUT_SECONDS = 0.1
@@ -122,23 +122,25 @@ def explicit_positive_int(value: Any, *, field_name: str) -> int:
     return parsed
 
 
-def normalize_max_concurrent(value: Any, default: int = 4) -> int:
-    return max(1, as_int(value, default))
-
-
-def normalize_admission_limit(value: Any) -> int | None:
-    if value is None:
-        return None
-    if value == "":
-        return None
-    return explicit_positive_int(value, field_name="admission_limit")
-
-
 def resolved_admission_limit(admission_limit: Any, max_concurrent: Any) -> int:
-    fallback = normalize_max_concurrent(max_concurrent, 1)
+    fallback = max(1, as_int(max_concurrent, 1))
     if admission_limit in (None, ""):
         return fallback
     return explicit_positive_int(admission_limit, field_name="admission_limit")
+
+
+def positive_int_mapping(raw: object) -> dict[str, int]:
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, int] = {}
+    for key, value in raw.items():
+        key_text = str(key).strip()
+        if not key_text:
+            continue
+        parsed = positive_int(value)
+        if parsed is not None:
+            result[key_text] = parsed
+    return result
 
 
 class RuntimeAdmissionMixin:
@@ -157,28 +159,37 @@ class RuntimeAdmissionMixin:
 
 
 @dataclass(frozen=True)
-class CommonRuntimeConfig(RuntimeAdmissionMixin):
-    allowed_root: str
-    max_concurrent: int = 4
+class SchedulerConfig:
+    """Validated top-level ``scheduler`` section.
+
+    ``admission_root`` is the validated explicit path text, or "" when the
+    section leaves it to the ``<runs_root>/.admission`` default. ``configured``
+    records whether the operator wrote any scheduler key: only then is the
+    admission limit pinned to ``max_active_simulations`` instead of following
+    the worker's runtime concurrency.
+    """
+
+    max_active_simulations: int = 4
+    admission_root: str = ""
+    configured: bool = False
+
+    @property
+    def admission_limit(self) -> int | None:
+        return self.max_active_simulations if self.configured else None
+
+
+@dataclass(frozen=True)
+class OrcaRuntimeConfig(RuntimeAdmissionMixin):
+    """Validated ORCA runtime settings; ``load_config`` is the only producer.
+
+    Frozen: a consumer that needs a different value (the queue worker's
+    effective concurrency) derives a new instance with ``dataclasses.replace``.
+    """
+
+    allowed_root: str = ""
+    max_concurrent: int = SchedulerConfig.max_active_simulations
     admission_root: str | None = None
     admission_limit: int | None = None
-
-
-@dataclass
-class OrcaRuntimeConfig(RuntimeAdmissionMixin):
-    allowed_root: str = ""
-    max_concurrent: int = 4
-    admission_root: str | None = ""
-    admission_limit: int | None = None
-
-    def __post_init__(self) -> None:
-        self.max_concurrent = normalize_max_concurrent(
-            self.max_concurrent,
-            4,
-        )
-        if not self.admission_root and self.allowed_root:
-            self.admission_root = self.allowed_root
-        self.admission_limit = normalize_admission_limit(self.admission_limit)
 
 
 @dataclass(frozen=True)

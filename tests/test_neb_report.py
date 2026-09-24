@@ -279,7 +279,7 @@ def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
     [("", "utf-8"), ("", "utf-16"), ("empty", "utf-8"), ("freq", "utf-8"), ("missing", "utf-8")],
     ids=["complete", "utf16", "trailing-empty", "trailing-freq", "trailing-missing"],
 )
-def test_neb_report_reads_one_shared_output_and_separate_frequency_analysis(
+def test_neb_report_decodes_each_attempt_output_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: str, encoding: str
 ) -> None:
     _write_neb_inp(tmp_path / "rxn.inp")
@@ -288,14 +288,14 @@ def test_neb_report_reads_one_shared_output_and_separate_frequency_analysis(
     if encoding != "utf-8":
         out_path.write_text(out_path.read_text(encoding="utf-8"), encoding=encoding)
     state = _state(tmp_path, out_path)
-    expected_reads = {out_path: 2}
+    # Path table, TS refinement, optimization progress, and frequency analysis
+    # all come from one decoded snapshot per attempt output.
+    expected_reads = {out_path: 1}
     if tail:
         tail_path = tmp_path / "tail.out"
         if tail != "missing":
             tail_path.write_text(_FREQ_TS_BLOCK if tail == "freq" else "", encoding="utf-8")
-            expected_reads[tail_path] = 2
-        if tail == "freq":
-            expected_reads[out_path] = 1
+            expected_reads[tail_path] = 1
         state["attempts"].append({"index": 2, "out_path": str(tail_path)})
         state["final_result"]["last_out_path"] = str(tail_path)
     observed_reads: Counter[Path] = Counter()
@@ -427,6 +427,27 @@ def test_line_chart_svg_uses_marker_legend_for_single_point_series() -> None:
 
     assert '<circle cx="90" cy="24" r="3.5" fill="#158a72"/>' in svg
     assert '<line x1="76" y1="24" x2="104" y2="24" stroke="#158a72"' not in svg
+
+
+def test_neb_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
+    _write_neb_inp(tmp_path / "rxn.inp")
+    out_path = tmp_path / "rxn.out"
+    _write_neb_out(out_path)
+    missing_out = tmp_path / "rxn_retry.out"
+    state = _state(tmp_path, out_path)
+    state["attempts"].append({"index": 2, "out_path": str(missing_out)})
+    state["final_result"]["last_out_path"] = str(missing_out)
+
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "NEB-CI path profile" in text
+    assert "last output:" not in text
+    assert "rxn_retry.out" not in text
+    assert "<code>rxn.out</code>" not in text
 
 
 def test_neb_ts_report_renders_neb_specific_sections(tmp_path: Path) -> None:

@@ -6,7 +6,7 @@ from orca_auto import cli_systemd_units, systemd_plan
 
 
 def test_service_units_for_user_reuses_canonical_name_owner() -> None:
-    assert cli_systemd_units._service_units_for_user("alice") == (
+    assert cli_systemd_units.service_units_for_user("alice") == (
         ("runtime", systemd_plan._runtime_unit_for_user("alice")),
         ("engines", systemd_plan._engine_workers_unit_for_user("alice")),
         ("worker", systemd_plan._worker_unit_for_user("alice")),
@@ -15,7 +15,7 @@ def test_service_units_for_user_reuses_canonical_name_owner() -> None:
 
 def test_service_units_for_user_rejects_blank_user() -> None:
     with pytest.raises(ValueError, match="service user is required"):
-        cli_systemd_units._service_units_for_user("  ")
+        cli_systemd_units.service_units_for_user("  ")
 
 
 def test_default_service_user_resolves_the_account_behind_sudo(
@@ -31,7 +31,7 @@ def test_default_service_user_resolves_the_account_behind_sudo(
     monkeypatch.setattr(cli_systemd_units.getpass, "getuser", lambda: "root")
     monkeypatch.setenv("SUDO_USER", "alice")
 
-    assert cli_systemd_units._default_service_user() == "alice"
+    assert cli_systemd_units.default_service_user() == "alice"
 
 
 def test_default_service_user_keeps_root_for_a_real_root_session(
@@ -41,7 +41,7 @@ def test_default_service_user_keeps_root_for_a_real_root_session(
     monkeypatch.setattr(cli_systemd_units.getpass, "getuser", lambda: "root")
     monkeypatch.delenv("SUDO_USER", raising=False)
 
-    assert cli_systemd_units._default_service_user() == "root"
+    assert cli_systemd_units.default_service_user() == "root"
 
 
 def test_default_service_user_ignores_a_root_sudo_invoker(
@@ -51,7 +51,7 @@ def test_default_service_user_ignores_a_root_sudo_invoker(
     monkeypatch.setattr(cli_systemd_units.getpass, "getuser", lambda: "root")
     monkeypatch.setenv("SUDO_USER", "root")
 
-    assert cli_systemd_units._default_service_user() == "root"
+    assert cli_systemd_units.default_service_user() == "root"
 
 
 def test_default_service_user_ignores_sudo_user_without_root(
@@ -63,4 +63,4 @@ def test_default_service_user_ignores_sudo_user_without_root(
     monkeypatch.setattr(cli_systemd_units.getpass, "getuser", lambda: "alice")
     monkeypatch.setenv("SUDO_USER", "bob")
 
-    assert cli_systemd_units._default_service_user() == "alice"
+    assert cli_systemd_units.default_service_user() == "alice"

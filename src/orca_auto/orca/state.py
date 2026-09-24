@@ -35,7 +35,7 @@ from orca_auto.core.utils.persistence import (
 )
 
 from . import state_reading as _state_reading
-from .statuses import RunStatus
+from .statuses import TERMINAL_RUN_STATUSES, RunStatus, coerce_run_status
 from .types import RunFinalResult, RunState
 
 logger = logging.getLogger(__name__)
@@ -164,10 +164,19 @@ def finalize_state(
     reaction_dir: Path,
     state: RunState,
     *,
-    status: str,
+    status: RunStatus | str,
     final_result: RunFinalResult,
 ) -> None:
-    state["status"] = status
+    """Persist the terminal ``status`` and ``final_result`` of a generation.
+
+    ``status`` must be a member of ``TERMINAL_RUN_STATUSES`` (or its value);
+    any other status raises ``ValueError`` before the state file is touched.
+    """
+
+    terminal_status = coerce_run_status(status)
+    if terminal_status not in TERMINAL_RUN_STATUSES:
+        raise ValueError(f"finalize_state requires a terminal run status, got {status!r}")
+    state["status"] = terminal_status.value
     state["final_result"] = final_result
     write_state(reaction_dir, state)
 

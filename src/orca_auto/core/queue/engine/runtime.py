@@ -41,8 +41,8 @@ class EngineQueueRuntime(Generic[ConfigT]):
     ) -> Callable[[QueueEntry], bool] | None:
         if skip_entry_fn is None or self.dequeue_entry_if_pending is None:
             # Without a by-id dequeue the root claims its own head row, which a
-            # selection filter cannot steer. Engine definitions always supply a
-            # by-id dequeue, so only hand-built runtimes take this branch.
+            # selection filter cannot steer, so the filter is not applied to
+            # the preview either.
             return self.accept_entry_fn
         accept_entry_fn = self.accept_entry_fn
 

@@ -7,7 +7,6 @@ from pathlib import Path
 
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
-from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.process_tracking import run_lock_is_held
 
@@ -33,14 +32,12 @@ from .run_snapshot import (
 )
 from .state import STATE_MUTATION_LOCK_FILE_NAME
 from .state_reading import STATE_FILE_NAME
-from .statuses import RunStatus
+from .statuses import ACTIVE_RUN_STATUS_VALUES, TERMINAL_RUN_STATUS_VALUES
 
 logger = logging.getLogger(__name__)
 
-_TERMINAL_RUN_STATUSES = frozenset(
-    {RunStatus.COMPLETED.value, RunStatus.FAILED.value, STATUS_CANCELLED}
-)
-_STALE_ACTIVE_RUN_STATUSES = frozenset({RunStatus.RUNNING.value, RunStatus.RETRYING.value})
+_TERMINAL_RUN_STATUSES = TERMINAL_RUN_STATUS_VALUES
+_STALE_ACTIVE_RUN_STATUSES = ACTIVE_RUN_STATUS_VALUES
 
 
 def _resolved_path_text(path_text: str) -> str:

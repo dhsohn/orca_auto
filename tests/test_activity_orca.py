@@ -8,10 +8,8 @@ import pytest
 
 from orca_auto import activity
 from orca_auto.activity import _cancel as _activity_cancel
-from orca_auto.activity import _collectors as _activity_collectors
 from orca_auto.activity import _list as _activity_list
 from orca_auto.activity import _orca as _activity_orca
-from orca_auto.activity import _sources as _activity_sources
 from orca_auto.core import activity as _activity_model
 from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
 from orca_auto.core.config import discovery
@@ -107,7 +105,7 @@ def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
     monkeypatch.setattr(
         _activity_orca,
         "engine_runtime_paths",
-        lambda config_path, *, engine: {"allowed_root": allowed},
+        lambda config_path: {"allowed_root": allowed},
     )
     monkeypatch.setattr(run_snapshot, "collect_run_snapshots", lambda root, **kwargs: [])
     monkeypatch.setattr(
@@ -214,7 +212,7 @@ def test_orca_records_merge_queue_entries_and_snapshots(
     monkeypatch.setattr(
         _activity_orca,
         "engine_runtime_paths",
-        lambda config_path, *, engine: {"allowed_root": allowed},
+        lambda config_path: {"allowed_root": allowed},
     )
     monkeypatch.setattr(
         queue_adapter, "reconcile_orphaned_running_entries", lambda root: reconciled.append(root)
@@ -287,7 +285,7 @@ def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
     monkeypatch.setattr(
         _activity_orca,
         "engine_runtime_paths",
-        lambda config_path, *, engine: {"allowed_root": allowed},
+        lambda config_path: {"allowed_root": allowed},
     )
     monkeypatch.setattr(queue_adapter, "reconcile_orphaned_running_entries", lambda root: None)
     monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
@@ -349,7 +347,7 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
     monkeypatch.setattr(
         _activity_orca,
         "engine_runtime_paths",
-        lambda config_path, *, engine: {"allowed_root": allowed},
+        lambda config_path: {"allowed_root": allowed},
     )
     monkeypatch.setattr(queue_adapter, "reconcile_orphaned_running_entries", lambda root: None)
     monkeypatch.setattr(queue_adapter, "list_queue", lambda root: entries)
@@ -441,12 +439,12 @@ def test_match_activity_record_and_cancel_error_edges(monkeypatch: pytest.Monkey
 
     def collect_one(record: activity.ActivityRecord) -> None:
         monkeypatch.setattr(
-            _activity_collectors, "collect_activity_records", lambda **kwargs: [record]
+            _activity_list, "collect_activity_records", lambda *args, **kwargs: [record]
         )
 
     monkeypatch.setattr(
-        _activity_sources,
-        "resolve_activity_source_request",
+        _activity_list,
+        "resolve_activity_sources",
         lambda request: _activity_model.ResolvedActivitySources(None),
     )
 
@@ -472,9 +470,9 @@ def test_cancel_activity_routes_orca_targets(monkeypatch: pytest.MonkeyPatch) ->
         ),
     }
     monkeypatch.setattr(
-        _activity_collectors,
+        _activity_list,
         "collect_activity_records",
-        lambda **kwargs: list(records.values()),
+        lambda *args, **kwargs: list(records.values()),
     )
     monkeypatch.setattr(
         _activity_cancel, "cancel_orca_target", lambda **kwargs: {"status": "", **kwargs}
@@ -495,13 +493,14 @@ def test_list_activities_autodiscovers_defaults_when_no_args(monkeypatch) -> Non
     )
     captured: dict[str, Any] = {}
 
-    def fake_collect(request: activity.ActivityListRequest) -> list[activity.ActivityRecord]:
-        resolved = _activity_sources.resolve_activity_source_request(request.sources)
+    def fake_collect(
+        resolved: activity.ResolvedActivitySources, request: activity.ActivityListRequest
+    ) -> list[activity.ActivityRecord]:
         captured.update(vars(resolved))
         assert request.indexed
         return []
 
-    monkeypatch.setattr(_activity_list, "collect_activity_records_from_request", fake_collect)
+    monkeypatch.setattr(_activity_list, "collect_activity_records", fake_collect)
 
     payload = activity.list_activities()
 

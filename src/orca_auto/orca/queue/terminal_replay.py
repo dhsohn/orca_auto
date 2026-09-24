@@ -9,12 +9,16 @@ rows as new work.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.queue.types import QueueEntry, QueueStatus
+
 from ..state_reading import load_state, state_path, state_payload_job_id
+from ..statuses import TERMINAL_RUN_STATUS_VALUES
 from ..types import RunState
 from .entries import (
     TERMINAL_STATUSES,
@@ -52,7 +56,7 @@ def terminal_status_from_run_state(state: RunState | None) -> str | None:
     if not isinstance(final_result, dict):
         return None
     status = str(final_result.get("status") or "").strip().lower()
-    return status if status in TERMINAL_STATUSES else None
+    return status if status in TERMINAL_RUN_STATUS_VALUES else None
 
 
 def load_state_generation_fingerprint(
@@ -148,6 +152,48 @@ def terminal_replay_marker_for_entry(
         status=status,
         error=error,
     )
+
+
+def terminal_replay_metadata_update_fn(
+    *,
+    status: QueueStatus,
+    error: str,
+    metadata_update: Mapping[str, Any] | None = None,
+    allow_terminal_candidate: bool = False,
+) -> Callable[[QueueEntry], Mapping[str, Any] | None]:
+    """Return the store ``metadata_update_fn`` that attaches the replay marker.
+
+    Every ORCA terminal writer passes this to the queue store so the marker is
+    persisted in the same queue mutation as the terminal transition.
+    """
+    supplied_metadata = dict(metadata_update or {})
+
+    def update(current: QueueEntry) -> Mapping[str, Any] | None:
+        if supplied_metadata.get(TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY) is True:
+            raise ValueError(
+                "terminal side-effect replay and an administrative fence are mutually exclusive"
+            )
+        if not allow_terminal_candidate and current.status not in {
+            QueueStatus.PENDING,
+            QueueStatus.RUNNING,
+        }:
+            # Core terminal marks permit idempotent same-status calls.  Once a
+            # completed marker has been cleared, such a call must not resurrect
+            # replay work for closed history.  Explicit metadata still follows
+            # the caller's request through the static update path.
+            return None
+        candidate_metadata = dict(current.metadata)
+        candidate_metadata.update(supplied_metadata)
+        candidate = replace(current, metadata=candidate_metadata)
+        return {
+            TERMINAL_REPLAY_METADATA_KEY: terminal_replay_marker_for_entry(
+                candidate,
+                status=status.value,
+                error=error,
+            )
+        }
+
+    return update
 
 
 def terminal_replay_marker_from_entry(entry: Any) -> dict[str, Any] | None:

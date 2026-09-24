@@ -290,14 +290,17 @@ def test_cmd_init_success_writes_config_and_prints_summary(tmp_path: Path, capsy
     ):
         assert init.cmd_init(Namespace(force=True)) == 0
 
-    validate_generated_config.assert_called_once_with(str(config_path.resolve()))
+    validate_generated_config.assert_called_once()
+    (validated_payload,) = validate_generated_config.call_args.args
     output = capsys.readouterr().out
     assert "Config created successfully." in output
     assert "runs_root" in output
     assert str(orca_allowed_root) in output
     assert "max_active_simulations: 4" in output
     assert "messenger_provider: discord" in output
-    assert yaml.safe_load(config_path.read_text(encoding="utf-8").split("\n", 1)[1]) == {
+    written = yaml.safe_load(config_path.read_text(encoding="utf-8").split("\n", 1)[1])
+    assert written == validated_payload
+    assert written == {
         "runs_root": str(orca_allowed_root),
         "resources": {
             "max_cores_per_task": 8,

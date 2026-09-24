@@ -79,9 +79,7 @@ def test_filtered_list_still_explains_queue_wide_publication_block(
     request = cli_queue._QueueListRequest(
         shared_config=None,
         limit=1,
-        engine_values=(),
         status_values=("completed",),
-        kind_values=(),
         json_output=False,
     )
     monkeypatch.setattr(cli_queue, "count_global_active_simulations", lambda *args, **kwargs: 0)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import pwd
 import re
 import stat
 from collections.abc import Callable, Sequence
@@ -9,13 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.config.files import (
-    engine_config_mapping,
-    load_shared_config_mapping,
-    mapping_section,
-    scheduler_admission_root,
-    usable_runs_root_from_mapping,
+    YAML_CONFIG_LOAD_EXCEPTIONS,
+    load_shared_config,
+    resolved_admission_root,
+    usable_runs_root_text,
 )
 from orca_auto.core.runtime_bundle import (
     PROCESS_RUNTIME_BUILD_ENV,
@@ -160,11 +159,7 @@ def _minimal_writable_roots(paths: Sequence[Path]) -> tuple[Path, ...]:
     )
 
 
-def _require_explicit_admission_directory(
-    scheduler: dict[str, Any], admission_root: Path | None
-) -> None:
-    if "admission_root" not in scheduler or admission_root is None:
-        return
+def _require_explicit_admission_directory(admission_root: Path) -> None:
     # Inspect with stat() so a permission error stays visible: Path.is_dir()
     # reports every OSError as "not a directory" on newer Pythons.
     try:
@@ -188,35 +183,17 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     if not config.exists():
         return ()
     try:
-        _, raw = load_shared_config_mapping(config)
+        _, shared = load_shared_config(config)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         return ()
 
     paths: list[Path] = []
-    scheduler_raw = mapping_section(raw, "scheduler")
-    runs_root = usable_runs_root_from_mapping(raw)
-    admission_root = scheduler_admission_root(
-        scheduler_raw,
-        default_runs_root=runs_root or None,
-    )
-    _require_explicit_admission_directory(scheduler_raw, admission_root)
+    runs_root = usable_runs_root_text(shared.runs_root)
+    admission_root = resolved_admission_root(shared.scheduler, runs_root=runs_root or None)
     if admission_root is not None:
+        if shared.scheduler.admission_root:
+            _require_explicit_admission_directory(admission_root)
         paths.append(admission_root)
-
-    # Resolve the ORCA view as well so a split-brain engine-scoped scheduler is
-    # rejected during installation instead of producing a service that starts
-    # against a different admission pool.
-    orca_scheduler_raw = mapping_section(
-        engine_config_mapping(raw, "orca", inherit_keys=("scheduler",)),
-        "scheduler",
-    )
-    orca_admission_root = scheduler_admission_root(
-        orca_scheduler_raw,
-        default_runs_root=runs_root or None,
-    )
-    _require_explicit_admission_directory(orca_scheduler_raw, orca_admission_root)
-    if orca_admission_root is not None:
-        paths.append(orca_admission_root)
 
     _append_absolute_path(paths, runs_root)
 
@@ -264,8 +241,18 @@ def _render_unit_template(
     return "\n".join(lines) + "\n"
 
 
-def _default_config_for_repo(repo: Path) -> Path:
-    return repo / "config" / "orca_auto.yaml"
+def _default_config_for_user(target_user: str) -> Path:
+    """Default rendered config path: the target user's discoverable home config.
+
+    Matches the runtime discovery order (``--config``, ``ORCA_AUTO_CONFIG``,
+    ``~/orca_auto/config/orca_auto.yaml``); the unit template carries the same
+    ``/home/%i/...`` shape, so an account without a passwd entry falls back to it.
+    """
+    try:
+        home = Path(pwd.getpwnam(target_user).pw_dir)
+    except KeyError:
+        home = Path("/home") / target_user
+    return home / "orca_auto" / "config" / "orca_auto.yaml"
 
 
 def _normalize_path(value: str | Path) -> Path:
@@ -476,7 +463,7 @@ def build_systemd_install_plan(
     options = SystemdInstallOptions(
         target_user=user_text,
         repo=repo_path,
-        config=_normalize_path(config or _default_config_for_repo(repo_path)),
+        config=_normalize_path(config or _default_config_for_user(user_text)),
         unit_dir=_normalize_path(unit_dir),
         worker_only=worker_only,
         no_enable=no_enable,

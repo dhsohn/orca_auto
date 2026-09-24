@@ -336,3 +336,110 @@ def test_child_retains_parent_reservation_at_execution_boundaries(
     assert get_slot(admission_root, token) == slot_before
     assert handoffs == [(admission_root, token)]
     assert executions == ([boundary] if boundary in {"cancel", "exception"} else [])
+
+
+def _running_state_for(rxn: Path, task_id: str) -> None:
+    from orca_auto.orca.state import new_state, save_state
+
+    state = new_state(rxn, rxn / "h2.inp")
+    state["job_id"] = task_id
+    state["status"] = "running"
+    save_state(rxn, state)
+
+
+def _run_cancelled_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, QueueEntry, Callable[[], int]]:
+    cfg, config_path, queued, _executable = _queued_submission(tmp_path)
+    queue_root = Path(cfg.runtime.allowed_root)
+    admission_root = Path(cfg.runtime.resolved_admission_root)
+    running = adapter.dequeue_next(queue_root)
+    assert running is not None
+    token = reserve_slot(admission_root, 1, source="orca-child-cancel-lock-test")
+    assert token is not None
+    rxn = Path(adapter.queue_entry_reaction_dir(running))
+    _running_state_for(rxn, queued.task_id)
+
+    def execute(*_args: Any, **_kwargs: Any) -> int:
+        cancelled = adapter.cancel(queue_root, queued.queue_id, expected_entry=running)
+        assert cancelled is not None and cancelled.cancel_requested
+        raise WorkerShutdownInterrupt
+
+    monkeypatch.setattr(worker_execution, "install_shutdown_signal_handlers", lambda _cb: None)
+    monkeypatch.setattr(worker_execution, "execute_orca_run", execute)
+
+    def run_child() -> int:
+        return worker_execution.run_worker_child_job(
+            config_path=str(config_path),
+            queue_root=queue_root,
+            queue_id=queued.queue_id,
+            admission_token=token,
+            await_parent_admission_handoff_fn=lambda _root, _token: True,
+        )
+
+    return rxn, queue_root, queued, run_child
+
+
+def test_cancel_finalization_writes_cancelled_state_under_the_run_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.core.utils.process_tracking import run_lock_is_held
+
+    rxn, queue_root, queued, run_child = _run_cancelled_child(tmp_path, monkeypatch)
+    real_finalize_state = worker_execution.finalize_state
+    held_during_finalize: list[bool] = []
+
+    def finalize_state(*args: Any, **kwargs: Any) -> Any:
+        held_during_finalize.append(run_lock_is_held(rxn))
+        return real_finalize_state(*args, **kwargs)
+
+    monkeypatch.setattr(worker_execution, "finalize_state", finalize_state)
+
+    assert run_child() == 0
+
+    assert held_during_finalize == [True]
+    written = load_state(rxn)
+    assert written is not None
+    final_result = written["final_result"]
+    assert final_result is not None
+    assert final_result["status"] == "cancelled"
+    assert final_result["reason"] == "cancel_requested"
+    row = adapter.get_entry_by_id(queue_root, queued.queue_id)
+    assert row is not None and row.status is QueueStatus.CANCELLED
+
+
+def test_cancel_finalization_skips_when_the_run_lock_is_held(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
+    from orca_auto.orca.queue.replay import record_cancelled_run_state
+
+    rxn, queue_root, queued, run_child = _run_cancelled_child(tmp_path, monkeypatch)
+
+    # Another finalizer owns run.lock (flock is per open file description, so a
+    # second handle in this process contends exactly like another process).
+    with lock_utils.file_lock(rxn / RUN_LOCK_FILE_NAME, timeout_seconds=0.0, payload="held"):
+        with caplog.at_level("WARNING", logger="orca_auto.orca.worker_execution"):
+            assert run_child() == 0
+
+    # Fail closed: the child did not touch job_state.json ...
+    untouched = load_state(rxn)
+    assert untouched is not None
+    assert untouched["status"] == "running"
+    assert not isinstance(untouched.get("final_result"), dict)
+    assert any("Skipping cancel finalization" in record.message for record in caplog.records)
+    # ... but the queue row is still cancelled with its replay marker, so the
+    # parent's terminal replay settles the state under the same lock.
+    row = adapter.get_entry_by_id(queue_root, queued.queue_id)
+    assert row is not None and row.status is QueueStatus.CANCELLED
+    assert terminal_replay_marker_from_entry(row) is not None
+    run_id, terminal_status = record_cancelled_run_state(rxn, fallback_job_id=queued.task_id)
+    assert terminal_status == "cancelled"
+    settled = load_state(rxn)
+    assert settled is not None
+    settled_result = settled["final_result"]
+    assert settled_result is not None
+    assert settled_result["status"] == "cancelled"
+    assert (run_id or "") == str(settled.get("run_id") or "")

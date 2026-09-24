@@ -12,6 +12,7 @@ from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca import input_blocks, input_references
 from orca_auto.orca.execution_binding import (
+    _inline_geometry_atom_count,
     build_orca_execution_snapshot,
     verify_orca_execution_snapshot,
 )
@@ -1657,6 +1658,60 @@ def test_orca_frequency_snapshot_uses_stricter_hessian_atom_cap(
             job_dir,
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=_write_executable(tmp_path / "orca"),
+        )
+
+
+def test_orca_frequency_snapshot_ignores_comment_lines_inside_inline_geometry(
+    tmp_path: Path,
+) -> None:
+    # A comment-only line inside ``* xyz ... *`` is not an atom: with exactly
+    # MAX_HESSIAN_ADMISSION_ATOMS real rows the Hessian limit must not fire
+    # because of the comment (it did when the raw-line counter was used), and
+    # the trailing comment on a real row must not break it either.
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "job.inp"
+    atom_rows = ["H 0 0 0"] * (MAX_HESSIAN_ADMISSION_ATOMS - 1) + ["H 0 0 0.74 # last"]
+    selected.write_text(
+        "! Freq\n* xyz 0 1 # neutral\n# fragment A\n"
+        + "\n".join(atom_rows)
+        + "\n  # fragment B #\n* # done\n",
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        orca_executable=_write_executable(tmp_path / "orca"),
+    )
+
+    assert snapshot["source_selected_inp"] == str(selected.resolve())
+    assert (
+        _inline_geometry_atom_count(selected.read_text(encoding="utf-8"))
+        == MAX_HESSIAN_ADMISSION_ATOMS
+    )
+
+
+def test_orca_frequency_snapshot_rejects_inline_geometry_above_hessian_atom_cap(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        "! Freq\n* xyz 0 1\n" + "H 0 0 0\n" * (MAX_HESSIAN_ADMISSION_ATOMS + 1) + "*\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Hessian atom-count limit"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
             resource_request={"max_cores": 1, "max_memory_gb": 1},
             orca_executable=_write_executable(tmp_path / "orca"),
         )

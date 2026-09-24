@@ -1,4 +1,10 @@
-"""Shared configuration discovery for standalone ORCA commands."""
+"""Shared configuration discovery for standalone ORCA commands.
+
+Order: explicit ``--config``, ``ORCA_AUTO_CONFIG``, then
+``~/orca_auto/config/orca_auto.yaml``. No checkout-relative location is probed:
+the package can live in a source tree, a wheel, or a prepared runtime, and only
+the operator's home is the same in all three.
+"""
 
 from __future__ import annotations
 
@@ -8,22 +14,15 @@ from typing import Any
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.utils.coercion import normalize_text
 
-from .files import discover_shared_config_path
+from .files import default_config_path, discover_shared_config_path
 
 
-def repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
-
-
-def repo_root_for_subprocess() -> str | None:
-    root = repo_root()
-    if (root / "src" / "orca_auto").is_dir():
-        return str(root)
-    return None
+def default_shared_config_path() -> str:
+    return default_config_path(env_var=ORCA_AUTO_CONFIG_ENV_VAR)
 
 
 def resolve_shared_config_path(explicit: str | None) -> str | None:
-    return discover_shared_config_path(explicit, repo_root(), env_var=ORCA_AUTO_CONFIG_ENV_VAR)
+    return discover_shared_config_path(explicit, env_var=ORCA_AUTO_CONFIG_ENV_VAR)
 
 
 def shared_config_text_from_args(args: Any) -> str:
@@ -40,9 +39,8 @@ def engine_config_for_args(args: Any) -> str | None:
 
 
 __all__ = [
+    "default_shared_config_path",
     "engine_config_for_args",
-    "repo_root",
-    "repo_root_for_subprocess",
     "resolve_shared_config_path",
     "shared_config_text_from_args",
 ]

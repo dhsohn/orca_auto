@@ -19,7 +19,7 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
-def test_discovery_resolves_config_from_explicit_env_and_repo_candidate(
+def test_discovery_resolves_config_from_explicit_env_and_home_candidate(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -27,10 +27,9 @@ def test_discovery_resolves_config_from_explicit_env_and_repo_candidate(
     explicit_config.write_text("runs_root: /tmp/runs\n", encoding="utf-8")
     env_config = tmp_path / "env.yaml"
     env_config.write_text("runs_root: /tmp/runs\n", encoding="utf-8")
-    repo_root = tmp_path / "repo"
-    repo_config = repo_root / "config" / "orca_auto.yaml"
-    repo_config.parent.mkdir(parents=True)
-    repo_config.write_text("runs_root: /tmp/runs\n", encoding="utf-8")
+    home_config = Path.home() / "orca_auto" / "config" / "orca_auto.yaml"
+    home_config.parent.mkdir(parents=True)
+    home_config.write_text("runs_root: /tmp/runs\n", encoding="utf-8")
 
     assert discovery.resolve_shared_config_path(str(explicit_config)) == str(
         explicit_config.resolve()
@@ -40,8 +39,7 @@ def test_discovery_resolves_config_from_explicit_env_and_repo_candidate(
     assert discovery.resolve_shared_config_path(None) == str(env_config.resolve())
 
     monkeypatch.delenv(ORCA_AUTO_CONFIG_ENV_VAR)
-    monkeypatch.setattr(discovery, "repo_root", lambda: repo_root)
-    assert discovery.resolve_shared_config_path(None) == str(repo_config.resolve())
+    assert discovery.resolve_shared_config_path(None) == str(home_config.resolve())
 
 
 def test_cmd_run_dir_dispatches_to_orca_for_inp_directories(

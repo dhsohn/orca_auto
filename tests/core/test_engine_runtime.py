@@ -7,15 +7,10 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.config.schema import CommonRuntimeConfig
+from orca_auto.core.config.schema import OrcaRuntimeConfig
 from orca_auto.core.engines import (
     entry_matches_engine_identity,
     own_engine_accept_entry,
-)
-from orca_auto.core.engines.definitions import (
-    EngineDefinition,
-    EngineQueueFunctions,
-    EngineRunnerCallbacks,
 )
 from orca_auto.core.queue.engine.runtime import EngineQueueRuntime
 from orca_auto.core.queue.publication import (
@@ -26,7 +21,7 @@ from orca_auto.core.queue.types import QueueEntry
 
 
 def _cfg() -> SimpleNamespace:
-    return SimpleNamespace(runtime=CommonRuntimeConfig(allowed_root="/unused"))
+    return SimpleNamespace(runtime=OrcaRuntimeConfig(allowed_root="/unused"))
 
 
 def _runtime(
@@ -283,7 +278,7 @@ def test_engine_queue_runtime_common_accessors(tmp_path: Path) -> None:
     assert runtime.read_worker_pid(tmp_path) is None
 
 
-def test_engine_definition_builds_canonical_runtime_from_queue_contract(
+def test_engine_queue_runtime_filters_by_id_lookups_through_the_accept_predicate(
     tmp_path: Path,
 ) -> None:
     queue_root = tmp_path / "queue"
@@ -296,25 +291,15 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
         looked_up.append((root, queue_id))
         return own_entry if queue_id == own_entry.queue_id else foreign_entry
 
-    definition = EngineDefinition(
-        engine="orca",
-        load_config=lambda _path: _cfg(),
-        queue_worker_runner=lambda _argv: 0,
-        queue_functions=EngineQueueFunctions(
-            runtime_roots_for_cfg=lambda _cfg: (queue_root,),
-            list_queue=lambda _root: [foreign_entry, own_entry],
-            dequeue_next=lambda _root: own_entry,
-            dequeue_entry_if_pending=lambda _root, _queue_id, **_kwargs: own_entry,
-            queue_entry_by_id=queue_entry_by_id,
-            worker_pid_file_name="queue-contract.pid",
-        ),
-        runner_callbacks=EngineRunnerCallbacks(
-            run_worker_child_job=lambda **_kwargs: 0,
-            build_worker_child_command=lambda **_kwargs: ["worker"],
-        ),
+    runtime: EngineQueueRuntime[SimpleNamespace] = EngineQueueRuntime(
+        runtime_roots_for_cfg=lambda _cfg: (queue_root,),
+        list_queue=lambda _root: [foreign_entry, own_entry],
+        dequeue_next=lambda _root: own_entry,
+        dequeue_entry_if_pending=lambda _root, _queue_id, **_kwargs: own_entry,
+        queue_entry_by_id_fn=queue_entry_by_id,
+        worker_pid_file_name="queue-contract.pid",
+        accept_entry_fn=own_engine_accept_entry("orca"),
     )
-
-    runtime = definition.build_queue_runtime()
 
     assert runtime.worker_pid_file_name == "queue-contract.pid"
     assert runtime.queue_entries_with_roots(_cfg()) == [(queue_root, own_entry)]
@@ -325,26 +310,6 @@ def test_engine_definition_builds_canonical_runtime_from_queue_contract(
         (queue_root, own_entry.queue_id),
         (queue_root, foreign_entry.queue_id),
     ]
-
-
-def test_engine_definition_requires_worker_pid_in_queue_contract() -> None:
-    definition = EngineDefinition(
-        engine="orca",
-        load_config=lambda _path: _cfg(),
-        queue_worker_runner=lambda _argv: 0,
-        queue_functions=EngineQueueFunctions(
-            runtime_roots_for_cfg=lambda _cfg: (),
-            list_queue=lambda _root: [],
-            dequeue_next=lambda _root: None,
-        ),
-        runner_callbacks=EngineRunnerCallbacks(
-            run_worker_child_job=lambda **_kwargs: 0,
-            build_worker_child_command=lambda **_kwargs: ["worker"],
-        ),
-    )
-
-    with pytest.raises(ValueError, match="worker_pid_file_name is required"):
-        definition.build_queue_runtime()
 
 
 def test_queue_roots_propagates_runtime_root_errors(tmp_path: Path) -> None:

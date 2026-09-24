@@ -16,6 +16,7 @@ from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.indexing import store as locations
 from orca_auto.core.queue import persistence as queue
 from orca_auto.core.queue.store import queue_lock
+from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca.queue import adapter
 from orca_auto.orca.run_snapshot import RunSnapshot, collect_run_snapshots
@@ -156,7 +157,7 @@ def _store_group(
         _store_activity(connection, kind, key, record)
     by_run, by_dir = _orca.snapshot_indexes(snapshots)
     for entry in entries:
-        if adapter.queue_entry_status(entry) != "running":
+        if adapter.queue_entry_status(entry) != QueueStatus.RUNNING.value:
             continue
         matched = _orca.snapshot_matches_entry(adapter, entry, by_run, by_dir)
         payload: dict[str, Any] = {
@@ -179,7 +180,7 @@ def _store_group(
         if snapshot.key in represented:
             continue
         suppressed = str(snapshot.reaction_dir.resolve()) in superseded
-        if snapshot.status in {"running", "retrying"} or suppressed:
+        if snapshot.status in _orca._STALE_SNAPSHOT_STATUSES or suppressed:
             payload = {"snapshot": _snapshot_payload(snapshot), "superseded": suppressed}
             connection.execute(
                 "INSERT OR REPLACE INTO watches VALUES ('snapshot', ?, ?)",
@@ -241,13 +242,10 @@ def _refresh(connection: sqlite3.Connection, root: Path) -> None:
 
 
 def _select(connection: sqlite3.Connection, request: ActivityListRequest) -> list[ActivityRecord]:
-    matches = (not request.engines or "orca" in request.engines) and (
-        not request.kinds or "job" in request.kinds
-    )
     selected = {}
     # A separate bounded range per status avoids SQLite sorting every matching
     # historical row for a multi-status IN predicate. The caller merges top K.
-    for status in (request.statuses or ("",)) if matches else ():
+    for status in request.statuses or ("",):
         where = " WHERE status=?" if status else ""
         values: list[Any] = [status] if status else []
         sql = (

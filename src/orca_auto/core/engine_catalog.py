@@ -1,73 +1,57 @@
+"""Import-safe identity for the one supported engine (standalone ORCA).
+
+The catalog carries only what is persisted as queue/admission identity or read
+by the worker at admission time. It imports nothing from ``orca_auto.orca`` so
+the CLI and activity code can consult engine identity without pulling in the
+execution stack.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, Literal
-
-ActivityRole = Literal["engine-queue", "orca-run"]
-SupervisionRole = Literal["default"]
+from typing import Final
 
 
 @dataclass(frozen=True)
 class EngineCatalogEntry:
-    """Import-safe metadata for supported standalone ORCA execution."""
+    """Persisted identity and admission policy for one engine."""
 
     engine_id: str
-    definition_module: str
-    worker_module: str
-    admission_source: str
     app_id: str
     source_id: str
-    activity_role: ActivityRole
-    managed_admission: bool
-    engine_launch_gated: bool
-    default_supervision_role: SupervisionRole
-    supervision_order: int
-    activity_order: int
     task_kinds: tuple[str, ...]
+    # Durable identity label written to ``admission_slots.json`` (``source``
+    # field) on every reservation. It is NOT a module path; do not change it
+    # without migrating persisted admission records.
+    admission_source: str
+    engine_launch_gated: bool
 
 
 _ENGINE_CATALOG: Final[tuple[EngineCatalogEntry, ...]] = (
     EngineCatalogEntry(
         engine_id="orca",
-        definition_module="orca_auto.orca.engine",
-        worker_module="orca_auto.core.engines.queue_worker",
-        admission_source="orca_auto.orca.queue_worker",
         app_id="orca_auto_orca",
         source_id="orca_auto_orca",
-        activity_role="orca-run",
-        managed_admission=True,
-        engine_launch_gated=True,
-        default_supervision_role="default",
-        supervision_order=0,
-        activity_order=2,
         task_kinds=("orca_run_inp",),
+        admission_source="orca_auto.orca.queue_worker",
+        engine_launch_gated=True,
     ),
 )
 
 _ENGINE_BY_ID: Final[dict[str, EngineCatalogEntry]] = {
     entry.engine_id: entry for entry in _ENGINE_CATALOG
 }
-_ENGINE_BY_APP_ID: Final[dict[str, EngineCatalogEntry]] = {
-    entry.app_id: entry for entry in _ENGINE_CATALOG
-}
-_ENGINE_BY_SOURCE_ID: Final[dict[str, EngineCatalogEntry]] = {
-    entry.source_id: entry for entry in _ENGINE_CATALOG
-}
 
 if len(_ENGINE_BY_ID) != len(_ENGINE_CATALOG):
     raise RuntimeError("duplicate engine id in built-in engine catalog")
-if len(_ENGINE_BY_APP_ID) != len(_ENGINE_CATALOG):
+if len({entry.app_id for entry in _ENGINE_CATALOG}) != len(_ENGINE_CATALOG):
     raise RuntimeError("duplicate app id in built-in engine catalog")
-if len(_ENGINE_BY_SOURCE_ID) != len(_ENGINE_CATALOG):
+if len({entry.source_id for entry in _ENGINE_CATALOG}) != len(_ENGINE_CATALOG):
     raise RuntimeError("duplicate source id in built-in engine catalog")
 
 
 def engine_catalog() -> tuple[EngineCatalogEntry, ...]:
     return _ENGINE_CATALOG
-
-
-def known_engine_ids() -> tuple[str, ...]:
-    return tuple(entry.engine_id for entry in _ENGINE_CATALOG)
 
 
 def find_engine_catalog_entry(engine: object) -> EngineCatalogEntry | None:
@@ -80,31 +64,13 @@ def get_engine_catalog_entry(engine: object) -> EngineCatalogEntry:
     if entry is not None:
         return entry
     engine_id = str(engine or "").strip().lower().replace("-", "_")
-    supported = ", ".join(known_engine_ids())
+    supported = ", ".join(entry.engine_id for entry in _ENGINE_CATALOG)
     raise ValueError(f"unsupported engine: {engine_id or '<blank>'} (supported: {supported})")
 
 
-def find_engine_catalog_entry_by_source_id(source_id: object) -> EngineCatalogEntry | None:
-    return _ENGINE_BY_SOURCE_ID.get(str(source_id or "").strip())
-
-
-def supervised_engine_entries() -> tuple[EngineCatalogEntry, ...]:
-    return tuple(sorted(_ENGINE_CATALOG, key=lambda entry: entry.supervision_order))
-
-
-def activity_engine_entries() -> tuple[EngineCatalogEntry, ...]:
-    return tuple(sorted(_ENGINE_CATALOG, key=lambda entry: entry.activity_order))
-
-
 __all__ = [
-    "ActivityRole",
     "EngineCatalogEntry",
-    "SupervisionRole",
-    "activity_engine_entries",
     "engine_catalog",
     "find_engine_catalog_entry",
-    "find_engine_catalog_entry_by_source_id",
     "get_engine_catalog_entry",
-    "known_engine_ids",
-    "supervised_engine_entries",
 ]

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
-from functools import lru_cache
+import threading
+from collections import OrderedDict
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, cast
 
 from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis_text
@@ -16,6 +17,7 @@ from .orca_opt_progress import OptProgress, parse_opt_progress_text
 from .parser import OrcaResult, parse_orca_output_text
 from .parser.io import read_orca_text
 from .relaxed_scan import first_scan_coordinate_spec
+from .statuses import RunStatus
 
 # Route families whose final geometry is not a stationary point: path methods
 # (plain NEB / NEB-CI — NEB-TS is claimed by the TS check first) and dynamics.
@@ -58,6 +60,18 @@ def final_out_path(state: Mapping[str, Any]) -> Path | None:
     return None
 
 
+def final_out_name(state: Mapping[str, Any]) -> str:
+    """Basename of :func:`final_out_path` for report headers; ``""`` without one.
+
+    Report collectors that show a "last output" name should take it from
+    here rather than from ``final_result.last_out_path or attempts[-1]``: that
+    weaker rule names a file the run no longer has, or an earlier attempt's,
+    as if it were the final output.
+    """
+    path = final_out_path(state)
+    return path.name if path is not None else ""
+
+
 def structure_kind(selected_inp: Path) -> str | None:
     """``"ts"`` / ``"min"`` / ``"sp"``; ``None`` for non-stationary jobs.
 
@@ -84,22 +98,79 @@ def structure_kind(selected_inp: Path) -> str | None:
     return "sp"
 
 
-@dataclass(frozen=True)
+T = TypeVar("T")
+
+_PARSED_OUTPUT_CACHE_SIZE = 32
+
+
+@dataclass(frozen=True, eq=False)
 class _ParsedOutput:
+    """Facts parsed from one decoded output snapshot; never the text itself.
+
+    ``derived`` memoizes report-specific facts (see :func:`parsed_output_facts`)
+    keyed by the parser that produced them, so a job report decodes each
+    output once for structure evidence, progress, frequencies, and its own
+    path/settings tables alike.
+    """
+
     final_output: tuple[OrcaResult, FrequencyAnalysis | None]
     optimization: OptProgress
+    derived: dict[Callable[[str], object], object] = field(default_factory=dict)
 
 
-@lru_cache(maxsize=32)
-def _parsed_output_cached(out_path_text: str, mtime_ns: int, size: int) -> _ParsedOutput:
-    text = read_orca_text(out_path_text)
-    return _ParsedOutput(
+class _ParsedOutputCache:
+    """Bounded LRU keyed by ``(path, mtime_ns, size)``.
+
+    A hand-rolled LRU rather than ``functools.lru_cache`` because a derived
+    parser requested on a cache miss must run on the same decoded text as the
+    base facts, which needs a lookup that is separate from the store.
+    """
+
+    def __init__(self, maxsize: int) -> None:
+        self._maxsize = maxsize
+        self._entries: OrderedDict[tuple[str, int, int], _ParsedOutput] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple[str, int, int]) -> _ParsedOutput | None:
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None:
+                self._entries.move_to_end(key)
+            return entry
+
+    def put(self, key: tuple[str, int, int], entry: _ParsedOutput) -> _ParsedOutput:
+        """Store ``entry`` unless a concurrent reader stored one first; return the kept one."""
+        with self._lock:
+            existing = self._entries.get(key)
+            if existing is not None:
+                self._entries.move_to_end(key)
+                return existing
+            self._entries[key] = entry
+            while len(self._entries) > self._maxsize:
+                self._entries.popitem(last=False)
+            return entry
+
+    def cache_clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_parsed_output_cache = _ParsedOutputCache(_PARSED_OUTPUT_CACHE_SIZE)
+
+
+def _parse_output_text(
+    text: str, out_path_text: str, derive: Callable[[str], object] | None
+) -> _ParsedOutput:
+    snapshot = _ParsedOutput(
         final_output=(
             parse_orca_output_text(text, source_path=out_path_text),
             parse_frequency_analysis_text(text),
         ),
         optimization=parse_opt_progress_text(text, source_path=out_path_text),
     )
+    if derive is not None:
+        snapshot.derived[derive] = derive(text)
+    return snapshot
 
 
 def parsed_final_output(out_path: Path) -> tuple[OrcaResult, FrequencyAnalysis | None]:
@@ -111,9 +182,15 @@ def parsed_final_output(out_path: Path) -> tuple[OrcaResult, FrequencyAnalysis |
     return _parsed_output(out_path).final_output
 
 
-def _parsed_output(out_path: Path) -> _ParsedOutput:
+def _parsed_output(out_path: Path, derive: Callable[[str], object] | None = None) -> _ParsedOutput:
     stat = out_path.stat()
-    return _parsed_output_cached(str(out_path), stat.st_mtime_ns, stat.st_size)
+    key = (str(out_path), stat.st_mtime_ns, stat.st_size)
+    snapshot = _parsed_output_cache.get(key)
+    if snapshot is None:
+        snapshot = _parsed_output_cache.put(
+            key, _parse_output_text(read_orca_text(key[0]), key[0], derive)
+        )
+    return snapshot
 
 
 def parsed_optimization_progress(out_path: Path) -> OptProgress:
@@ -127,6 +204,24 @@ def parsed_optimization_progress(out_path: Path) -> OptProgress:
 def parsed_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
     """Reuse even an absent frequency section; read failures remain retryable."""
     return parsed_final_output(out_path)[1]
+
+
+def parsed_output_facts(out_path: Path, parse_text: Callable[[str], T]) -> T:
+    """``parse_text(decoded output)`` memoized on the same snapshot as the base facts.
+
+    For report parsers (IRC/NEB settings, iterations, path summaries) that
+    would otherwise decode the output again per attempt. ``parse_text`` must be
+    a module-level function: it is the memo key, and a fresh lambda per call
+    would defeat the cache. The result is shared across cache hits, so callers
+    treat it as read-only. A snapshot cached before this parser was asked for
+    decodes the text once more and remembers the result.
+    """
+    snapshot = _parsed_output(out_path, derive=parse_text)
+    try:
+        return cast(T, snapshot.derived[parse_text])
+    except KeyError:
+        facts = parse_text(read_orca_text(str(out_path)))
+        return cast(T, snapshot.derived.setdefault(parse_text, facts))
 
 
 @dataclass(frozen=True)
@@ -151,7 +246,7 @@ def collect_structure_evidence(
         OrcaEvidenceError: for a job that should have structure evidence but is missing its
             output, final energy, or coordinates.
     """
-    if str(state.get("status") or "") != "completed":
+    if str(state.get("status") or "") != RunStatus.COMPLETED.value:
         return None
     selected_raw = str(state.get("selected_inp") or "").strip()
     if not selected_raw:

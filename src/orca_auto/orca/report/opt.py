@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..evidence import (
+    final_out_name,
     final_out_path,
     parsed_final_output,
     parsed_frequency_analysis,
@@ -26,8 +27,10 @@ from .attempts import (
     AttemptReportRow,
     attempt_dicts,
     attempt_report_rows,
+    attempts_metric_card,
     attempts_table_html,
     duration_text,
+    latest_attempt_with_content,
     terminal_actions_html,
 )
 from .frequencies import (
@@ -92,22 +95,7 @@ def collect_opt_report_data(
     # Prefer the latest attempt output that actually contains optimization
     # cycles; an execution that died before the first cycle parses to an empty
     # trace and must not mask an earlier attempt's convergence data.
-    chosen: OptProgress | None = None
-    fallback: OptProgress | None = None
-    for position in range(len(attempts) - 1, -1, -1):
-        out_raw = str(attempts[position].get("out_path") or "").strip()
-        if not out_raw or not Path(out_raw).exists():
-            continue
-        try:
-            progress = parsed_optimization_progress(Path(out_raw))
-        except OSError:
-            continue
-        if fallback is None:
-            fallback = progress
-        if progress.steps:
-            chosen = progress
-            break
-    selected = chosen if chosen is not None else fallback
+    selected = latest_attempt_with_content(attempts, parsed_optimization_progress, _has_opt_steps)
     if selected is not None:
         formula, method, basis_set = selected.formula, selected.method, selected.basis_set
         steps = tuple((step.cycle, step.energy_hartree) for step in selected.steps)
@@ -137,9 +125,6 @@ def collect_opt_report_data(
 
     final_result = state.get("final_result")
     final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
-    last_out = str(final_payload.get("last_out_path") or "").strip()
-    if not last_out and attempts:
-        last_out = str(attempts[-1].get("out_path") or "").strip()
 
     return OptReportData(
         title=reaction_dir.name or str(reaction_dir),
@@ -164,8 +149,12 @@ def collect_opt_report_data(
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         frequency_attempt_index=frequency_attempt_index,
         frequency_from_earlier_attempt=frequency_from_earlier_attempt,
-        last_out_name=Path(last_out).name if last_out else "",
+        last_out_name=final_out_name(state),
     )
+
+
+def _has_opt_steps(progress: OptProgress) -> bool:
+    return bool(progress.steps)
 
 
 def _attempt_index_for_output(attempts: Sequence[Mapping[str, Any]], out_path: Path) -> int | None:
@@ -250,13 +239,7 @@ def _metric_cards(
             )
         )
     if include_attempts:
-        cards.append(
-            metric_card(
-                "Attempts",
-                str(len(data.attempts)),
-                data.total_duration_text and f"total wall time {data.total_duration_text}",
-            )
-        )
+        cards.append(attempts_metric_card(data.attempts, data.total_duration_text))
     return "".join(cards)
 
 

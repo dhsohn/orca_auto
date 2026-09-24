@@ -18,9 +18,9 @@ def engine_resource_caps(
 
 
 def coerce_resource_request(value: Any) -> dict[str, int]:
-    from orca_auto.core.config import engines as _config_engines
+    from orca_auto.core.config.schema import positive_int_mapping
 
-    return _config_engines.positive_int_mapping(value)
+    return positive_int_mapping(value)
 
 
 def entry_resource_request(

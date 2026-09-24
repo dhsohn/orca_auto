@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -343,34 +344,197 @@ def ensure_route_keywords(lines: list[str], keywords: list[str]) -> bool:
     return True
 
 
-def find_geometry_start(lines: list[str]) -> int | None:
-    for idx, line in enumerate(lines):
-        if GEOM_HEADER_RE.match(line.strip()):
-            return idx
+@dataclass(frozen=True)
+class OrcaGeometryBlock:
+    """The first ``* xyz`` / ``* xyzfile`` geometry block of an ORCA input.
+
+    Every field is read through :func:`orca_line_tokens`, so ``#`` comments
+    (closed ``# ... #`` and trailing) never count as atoms and never hide a
+    header or the closing ``*``. ``atom_rows`` holds ``(line_index, active
+    text)`` for each inline atom row; comment-only and blank lines are
+    omitted. ``terminator_index`` is the line index of the closing ``*`` and
+    ``None`` for ``xyzfile`` headers and unterminated inline blocks.
+    """
+
+    header_index: int
+    kind: str  # "xyz" | "xyzfile"
+    charge: int
+    multiplicity: int
+    reference: str | None
+    atom_rows: tuple[tuple[int, str], ...]
+    terminator_index: int | None
+
+
+def geometry_header_match(line: str) -> re.Match[str] | None:
+    """Match ``GEOM_HEADER_RE`` against the active (comment-free) text of ``line``."""
+
+    return GEOM_HEADER_RE.match(active_orca_line_text(line))
+
+
+def find_geometry_block(lines: Sequence[str]) -> OrcaGeometryBlock | None:
+    """Locate the first geometry header and, for ``xyz``, its atom rows."""
+
+    for header_index, line in enumerate(lines):
+        match = geometry_header_match(line)
+        if match is None:
+            continue
+        kind = match.group(1).lower()
+        charge = int(match.group(2))
+        multiplicity = int(match.group(3))
+        if kind == "xyzfile":
+            # Same token position as input_references' geometry reference, so a
+            # quoted or comment-suffixed filename resolves identically.
+            tokens = orca_line_tokens(line)
+            reference = tokens[4].value if len(tokens) >= 5 else None
+            return OrcaGeometryBlock(header_index, kind, charge, multiplicity, reference, (), None)
+        atom_rows: list[tuple[int, str]] = []
+        for index in range(header_index + 1, len(lines)):
+            text = active_orca_line_text(lines[index]).strip()
+            if not text:
+                continue
+            if text == "*":
+                return OrcaGeometryBlock(
+                    header_index, kind, charge, multiplicity, None, tuple(atom_rows), index
+                )
+            atom_rows.append((index, text))
+        return OrcaGeometryBlock(
+            header_index, kind, charge, multiplicity, None, tuple(atom_rows), None
+        )
     return None
+
+
+def find_geometry_start(lines: list[str]) -> int | None:
+    block = find_geometry_block(lines)
+    return None if block is None else block.header_index
+
+
+@dataclass(frozen=True)
+class OrcaBlockRow:
+    """One active body row of a ``%block``: its line index and non-comment tokens."""
+
+    line_index: int
+    tokens: tuple[OrcaLineToken, ...]
+
+    @property
+    def text(self) -> str:
+        return " ".join(token.value for token in self.tokens)
+
+
+@dataclass(frozen=True)
+class OrcaBlock:
+    """One ``%name`` block found by :func:`iter_blocks`.
+
+    This is the shared block-termination rule of the package: a block closes at
+    the first unquoted ``end`` token outside a nested ``scan``/``constraints``
+    sub-block -- on the header line itself (``%pal nprocs 8 end``) or on a
+    later line -- and an unterminated block is cut by the next ``%`` directive,
+    by the geometry section (``*``), or by end of input. ``rows`` are the
+    active body rows in order, starting with the header remainder when it
+    carries tokens; tokens after the closing ``end`` are not body rows.
+
+    ``end`` is the index of the line carrying the closing ``end`` token
+    (``start`` for an inline-closed block). When ``closed`` is False it is the
+    index of the line that cut the block or ``len(lines)``, i.e. where an
+    ``end`` line has to be inserted to close the block.
+    """
+
+    name: str
+    start: int
+    end: int
+    closed: bool
+    rows: tuple[OrcaBlockRow, ...]
+
+    @property
+    def needs_close(self) -> bool:
+        return not self.closed
+
+
+def _unquoted_end_index(tokens: Sequence[OrcaLineToken], start: int) -> int:
+    return next(
+        (
+            index
+            for index in range(start, len(tokens))
+            if not tokens[index].quoted and tokens[index].value.lower() == "end"
+        ),
+        len(tokens),
+    )
+
+
+def _scan_block(
+    lines: Sequence[str],
+    *,
+    name: str,
+    start: int,
+    header_tokens: list[OrcaLineToken],
+    body_start: int,
+) -> OrcaBlock:
+    rows: list[OrcaBlockRow] = []
+    end_index = _unquoted_end_index(header_tokens, body_start)
+    if header_tokens[body_start:end_index]:
+        rows.append(OrcaBlockRow(start, tuple(header_tokens[body_start:end_index])))
+    if end_index < len(header_tokens):
+        return OrcaBlock(name, start, start, True, tuple(rows))
+    nested_depth = 0
+    for index in range(start + 1, len(lines)):
+        tokens = orca_line_tokens(lines[index])
+        if not tokens:
+            continue
+        first = tokens[0]
+        if _percent_directive_header(tokens) is not None or (
+            not first.quoted and first.value.startswith("*")
+        ):
+            return OrcaBlock(name, start, index, False, tuple(rows))
+        if len(tokens) == 1 and not first.quoted and first.value.lower() in NESTED_BLOCK_NAMES:
+            nested_depth += 1
+            rows.append(OrcaBlockRow(index, tuple(tokens)))
+            continue
+        end_index = _unquoted_end_index(tokens, 0)
+        if end_index == len(tokens) or nested_depth > 0:
+            if end_index < len(tokens):
+                nested_depth -= 1
+            rows.append(OrcaBlockRow(index, tuple(tokens)))
+            continue
+        if end_index > 0:
+            rows.append(OrcaBlockRow(index, tuple(tokens[:end_index])))
+        return OrcaBlock(name, start, index, True, tuple(rows))
+    return OrcaBlock(name, start, len(lines), False, tuple(rows))
+
+
+def iter_blocks(lines: Sequence[str], block_name: str) -> Iterator[OrcaBlock]:
+    """Yield every ``%block_name`` block of ``lines`` in order (see :class:`OrcaBlock`)."""
+
+    name = block_name.lower()
+    index = 0
+    while index < len(lines):
+        tokens = orca_line_tokens(lines[index])
+        header = _percent_directive_header(tokens)
+        if header is None or header[0] != name:
+            index += 1
+            continue
+        block = _scan_block(
+            lines,
+            name=name,
+            start=index,
+            header_tokens=tokens,
+            body_start=header[1],
+        )
+        yield block
+        index = block.end + 1 if block.closed else max(block.end, index + 1)
+
+
+def find_block(lines: Sequence[str], block_name: str) -> OrcaBlock | None:
+    """Return the first ``%block_name`` block, or ``None``."""
+
+    return next(iter_blocks(lines, block_name), None)
 
 
 def find_block_range(lines: list[str], block_name: str) -> tuple[int, int, bool] | None:
-    name = block_name.lower()
-    for i, line in enumerate(lines):
-        m = BLOCK_START_RE.match(active_orca_directive_text(line))
-        if not m:
-            continue
-        if m.group(1).lower() != name:
-            continue
-        nested_depth = 0
-        for j in range(i + 1, len(lines)):
-            stripped = active_orca_line_text(lines[j]).strip().lower()
-            if stripped in NESTED_BLOCK_NAMES:
-                nested_depth += 1
-                continue
-            if stripped == "end":
-                if nested_depth > 0:
-                    nested_depth -= 1
-                    continue
-                return i, j, False
-        return i, len(lines), True
-    return None
+    """Return ``(start, end, needs_close)`` of the first ``%block_name`` block."""
+
+    block = find_block(lines, block_name)
+    if block is None:
+        return None
+    return block.start, block.end, block.needs_close
 
 
 def set_block_key_value(lines: list[str], block_name: str, key: str, value: str) -> bool:
@@ -395,12 +559,12 @@ def set_block_key_value(lines: list[str], block_name: str, key: str, value: str)
         key_occurrences = sum(
             1 for token in inline_tokens if not token.quoted and token.value.lower() == key.lower()
         )
+        block = find_block(lines, block_name)
+        body_rows = tuple(row for row in block.rows if row.line_index != start) if block else ()
         key_occurrences += sum(
             1
-            for line in lines[start + 1 : end]
-            if (tokens := orca_line_tokens(active_orca_line_text(line)))
-            and not tokens[0].quoted
-            and tokens[0].value.lower() == key.lower()
+            for row in body_rows
+            if not row.tokens[0].quoted and row.tokens[0].value.lower() == key.lower()
         )
         if key_occurrences > 1:
             raise ValueError(f"ORCA %{block_name} block has duplicate {key} directives")
@@ -415,8 +579,8 @@ def set_block_key_value(lines: list[str], block_name: str, key: str, value: str)
         insert_at = find_geometry_start(lines)
         if insert_at is None:
             insert_at = len(lines)
-        block = [f"%{block_name}", f"  {key} {value}", "end", ""]
-        lines[insert_at:insert_at] = block
+        new_block = [f"%{block_name}", f"  {key} {value}", "end", ""]
+        lines[insert_at:insert_at] = new_block
         return True
 
     start, end, needs_close = rng
@@ -428,17 +592,18 @@ def set_block_key_value(lines: list[str], block_name: str, key: str, value: str)
     if needs_close:
         lines.insert(end, "end")
     replaced = False
-    for i in range(start + 1, end):
-        stripped = active_orca_line_text(lines[i]).strip()
-        if not stripped:
+    found = find_block(lines, block_name)
+    body_rows = tuple(row for row in found.rows if row.line_index != start) if found else ()
+    for row in body_rows:
+        if row.tokens[0].quoted or row.tokens[0].value.lower() != key_lower:
             continue
-        body_tokens = stripped.split()
-        if body_tokens and body_tokens[0].lower() == key_lower:
-            new_line = f"  {key} {value}"
-            if lines[i] != new_line:
-                lines[i] = new_line
-                changed = True
-            replaced = True
+        # A body row may carry the closing ``end`` (``nprocs 8 end``); keep it.
+        closes_block = found is not None and found.closed and row.line_index == found.end
+        new_line = f"  {key} {value}" + (" end" if closes_block else "")
+        if lines[row.line_index] != new_line:
+            lines[row.line_index] = new_line
+            changed = True
+        replaced = True
 
     if not replaced:
         lines.insert(end, f"  {key} {value}")
@@ -559,22 +724,18 @@ def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:
 
 
 def geometry_range(lines: list[str]) -> tuple[int, int, int, int] | None:
-    for start, line in enumerate(lines):
-        m = GEOM_HEADER_RE.match(line.strip())
-        if not m:
-            continue
-        geom_type = m.group(1).lower()
-        charge = int(m.group(2))
-        mult = int(m.group(3))
-        if geom_type == "xyzfile":
-            return start, start + 1, charge, mult
+    """Return ``(start, end, charge, multiplicity)`` of the first geometry block."""
+
+    block = find_geometry_block(lines)
+    if block is None:
+        return None
+    if block.kind == "xyzfile":
+        end = block.header_index + 1
+    elif block.terminator_index is not None:
+        end = block.terminator_index + 1
+    else:
         end = len(lines)
-        for i in range(start + 1, len(lines)):
-            if lines[i].strip() == "*":
-                end = i + 1
-                break
-        return start, end, charge, mult
-    return None
+    return block.header_index, end, block.charge, block.multiplicity
 
 
 def replace_geometry_with_xyzfile(lines: list[str], geom_file: Path, base_dir: Path) -> bool:
@@ -617,37 +778,13 @@ def _percent_directive_header(tokens: list[OrcaLineToken]) -> tuple[str, int] | 
 
 
 def _scf_body_token_rows(lines: list[str]) -> list[tuple[int, list[OrcaLineToken]]]:
-    """Return active ``%scf`` body tokens, stopping each block at ``end``."""
+    """Return active ``%scf`` body tokens per row (see :func:`iter_blocks`)."""
 
-    rows: list[tuple[int, list[OrcaLineToken]]] = []
-    in_scf_block = False
-    for line_index, line in enumerate(lines):
-        tokens = orca_line_tokens(line)
-        if not tokens:
-            continue
-        header = _percent_directive_header(tokens)
-        if header is not None:
-            block_name, body_start = header
-            in_scf_block = block_name == "scf"
-            if not in_scf_block:
-                continue
-        elif in_scf_block:
-            body_start = 0
-        else:
-            continue
-
-        end_index = next(
-            (
-                index
-                for index in range(body_start, len(tokens))
-                if not tokens[index].quoted and tokens[index].value.lower() == "end"
-            ),
-            len(tokens),
-        )
-        rows.append((line_index, tokens[body_start:end_index]))
-        if end_index < len(tokens):
-            in_scf_block = False
-    return rows
+    return [
+        (row.line_index, list(row.tokens))
+        for block in iter_blocks(lines, "scf")
+        for row in block.rows
+    ]
 
 
 def _reference_after_keyword(

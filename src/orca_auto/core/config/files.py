@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import errno
 import os
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -13,15 +15,18 @@ from orca_auto.core.paths.validation import (
 )
 from orca_auto.core.utils.coercion import normalize_text
 
-from . import bounded_yaml as _bounded_yaml
 from .schema import (
+    CommonResourceConfig,
+    MessengerConfig,
+    SchedulerConfig,
+    as_nonempty_str,
     explicit_positive_int,
     messenger_config_from_mapping,
 )
 from .schema import (
     reject_unknown_config_fields as _reject_unknown_config_fields,
 )
-from .scratch import scratch_config_from_runtime_mapping
+from .scratch import ScratchConfig, scratch_config_from_runtime_mapping
 
 DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
 DEFAULT_SHARED_ADMISSION_DIRNAME = ".admission"
@@ -32,6 +37,41 @@ _RESOURCE_CONFIG_FIELDS = frozenset({"max_cores_per_task", "max_memory_gb_per_ta
 _ORCA_CONFIG_FIELDS = frozenset({"paths", "runtime"})
 _ORCA_RUNTIME_CONFIG_FIELDS = frozenset({"scratch_min_free_gb", "scratch_root"})
 _ORCA_PATH_CONFIG_FIELDS = frozenset({"orca_executable"})
+YAML_CONFIG_LOAD_EXCEPTIONS = (OSError, ValueError, yaml.YAMLError)
+
+
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects ambiguous duplicate mapping keys."""
+
+
+def _construct_unique_mapping(
+    loader: UniqueKeySafeLoader,
+    node: yaml.nodes.MappingNode,
+    deep: bool = False,
+) -> dict[Any, Any]:
+    loader.flatten_mapping(node)
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        # types-PyYAML leaves BaseConstructor.construct_object untyped.
+        key = loader.construct_object(key_node, deep=deep)  # type: ignore[no-untyped-call]
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise ValueError("YAML mapping keys must be hashable scalars") from exc
+        if duplicate:
+            # Do not include the key or source line: config values can contain secrets.
+            raise ValueError("YAML contains a duplicate mapping key")
+        mapping[key] = loader.construct_object(  # type: ignore[no-untyped-call]
+            value_node,
+            deep=deep,
+        )
+    return mapping
+
+
+UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
 
 
 def config_env_value(env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR) -> str:
@@ -46,46 +86,49 @@ def secure_config_file_permissions(
     Path(config_path).chmod(mode)
 
 
-def default_config_path_from_repo_root(
-    repo_root: Path,
-    *,
-    env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR,
-) -> str:
+def home_default_config_path() -> Path:
+    """The one implicit config location: ``~/orca_auto/config/orca_auto.yaml``.
+
+    A source checkout is not probed. In a wheel or prepared-runtime install the
+    package ancestry points into the virtual environment, and production runs
+    prepared runtimes, so a checkout-relative location would silently differ
+    between layouts.
+    """
+
+    return Path.home() / "orca_auto" / "config" / DEFAULT_CONFIG_FILENAME
+
+
+def default_config_path(*, env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR) -> str:
+    """Where a new config is written when no explicit path is given."""
+
     env_path = config_env_value(env_var)
     if env_path:
         return env_path
-
-    repo_default = repo_root / "config" / DEFAULT_CONFIG_FILENAME
-    if repo_default.exists():
-        return str(repo_default)
-
-    home_default = Path.home() / "orca_auto" / "config" / DEFAULT_CONFIG_FILENAME
-    if home_default.exists():
-        return str(home_default)
-
-    # A wheel's package ancestry points into the virtual environment, not a
-    # source checkout. Keep a new config outside that replaceable installation.
-    if (repo_root / "src" / "orca_auto").is_dir():
-        return str(repo_default)
-    return str(home_default)
+    return str(home_default_config_path())
 
 
 def discover_shared_config_path(
     explicit: str | Path | None,
-    repo_root: Path,
     *,
     env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR,
 ) -> str | None:
+    """Discovery order: explicit path, ``ORCA_AUTO_CONFIG``, then the home default.
+
+    An explicit or environment path is returned even when the file is missing
+    so the caller reports that path; the home default is used only when it
+    exists.
+    """
+
     explicit_text = str(explicit or "").strip()
     if explicit_text:
         return str(Path(explicit_text).expanduser().resolve())
 
-    discovered = default_config_path_from_repo_root(repo_root, env_var=env_var)
-    if config_env_value(env_var):
-        return str(Path(discovered).expanduser().resolve())
+    env_path = config_env_value(env_var)
+    if env_path:
+        return str(Path(env_path).expanduser().resolve())
 
-    path = Path(discovered).expanduser().resolve()
-    return str(path) if path.exists() else None
+    home_default = home_default_config_path().expanduser().resolve()
+    return str(home_default) if home_default.exists() else None
 
 
 def load_yaml_mapping(
@@ -100,9 +143,9 @@ def load_yaml_mapping(
         if not payload.strip():
             parsed = {}
         else:
-            parsed = yaml.load(payload, Loader=_bounded_yaml.UniqueKeySafeLoader)
+            parsed = yaml.load(payload, Loader=UniqueKeySafeLoader)
         if parsed is None:
-            node = yaml.compose(payload, Loader=_bounded_yaml.UniqueKeySafeLoader)
+            node = yaml.compose(payload, Loader=UniqueKeySafeLoader)
             empty_document = node is None
         else:
             empty_document = False
@@ -150,8 +193,78 @@ def _validate_optional_text_field(
         raise ValueError(f"{field_name} must be a string when configured.")
 
 
-def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
-    """Validate the complete public shared-config shape before any defaults apply."""
+@dataclass(frozen=True)
+class SharedConfig:
+    """Every validated section of one ``orca_auto.yaml``; defaults already applied.
+
+    ``runs_root`` and ``orca_executable`` are the configured text ("" when
+    omitted). Their path rules are applied by the consumers that require them,
+    because soft consumers (systemd rendering, discovery) must tolerate a
+    missing or invalid root instead of failing the whole file.
+    """
+
+    runs_root: str = ""
+    orca_executable: str = ""
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
+    resources: CommonResourceConfig = field(default_factory=CommonResourceConfig)
+    scratch: ScratchConfig = field(default_factory=ScratchConfig)
+    messenger: MessengerConfig = field(default_factory=MessengerConfig)
+
+
+def _scheduler_config_from_mapping(scheduler: Mapping[str, Any]) -> SchedulerConfig:
+    _reject_unknown_config_fields(
+        scheduler,
+        allowed=_SCHEDULER_CONFIG_FIELDS,
+        section="scheduler",
+    )
+    max_active = SchedulerConfig.max_active_simulations
+    if "max_active_simulations" in scheduler:
+        max_active = explicit_positive_int(
+            scheduler.get("max_active_simulations"),
+            field_name="scheduler.max_active_simulations",
+        )
+    admission_root = ""
+    if "admission_root" in scheduler:
+        admission_root = _validated_absolute_linux_path_text(
+            normalize_text(scheduler.get("admission_root")),
+            field_name="scheduler.admission_root",
+        )
+    return SchedulerConfig(
+        max_active_simulations=max_active,
+        admission_root=admission_root,
+        configured=bool(scheduler),
+    )
+
+
+def _resource_config_from_mapping(resources: Mapping[str, Any]) -> CommonResourceConfig:
+    _reject_unknown_config_fields(
+        resources,
+        allowed=_RESOURCE_CONFIG_FIELDS,
+        section="resources",
+    )
+
+    def configured(key: str, default: int) -> int:
+        if key not in resources:
+            return default
+        return explicit_positive_int(resources.get(key), field_name=f"resources.{key}")
+
+    return CommonResourceConfig(
+        max_cores_per_task=configured(
+            "max_cores_per_task", CommonResourceConfig.max_cores_per_task
+        ),
+        max_memory_gb_per_task=configured(
+            "max_memory_gb_per_task", CommonResourceConfig.max_memory_gb_per_task
+        ),
+    )
+
+
+def validate_shared_config_sections(raw: Mapping[str, Any]) -> SharedConfig:
+    """Validate the complete public shared-config shape in one pass.
+
+    Returns the validated sections so callers never re-parse a section they
+    already validated. ``orca`` holds only ``paths`` and ``runtime``; the
+    ``resources``, ``scheduler`` and ``messenger`` sections are top-level only.
+    """
 
     messenger_raw = messenger_mapping_from_root(raw)
     _reject_unknown_config_fields(
@@ -161,34 +274,9 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
     )
     _validate_optional_text_field(raw, "runs_root", field_name="runs_root")
 
-    scheduler = _configured_mapping_section(raw, "scheduler")
-    _reject_unknown_config_fields(
-        scheduler,
-        allowed=_SCHEDULER_CONFIG_FIELDS,
-        section="scheduler",
-    )
-    if "max_active_simulations" in scheduler:
-        explicit_positive_int(
-            scheduler.get("max_active_simulations"),
-            field_name="scheduler.max_active_simulations",
-        )
-    if "admission_root" in scheduler:
-        _validated_absolute_linux_path_text(
-            normalize_text(scheduler.get("admission_root")),
-            field_name="scheduler.admission_root",
-        )
-    resources = _configured_mapping_section(raw, "resources")
-    _reject_unknown_config_fields(
-        resources,
-        allowed=_RESOURCE_CONFIG_FIELDS,
-        section="resources",
-    )
-    for key in _RESOURCE_CONFIG_FIELDS:
-        if key in resources:
-            explicit_positive_int(
-                resources.get(key),
-                field_name=f"resources.{key}",
-            )
+    scheduler = _scheduler_config_from_mapping(_configured_mapping_section(raw, "scheduler"))
+    resources = _resource_config_from_mapping(_configured_mapping_section(raw, "resources"))
+
     orca = _configured_mapping_section(raw, "orca")
     _reject_unknown_config_fields(orca, allowed=_ORCA_CONFIG_FIELDS, section="orca")
     orca_runtime = _configured_mapping_section(orca, "runtime", field_name="orca.runtime")
@@ -197,7 +285,7 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
         allowed=_ORCA_RUNTIME_CONFIG_FIELDS,
         section="orca.runtime",
     )
-    scratch_config_from_runtime_mapping(orca_runtime)
+    scratch = scratch_config_from_runtime_mapping(orca_runtime)
     orca_paths = _configured_mapping_section(orca, "paths", field_name="orca.paths")
     _reject_unknown_config_fields(
         orca_paths,
@@ -210,7 +298,14 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> None:
         field_name="orca.paths.orca_executable",
     )
 
-    messenger_config_from_mapping(messenger_raw)
+    return SharedConfig(
+        runs_root=normalize_text(raw.get("runs_root")),
+        orca_executable=as_nonempty_str(orca_paths.get("orca_executable"), ""),
+        scheduler=scheduler,
+        resources=resources,
+        scratch=scratch,
+        messenger=messenger_config_from_mapping(messenger_raw),
+    )
 
 
 def load_shared_config_mapping(
@@ -218,27 +313,34 @@ def load_shared_config_mapping(
     *,
     invalid_message: str = "YAML top-level is not a mapping: {path}",
 ) -> tuple[Path, dict[str, Any]]:
-    """Load and validate one complete shared ``orca_auto.yaml`` mapping."""
+    """Load and validate one shared ``orca_auto.yaml``, returning the raw mapping.
+
+    For callers that need the file's own text back (for example to preserve a
+    section verbatim). Consumers of settings use ``load_shared_config``.
+    """
 
     path, raw = load_yaml_mapping(config_path, invalid_message=invalid_message)
     validate_shared_config_sections(raw)
     return path, raw
 
 
-def load_required_shared_config_mapping(
+def load_shared_config(
     config_path: str | Path,
     *,
     missing_error: Callable[[Path], Exception] | None = None,
     invalid_message: str = "YAML top-level is not a mapping: {path}",
-) -> tuple[Path, dict[str, Any]]:
-    """Require, load, and validate one complete shared ``orca_auto.yaml`` mapping."""
+) -> tuple[Path, SharedConfig]:
+    """Require, load, and validate one shared ``orca_auto.yaml`` in a single pass."""
 
     path = Path(config_path).expanduser().resolve()
     if not path.exists():
         if missing_error is not None:
             raise missing_error(path)
-        raise FileNotFoundError(path)
-    return load_shared_config_mapping(path, invalid_message=invalid_message)
+        # Same shape as the OSError ``open()`` raised before existence was
+        # checked up front, so callers keep naming "No such file".
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(path))
+    path, raw = load_yaml_mapping(path, invalid_message=invalid_message)
+    return path, validate_shared_config_sections(raw)
 
 
 def messenger_mapping_from_root(raw: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -257,31 +359,6 @@ def resolve_configured_path(value: Any) -> Path | None:
     return Path(text).expanduser().resolve() if text else None
 
 
-def engine_config_mapping(
-    raw: dict[str, Any],
-    engine: str,
-    *,
-    inherit_keys: Iterable[str] = ("resources", "messenger"),
-) -> dict[str, Any]:
-    if engine not in raw:
-        return {}
-    section = raw.get(engine)
-    if not isinstance(section, dict):
-        raise ValueError(f"{engine} section must be a mapping when configured.")
-
-    resolved = dict(section)
-    for key in inherit_keys:
-        inherited = raw.get(key)
-        if key in resolved:
-            raise ValueError(
-                f"{engine}.{key} is not supported; configure shared {key} at the top level."
-            )
-        if not isinstance(inherited, dict):
-            continue
-        resolved[key] = dict(inherited)
-    return resolved
-
-
 def default_shared_admission_root(runs_root: str | Path | None) -> str:
     """Default shared admission directory: hidden under the single runs root."""
     text = normalize_text(runs_root)
@@ -290,29 +367,16 @@ def default_shared_admission_root(runs_root: str | Path | None) -> str:
     return str(Path(text).expanduser().resolve() / DEFAULT_SHARED_ADMISSION_DIRNAME)
 
 
-def scheduler_admission_root(
-    scheduler: dict[str, Any] | None,
+def resolved_admission_root(
+    scheduler: SchedulerConfig,
     *,
-    default_runs_root: str | Path | None = None,
+    runs_root: str | Path | None = None,
 ) -> Path | None:
-    scheduler_raw = scheduler if isinstance(scheduler, dict) else {}
-    if "admission_root" in scheduler_raw:
-        raw_text = normalize_text(scheduler_raw.get("admission_root"))
-        validated = _validated_absolute_linux_path_text(
-            raw_text,
-            field_name="scheduler.admission_root",
-        )
-        return Path(validated).expanduser().resolve()
-    return resolve_configured_path(default_shared_admission_root(default_runs_root))
+    """Explicit ``scheduler.admission_root`` or ``<runs_root>/.admission``; None without either."""
 
-
-def runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
-    """Read the shared runs root from the top-level runs_root key.
-
-    Returns the configured text as-is (no resolution) so callers can validate
-    the raw value before resolving it.
-    """
-    return normalize_text((raw.get("runs_root") or "") if isinstance(raw, dict) else "")
+    if scheduler.admission_root:
+        return Path(scheduler.admission_root).expanduser().resolve()
+    return resolve_configured_path(default_shared_admission_root(runs_root))
 
 
 def validated_runs_root_text(root_text: str) -> str:
@@ -325,14 +389,13 @@ def validated_runs_root_text(root_text: str) -> str:
     return _validated_absolute_linux_path_text(root_text, field_name="runs_root")
 
 
-def usable_runs_root_from_mapping(raw: dict[str, Any] | None) -> str:
+def usable_runs_root_text(root_text: str) -> str:
     """runs_root text when present and valid, else "".
 
     For soft consumers (discovery, capacity preflight, systemd rendering) that
     must ignore an invalid root rather than raise: an unvalidated resolve would
     silently anchor the value on the caller cwd.
     """
-    root_text = runs_root_from_mapping(raw)
     if not root_text:
         return ""
     try:
@@ -353,11 +416,11 @@ def shared_runs_root_from_config(config_path: str | Path | None) -> str | None:
         return None
 
     try:
-        _, parsed = load_shared_config_mapping(path)
-    except _bounded_yaml.YAML_CONFIG_LOAD_EXCEPTIONS:
+        _, shared = load_shared_config(path)
+    except YAML_CONFIG_LOAD_EXCEPTIONS:
         return None
 
-    root_text = usable_runs_root_from_mapping(parsed)
+    root_text = usable_runs_root_text(shared.runs_root)
     if not root_text:
         return None
     return str(Path(root_text).expanduser().resolve())

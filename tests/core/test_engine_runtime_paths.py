@@ -22,9 +22,8 @@ def test_engine_runtime_paths_requires_runs_root(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("scheduler:\n  max_active_simulations: 4\n", encoding="utf-8")
 
-    for engine in (None, "orca"):
-        with pytest.raises(ValueError, match="Missing runs_root"):
-            engine_runtime.engine_runtime_paths(str(config_path), engine=engine)
+    with pytest.raises(ValueError, match="Missing runs_root"):
+        engine_runtime.engine_runtime_paths(str(config_path))
 
 
 def test_engine_runtime_paths_rejects_invalid_runs_root_before_resolving(
@@ -34,11 +33,11 @@ def test_engine_runtime_paths_rejects_invalid_runs_root_before_resolving(
 
     config_path.write_text("runs_root: './runs'\n", encoding="utf-8")
     with pytest.raises(ValueError, match="absolute Linux path"):
-        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
+        engine_runtime.engine_runtime_paths(str(config_path))
 
     config_path.write_text("runs_root: '/mnt/c/runs'\n", encoding="utf-8")
     with pytest.raises(ValueError, match="Linux path"):
-        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
+        engine_runtime.engine_runtime_paths(str(config_path))
 
 
 @pytest.mark.parametrize(
@@ -67,20 +66,7 @@ def test_engine_runtime_paths_validates_complete_shared_config(
     config_path.write_text(payload, encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        engine_runtime.engine_runtime_paths(str(config_path), engine="orca")
-
-
-def test_engine_runtime_paths_orca_uses_the_runs_root(tmp_path: Path) -> None:
-    runs_root = tmp_path / "runs"
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
-
-    expected = {
-        "allowed_root": runs_root.resolve(),
-        "admission_root": runs_root.resolve() / ".admission",
-    }
-    for engine in ("orca",):
-        assert engine_runtime.engine_runtime_paths(str(config_path), engine=engine) == expected
+        engine_runtime.engine_runtime_paths(str(config_path))
 
 
 def test_engine_runtime_paths_uses_scheduler_admission_root(tmp_path: Path) -> None:
@@ -100,10 +86,9 @@ def test_engine_runtime_paths_uses_scheduler_admission_root(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    for engine in (None, "orca"):
-        paths = engine_runtime.engine_runtime_paths(str(config_path), engine=engine)
-        assert paths["allowed_root"] == runs_root.resolve()
-        assert paths["admission_root"] == admission_root.resolve()
+    paths = engine_runtime.engine_runtime_paths(str(config_path))
+    assert paths["allowed_root"] == runs_root.resolve()
+    assert paths["admission_root"] == admission_root.resolve()
 
 
 def test_engine_runtime_paths_rejects_engine_scoped_scheduler_override(
@@ -128,6 +113,5 @@ def test_engine_runtime_paths_rejects_engine_scoped_scheduler_override(
         encoding="utf-8",
     )
 
-    for engine in (None, "orca"):
-        with pytest.raises(ValueError, match="Unknown orca config fields are not supported"):
-            engine_runtime.engine_runtime_paths(str(config_path), engine=engine)
+    with pytest.raises(ValueError, match="Unknown orca config fields are not supported"):
+        engine_runtime.engine_runtime_paths(str(config_path))

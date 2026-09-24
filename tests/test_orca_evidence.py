@@ -21,9 +21,9 @@ _FREQUENCIES = "VIBRATIONAL FREQUENCIES\n0: -410.20 cm**-1\n1: 100.00 cm**-1\n"
 
 @pytest.fixture(autouse=True)
 def _empty_evidence_cache() -> Iterator[None]:
-    evidence._parsed_output_cached.cache_clear()
+    evidence._parsed_output_cache.cache_clear()
     yield
-    evidence._parsed_output_cached.cache_clear()
+    evidence._parsed_output_cache.cache_clear()
 
 
 def _record_output_reads(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int]]:
@@ -179,3 +179,55 @@ def test_opt_report_and_si_share_absent_frequency_result(
     assert compose_job_report_html(tmp_path, state)
     assert evidence.collect_structure_evidence(tmp_path, state)
     assert len(reads) == 1
+
+
+def test_final_out_name_follows_the_final_out_path_rule(tmp_path: Path) -> None:
+    earlier = tmp_path / "attempt_1.out"
+    earlier.write_text("earlier attempt\n", encoding="utf-8")
+    final = tmp_path / "attempt_2.out"
+    attempts = [{"index": 1, "out_path": str(earlier)}, {"index": 2, "out_path": str(final)}]
+
+    # A recorded final output missing on disk names nothing, never the
+    # earlier attempt the report collectors used to fall back to.
+    state = {"final_result": {"last_out_path": str(final)}, "attempts": attempts}
+    assert evidence.final_out_name(state) == ""
+    final.write_text("final attempt\n", encoding="utf-8")
+    assert evidence.final_out_name(state) == "attempt_2.out"
+    assert evidence.final_out_name({"attempts": attempts[:1]}) == "attempt_1.out"
+    assert evidence.final_out_name({}) == ""
+
+
+def _line_count(text: str) -> int:
+    return len(text.splitlines())
+
+
+def _upper_text(text: str) -> str:
+    return text.upper()
+
+
+def test_derived_output_facts_share_the_decoded_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "final.out"
+    out.write_text(_ENERGY + _FREQUENCIES, encoding="utf-8")
+    reads = _record_output_reads(monkeypatch)
+
+    # Asked for first on a cold key: derived and base facts come from one read.
+    count = evidence.parsed_output_facts(out, _line_count)
+    assert count == 4
+    assert evidence.parsed_final_output(out)[0].energy_hartree == -1.0
+    assert evidence.parsed_output_facts(out, _line_count) is count
+    assert len(reads) == 1
+
+    # A parser first asked for on an already-cached snapshot decodes once more
+    # and is remembered from then on.
+    upper = evidence.parsed_output_facts(out, _upper_text)
+    assert upper == (_ENERGY + _FREQUENCIES).upper()
+    assert evidence.parsed_output_facts(out, _upper_text) is upper
+    assert len(reads) == 2
+
+    # The memo follows the file identity like the base facts do.
+    out.write_text(_ENERGY.replace("-1.0", "-10.0") + _FREQUENCIES, encoding="utf-8")
+    assert evidence.parsed_output_facts(out, _line_count) == 4
+    assert evidence.parsed_final_output(out)[0].energy_hartree == -10.0
+    assert len(reads) == 3

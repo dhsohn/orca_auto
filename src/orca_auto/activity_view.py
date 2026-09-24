@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.admission import AdmissionStoreCorruptError, read_active_slot_count
-from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.engine_runtime import engine_runtime_paths
 from orca_auto.core.statuses import (
     STATUS_CANCEL_REQUESTED,
@@ -38,24 +38,14 @@ def normalize_activity_filter_values(values: Sequence[str] | None) -> tuple[str,
 def filter_activity_items(
     items: Sequence[dict[str, Any]],
     *,
-    engines: Sequence[str] | None = None,
     statuses: Sequence[str] | None = None,
-    kinds: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
-    engine_filter = set(normalize_activity_filter_values(engines))
     status_filter = set(normalize_activity_filter_values(statuses))
-    kind_filter = set(normalize_activity_filter_values(kinds))
 
     filtered: list[dict[str, Any]] = []
     for item in items:
-        engine = normalize_text(item.get("engine")).lower()
         status = normalize_text(item.get("status")).lower()
-        kind = normalize_text(item.get("kind")).lower()
-        if engine_filter and engine not in engine_filter:
-            continue
         if status_filter and status not in status_filter:
-            continue
-        if kind_filter and kind not in kind_filter:
             continue
         filtered.append(dict(item))
     return filtered
@@ -108,7 +98,7 @@ def count_global_active_simulations(
     config_text = normalize_text(config_path)
     if config_text:
         try:
-            runtime_paths = engine_runtime_paths(config_text, engine="orca")
+            runtime_paths = engine_runtime_paths(config_text)
         except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
             LOGGER.debug(
                 "active_simulation_runtime_paths_failed: config_path=%s error=%s",

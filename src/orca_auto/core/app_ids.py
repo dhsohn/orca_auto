@@ -10,10 +10,5 @@ ORCA_AUTO_ORCA_APP_NAME = get_engine_catalog_entry("orca").app_id
 ORCA_AUTO_ORCA_SOURCE = get_engine_catalog_entry("orca").source_id
 
 ORCA_AUTO_ORCA_SUBMITTER = ORCA_AUTO_ORCA_APP_NAME
-ORCA_SUBMITTERS = frozenset({ORCA_AUTO_ORCA_SUBMITTER})
 
 ORCA_AUTO_CONFIG_ENV_VAR = "ORCA_AUTO_CONFIG"
-
-
-def is_orca_submitter(value: object | None) -> bool:
-    return str(value or "").strip() in ORCA_SUBMITTERS

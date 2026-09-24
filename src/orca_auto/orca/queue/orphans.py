@@ -9,8 +9,7 @@ from typing import Any
 
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
-from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.core.utils.persistence import now_utc_iso
+from orca_auto.core.queue.types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 from orca_auto.core.utils.process_tracking import read_pid_file, run_lock_is_held
 
 from ..job_locations._generation import payload_matches_queue_generation
@@ -24,9 +23,8 @@ from .entries import (
     queue_entry_status,
 )
 from .terminal_replay import (
-    TERMINAL_REPLAY_METADATA_KEY,
-    terminal_replay_marker_for_entry,
     terminal_replay_marker_from_entry,
+    terminal_replay_metadata_update_fn,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,31 +42,40 @@ def apply_terminal_reconciliation(
     finished_at: str | None,
     error: str | None = None,
 ) -> QueueEntry:
+    """Orphan variant of the terminal row: the state file, not a worker, decides.
+
+    The row itself comes from ``store.terminal_entry``; only the evidence
+    mapping is orphan-specific: the state's ``run_id`` and ``completed_at``
+    are authoritative when present, a COMPLETED row drops any stale error, and
+    the other statuses keep the recorded error unless the state names one.
+    """
+    target = QueueStatus(status)
     metadata = dict(entry.metadata)
     if run_id is not None:
         metadata["run_id"] = run_id
     if error is not None:
-        updated_error = error
-    elif status == QueueStatus.COMPLETED.value:
+        updated_error: str | None = error
+    elif target == QueueStatus.COMPLETED:
         updated_error = ""
     else:
-        updated_error = entry.error
-    updated = replace(
+        updated_error = None
+    updated = _queue_store.terminal_entry(
         entry,
-        status=QueueStatus(status),
-        finished_at=finished_at or entry.finished_at or now_utc_iso(),
+        status=target,
         error=updated_error,
+        finished_at=finished_at or entry.finished_at or None,
         metadata=metadata,
     )
     if terminal_replay_marker_from_entry(updated) is not None:
         return updated
-    metadata = dict(updated.metadata)
-    metadata[TERMINAL_REPLAY_METADATA_KEY] = terminal_replay_marker_for_entry(
-        updated,
-        status=status,
+    marker_update = terminal_replay_metadata_update_fn(
+        status=target,
         error=error if error is not None else updated.error,
-    )
-    return replace(updated, metadata=metadata)
+        allow_terminal_candidate=True,
+    )(updated)
+    if not marker_update:
+        return updated
+    return replace(updated, metadata={**updated.metadata, **marker_update})
 
 
 @dataclass(frozen=True)
@@ -107,13 +114,8 @@ def _prior_terminal_generation_evidence(
 ) -> dict[tuple[str, str], _PriorTerminalGenerationEvidence]:
     run_ids_by_key: dict[tuple[str, str], set[str]] = {}
     unidentified_keys: set[tuple[str, str]] = set()
-    terminal_statuses = {
-        QueueStatus.COMPLETED,
-        QueueStatus.FAILED,
-        QueueStatus.CANCELLED,
-    }
     for entry in entries:
-        if entry.status not in terminal_statuses:
+        if entry.status not in TERMINAL_QUEUE_STATUSES:
             continue
         key = _entry_generation_key(entry)
         if key is None:
@@ -248,15 +250,13 @@ def _reconcile_entry(
         # would never be re-run, and no path transitions a PENDING+cancel_requested
         # entry to a terminal state. Honor the cancellation instead, mirroring
         # store.requeue_running_entry's cancel chokepoint, and clear the flag so the
-        # terminal entry stops advertising a pending cancellation.
-        updated = replace(
-            apply_terminal_reconciliation(
-                entry,
-                status=QueueStatus.CANCELLED.value,
-                run_id=None,
-                finished_at=None,
-            ),
-            cancel_requested=False,
+        # terminal entry stops advertising a pending cancellation (the
+        # CANCELLED row constructor clears it).
+        updated = apply_terminal_reconciliation(
+            entry,
+            status=QueueStatus.CANCELLED.value,
+            run_id=None,
+            finished_at=None,
         )
         logger.info("Reconciled orphaned entry %s -> cancelled (cancel_requested)", queue_id)
         return updated
