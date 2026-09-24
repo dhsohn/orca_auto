@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
+from ..evidence import parsed_optimization_progress
+from ..orca_opt_progress import OptProgress
 from ..statuses import AnalyzerStatus
 from .render import metric_card
 
@@ -127,6 +129,20 @@ def latest_attempt_with_content(
         if fallback is None:
             fallback = parsed
     return fallback
+
+
+def has_opt_steps(progress: OptProgress) -> bool:
+    return bool(progress.steps)
+
+
+def latest_optimization_progress(attempts: Sequence[Mapping[str, Any]]) -> OptProgress | None:
+    """Latest attempt's optimization trace that has cycles (see :func:`latest_attempt_with_content`).
+
+    Shared by the Opt, IRC and NEB-TS reports: an execution that died before
+    its first cycle parses to an empty trace and must not mask an earlier
+    attempt's convergence data.
+    """
+    return latest_attempt_with_content(attempts, parsed_optimization_progress, has_opt_steps)
 
 
 def parse_iso(value: Any) -> datetime | None:

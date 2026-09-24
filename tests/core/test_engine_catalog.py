@@ -11,7 +11,7 @@ import pytest
 
 from orca_auto import cli as unified_cli
 from orca_auto.activity import _cancel as activity_cancel
-from orca_auto.core.engine_catalog import (
+from orca_auto.orca.engine_catalog import (
     engine_catalog,
     find_engine_catalog_entry,
     get_engine_catalog_entry,
@@ -35,9 +35,13 @@ def _subparser(
 def test_engine_catalog_is_import_safe() -> None:
     script = """
 import sys
-from orca_auto.core.engine_catalog import engine_catalog
+from orca_auto.orca.engine_catalog import engine_catalog
 assert tuple(entry.engine_id for entry in engine_catalog()) == ("orca",)
-assert not any(name.startswith(('orca_auto.flow', 'orca_auto.orca')) for name in sys.modules)
+allowed = {'orca_auto.orca', 'orca_auto.orca.engine_catalog'}
+assert not any(
+    name.startswith(('orca_auto.flow', 'orca_auto.orca')) and name not in allowed
+    for name in sys.modules
+)
 """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2] / "src")
@@ -88,10 +92,10 @@ def test_catalog_holds_exactly_the_orca_identity() -> None:
 
 def test_catalog_lookup_normalizes_and_rejects_unknown_engines() -> None:
     assert find_engine_catalog_entry(" ORCA ") is engine_catalog()[0]
-    assert find_engine_catalog_entry("xtb") is None
+    assert find_engine_catalog_entry("other") is None
     assert get_engine_catalog_entry("orca") is engine_catalog()[0]
-    with pytest.raises(ValueError, match=r"unsupported engine: xtb \(supported: orca\)"):
-        get_engine_catalog_entry("xtb")
+    with pytest.raises(ValueError, match=r"unsupported engine: other \(supported: orca\)"):
+        get_engine_catalog_entry("other")
     with pytest.raises(ValueError, match="unsupported engine: <blank>"):
         get_engine_catalog_entry(None)
 

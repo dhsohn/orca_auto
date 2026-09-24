@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..input_blocks import OrcaFileReference
+from ..input_references import OrcaFileReference
 
 
 @dataclass(frozen=True)

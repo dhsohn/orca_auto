@@ -12,7 +12,6 @@ from typing import Any
 from ..evidence import (
     final_out_name,
     parsed_frequency_analysis,
-    parsed_optimization_progress,
     parsed_output_facts,
 )
 from ..frequencies import (
@@ -20,8 +19,7 @@ from ..frequencies import (
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_blocks import file_route_lines
-from ..orca_opt_progress import OptProgress
+from ..input_syntax import file_route_lines
 from ..parser import KCAL_PER_HARTREE
 from ..parser.extractors import parse_optimization_cycles
 from .attempts import (
@@ -32,6 +30,7 @@ from .attempts import (
     attempts_table_html,
     duration_text,
     latest_attempt_with_content,
+    latest_optimization_progress,
     parse_attempt_output,
     terminal_actions_html,
     with_details,
@@ -42,6 +41,7 @@ from .frequencies import (
 from .path import (
     NebPathPoint,
     PathPoint,
+    attempt_detail_text,
     iter_phase_table_rows,
     parse_path_summary,
     path_marker_index,
@@ -164,10 +164,6 @@ def _neb_ts_steps(out_path: Path) -> tuple[tuple[int, float], ...]:
     return parse_neb_output(out_path).ts_steps
 
 
-def _has_opt_steps(progress: OptProgress) -> bool:
-    return bool(progress.steps)
-
-
 def collect_neb_report_data(
     reaction_dir: Path,
     state: Mapping[str, Any],
@@ -184,7 +180,7 @@ def collect_neb_report_data(
     parsed_attempts = [parse_attempt_output(attempt, parse_neb_output) for attempt in attempts]
     rows = with_details(
         attempt_report_rows(attempts, "initial NEB-TS"),
-        [_attempt_detail(parsed) for parsed in parsed_attempts],
+        [_neb_attempt_detail(parsed) for parsed in parsed_attempts],
     )
 
     # Prefer the latest attempt whose output actually contains NEB data (or
@@ -194,7 +190,7 @@ def collect_neb_report_data(
         latest_attempt_with_content(attempts, parse_neb_output, _neb_parse_has_content)
         or _EMPTY_NEB_OUTPUT
     )
-    progress = latest_attempt_with_content(attempts, parsed_optimization_progress, _has_opt_steps)
+    progress = latest_optimization_progress(attempts)
     ts_steps = latest_attempt_with_content(attempts, _neb_ts_steps, bool) or ()
     formula = method = basis_set = ""
     final_energy = _ts_path_energy(parsed.path_points)
@@ -256,17 +252,14 @@ _EMPTY_NEB_OUTPUT = NebParsedOutput(
 )
 
 
-def _attempt_detail(parsed: NebParsedOutput | None) -> str:
+def _neb_attempt_detail(parsed: NebParsedOutput | None) -> str:
     if parsed is None:
         return ""
-    parts = []
-    if parsed.path_points:
-        parts.append(f"{len(parsed.path_points)} path pts")
-    if parsed.iterations:
-        parts.append(f"{parsed.iterations[-1].iteration} NEB iter")
-    if parsed.ts_steps:
-        parts.append(f"{len(parsed.ts_steps)} TS cycles")
-    return ", ".join(parts)
+    return attempt_detail_text(
+        parsed.path_points,
+        f"{parsed.iterations[-1].iteration} NEB iter" if parsed.iterations else "",
+        f"{len(parsed.ts_steps)} TS cycles" if parsed.ts_steps else "",
+    )
 
 
 def _parse_ts_refinement_steps(text: str) -> tuple[tuple[int, float], ...]:
@@ -396,7 +389,9 @@ def _path_x_ticks(points: Sequence[NebPathPoint]) -> tuple[float, ...]:
     return tuple(float(tick) for tick in ticks)
 
 
-def _path_chart_svg(data: NebReportData) -> str:
+# NEB-specific chart highlights (climbing image + optimized TS) and metric
+# cards; the IRC report has its own versions in irc.py.
+def _neb_path_chart_svg(data: NebReportData) -> str:
     points = data.path_points
     return path_profile_chart_svg(
         points,
@@ -459,7 +454,7 @@ def neb_report_meta_html(data: NebReportData) -> str:
     )
 
 
-def _metric_cards(
+def _neb_metric_cards(
     data: NebReportData,
     *,
     include_attempts: bool = True,
@@ -521,10 +516,10 @@ def _metric_cards(
 
 
 def _path_profile_html(data: NebReportData) -> str:
-    chart = _path_chart_svg(data) or (
+    chart = _neb_path_chart_svg(data) or (
         '<p class="muted">No NEB path-summary points were parsed from the attempt outputs.</p>'
     )
-    table = path_table_html(data.path_points, _PATH_TABLE_COLUMNS)
+    table = path_table_html(data.path_points, _NEB_PATH_TABLE_COLUMNS)
     notes = []
     if data.possible_intermediates:
         notes.append(
@@ -537,7 +532,7 @@ def _path_profile_html(data: NebReportData) -> str:
     return chart + table + note_html
 
 
-_PATH_TABLE_COLUMNS: tuple[tuple[str, Callable[[PathPoint], str]], ...] = (
+_NEB_PATH_TABLE_COLUMNS: tuple[tuple[str, Callable[[PathPoint], str]], ...] = (
     ("Image", lambda point: html.escape(point.label)),
     ("dE kcal/mol", lambda point: f"{point.relative_kcal:.2f}"),
     ("E(Eh)", lambda point: f"{point.energy_hartree:.6f}"),
@@ -606,7 +601,7 @@ def neb_report_component(
         )
 
     return ReportComponent(
-        metrics_html=_metric_cards(
+        metrics_html=_neb_metric_cards(
             data,
             include_attempts=include_attempt_metric,
             include_frequency=include_frequency_metric,

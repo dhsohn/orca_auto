@@ -6,15 +6,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..input_blocks import (
-    OrcaFileReference,
-    ensure_route_keywords,
-    geometry_header_match,
-    quote_orca_path,
-    set_moinp,
-    unquoted_orca_path,
-    validate_unambiguous_orca_directives,
-)
+from ..input_blocks import geometry_header_match
+from ..input_references import OrcaFileReference, set_moinp
+from ..input_syntax import ensure_route_keywords, quote_orca_path, unquoted_orca_path
+from ..input_validation import validate_unambiguous_orca_directives
 from ._confinement import _confined_reference_path, _write_private_input
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 from ._models import _MaterializedSnapshotInputs, _SelectedSnapshotInput

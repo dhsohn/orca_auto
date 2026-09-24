@@ -6,21 +6,30 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
     EngineScratchError,
     EngineScratchWorkspace,
+    durable_publication_journal_status,
+    inspect_scratch_root,
     is_transient_scratch_file,
+    remove_scratch_workspace,
 )
+from orca_auto.core.engine_scratch import _constants as constants_mod
+from orca_auto.core.engine_scratch import _fs as fs_mod
+from orca_auto.core.engine_scratch import _manifest as manifest_mod
+from orca_auto.core.engine_scratch import _policy as policy_mod
+from orca_auto.core.engine_scratch import _publication as publication_mod
+from orca_auto.core.engine_scratch import _workspace as workspace_mod
+from orca_auto.core.utils import process as process_utils
 from orca_auto.orca.scratch import OrcaScratchPolicy
 
 
 def _policy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> OrcaScratchPolicy:
     shm = tmp_path / "shm"
     shm.mkdir()
-    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
-    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: 2**63)
+    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", lambda: 2**63)
     return OrcaScratchPolicy(
         root=shm / "orca_auto",
         min_free_bytes=1,
@@ -113,7 +122,7 @@ def test_scratch_can_pin_immutable_input_separately_from_publication_directory(
     snapshots.mkdir(parents=True)
     manifest_snapshot = snapshots / "manifest.json"
     manifest_snapshot.write_text('{"job_type":"opt"}\n', encoding="utf-8")
-    mutable_manifest = durable / "xtb_job.yaml"
+    mutable_manifest = durable / "job.yaml"
     mutable_manifest.write_text("job_type: opt\n", encoding="utf-8")
 
     workspace = EngineScratchWorkspace.create(
@@ -122,12 +131,12 @@ def test_scratch_can_pin_immutable_input_separately_from_publication_directory(
         durable_output_dir=durable,
     )
     mutable_manifest.unlink()
-    (workspace.path / "xtbopt.xyz").write_text("1\nresult\nH 0 0 0\n", encoding="utf-8")
+    (workspace.path / "result.xyz").write_text("1\nresult\nH 0 0 0\n", encoding="utf-8")
 
     publication = workspace.publish()
 
-    assert [path.name for path in publication.paths] == ["xtbopt.xyz"]
-    assert (durable / "xtbopt.xyz").is_file()
+    assert [path.name for path in publication.paths] == ["result.xyz"]
+    assert (durable / "result.xyz").is_file()
     assert manifest_snapshot.is_file()
     workspace.cleanup()
 
@@ -207,7 +216,7 @@ def test_scratch_capacity_guard_removes_unowned_new_workspace(
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
     monkeypatch.setattr(
-        scratch_mod,
+        workspace_mod,
         "_filesystem_free_bytes",
         lambda _descriptor: 0,
     )
@@ -224,7 +233,7 @@ def test_scratch_memory_headroom_guard_removes_unowned_new_workspace(
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
     monkeypatch.setattr(
-        scratch_mod,
+        workspace_mod,
         "_linux_available_memory_bytes",
         lambda: 1,
     )
@@ -241,7 +250,7 @@ def test_scratch_reserve_lost_while_staging_is_a_capacity_refusal_without_leftov
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
     readings = iter([2**40, 0])
-    monkeypatch.setattr(scratch_mod, "_filesystem_free_bytes", lambda _descriptor: next(readings))
+    monkeypatch.setattr(workspace_mod, "_filesystem_free_bytes", lambda _descriptor: next(readings))
 
     with pytest.raises(EngineScratchCapacityError, match="while staging"):
         EngineScratchWorkspace.create(policy, selected)
@@ -255,12 +264,12 @@ def test_scratch_capacity_refusal_that_leaves_a_workspace_needs_inspection(
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
     readings = iter([2**40, 0])
-    monkeypatch.setattr(scratch_mod, "_filesystem_free_bytes", lambda _descriptor: next(readings))
+    monkeypatch.setattr(workspace_mod, "_filesystem_free_bytes", lambda _descriptor: next(readings))
 
     def refuse_removal(*_args: object) -> None:
         raise OSError("busy")
 
-    monkeypatch.setattr(scratch_mod, "_remove_owned_workspace", refuse_removal)
+    monkeypatch.setattr(workspace_mod, "_remove_owned_workspace", refuse_removal)
 
     with pytest.raises(EngineScratchError, match="could not be removed") as raised:
         EngineScratchWorkspace.create(policy, selected)
@@ -283,7 +292,7 @@ def test_scratch_root_lock_timeout_is_a_capacity_refusal(
         raise FileLockTimeoutError("Timed out acquiring lock")
         yield
 
-    monkeypatch.setattr(scratch_mod, "file_lock_at", contended)
+    monkeypatch.setattr(workspace_mod, "file_lock_at", contended)
 
     with pytest.raises(EngineScratchCapacityError, match="stayed busy"):
         EngineScratchWorkspace.create(policy, selected)
@@ -300,7 +309,7 @@ def test_unreadable_available_memory_is_not_a_capacity_refusal(
     def unreadable() -> int:
         raise EngineScratchError("Cannot determine available host memory for engine scratch")
 
-    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", unreadable)
+    monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", unreadable)
 
     with pytest.raises(EngineScratchError) as raised:
         EngineScratchWorkspace.create(policy, selected)
@@ -343,11 +352,11 @@ def test_stale_workspace_is_preserved_and_blocks_new_attempt(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     selected = _durable_input(tmp_path)
     stale = root / "attempt-stale"
     stale.mkdir()
-    (stale / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
+    (stale / constants_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
         json.dumps(
             {
                 "schema_version": 2,
@@ -371,13 +380,13 @@ def test_unrelated_stale_workspace_is_preserved_and_blocks_new_attempt(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     selected = _durable_input(tmp_path)
     unrelated_durable = tmp_path / "unrelated-durable"
     unrelated_durable.mkdir()
     stale = root / "attempt-unrelated-stale"
     stale.mkdir()
-    manifest = stale / scratch_mod.SCRATCH_MANIFEST_FILE_NAME
+    manifest = stale / constants_mod.SCRATCH_MANIFEST_FILE_NAME
     manifest.write_text(
         json.dumps(
             {
@@ -408,12 +417,12 @@ def test_unrelated_stale_workspace_is_preserved_and_blocks_new_attempt(
 def test_alive_owner_with_unreadable_start_ticks_is_preserved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(scratch_mod.process_utils, "linux_boot_id", lambda **_kwargs: "boot")
-    monkeypatch.setattr(scratch_mod.process_utils, "is_process_alive", lambda _pid: True)
-    monkeypatch.setattr(scratch_mod.process_utils, "process_start_ticks", lambda _pid: None)
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda **_kwargs: "boot")
+    monkeypatch.setattr(process_utils, "is_process_alive", lambda _pid: True)
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid: None)
 
     assert (
-        scratch_mod._manifest_owner_state(
+        manifest_mod._manifest_owner_state(
             {
                 "owner_pid": os.getpid(),
                 "owner_process_start_ticks": 123,
@@ -429,14 +438,14 @@ def test_unverifiable_owner_blocks_new_attempt_instead_of_being_counted(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     selected = _durable_input(tmp_path)
-    monkeypatch.setattr(scratch_mod.process_utils, "linux_boot_id", lambda **_kwargs: "boot")
-    monkeypatch.setattr(scratch_mod.process_utils, "is_process_alive", lambda _pid: True)
-    monkeypatch.setattr(scratch_mod.process_utils, "process_start_ticks", lambda _pid: None)
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda **_kwargs: "boot")
+    monkeypatch.setattr(process_utils, "is_process_alive", lambda _pid: True)
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid: None)
     unverifiable = root / "attempt-unverifiable"
     unverifiable.mkdir()
-    (unverifiable / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
+    (unverifiable / constants_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
         json.dumps(
             {
                 "schema_version": 2,
@@ -462,10 +471,10 @@ def test_invalid_workspace_manifest_is_preserved_and_blocks_new_attempt(
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     unresolved = root / "attempt-unresolved"
     unresolved.mkdir()
-    (unresolved / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text("not json\n")
+    (unresolved / constants_mod.SCRATCH_MANIFEST_FILE_NAME).write_text("not json\n")
 
     with pytest.raises(EngineScratchError, match="without valid ownership"):
         EngineScratchWorkspace.create(policy, selected)
@@ -479,7 +488,7 @@ def test_orphaned_durable_publication_entry_is_preserved_and_blocks_launch(
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
-    orphan = selected.parent / f"{scratch_mod._PUBLICATION_BACKUP_PREFIX}orphan"
+    orphan = selected.parent / f"{constants_mod._PUBLICATION_BACKUP_PREFIX}orphan"
     orphan.write_bytes(b"unknown prior artifact")
 
     with pytest.raises(EngineScratchError, match="unresolved scratch publication entry"):
@@ -496,7 +505,7 @@ def test_journal_names_cannot_escape_generation(
     selected = _durable_input(tmp_path)
     victim = tmp_path / "victim"
     victim.write_text("keep\n", encoding="utf-8")
-    (selected.parent / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text(
+    (selected.parent / constants_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text(
         json.dumps(
             {
                 "schema_version": 1,
@@ -528,14 +537,14 @@ def test_prepared_journal_never_deletes_unverified_target(
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
     original = selected.read_bytes()
-    (selected.parent / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text(
+    (selected.parent / constants_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text(
         json.dumps(
             {
                 "schema_version": 1,
                 "phase": "prepared",
                 "items": [
                     {
-                        "temporary_name": f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'0' * 32}.tmp",
+                        "temporary_name": f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'0' * 32}.tmp",
                         "target_name": selected.name,
                         "backup_name": None,
                         "sha256": "0" * 64,
@@ -566,9 +575,9 @@ def test_concurrent_scratch_attempts_share_the_root(
     assert len(_scratch_attempts(policy.root)) == 2
     for workspace in (first, second):
         manifest = json.loads(
-            (workspace.path / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).read_text(encoding="utf-8")
+            (workspace.path / constants_mod.SCRATCH_MANIFEST_FILE_NAME).read_text(encoding="utf-8")
         )
-        assert manifest["schema_version"] == scratch_mod._WORKSPACE_MANIFEST_SCHEMA_VERSION
+        assert manifest["schema_version"] == constants_mod._WORKSPACE_MANIFEST_SCHEMA_VERSION
         assert manifest["max_task_memory_bytes"] == policy.max_task_memory_bytes
 
     first.publish()
@@ -585,13 +594,13 @@ def test_live_workspace_task_memory_caps_count_toward_headroom_guard(
 ) -> None:
     shm = tmp_path / "shm"
     shm.mkdir()
-    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
-    monkeypatch.setattr(scratch_mod, "_filesystem_free_bytes", lambda _descriptor: 100)
+    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(workspace_mod, "_filesystem_free_bytes", lambda _descriptor: 100)
     policy = OrcaScratchPolicy(root=shm / "orca_auto", min_free_bytes=1, max_task_memory_bytes=10)
     selected = _durable_input(tmp_path)
     # One workspace needs 10 + 100 + 1; a second one additionally carries the
     # live workspace's full cap: 10 + 10 + 100 + 1.
-    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: 115)
+    monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", lambda: 115)
     first = EngineScratchWorkspace.create(policy, selected)
 
     with pytest.raises(EngineScratchError, match="live_task_memory_limits=10"):
@@ -610,11 +619,11 @@ def test_workspace_manifest_without_task_memory_cap_blocks_new_attempt(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     selected = _durable_input(tmp_path)
     legacy = root / "attempt-legacy"
     legacy.mkdir()
-    (legacy / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
+    (legacy / constants_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(
         json.dumps(
             {
                 "schema_version": 1,
@@ -639,7 +648,7 @@ def test_input_capture_is_not_rebound_between_preflight_and_staging(
     policy = _policy(monkeypatch, tmp_path)
     selected = _durable_input(tmp_path)
     original = selected.read_bytes()
-    original_size = scratch_mod._input_closure_size_bytes
+    original_size = workspace_mod._input_closure_size_bytes
 
     def replace_after_capture(selected_name, captured_inputs, **kwargs):
         size = original_size(selected_name, captured_inputs, **kwargs)
@@ -647,7 +656,7 @@ def test_input_capture_is_not_rebound_between_preflight_and_staging(
         return size
 
     monkeypatch.setattr(
-        scratch_mod,
+        workspace_mod,
         "_input_closure_size_bytes",
         replace_after_capture,
     )
@@ -691,7 +700,7 @@ def test_generation_path_swap_during_publication_rolls_back_original_set(
     workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "sp.out").write_text("new output\n", encoding="utf-8")
 
-    original_identity_check = scratch_mod._require_directory_path_identity
+    original_identity_check = fs_mod._require_directory_path_identity
     calls = 0
 
     def swap_before_commit_check(*args, **kwargs) -> None:
@@ -705,7 +714,12 @@ def test_generation_path_swap_during_publication_rolls_back_original_set(
         original_identity_check(*args, **kwargs)
 
     monkeypatch.setattr(
-        scratch_mod,
+        workspace_mod,
+        "_require_directory_path_identity",
+        swap_before_commit_check,
+    )
+    monkeypatch.setattr(
+        publication_mod,
         "_require_directory_path_identity",
         swap_before_commit_check,
     )
@@ -731,14 +745,14 @@ def test_multi_file_publication_failure_restores_previous_set(
     (workspace.path / "sp.gbw").write_bytes(b"new checkpoint")
     (workspace.path / "sp.out").write_bytes(b"new output")
 
-    original_replace = scratch_mod.os.replace
+    original_replace = os.replace
 
     def fail_second_artifact(source, target, *args, **kwargs):
-        if str(source).startswith(scratch_mod._PUBLICATION_TEMP_PREFIX) and target == "sp.out":
+        if str(source).startswith(constants_mod._PUBLICATION_TEMP_PREFIX) and target == "sp.out":
             raise OSError("injected second artifact failure")
         return original_replace(source, target, *args, **kwargs)
 
-    monkeypatch.setattr(scratch_mod.os, "replace", fail_second_artifact)
+    monkeypatch.setattr(os, "replace", fail_second_artifact)
 
     with pytest.raises(OSError, match="second artifact"):
         workspace.publish()
@@ -758,17 +772,17 @@ def test_committed_publication_cleanup_is_retried_without_invalidating_result(
     workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "sp.out").write_bytes(b"new output")
 
-    original_unlink = scratch_mod._unlink_at_if_present
+    original_unlink = publication_mod._unlink_at_if_present
     failed = False
 
     def fail_cleanup_once(directory_fd: int, name: str) -> None:
         nonlocal failed
-        if not failed and name.startswith(scratch_mod._PUBLICATION_BACKUP_PREFIX):
+        if not failed and name.startswith(constants_mod._PUBLICATION_BACKUP_PREFIX):
             failed = True
             raise OSError("injected cleanup failure")
         original_unlink(directory_fd, name)
 
-    monkeypatch.setattr(scratch_mod, "_unlink_at_if_present", fail_cleanup_once)
+    monkeypatch.setattr(publication_mod, "_unlink_at_if_present", fail_cleanup_once)
 
     publication = workspace.publish()
 
@@ -786,7 +800,7 @@ def test_committed_journal_outcome_unknown_is_recovered_as_success(
     workspace = EngineScratchWorkspace.create(policy, selected)
     (workspace.path / "sp.out").write_bytes(b"new output")
 
-    original_write = scratch_mod._atomic_write_json_at
+    original_write = publication_mod._atomic_write_json_at
     injected = False
 
     def raise_after_committed_write(directory_fd: int, name: str, payload: dict) -> None:
@@ -796,7 +810,7 @@ def test_committed_journal_outcome_unknown_is_recovered_as_success(
             injected = True
             raise OSError("injected post-commit fsync outcome")
 
-    monkeypatch.setattr(scratch_mod, "_atomic_write_json_at", raise_after_committed_write)
+    monkeypatch.setattr(publication_mod, "_atomic_write_json_at", raise_after_committed_write)
 
     publication = workspace.publish()
 
@@ -866,8 +880,8 @@ def _manifest_payload(durable_dir: Path, **overrides: object) -> dict[str, objec
     payload: dict[str, object] = {
         "schema_version": 2,
         "owner_pid": os.getpid(),
-        "owner_process_start_ticks": scratch_mod.process_utils.current_process_start_ticks(),
-        "owner_boot_id": scratch_mod.process_utils.linux_boot_id(proc_root=Path("/proc")),
+        "owner_process_start_ticks": process_utils.current_process_start_ticks(),
+        "owner_boot_id": process_utils.linux_boot_id(proc_root=Path("/proc")),
         "durable_dir": str(durable_dir.resolve()),
         "max_task_memory_bytes": 1,
     }
@@ -879,7 +893,7 @@ def _write_workspace(root: Path, name: str, manifest: dict[str, object] | str) -
     workspace = root / name
     workspace.mkdir()
     text = manifest if isinstance(manifest, str) else json.dumps(manifest, sort_keys=True) + "\n"
-    (workspace / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(text, encoding="utf-8")
+    (workspace / constants_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(text, encoding="utf-8")
     return workspace
 
 
@@ -889,15 +903,15 @@ _UNVERIFIABLE_PID = 2**22 - 7
 def _patch_unverifiable_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make one sentinel pid look alive with unreadable start ticks; leave others real."""
 
-    real_alive = scratch_mod.process_utils.is_process_alive
-    real_ticks = scratch_mod.process_utils.process_start_ticks
+    real_alive = process_utils.is_process_alive
+    real_ticks = process_utils.process_start_ticks
     monkeypatch.setattr(
-        scratch_mod.process_utils,
+        process_utils,
         "is_process_alive",
         lambda pid: True if pid == _UNVERIFIABLE_PID else real_alive(pid),
     )
     monkeypatch.setattr(
-        scratch_mod.process_utils,
+        process_utils,
         "process_start_ticks",
         lambda pid, **kwargs: None if pid == _UNVERIFIABLE_PID else real_ticks(pid, **kwargs),
     )
@@ -908,14 +922,14 @@ def test_inspect_scratch_root_classifies_every_workspace_state(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     selected = _durable_input(tmp_path)
     durable = selected.parent
     _patch_unverifiable_pid(monkeypatch)
     live = _write_workspace(root, "attempt-live", _manifest_payload(durable))
     (live / "sp.out").write_bytes(b"x" * 3000)
-    (live / scratch_mod.SCRATCH_RUNTIME_HOME_DIR_NAME).mkdir()
-    (live / scratch_mod.SCRATCH_RUNTIME_HOME_DIR_NAME / "nested.bin").write_bytes(b"y" * 1000)
+    (live / constants_mod.SCRATCH_RUNTIME_HOME_DIR_NAME).mkdir()
+    (live / constants_mod.SCRATCH_RUNTIME_HOME_DIR_NAME / "nested.bin").write_bytes(b"y" * 1000)
     _write_workspace(
         root,
         "attempt-stale",
@@ -931,7 +945,7 @@ def test_inspect_scratch_root_classifies_every_workspace_state(
     tombstone = root / (".orca_auto_cleanup." + "b" * 32)
     tombstone.mkdir()
 
-    reports = scratch_mod.inspect_scratch_root(policy.root)
+    reports = inspect_scratch_root(policy.root)
 
     by_name = {report.name: report for report in reports}
     assert set(by_name) == {
@@ -941,19 +955,19 @@ def test_inspect_scratch_root_classifies_every_workspace_state(
         "attempt-unverifiable",
         tombstone.name,
     }
-    assert by_name["attempt-live"].state == scratch_mod.SCRATCH_STATE_LIVE
+    assert by_name["attempt-live"].state == constants_mod.SCRATCH_STATE_LIVE
     assert by_name["attempt-live"].blocks_launch is False
     assert by_name["attempt-live"].detail is None
     assert by_name["attempt-live"].owner_pid == os.getpid()
     assert by_name["attempt-live"].durable_dir == str(durable.resolve())
     assert by_name["attempt-live"].max_task_memory_bytes == 1
-    manifest_size = (live / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).stat().st_size
+    manifest_size = (live / constants_mod.SCRATCH_MANIFEST_FILE_NAME).stat().st_size
     assert by_name["attempt-live"].size_bytes == 4000 + manifest_size
     assert by_name["attempt-live"].size_walk_truncated is False
     assert by_name["attempt-live"].publication_journal is None
 
     stale = by_name["attempt-stale"]
-    assert stale.state == scratch_mod.SCRATCH_STATE_STALE
+    assert stale.state == constants_mod.SCRATCH_STATE_STALE
     assert stale.blocks_launch is True
     assert stale.manifest_valid is True
     assert stale.owner_pid == 999999
@@ -961,17 +975,17 @@ def test_inspect_scratch_root_classifies_every_workspace_state(
     assert stale.detail is not None and "stale workspace" in stale.detail
 
     invalid = by_name["attempt-invalid"]
-    assert invalid.state == scratch_mod.SCRATCH_STATE_INVALID_MANIFEST
+    assert invalid.state == constants_mod.SCRATCH_STATE_INVALID_MANIFEST
     assert invalid.manifest_valid is False
     assert invalid.owner_pid is None
     assert invalid.detail is not None and "without valid ownership" in invalid.detail
 
     unverifiable = by_name["attempt-unverifiable"]
-    assert unverifiable.state == scratch_mod.SCRATCH_STATE_UNVERIFIABLE
+    assert unverifiable.state == constants_mod.SCRATCH_STATE_UNVERIFIABLE
     assert unverifiable.blocks_launch is True
     assert unverifiable.detail is not None and "owner cannot be verified" in unverifiable.detail
 
-    assert by_name[tombstone.name].state == scratch_mod.SCRATCH_STATE_TOMBSTONE
+    assert by_name[tombstone.name].state == constants_mod.SCRATCH_STATE_TOMBSTONE
     assert by_name[tombstone.name].blocks_launch is False
 
     # The sweep raises with exactly the detail the report carries.
@@ -985,25 +999,25 @@ def test_inspect_scratch_root_handles_missing_root_and_unsafe_entries(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    assert scratch_mod.inspect_scratch_root(policy.root) == []
+    assert inspect_scratch_root(policy.root) == []
 
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     (root / "attempt-file").write_bytes(b"not a directory")
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     (root / "attempt-link").symlink_to(elsewhere)
 
-    reports = scratch_mod.inspect_scratch_root(policy.root)
+    reports = inspect_scratch_root(policy.root)
 
     assert {report.name: report.state for report in reports} == {
-        "attempt-file": scratch_mod.SCRATCH_STATE_UNSAFE,
-        "attempt-link": scratch_mod.SCRATCH_STATE_UNSAFE,
+        "attempt-file": constants_mod.SCRATCH_STATE_UNSAFE,
+        "attempt-link": constants_mod.SCRATCH_STATE_UNSAFE,
     }
     assert all(report.blocks_launch for report in reports)
     with pytest.raises(EngineScratchError, match="name is unsafe"):
-        scratch_mod.remove_scratch_workspace(policy.root, "attempt-link/../attempt-link")
+        remove_scratch_workspace(policy.root, "attempt-link/../attempt-link")
     with pytest.raises(EngineScratchError, match="refusing to remove unsafe"):
-        scratch_mod.remove_scratch_workspace(policy.root, "attempt-link")
+        remove_scratch_workspace(policy.root, "attempt-link")
     assert (root / "attempt-link").is_symlink()
     assert elsewhere.is_dir()
 
@@ -1013,19 +1027,19 @@ def test_inspect_scratch_root_bounds_the_size_walk(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     durable = _durable_input(tmp_path).parent
     workspace = _write_workspace(root, "attempt-big", _manifest_payload(durable))
     for index in range(10):
         (workspace / f"chunk-{index}.bin").write_bytes(b"z" * 100)
 
-    [report] = scratch_mod.inspect_scratch_root(policy.root, max_size_entries=4)
+    [report] = inspect_scratch_root(policy.root, max_size_entries=4)
 
     assert report.size_walk_truncated is True
     assert (
         0
         < report.size_bytes
-        < 1000 + (workspace / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).stat().st_size
+        < 1000 + (workspace / constants_mod.SCRATCH_MANIFEST_FILE_NAME).stat().st_size
     )
 
 
@@ -1034,7 +1048,7 @@ def test_remove_scratch_workspace_refuses_live_and_unblocks_after_stale_removal(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     selected = _durable_input(tmp_path)
     live = _write_workspace(root, "attempt-live", _manifest_payload(selected.parent))
     stale = _write_workspace(
@@ -1047,16 +1061,16 @@ def test_remove_scratch_workspace_refuses_live_and_unblocks_after_stale_removal(
     with pytest.raises(EngineScratchError, match="stale workspace"):
         EngineScratchWorkspace.create(policy, selected)
     with pytest.raises(EngineScratchError, match="refusing to remove live"):
-        scratch_mod.remove_scratch_workspace(policy.root, "attempt-live")
+        remove_scratch_workspace(policy.root, "attempt-live")
     with pytest.raises(ValueError, match="live"):
-        scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale", allow_states=("live",))
+        remove_scratch_workspace(policy.root, "attempt-stale", allow_states=("live",))
     with pytest.raises(EngineScratchError, match="does not exist"):
-        scratch_mod.remove_scratch_workspace(policy.root, "attempt-missing")
+        remove_scratch_workspace(policy.root, "attempt-missing")
     assert live.is_dir() and stale.is_dir()
 
-    removal = scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale")
+    removal = remove_scratch_workspace(policy.root, "attempt-stale", durable_root=tmp_path)
 
-    assert removal.report.state == scratch_mod.SCRATCH_STATE_STALE
+    assert removal.report.state == constants_mod.SCRATCH_STATE_STALE
     assert removal.removed_durable_entries == ()
     assert removal.publication_journal_removed is False
     assert not stale.exists()
@@ -1073,22 +1087,22 @@ def test_remove_scratch_workspace_clears_only_unjournaled_publication_temps(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     durable = _durable_input(tmp_path).parent
     _write_workspace(
         root,
         "attempt-stale",
         _manifest_payload(durable, owner_pid=999999, owner_boot_id="old-boot"),
     )
-    stray = durable / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'a' * 32}.tmp"
+    stray = durable / f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'a' * 32}.tmp"
     stray.write_bytes(b"half-copied")
-    journaled = durable / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'b' * 32}.tmp"
+    journaled = durable / f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'b' * 32}.tmp"
     journaled.write_bytes(b"journaled")
     other_dir = tmp_path / "other-generation"
     other_dir.mkdir()
-    unrelated = other_dir / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'c' * 32}.tmp"
+    unrelated = other_dir / f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'c' * 32}.tmp"
     unrelated.write_bytes(b"other generation")
-    journal = durable / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME
+    journal = durable / constants_mod._PUBLICATION_JOURNAL_FILE_NAME
     journal.write_text(
         json.dumps(
             {
@@ -1107,17 +1121,17 @@ def test_remove_scratch_workspace_clears_only_unjournaled_publication_temps(
         ),
         encoding="utf-8",
     )
-    status = scratch_mod.durable_publication_journal_status(durable)
+    status = durable_publication_journal_status(durable)
     assert status is not None and (status.phase, status.item_count, status.corrupt) == (
         "prepared",
         1,
         False,
     )
-    [report] = scratch_mod.inspect_scratch_root(policy.root)
+    [report] = inspect_scratch_root(policy.root)
     assert report.publication_journal is not None
     assert report.publication_journal.phase == "prepared"
 
-    removal = scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale")
+    removal = remove_scratch_workspace(policy.root, "attempt-stale", durable_root=tmp_path)
 
     assert removal.removed_durable_entries == (stray.name,)
     assert removal.publication_journal_removed is False
@@ -1133,7 +1147,7 @@ def test_remove_scratch_workspace_drops_a_finished_committed_journal(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     durable = _durable_input(tmp_path).parent
     (durable / "sp.out").write_bytes(b"committed")
     _write_workspace(
@@ -1141,7 +1155,7 @@ def test_remove_scratch_workspace_drops_a_finished_committed_journal(
         "attempt-stale",
         _manifest_payload(durable, owner_pid=999999, owner_boot_id="old-boot"),
     )
-    journal = durable / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME
+    journal = durable / constants_mod._PUBLICATION_JOURNAL_FILE_NAME
     journal.write_text(
         json.dumps(
             {
@@ -1149,7 +1163,7 @@ def test_remove_scratch_workspace_drops_a_finished_committed_journal(
                 "phase": "committed",
                 "items": [
                     {
-                        "temporary_name": f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'d' * 32}.tmp",
+                        "temporary_name": f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'d' * 32}.tmp",
                         "target_name": "sp.out",
                         "backup_name": None,
                         "sha256": "0" * 64,
@@ -1161,7 +1175,7 @@ def test_remove_scratch_workspace_drops_a_finished_committed_journal(
         encoding="utf-8",
     )
 
-    removal = scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale")
+    removal = remove_scratch_workspace(policy.root, "attempt-stale", durable_root=tmp_path)
 
     assert removal.publication_journal_removed is True
     assert not journal.exists()
@@ -1173,7 +1187,7 @@ def test_remove_scratch_workspace_leaves_durable_files_of_a_live_peer(
     tmp_path: Path,
 ) -> None:
     policy = _policy(monkeypatch, tmp_path)
-    root = scratch_mod._prepare_scratch_root(policy)
+    root = policy_mod._prepare_scratch_root(policy)
     durable = _durable_input(tmp_path).parent
     _write_workspace(root, "attempt-live", _manifest_payload(durable))
     _write_workspace(
@@ -1181,10 +1195,10 @@ def test_remove_scratch_workspace_leaves_durable_files_of_a_live_peer(
         "attempt-stale",
         _manifest_payload(durable, owner_pid=999999, owner_boot_id="old-boot"),
     )
-    stray = durable / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'e' * 32}.tmp"
+    stray = durable / f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'e' * 32}.tmp"
     stray.write_bytes(b"in flight")
 
-    removal = scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale")
+    removal = remove_scratch_workspace(policy.root, "attempt-stale", durable_root=tmp_path)
 
     assert removal.removed_durable_entries == ()
     assert removal.durable_note is not None and "live workspace" in removal.durable_note
@@ -1196,13 +1210,78 @@ def test_durable_publication_journal_status_reports_corrupt_and_absent(
 ) -> None:
     durable = tmp_path / "durable"
     durable.mkdir()
-    assert scratch_mod.durable_publication_journal_status(durable) is None
-    assert scratch_mod.durable_publication_journal_status(tmp_path / "missing") is None
+    assert durable_publication_journal_status(durable) is None
+    assert durable_publication_journal_status(tmp_path / "missing") is None
 
-    (durable / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text("{broken", encoding="utf-8")
-    status = scratch_mod.durable_publication_journal_status(durable)
+    (durable / constants_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text("{broken", encoding="utf-8")
+    status = durable_publication_journal_status(durable)
 
     assert status is not None
     assert status.corrupt is True
     assert status.phase is None
     assert status.detail is not None and "corrupt" in status.detail
+
+
+def test_remove_scratch_workspace_never_cleans_a_durable_dir_named_by_an_invalid_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A corrupt manifest must not steer the durable clean-up to another directory."""
+
+    policy = _policy(monkeypatch, tmp_path)
+    root = policy_mod._prepare_scratch_root(policy)
+    foreign = tmp_path / "foreign-generation"
+    foreign.mkdir()
+    victim = foreign / f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'d' * 32}.tmp"
+    victim.write_bytes(b"belongs to another run")
+    payload = _manifest_payload(foreign, owner_pid=999999, owner_boot_id="old-boot")
+    payload["schema_version"] = 999  # invalid manifest, still names a durable_dir
+    _write_workspace(root, "attempt-bad", payload)
+
+    [report] = inspect_scratch_root(policy.root)
+    assert report.state == constants_mod.SCRATCH_STATE_INVALID_MANIFEST
+    assert report.durable_dir == str(foreign.resolve())
+
+    removal = remove_scratch_workspace(policy.root, "attempt-bad", durable_root=tmp_path)
+
+    assert not (root / "attempt-bad").exists()
+    assert removal.removed_durable_entries == ()
+    assert removal.publication_journal_removed is False
+    assert removal.durable_note is not None and "invalid" in removal.durable_note
+    assert victim.read_bytes() == b"belongs to another run"
+
+
+def test_remove_scratch_workspace_leaves_a_durable_dir_outside_the_runs_root_alone(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = policy_mod._prepare_scratch_root(policy)
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    stray = outside / f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'e' * 32}.tmp"
+    stray.write_bytes(b"outside the runs root")
+    _write_workspace(
+        root,
+        "attempt-stale",
+        _manifest_payload(outside, owner_pid=999999, owner_boot_id="old-boot"),
+    )
+
+    removal = remove_scratch_workspace(policy.root, "attempt-stale", durable_root=runs_root)
+
+    assert not (root / "attempt-stale").exists()
+    assert removal.removed_durable_entries == ()
+    assert removal.durable_note is not None and "outside" in removal.durable_note
+    assert stray.read_bytes() == b"outside the runs root"
+
+    # Without a runs root nothing outside the scratch root is ever touched.
+    _write_workspace(
+        root,
+        "attempt-stale2",
+        _manifest_payload(outside, owner_pid=999999, owner_boot_id="old-boot"),
+    )
+    removal = remove_scratch_workspace(policy.root, "attempt-stale2")
+    assert removal.removed_durable_entries == ()
+    assert stray.exists()

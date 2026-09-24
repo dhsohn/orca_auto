@@ -20,18 +20,18 @@ from orca_auto.core.queue.store import list_queue as list_queue_core
 from orca_auto.core.queue.store import update_metadata
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import publication_repair as publication_mod
-from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.terminal_replay import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
 )
+from tests.conftest import claim_next_entry, make_app_cfg
 from tests.queue_worker_helpers import (
     current_orca_queue_metadata as _current_orca_queue_metadata,
 )
-from tests.queue_worker_helpers import make_queue_worker_cfg as _make_cfg
 
 
 def test_orca_worker_repairs_queued_publication_before_claim(tmp_path: Path) -> None:
-    cfg = _make_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     reaction_dir = tmp_path / "rxn"
     metadata = _current_orca_queue_metadata(
         reaction_dir,
@@ -68,7 +68,7 @@ def test_orca_worker_repairs_queued_publication_before_claim(tmp_path: Path) -> 
 
 
 def test_orca_worker_keeps_failed_publication_repair_unclaimable(tmp_path: Path) -> None:
-    cfg = _make_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     reaction_dir = tmp_path / "rxn"
     entry = enqueue(
         tmp_path,
@@ -93,19 +93,19 @@ def test_orca_worker_keeps_failed_publication_repair_unclaimable(tmp_path: Path)
 
     [pending] = list_queue(tmp_path)
     assert pending.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
-    assert dequeue_next(tmp_path) is None
+    assert claim_next_entry(tmp_path) is None
 
 
 def test_orca_publication_repair_ignores_foreign_engine_row(tmp_path: Path) -> None:
-    cfg = _make_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     foreign = enqueue_core(
         tmp_path,
-        app_name="orca_auto_xtb",
-        task_id="xtb-foreign",
-        task_kind="xtb_opt",
-        engine="xtb",
+        app_name="orca_auto_other",
+        task_id="other-foreign",
+        task_kind="other_opt",
+        engine="other",
         metadata={
-            "job_dir": str(tmp_path / "xtb-job"),
+            "job_dir": str(tmp_path / "other-job"),
             **queue_record_sync_metadata(
                 QUEUE_RECORD_SYNC_REPAIR_PENDING,
                 token="foreign-token",
@@ -123,7 +123,7 @@ def test_orca_publication_repair_ignores_foreign_engine_row(tmp_path: Path) -> N
 
 
 def test_orca_publication_repair_reclaims_abandoned_live_pid_lease(tmp_path: Path) -> None:
-    cfg = _make_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     reaction_dir = tmp_path / "rxn"
     entry = enqueue(
         tmp_path,
@@ -152,7 +152,7 @@ def test_orca_publication_repair_rejects_invalid_marker_after_lock_reload(
     tmp_path: Path,
     changed_state: str,
 ) -> None:
-    cfg = _make_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     reaction_dir = tmp_path / "rxn"
     entry = enqueue(
         tmp_path,
@@ -185,7 +185,7 @@ def test_orca_publication_repair_rejects_invalid_marker_after_lock_reload(
 
 
 def test_orca_publication_repair_ignores_malformed_terminal_history(tmp_path: Path) -> None:
-    cfg = _make_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     terminal = QueueEntry(
         queue_id="terminal-history",
         app_name="orca_auto_orca",
@@ -206,7 +206,7 @@ def test_orca_publication_repair_ignores_malformed_terminal_history(tmp_path: Pa
 
 
 def test_orca_publication_repair_validates_every_selected_input_path(tmp_path: Path) -> None:
-    cfg = _make_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     reaction_dir = tmp_path / "rxn"
     entry = enqueue(
         tmp_path,
@@ -235,7 +235,7 @@ def test_orca_publication_repair_validates_every_selected_input_path(tmp_path: P
 def test_orca_publication_repair_fences_crash_row_with_reserved_reaction_dir(
     tmp_path: Path,
 ) -> None:
-    cfg = _make_cfg(str(tmp_path))
+    cfg = make_app_cfg(str(tmp_path))
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
     original_status = reaction_dir.stat()
@@ -277,4 +277,4 @@ def test_orca_publication_repair_fences_crash_row_with_reserved_reaction_dir(
     assert fenced.metadata[TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True
     assert fenced.metadata.get("orca_terminal_replay") is None
     assert fenced.error == "queue_publication_job_dir_invalid:reaction_dir_reserved_or_unsafe"
-    assert dequeue_next(tmp_path) is None
+    assert claim_next_entry(tmp_path) is None

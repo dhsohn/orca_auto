@@ -32,9 +32,9 @@ graph TD
 
 | Component | Responsibility |
 | :--- | :--- |
-| **`cli*.py`, `activity/`** | Command parsing, terminal formatting, queue querying, service status, and job cancellation interfaces |
-| **`orca/`** | ORCA input (`.inp`) parsing, resource extraction, execution workspace setup, output log analysis, convergence verification, and result reporting (`machine.json`) |
-| **`core/`** | Disk queue store, concurrency admission slots, process supervision, systemd integration, and filesystem locks |
+| **`cli*.py`, `activity/`, `terminal.py`** | Command parsing, terminal formatting and ANSI styling (`terminal.py`), the activity record model (`activity/model.py`), queue querying, service status, and job cancellation interfaces |
+| **`orca/`** | Everything ORCA-specific: the engine catalog and runtime roots, scratch configuration, input (`.inp`) parsing, resource extraction, execution workspace setup, the queue worker, output log analysis, convergence verification, run status and snapshot-supersession rules (`run_status.py`), and result reporting (`machine.json`) |
+| **`core/`** | Generic infrastructure only: disk queue store, admission slots, process-group supervision and the worker pid file (`queue/worker/pid_file.py`), confined file I/O (`confined_io.py`), the configuration loader, the indexing store, systemd integration, and filesystem locks |
 
 > **ORCA_auto 7.0 Structure**: Workflows, conformer scaffolds, and xTB/CREST engines (`flow/`) were retired in 7.0. The engine catalog contains only standalone `orca`, significantly simplifying the runtime architecture.
 
@@ -61,25 +61,26 @@ graph TD
 
 ### Worker ownership and child execution
 
-`OrcaQueueWorker` owns ORCA cancellation, shutdown, recovery and its replay state.
-Its common base owns process supervision, admission and the PID-file lifecycle.
-The worker composes its typed dependencies once; tests can substitute process
-creation and sleep directly. The parent entry point is
-`python -m orca_auto.orca.commands.queue --config …`; the child is
-`python -m orca_auto.orca.commands.worker_child --config … --queue-root …
---queue-id … [--admission-token …]`. The parent constructs `EngineQueueRuntime`
-directly from the concrete ORCA configuration and queue-entry types, including
-the keyword-only `expected_entry` comparison when claiming a selected generation.
+`OrcaQueueWorker` (`orca/queue/worker.py`) is the only queue worker. It owns the
+PID-file and singleton-lock lifecycle, admission (a slot is reserved before the
+row is claimed by id, with the previewed row as `expected_entry`), child start
+and attach, terminal finalization, cancellation, shutdown and orphan
+reconciliation. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
+(reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
+and knows a job only as a process-backed record. Tests substitute
+`_start_background_process` and `sleep_fn`; there is no injected dependency
+bag. The parent entry point is `python -m orca_auto.orca.commands.queue
+--config …`; the child is `python -m orca_auto.orca.commands.worker_child
+--config … --queue-root … --queue-id … [--admission-token …]`.
 
 Cancellation observations reuse unchanged queue snapshots. Terminal notification
 dispatch has a durable claim and bounded background sends; notification delivery
 is best effort and does not retain execution admission slots.
 
-The worker CLI loads config, checks the PID file, then constructs and runs the
-ORCA worker directly. `EngineQueueRuntime` owns root selection, queue lookup and
-admission preview; it has no child-start or terminal policy callbacks.
-`OrcaQueueWorker` in `queue/worker.py` owns admission-slot attach, terminal
-marking, cancellation, shutdown and orphan reconciliation as methods;
+The worker CLI loads config, checks the PID file (`read_worker_pid` in
+`orca/queue/orphans.py`), then constructs and runs the ORCA worker directly.
+`orca/queue/roots.py` owns root selection, listing and the fenced by-id claim;
+rows are never claimed by head-of-queue position.
 `queue/replay.py` is only the replay engine (work items, strict finish, the
 reconcile pipeline and generation owners) and takes its state explicitly, and
 `queue/run_state_replay.py` synthesizes terminal `job_state.json` under
@@ -99,7 +100,7 @@ empty lifecycle callbacks.
 
 ## 4. Operational Architecture
 
-- **SQLite Activity Projection**: High-performance querying is provided by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The projection keys location rows by job id; `job_locations.json` itself is rebuildable from the run states on disk with `index rebuild`, and `--refresh` persists unindexed runs through the same rebuild.
+- **SQLite Activity Projection**: High-performance querying is provided by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The projection keys location rows by job id; `job_locations.json` itself is rebuildable from the run states on disk with `index rebuild`, and `--refresh` persists unindexed runs through the same rebuild. The run-status and snapshot-supersession rules the listing applies live in `orca/run_status.py`, not in the CLI layer.
 - **Scratch Operator Surface**: `orca_auto scratch list` and `scratch clear` inspect and remove non-live RAM-scratch workspaces; one stale, unverifiable or invalid-manifest workspace otherwise blocks every later scratch launch (fail-closed).
 - **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation to eliminate risks associated with running directly out of mutable development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
 - **Historical Data Protection**: Retired workflow directories from previous versions are protected as read-only to ensure historical calculations are preserved without risk of accidental overwrite.

@@ -8,14 +8,14 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engine_process import require_confined_regular_file
+from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.queue.engine.input_snapshot import (
     MAX_INPUT_SNAPSHOT_BYTES,
     read_stable_regular_file,
 )
 
 from ..inp_rewriter import resume_checkpoint_input_path
-from ..input_blocks import checkpoint_file_looks_intact
+from ..input_references import checkpoint_file_looks_intact
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 from ._inputs import _inline_geometry_atom_signature, _strict_xyz_atom_row, _xyz_atom_lines
 from ._snapshot_identity import (

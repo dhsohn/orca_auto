@@ -72,7 +72,13 @@ def _record_from_dict(raw: dict[str, Any]) -> JobLocationRecord:
     )
 
 
-def _load_records(root: Path) -> list[JobLocationRecord]:
+def load_job_locations(root: Path) -> list[JobLocationRecord]:
+    """Read the index rows without taking the index lock.
+
+    Callers that need the rows and the file's identity to agree hold
+    ``JOB_LOCATION_INDEX_LOCK_NAME`` around this call; ``list_job_locations`` is
+    the self-locking reader.
+    """
     raw = load_json_list_file(
         _index_path(root),
         corrupt_error=JobLocationIndexCorruptError,
@@ -166,7 +172,7 @@ def prune_job_locations(root: str | Path, *, apply: bool) -> JobLocationPruneRes
     """
     resolved_root = resolve_root_path(root)
     with file_lock(_lock_path(resolved_root)):
-        records = _load_records(resolved_root)
+        records = load_job_locations(resolved_root)
         kept: list[JobLocationRecord] = []
         pruned: list[JobLocationRecord] = []
         for record in records:
@@ -185,7 +191,7 @@ def prune_job_locations(root: str | Path, *, apply: bool) -> JobLocationPruneRes
 def list_job_locations(root: str | Path) -> list[JobLocationRecord]:
     resolved_root = resolve_root_path(root)
     with file_lock(_lock_path(resolved_root)):
-        return _load_records(resolved_root)
+        return load_job_locations(resolved_root)
 
 
 def get_job_location(root: str | Path, job_id: str) -> JobLocationRecord | None:
@@ -194,7 +200,7 @@ def get_job_location(root: str | Path, job_id: str) -> JobLocationRecord | None:
         return None
     resolved_root = resolve_root_path(root)
     with file_lock(_lock_path(resolved_root)):
-        for record in _load_records(resolved_root):
+        for record in load_job_locations(resolved_root):
             if record.job_id == target:
                 return record
     return None
@@ -243,7 +249,7 @@ def _merge_locked(
     exactly as they were.
     """
     with file_lock(_lock_path(resolved_root)):
-        merged = _load_records(resolved_root)
+        merged = load_job_locations(resolved_root)
         slots: dict[str, int] = {}
         for index, existing in enumerate(merged):
             slots.setdefault(existing.job_id, index)
@@ -348,7 +354,7 @@ def resolve_job_location(root: str | Path, lookup_target: str) -> JobLocationRec
     candidate_path = _resolve_candidate_path(target)
 
     with file_lock(_lock_path(resolved_root)):
-        records = _load_records(resolved_root)
+        records = load_job_locations(resolved_root)
 
     for record in records:
         if record.job_id == target:

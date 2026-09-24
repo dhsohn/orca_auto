@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orca_auto.core.machine_observation import machine_code
+from orca_auto.orca.machine_observation import machine_code
 
 
 def test_machine_code_caps_long_dynamic_reasons_without_losing_identity() -> None:

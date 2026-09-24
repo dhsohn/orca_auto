@@ -3,16 +3,18 @@
 The project intentionally keeps a single runtime dependency (PyYAML), so this
 module hand-rolls the small amount of ANSI handling the CLI needs: TTY
 detection, ``NO_COLOR``/``FORCE_COLOR``/``--no-color`` support, a couple of
-``paint`` helpers, and the ``error:`` line format every command uses on
-``stderr``. Messenger output never routes through here. It lives in ``core``
-so command adapters can use it without reaching up into the
-top-level CLI layer.
+``paint`` helpers, the ``error:`` line format every command uses on
+``stderr``, and the one ``--json`` document shape (``emit_json``) every
+command prints on ``stdout``. Messenger output never routes through here. It
+is part of the top-level CLI layer: no domain package imports it.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from collections.abc import Mapping
 from typing import IO, Any
 
 from orca_auto.core import statuses as _s
@@ -115,14 +117,38 @@ def status_text(status: object, *, stream: IO[str] | None = None) -> str:
     return paint(text, color, stream=stream) if color else text
 
 
-def emit_error(message: Any, *, hint: str | None = None) -> None:
+def emit_json(
+    payload: Mapping[str, Any] | None = None,
+    *,
+    ok: bool = True,
+    error: str | None = None,
+) -> None:
+    """Print the one ``--json`` document shape every command shares to stdout.
+
+    The document always carries ``ok`` (``True`` exactly when the command
+    exits 0) followed by the command's own keys; a failed command also
+    carries an ``error`` string. ``ok`` comes first so a truncated stream
+    still shows the verdict.
+    """
+
+    document: dict[str, Any] = {"ok": bool(ok), **(payload or {})}
+    if not ok:
+        document["error"] = error or "command failed"
+    print(json.dumps(document, ensure_ascii=True, indent=2))
+
+
+def emit_error(message: Any, *, hint: str | None = None, json_output: bool = False) -> None:
     """Print ``error: <message>`` to stderr, with an optional ``hint:`` line.
 
     Errors and their recovery hints go to ``stderr`` so they stay out of piped
-    ``stdout`` data and ``--json`` payloads; the prefix is tinted red when the
-    stream is a TTY.
+    ``stdout`` data; the prefix is tinted red when the stream is a TTY. Under
+    ``--json`` (``json_output``) the same failure is also printed on stdout as
+    the shared ``{"ok": false, "error": ...}`` document, so scripts parsing
+    stdout and humans reading stderr both see it.
     """
 
+    if json_output:
+        emit_json(ok=False, error=str(message))
     prefix = paint("error:", RED, stream=sys.stderr)
     print(f"{prefix} {message}", file=sys.stderr)
     if hint:
@@ -147,6 +173,7 @@ __all__ = [
     "YELLOW",
     "color_enabled",
     "emit_error",
+    "emit_json",
     "emit_prefixed_error",
     "label",
     "paint",

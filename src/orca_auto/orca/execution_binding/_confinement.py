@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_STATE_FILE
-from orca_auto.core.engine_process import (
+from orca_auto.core.confined_io import (
     atomic_write_confined_bytes,
     require_confined_regular_file,
 )

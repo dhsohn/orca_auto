@@ -591,7 +591,7 @@ def test_registrar_publication_failure_cleans_process_and_pending_marker(
         return True
 
     def start_job() -> SimpleNamespace:
-        # CREST/xTB prepare immediately inside start_job, just before Popen;
+        # Engine preparation happens immediately inside start_job, just before Popen;
         # the outer cancellable preparation flag therefore remains false.
         admission.build_slot_engine_process_preparer(tmp_path, token)()
         return SimpleNamespace(process=process)

@@ -129,7 +129,7 @@ def test_validated_sections_apply_schema_defaults_once() -> None:
         8,
         32,
     )
-    assert not shared.scratch.enabled
+    assert shared.engine_section == {}
     assert not shared.messenger.enabled
 
 
@@ -148,15 +148,17 @@ def test_validated_sections_return_every_configured_model(tmp_path: Path) -> Non
     )
 
     assert shared.runs_root == "/tmp/runs"
-    assert shared.orca_executable == "/opt/orca/orca"
     assert shared.scheduler == SchedulerConfig(
         max_active_simulations=6, admission_root="/tmp/pool", configured=True
     )
     assert shared.scheduler.admission_limit == 6
     assert shared.resources.max_cores_per_task == 12
     assert shared.resources.max_memory_gb_per_task == 32
-    assert shared.scratch.root == "/dev/shm/orca-scratch"
-    assert shared.scratch.min_free_gb == 2
+    # The engine section is passed through raw for ``orca_auto.orca.config``.
+    assert shared.engine_section == {
+        "runtime": {"scratch_root": "/dev/shm/orca-scratch", "scratch_min_free_gb": 2},
+        "paths": {"orca_executable": "/opt/orca/orca"},
+    }
     assert shared.messenger.enabled
 
 
@@ -167,18 +169,10 @@ def test_scheduler_section_with_only_admission_root_pins_default_limit() -> None
     assert shared.scheduler.admission_limit == 4
 
 
-@pytest.mark.parametrize("section", ["scheduler", "resources", "messenger"])
-@pytest.mark.parametrize("invalid", [None, "disabled", [], {"admission_root": "/tmp/shared"}])
-def test_engine_scoped_shared_sections_are_rejected(section: str, invalid: object) -> None:
-    # resources, messenger and scheduler are top-level only; an orca.* copy is
-    # rejected before any inheritance question can arise.
-    raw = {
-        "scheduler": {"max_active_simulations": 1, "admission_root": "/tmp/shared"},
-        "orca": {section: invalid},
-    }
-
-    with pytest.raises(ValueError, match="Unknown orca config fields are not supported"):
-        validate_shared_config_sections(raw)
+@pytest.mark.parametrize("invalid", [None, "disabled", []])
+def test_engine_section_must_be_a_mapping(invalid: object) -> None:
+    with pytest.raises(ValueError, match="orca section must be a mapping"):
+        validate_shared_config_sections({"orca": invalid})
 
 
 def test_load_shared_config_requires_the_file(tmp_path: Path) -> None:
@@ -241,14 +235,6 @@ def test_discovery_order_is_explicit_then_env_then_home(
             {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
             "Unknown top-level config fields are not supported",
         ),
-        (
-            {"orca": {"runtime": {"max_concurrent": 2}}},
-            "Unknown orca.runtime config fields are not supported",
-        ),
-        (
-            {"orca": {"paths": {"executable": "/tmp/orca"}}},
-            "Unknown orca.paths config fields are not supported",
-        ),
     ],
 )
 def test_shared_config_validation_rejects_unknown_fields(
@@ -283,19 +269,6 @@ def test_shared_config_unknown_field_error_does_not_echo_raw_key() -> None:
             "scheduler:\n  admission_root: relative/pool\n",
             "scheduler.admission_root must be an absolute Linux path",
         ),
-        (
-            "orca:\n  runtime:\n    scratch_min_free_gb: 8\n",
-            "orca.runtime.scratch_min_free_gb requires orca.runtime.scratch_root",
-        ),
-        (
-            "orca:\n  runtime:\n    scratch_root: /tmp/orca-scratch\n",
-            "orca.runtime.scratch_root must be a dedicated directory below /dev/shm",
-        ),
-        (
-            "orca:\n  runtime:\n    scratch_root: /dev/shm/orca-scratch\n"
-            "    scratch_min_free_gb: 0\n",
-            "orca.runtime.scratch_min_free_gb must be an integer >= 1",
-        ),
     ],
 )
 def test_complete_shared_loader_rejects_malformed_execution_controls(
@@ -317,7 +290,6 @@ def test_complete_shared_loader_rejects_malformed_execution_controls(
         "messenger:\n  provider: misplaced-credential\n",
         "messenger:\n  discord:\n    uploads:\n      max_archive_bytes: misplaced-credential\n",
         "scheduler:\n  admission_root: misplaced-credential\n",
-        "orca:\n  runtime:\n    scratch_root: misplaced-credential\n",
     ],
 )
 def test_shared_config_errors_do_not_echo_misplaced_credentials(

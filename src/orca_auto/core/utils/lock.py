@@ -75,9 +75,11 @@ def file_lock(
     timeout_seconds: float = 10.0,
     payload: str | None = None,
 ) -> Iterator[None]:
+    # The lock directory is owned by whoever created the root (``init``, the
+    # worker, a submission): a missing parent is that owner's error, never a
+    # reason to conjure a directory tree at a mistyped path.
     if lock_path.parent.is_symlink():
         raise ValueError(f"Lock directory must not be a symlink: {lock_path.parent}")
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
     directory_flags = os.O_RDONLY
     directory_flags |= os.O_DIRECTORY
     directory_flags |= os.O_NOFOLLOW

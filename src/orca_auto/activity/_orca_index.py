@@ -9,9 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core import activity_index as index
-from orca_auto.core import activity_invalidation as journal
-from orca_auto.core.activity import (
+from orca_auto.activity.model import (
     ACTIVE_SIMULATION_STATUSES,
     ActivityListing,
     ActivityListRequest,
@@ -19,6 +17,8 @@ from orca_auto.core.activity import (
     blocker_payload,
     sort_key,
 )
+from orca_auto.core import activity_index as index
+from orca_auto.core import activity_invalidation as journal
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.indexing import store as locations
 from orca_auto.core.queue import persistence as queue
@@ -27,6 +27,11 @@ from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca.queue import adapter
 from orca_auto.orca.run_snapshot import RunSnapshot, collect_run_snapshots
+from orca_auto.orca.run_status import (
+    STALE_SNAPSHOT_STATUSES,
+    snapshot_is_superseded,
+    superseded_snapshot_dirs,
+)
 
 from . import _orca
 
@@ -46,7 +51,7 @@ def _sync_sources(connection: sqlite3.Connection, root: Path) -> None:
     filename = locations.JOB_LOCATION_INDEX_FILE_NAME
     if index.metadata(connection, "location") != index.fingerprint(root / filename):
         with file_lock(root / locations.JOB_LOCATION_INDEX_LOCK_NAME):
-            records = locations._load_records(root)
+            records = locations.load_job_locations(root)
             index.sync_source(
                 connection, root, "location", filename, [asdict(record) for record in records]
             )
@@ -182,12 +187,12 @@ def _store_group(
         is not None
         and _orca.queue_represents_snapshot(adapter, entry, matched_snapshot)
     }
-    superseded = _orca.superseded_snapshot_dirs(adapter, entries)
+    superseded = superseded_snapshot_dirs(adapter, entries)
     for snapshot in snapshots:
         if snapshot.key in represented:
             continue
         suppressed = str(snapshot.reaction_dir.resolve()) in superseded
-        if snapshot.status in _orca._STALE_SNAPSHOT_STATUSES or suppressed:
+        if snapshot.status in STALE_SNAPSHOT_STATUSES or suppressed:
             payload = {"snapshot": _snapshot_payload(snapshot), "superseded": suppressed}
             connection.execute(
                 "INSERT OR REPLACE INTO watches VALUES ('snapshot', ?, ?)",
@@ -208,7 +213,7 @@ def _refresh_locks(connection: sqlite3.Connection, root: Path) -> None:
             )
         else:
             assert snapshot is not None
-            if payload["superseded"] and _orca._snapshot_is_superseded(
+            if payload["superseded"] and snapshot_is_superseded(
                 snapshot, {str(snapshot.reaction_dir.resolve())}
             ):
                 connection.execute(

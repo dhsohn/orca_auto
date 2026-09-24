@@ -299,12 +299,12 @@ def test_resolve_job_location_path_alias_selects_newest_generation(tmp_path: Pat
     second_generation.mkdir(parents=True)
     first_generation.mkdir()
     first = _record(
-        "xtbmd-first",
+        "md-first",
         original_run_dir=str(job_dir),
         latest_known_path=str(first_generation),
     )
     second = _record(
-        "xtbmd-second",
+        "md-second",
         original_run_dir=str(job_dir),
         latest_known_path=str(second_generation),
     )

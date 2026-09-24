@@ -14,7 +14,7 @@ from ..frequencies import (
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_blocks import file_route_lines
+from ..input_syntax import file_route_lines
 from ..parser import KCAL_PER_HARTREE
 from ..relaxed_scan import (
     ScanCoordinateSpec,

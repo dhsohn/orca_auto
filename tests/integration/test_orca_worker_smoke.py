@@ -16,10 +16,9 @@ from orca_auto.core.queue.generation import (
     immutable_generation_metadata,
     queue_entry_generation_token,
 )
-from orca_auto.core.queue.processes import worker_pid_file_path
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
 from orca_auto.orca.config import load_config
-from orca_auto.orca.engine import ENGINE_RUNTIME
 from orca_auto.orca.evidence import collect_structure_evidence
 from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress
@@ -33,6 +32,7 @@ from orca_auto.orca.state_reading import (
     load_state,
     report_json_path,
 )
+from tests.conftest import write_fake_orca
 
 
 def _write_fake_orca(
@@ -81,8 +81,7 @@ def _write_fake_orca(
         )
     lines.extend(f"print({line!r})" for line in termination_lines)
     lines.extend([f"raise SystemExit({return_code})", ""])
-    binary_path.write_text("\n".join(lines), encoding="utf-8")
-    binary_path.chmod(0o755)
+    write_fake_orca(binary_path, "\n".join(lines))
 
 
 def _write_orca_worker_config(
@@ -179,10 +178,7 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert completed.status == QueueStatus.COMPLETED
     assert counter_path.read_text(encoding="utf-8") == "1"
     assert list_slots(admission_root) == []
-    assert not worker_pid_file_path(
-        allowed_root,
-        ENGINE_RUNTIME.worker_pid_file_name,
-    ).exists()
+    assert not worker_pid_file_path(allowed_root).exists()
 
     execution_snapshot = completed.metadata["execution_snapshot"]
     bound_input = Path(execution_snapshot["selected_inp"])
@@ -544,10 +540,7 @@ def test_orca_queue_worker_rejects_incomplete_or_conflicting_termination_evidenc
     assert failed.status == QueueStatus.FAILED
     assert counter_path.read_text(encoding="utf-8") == "1"
     assert list_slots(admission_root) == []
-    assert not worker_pid_file_path(
-        allowed_root,
-        ENGINE_RUNTIME.worker_pid_file_name,
-    ).exists()
+    assert not worker_pid_file_path(allowed_root).exists()
 
     execution_snapshot = failed.metadata["execution_snapshot"]
     bound_input = Path(execution_snapshot["selected_inp"])
@@ -639,10 +632,7 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert completed.queue_id == queued.queue_id
     assert completed.status == QueueStatus.COMPLETED
     assert list_slots(admission_root) == []
-    assert not worker_pid_file_path(
-        allowed_root,
-        ENGINE_RUNTIME.worker_pid_file_name,
-    ).exists()
+    assert not worker_pid_file_path(allowed_root).exists()
 
     execution_snapshot = completed.metadata["execution_snapshot"]
     assert execution_snapshot["dependency_paths"] == [str(geometry.resolve())]

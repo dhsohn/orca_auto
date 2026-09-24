@@ -1,8 +1,10 @@
+"""Public activity catalog API: list, clear and cancel across the ORCA queue."""
+
 from __future__ import annotations
 
 from typing import Any
 
-from orca_auto.core.activity import (
+from orca_auto.activity.model import (
     ActivityCancelRequest,
     ActivityListRequest,
     ActivityRecord,

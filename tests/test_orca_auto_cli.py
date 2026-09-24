@@ -133,9 +133,9 @@ def test_build_parser_parses_unified_queue_commands() -> None:
     assert clear_args.json is True
     assert clear_args.func is cli_queue.cmd_queue_list
 
-    cancel_args = parser.parse_args(["queue", "cancel", "xtb-q-1"])
+    cancel_args = parser.parse_args(["queue", "cancel", "other-q-1"])
     assert cancel_args.queue_command == "cancel"
-    assert cancel_args.target == "xtb-q-1"
+    assert cancel_args.target == "other-q-1"
     assert cancel_args.func is cli_queue.cmd_queue_cancel
 
 
@@ -616,12 +616,12 @@ def test_main_dispatches_unified_queue_cancel(monkeypatch: pytest.MonkeyPatch) -
 
     monkeypatch.setattr(cli_queue, "cmd_queue_cancel", fake_cmd)
 
-    result = unified_cli.main(["queue", "cancel", "crest-q-1", "--json"])
+    result = unified_cli.main(["queue", "cancel", "other-q-1", "--json"])
 
     assert result == 18
     assert len(seen) == 1
     assert seen[0].queue_command == "cancel"
-    assert seen[0].target == "crest-q-1"
+    assert seen[0].target == "other-q-1"
     assert seen[0].json is True
 
 

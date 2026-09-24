@@ -1,36 +1,30 @@
+"""ORCA rows for the activity catalog: queue entries merged with run snapshots."""
+
 from __future__ import annotations
 
-import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from orca_auto.core.activity import ActivityRecord, path_aliases, timestamp_metadata, unique_texts
-from orca_auto.core.app_ids import ORCA_AUTO_ORCA_SOURCE
-from orca_auto.core.engine_runtime import engine_runtime_paths
+from orca_auto.activity.model import ActivityRecord, path_aliases, timestamp_metadata, unique_texts
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.publication import QUEUE_RECORD_SYNC_BLOCKED_KEY
-from orca_auto.core.queue.types import QueueStatus, effective_queue_status
-from orca_auto.core.statuses import (
-    ACTIVE_STATUSES,
-    STATUS_FAILED,
-    STATUS_PENDING,
-    STATUS_UNKNOWN,
-    TERMINAL_STATUSES,
-)
+from orca_auto.core.statuses import ACTIVE_STATUSES, STATUS_PENDING
 from orca_auto.core.utils import normalize_text
-from orca_auto.core.utils.process_tracking import run_lock_is_held
-from orca_auto.orca.statuses import ACTIVE_RUN_STATUS_VALUES
+from orca_auto.orca import run_snapshot
+from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE
+from orca_auto.orca.engine_runtime import engine_runtime_paths
+from orca_auto.orca.queue import adapter as queue_adapter
+from orca_auto.orca.run_snapshot import RunSnapshot
+from orca_auto.orca.run_status import (
+    queue_entry_status,
+    snapshot_display_status,
+    snapshot_is_superseded,
+    snapshot_reaction_dir,
+    superseded_snapshot_dirs,
+)
 
-if TYPE_CHECKING:
-    from orca_auto.orca.run_snapshot import RunSnapshot
-
-_LOGGER = logging.getLogger(__name__)
 _ORCA_ACTIVE_QUEUE_STATUSES = ACTIVE_STATUSES
-_ORCA_TERMINAL_QUEUE_STATUSES = TERMINAL_STATUSES
-# Snapshot run states that imply a live process; without a live run lock the run
-# was cancelled/killed/crashed and must not keep showing as in progress.
-_STALE_SNAPSHOT_STATUSES = ACTIVE_RUN_STATUS_VALUES
 
 
 def snapshot_matches_entry(
@@ -94,19 +88,6 @@ def snapshot_indexes(
     return snapshot_by_run_id, snapshot_by_dir
 
 
-def queue_entry_status(queue_adapter: Any, entry: Any, snapshot: RunSnapshot | None) -> str:
-    status = effective_queue_status(entry)
-    if status != QueueStatus.RUNNING.value:
-        return status
-    snapshot_status = normalize_text(snapshot.status) if snapshot is not None else ""
-    if snapshot_status and snapshot_status not in _STALE_SNAPSHOT_STATUSES:
-        return snapshot_status
-    reaction_dir = normalize_text(queue_adapter.queue_entry_reaction_dir(entry))
-    if reaction_dir and not run_lock_is_held(Path(reaction_dir), logger=_LOGGER):
-        return STATUS_PENDING
-    return snapshot_status or status
-
-
 def queue_record(
     queue_adapter: Any,
     entry: Any,
@@ -152,6 +133,7 @@ def queue_record(
         submitted_at=submitted_at,
         updated_at=updated_at,
         cancel_target=queue_id or run_id or reaction_dir,
+        worker_log=normalize_text(entry_metadata.get("worker_log")),
         aliases=unique_texts(
             [queue_id, task_id, run_id, *list(path_aliases(reaction_dir, root=allowed_root))]
         ),
@@ -180,28 +162,6 @@ def queue_record(
     )
 
 
-def snapshot_reaction_dir(snapshot: RunSnapshot) -> str:
-    try:
-        return str(snapshot.reaction_dir.expanduser().resolve())
-    except OSError:
-        return str(snapshot.reaction_dir)
-
-
-def _snapshot_display_status(snapshot: RunSnapshot) -> str:
-    status = normalize_text(snapshot.status).lower() or STATUS_UNKNOWN
-    if status not in _STALE_SNAPSHOT_STATUSES:
-        return status
-    reaction_dir = snapshot_reaction_dir(snapshot)
-    if not reaction_dir:
-        return status
-    # An orphan snapshot still parked at a running status with no live run lock is
-    # stale (the run was cancelled/killed/crashed); surface it as failed instead of
-    # leaving it stuck "in progress" in the activity list.
-    if not run_lock_is_held(Path(reaction_dir), logger=_LOGGER):
-        return STATUS_FAILED
-    return status
-
-
 def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path) -> ActivityRecord:
     reaction_dir = snapshot_reaction_dir(snapshot)
     run_id = normalize_text(snapshot.run_id)
@@ -216,7 +176,7 @@ def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path) -> ActivityRec
         activity_id=run_id or label,
         kind="job",
         engine="orca",
-        status=_snapshot_display_status(snapshot),
+        status=snapshot_display_status(snapshot),
         label=label,
         source=ORCA_AUTO_ORCA_SOURCE,
         submitted_at=started_at,
@@ -243,57 +203,8 @@ def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path) -> ActivityRec
     )
 
 
-def _resolved_entry_reaction_dir(queue_adapter: Any, entry: Any) -> str:
-    reaction_dir = normalize_text(queue_adapter.queue_entry_reaction_dir(entry))
-    if not reaction_dir:
-        return ""
-    try:
-        return str(Path(reaction_dir).expanduser().resolve())
-    except OSError:
-        return reaction_dir
-
-
-def superseded_snapshot_dirs(queue_adapter: Any, entries: list[Any]) -> set[str]:
-    """Reaction dirs whose only queue state is terminal.
-
-    A finished/cancelled queue entry supersedes any run snapshot still parked at
-    "running" for the same dir. Without this a cancelled job keeps showing as in
-    progress, because its stale snapshot is listed as a separate active row even
-    though the queue already recorded a terminal outcome.
-    """
-    active: set[str] = set()
-    terminal: set[str] = set()
-    for entry in entries:
-        reaction_dir = _resolved_entry_reaction_dir(queue_adapter, entry)
-        if not reaction_dir:
-            continue
-        status = normalize_text(queue_adapter.queue_entry_status(entry))
-        if status in _ORCA_ACTIVE_QUEUE_STATUSES:
-            active.add(reaction_dir)
-        elif status in _ORCA_TERMINAL_QUEUE_STATUSES:
-            terminal.add(reaction_dir)
-    return terminal - active
-
-
-def _snapshot_is_superseded(snapshot: RunSnapshot, superseded_dirs: set[str]) -> bool:
-    """Whether a stale snapshot is superseded by a terminal queue entry.
-
-    A snapshot is only superseded when its dir has a terminal-only queue outcome
-    *and* the run is no longer live. A live run lock means a genuinely running
-    re-run shares the dir with an older terminal entry; suppressing it would hide
-    an in-progress job, so defer to the live process and keep the row.
-    """
-    reaction_dir = snapshot_reaction_dir(snapshot)
-    if reaction_dir not in superseded_dirs:
-        return False
-    return not run_lock_is_held(Path(reaction_dir), logger=_LOGGER)
-
-
 def orca_records(*, config_path: str) -> list[ActivityRecord]:
     """Every ORCA activity from the canonical queue, index and state files."""
-    from orca_auto.orca import run_snapshot
-    from orca_auto.orca.queue import adapter as queue_adapter
-
     runtime_paths = engine_runtime_paths(config_path)
     allowed_root = runtime_paths["allowed_root"]
 
@@ -323,8 +234,6 @@ def materialized_records(
     allowed_root: Path,
 ) -> list[tuple[str, str, ActivityRecord]]:
     """One generation-aware merge shared by discovery and the query projection."""
-    from orca_auto.orca.queue import adapter as queue_adapter
-
     snapshot_by_run_id, snapshot_by_dir = snapshot_indexes(snapshots)
     represented_snapshot_keys: set[str] = set()
     superseded_dirs = superseded_snapshot_dirs(queue_adapter, queue_entries)
@@ -346,7 +255,7 @@ def materialized_records(
         snapshot_key = normalize_text(snapshot.key)
         if snapshot_key and snapshot_key in represented_snapshot_keys:
             continue
-        if _snapshot_is_superseded(snapshot, superseded_dirs):
+        if snapshot_is_superseded(snapshot, superseded_dirs):
             continue
         rows.append(
             (

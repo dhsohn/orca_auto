@@ -11,9 +11,9 @@ fd-pinned removal the worker uses. Live workspaces are never removed here.
 from __future__ import annotations
 
 import argparse
-import json
 from collections import Counter
 from collections.abc import Callable, Iterator
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -31,9 +31,9 @@ from orca_auto.core.engine_scratch import (
     inspect_scratch_root,
     remove_scratch_workspace,
 )
-from orca_auto.core.terminal import RED, YELLOW, emit_error, label, paint
 from orca_auto.orca.config import load_config
 from orca_auto.orca.scratch import OrcaScratchPolicy
+from orca_auto.terminal import RED, YELLOW, emit_error, emit_json, label, paint
 
 _CLEAR_HINT = (
     "Run `orca_auto scratch clear NAME` for one workspace, or "
@@ -47,8 +47,8 @@ class _ScratchCommandError(Exception):
         self.hint = hint
 
 
-def _scratch_policy_from_args(args: argparse.Namespace) -> OrcaScratchPolicy:
-    """Build the policy exactly as the worker does (``orca.execution._build_runner``)."""
+def _scratch_policy_from_args(args: argparse.Namespace) -> tuple[OrcaScratchPolicy, Path]:
+    """Build the policy exactly as the worker does and return it with the runs root."""
 
     config_path = resolve_shared_config_path(shared_config_text_from_args(args) or None)
     if not config_path:
@@ -69,13 +69,14 @@ def _scratch_policy_from_args(args: argparse.Namespace) -> OrcaScratchPolicy:
             hint="RAM scratch is disabled; there are no scratch workspaces to inspect.",
         )
     try:
-        return OrcaScratchPolicy(
+        policy = OrcaScratchPolicy(
             root=Path(cfg.scratch.root),
             min_free_bytes=int(cfg.scratch.min_free_gb) * 1024**3,
             max_task_memory_bytes=int(cfg.resources.max_memory_gb_per_task) * 1024**3,
         )
     except ValueError as exc:
         raise _ScratchCommandError(str(exc)) from exc
+    return policy, Path(cfg.runtime.allowed_root)
 
 
 def _human_bytes(size: int) -> str:
@@ -125,7 +126,7 @@ def _emit_scratch_list(
     root: Path, reports: list[ScratchWorkspaceReport], *, json_output: bool
 ) -> int:
     if json_output:
-        print(json.dumps(_list_payload(root, reports), ensure_ascii=True, indent=2))
+        emit_json(_list_payload(root, reports))
         return 0
     print(f"{label('root:')} {root}")
     print(f"{label('workspaces:')} {len(reports)}")
@@ -153,19 +154,22 @@ def _emit_scratch_list(
 
 
 def cmd_scratch_list(args: argparse.Namespace) -> int:
+    json_output = bool(getattr(args, "json", False))
     try:
-        policy = _scratch_policy_from_args(args)
+        policy, _runs_root = _scratch_policy_from_args(args)
         reports = inspect_scratch_root(policy.root)
     except _ScratchCommandError as exc:
-        emit_error(exc, hint=exc.hint)
+        emit_error(exc, hint=exc.hint, json_output=json_output)
         return 1
     except (EngineScratchError, OSError) as exc:
-        emit_error(exc, hint="The scratch root is unreadable or unsafe; inspect it by hand.")
+        emit_error(
+            exc,
+            hint="The scratch root is unreadable or unsafe; inspect it by hand.",
+            json_output=json_output,
+        )
         return 1
     try:
-        return _emit_scratch_list(
-            policy.root, reports, json_output=bool(getattr(args, "json", False))
-        )
+        return _emit_scratch_list(policy.root, reports, json_output=json_output)
     except BrokenPipeError:
         return 0
 
@@ -225,7 +229,10 @@ def _emit_scratch_clear(
     *,
     json_output: bool,
 ) -> int:
-    exit_code = 0 if removed and not refused else 1
+    # Nothing to remove is not a failure; a refused workspace is, because the
+    # operator asked for it and it still blocks scratch launches.
+    error = f"{len(refused)} workspace(s) could not be removed" if refused else None
+    exit_code = 1 if refused else 0
     if json_output:
         payload = {
             "root": str(root),
@@ -233,7 +240,9 @@ def _emit_scratch_clear(
             "removed": [item.as_payload() for item in removed],
             "refused": refused,
         }
-        print(json.dumps(payload, ensure_ascii=True, indent=2))
+        emit_json(payload, ok=not refused, error=error)
+        if error:
+            emit_error(error, hint=_CLEAR_HINT)
         return exit_code
     print(f"{label('root:')} {root}")
     print(f"{label('removed:')} {len(removed)}")
@@ -252,23 +261,30 @@ def _emit_scratch_clear(
             print(f"  - {entry['name']} {_state_text(entry['state'])} {entry['reason']}")
     if not removed and not refused:
         print("nothing to clear.")
+    if error:
+        emit_error(error, hint=_CLEAR_HINT)
     return exit_code
 
 
 def cmd_scratch_clear(args: argparse.Namespace) -> int:
     json_output = bool(getattr(args, "json", False))
     try:
-        policy = _scratch_policy_from_args(args)
+        policy, runs_root = _scratch_policy_from_args(args)
         reports = inspect_scratch_root(policy.root)
         targets, refused = _clear_targets(args, reports)
     except _ScratchCommandError as exc:
-        emit_error(exc, hint=exc.hint)
+        emit_error(exc, hint=exc.hint, json_output=json_output)
         return 1
     except (EngineScratchError, OSError) as exc:
-        emit_error(exc, hint="The scratch root is unreadable or unsafe; inspect it by hand.")
+        emit_error(
+            exc,
+            hint="The scratch root is unreadable or unsafe; inspect it by hand.",
+            json_output=json_output,
+        )
         return 1
     removed: list[ScratchWorkspaceRemoval] = []
-    for report, removal, failure in _remove_each(policy.root, targets, remove_scratch_workspace):
+    remover = partial(remove_scratch_workspace, durable_root=runs_root)
+    for report, removal, failure in _remove_each(policy.root, targets, remover):
         if removal is not None:
             removed.append(removal)
         else:

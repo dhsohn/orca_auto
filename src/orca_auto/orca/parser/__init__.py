@@ -31,13 +31,13 @@ from .extractors import (
 )
 from .io import read_orca_text as _read_orca_text
 from .patterns import (
-    _CHARGE_MULT_RE,
-    _ENTHALPY_RE,
-    _GIBBS_CORRECTION_RE,
-    _GIBBS_RE,
-    _THERMO_TEMPERATURE_RE,
-    _ZPE_RE,
+    CHARGE_MULT_RE,
+    ENTHALPY_RE,
     FINAL_SINGLE_POINT_ENERGY_RE,
+    GIBBS_CORRECTION_RE,
+    GIBBS_RE,
+    THERMO_TEMPERATURE_RE,
+    ZPE_RE,
     final_single_point_energy_value,
 )
 
@@ -142,7 +142,7 @@ def _populate_input_metadata(result: OrcaResult, text: str) -> None:
     result.input_line = " ".join(input_tokens)
     result.orca_version = _parse_program_version(text)
     result.solvation = _parse_solvation(text, input_tokens)
-    cm_match = _CHARGE_MULT_RE.search(text)
+    cm_match = CHARGE_MULT_RE.search(text)
     if cm_match:
         result.charge = int(cm_match.group(1))
         result.multiplicity = int(cm_match.group(2))
@@ -222,16 +222,16 @@ def _final_stage_text(
 def _populate_thermodynamics(result: OrcaResult, stage_text: str | None) -> None:
     if stage_text is None:
         return
-    enthalpy_match = _ENTHALPY_RE.search(stage_text)
+    enthalpy_match = ENTHALPY_RE.search(stage_text)
     if enthalpy_match:
         result.enthalpy = float(enthalpy_match.group(1))
-    gibbs_match = _GIBBS_RE.search(stage_text)
+    gibbs_match = GIBBS_RE.search(stage_text)
     if gibbs_match:
         result.gibbs_energy = float(gibbs_match.group(1))
-    zpe_match = _ZPE_RE.search(stage_text)
+    zpe_match = ZPE_RE.search(stage_text)
     if zpe_match:
         result.zpe_correction = float(zpe_match.group(1))
-    correction_match = _GIBBS_CORRECTION_RE.search(stage_text)
+    correction_match = GIBBS_CORRECTION_RE.search(stage_text)
     if correction_match:
         result.gibbs_correction = float(correction_match.group(1))
     elif result.gibbs_energy is not None and result.energy_hartree is not None:
@@ -240,6 +240,6 @@ def _populate_thermodynamics(result: OrcaResult, stage_text: str | None) -> None
         # IS G - E(el). Without this fallback an SP//opt workflow would
         # silently omit its composite G.
         result.gibbs_correction = result.gibbs_energy - result.energy_hartree
-    temperature_match = _THERMO_TEMPERATURE_RE.search(stage_text)
+    temperature_match = THERMO_TEMPERATURE_RE.search(stage_text)
     if temperature_match:
         result.thermo_temperature_k = float(temperature_match.group(1))

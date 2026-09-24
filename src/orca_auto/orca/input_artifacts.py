@@ -1,10 +1,12 @@
+"""Artifact paths derived from a job's selected ``.inp`` (its ``xyzfile`` sibling and stem)."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .input_blocks import orca_line_tokens
+from .input_syntax import orca_line_tokens
 
 
 @dataclass(frozen=True)

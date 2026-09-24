@@ -31,15 +31,17 @@ sys.path.insert(0, sys.argv[1])
 import orca_auto
 from orca_auto import cli_workers
 from orca_auto.core.admission import read_active_slot_count, reserve_slot
-from orca_auto.core.engine_catalog import engine_catalog, get_engine_catalog_entry
+from orca_auto.orca.engine_catalog import engine_catalog, get_engine_catalog_entry
 from orca_auto.orca.commands import queue as orca_queue_command
 from orca_auto.orca.commands import worker_child as orca_worker_child
-from orca_auto.orca.engine import ENGINE_RUNTIME
+from orca_auto.core.queue.worker.pid_file import WORKER_PID_FILE_NAME
+from orca_auto.orca.queue import roots as orca_queue_roots
 from orca_auto.orca.worker_execution import build_worker_child_command
 
 assert Path(orca_auto.__file__).parent == Path(sys.argv[1]) / 'orca_auto'
 assert [entry.engine_id for entry in engine_catalog()] == ['orca']
-assert ENGINE_RUNTIME.worker_pid_file_name == 'queue_worker.pid'
+assert WORKER_PID_FILE_NAME == 'queue_worker.pid'
+assert orca_queue_roots.accept_orca_entry({'queue_id': 'q', 'app_name': 'orca_auto_orca', 'task_id': 't', 'task_kind': 'orca_run_inp', 'engine': 'orca'})
 specs = cli_workers._build_worker_specs(SimpleNamespace(orca_auto_config=sys.argv[2]))
 assert [spec.app for spec in specs] == ['orca']
 assert specs[0].argv[1:3] == ('-m', orca_queue_command.QUEUE_WORKER_MODULE)

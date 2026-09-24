@@ -17,7 +17,6 @@ from orca_auto.core.admission import (
     reconcile_stale_slots,
     recover_orphaned_engine_slots,
 )
-from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue.child.process import entry_status_is_running
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker import live_queue_slot_keys_for_slots
@@ -27,12 +26,12 @@ from orca_auto.core.statuses import (
     STATUS_FAILED,
     STATUS_RUNNING,
 )
+from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from ..config import AppConfig
-from ..engine import ENGINE_RUNTIME
 from ..execution_binding import orca_execution_provenance
 from ..state_reading import load_state, state_path, state_payload_job_id
-from . import worker_tracking
+from . import roots, worker_tracking
 from .adapter import (
     get_cancel_requested,
     list_queue,
@@ -68,18 +67,15 @@ logger = logging.getLogger(__name__)
 
 
 def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
-    return ENGINE_RUNTIME.queue_roots(cfg)
+    return roots.queue_roots(cfg)
 
 
 def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
-    return ENGINE_RUNTIME.queue_entries_with_roots(
-        cfg,
-        list_queue_fn=lambda root: [
-            entry
-            for entry in list_queue(Path(root))
-            if not queue_entry_is_retired_workflow_owned(entry, root)
-        ],
-    )
+    return [
+        (root, entry)
+        for root, entry in roots.queue_entries_with_roots(cfg)
+        if not queue_entry_is_retired_workflow_owned(entry, root)
+    ]
 
 
 @dataclass(frozen=True)

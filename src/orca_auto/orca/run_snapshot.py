@@ -15,6 +15,7 @@ from orca_auto.core.paths import (
 )
 from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.persistence import load_json_mapping_file
+from orca_auto.core.utils.stable_fs import StableFsError, open_pinned_directory
 
 from .job_locations import list_job_location_records, resolve_record_job_dir
 from .state_reading import STATE_FILE_NAME, state_from_normalized_payload
@@ -66,7 +67,7 @@ def _state_file_identity(path_stat: os.stat_result) -> StateFileIdentity:
     )
 
 
-def _state_publication_identity(
+def state_publication_identity(
     payload: Mapping[str, Any],
 ) -> tuple[str, str]:
     job = payload.get("job")
@@ -83,7 +84,7 @@ def _state_publication_identity(
     return run_identity, generation_identity
 
 
-def _load_pinned_state(
+def load_pinned_state(
     directory_fd: int,
 ) -> tuple[dict[str, Any], StateFileIdentity] | None:
     flags = os.O_RDONLY | os.O_NOFOLLOW
@@ -114,22 +115,11 @@ def _open_snapshot_directory(
     *,
     expected_identity: tuple[int, int],
 ) -> int | None:
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    try:
-        directory_fd = os.open(path, flags)
-    except OSError:
-        return None
+    """Pinned no-follow handle on ``path``; ``None`` unless it still names ``expected_identity``."""
 
     try:
-        opened_stat = os.fstat(directory_fd)
-        if (opened_stat.st_dev, opened_stat.st_ino) != expected_identity:
-            raise OSError("snapshot directory identity changed")
-        pinned_path = Path("/proc/self/fd") / str(directory_fd)
-        pinned_stat = pinned_path.stat()
-        if (pinned_stat.st_dev, pinned_stat.st_ino) != expected_identity:
-            raise OSError("snapshot directory fd path identity changed")
-    except OSError:
-        os.close(directory_fd)
+        directory_fd, _identity = open_pinned_directory(path, expected_identity=expected_identity)
+    except (StableFsError, OSError):
         return None
     return directory_fd
 
@@ -289,14 +279,14 @@ def collect_run_snapshots(
                 if synchronize
                 else nullcontext()
             ):
-                loaded_state = _load_pinned_state(directory_fd)
+                loaded_state = load_pinned_state(directory_fd)
             if loaded_state is None:
                 continue
             state_payload, state_file_identity = loaded_state
             state = state_from_normalized_payload(state_payload)
             if state is None:
                 continue
-            state_run_identity, state_generation_identity = _state_publication_identity(
+            state_run_identity, state_generation_identity = state_publication_identity(
                 state_payload
             )
 

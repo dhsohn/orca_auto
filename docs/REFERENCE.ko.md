@@ -28,6 +28,7 @@ orca_auto run-dir <PATH> [--config PATH] [--force] [--priority N] [--json]
 - `--force`: 이미 완료된 성공 기록이 있더라도 새 generation을 생성하여 강제 재실행
 - `--priority N`: 큐 내 우선순위 지정 (기본값: 10, 낮을수록 먼저 실행 / 높은 우선순위)
 - `--json`: 제출 결과를 JSON 형식으로 출력
+- 설정 파일을 읽을 수 없거나(`invalid_config`) `queue.json`이 손상된 경우(`queue_store_corrupt`) `--log-file`을 지정했더라도 `error:` 한 줄과 종료 코드 1로 보고합니다.
 
 ---
 
@@ -40,6 +41,8 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 - `--limit N`: 출력할 최대 작업 개수 지정
 - `--refresh`: 인덱스에 등록되지 않은 계산 디렉터리를 파일시스템에서 스캔하여 `job_locations.json`에 기록 (`index rebuild`와 같은 재구성)
 - `--json`: 자동화 및 스크립팅을 위한 구조화된 JSON 출력
+- 각 행은 `worker_log`(`<runs_root>/logs/<queue_id>.log`)를 포함하며, 텍스트 출력에서는 running·failed 행의 로그 경로를 표 아래에 나열합니다.
+- 설정 파일을 찾지 못하거나 `runs_root`가 없으면 아무것도 만들지 않고 종료 코드 1을 반환합니다. `admission_slots.json`이 손상되면 `admission_blockers` 항목(scope `admission_store`, 큐 ID `*`)으로 보고하고 `active_simulations`는 목록 자체의 집계로 대체합니다.
 
 ---
 
@@ -57,7 +60,7 @@ orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```bash
 orca_auto queue list clear [--config PATH] [--json]
 ```
-> **참고**: 큐 목록 및 작업 루트의 terminal `job_state.json` 메타데이터(중복 방지 배리어)를 정리하여 이후 재제출 시 `--force` 없이 제출 가능하도록 합니다. 디스크 상의 generation 하위 디렉터리, 계산 산출물, 로그 파일은 일체 삭제되지 않습니다.
+> **참고**: 큐 목록 및 작업 루트의 terminal `job_state.json` 메타데이터(중복 방지 배리어)를 정리하여 이후 재제출 시 `--force` 없이 제출 가능하도록 합니다. 디스크 상의 generation 하위 디렉터리, 계산 산출물, 출력 파일은 일체 삭제되지 않습니다. 정리된 행의 워커 로그와 publication lock 파일은 제거되며, `--json`은 제거한 로그 수를 `removed_worker_logs`로 보고합니다.
 
 ---
 
@@ -84,7 +87,8 @@ orca_auto scratch clear --all-stale [--config PATH] [--json]
 - `list`: 각 워크스페이스의 상태(`live`, `stale`, `unverifiable`, `invalid-manifest`, `unsafe`, `tombstone`), 소유 PID, 크기를 출력하고 새 실행을 막는 워크스페이스 이름을 표시합니다. 차단 항목이 있어도 종료 코드는 0이며, scratch가 설정되지 않았거나 루트를 읽을 수 없으면 1을 반환합니다.
 - `clear NAME`: `scratch list`에 출력된 이름(`attempt-...`)의 워크스페이스를 제거합니다. 실행 중(live)인 워크스페이스는 거부합니다.
 - `--all-stale`: `stale`, `unverifiable`, `invalid-manifest` 상태의 워크스페이스를 모두 제거합니다. `NAME`과 `--all-stale` 중 정확히 하나를 지정해야 합니다.
-- 제거된 항목이 없거나 거부된 대상이 있으면 종료 코드 1을 반환합니다.
+- durable generation의 publication 임시 파일은 manifest가 유효하고 generation이 설정된 `runs_root` 아래에 있을 때만 정리합니다. 그 외에는 경로를 건드리지 않고 사유를 `note:`(`--json`에서는 `durable_note`)로 출력합니다.
+- 거부된 대상이 있으면 종료 코드 1을 반환합니다. `--all-stale`에서 제거할 항목이 없으면 `removed_count` 0과 함께 0을 반환합니다.
 
 ---
 
@@ -94,8 +98,8 @@ orca_auto scratch clear --all-stale [--config PATH] [--json]
 orca_auto service status [--json]
 orca_auto service restart [--force]
 ```
-- `status`: 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 0이 아닌 종료 코드를 반환합니다.
-- `restart`: 기본적으로 실행 중인 계산이 있을 때는 재시작을 거부하여 데이터 유실을 방지합니다. 즉시 재시작하려면 `--force`를 전달합니다.
+- `status`: 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 종료 코드 1(`--json`에서는 `ok: false`)을 반환합니다.
+- `restart`: 기본적으로 실행 중인 계산이 있을 때는 재시작을 거부하여 데이터 유실을 방지합니다. 즉시 재시작하려면 `--force`를 전달합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다.
 
 ---
 
@@ -135,3 +139,6 @@ water/
 ```bash
 journalctl -u "orca_auto-queue-worker@$(id -un)" -f
 ```
+- 저널에는 워커의 INFO 수명주기 줄(`Queue worker started`/`stopped`, 고아 행 정리, intent 정리)과 경고·오류가 기록됩니다. 각 자식의 INFO 줄은 자체 `worker_log` 파일(`<runs_root>/logs/<queue_id>.log`, `queue list`에 표시)로 갑니다.
+- 시작 시 정리(reconciliation)가 실패하면 `Queue worker startup failed: <reason>` 한 줄을 남기고 pid 파일을 제거한 뒤 종료 코드 1로 끝나며, 감독 프로세스가 상한까지 재시작합니다.
+- `max_concurrent` × `resources.max_cores_per_task`가 워커가 사용할 수 있는 CPU 수(`sched_getaffinity`)를 넘으면 시작 시 두 숫자를 명시한 WARNING 한 줄을 기록합니다. 시작을 거부하지 않으며 끌 수 있는 옵션도 없습니다.

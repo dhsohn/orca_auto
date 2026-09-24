@@ -7,10 +7,11 @@ import math
 import re
 from pathlib import Path
 
-from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS
+from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS
 
 from ..completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
-from ..input_blocks import find_geometry_block, orca_route_line, orca_route_tokens
+from ..input_blocks import find_geometry_block
+from ..input_syntax import orca_route_line, orca_route_tokens
 from ..job_type import FREQ_RE
 
 _NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)

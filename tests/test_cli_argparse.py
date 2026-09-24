@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from orca_auto import cli as unified_cli
+from orca_auto._version import package_version
 from orca_auto.cli_parsers import _suggestion_hint
 
 
@@ -44,3 +45,13 @@ def test_queue_list_parser_rejects_negative_limit(
     stderr = capsys.readouterr().err
     assert "error:" in stderr
     assert "--limit must be a non-negative integer" in stderr
+
+
+def test_main_version_prints_package_version(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        unified_cli.main(["--version"])
+
+    assert exc.value.code == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == f"orca_auto {package_version()}"
+    assert captured.err == ""

@@ -1,47 +1,34 @@
-import io
+from __future__ import annotations
+
 import json
-import tempfile
-import unittest
-from contextlib import redirect_stdout
-from dataclasses import replace
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from typing import Any
 
+import pytest
+
+from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.commands.run_inp import cmd_run_inp
-from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.submission import submit_reaction_dir_to_queue
+from tests.conftest import make_queue_entry
+
+DEFAULT_INP = "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
 
 
-def _make_cfg(tmp: str, *, max_cores: int = 8, max_memory_gb: int = 32) -> AppConfig:
-    root = Path(tmp)
-    fake_orca = root / "fake_orca"
-    fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
-    fake_orca.chmod(0o755)
-    cfg = AppConfig(
-        runtime=OrcaRuntimeConfig(allowed_root=tmp),
-        paths=PathsConfig(orca_executable=str(fake_orca)),
-        resources=CommonResourceConfig(
-            max_cores_per_task=max_cores,
-            max_memory_gb_per_task=max_memory_gb,
-        ),
-    )
-    return replace(cfg, runtime=replace(cfg.runtime, max_concurrent=1))
-
-
-def _write_inp(reaction_dir: Path, content: str | None = None) -> None:
+def _write_inp(reaction_dir: Path, content: str = DEFAULT_INP) -> Path:
     reaction_dir.mkdir(parents=True, exist_ok=True)
-    (reaction_dir / "rxn.inp").write_text(
-        content or "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-        encoding="utf-8",
-    )
+    inp = reaction_dir / "rxn.inp"
+    inp.write_text(content, encoding="utf-8")
+    return inp
 
 
-def _make_args(root: Path, reaction_dir: Path, **overrides) -> SimpleNamespace:
-    defaults = {
-        "config": str(root / "orca_auto.yaml"),
+def _make_args(config: Path | str, reaction_dir: Path, **overrides: Any) -> SimpleNamespace:
+    defaults: dict[str, Any] = {
+        "config": str(config),
         "reaction_dir": str(reaction_dir),
         "force": False,
         "priority": 10,
@@ -50,382 +37,330 @@ def _make_args(root: Path, reaction_dir: Path, **overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
-class TestRunInpSubmit(unittest.TestCase):
-    @patch("orca_auto.orca.commands.run_inp._emit_queued_submission")
-    @patch("orca_auto.orca.commands.run_inp.submission.submit_reaction_dir_to_queue")
-    def test_submit_always_enqueues_without_attempting_direct_execution(
-        self,
-        mock_submit_to_queue: MagicMock,
-        _mock_emit_queued: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            reaction_dir = root / "rxn"
-            _write_inp(reaction_dir)
-            mock_submit_to_queue.return_value = SimpleNamespace(
-                status="submitted",
-                reason="",
-                stderr="",
-                context=SimpleNamespace(reaction_dir=reaction_dir),
-                queued_result=SimpleNamespace(
-                    entry=object(),
-                    worker_info=SimpleNamespace(status=None, pid=None, log_file=None, detail=None),
-                ),
-            )
-
-            rc = cmd_run_inp(_make_args(root, reaction_dir))
-
-        self.assertEqual(rc, 0)
-        mock_submit_to_queue.assert_called_once()
-
-    @patch("orca_auto.orca.commands.run_inp.submission.queue_adapter.queue_entry_force")
-    @patch("orca_auto.orca.commands.run_inp.submission.queue_adapter.queue_entry_priority")
-    @patch("orca_auto.orca.commands.run_inp.submission.queue_adapter.queue_entry_task_id")
-    @patch("orca_auto.orca.commands.run_inp.submission.queue_adapter.queue_entry_id")
-    @patch("orca_auto.orca.commands.run_inp.submission.submit_reaction_dir_to_queue")
-    def test_json_submission_emits_one_parseable_document(
-        self,
-        mock_submit_to_queue: MagicMock,
-        mock_entry_id: MagicMock,
-        mock_task_id: MagicMock,
-        mock_priority: MagicMock,
-        mock_force: MagicMock,
-    ) -> None:
-        reaction_dir = Path("/tmp/orca-json-job")
-        mock_entry_id.return_value = "q-json"
-        mock_task_id.return_value = "orca-json"
-        mock_priority.return_value = 7
-        mock_force.return_value = False
-        mock_submit_to_queue.return_value = SimpleNamespace(
-            status="submitted",
-            reason="",
-            stderr="",
-            context=SimpleNamespace(reaction_dir=reaction_dir),
-            queued_result=SimpleNamespace(
-                entry=object(),
-                worker_info=SimpleNamespace(
-                    status="inactive",
-                    pid=None,
-                    log_file="/tmp/q-json.log",
-                    detail=None,
-                ),
-            ),
-        )
-        output = io.StringIO()
-
-        with redirect_stdout(output):
-            rc = cmd_run_inp(SimpleNamespace(config="/tmp/orca.yaml", priority=7, json=True))
-
-        self.assertEqual(rc, 0)
-        self.assertEqual(
-            json.loads(output.getvalue()),
-            {
-                "status": "queued",
-                "job_dir": str(reaction_dir),
-                "queue_id": "q-json",
-                "job_id": "orca-json",
-                "priority": 7,
-                "worker": "inactive",
-                "worker_log": "/tmp/q-json.log",
-            },
-        )
-
-    @patch("orca_auto.orca.submission.load_config")
-    @patch("orca_auto.orca.submission.create_queued_submission")
-    def test_submit_rejects_when_active_queue_entry_exists_for_same_reaction_dir(
-        self,
-        mock_create_queued_submission: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            mock_load_config.return_value = _make_cfg(tmp)
-            reaction_dir = root / "rxn"
-            _write_inp(reaction_dir)
-            enqueue(root, str(reaction_dir))
-
-            rc = cmd_run_inp(_make_args(root, reaction_dir))
-
-        self.assertEqual(rc, 1)
-        mock_create_queued_submission.assert_not_called()
-
-    @patch("orca_auto.orca.submission.load_config")
-    @patch("orca_auto.orca.submission.create_queued_submission")
-    def test_submit_rejects_when_same_reaction_dir_is_already_running_directly(
-        self,
-        mock_create_queued_submission: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            mock_load_config.return_value = _make_cfg(tmp)
-            reaction_dir = root / "rxn"
-            _write_inp(reaction_dir)
-            with acquire_run_lock(reaction_dir):
-                rc = cmd_run_inp(_make_args(root, reaction_dir))
-
-        self.assertEqual(rc, 1)
-        mock_create_queued_submission.assert_not_called()
-
-    @patch("orca_auto.orca.commands.run_inp._emit_queued_submission")
-    @patch("orca_auto.orca.commands.run_inp.submission.submit_reaction_dir_to_queue")
-    def test_submit_queues_completed_output_for_worker_reconciliation(
-        self,
-        mock_submit_to_queue: MagicMock,
-        _mock_emit_queued: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            reaction_dir = root / "rxn"
-            _write_inp(reaction_dir)
-            (reaction_dir / "rxn.out").write_text(
-                "****ORCA TERMINATED NORMALLY****\n", encoding="utf-8"
-            )
-            mock_submit_to_queue.return_value = SimpleNamespace(
-                status="submitted",
-                reason="",
-                stderr="",
-                context=SimpleNamespace(reaction_dir=reaction_dir),
-                queued_result=SimpleNamespace(
-                    entry=object(),
-                    worker_info=SimpleNamespace(status=None, pid=None, log_file=None, detail=None),
-                ),
-            )
-
-            rc = cmd_run_inp(_make_args(root, reaction_dir))
-
-        self.assertEqual(rc, 0)
-        mock_submit_to_queue.assert_called_once()
-
-    @patch("orca_auto.orca.submission.load_config")
-    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
-    def test_submit_reaction_dir_to_queue_reports_inactive_worker_without_autostart(
-        self,
-        mock_read_worker_pid: MagicMock,
-        mock_notify_queue: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            mock_load_config.return_value = cfg
-            reaction_dir = root / "rxn"
-            _write_inp(reaction_dir)
-
-            submission = submit_reaction_dir_to_queue(_make_args(root, reaction_dir, priority=3))
-
-            entries = list_queue(root)
-
-            self.assertEqual(submission.status, "submitted")
-            result = submission.queued_result
-            self.assertIsNotNone(result)
-            assert result is not None
-            self.assertEqual(len(entries), 1)
-            entry = entries[0]
-            metadata = queue_entry_metadata(entry)
-            self.assertEqual(entry.priority, 3)
-            self.assertEqual(entry.app_name, "orca_auto_orca")
-            self.assertTrue(entry.task_id.startswith("orca_"))
-            self.assertEqual(metadata["source_selected_inp"], str(reaction_dir / "rxn.inp"))
-            execution_dir = Path(metadata["execution_snapshot"]["execution_dir"])
-            self.assertEqual(execution_dir.parent, reaction_dir.resolve())
-            self.assertEqual(Path(metadata["selected_inp"]), execution_dir / "rxn.inp")
-            self.assertFalse((reaction_dir / ".orca_auto_orca_executions").exists())
-            self.assertFalse((reaction_dir / ".orca_auto_input_snapshots").exists())
-            self.assertEqual(
-                metadata["execution_snapshot"]["selected_inp"],
-                metadata["selected_inp"],
-            )
-            self.assertEqual(metadata["selected_input_path"], str(reaction_dir / "rxn.inp"))
-            self.assertEqual(metadata["selected_input_xyz"], "")
-            self.assertNotIn("max_retries", metadata)
-            self.assertEqual(metadata["submitted_via"], "run_inp")
-            self.assertEqual(metadata["job_type"], "opt")
-            self.assertEqual(
-                metadata["worker_log"],
-                str((root / "logs" / f"{entry.queue_id}.log").resolve()),
-            )
-            self.assertTrue(str(metadata["molecule_key"]).strip())
-            self.assertEqual(metadata["resource_request"]["max_cores"], 8)
-            self.assertEqual(metadata["resource_request"]["max_memory_gb"], 32)
-            self.assertEqual(metadata["resource_actual"]["max_cores"], 8)
-            self.assertEqual(metadata["resource_actual"]["max_memory_gb"], 32)
-            source_text = (reaction_dir / "rxn.inp").read_text(encoding="utf-8")
-            self.assertNotIn("%pal", source_text)
-            self.assertNotIn("%maxcore", source_text)
-            private_text = Path(metadata["selected_inp"]).read_text(encoding="utf-8")
-            self.assertIn("%pal", private_text)
-            self.assertIn("nprocs 8", private_text)
-            self.assertIn("%maxcore 4096", private_text)
-            tracking_records = json.loads((root / "job_locations.json").read_text(encoding="utf-8"))
-            self.assertEqual(len(tracking_records), 1)
-            self.assertEqual(tracking_records[0]["job_id"], entry.task_id)
-            self.assertEqual(tracking_records[0]["status"], "queued")
-            self.assertEqual(tracking_records[0]["original_run_dir"], str(reaction_dir.resolve()))
-            self.assertEqual(
-                tracking_records[0]["selected_input_xyz"], str((reaction_dir / "rxn.inp").resolve())
-            )
-            self.assertEqual(result.worker_info.status, "inactive")
-            self.assertIsNone(result.worker_info.pid)
-            self.assertEqual(result.worker_info.log_file, metadata["worker_log"])
-            mock_read_worker_pid.assert_called_once()
-            mock_notify_queue.assert_called_once()
-
-    @patch("orca_auto.orca.submission.load_config")
-    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.submission.read_worker_pid", return_value=4321)
-    def test_submit_reaction_dir_to_queue_reports_running_worker_pid(
-        self,
-        mock_read_worker_pid: MagicMock,
-        mock_notify_queue: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            mock_load_config.return_value = cfg
-            reaction_dir = root / "rxn"
-            _write_inp(reaction_dir)
-
-            submission = submit_reaction_dir_to_queue(_make_args(root, reaction_dir))
-
-            self.assertEqual(submission.status, "submitted")
-            result = submission.queued_result
-            self.assertIsNotNone(result)
-            assert result is not None
-            self.assertEqual(len(list_queue(root)), 1)
-            [entry] = list_queue(root)
-            metadata = queue_entry_metadata(entry)
-            self.assertEqual(result.worker_info.status, "running")
-            self.assertEqual(result.worker_info.pid, 4321)
-            self.assertEqual(result.worker_info.log_file, metadata["worker_log"])
-            mock_read_worker_pid.assert_called_once()
-            mock_notify_queue.assert_called_once()
-
-    @patch("orca_auto.orca.submission.load_config")
-    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
-    def test_submit_reaction_dir_to_queue_separates_inp_and_xyzfile_artifacts(
-        self,
-        _mock_read_worker_pid: MagicMock,
-        _mock_notify_queue: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            mock_load_config.return_value = cfg
-            reaction_dir = root / "rxn"
-            _write_inp(
-                reaction_dir,
-                content="! Opt\n* xyzfile 0 1 geom.xyz\n",
-            )
-            (reaction_dir / "geom.xyz").write_text(
-                "2\ncomment\nH 0 0 0\nH 0 0 0.74\n",
-                encoding="utf-8",
-            )
-
-            submission = submit_reaction_dir_to_queue(_make_args(root, reaction_dir))
-
-            self.assertEqual(submission.status, "submitted")
-            entry = list_queue(root)[0]
-            metadata = queue_entry_metadata(entry)
-            xyz_path = str((reaction_dir / "geom.xyz").resolve())
-            self.assertEqual(metadata["source_selected_inp"], str(reaction_dir / "rxn.inp"))
-            execution_dir = Path(metadata["execution_snapshot"]["execution_dir"])
-            self.assertEqual(execution_dir.parent, reaction_dir.resolve())
-            self.assertEqual(Path(metadata["selected_inp"]), execution_dir / "rxn.inp")
-            self.assertEqual(
-                (execution_dir / "geom.xyz").read_bytes(), (reaction_dir / "geom.xyz").read_bytes()
-            )
-            self.assertEqual(metadata["selected_input_xyz"], xyz_path)
-            self.assertEqual(metadata["selected_input_path"], xyz_path)
-            self.assertEqual(metadata["job_type"], "opt")
-
-            tracking_records = json.loads((root / "job_locations.json").read_text(encoding="utf-8"))
-            self.assertEqual(tracking_records[0]["selected_input_xyz"], xyz_path)
-
-    @patch("orca_auto.orca.submission.load_config")
-    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
-    @patch(
-        "orca_auto.orca.submission.upsert_queued_job_record",
-        side_effect=RuntimeError("index write failed"),
+def _submitted(reaction_dir: Path, entry: Any, **worker: Any) -> SimpleNamespace:
+    worker_info = {"status": None, "pid": None, "log_file": None, "detail": None, **worker}
+    return SimpleNamespace(
+        status="submitted",
+        reason="",
+        stderr="",
+        context=SimpleNamespace(reaction_dir=reaction_dir),
+        queued_result=SimpleNamespace(entry=entry, worker_info=SimpleNamespace(**worker_info)),
     )
-    def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
-        self,
-        mock_upsert: MagicMock,
-        mock_read_worker_pid: MagicMock,
-        mock_notify_queue: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            mock_load_config.return_value = cfg
-            reaction_dir = root / "rxn"
-            _write_inp(reaction_dir)
 
-            submission = submit_reaction_dir_to_queue(_make_args(root, reaction_dir, priority=3))
 
-            entries = list_queue(root)
+@pytest.fixture
+def reaction_dir(tmp_path: Path) -> Path:
+    reaction = tmp_path / "rxn"
+    _write_inp(reaction)
+    return reaction
 
-            self.assertEqual(submission.status, "submitted")
-            self.assertEqual(len(entries), 1)
-            self.assertFalse((root / "job_locations.json").exists())
-            result = submission.queued_result
-            self.assertIsNotNone(result)
-            assert result is not None
-            self.assertIn("queue submission succeeded", result.worker_info.detail or "")
-            mock_upsert.assert_called_once()
-            mock_read_worker_pid.assert_called_once()
-            mock_notify_queue.assert_called_once()
 
-    @patch("orca_auto.orca.submission.load_config")
-    @patch("orca_auto.orca.submission.notify_queue_enqueued_event", return_value=True)
-    @patch("orca_auto.orca.submission.read_worker_pid", return_value=None)
-    def test_submit_reaction_dir_to_queue_reads_metadata_from_input_even_when_flags_are_present(
-        self,
-        mock_read_worker_pid: MagicMock,
-        mock_notify_queue: MagicMock,
-        mock_load_config: MagicMock,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            cfg = _make_cfg(tmp)
-            mock_load_config.return_value = cfg
-            reaction_dir = root / "rxn"
-            _write_inp(
-                reaction_dir,
-                content=(
-                    "! Opt\n"
-                    "%pal\n"
-                    "  nprocs 12\n"
-                    "end\n"
-                    "%maxcore 2048\n"
-                    "* xyz 0 1\n"
-                    "H 0 0 0\n"
-                    "H 0 0 0.74\n"
-                    "*\n"
-                ),
-            )
+@pytest.fixture
+def config(config_path: Callable[..., Path]) -> Path:
+    return config_path(max_concurrent=1)
 
-            submission = submit_reaction_dir_to_queue(
-                _make_args(root, reaction_dir, max_cores=20, max_memory_gb=80)
-            )
 
-            entries = list_queue(root)
+@pytest.fixture
+def submit_to_queue(monkeypatch: pytest.MonkeyPatch) -> Callable[[SimpleNamespace], list[Any]]:
+    """Replace the submission pipeline behind ``cmd_run_inp``; returns the recorded args."""
 
-            self.assertEqual(submission.status, "submitted")
-            self.assertEqual(len(entries), 1)
-            metadata = queue_entry_metadata(entries[0])
-            self.assertEqual(metadata["resource_request"]["max_cores"], 12)
-            self.assertEqual(metadata["resource_request"]["max_memory_gb"], 24)
-            self.assertEqual(metadata["resource_actual"]["max_cores"], 12)
-            self.assertEqual(metadata["resource_actual"]["max_memory_gb"], 24)
-            inp_text = (reaction_dir / "rxn.inp").read_text(encoding="utf-8")
-            self.assertIn("nprocs 12", inp_text)
-            self.assertIn("%maxcore 2048", inp_text)
-            mock_read_worker_pid.assert_called_once()
-            mock_notify_queue.assert_called_once()
+    def install(result: SimpleNamespace) -> list[Any]:
+        calls: list[Any] = []
+
+        def fake_submit(args: Any) -> SimpleNamespace:
+            calls.append(args)
+            return result
+
+        monkeypatch.setattr(submission_mod, "submit_reaction_dir_to_queue", fake_submit)
+        return calls
+
+    return install
+
+
+@dataclass
+class _WorkerSeams:
+    """The queue worker pid file and the messenger, as ``submission`` sees them."""
+
+    worker_pid: int | None = None
+    pid_reads: list[Path] = field(default_factory=list)
+    notifications: list[tuple[tuple[Any, ...], dict[str, Any]]] = field(default_factory=list)
+
+
+@pytest.fixture
+def worker_seams(monkeypatch: pytest.MonkeyPatch) -> _WorkerSeams:
+    seams = _WorkerSeams()
+
+    def read_worker_pid(root: Path) -> int | None:
+        seams.pid_reads.append(root)
+        return seams.worker_pid
+
+    def notify(*args: Any, **kwargs: Any) -> bool:
+        seams.notifications.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(submission_mod, "read_worker_pid", read_worker_pid)
+    monkeypatch.setattr(submission_mod, "notify_queue_enqueued_event", notify)
+    return seams
+
+
+def test_submit_always_enqueues_without_attempting_direct_execution(
+    tmp_path: Path,
+    reaction_dir: Path,
+    submit_to_queue: Callable[[SimpleNamespace], list[Any]],
+) -> None:
+    entry = make_queue_entry(reaction_dir=reaction_dir)
+    calls = submit_to_queue(_submitted(reaction_dir, entry))
+
+    rc = cmd_run_inp(_make_args(tmp_path / "orca_auto.yaml", reaction_dir))
+
+    assert rc == 0
+    assert len(calls) == 1
+
+
+def test_json_submission_emits_one_parseable_document(
+    submit_to_queue: Callable[[SimpleNamespace], list[Any]],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    reaction_dir = Path("/tmp/orca-json-job")
+    entry = make_queue_entry(
+        queue_id="q-json", task_id="orca-json", priority=7, reaction_dir=reaction_dir
+    )
+    submit_to_queue(_submitted(reaction_dir, entry, status="inactive", log_file="/tmp/q-json.log"))
+
+    rc = cmd_run_inp(SimpleNamespace(config="/tmp/orca.yaml", priority=7, json=True))
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "queued",
+        "job_dir": str(reaction_dir),
+        "queue_id": "q-json",
+        "job_id": "orca-json",
+        "priority": 7,
+        "worker": "inactive",
+        "worker_log": "/tmp/q-json.log",
+    }
+
+
+@pytest.fixture
+def refuse_queued_submission(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """Fail the test if the submission pipeline reaches queue-row creation."""
+
+    calls: list[Any] = []
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        pytest.fail("create_queued_submission must not run for a rejected submission")
+
+    monkeypatch.setattr(submission_mod, "create_queued_submission", refuse)
+    return calls
+
+
+def test_submit_rejects_when_active_queue_entry_exists_for_same_reaction_dir(
+    tmp_path: Path,
+    reaction_dir: Path,
+    config: Path,
+    refuse_queued_submission: list[Any],
+) -> None:
+    enqueue(tmp_path, str(reaction_dir))
+
+    rc = cmd_run_inp(_make_args(config, reaction_dir))
+
+    assert rc == 1
+    assert refuse_queued_submission == []
+
+
+def test_submit_rejects_when_same_reaction_dir_is_already_running_directly(
+    reaction_dir: Path,
+    config: Path,
+    refuse_queued_submission: list[Any],
+) -> None:
+    with acquire_run_lock(reaction_dir):
+        rc = cmd_run_inp(_make_args(config, reaction_dir))
+
+    assert rc == 1
+    assert refuse_queued_submission == []
+
+
+def test_submit_queues_completed_output_for_worker_reconciliation(
+    tmp_path: Path,
+    reaction_dir: Path,
+    submit_to_queue: Callable[[SimpleNamespace], list[Any]],
+) -> None:
+    (reaction_dir / "rxn.out").write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+    entry = make_queue_entry(reaction_dir=reaction_dir)
+    calls = submit_to_queue(_submitted(reaction_dir, entry))
+
+    rc = cmd_run_inp(_make_args(tmp_path / "orca_auto.yaml", reaction_dir))
+
+    assert rc == 0
+    assert len(calls) == 1
+
+
+def test_submit_reaction_dir_to_queue_reports_inactive_worker_without_autostart(
+    tmp_path: Path,
+    reaction_dir: Path,
+    config: Path,
+    worker_seams: _WorkerSeams,
+) -> None:
+    root = tmp_path
+
+    submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir, priority=3))
+
+    entries = list_queue(root)
+
+    assert submission.status == "submitted"
+    result = submission.queued_result
+    assert result is not None
+    assert len(entries) == 1
+    entry = entries[0]
+    metadata = queue_entry_metadata(entry)
+    assert entry.priority == 3
+    assert entry.app_name == "orca_auto_orca"
+    assert entry.task_id.startswith("orca_")
+    assert metadata["source_selected_inp"] == str(reaction_dir / "rxn.inp")
+    execution_dir = Path(metadata["execution_snapshot"]["execution_dir"])
+    assert execution_dir.parent == reaction_dir.resolve()
+    assert Path(metadata["selected_inp"]) == execution_dir / "rxn.inp"
+    assert not (reaction_dir / ".orca_auto_orca_executions").exists()
+    assert not (reaction_dir / ".orca_auto_input_snapshots").exists()
+    assert metadata["execution_snapshot"]["selected_inp"] == metadata["selected_inp"]
+    assert metadata["selected_input_path"] == str(reaction_dir / "rxn.inp")
+    assert metadata["selected_input_xyz"] == ""
+    assert "max_retries" not in metadata
+    assert metadata["submitted_via"] == "run_inp"
+    assert metadata["job_type"] == "opt"
+    assert metadata["worker_log"] == str((root / "logs" / f"{entry.queue_id}.log").resolve())
+    assert str(metadata["molecule_key"]).strip()
+    assert metadata["resource_request"]["max_cores"] == 8
+    assert metadata["resource_request"]["max_memory_gb"] == 32
+    assert metadata["resource_actual"]["max_cores"] == 8
+    assert metadata["resource_actual"]["max_memory_gb"] == 32
+    source_text = (reaction_dir / "rxn.inp").read_text(encoding="utf-8")
+    assert "%pal" not in source_text
+    assert "%maxcore" not in source_text
+    private_text = Path(metadata["selected_inp"]).read_text(encoding="utf-8")
+    assert "%pal" in private_text
+    assert "nprocs 8" in private_text
+    assert "%maxcore 4096" in private_text
+    tracking_records = json.loads((root / "job_locations.json").read_text(encoding="utf-8"))
+    assert len(tracking_records) == 1
+    assert tracking_records[0]["job_id"] == entry.task_id
+    assert tracking_records[0]["status"] == "queued"
+    assert tracking_records[0]["original_run_dir"] == str(reaction_dir.resolve())
+    assert tracking_records[0]["selected_input_xyz"] == str((reaction_dir / "rxn.inp").resolve())
+    assert result.worker_info.status == "inactive"
+    assert result.worker_info.pid is None
+    assert result.worker_info.log_file == metadata["worker_log"]
+    assert len(worker_seams.pid_reads) == 1
+    assert len(worker_seams.notifications) == 1
+
+
+def test_submit_reaction_dir_to_queue_reports_running_worker_pid(
+    tmp_path: Path,
+    reaction_dir: Path,
+    config: Path,
+    worker_seams: _WorkerSeams,
+) -> None:
+    worker_seams.worker_pid = 4321
+
+    submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir))
+
+    assert submission.status == "submitted"
+    result = submission.queued_result
+    assert result is not None
+    [entry] = list_queue(tmp_path)
+    metadata = queue_entry_metadata(entry)
+    assert result.worker_info.status == "running"
+    assert result.worker_info.pid == 4321
+    assert result.worker_info.log_file == metadata["worker_log"]
+    assert len(worker_seams.pid_reads) == 1
+    assert len(worker_seams.notifications) == 1
+
+
+def test_submit_reaction_dir_to_queue_separates_inp_and_xyzfile_artifacts(
+    tmp_path: Path,
+    reaction_dir: Path,
+    config: Path,
+    worker_seams: _WorkerSeams,
+) -> None:
+    _write_inp(reaction_dir, "! Opt\n* xyzfile 0 1 geom.xyz\n")
+    (reaction_dir / "geom.xyz").write_text("2\ncomment\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+
+    submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir))
+
+    assert submission.status == "submitted"
+    entry = list_queue(tmp_path)[0]
+    metadata = queue_entry_metadata(entry)
+    xyz_path = str((reaction_dir / "geom.xyz").resolve())
+    assert metadata["source_selected_inp"] == str(reaction_dir / "rxn.inp")
+    execution_dir = Path(metadata["execution_snapshot"]["execution_dir"])
+    assert execution_dir.parent == reaction_dir.resolve()
+    assert Path(metadata["selected_inp"]) == execution_dir / "rxn.inp"
+    assert (execution_dir / "geom.xyz").read_bytes() == (reaction_dir / "geom.xyz").read_bytes()
+    assert metadata["selected_input_xyz"] == xyz_path
+    assert metadata["selected_input_path"] == xyz_path
+    assert metadata["job_type"] == "opt"
+
+    tracking_records = json.loads((tmp_path / "job_locations.json").read_text(encoding="utf-8"))
+    assert tracking_records[0]["selected_input_xyz"] == xyz_path
+
+
+def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
+    tmp_path: Path,
+    reaction_dir: Path,
+    config: Path,
+    worker_seams: _WorkerSeams,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upserts: list[Any] = []
+
+    def failing_upsert(*args: Any, **kwargs: Any) -> None:
+        upserts.append((args, kwargs))
+        raise RuntimeError("index write failed")
+
+    monkeypatch.setattr(submission_mod, "upsert_queued_job_record", failing_upsert)
+
+    submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir, priority=3))
+
+    entries = list_queue(tmp_path)
+
+    assert submission.status == "submitted"
+    assert len(entries) == 1
+    assert not (tmp_path / "job_locations.json").exists()
+    result = submission.queued_result
+    assert result is not None
+    assert "queue submission succeeded" in (result.worker_info.detail or "")
+    assert len(upserts) == 1
+    assert len(worker_seams.pid_reads) == 1
+    assert len(worker_seams.notifications) == 1
+
+
+def test_submit_reaction_dir_to_queue_reads_metadata_from_input_even_when_flags_are_present(
+    tmp_path: Path,
+    reaction_dir: Path,
+    config: Path,
+    worker_seams: _WorkerSeams,
+) -> None:
+    _write_inp(
+        reaction_dir,
+        "! Opt\n%pal\n  nprocs 12\nend\n%maxcore 2048\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
+    )
+
+    submission = submit_reaction_dir_to_queue(
+        _make_args(config, reaction_dir, max_cores=20, max_memory_gb=80)
+    )
+
+    entries = list_queue(tmp_path)
+
+    assert submission.status == "submitted"
+    assert len(entries) == 1
+    metadata = queue_entry_metadata(entries[0])
+    assert metadata["resource_request"]["max_cores"] == 12
+    assert metadata["resource_request"]["max_memory_gb"] == 24
+    assert metadata["resource_actual"]["max_cores"] == 12
+    assert metadata["resource_actual"]["max_memory_gb"] == 24
+    inp_text = (reaction_dir / "rxn.inp").read_text(encoding="utf-8")
+    assert "nprocs 12" in inp_text
+    assert "%maxcore 2048" in inp_text
+    assert len(worker_seams.pid_reads) == 1
+    assert len(worker_seams.notifications) == 1

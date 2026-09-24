@@ -1,7 +1,12 @@
+"""``orca_auto service status``: unit states plus the worker code-freshness verdict.
+
+Exit 0 only when every required unit is active and no worker is stale or
+undetermined; ``--json`` carries the same verdict as ``ok``.
+"""
+
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import subprocess
 from collections.abc import Callable, Sequence
@@ -9,10 +14,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from orca_auto import cli_systemd_freshness, cli_systemd_units
-from orca_auto.core import terminal
-from orca_auto.core.terminal import emit_error
+from orca_auto import cli_systemd_freshness, cli_systemd_units, terminal
 from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.terminal import emit_error, emit_json
 
 _SERVICE_ACTIVE_COLORS = {
     "active": terminal.GREEN,
@@ -51,7 +55,6 @@ def _service_status_payload(
     return {
         "target_user": target_user,
         "mode": mode,
-        "ok": _required_services_active(statuses, required_labels=required_labels),
         "worker_staleness": staleness,
         "services": [
             {
@@ -86,9 +89,8 @@ def _required_service_labels(mode: str) -> frozenset[str]:
     return frozenset({"engines", "worker"})
 
 
-def _required_services_active(
-    statuses: Sequence[cli_systemd_units.ServiceUnitStatus], *, required_labels: frozenset[str]
-) -> bool:
+def _required_services_active(statuses: Sequence[cli_systemd_units.ServiceUnitStatus]) -> bool:
+    required_labels = _required_service_labels(_selected_service_mode(statuses))
     by_label = {status.label: status for status in statuses}
     return all(
         label in by_label and by_label[label].active == "active" for label in required_labels
@@ -116,8 +118,9 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
     deps = deps or ServiceStatusDeps()
     which = deps.which or shutil.which
     collect_status = deps.collect_service_status or cli_systemd_units.collect_service_status
+    json_output = bool(getattr(args, "json", False))
     if not cli_systemd_units.systemctl_available(which=which):
-        emit_error("systemctl is not available in this environment")
+        emit_error("systemctl is not available in this environment", json_output=json_output)
         return 1
 
     target_user = cli_systemd_units.service_target_user(
@@ -126,14 +129,24 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
     try:
         statuses = collect_status(target_user, run=deps.run or subprocess.run)
     except ValueError as exc:
-        emit_error(exc)
+        emit_error(exc, json_output=json_output)
         return 1
     staleness = (deps.collect_worker_staleness or cli_systemd_freshness.collect_worker_staleness)(
         statuses, run=deps.run or subprocess.run
     )
     payload = _service_status_payload(target_user, statuses, staleness)
-    if bool(getattr(args, "json", False)):
-        print(json.dumps(payload, ensure_ascii=True, indent=2))
+    services_ok = _required_services_active(statuses)
+    staleness_ok = staleness is None or not (staleness["stale"] or staleness["undetermined"])
+    if json_output:
+        # ``ok`` mirrors the exit code: a stale or unreadable worker fails the
+        # status just as an inactive required unit does.
+        if not services_ok:
+            error = "required services are not active"
+        elif not staleness_ok:
+            error = "a worker runs stale code or could not be judged"
+        else:
+            error = None
+        emit_json(payload, ok=services_ok and staleness_ok, error=error)
     else:
         _print_service_status(target_user, statuses)
         for entry in (staleness or {}).get("workers", []):
@@ -141,7 +154,6 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
                 print(
                     f"runtime_build: {entry['unit']} {entry['runtime_build_id']} ({entry['source_root']})"
                 )
-    staleness_ok = staleness is None or not (staleness["stale"] or staleness["undetermined"])
     if staleness is not None:
         for entry in staleness["stale"]:
             if entry.get("expected_runtime_build_id"):
@@ -187,7 +199,7 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
                 + f": {entry['detail']}",
                 hint="restart the workers in an idle window: orca_auto service restart",
             )
-    return 0 if payload["ok"] and staleness_ok else 1
+    return 0 if services_ok and staleness_ok else 1
 
 
 __all__ = ["ServiceStatusDeps", "cmd_service_status"]

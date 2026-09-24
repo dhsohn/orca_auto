@@ -1,73 +1,44 @@
-import tempfile
-import unittest
+from __future__ import annotations
+
 from pathlib import Path
+
+import pytest
 
 from orca_auto.orca.job_type import detect_job_type
 
 
-class TestDetectJobType(unittest.TestCase):
-    def _inp(self, td: str, route: str) -> Path:
-        p = Path(td) / "rxn.inp"
-        p.write_text(f"{route}\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
-        return p
-
-    def test_optts(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! OptTS Freq")), "ts")
-
-    def test_neb_ts(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! NEB-TS")), "ts")
-
-    def test_opt(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! Opt Freq")), "opt")
-
-    def test_sp(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! SP def2-SVP")), "sp")
-
-    def test_energy(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! Energy")), "sp")
-
-    def test_freq(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! Freq")), "freq")
-
-    def test_numfreq(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! NumFreq")), "freq")
-
-    def test_anfreq(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! AnFreq")), "freq")
-
-    def test_other(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! B3LYP def2-SVP")), "other")
-
-    def test_optts_not_classified_as_opt(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "! OptTS IRC")), "ts")
-
-    def test_comment_and_blank_lines_skipped(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "rxn.inp"
-            p.write_text(
-                "# comment\n\n! Opt Freq\n* xyz 0 1\nH 0 0 0\n*\n",
-                encoding="utf-8",
-            )
-            self.assertEqual(detect_job_type(p), "opt")
-
-    def test_route_after_closed_comment_is_classified(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(self._inp(td, "# hidden # ! Freq")), "freq")
-
-    def test_missing_file_is_other(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
-            self.assertEqual(detect_job_type(Path(td) / "missing.inp"), "other")
+def _inp(tmp_path: Path, route: str) -> Path:
+    path = tmp_path / "rxn.inp"
+    path.write_text(f"{route}\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    return path
 
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.parametrize(
+    ("route", "expected"),
+    [
+        ("! OptTS Freq", "ts"),
+        ("! NEB-TS", "ts"),
+        ("! Opt Freq", "opt"),
+        ("! SP def2-SVP", "sp"),
+        ("! Energy", "sp"),
+        ("! Freq", "freq"),
+        ("! NumFreq", "freq"),
+        ("! AnFreq", "freq"),
+        ("! B3LYP def2-SVP", "other"),
+        # OptTS must never be classified as a plain optimization.
+        ("! OptTS IRC", "ts"),
+        ("# hidden # ! Freq", "freq"),
+    ],
+)
+def test_route_classification(tmp_path: Path, route: str, expected: str) -> None:
+    assert detect_job_type(_inp(tmp_path, route)) == expected
+
+
+def test_comment_and_blank_lines_skipped(tmp_path: Path) -> None:
+    path = tmp_path / "rxn.inp"
+    path.write_text("# comment\n\n! Opt Freq\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+    assert detect_job_type(path) == "opt"
+
+
+def test_missing_file_is_other(tmp_path: Path) -> None:
+    assert detect_job_type(tmp_path / "missing.inp") == "other"

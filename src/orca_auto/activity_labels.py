@@ -9,7 +9,7 @@ from orca_auto.core.statuses import QUEUE_ACTIVE_STATUSES
 from orca_auto.core.utils import normalize_text, parse_iso_utc
 
 # Status glyphs for the queue table and CLI summaries. Keyed by the same
-# ``core.statuses`` constants as ``core.terminal``'s colour map so a status is
+# ``core.statuses`` constants as ``terminal``'s colour map so a status is
 # always drawn with one icon and one colour.
 _ACTIVITY_STATUS_ICONS = {
     _s.STATUS_CREATED: "🆕",

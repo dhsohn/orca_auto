@@ -1,17 +1,69 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.engines import command_result as _engine_models
 from orca_auto.core.queue.types import QueueStatus, effective_queue_status
 from orca_auto.core.statuses import STATUS_FAILED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
+from .engine_runtime import engine_runtime_paths
+from .queue import adapter as queue_adapter
 from .queue.entries import queue_entry_is_retired_workflow_owned
 
 _CANCEL_API_NAME = "orca_auto.orca.direct_cancel"
+
+
+@dataclass(frozen=True)
+class InternalEngineCommandResult:
+    """JSON-ready outcome of one internal engine command call."""
+
+    status: str
+    command_argv: list[str]
+    returncode: int
+    reason: str = ""
+    stdout: str = ""
+    stderr: str = ""
+    parsed_stdout: dict[str, str] = field(default_factory=dict)
+    job_id: str = ""
+    queue_id: str = ""
+    job_dir: str = ""
+    extra_fields: dict[str, Any] = field(default_factory=dict)
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "status": self.status,
+            "reason": self.reason,
+            "returncode": self.returncode,
+            "command_argv": list(self.command_argv),
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "parsed_stdout": dict(self.parsed_stdout),
+            "job_id": self.job_id,
+            "queue_id": self.queue_id,
+        }
+        if self.job_dir:
+            payload["job_dir"] = self.job_dir
+        payload.update(self.extra_fields)
+        return payload
+
+
+def internal_call_argv(
+    *,
+    api_name: str,
+    config_path: str,
+    kwargs: dict[str, Any],
+) -> list[str]:
+    return [
+        api_name,
+        f"config={config_path}",
+        *[f"{key}={value}" for key, value in kwargs.items()],
+    ]
+
+
+def _text_fields(fields: dict[str, Any]) -> dict[str, str]:
+    return {key: text for key, value in fields.items() if (text := _normalize_text(value))}
 
 
 @dataclass(frozen=True)
@@ -22,7 +74,7 @@ class _OrcaDirectCancelRequest:
 
 
 def _trace_argv(*, api_name: str, config_path: str, kwargs: dict[str, Any]) -> list[str]:
-    return _engine_models.internal_call_argv(
+    return internal_call_argv(
         api_name=api_name,
         config_path=config_path,
         kwargs=kwargs,
@@ -30,7 +82,7 @@ def _trace_argv(*, api_name: str, config_path: str, kwargs: dict[str, Any]) -> l
 
 
 def _key_value_stdout(fields: dict[str, Any]) -> str:
-    return _engine_models._key_value_stdout(_engine_models._text_fields(fields))
+    return "\n".join(f"{key}: {value}" for key, value in _text_fields(fields).items() if value)
 
 
 def _failure_payload(
@@ -42,7 +94,7 @@ def _failure_payload(
 ) -> dict[str, Any]:
     if stderr and not stderr.endswith("\n"):
         stderr += "\n"
-    return _engine_models.InternalEngineCommandResult(
+    return InternalEngineCommandResult(
         status=STATUS_FAILED,
         reason=reason,
         returncode=1,
@@ -71,9 +123,6 @@ def _cancel_request(*, target: str, config_path: str) -> _OrcaDirectCancelReques
 
 
 def _find_orca_cancel_entry(request: _OrcaDirectCancelRequest) -> tuple[Path, Any] | None:
-    from orca_auto.core.engine_runtime import engine_runtime_paths
-    from orca_auto.orca.queue import adapter as queue_adapter
-
     allowed_root = engine_runtime_paths(request.config_path)["allowed_root"]
     matched = queue_adapter.find_entry_by_target(
         queue_adapter.list_queue(allowed_root),
@@ -85,8 +134,6 @@ def _find_orca_cancel_entry(request: _OrcaDirectCancelRequest) -> tuple[Path, An
 
 
 def _request_orca_cancel(allowed_root: Path, entry: Any) -> Any | None:
-    from orca_auto.orca.queue import adapter as queue_adapter
-
     return queue_adapter.cancel(
         allowed_root,
         queue_adapter.queue_entry_id(entry),
@@ -98,8 +145,6 @@ def _cancel_request_targets_exact_entry(
     request: _OrcaDirectCancelRequest,
     entry: Any,
 ) -> bool:
-    from orca_auto.orca.queue import adapter as queue_adapter
-
     return bool(
         queue_adapter.is_orca_queue_entry(entry)
         and queue_adapter.queue_entry_matches_target(entry, request.target)
@@ -111,17 +156,15 @@ def _cancel_success_payload(
     command_argv: list[str],
     updated: Any,
 ) -> dict[str, Any]:
-    from orca_auto.orca.queue import adapter as queue_adapter
-
     status = effective_queue_status(updated)
-    parsed_stdout = _engine_models._text_fields(
+    parsed_stdout = _text_fields(
         {
             "status": status,
             "queue_id": queue_adapter.queue_entry_id(updated),
             "job_id": queue_adapter.queue_entry_task_id(updated),
         }
     )
-    return _engine_models.InternalEngineCommandResult(
+    return InternalEngineCommandResult(
         status=status,
         reason="",
         returncode=0,
@@ -164,8 +207,6 @@ def cancel_target(
             )
         updated = _request_orca_cancel(allowed_root, matched)
         if updated is None:
-            from orca_auto.orca.queue import adapter as queue_adapter
-
             current = queue_adapter.get_entry_by_id(
                 allowed_root,
                 queue_adapter.queue_entry_id(matched),
@@ -185,8 +226,6 @@ def cancel_target(
     except Exception as exc:  # noqa: BLE001
         if allowed_root is not None and matched is not None:
             try:
-                from orca_auto.orca.queue import adapter as queue_adapter
-
                 current = queue_adapter.get_entry_by_id(
                     allowed_root,
                     queue_adapter.queue_entry_id(matched),

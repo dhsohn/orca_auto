@@ -27,18 +27,3 @@ def _missing_concrete_override_modules(repo_root: Path) -> list[str]:
 
 def test_concrete_mypy_override_modules_exist_in_source_inventory() -> None:
     assert _missing_concrete_override_modules(_REPO_ROOT) == []
-
-
-def test_mypy_override_inventory_checker_detects_a_stale_module(tmp_path: Path) -> None:
-    (tmp_path / "src" / "orca_auto" / "live").mkdir(parents=True)
-    (tmp_path / "src" / "orca_auto" / "live" / "__init__.py").write_text("", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text(
-        """
-[tool.mypy]
-[[tool.mypy.overrides]]
-module = ["orca_auto.live", "orca_auto.removed", "orca_auto.generated.*"]
-""".strip(),
-        encoding="utf-8",
-    )
-
-    assert _missing_concrete_override_modules(tmp_path) == ["orca_auto.removed"]

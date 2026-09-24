@@ -1,3 +1,5 @@
+"""Activity catalog models: requests, the ``ActivityRecord`` row and one page of it."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
@@ -51,6 +53,9 @@ class ActivityRecord:
     cancel_target: str
     aliases: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
+    #: The per-job worker log (``<runs_root>/logs/<queue_id>.log``) for a
+    #: queue-backed row; empty for a row known only through its state file.
+    worker_log: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +68,7 @@ class ActivityRecord:
             "submitted_at": self.submitted_at,
             "updated_at": self.updated_at,
             "cancel_target": self.cancel_target,
+            "worker_log": self.worker_log,
             "aliases": list(self.aliases),
             "metadata": dict(self.metadata),
         }

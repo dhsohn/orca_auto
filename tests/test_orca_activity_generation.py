@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto.activity._orca import orca_records
 from orca_auto.activity._orca_index import query_listing
-from orca_auto.core.activity import ActivityListRequest, ActivitySourceRequest
+from orca_auto.activity.model import ActivityListRequest, ActivitySourceRequest
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.orca.config import load_config
 from orca_auto.orca.execution_binding import orca_execution_provenance
@@ -15,6 +15,7 @@ from orca_auto.orca.queue import adapter
 from orca_auto.orca.queue.terminal_replay import TERMINAL_REPLAY_METADATA_KEY
 from orca_auto.orca.state import new_state, write_state
 from orca_auto.orca.submission import create_queued_submission
+from tests.conftest import claim_next_entry
 
 
 @pytest.mark.parametrize("claimed", [False, True], ids=["pending", "running"])
@@ -43,7 +44,7 @@ def test_activity_borrows_state_only_from_its_queue_generation(
     cfg = load_config(str(config_path))
     args = Namespace(force=False, priority=10)
     previous = create_queued_submission(cfg, args, job_dir, selected_inp=selected).entry
-    previous = adapter.dequeue_next(runs_root)
+    previous = claim_next_entry(runs_root)
     assert previous is not None
     state = new_state(job_dir, Path(previous.metadata["selected_inp"]))
     state["job_id"] = previous.task_id
@@ -67,7 +68,7 @@ def test_activity_borrows_state_only_from_its_queue_generation(
     )
     current = create_queued_submission(cfg, args, job_dir, selected_inp=selected).entry
     if claimed:
-        current = adapter.dequeue_next(runs_root)
+        current = claim_next_entry(runs_root)
         assert current is not None
     if matching_state:
         state["run_id"] = "current-run"

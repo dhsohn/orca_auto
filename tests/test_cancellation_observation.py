@@ -117,7 +117,7 @@ def test_batch_cancellation_is_one_snapshot_and_preserves_identity(
 ) -> None:
     rows = [entry(str(i), cancel_requested=True) for i in range(4)]
     rows[1] = replace(rows[1], task_id="successor")
-    rows[2] = replace(rows[2], engine="xtb")
+    rows[2] = replace(rows[2], engine="other")
     store.save_entries(tmp_path, rows)
     reads = []
     original = store.load_entries

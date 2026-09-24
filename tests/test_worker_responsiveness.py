@@ -4,7 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from orca_auto.core.queue import store
-from orca_auto.core.queue.enqueue_publication import repair_enqueue_publication_outcome
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_PREPARING,
     queue_record_publication_lock,
@@ -13,6 +12,7 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.lock import FileLockTimeoutError
+from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication_outcome
 
 
 def _pending_publication(root: Path) -> QueueEntry:

@@ -14,8 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.queue import publication, store
-from orca_auto.core.queue.enqueue_publication import repair_enqueue_publication
+from orca_auto.core.queue import publication, store, transitions
 from orca_auto.core.queue.generation import (
     queue_entries_same_generation,
     queue_entry_generation_token,
@@ -34,7 +33,9 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     current_process_start_token,
 )
-from orca_auto.core.queue.types import QueueStatus
+from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.queue.worker.admission import select_next_claimable_entry
+from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication
 
 
 def _install_deterministic_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,11 +46,12 @@ def _install_deterministic_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         store, "timestamped_token", lambda prefix: f"{prefix}_{next(token_counter):04d}"
     )
-    monkeypatch.setattr(
-        store,
-        "now_utc_iso",
-        lambda: f"2026-04-19T00:00:{next(time_counter):02d}+00:00",
-    )
+
+    def clock() -> str:
+        return f"2026-04-19T00:00:{next(time_counter):02d}+00:00"
+
+    monkeypatch.setattr(store, "now_utc_iso", clock)
+    monkeypatch.setattr(transitions, "now_utc_iso", clock)
 
 
 def test_queue_generation_token_tracks_only_immutable_identity() -> None:
@@ -173,6 +175,14 @@ def test_queue_generation_rejects_immutable_metadata_changes() -> None:
     for replacement in replacements:
         assert queue_entry_generation_token(replacement) != token
         assert not queue_entries_same_generation(replacement, entry)
+
+
+def _claim_next(root: Path) -> QueueEntry | None:
+    """Preview the head of ``root`` and claim it by id, as a worker does."""
+    entry = select_next_claimable_entry(store.list_queue(root))
+    if entry is None:
+        return None
+    return store.dequeue_entry_if_pending(root, entry.queue_id, expected_entry=entry)
 
 
 def _queue_file(root: Path) -> Path:
@@ -833,7 +843,7 @@ def test_enqueue_blocks_active_duplicates_and_allows_reenqueue_after_terminal_st
         engine="engine",
     )
 
-    running = store.dequeue_next(tmp_path)
+    running = _claim_next(tmp_path)
     assert running is not None
     assert running.queue_id == first.queue_id
     assert running.status == QueueStatus.RUNNING
@@ -847,7 +857,7 @@ def test_enqueue_blocks_active_duplicates_and_allows_reenqueue_after_terminal_st
             engine="engine",
         )
 
-    completed = store.mark_completed(tmp_path, first.queue_id)
+    completed = transitions.mark_completed(tmp_path, first.queue_id)
     assert completed is not None
     assert completed.status == QueueStatus.COMPLETED
 
@@ -911,7 +921,7 @@ def test_reject_duplicate_entry_key_supports_force_over_terminal_only(
         )
 
 
-def test_dequeue_next_respects_priority_then_arrival_order(
+def test_claim_next_respects_priority_then_arrival_order(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -934,12 +944,12 @@ def test_dequeue_next_respects_priority_then_arrival_order(
         encoding="utf-8",
     )
 
-    picked = [store.dequeue_next(tmp_path) for _ in range(4)]
+    picked = [_claim_next(tmp_path) for _ in range(4)]
     assert [entry.queue_id for entry in picked if entry is not None] == ["q-2", "q-3", "q-4", "q-1"]
-    assert store.dequeue_next(tmp_path) is None
+    assert _claim_next(tmp_path) is None
 
 
-def test_dequeue_next_keeps_fifo_when_the_clock_steps_backwards(
+def test_claim_next_keeps_fifo_when_the_clock_steps_backwards(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -960,41 +970,46 @@ def test_dequeue_next_keeps_fifo_when_the_clock_steps_backwards(
     second = store.enqueue(tmp_path, app_name="app", task_id="b", task_kind="kind", engine="e")
     assert first.enqueued_at > second.enqueued_at
 
-    picked = store.dequeue_next(tmp_path)
+    picked = _claim_next(tmp_path)
     assert picked is not None and picked.queue_id == first.queue_id
 
 
-def test_dequeue_next_accept_entry_fn_skips_other_engine_entries(
+def test_select_next_claimable_entry_accept_entry_fn_skips_other_engine_entries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    # Internal-engine workers share the single runs root with standalone ORCA
-    # jobs; the app filter must skip an ORCA entry at the atomic pop so a CREST
-    # or xTB worker never claims (and mis-runs) it, even on the single-root path.
+    # Workers for another app share the single runs root with standalone ORCA
+    # jobs; the app filter must skip an ORCA entry at the atomic pop so the
+    # other worker never claims (and mis-runs) it, even on the single-root path.
     _install_deterministic_helpers(monkeypatch)
     _queue_file(tmp_path).write_text(
         json.dumps(
             [
                 _entry("q-orca", app_name="orca_auto_orca", priority=1),
-                _entry("q-xtb", app_name="orca_auto_xtb", priority=9),
+                _entry("q-other", app_name="orca_auto_other", priority=9),
             ],
             indent=2,
         ),
         encoding="utf-8",
     )
 
-    def accept_xtb(entry: object) -> bool:
-        return getattr(entry, "app_name", "") in ("", "orca_auto_xtb")
+    def accept_other(entry: object) -> bool:
+        return getattr(entry, "app_name", "") in ("", "orca_auto_other")
 
-    # Skips the higher-priority ORCA entry, claims the xTB one.
-    claimed = store.dequeue_next(tmp_path, accept_entry_fn=accept_xtb)
-    assert claimed is not None and claimed.queue_id == "q-xtb"
+    # Skips the higher-priority ORCA entry, selects the other app's one.
+    selected = select_next_claimable_entry(store.list_queue(tmp_path), accept_entry_fn=accept_other)
+    assert selected is not None and selected.queue_id == "q-other"
+    claimed = store.dequeue_entry_if_pending(tmp_path, selected.queue_id, expected_entry=selected)
+    assert claimed is not None and claimed.queue_id == "q-other"
 
-    # Only the ORCA entry remains; the xTB filter now claims nothing.
-    assert store.dequeue_next(tmp_path, accept_entry_fn=accept_xtb) is None
+    # Only the ORCA entry remains; the other app's filter now selects nothing.
+    assert (
+        select_next_claimable_entry(store.list_queue(tmp_path), accept_entry_fn=accept_other)
+        is None
+    )
 
-    # An unfiltered (ORCA) worker still claims it.
-    unfiltered = store.dequeue_next(tmp_path)
+    # An unfiltered (ORCA) worker still selects it.
+    unfiltered = select_next_claimable_entry(store.list_queue(tmp_path))
     assert unfiltered is not None and unfiltered.queue_id == "q-orca"
 
 
@@ -1087,7 +1102,7 @@ def test_request_cancel_rejects_replacement_with_same_queue_id(
         encoding="utf-8",
     )
 
-    assert store.request_cancel(tmp_path, "q-same", expected_entry=selected) is None
+    assert transitions.request_cancel(tmp_path, "q-same", expected_entry=selected) is None
     [replacement] = store.list_queue(tmp_path)
     assert replacement.task_id == "task-b"
     assert replacement.status == QueueStatus.PENDING
@@ -1125,7 +1140,7 @@ def test_request_cancel_accepts_same_generation_after_publication_transition(
         encoding="utf-8",
     )
 
-    cancelled = store.request_cancel(tmp_path, "q-same", expected_entry=selected)
+    cancelled = transitions.request_cancel(tmp_path, "q-same", expected_entry=selected)
 
     assert cancelled is not None
     assert cancelled.status == QueueStatus.CANCELLED
@@ -1164,8 +1179,8 @@ def test_pending_cancel_callback_runs_after_durable_fence_under_both_locks(
         task_kind="kind",
         engine="engine",
     )
-    monkeypatch.setattr(store, "queue_record_publication_lock", publication_lock)
-    monkeypatch.setattr(store, "queue_lock", queue_mutation_lock)
+    monkeypatch.setattr(transitions, "queue_record_publication_lock", publication_lock)
+    monkeypatch.setattr(transitions, "queue_lock", queue_mutation_lock)
     events: list[tuple[str, QueueStatus]] = []
     real_save_entries = store.save_entries
 
@@ -1191,7 +1206,7 @@ def test_pending_cancel_callback_runs_after_durable_fence_under_both_locks(
         events.append(("save", entries[0].status))
         real_save_entries(root, entries)
 
-    cancelled = store.request_cancel(
+    cancelled = transitions.request_cancel(
         tmp_path,
         entry.queue_id,
         expected_entry=entry,
@@ -1227,7 +1242,7 @@ def test_pending_cancel_callback_failure_leaves_queue_fenced_and_unclaimable(
         raise OSError("artifact publication failed")
 
     with pytest.raises(OSError, match="artifact publication failed"):
-        store.request_cancel(
+        transitions.request_cancel(
             tmp_path,
             entry.queue_id,
             expected_entry=entry,
@@ -1238,7 +1253,7 @@ def test_pending_cancel_callback_failure_leaves_queue_fenced_and_unclaimable(
     assert fenced.status == QueueStatus.PENDING
     assert fenced.cancel_requested is True
     assert fenced.finished_at == ""
-    assert store.dequeue_next(tmp_path) is None
+    assert _claim_next(tmp_path) is None
     with pytest.raises(store.DuplicateQueueEntryError):
         store.enqueue(
             tmp_path,
@@ -1277,7 +1292,7 @@ def test_pending_cancel_final_save_failure_keeps_fence_and_can_be_retried(
         callback_calls += 1
 
     with pytest.raises(OSError, match="terminal queue save failed"):
-        store.request_cancel(
+        transitions.request_cancel(
             tmp_path,
             entry.queue_id,
             expected_entry=entry,
@@ -1289,9 +1304,9 @@ def test_pending_cancel_final_save_failure_keeps_fence_and_can_be_retried(
     assert fenced.status == QueueStatus.PENDING
     assert fenced.cancel_requested is True
     assert fenced.finished_at == ""
-    assert store.dequeue_next(tmp_path) is None
+    assert _claim_next(tmp_path) is None
 
-    retried = store.request_cancel(
+    retried = transitions.request_cancel(
         tmp_path,
         entry.queue_id,
         expected_entry=entry,
@@ -1327,7 +1342,7 @@ def test_pending_cancel_metadata_callback_failure_aborts_queue_write(
         save_calls += 1
 
     with pytest.raises(OSError, match="metadata generation failed"):
-        store.request_cancel(
+        transitions.request_cancel(
             tmp_path,
             entry.queue_id,
             pending_metadata_update_fn=reject_metadata,
@@ -1353,10 +1368,10 @@ def test_running_cancel_does_not_invoke_pending_cancel_callback(
         task_kind="kind",
         engine="engine",
     )
-    running = store.dequeue_next(tmp_path)
+    running = _claim_next(tmp_path)
     assert running is not None
 
-    requested = store.request_cancel(
+    requested = transitions.request_cancel(
         tmp_path,
         pending.queue_id,
         expected_entry=running,
@@ -1394,7 +1409,7 @@ def test_terminal_mark_rejects_replacement_with_same_queue_id(
         encoding="utf-8",
     )
 
-    assert store.mark_completed(tmp_path, "q-same", expected_entry=selected) is None
+    assert transitions.mark_completed(tmp_path, "q-same", expected_entry=selected) is None
     [replacement] = store.list_queue(tmp_path)
     assert replacement.task_id == "task-b"
     assert replacement.status == QueueStatus.RUNNING
@@ -1412,15 +1427,15 @@ def test_terminal_completion_does_not_overwrite_acknowledged_cancellation(
         task_kind="kind",
         engine="engine",
     )
-    running = store.dequeue_next(tmp_path)
+    running = _claim_next(tmp_path)
     assert running is not None
-    assert store.request_cancel(tmp_path, entry.queue_id, expected_entry=running) is not None
+    assert transitions.request_cancel(tmp_path, entry.queue_id, expected_entry=running) is not None
 
-    assert store.mark_completed(tmp_path, entry.queue_id, expected_entry=running) is None
+    assert transitions.mark_completed(tmp_path, entry.queue_id, expected_entry=running) is None
     [cancel_requested] = store.list_queue(tmp_path)
     assert cancel_requested.status == QueueStatus.RUNNING
     assert cancel_requested.cancel_requested is True
-    assert store.mark_cancelled(tmp_path, entry.queue_id, expected_entry=running) is not None
+    assert transitions.mark_cancelled(tmp_path, entry.queue_id, expected_entry=running) is not None
     [cancelled] = store.list_queue(tmp_path)
     assert cancelled.status == QueueStatus.CANCELLED
 
@@ -1438,7 +1453,7 @@ def test_request_cancel_handles_pending_running_and_terminal_entries(
         task_kind="kind",
         engine="engine",
     )
-    pending_cancelled = store.request_cancel(tmp_path, pending.queue_id)
+    pending_cancelled = transitions.request_cancel(tmp_path, pending.queue_id)
     assert pending_cancelled is not None
     assert pending_cancelled.status == QueueStatus.CANCELLED
     assert pending_cancelled.cancel_requested is True
@@ -1451,18 +1466,18 @@ def test_request_cancel_handles_pending_running_and_terminal_entries(
         task_kind="kind",
         engine="engine",
     )
-    dequeued = store.dequeue_next(tmp_path)
+    dequeued = _claim_next(tmp_path)
     assert dequeued is not None
     assert dequeued.queue_id == running.queue_id
 
-    running_cancelled = store.request_cancel(tmp_path, running.queue_id)
+    running_cancelled = transitions.request_cancel(tmp_path, running.queue_id)
     assert running_cancelled is not None
     assert running_cancelled.status == QueueStatus.RUNNING
     assert running_cancelled.cancel_requested is True
     assert running_cancelled.finished_at == ""
     assert store.get_cancel_requested(tmp_path, running.queue_id) is True
     assert store.get_cancel_requested(tmp_path, "missing-queue-id") is False
-    assert store.request_cancel(tmp_path, "missing-queue-id") is None
+    assert transitions.request_cancel(tmp_path, "missing-queue-id") is None
 
     terminal = store.enqueue(
         tmp_path,
@@ -1471,8 +1486,8 @@ def test_request_cancel_handles_pending_running_and_terminal_entries(
         task_kind="kind",
         engine="engine",
     )
-    assert store.mark_completed(tmp_path, terminal.queue_id) is not None
-    assert store.request_cancel(tmp_path, terminal.queue_id) is None
+    assert transitions.mark_completed(tmp_path, terminal.queue_id) is not None
+    assert transitions.request_cancel(tmp_path, terminal.queue_id) is None
 
 
 def test_request_cancel_revalidates_selected_identity_atomically(
@@ -1489,7 +1504,7 @@ def test_request_cancel_revalidates_selected_identity_atomically(
     )
 
     assert (
-        store.request_cancel(
+        transitions.request_cancel(
             tmp_path,
             entry.queue_id,
             accept_entry_fn=lambda current: current.engine == "owned",
@@ -1520,7 +1535,7 @@ def test_request_cancel_revokes_transient_publication_ownership(
         },
     )
 
-    cancelled = store.request_cancel(tmp_path, entry.queue_id)
+    cancelled = transitions.request_cancel(tmp_path, entry.queue_id)
 
     assert cancelled is not None
     assert cancelled.status == QueueStatus.CANCELLED
@@ -1572,7 +1587,7 @@ def test_dequeue_skips_transient_publication_and_claims_the_next_row(
     )
 
     assert store.dequeue_entry_if_pending(tmp_path, blocked.queue_id) is None
-    claimed = store.dequeue_next(tmp_path)
+    claimed = _claim_next(tmp_path)
 
     # A parked publication must not stall the rows behind it.
     assert claimed is not None
@@ -1594,7 +1609,7 @@ def test_dequeue_quarantines_unknown_or_aborted_publication_state(
     )
 
     assert store.dequeue_entry_if_pending(tmp_path, blocked.queue_id) is None
-    assert store.dequeue_next(tmp_path) is None
+    assert _claim_next(tmp_path) is None
 
 
 def test_sigkilled_publisher_row_stays_parked_until_repair_publishes(
@@ -1625,7 +1640,7 @@ def test_sigkilled_publisher_row_stays_parked_until_repair_publishes(
 
     # The row is still not claimable: its queued record was never published,
     # and the dead owner PID is not a licence to run the job without one.
-    assert store.dequeue_next(tmp_path) is None
+    assert _claim_next(tmp_path) is None
     [parked] = store.list_queue(tmp_path)
     assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_PREPARING
 
@@ -1641,7 +1656,7 @@ def test_sigkilled_publisher_row_stays_parked_until_repair_publishes(
     [repaired] = store.list_queue(tmp_path)
     assert repaired.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
-    claimed = store.dequeue_next(tmp_path)
+    claimed = _claim_next(tmp_path)
 
     assert claimed is not None
     assert claimed.queue_id == queue_id
@@ -1740,12 +1755,12 @@ def test_requeue_running_entry_returns_running_entry_to_pending(
         engine="engine",
         metadata={"keep": "yes"},
     )
-    dequeued = store.dequeue_next(tmp_path)
+    dequeued = _claim_next(tmp_path)
     assert dequeued is not None
     assert dequeued.queue_id == running.queue_id
     assert dequeued.status == QueueStatus.RUNNING
 
-    updated = store.requeue_running_entry(
+    updated = transitions.requeue_running_entry(
         tmp_path,
         running.queue_id,
         cancel_metadata_update_fn=lambda _candidate: pytest.fail(
@@ -1762,7 +1777,7 @@ def test_requeue_running_entry_returns_running_entry_to_pending(
     entries = store.list_queue(tmp_path)
     assert len(entries) == 1
     assert entries[0].status == QueueStatus.PENDING
-    assert store.requeue_running_entry(tmp_path, "missing-queue-id") is None
+    assert transitions.requeue_running_entry(tmp_path, "missing-queue-id") is None
 
 
 def test_requeue_running_entry_cancels_when_cancel_requested(
@@ -1782,8 +1797,8 @@ def test_requeue_running_entry_cancels_when_cancel_requested(
         task_kind="kind",
         engine="engine",
     )
-    assert store.dequeue_next(tmp_path) is not None
-    assert store.request_cancel(tmp_path, running.queue_id) is not None
+    assert _claim_next(tmp_path) is not None
+    assert transitions.request_cancel(tmp_path, running.queue_id) is not None
 
     lock_held = False
 
@@ -1806,7 +1821,7 @@ def test_requeue_running_entry_cancels_when_cancel_requested(
         assert candidate.cancel_requested is False
         return {"terminal_replay": {"status": candidate.status.value}}
 
-    updated = store.requeue_running_entry(
+    updated = transitions.requeue_running_entry(
         tmp_path,
         running.queue_id,
         cancel_metadata_update_fn=cancel_metadata,
@@ -1820,7 +1835,7 @@ def test_requeue_running_entry_cancels_when_cancel_requested(
     assert lock_held is False
 
     # The cancelled entry is terminal and is never handed back out for a resume.
-    assert store.dequeue_next(tmp_path) is None
+    assert _claim_next(tmp_path) is None
 
 
 def test_requeue_cancel_metadata_callback_failure_aborts_queue_write(
@@ -1836,9 +1851,9 @@ def test_requeue_cancel_metadata_callback_failure_aborts_queue_write(
         engine="engine",
         metadata={"keep": "yes"},
     )
-    running = store.dequeue_next(tmp_path)
+    running = _claim_next(tmp_path)
     assert running is not None
-    requested = store.request_cancel(tmp_path, entry.queue_id)
+    requested = transitions.request_cancel(tmp_path, entry.queue_id)
     assert requested is not None and requested.cancel_requested is True
     before = _queue_file(tmp_path).read_bytes()
     save_calls = 0
@@ -1851,7 +1866,7 @@ def test_requeue_cancel_metadata_callback_failure_aborts_queue_write(
         save_calls += 1
 
     with pytest.raises(OSError, match="metadata generation failed"):
-        store.requeue_running_entry(
+        transitions.requeue_running_entry(
             tmp_path,
             entry.queue_id,
             cancel_metadata_update_fn=reject_metadata,
@@ -1909,6 +1924,43 @@ def test_clear_terminal_removes_terminal_entries_and_can_keep_latest(
 
     assert store.clear_terminal(tmp_path) == 0
     assert store.clear_terminal(tmp_path / "missing") == 0
+
+
+def test_clear_terminal_unlinks_publication_lock_files_of_removed_rows_only(
+    tmp_path: Path,
+) -> None:
+    _queue_file(tmp_path).write_text(
+        json.dumps(
+            [
+                _entry("q-running", status=QueueStatus.RUNNING),
+                _entry("q-done", status=QueueStatus.COMPLETED),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for queue_id in ("q-running", "q-done"):
+        with publication.queue_record_publication_lock(tmp_path, queue_id):
+            pass
+    running_lock = publication.queue_record_publication_lock_path(tmp_path, "q-running")
+    done_lock = publication.queue_record_publication_lock_path(tmp_path, "q-done")
+    assert running_lock.is_file() and done_lock.is_file()
+
+    assert store.clear_terminal(tmp_path) == 1
+
+    assert running_lock.is_file()
+    assert not done_lock.exists()
+    assert store.clear_terminal(tmp_path) == 0
+    assert running_lock.is_file()
+
+
+def test_publication_lock_does_not_create_a_missing_queue_root(tmp_path: Path) -> None:
+    missing_root = tmp_path / "missing"
+
+    with pytest.raises(FileNotFoundError):
+        with publication.queue_record_publication_lock(missing_root, "q-1"):
+            pass
+
+    assert not missing_root.exists()
 
 
 def test_clear_terminal_scopes_keep_last_to_selected_entries(
@@ -1981,7 +2033,7 @@ def test_mark_helpers_merge_metadata_updates(
         metadata={"keep": "yes", "shared": "old"},
     )
 
-    helper = getattr(store, helper_name)
+    helper = getattr(transitions, helper_name)
     updated = helper(
         tmp_path,
         entry.queue_id,
@@ -2047,7 +2099,7 @@ def test_mark_helpers_merge_callback_metadata_under_queue_lock(
         callback_entries.append(current)
         return {"shared": "dynamic", "terminal_replay": expected_status.value}
 
-    helper = getattr(store, helper_name)
+    helper = getattr(transitions, helper_name)
     updated = helper(
         tmp_path,
         entry.queue_id,
@@ -2091,7 +2143,7 @@ def test_mark_metadata_callback_failure_aborts_queue_write(
         save_calls += 1
 
     with pytest.raises(OSError, match="metadata generation failed"):
-        store.mark_failed(
+        transitions.mark_failed(
             tmp_path,
             entry.queue_id,
             error="boom",
@@ -2122,10 +2174,10 @@ def test_mark_status_never_flips_a_terminal_outcome(
     _install_deterministic_helpers(monkeypatch)
     _write_single_running_entry(tmp_path)
 
-    completed = store.mark_completed(tmp_path, "q-1")
+    completed = transitions.mark_completed(tmp_path, "q-1")
     assert completed is not None and completed.status == QueueStatus.COMPLETED
 
-    refused = store.mark_cancelled(tmp_path, "q-1")
+    refused = transitions.mark_cancelled(tmp_path, "q-1")
     assert refused is None
     assert store.list_queue(tmp_path)[0].status == QueueStatus.COMPLETED
 
@@ -2136,10 +2188,10 @@ def test_mark_status_does_not_resurrect_a_cancelled_entry(
     _install_deterministic_helpers(monkeypatch)
     _write_single_running_entry(tmp_path)
 
-    cancelled = store.mark_cancelled(tmp_path, "q-1")
+    cancelled = transitions.mark_cancelled(tmp_path, "q-1")
     assert cancelled is not None and cancelled.status == QueueStatus.CANCELLED
 
-    refused = store.mark_completed(tmp_path, "q-1")
+    refused = transitions.mark_completed(tmp_path, "q-1")
     assert refused is None
     assert store.list_queue(tmp_path)[0].status == QueueStatus.CANCELLED
 
@@ -2151,7 +2203,7 @@ def test_mark_status_replays_same_terminal_side_effect_under_lock(
     _write_single_running_entry(tmp_path)
     [running] = store.list_queue(tmp_path)
     assert (
-        store.mark_cancelled(
+        transitions.mark_cancelled(
             tmp_path,
             "q-1",
             metadata_update={"candidate_count": 2},
@@ -2161,7 +2213,7 @@ def test_mark_status_replays_same_terminal_side_effect_under_lock(
     )
     calls: list[str] = []
 
-    replayed = store.mark_cancelled(
+    replayed = transitions.mark_cancelled(
         tmp_path,
         "q-1",
         expected_entry=running,
@@ -2231,7 +2283,7 @@ def _terminal_source_entry(**overrides: object) -> store.QueueEntry:
 @pytest.mark.parametrize("status", [QueueStatus.PENDING, QueueStatus.RUNNING])
 def test_terminal_entry_rejects_non_terminal_status(status: QueueStatus) -> None:
     with pytest.raises(ValueError, match="terminal status"):
-        store.terminal_entry(_terminal_source_entry(), status=status, error=None)
+        transitions.terminal_entry(_terminal_source_entry(), status=status, error=None)
 
 
 def test_terminal_entry_finished_at_defaults_to_now_and_keeps_an_explicit_value(
@@ -2240,11 +2292,11 @@ def test_terminal_entry_finished_at_defaults_to_now_and_keeps_an_explicit_value(
     _install_deterministic_helpers(monkeypatch)
     source = _terminal_source_entry()
 
-    stamped = store.terminal_entry(source, status=QueueStatus.COMPLETED, error="")
+    stamped = transitions.terminal_entry(source, status=QueueStatus.COMPLETED, error="")
     assert stamped.status == QueueStatus.COMPLETED
     assert stamped.finished_at == "2026-04-19T00:00:01+00:00"
 
-    kept = store.terminal_entry(
+    kept = transitions.terminal_entry(
         source,
         status=QueueStatus.FAILED,
         error="boom",
@@ -2266,17 +2318,17 @@ def test_terminal_entry_clears_cancel_requested_only_for_cancelled_rows(
     _install_deterministic_helpers(monkeypatch)
     requested = _terminal_source_entry(cancel_requested=True)
 
-    cancelled = store.terminal_entry(requested, status=QueueStatus.CANCELLED, error=None)
+    cancelled = transitions.terminal_entry(requested, status=QueueStatus.CANCELLED, error=None)
     assert cancelled.cancel_requested is False
 
-    failed = store.terminal_entry(requested, status=QueueStatus.FAILED, error="boom")
+    failed = transitions.terminal_entry(requested, status=QueueStatus.FAILED, error="boom")
     assert failed.cancel_requested is True
-    completed = store.terminal_entry(requested, status=QueueStatus.COMPLETED, error="")
+    completed = transitions.terminal_entry(requested, status=QueueStatus.COMPLETED, error="")
     assert completed.cancel_requested is True
 
     # A writer that records the flag on purpose (pending-row cancellation, the
     # ambiguous enqueue fence) overrides the default rule explicitly.
-    fenced = store.terminal_entry(
+    fenced = transitions.terminal_entry(
         _terminal_source_entry(cancel_requested=False),
         status=QueueStatus.CANCELLED,
         error=None,
@@ -2289,16 +2341,16 @@ def test_terminal_entry_error_and_metadata_rules(monkeypatch: pytest.MonkeyPatch
     _install_deterministic_helpers(monkeypatch)
     source = _terminal_source_entry()
 
-    kept = store.terminal_entry(source, status=QueueStatus.FAILED, error=None)
+    kept = transitions.terminal_entry(source, status=QueueStatus.FAILED, error=None)
     assert kept.error == "recorded"
     assert kept.metadata == source.metadata
 
-    stripped = store.terminal_entry(source, status=QueueStatus.FAILED, error="  boom \n")
+    stripped = transitions.terminal_entry(source, status=QueueStatus.FAILED, error="  boom \n")
     assert stripped.error == "boom"
-    cleared = store.terminal_entry(source, status=QueueStatus.COMPLETED, error="")
+    cleared = transitions.terminal_entry(source, status=QueueStatus.COMPLETED, error="")
     assert cleared.error == ""
 
-    replaced = store.terminal_entry(
+    replaced = transitions.terminal_entry(
         source,
         status=QueueStatus.COMPLETED,
         error="",
@@ -2316,8 +2368,8 @@ def _failed_row(tmp_path: Path) -> store.QueueEntry:
         task_kind="kind",
         engine="engine",
     )
-    assert store.dequeue_next(tmp_path) is not None
-    failed = store.mark_failed(tmp_path, submitted.queue_id, error="crashed")
+    assert _claim_next(tmp_path) is not None
+    failed = transitions.mark_failed(tmp_path, submitted.queue_id, error="crashed")
     assert failed is not None
     return failed
 
@@ -2334,11 +2386,11 @@ def test_correct_terminal_status_refuses_non_terminal_row(
         task_kind="kind",
         engine="engine",
     )
-    running = store.dequeue_next(tmp_path)
+    running = _claim_next(tmp_path)
     assert running is not None
 
     assert (
-        store.correct_terminal_status(
+        transitions.correct_terminal_status(
             tmp_path,
             submitted.queue_id,
             status=QueueStatus.COMPLETED,
@@ -2347,7 +2399,7 @@ def test_correct_terminal_status_refuses_non_terminal_row(
     )
     assert store.list_queue(tmp_path) == [running]
     with pytest.raises(ValueError, match="terminal status"):
-        store.correct_terminal_status(
+        transitions.correct_terminal_status(
             tmp_path,
             submitted.queue_id,
             status=QueueStatus.RUNNING,
@@ -2363,7 +2415,7 @@ def test_correct_terminal_status_refuses_generation_mismatch(
     stale_generation = replace(failed, task_id="replacement-task")
 
     assert (
-        store.correct_terminal_status(
+        transitions.correct_terminal_status(
             tmp_path,
             failed.queue_id,
             status=QueueStatus.COMPLETED,
@@ -2382,7 +2434,7 @@ def test_correct_terminal_status_refuses_task_mismatch(
     failed = _failed_row(tmp_path)
 
     assert (
-        store.correct_terminal_status(
+        transitions.correct_terminal_status(
             tmp_path,
             failed.queue_id,
             status=QueueStatus.COMPLETED,
@@ -2391,7 +2443,7 @@ def test_correct_terminal_status_refuses_task_mismatch(
         is None
     )
     assert (
-        store.correct_terminal_status(
+        transitions.correct_terminal_status(
             tmp_path,
             failed.queue_id,
             status=QueueStatus.COMPLETED,
@@ -2399,7 +2451,10 @@ def test_correct_terminal_status_refuses_task_mismatch(
         )
         is None
     )
-    assert store.correct_terminal_status(tmp_path, "missing", status=QueueStatus.COMPLETED) is None
+    assert (
+        transitions.correct_terminal_status(tmp_path, "missing", status=QueueStatus.COMPLETED)
+        is None
+    )
     assert store.list_queue(tmp_path) == [failed]
 
 
@@ -2428,7 +2483,7 @@ def test_correct_terminal_status_rebuilds_the_row_and_merges_metadata_under_the_
         assert current == failed
         return {"seen_status": current.status.value}
 
-    corrected = store.correct_terminal_status(
+    corrected = transitions.correct_terminal_status(
         tmp_path,
         failed.queue_id,
         status=QueueStatus.COMPLETED,
@@ -2453,12 +2508,13 @@ def test_terminal_rows_are_built_only_by_store_terminal_entry() -> None:
 
     ``replace(..., status=QueueStatus.<terminal>)`` encodes the terminal rules
     (finished_at, cancel_requested, error) at the call site. Every writer must
-    go through ``store.terminal_entry`` so the rules cannot silently diverge.
+    go through ``transitions.terminal_entry`` so the rules cannot silently
+    diverge.
     """
     import ast
 
-    package_root = Path(store.__file__).resolve().parents[2]
-    terminal_names = {status.name for status in store.TERMINAL_QUEUE_STATUSES}
+    package_root = Path(transitions.__file__).resolve().parents[2]
+    terminal_names = {status.name for status in transitions.TERMINAL_QUEUE_STATUSES}
     offenders: list[str] = []
     for source_path in sorted(package_root.rglob("*.py")):
         tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))

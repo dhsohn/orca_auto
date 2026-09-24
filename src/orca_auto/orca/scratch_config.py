@@ -1,12 +1,13 @@
+"""``orca.runtime.scratch_*`` settings: the ORCA scratch policy's configuration."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.config.schema import as_nonempty_str, explicit_positive_int
 from orca_auto.core.paths.validation import validated_absolute_linux_path_text
-
-from .schema import as_nonempty_str, explicit_positive_int
 
 # Mirrors the confinement enforced by ``core.engine_scratch``; kept as a module
 # constant so tests can relocate both checks onto a private directory.

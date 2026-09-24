@@ -13,6 +13,7 @@ from orca_auto.orca.queue import worker_tracking
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state, state_path
 from orca_auto.orca.types import RunState
+from tests.conftest import RecordingChannel, claim_next_entry
 from tests.queue_worker_helpers import write_completed_run_state
 
 
@@ -85,21 +86,13 @@ def test_slow_notification_does_not_block_loop_or_write_successor(
 
 @pytest.mark.parametrize("after_commit", [False, True])
 def test_ambiguous_notification_claim_never_dispatches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, after_commit: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recording_channel: RecordingChannel,
+    after_commit: bool,
 ) -> None:
     write_completed_run_state(tmp_path)
-    sends: list[object] = []
-
-    class Channel:
-        enabled = True
-
-        def send(self, message: object) -> SendResult:
-            sends.append(message)
-            return SendResult(sent=True)
-
-    monkeypatch.setattr(
-        worker_tracking, "notification_channel", lambda *_args, **_kwargs: Channel()
-    )
+    sends = recording_channel.sends
 
     def fail_save(path: Path, state: RunState) -> None:
         if after_commit:
@@ -125,19 +118,15 @@ def test_ambiguous_notification_claim_never_dispatches(
 
 
 def test_wrong_run_claim_does_not_write_or_send(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, recording_channel: RecordingChannel
 ) -> None:
     write_completed_run_state(tmp_path)
     before = state_path(tmp_path).read_bytes()
-    monkeypatch.setattr(
-        worker_tracking,
-        "notification_channel",
-        lambda *_args, **_kwargs: type("Channel", (), {"enabled": True})(),
-    )
     assert not worker_tracking.notify_terminal_job_from_state(
         AppConfig(), str(tmp_path), expected_job_id="task_terminal_123", expected_run_id="successor"
     )
     assert state_path(tmp_path).read_bytes() == before
+    assert recording_channel.sends == []
 
 
 def test_bounded_sends_recover_capacity_after_transport_and_start_failures(
@@ -225,7 +214,7 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
     job_dir.mkdir()
     write_completed_run_state(job_dir)
     entry = adapter.enqueue(tmp_path, str(job_dir), task_id="task_terminal_123")
-    adapter.dequeue_next(tmp_path)
+    claim_next_entry(tmp_path)
     token = reserve_slot(
         tmp_path,
         2,

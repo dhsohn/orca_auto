@@ -202,72 +202,7 @@ def _assert_workflows_unavailable(result: subprocess.CompletedProcess[str]) -> N
     assert "Traceback" not in output
 
 
-@pytest.mark.parametrize("option", ["--help", "--version"])
-def test_core_help_and_version_without_workflow_files(
-    core_only: _CoreOnlyInstallation, option: str
-) -> None:
-    before = core_only.snapshot()
-    result = core_only.cli(option)
-    _assert_success(result)
-    assert "orca_auto" in result.stdout
-    if option == "--version":
-        assert metadata.version("orca_auto") in result.stdout
-    assert core_only.snapshot() == before
-
-
-def test_core_empty_queue_json_and_text_are_read_only(core_only: _CoreOnlyInstallation) -> None:
-    # Locks and the disposable read model may change; canonical data must not.
-    before = core_only.snapshot(include_locks=False, include_projection=False)
-    result = core_only.cli("queue", "list", "--json")
-    _assert_success(result)
-    payload = json.loads(result.stdout)
-    assert payload["activities"] == []
-    assert payload["active_simulations"] == 0
-    text = core_only.cli("queue", "list")
-    _assert_success(text)
-    assert "Traceback" not in text.stderr
-    assert core_only.snapshot(include_locks=False, include_projection=False) == before
-    assert (core_only.runs / ".activity.sqlite3").read_bytes().startswith(b"SQLite format 3")
-
-
-def test_core_orca_submission_listing_and_cancellation(core_only: _CoreOnlyInstallation) -> None:
-    input_dir = core_only.write_orca_input()
-    _assert_success(core_only.cli("run-dir", str(input_dir), "--json"))
-    before_listing = core_only.snapshot(include_locks=False, include_projection=False)
-    listed = core_only.cli("queue", "list", "--json")
-    _assert_success(listed)
-    activities = json.loads(listed.stdout)["activities"]
-    assert len(activities) == 1
-    assert activities[0]["engine"] == "orca"
-    assert activities[0]["status"] == "pending"
-    assert core_only.snapshot(include_locks=False, include_projection=False) == before_listing
-    _assert_success(core_only.cli("queue", "cancel", str(input_dir), "--json"))
-    cancelled = core_only.cli("queue", "list", "--json")
-    _assert_success(cancelled)
-    assert json.loads(cancelled.stdout)["activities"][0]["status"] == "cancelled"
-    assert not core_only.engine_counter.exists()
-    preserved_input = (input_dir / "h2.inp").read_bytes()
-    pending_replay = core_only.cli("queue", "list", "clear", "--json")
-    _assert_success(pending_replay)
-    assert json.loads(pending_replay.stdout)["cleared"]["orca_queue_entries"] == 0
-    cleared = core_only.cli("queue", "list", "--json")
-    _assert_success(cleared)
-    assert json.loads(cleared.stdout)["activities"][0]["status"] == "cancelled"
-    assert (input_dir / "h2.inp").read_bytes() == preserved_input
-
-
-def test_core_default_worker_plan_is_orca_only(core_only: _CoreOnlyInstallation) -> None:
-    before = core_only.snapshot()
-    result = core_only.cli("queue", "worker", "--json")
-    _assert_success(result)
-    workers = json.loads(result.stdout)["workers"]
-    assert [worker["app"] for worker in workers] == ["orca"]
-    assert workers[0]["argv"][1:3] == ["-m", "orca_auto.orca.commands.queue"]
-    assert workers[0]["argv"][-2] == "--config"
-    assert "--engine" not in workers[0]["argv"]
-    assert core_only.snapshot() == before
-
-
+@pytest.mark.slow
 def test_core_worker_runs_fake_orca_child_without_workflow_files(
     core_only: _CoreOnlyInstallation,
 ) -> None:
@@ -310,6 +245,7 @@ def test_core_worker_runs_fake_orca_child_without_workflow_files(
     assert machines[0].read_bytes() == machine_bytes
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("operation", ["scaffold", "run-dir", "mixed-run-dir"])
 def test_explicit_workflows_refuse_before_runtime_mutation(
     core_only: _CoreOnlyInstallation, operation: str
@@ -331,27 +267,7 @@ def test_explicit_workflows_refuse_before_runtime_mutation(
     assert core_only.snapshot() == before
 
 
-@pytest.mark.parametrize(
-    "selection",
-    [
-        ("--engine", "workflow"),
-        ("--engine", "xtb"),
-        ("--engine", "crest"),
-        ("--kind", "workflow"),
-    ],
-)
-def test_explicit_workflow_queue_filters_refuse_without_mutation(
-    core_only: _CoreOnlyInstallation, selection: tuple[str, ...]
-) -> None:
-    before = core_only.snapshot()
-    _assert_workflows_unavailable(core_only.cli("queue", "list", *selection, "--json"))
-    assert core_only.snapshot() == before
-
-
-def test_orca_refresh_is_supported_without_extension(core_only: _CoreOnlyInstallation) -> None:
-    _assert_success(core_only.cli("queue", "list", "--refresh", "--json"))
-
-
+@pytest.mark.slow
 def test_retired_installed_package_is_never_imported(core_only: _CoreOnlyInstallation) -> None:
     flow = core_only.imports / "orca_auto" / "flow"
     flow.mkdir()

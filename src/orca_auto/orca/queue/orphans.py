@@ -8,17 +8,18 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.admission import AdmissionStore, AdmissionStoreCorruptError
-from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.queue import store as _queue_store
+from orca_auto.core.queue import transitions as _queue_transitions
 from orca_auto.core.queue.child.process import live_queue_slot_keys_for_slots
 from orca_auto.core.queue.types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
-from orca_auto.core.utils.process_tracking import read_pid_file, run_lock_is_held
+from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
+from orca_auto.core.utils.process_tracking import run_lock_is_held
+from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from ..job_locations._generation import payload_matches_queue_generation
 from ..state_reading import load_state
 from ..statuses import RunStatus
 from .entries import (
-    WORKER_PID_FILE_NAME,
     queue_entry_id,
     queue_entry_is_retired_workflow_owned,
     queue_entry_reaction_dir,
@@ -33,7 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 def read_worker_pid(allowed_root: Path) -> int | None:
-    return read_pid_file(allowed_root / WORKER_PID_FILE_NAME)
+    """The live pid recorded by the ORCA queue worker under *allowed_root*, if any."""
+    return read_worker_pid_file(allowed_root)
 
 
 def apply_terminal_reconciliation(
@@ -46,7 +48,7 @@ def apply_terminal_reconciliation(
 ) -> QueueEntry:
     """Orphan variant of the terminal row: the state file, not a worker, decides.
 
-    The row itself comes from ``store.terminal_entry``; only the evidence
+    The row itself comes from ``transitions.terminal_entry``; only the evidence
     mapping is orphan-specific: the state's ``run_id`` and ``completed_at``
     are authoritative when present, a COMPLETED row drops any stale error, and
     the other statuses keep the recorded error unless the state names one.
@@ -61,7 +63,7 @@ def apply_terminal_reconciliation(
         updated_error = ""
     else:
         updated_error = None
-    updated = _queue_store.terminal_entry(
+    updated = _queue_transitions.terminal_entry(
         entry,
         status=target,
         error=updated_error,
@@ -336,7 +338,7 @@ def _reconcile_entry(
         # strand the entry forever: dequeue skips cancel_requested entries, so it
         # would never be re-run, and no path transitions a PENDING+cancel_requested
         # entry to a terminal state. Honor the cancellation instead, mirroring
-        # store.requeue_running_entry's cancel chokepoint, and clear the flag so the
+        # transitions.requeue_running_entry's cancel chokepoint, and clear the flag so the
         # terminal entry stops advertising a pending cancellation (the
         # CANCELLED row constructor clears it).
         updated = apply_terminal_reconciliation(

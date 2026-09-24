@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from orca_auto.core.queue import enqueue
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_STATE_CREATING,
@@ -21,6 +20,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     reconcile_orphaned_snapshot_generations,
     transition_snapshot_intent,
 )
+from orca_auto.core.queue.store import enqueue
 
 
 def _visible_generation_path(

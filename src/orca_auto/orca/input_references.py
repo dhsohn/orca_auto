@@ -1,10 +1,32 @@
-"""Canonical scanning policy for external ORCA input file references."""
+"""External file references of an ORCA input: ``MOInp`` checkpoints and the rest.
+
+Sits on :mod:`.input_blocks` and :mod:`.input_syntax`. This module owns every
+reading of "which files does this input pull in": the semantic ``MOInp``
+occurrences (top-level ``%moinp`` and ``%scf MOInp``) that
+:func:`set_moinp` rewrites and :func:`orca_input_requests_moread` reads,
+whether a referenced ``.gbw`` checkpoint is intact enough to seed from, and
+the fail-closed :func:`scan_orca_file_references` scanner that execution
+binding and restart rematerialization share. Consumers above it
+(``execution_binding``, ``scratch``, ``inp_rewriter``) never re-derive a
+reference set themselves.
+
+The syntax and block helpers are looked up through their owning modules at
+call time (``_input_syntax.orca_line_tokens``), which keeps the reference
+scanner patchable at its owners in tests.
+"""
 
 from __future__ import annotations
 
-from . import input_blocks as _input_blocks
+import re
+from dataclasses import dataclass
+from pathlib import Path
 
+from . import input_blocks as _input_blocks
+from . import input_syntax as _input_syntax
+
+MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
 MAX_ORCA_INPUT_REFERENCES = 128
+CHECKPOINT_HEAD_BYTES = 16
 
 _NEB_FILE_REFERENCE_KEYS = frozenset({"product", "ts"})
 _SIMPLE_FILE_REFERENCE_KEYS = frozenset({"%moinp", "%pointcharges"})
@@ -82,8 +104,172 @@ _UNSUPPORTED_EXTERNAL_HOOK_KEYS = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class OrcaFileReference:
+    """One external file reference of an ORCA input, with its source span."""
+
+    line_index: int
+    value: str
+    start: int
+    end: int
+    kind: str  # "geometry" | "neb_geometry" | "auxiliary"
+
+
+def nonempty_file(path: Path) -> bool:
+    """True when ``path`` exists with size > 0; False when missing or unreadable."""
+    try:
+        return path.exists() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def checkpoint_file_looks_intact(path: Path) -> bool:
+    """Whether a ``.gbw`` checkpoint is worth seeding orbitals from.
+
+    A crash while ORCA writes its checkpoint can leave a file of the right
+    size whose blocks were never flushed: the filesystem then reads them back
+    as zeros. ORCA's checkpoint starts with a non-zero header, so a leading
+    window without a single non-zero byte is a torn file, not orbitals;
+    seeding it with ``MORead`` would make the restarted run fail on a corrupt
+    guess instead of degrading to a geometry-only restart. Only the leading
+    bytes are inspected; a short non-zero file still counts as a checkpoint.
+    """
+    if not nonempty_file(path):
+        return False
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(CHECKPOINT_HEAD_BYTES)
+    except OSError:
+        return False
+    return any(head)
+
+
+def _scf_body_token_rows(lines: list[str]) -> list[tuple[int, list[_input_syntax.OrcaLineToken]]]:
+    """Return active ``%scf`` body tokens per row (see :func:`input_blocks.iter_blocks`)."""
+
+    return [
+        (row.line_index, list(row.tokens))
+        for block in _input_blocks.iter_blocks(lines, "scf")
+        for row in block.rows
+    ]
+
+
+def _reference_after_keyword(
+    *,
+    line_index: int,
+    line: str,
+    tokens: list[_input_syntax.OrcaLineToken],
+    keyword_index: int,
+) -> OrcaFileReference:
+    value_index = keyword_index + 1
+    if value_index < len(tokens) and tokens[value_index].value == "=":
+        value_index += 1
+    if value_index >= len(tokens):
+        raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
+    value_token = tokens[value_index]
+    value = value_token.value.strip()
+    if not value or (not value_token.quoted and value.lower() == "end"):
+        raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
+    return OrcaFileReference(
+        line_index=line_index,
+        value=value,
+        start=value_token.start,
+        end=value_token.end,
+        kind="auxiliary",
+    )
+
+
+def orca_moinp_references(lines: list[str]) -> list[OrcaFileReference]:
+    """Return every semantic top-level or ``%scf`` ``MOInp`` occurrence."""
+
+    references: list[OrcaFileReference] = []
+    for line_index, line in enumerate(lines):
+        tokens = _input_syntax.orca_line_tokens(line)
+        header = _input_blocks.percent_directive_header(tokens)
+        if header is None or header[0] != "moinp":
+            continue
+        references.append(
+            _reference_after_keyword(
+                line_index=line_index,
+                line=line,
+                tokens=tokens,
+                keyword_index=header[1] - 1,
+            )
+        )
+    for line_index, body_tokens in _scf_body_token_rows(lines):
+        for token_index, token in enumerate(body_tokens):
+            if token.quoted or token.value.lower() != "moinp":
+                continue
+            references.append(
+                _reference_after_keyword(
+                    line_index=line_index,
+                    line=lines[line_index],
+                    tokens=body_tokens,
+                    keyword_index=token_index,
+                )
+            )
+    return sorted(references, key=lambda reference: (reference.line_index, reference.start))
+
+
+def orca_input_requests_moread(lines: list[str]) -> bool:
+    """Return whether active route or ``%scf`` semantics request orbital reuse."""
+
+    if orca_moinp_references(lines):
+        return True
+    if any(
+        not token.quoted and token.value.lower() == "moread"
+        for line in lines
+        for token in _input_syntax.orca_route_tokens(line)
+    ):
+        return True
+    return any(
+        not token.quoted and token.value.lower() == "moread"
+        for _line_index, tokens in _scf_body_token_rows(lines)
+        for token in tokens
+    )
+
+
+def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:
+    ref = _input_syntax.quote_orca_path(
+        _input_syntax.format_relative_or_absolute(checkpoint, base_dir)
+    )
+    new_line = f"%moinp {ref}"
+    matches = [
+        idx
+        for idx, line in enumerate(lines)
+        if MOINP_RE.match(_input_syntax.active_orca_directive_text(line))
+    ]
+    semantic_references = orca_moinp_references(lines)
+    noncanonical_references = [
+        reference for reference in semantic_references if reference.line_index not in matches
+    ]
+    if noncanonical_references:
+        if len(semantic_references) != 1:
+            raise ValueError("ORCA input has duplicate semantic MOInp declarations")
+        reference = noncanonical_references[0]
+        current = lines[reference.line_index]
+        updated = current[: reference.start] + ref + current[reference.end :]
+        if updated == current:
+            return False
+        lines[reference.line_index] = updated
+        return True
+    if matches:
+        first = matches[0]
+        changed = lines[first] != new_line or len(matches) > 1
+        lines[first] = new_line
+        for idx in reversed(matches[1:]):
+            del lines[idx]
+        return changed
+
+    insert_at = _input_blocks.find_geometry_start(lines)
+    if insert_at is None:
+        insert_at = len(lines)
+    lines.insert(insert_at, new_line)
+    return True
+
+
 def neb_file_reference_context(
-    tokens: list[_input_blocks.OrcaLineToken],
+    tokens: list[_input_syntax.OrcaLineToken],
     *,
     in_neb_block: bool,
 ) -> tuple[set[int], bool]:
@@ -134,7 +320,7 @@ def scan_orca_file_references(
     lines: list[str],
     *,
     include_geometry: bool = True,
-) -> list[_input_blocks.OrcaFileReference]:
+) -> list[OrcaFileReference]:
     """Every external file reference of an ORCA input, or a fail-closed error.
 
     This is the single scanner shared by execution binding (which binds every
@@ -150,14 +336,14 @@ def scan_orca_file_references(
     directives, malformed references, and more than
     ``MAX_ORCA_INPUT_REFERENCES`` references.
     """
-    moinp_references = _input_blocks.orca_moinp_references(lines)
-    moinp_by_line: dict[int, list[_input_blocks.OrcaFileReference]] = {}
+    moinp_references = orca_moinp_references(lines)
+    moinp_by_line: dict[int, list[OrcaFileReference]] = {}
     for reference in moinp_references:
         moinp_by_line.setdefault(reference.line_index, []).append(reference)
-    references: list[_input_blocks.OrcaFileReference] = []
+    references: list[OrcaFileReference] = []
     in_neb_block = False
     for line_index, line in enumerate(lines):
-        tokens = _input_blocks.orca_line_tokens(line)
+        tokens = _input_syntax.orca_line_tokens(line)
         semantic_moinp_value_indices = {
             token_index
             for token_index, token in enumerate(tokens)
@@ -182,7 +368,7 @@ def scan_orca_file_references(
             # callers that filter geometry out of the returned set.
             reference_value_indices.add(4)
             references.append(
-                _input_blocks.OrcaFileReference(
+                OrcaFileReference(
                     line_index=line_index,
                     value=value_token.value,
                     start=value_token.start,
@@ -268,7 +454,7 @@ def scan_orca_file_references(
             if not value or (not value_token.quoted and value.lower() == "end"):
                 raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
             references.append(
-                _input_blocks.OrcaFileReference(
+                OrcaFileReference(
                     line_index=line_index,
                     value=value,
                     start=value_token.start,
@@ -287,5 +473,12 @@ def scan_orca_file_references(
 
 __all__ = [
     "MAX_ORCA_INPUT_REFERENCES",
+    "MOINP_RE",
+    "OrcaFileReference",
+    "checkpoint_file_looks_intact",
+    "nonempty_file",
+    "orca_input_requests_moread",
+    "orca_moinp_references",
     "scan_orca_file_references",
+    "set_moinp",
 ]

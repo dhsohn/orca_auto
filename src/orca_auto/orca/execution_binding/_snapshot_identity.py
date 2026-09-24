@@ -7,11 +7,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core import engine_runner as _engine_runner
-from orca_auto.core.engine_process import require_confined_regular_file
+from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
 from orca_auto.core.queue.engine.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KEY
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.orca import engine_runner as _engine_runner
 
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 

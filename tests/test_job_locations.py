@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 
 from orca_auto.core.indexing import JobLocationRecord, upsert_job_location
-from orca_auto.core.machine_observation import machine_json_bytes
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.job_locations import (
@@ -26,12 +25,14 @@ from orca_auto.orca.job_locations import (
     upsert_job_record,
 )
 from orca_auto.orca.job_locations._generation import payload_matches_queue_generation
+from orca_auto.orca.machine_observation import machine_json_bytes
 from orca_auto.orca.report import publication as orca_publication
 from orca_auto.orca.state_reading import (
     REPORT_JSON_NAME,
     report_json_path,
     state_path,
 )
+from tests.conftest import make_app_cfg, write_fake_orca
 from tests.engine_artifact_helpers import orca_artifact_payload
 
 
@@ -144,23 +145,14 @@ def _write_orca_report(reaction_dir: Path, **kwargs: Any) -> None:
     _write_json(report_json_path(reaction_dir), _orca_payload(reaction_dir=reaction_dir, **kwargs))
 
 
-def _make_cfg(root: Path) -> AppConfig:
-    fake_orca = root / "fake_orca"
-    fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
-    fake_orca.chmod(0o755)
-    return AppConfig(
-        runtime=OrcaRuntimeConfig(
-            allowed_root=str(root / "runs"),
-        ),
-        paths=PathsConfig(orca_executable=str(fake_orca)),
-        resources=CommonResourceConfig(max_cores_per_task=8, max_memory_gb_per_task=16),
-    )
-
-
 def test_upsert_job_record_writes_allowed_root_index_and_resolves_latest_dir() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        cfg = _make_cfg(root)
+        cfg = make_app_cfg(
+            root / "runs",
+            orca_executable=write_fake_orca(root / "fake_orca"),
+            resources=CommonResourceConfig(max_cores_per_task=8, max_memory_gb_per_task=16),
+        )
         allowed_root = Path(cfg.runtime.allowed_root)
         allowed_root.mkdir(parents=True)
         job_dir = allowed_root / "rxn_a"
@@ -236,7 +228,11 @@ def test_record_from_artifacts_uses_run_id_fallback() -> None:
 def test_job_locations_uses_core_indexing_backend() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
-        cfg = _make_cfg(root)
+        cfg = make_app_cfg(
+            root / "runs",
+            orca_executable=write_fake_orca(root / "fake_orca"),
+            resources=CommonResourceConfig(max_cores_per_task=8, max_memory_gb_per_task=16),
+        )
         allowed_root = Path(cfg.runtime.allowed_root)
         allowed_root.mkdir(parents=True)
         job_dir = allowed_root / "rxn_fallback"

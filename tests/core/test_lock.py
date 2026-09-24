@@ -23,7 +23,7 @@ def _hold_lock_then_crash(lock_path: str, ready) -> None:
 
 
 def test_file_lock_writes_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    lock_path = tmp_path / "nested" / "resource.lock"
+    lock_path = tmp_path / "resource.lock"
     monkeypatch.setattr("orca_auto.core.utils.lock.os.getpid", lambda: 4321)
     monkeypatch.setattr(
         "orca_auto.core.utils.lock.now_utc_iso", lambda: "2026-04-19T12:34:56+00:00"
@@ -32,8 +32,17 @@ def test_file_lock_writes_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     with file_lock(lock_path):
         contents = lock_path.read_text(encoding="utf-8")
 
-    assert lock_path.parent.exists()
     assert contents == "pid=4321\nacquired_at=2026-04-19T12:34:56+00:00\n"
+
+
+def test_file_lock_does_not_create_a_missing_lock_directory(tmp_path: Path) -> None:
+    lock_path = tmp_path / "nested" / "resource.lock"
+
+    with pytest.raises(FileNotFoundError):
+        with file_lock(lock_path):
+            pass
+
+    assert not lock_path.parent.exists()
 
 
 def test_file_lock_writes_custom_payload_and_reports_it_only_while_held(tmp_path: Path) -> None:
@@ -132,6 +141,7 @@ def test_file_lock_at_uses_pinned_directory_descriptor(tmp_path: Path) -> None:
     assert f"pid={os.getpid()}\n" in contents
 
 
+@pytest.mark.real_fsync
 def test_file_lock_at_does_not_fsync_its_diagnostic_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

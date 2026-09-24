@@ -14,18 +14,18 @@ from pathlib import Path
 import pytest
 
 from orca_auto.core.admission import AdmissionStore, reserve_slot, update_slot_metadata
-from orca_auto.core.queue.processes import write_worker_pid_file
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.queue.worker.pid_file import WORKER_PID_FILE_NAME, write_worker_pid_file
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING
 from orca_auto.orca.queue import adapter
-from orca_auto.orca.queue.adapter import DuplicateEntryError, dequeue_next, enqueue, list_queue
-from orca_auto.orca.queue.entries import WORKER_PID_FILE_NAME
+from orca_auto.orca.queue.adapter import DuplicateEntryError, enqueue, list_queue
 from orca_auto.orca.queue.orphans import reconcile_dead_running_rows_for_dir
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import finalize_state, new_state
 from orca_auto.orca.statuses import RunStatus
+from tests.conftest import claim_next_entry
 
 
 def _running_row(root: Path, name: str) -> tuple[Path, QueueEntry]:
@@ -33,7 +33,7 @@ def _running_row(root: Path, name: str) -> tuple[Path, QueueEntry]:
     rxn = root / name
     rxn.mkdir()
     entry = enqueue(root, str(rxn))
-    dequeued = dequeue_next(root)
+    dequeued = claim_next_entry(root)
     assert dequeued is not None and dequeued.queue_id == entry.queue_id
     return rxn, dequeued
 
@@ -58,7 +58,7 @@ def _snapshot(rxn: Path, status: str) -> RunSnapshot:
 
 
 def test_dead_running_row_lists_as_pending_until_a_worker_reconciles_it(tmp_path: Path) -> None:
-    from orca_auto.activity._orca import queue_entry_status
+    from orca_auto.orca.run_status import queue_entry_status
 
     rxn, entry = _running_row(tmp_path, "rxn")
 

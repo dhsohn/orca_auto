@@ -12,17 +12,21 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 | Command | Behavior and Guarantees |
 | :--- | :--- |
 | `init` | Creates or updates the shared configuration (`orca_auto.yaml`). Custom paths are specified via `--config`. |
-| `run-dir PATH` | Validates and durably enqueues an ORCA input directory, returning immediately upon acceptance. |
-| `queue list` | Queries queued/active jobs and the global active simulation count. Supports `--json` for automation. |
-| `queue list clear` | Clears terminal queue records and unlinks job-root run states while preserving generation artifacts on disk. |
-| `queue cancel TARGET` | Cancels a job by queue ID, run ID, or unambiguous directory path alias. |
+| `run-dir PATH` | Validates and durably enqueues an ORCA input directory, returning immediately upon acceptance. A config that does not load (`invalid_config`) or a corrupt `queue.json` (`queue_store_corrupt`) is one `error:` line with exit 1. |
+| `queue list` | Queries queued/active jobs and the global active simulation count. Supports `--json` for automation. Exits 1 without a discoverable config or an existing `runs_root`, creating nothing. A corrupt `admission_slots.json` is reported as an `admission_blockers` entry (scope `admission_store`) while `active_simulations` falls back to the listing's count; each row carries `worker_log`. |
+| `queue list clear` | Clears terminal queue records and unlinks job-root run states while preserving generation artifacts on disk; also removes each cleared row's worker log and publication lock file. Exits 1 without a discoverable config or an existing `runs_root`. |
+| `queue cancel TARGET` | Cancels a job by queue ID, run ID, or unambiguous directory path alias. Exits 1 without a discoverable config or an existing `runs_root`. |
 | `index prune` | Previews indexed rows whose disk paths no longer exist. Removes them only when `--apply` is passed. |
 | `index rebuild` | Re-derives `job_locations.json` rows from every `job_state.json` under `runs_root`, adding or updating rows by job id and never removing one. `--dry-run` reports without writing. |
-| `systemd install` | Installs systemd unit templates for the specified user and repository or prepared runtime root (`--repo`). |
-| `service status` | Inspects systemd units and verifies worker process freshness against the checkout HEAD or the installed runtime build. Returns non-zero when a unit is unhealthy or a worker is stale or undetermined. |
-| `service restart` | Refuses restart if active calculations or reservations exist, preventing accidental data loss. Use `--force` to bypass. |
+| `systemd install` | Installs systemd unit templates for the specified user and repository or prepared runtime root (`--repo`). A config that exists but does not load exits 1 and writes no units; `TimeoutStopSec` is rendered from `scheduler.max_active_simulations`. |
+| `service status` | Inspects systemd units and verifies worker process freshness against the checkout HEAD or the installed runtime build. Exits 1 (`ok: false` under `--json`) when a unit is unhealthy or a worker is stale or undetermined. |
+| `service restart` | Refuses restart if active calculations or reservations exist, preventing accidental data loss. Use `--force` to bypass. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
 | `scratch list` | Lists RAM-scratch workspaces under `orca.runtime.scratch_root` and whether any non-live workspace blocks new scratch launches. Exits 0 even when blockers exist; supports `--json`. |
-| `scratch clear NAME` / `--all-stale` | Removes non-live (`stale`, `unverifiable`, `invalid-manifest`) scratch workspaces. Live workspaces are refused; exits 1 when nothing was removed or a target was refused. |
+| `scratch clear NAME` / `--all-stale` | Removes non-live (`stale`, `unverifiable`, `invalid-manifest`) scratch workspaces. Live workspaces are refused; exits 1 when a target was refused, while `--all-stale` with nothing to remove exits 0. Publication temp files of the durable generation are cleaned only when the manifest was valid and the generation lies under `runs_root`; otherwise the path is left alone and named in `durable_note`. |
+
+### JSON output and exit codes
+- Every `--json` document carries `ok`, `true` exactly when the command exits 0. A failed command prints `{"ok": false, "error": "<message>"}` on stdout and still writes the `error:` line to stderr.
+- Exit code 0 means success or nothing to do; 1 means the command was refused, failed or was invalid; 2 is an argparse usage error. Raw exit codes of `sudo`/`systemctl` are never passed through.
 
 ### `run-dir` Behavior
 - Automatically detects the most recently modified eligible `.inp` file in the target directory (ties broken alphabetically by filename).

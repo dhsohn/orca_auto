@@ -1,3 +1,5 @@
+"""Resolve a job's molecule key (user ``# TAG``, Hill formula, or directory name)."""
+
 from __future__ import annotations
 
 import logging

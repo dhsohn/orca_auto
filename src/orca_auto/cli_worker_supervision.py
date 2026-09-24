@@ -12,8 +12,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.terminal import emit_error
+from orca_auto.core.config.schema import SchedulerConfig
+from orca_auto.core.queue.processes import KILL_TIMEOUT_SECONDS, worker_shutdown_budget_seconds
 from orca_auto.core.utils import normalize_text
+from orca_auto.terminal import emit_error
 
 LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +27,12 @@ class WorkerSpec:
     cwd: str | None = None
     env: dict[str, str] | None = None
     restart_on_clean_exit: bool = True
+    # How long the supervisor waits after SIGTERM before it kills the worker:
+    # the worker's own worst-case shutdown (stop every child, requeue each
+    # row), derived from the same constants the worker stops children with.
+    stop_timeout_seconds: float = worker_shutdown_budget_seconds(
+        SchedulerConfig.max_active_simulations
+    )
 
     def to_dict(self) -> dict[str, Any]:
         env_payload: dict[str, str] | None = None
@@ -43,10 +51,11 @@ class WorkerSpec:
             "cwd": self.cwd or "",
             "env": env_payload,
             "restart_on_clean_exit": self.restart_on_clean_exit,
+            "stop_timeout_seconds": self.stop_timeout_seconds,
         }
 
 
-def _quoted_command(command_argv: Sequence[str]) -> str:
+def quoted_command(command_argv: Sequence[str]) -> str:
     return " ".join(shlex.quote(part) for part in command_argv)
 
 
@@ -72,7 +81,7 @@ class _SupervisorShutdown:
     requested: bool = False
 
 
-def _terminate_process(proc: subprocess.Popen[Any]) -> None:
+def _terminate_process(proc: subprocess.Popen[Any], *, stop_timeout_seconds: float) -> None:
     if proc.poll() is not None:
         return
     try:
@@ -81,7 +90,7 @@ def _terminate_process(proc: subprocess.Popen[Any]) -> None:
         LOGGER.debug("failed to terminate supervised worker process", exc_info=True)
         return
 
-    deadline = time.monotonic() + 10.0
+    deadline = time.monotonic() + max(0.0, float(stop_timeout_seconds))
     while proc.poll() is None and time.monotonic() < deadline:
         time.sleep(0.1)
     if proc.poll() is not None:
@@ -93,13 +102,13 @@ def _terminate_process(proc: subprocess.Popen[Any]) -> None:
         LOGGER.debug("failed to kill supervised worker process", exc_info=True)
         return
 
-    deadline = time.monotonic() + 5.0
+    deadline = time.monotonic() + KILL_TIMEOUT_SECONDS
     while proc.poll() is None and time.monotonic() < deadline:
         time.sleep(0.1)
 
 
 def _spawn_supervised_worker(spec: WorkerSpec, *, restart: bool = False) -> _SupervisedWorker:
-    command_text = _quoted_command(spec.argv)
+    command_text = quoted_command(spec.argv)
     action = "restarting" if restart else "starting"
     print(f"{action} worker[{spec.app}]: {command_text}")
     return _SupervisedWorker(
@@ -245,10 +254,10 @@ def _supervise_worker_processes(
 
 def _terminate_supervised_workers(processes: Sequence[_SupervisedWorker]) -> None:
     for managed in processes:
-        _terminate_process(managed.process)
+        _terminate_process(managed.process, stop_timeout_seconds=managed.spec.stop_timeout_seconds)
 
 
-def _run_worker_supervisor(
+def run_worker_supervisor(
     specs: Sequence[WorkerSpec],
     *,
     startup_stagger_seconds: float = _WORKER_START_STAGGER_SECONDS,

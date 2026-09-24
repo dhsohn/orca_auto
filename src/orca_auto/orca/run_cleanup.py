@@ -1,23 +1,34 @@
+"""``queue list clear`` for ORCA: drop terminal queue rows, their worker logs and stale states.
+
+Queue rows and their ``<runs_root>/logs/<queue_id>.log`` files go together
+under the queue lock; a run state is unlinked only after a locked re-check
+that no queue generation still owns it.
+"""
+
 from __future__ import annotations
 
 import logging
 import os
 import stat
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, NamedTuple
 
+from orca_auto.core import activity_invalidation as _activity_invalidation
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.process_tracking import run_lock_is_held
+from orca_auto.core.utils.stable_fs import StableFsError, open_pinned_directory
 
 from .queue.adapter import (
     ACTIVE_STATUSES,
     TERMINAL_STATUSES,
-    clear_terminal,
     is_orca_queue_entry,
     list_queue,
     queue_entry_reaction_dir,
     queue_entry_status,
+    worker_log_path,
 )
 from .queue.entries import queue_entry_is_retired_workflow_owned
 from .queue.terminal_replay import (
@@ -26,9 +37,9 @@ from .queue.terminal_replay import (
 )
 from .run_snapshot import (
     RunSnapshot,
-    _load_pinned_state,
-    _state_publication_identity,
     collect_run_snapshots,
+    load_pinned_state,
+    state_publication_identity,
 )
 from .state import STATE_MUTATION_LOCK_FILE_NAME
 from .state_reading import STATE_FILE_NAME
@@ -127,34 +138,25 @@ def _open_stable_reaction_dir(
     *,
     expected_identity: tuple[int, int] | None,
 ) -> int | None:
-    """Open a no-follow directory handle after a final production-boundary check."""
+    """Open a pinned no-follow directory handle after a final production-boundary check.
+
+    ``None`` when the directory is excluded from the scan, cannot be opened, or
+    no longer names the inode the snapshot was collected from.
+    """
 
     if expected_identity is None or should_exclude_from_production_runs_scan(
         reaction_dir, allowed_root
     ):
         return None
 
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
-        directory_fd = os.open(reaction_dir, flags)
-    except OSError:
+        directory_fd, _identity = open_pinned_directory(
+            reaction_dir, expected_identity=expected_identity
+        )
+    except (StableFsError, OSError):
         return None
 
-    try:
-        opened_stat = os.fstat(directory_fd)
-        if (opened_stat.st_dev, opened_stat.st_ino) != expected_identity:
-            raise OSError("reaction directory no longer matches the collected snapshot")
-        current_stat = reaction_dir.lstat()
-        if not stat.S_ISDIR(current_stat.st_mode):
-            raise OSError("reaction directory was replaced with a non-directory")
-        if (current_stat.st_dev, current_stat.st_ino) != (
-            opened_stat.st_dev,
-            opened_stat.st_ino,
-        ):
-            raise OSError("reaction directory changed while it was opened")
-        if should_exclude_from_production_runs_scan(reaction_dir, allowed_root):
-            raise OSError("reaction directory is inside a reserved or unsafe scan tree")
-    except OSError:
+    if should_exclude_from_production_runs_scan(reaction_dir, allowed_root):
         os.close(directory_fd)
         return None
     return directory_fd
@@ -163,13 +165,13 @@ def _open_stable_reaction_dir(
 def _snapshot_state_is_current(snapshot: RunSnapshot, directory_fd: int) -> bool:
     if snapshot.state_file_identity is None:
         return False
-    loaded_state = _load_pinned_state(directory_fd)
+    loaded_state = load_pinned_state(directory_fd)
     if loaded_state is None:
         return False
     state_payload, state_file_identity = loaded_state
     if state_file_identity != snapshot.state_file_identity:
         return False
-    run_identity, generation_identity = _state_publication_identity(state_payload)
+    run_identity, generation_identity = state_publication_identity(state_payload)
     return bool(
         run_identity == snapshot.state_run_identity
         and generation_identity == snapshot.state_generation_identity
@@ -255,9 +257,9 @@ def clear_terminal_run_states(allowed_root: Path) -> int:
                         continue
                     if not _snapshot_state_is_current(snapshot, directory_fd):
                         continue
-                    from orca_auto.core.activity_invalidation import invalidate_state
-
-                    invalidate_state(snapshot.reaction_dir, root=allowed_root)
+                    _activity_invalidation.invalidate_state(
+                        snapshot.reaction_dir, root=allowed_root
+                    )
                     os.unlink(STATE_FILE_NAME, dir_fd=directory_fd)
                     run_count += 1
         except FileNotFoundError:
@@ -270,7 +272,85 @@ def clear_terminal_run_states(allowed_root: Path) -> int:
     return run_count
 
 
-def clear_terminal_entries(allowed_root: Path) -> tuple[int, int]:
+def _remove_worker_log(allowed_root: Path, queue_id: str) -> bool:
+    """Unlink one cleared row's worker log; ``True`` when a file was removed.
+
+    The ``logs/`` directory is opened without following symlinks, mirroring the
+    writer (``open_confined_log``), so a redirected directory never steers the
+    unlink outside the runs root.
+    """
+    try:
+        log_path = worker_log_path(allowed_root, queue_id)
+        directory_fd = os.open(
+            log_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to remove worker log for %s: %s", queue_id, exc)
+        return False
+    try:
+        os.unlink(log_path.name, dir_fd=directory_fd)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        logger.warning("Failed to remove worker log for %s: %s", queue_id, exc)
+        return False
+    finally:
+        os.close(directory_fd)
+    return True
+
+
+def clear_terminal_queue_entries(allowed_root: Path) -> tuple[int, int]:
+    """Remove terminal ORCA queue rows and their worker logs; returns both counts.
+
+    The log of every removed row is unlinked inside the store's queue lock,
+    right after the queue file is rewritten without the row, so a retained row
+    (undrained replay marker, other app, retired workflow) keeps its log and a
+    concurrent clear cannot see the row without its log or the reverse.
+    """
+    loaded: list[Any] = []
+    removed_logs = 0
+
+    def load(root: Path) -> list[Any]:
+        loaded[:] = _queue_store.load_entries(root)
+        return list(loaded)
+
+    def save(root: Path, kept: Sequence[Any]) -> None:
+        nonlocal removed_logs
+        _queue_store.save_entries(root, kept)
+        kept_ids = {entry.queue_id for entry in kept}
+        removed_logs += sum(
+            _remove_worker_log(allowed_root, entry.queue_id)
+            for entry in loaded
+            if entry.queue_id not in kept_ids
+        )
+
+    queue_count = _queue_store.clear_terminal(
+        allowed_root,
+        retain_entry_fn=lambda entry: (
+            terminal_replay_marker_kind(entry) is not TerminalReplayMarkerKind.ABSENT
+        ),
+        select_entry_fn=lambda entry: (
+            is_orca_queue_entry(entry)
+            and not queue_entry_is_retired_workflow_owned(entry, allowed_root)
+        ),
+        load_entries_fn=load,
+        save_entries_fn=save,
+    )
+    logger.info("Cleared %d terminal entries", queue_count)
+    return queue_count, removed_logs
+
+
+class TerminalClearCounts(NamedTuple):
+    """What one ``queue list clear`` removed."""
+
+    queue_entries: int
+    run_states: int
+    worker_logs: int
+
+
+def clear_terminal_records(allowed_root: Path) -> TerminalClearCounts:
     run_count = clear_terminal_run_states(allowed_root)
-    queue_count = clear_terminal(allowed_root)
-    return queue_count, run_count
+    queue_count, log_count = clear_terminal_queue_entries(allowed_root)
+    return TerminalClearCounts(queue_count, run_count, log_count)

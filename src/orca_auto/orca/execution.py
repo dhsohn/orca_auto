@@ -1,8 +1,20 @@
+"""Run one selected ORCA input to a terminal result under the reaction lock.
+
+``execute_orca_run`` is the single entry point: it takes the reaction lock,
+recovers a crashed resumable state, activates the queue's admission
+reservation, settles from an already completed output when
+``output_adoption`` says one exists, reserves RAM scratch, and otherwise
+loads (or creates) ``job_state.json`` and drives ``attempt.engine.run_attempts``
+with a runner built for the configured scratch and admission registrars.
+Admission-related failures release the reservation before they are reported.
+Input selection (``select_latest_inp``) and the direct-run lock probe
+(``active_direct_run_error``) live here because submission shares them.
+"""
+
 from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any
@@ -16,35 +28,25 @@ from orca_auto.core.admission import (
     release_slot,
 )
 from orca_auto.core.admission import activate_reserved_slot as _activate_reserved_slot
-from orca_auto.core.engine_process import require_confined_regular_file
+from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, run_lock_status
 
-from .attempt.engine import _exit_with_result, run_attempts
-from .attempt.reporting import last_out_path_from_state
-from .attempt.resume import resume_terminal_decision
-from .completion_rules import detect_completion_mode
+from .attempt.engine import run_attempts
 from .notifications import (
     notification_channel,
     notify_run_finished_event,
     notify_run_started_event,
 )
 from .orca_runner import OrcaRunner
-from .out_analyzer import analyze_output
+from .output_adoption import existing_completed_exit, to_resolved_local
+from .output_adoption import existing_completed_out as existing_completed_out
 from .run_context import RunExecutionContext
 from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy
-from .state import save_state
-from .state_machine import (
-    RESUMABLE_RUN_STATUSES,
-    is_resumable_state,
-    load_or_create_state,
-    parse_analyzer_status,
-    state_matches_selected,
-)
+from .state import RESUMABLE_RUN_STATUSES, load_or_create_state, save_state
 from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
-from .types import RunState
 
 ORCA_GENERATED_INP_RE = re.compile(
     r"\.(scfgrad|scfhess|cis|autoci|cipsi|mrci|mdci|eprnmr|loc|nbo|compound|hess)"
@@ -80,10 +82,6 @@ def select_latest_inp(reaction_dir: Path) -> Path:
             candidates[0].name,
         )
     return candidates[0]
-
-
-def _to_resolved_local(path_text: str) -> Path:
-    return Path(path_text).expanduser().resolve()
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -178,40 +176,6 @@ def _admission_context(
     )
 
 
-def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:
-    base_stem = selected_inp.stem
-
-    out_candidates = list(selected_inp.parent.glob(f"{base_stem}.out"))
-    out_candidates.sort(key=lambda p: (p.stat().st_mtime_ns, p.name.lower()), reverse=True)
-
-    seen: set[Path] = set()
-    for out_path in out_candidates:
-        resolved = out_path.resolve()
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-
-        mode_inp = out_path.with_suffix(".inp")
-        if not mode_inp.exists():
-            mode_inp = selected_inp
-        if _out_is_older_than_inputs(out_path, selected_inp=selected_inp, mode_inp=mode_inp):
-            continue
-        mode = detect_completion_mode(mode_inp)
-        analysis = analyze_output(out_path, mode)
-        if analysis.status != AnalyzerStatus.COMPLETED:
-            continue
-        return {
-            "out_path": str(out_path),
-            "analysis": analysis,
-        }
-    return None
-
-
-def _out_is_older_than_inputs(out_path: Path, *, selected_inp: Path, mode_inp: Path) -> bool:
-    newest_input_mtime_ns = max(selected_inp.stat().st_mtime_ns, mode_inp.stat().st_mtime_ns)
-    return out_path.stat().st_mtime_ns < newest_input_mtime_ns
-
-
 def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool:
     """Recover resumable run state after admission has reconciled engine ownership."""
     state = load_state(reaction_dir)
@@ -233,8 +197,6 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
         "reason": "crashed_recovery",
         "analyzer_status": AnalyzerStatus.INCOMPLETE.value,
     }
-    from .state import save_state
-
     save_state(reaction_dir, state)
     return True
 
@@ -338,112 +300,6 @@ def run_with_state(
     )
 
 
-def _state_with_recorded_attempt(reaction_dir: Path, selected_inp: Path) -> RunState | None:
-    # Read-only: load_or_create_state clears the resumable final result as it
-    # loads, so a second load would no longer recognize the state as resumable.
-    state = load_state(reaction_dir)
-    if not state or not state_matches_selected(
-        state, selected_inp, to_resolved_local=_to_resolved_local
-    ):
-        return None
-    attempts = state.get("attempts")
-    if not isinstance(attempts, list) or not attempts or not isinstance(attempts[-1], dict):
-        return None
-    return state
-
-
-def _recorded_attempt_failed(state: RunState) -> bool:
-    recorded = parse_analyzer_status(
-        str(state["attempts"][-1].get("analyzer_status") or "").strip()
-    )
-    return recorded != AnalyzerStatus.COMPLETED
-
-
-def existing_completed_exit(
-    *,
-    reaction_dir: Path,
-    selected_inp: Path,
-    admission_root: Path,
-    reservation_token: str | None,
-    admission_task_id: str | None,
-    execution_provenance: Mapping[str, Any] | None = None,
-    queue_id: str | None = None,
-    queue_generation: str | None = None,
-) -> int | None:
-    del admission_root, reservation_token
-    done = existing_completed_out(selected_inp)
-    if done is None:
-        return None
-    recorded = _state_with_recorded_attempt(reaction_dir, selected_inp)
-    if recorded is not None:
-        # The run already recorded its analyzer verdict for this generation, and
-        # that verdict was reconciled with the process exit code when it was
-        # saved. The completion marker alone must not publish success over it.
-        if is_resumable_state(recorded):
-            # The ordinary resume path settles from the record.
-            return None
-        if recorded.get("status") == RunStatus.FAILED.value and _recorded_attempt_failed(recorded):
-            # Loading this state would replace it and erase the attempt record.
-            if isinstance(recorded.get("final_result"), dict):
-                # Already settled: keep its reason, diagnostics and
-                # notification marker exactly as published.
-                logger.warning(
-                    "Keeping the settled failed result in %s over a completed-looking output",
-                    reaction_dir,
-                )
-                return 1
-            return resume_terminal_decision(
-                reaction_dir=reaction_dir,
-                selected_inp=selected_inp,
-                state=recorded,
-                resumed=True,
-                last_out_path_from_state=last_out_path_from_state,
-                exit_with_result=_exit_with_result,
-                emit=_emit,
-            )
-
-    state, resumed = load_or_create_state(
-        reaction_dir,
-        selected_inp,
-        to_resolved_local=_to_resolved_local,
-    )
-    state_changed = False
-    if execution_provenance and state.get("execution_provenance") != dict(execution_provenance):
-        state["execution_provenance"] = dict(execution_provenance)
-        state_changed = True
-    task_id = str(admission_task_id or "").strip()
-    if task_id and state.get("job_id") != task_id:
-        # A queued child may discover an already-completed output before the
-        # ordinary state-loading path below runs. Stamp the queue task ID
-        # first so the terminal replay can bind the resulting artifacts to
-        # this queue generation.
-        state["job_id"] = task_id
-        state_changed = True
-    resolved_queue_id = str(queue_id or "").strip()
-    if resolved_queue_id and state.get("queue_id") != resolved_queue_id:
-        state["queue_id"] = resolved_queue_id
-        state_changed = True
-    resolved_queue_generation = str(queue_generation or "").strip()
-    if resolved_queue_generation and state.get("queue_generation") != resolved_queue_generation:
-        state["queue_generation"] = resolved_queue_generation
-        state_changed = True
-    if state_changed:
-        save_state(reaction_dir, state)
-    return _exit_with_result(
-        reaction_dir,
-        state,
-        selected_inp,
-        status=RunStatus.COMPLETED,
-        analyzer_status=AnalyzerStatus.COMPLETED,
-        reason="existing_out_completed",
-        last_out_path=done["out_path"],
-        resumed=True if resumed else None,
-        exit_code=0,
-        emit=_emit,
-        extra={"skipped_execution": True},
-    )
-
-
 def execute_locked_run(
     context: RunExecutionContext,
     *,
@@ -468,6 +324,7 @@ def execute_locked_run(
                     execution_provenance=context.execution_provenance,
                     queue_id=context.queue_id or "",
                     queue_generation=context.queue_generation or "",
+                    emit=_emit,
                 )
                 if existing_exit is not None:
                     return existing_exit
@@ -510,7 +367,7 @@ def _load_state_and_run(
     state, resumed = load_or_create_state(
         context.reaction_dir,
         context.selected_inp,
-        to_resolved_local=_to_resolved_local,
+        to_resolved_local=to_resolved_local,
     )
     state_changed = False
     if context.execution_provenance and state.get("execution_provenance") != dict(

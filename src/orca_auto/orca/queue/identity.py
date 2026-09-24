@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from orca_auto.core.engine_catalog import find_engine_catalog_entry
+from ..engine_catalog import find_engine_catalog_entry
 
 
 def _entry_text(entry: Any, field: str) -> str:

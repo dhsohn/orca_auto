@@ -16,6 +16,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from .utils.coercion import normalize_text
+
 DB_NAME = ".activity.sqlite3"
 # Bump whenever the mirrored layout changes; an older projection is dropped and
 # rebuilt from the canonical sources instead of being read with new rules.
@@ -111,8 +113,6 @@ def path_token(path: str) -> str:
 
 
 def source_tokens(kind: str, body: dict[str, Any]) -> set[str]:
-    from .utils.coercion import normalize_text
-
     if kind == "queue":
         value = body.get("metadata", {})
         paths = [value.get("reaction_dir") or value.get("job_dir") or ""]

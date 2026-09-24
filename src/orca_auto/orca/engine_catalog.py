@@ -1,8 +1,8 @@
 """Import-safe identity for the one supported engine (standalone ORCA).
 
 The catalog carries only what is persisted as queue/admission identity or read
-by the worker at admission time. It imports nothing from ``orca_auto.orca`` so
-the CLI and activity code can consult engine identity without pulling in the
+by the worker at admission time. It imports nothing else from ``orca_auto.orca``
+so the CLI and activity code can consult engine identity without pulling in the
 execution stack.
 """
 

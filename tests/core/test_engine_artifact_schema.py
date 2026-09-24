@@ -4,7 +4,7 @@ from enum import Enum
 
 import pytest
 
-from orca_auto.core.engines.artifacts import (
+from orca_auto.orca.engine_artifacts import (
     EngineArtifactInput,
     EngineArtifactJob,
     EngineArtifactProcess,
@@ -20,7 +20,7 @@ class _StringStatus(str, Enum):
     COMPLETED = "completed"
 
 
-@pytest.mark.parametrize("engine", ["orca", "xtb", "crest"])
+@pytest.mark.parametrize("engine", ["orca", "other"])
 @pytest.mark.parametrize("state", ["running", "completed", "failed", "cancelled"])
 def test_engine_artifact_payload_has_common_shape(engine: str, state: str) -> None:
     payload = build_engine_artifact_payload(
@@ -108,18 +108,11 @@ def test_engine_artifact_payload_has_common_shape(engine: str, state: str) -> No
             },
         ),
         (
-            "xtb",
+            "other",
             {
                 "candidate_count": 2,
-                "selected_candidate_paths": ["/tmp/job/best.xyz"],
+                "selected_candidate_paths": ["/tmp/job/best.xyz", "/tmp/job/second.xyz"],
                 "analysis_summary": {"best_total_energy": -1.0},
-            },
-        ),
-        (
-            "crest",
-            {
-                "retained_conformer_count": 2,
-                "retained_conformer_paths": ["/tmp/job/conf-a.xyz", "/tmp/job/conf-b.xyz"],
             },
         ),
     ],

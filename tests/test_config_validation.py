@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.config.files import load_shared_config_mapping
 from orca_auto.core.config.schema import messenger_config_from_mapping
-from orca_auto.orca.config import load_config
+from orca_auto.orca.config import load_config, load_orca_shared_config_mapping
+from tests.conftest import write_fake_orca
 
 
 def _orca_config(payload: dict[str, object]) -> dict[str, object]:
@@ -19,12 +19,6 @@ def _orca_config(payload: dict[str, object]) -> dict[str, object]:
             orca[key] = value
     normalized["orca"] = orca
     return normalized
-
-
-def _write_fake_executable(path: Path) -> Path:
-    path.write_text("#!/bin/sh\n", encoding="utf-8")
-    path.chmod(0o755)
-    return path
 
 
 def _write_orca_config(config_path: Path, payload: dict[str, object]) -> Path:
@@ -104,7 +98,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -122,7 +116,7 @@ class TestConfigValidation:
             root = Path(td)
             allowed = root / "orca_runs"
             allowed.mkdir()
-            fake_orca = _write_fake_executable(root / "orca")
+            fake_orca = write_fake_orca(root / "orca")
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
                 {
@@ -146,7 +140,7 @@ class TestConfigValidation:
             root = Path(td)
             allowed = root / "orca_runs"
             allowed.mkdir()
-            fake_orca = _write_fake_executable(root / "orca")
+            fake_orca = write_fake_orca(root / "orca")
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
                 {
@@ -164,7 +158,7 @@ class TestConfigValidation:
             root = Path(td)
             allowed = root / "orca_runs"
             allowed.mkdir()
-            fake_orca = _write_fake_executable(root / "orca")
+            fake_orca = write_fake_orca(root / "orca")
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
                 {
@@ -183,7 +177,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -216,7 +210,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
                 {
@@ -235,7 +229,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -258,7 +252,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -278,7 +272,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -310,7 +304,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -334,7 +328,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
             shared_admission = root / "shared-admission"
 
             cfg_path = _write_orca_config(
@@ -365,7 +359,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -391,7 +385,7 @@ class TestConfigValidation:
     def test_shipped_example_config_loads_through_shared_validation(self) -> None:
         """bootstrap copies this template verbatim, so it must stay loadable."""
         example = Path(__file__).resolve().parents[1] / "config" / "orca_auto.yaml.example"
-        _, raw = load_shared_config_mapping(example)
+        _, raw = load_orca_shared_config_mapping(example)
         messenger = messenger_config_from_mapping(raw.get("messenger"))
         # The template ships blank credentials, so notifications stay off.
         assert messenger.enabled is False
@@ -412,7 +406,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -446,7 +440,7 @@ class TestConfigValidation:
             allowed = root / "orca_runs"
             allowed.mkdir()
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
 
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -503,7 +497,7 @@ class TestConfigValidation:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
             secret_path = root / "private-runs-secret-missing"
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
@@ -523,7 +517,7 @@ class TestConfigValidation:
             not_a_dir = root / "private-runs-secret-file"
             not_a_dir.write_text("oops", encoding="utf-8")
             fake_orca = root / "orca"
-            _write_fake_executable(fake_orca)
+            write_fake_orca(fake_orca)
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
                 {

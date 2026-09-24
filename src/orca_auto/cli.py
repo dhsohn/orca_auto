@@ -1,3 +1,5 @@
+"""``orca_auto`` entry point: parse one command line and dispatch it."""
+
 from __future__ import annotations
 
 import argparse
@@ -79,7 +81,7 @@ def main(
     process evidence before the worker starts, bound to the parser's own
     dispatch rather than to a raw ``sys.argv`` prefix.
     """
-    from orca_auto.core import terminal
+    from orca_auto import terminal
 
     parser = build_parser()
     args = parser.parse_args(argv)

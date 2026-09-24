@@ -1,3 +1,5 @@
+"""Plain-text rendering of activity rows: the queue table and its trailing notes."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -6,7 +8,12 @@ from typing import Any
 
 from orca_auto import activity_labels as _activity_labels
 from orca_auto import terminal_table as _terminal_table
+from orca_auto.core import statuses as _s
 from orca_auto.core.utils import normalize_text, safe_int
+
+#: Rows whose worker log is worth a line: a running job an operator may want
+#: to tail, or a failed one whose log explains the failure.
+_WORKER_LOG_STATUSES = frozenset({_s.STATUS_RUNNING, *_s.FAILED_STATUSES})
 
 
 def _tree_prefixes(indents: Sequence[int]) -> list[str]:
@@ -147,6 +154,21 @@ def queue_pending_cancel_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> li
     ]
 
 
+def queue_worker_log_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> list[str]:
+    """One ``worker_log:`` note per running or failed row that has a log.
+
+    Printed under the table like the cancel note: the path would not survive
+    the ``detail`` column's width cap, and a finished job's log is noise.
+    """
+
+    lines = []
+    for _indent, item in rows:
+        path = normalize_text(item.get("worker_log"))
+        if path and _s.normalize_status(item.get("status")) in _WORKER_LOG_STATUSES:
+            lines.append(f"worker_log: {normalize_text(item.get('activity_id')) or '-'} {path}")
+    return lines
+
+
 def queue_admission_blocker_lines(blockers: Sequence[dict[str, Any]]) -> list[str]:
     lines = []
     for blocker in blockers:
@@ -178,4 +200,7 @@ def queue_clear_lines(payload: dict[str, Any]) -> list[str]:
         count = int(cleared.get(key, 0) or 0)
         if count > 0:
             lines.append(f"  {label}: {count}")
+    removed_logs = int(payload.get("removed_worker_logs", 0) or 0)
+    if removed_logs > 0:
+        lines.append(f"  worker logs removed: {removed_logs}")
     return lines

@@ -178,3 +178,40 @@ def test_terminal_max_width_returns_none_without_terminal(monkeypatch) -> None:
     )
 
     assert terminal_table.terminal_max_width() is None
+
+
+def test_queue_worker_log_lines_name_running_and_failed_rows_only() -> None:
+    from orca_auto import activity_rendering
+
+    rows = [
+        (0, {"activity_id": "q-run", "status": "running", "worker_log": "/runs/logs/q-run.log"}),
+        (0, {"activity_id": "q-rb", "status": "repair_blocked", "worker_log": "/l/q-rb.log"}),
+        (0, {"activity_id": "q-done", "status": "completed", "worker_log": "/l/q-done.log"}),
+        (0, {"activity_id": "q-nolog", "status": "running", "worker_log": ""}),
+        (0, {"activity_id": "q-legacy", "status": "failed"}),
+    ]
+
+    assert activity_rendering.queue_worker_log_lines(rows) == [
+        "worker_log: q-run /runs/logs/q-run.log",
+        "worker_log: q-rb /l/q-rb.log",
+    ]
+    assert activity_rendering.queue_worker_log_lines([]) == []
+
+
+def test_queue_clear_lines_report_removed_worker_logs() -> None:
+    from orca_auto import activity_rendering
+
+    lines = activity_rendering.queue_clear_lines(
+        {
+            "total_cleared": 2,
+            "cleared": {"orca_queue_entries": 2, "orca_run_states": 0},
+            "removed_worker_logs": 1,
+        }
+    )
+
+    assert lines == [
+        "Cleared 2 completed/failed/cancelled entries.",
+        "  ORCA queue entries: 2",
+        "  worker logs removed: 1",
+    ]
+    assert activity_rendering.queue_clear_lines({"total_cleared": 0}) == ["Nothing to clear."]

@@ -6,8 +6,8 @@ Linux/WSL에서 독립 ORCA 작업을 디스크 큐와 백그라운드 감독 �
 
 ## 검증
 
-`make check`가 target-local `.venv`를 준비하고 Ruff·format·mypy·import-linter·전체
-pytest/coverage를 실행한다. 운영 checkout과 분리한 worktree에서 실행한다.
+`make check`가 target-local `.venv`를 준비하고 Ruff·format·mypy·import-linter·문서
+대칭 검사(`scripts/check_docs_parity.py`)·전체 pytest/coverage를 실행한다. 운영 checkout과 분리한 worktree에서 실행한다.
 패키지·설치 변경에는 `make check-packages`도 필요하다. 릴리스에는
 `bash examples/fake_orca_smoke/run.sh`를 추가한다.
 

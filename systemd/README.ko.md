@@ -27,7 +27,7 @@ orca_auto-runtime@USER.target          # 런타임 최상위 관리 타깃
 ## 2. 유닛 등록 및 서비스 관리
 
 ### 유닛 등록 (설치)
-설치기는 `/etc/systemd/system/`에 템플릿 유닛을 렌더링합니다. `.venv`가 포함된 소스 체크아웃 경로 또는 빌드된 런타임 루트(`--repo`)와 대상 사용자(`--user`)가 필요합니다. `--config`의 기본값은 대상 사용자의 `~/orca_auto/config/orca_auto.yaml`이며, 유닛은 이 경로를 `ORCA_AUTO_CONFIG`로 바인딩하고 `ExecStart`는 엔진 옵션 없이 `queue worker`를 실행합니다:
+설치기는 `/etc/systemd/system/`에 템플릿 유닛을 렌더링합니다. `.venv`가 포함된 소스 체크아웃 경로 또는 빌드된 런타임 루트(`--repo`)와 대상 사용자(`--user`)가 필요합니다. `--config`의 기본값은 대상 사용자의 `~/orca_auto/config/orca_auto.yaml`이며, 유닛은 이 경로를 `ORCA_AUTO_CONFIG`로 바인딩하고 `ExecStart`는 엔진 옵션 없이 `queue worker`를 실행하며, `TimeoutStopSec`은 설정된 `scheduler.max_active_simulations`에서 계산해 렌더링합니다(아래 참고). 설정 파일이 존재하지만 읽을 수 없으면 유닛을 하나도 쓰지 않고 설치가 실패합니다:
 ```bash
 # 현재 사용자 기준으로 systemd 유닛 등록 및 활성화
 orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config ~/orca_auto.yaml
@@ -47,6 +47,9 @@ orca_auto service restart
 # 진행 중인 계산을 즉시 중단하고 강제 재시작해야 하는 경우 (주의 필요)
 orca_auto service restart --force
 ```
+
+### 중지 동작
+`systemctl stop`은 감독 프로세스에만 SIGTERM을 보냅니다(`KillMode=mixed`). 감독 프로세스는 중지를 큐 워커에 전달하고, 워커는 모든 ORCA 자식에 한꺼번에 SIGTERM을 보낸 뒤 각각 최대 10초를 기다리며, 아직 살아 있는 자식은 SIGKILL로 종료하고 해당 행을 큐에 되돌립니다. `TimeoutStopSec`은 설치 시 `scheduler.max_active_simulations` × 15초 + 27초(기본값 4이면 87초)로 렌더링되며, 이 시간이 지나야 systemd가 control group 전체에 SIGKILL을 보냅니다.
 
 ---
 

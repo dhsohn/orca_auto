@@ -10,50 +10,6 @@ every error is logged and swallowed.
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Mapping
-from pathlib import Path
-from typing import Any
-
-from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE
-from orca_auto.core.engine_process import atomic_write_confined_bytes
-
-from .composer import compose_job_report_html
-
-logger = logging.getLogger(__name__)
-
-
-def write_job_html_report(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-    *,
-    generation_target: tuple[Path, tuple[int, int]],
-) -> Path | None:
-    """Write ``job_report.html``; ``None`` when the job type has no HTML report.
-
-    The report lands inside the verified execution generation. When the current
-    job type has no HTML report, a stale ``job_report.html`` in that generation
-    is removed so links cannot surface an obsolete report. The exception path deliberately does NOT remove it: a
-    transient parse error must not destroy the last valid report.
-    """
-    path = generation_target[0] / RUN_REPORT_HTML_FILE
-    try:
-        rendered = compose_job_report_html(reaction_dir, state)
-        if rendered is None:
-            path.unlink(missing_ok=True)
-            return None
-        atomic_write_confined_bytes(
-            generation_target[0],
-            path,
-            rendered.encode("utf-8"),
-            label="ORCA generation artifact",
-            mode=0o600,
-            expected_parent_identity=generation_target[1],
-        )
-        return path
-    except Exception:  # noqa: BLE001
-        logger.warning("Job HTML report generation failed for %s", reaction_dir, exc_info=True)
-        return None
-
+from .publication import write_job_html_report
 
 __all__ = ["write_job_html_report"]

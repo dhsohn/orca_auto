@@ -13,18 +13,18 @@ from orca_auto.core.artifacts import (
     RUN_REPORT_JSON_FILE,
     RUN_STATE_FILE,
 )
-from orca_auto.core.engine_process import read_confined_text, require_confined_regular_file
-from orca_auto.core.machine_observation import (
-    VerifiedArtifact,
-    artifact_receipt,
-    read_verified_artifacts,
-    results_payload_from_observation,
-)
+from orca_auto.core.confined_io import read_confined_text, require_confined_regular_file
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils.persistence import load_json_mapping_file
+from orca_auto.orca.machine_observation import (
+    VerifiedArtifact,
+    artifact_receipt,
+    read_verified_artifacts,
+    results_payload_from_observation,
+)
 
 from .generation_validation import (
     require_bound_generation_directory,

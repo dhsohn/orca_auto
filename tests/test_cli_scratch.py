@@ -10,9 +10,16 @@ import pytest
 
 from orca_auto import cli as unified_cli
 from orca_auto import cli_scratch
-from orca_auto.core import engine_scratch as scratch_mod
-from orca_auto.core.config import scratch as config_scratch
-from orca_auto.core.engine_scratch import EngineScratchError, EngineScratchWorkspace
+from orca_auto.core.engine_scratch import (
+    EngineScratchError,
+    EngineScratchWorkspace,
+    ScratchWorkspaceRemoval,
+)
+from orca_auto.core.engine_scratch import _constants as constants_mod
+from orca_auto.core.engine_scratch import _policy as policy_mod
+from orca_auto.core.engine_scratch import _workspace as workspace_mod
+from orca_auto.core.utils import process as process_utils
+from orca_auto.orca import scratch_config as config_scratch
 from orca_auto.orca.scratch import OrcaScratchPolicy
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
@@ -26,9 +33,9 @@ def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 def scratch_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
     shm = tmp_path / "shm"
     shm.mkdir()
-    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", shm)
     monkeypatch.setattr(config_scratch, "_SCRATCH_ROOT_PARENT", shm)
-    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: 2**63)
+    monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", lambda: 2**63)
     runs_root = tmp_path / "runs"
     runs_root.mkdir()
     fake_orca = tmp_path / "fake_orca"
@@ -62,8 +69,8 @@ def _manifest(durable: Path, **overrides: object) -> str:
     payload: dict[str, object] = {
         "schema_version": 2,
         "owner_pid": os.getpid(),
-        "owner_process_start_ticks": scratch_mod.process_utils.current_process_start_ticks(),
-        "owner_boot_id": scratch_mod.process_utils.linux_boot_id(proc_root=Path("/proc")),
+        "owner_process_start_ticks": process_utils.current_process_start_ticks(),
+        "owner_boot_id": process_utils.linux_boot_id(proc_root=Path("/proc")),
         "durable_dir": str(durable.resolve()),
         "max_task_memory_bytes": 1,
     }
@@ -72,10 +79,10 @@ def _manifest(durable: Path, **overrides: object) -> str:
 
 
 def _write_workspace(env: dict[str, Path], name: str, manifest: str) -> Path:
-    root = scratch_mod._prepare_scratch_root(_policy(env))
+    root = policy_mod._prepare_scratch_root(_policy(env))
     workspace = root / name
     workspace.mkdir()
-    (workspace / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(manifest, encoding="utf-8")
+    (workspace / constants_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(manifest, encoding="utf-8")
     return workspace
 
 
@@ -163,7 +170,7 @@ def test_scratch_list_json_payload(
     durable = scratch_env["durable"]
     stale = _write_workspace(scratch_env, "attempt-stale", _stale_manifest(durable))
     (stale / "partial.out").write_bytes(b"y" * 512)
-    (durable / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text(
+    (durable / constants_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text(
         json.dumps({"schema_version": 1, "phase": "committed", "items": []}), encoding="utf-8"
     )
 
@@ -267,7 +274,7 @@ def test_scratch_clear_refuses_a_live_workspace(
     assert _main("scratch", "clear", "attempt-live", "--config", str(scratch_env["config"])) == 1
 
     captured = capsys.readouterr()
-    assert captured.err == ""
+    assert captured.err.startswith("error: 1 workspace(s) could not be removed\n")
     assert "removed: 0" in captured.out
     assert "refused: 1" in captured.out
     assert f"  - attempt-live live workspace is live (owner pid {os.getpid()})" in captured.out
@@ -277,7 +284,11 @@ def test_scratch_clear_refuses_a_live_workspace(
         _main("scratch", "clear", "attempt-live", "--config", str(scratch_env["config"]), "--json")
         == 1
     )
-    payload = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert captured.err.startswith("error: 1 workspace(s) could not be removed\n")
+    assert payload["ok"] is False
+    assert payload["error"] == "1 workspace(s) could not be removed"
     assert payload["removed"] == []
     assert payload["removed_count"] == 0
     assert payload["refused"] == [
@@ -297,7 +308,7 @@ def test_scratch_clear_all_stale_keeps_live_and_reports_json(
     live = _write_workspace(scratch_env, "attempt-live", _manifest(durable))
     stale = _write_workspace(scratch_env, "attempt-stale", _stale_manifest(durable))
     invalid = _write_workspace(scratch_env, "attempt-invalid", "{}")
-    stray = durable / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'f' * 32}.tmp"
+    stray = durable / f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'f' * 32}.tmp"
     stray.write_bytes(b"half-copied")
 
     assert (
@@ -332,7 +343,7 @@ def test_scratch_clear_all_stale_cleans_unjournaled_publication_temps(
 ) -> None:
     durable = scratch_env["durable"]
     _write_workspace(scratch_env, "attempt-stale", _stale_manifest(durable))
-    stray = durable / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'a' * 32}.tmp"
+    stray = durable / f"{constants_mod._PUBLICATION_TEMP_PREFIX}{'a' * 32}.tmp"
     stray.write_bytes(b"half-copied")
 
     assert _main("scratch", "clear", "--all-stale", "--config", str(scratch_env["config"])) == 0
@@ -342,7 +353,7 @@ def test_scratch_clear_all_stale_cleans_unjournaled_publication_temps(
     assert not stray.exists()
 
 
-def test_scratch_clear_exits_one_when_nothing_matches(
+def test_scratch_clear_exit_codes_for_missing_name_and_empty_all_stale(
     scratch_env: dict[str, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
     config = str(scratch_env["config"])
@@ -352,16 +363,18 @@ def test_scratch_clear_exits_one_when_nothing_matches(
     assert captured.out == ""
     assert "no scratch workspace named 'attempt-missing'" in captured.err
 
-    assert _main("scratch", "clear", "--all-stale", "--config", config) == 1
+    # Nothing to remove is a no-op, not a failure.
+    assert _main("scratch", "clear", "--all-stale", "--config", config) == 0
     captured = capsys.readouterr()
     assert captured.err == ""
     assert "removed: 0" in captured.out
     assert "nothing to clear." in captured.out
 
     _write_workspace(scratch_env, "attempt-live", _manifest(scratch_env["durable"]))
-    assert _main("scratch", "clear", "--all-stale", "--config", config, "--json") == 1
+    assert _main("scratch", "clear", "--all-stale", "--config", config, "--json") == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
+        "ok": True,
         "root": str(scratch_env["scratch_root"]),
         "removed_count": 0,
         "removed": [],
@@ -389,7 +402,7 @@ def test_scratch_clear_reports_a_workspace_that_turned_live_under_the_lock(
     durable = scratch_env["durable"]
     stale = _write_workspace(scratch_env, "attempt-stale", _stale_manifest(durable))
 
-    def refuse(_root: Path, name: str, **_kwargs: object) -> scratch_mod.ScratchWorkspaceRemoval:
+    def refuse(_root: Path, name: str, **_kwargs: object) -> ScratchWorkspaceRemoval:
         raise EngineScratchError(f"refusing to remove live engine scratch workspace: {name}")
 
     monkeypatch.setattr(cli_scratch, "remove_scratch_workspace", refuse)

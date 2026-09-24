@@ -19,8 +19,15 @@ ProtectSystem=full
 ProtectHome=read-only
 # ORCA_AUTO_READ_WRITE_PATHS
 UMask=0077
-KillMode=control-group
-TimeoutStopSec=30
+# Stop only the supervisor with SIGTERM: it forwards the stop to the queue
+# worker, which stops each ORCA child, waits for it and requeues its row.
+# control-group would SIGTERM the children directly and race that requeue.
+# mixed still SIGKILLs the whole group once TimeoutStopSec expires.
+KillMode=mixed
+# The worker's worst case: 4 jobs x (10 s SIGTERM + 5 s SIGKILL) + 15 s
+# requeue margin + the supervisor's 5 s kill wait. Installation re-renders
+# this line for the configured scheduler.max_active_simulations.
+TimeoutStopSec=87
 Restart=on-failure
 RestartSec=30
 

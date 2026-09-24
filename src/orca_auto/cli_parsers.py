@@ -1,8 +1,8 @@
 """Build the ``orca_auto`` argument parser.
 
 ``argparse`` writes its own ``prog: error: ...`` line straight to ``stderr``,
-bypassing :mod:`orca_auto.core.terminal`. :class:`OrcaAutoArgumentParser` funnels
-those errors through :func:`orca_auto.core.terminal.emit_error` so every
+bypassing :mod:`orca_auto.terminal`. :class:`OrcaAutoArgumentParser` funnels
+those errors through :func:`orca_auto.terminal.emit_error` so every
 user-facing failure — runtime or argument-parsing — shares one
 ``error:``/``hint:`` format, and adds a "did you mean" suggestion when an
 unknown subcommand looks like a typo. ``add_subparsers`` defaults
@@ -22,9 +22,8 @@ from orca_auto._version import package_version
 from orca_auto.cli_systemd_apply import cmd_systemd_install
 from orca_auto.cli_systemd_restart import cmd_service_restart
 from orca_auto.cli_systemd_status import cmd_service_status
-from orca_auto.core.commands.worker_options import add_worker_common_cli_options
-from orca_auto.core.terminal import emit_error
 from orca_auto.systemd_plan import DEFAULT_SYSTEMD_UNIT_DIR
+from orca_auto.terminal import emit_error
 
 # Matches argparse's stock invalid-choice message. Older Python quotes each
 # choice (``choose from 'queue', 'run-dir'``); 3.12+ drops the quotes
@@ -180,9 +179,14 @@ def _add_queue_cancel_parser(
 
 
 def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
-    add_worker_common_cli_options(
-        parser, json_help="Print worker commands as JSON without starting them"
+    parser.add_argument(
+        "--orca_auto-config",
+        "--config",
+        dest="orca_auto_config",
+        default=None,
+        help="Path to shared orca_auto.yaml",
     )
+    add_json_argument(parser, help_text="Print worker commands as JSON without starting them")
 
 
 def _add_queue_worker_parser(

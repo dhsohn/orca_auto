@@ -13,7 +13,6 @@ from ..evidence import (
     final_out_path,
     parsed_final_output,
     parsed_frequency_analysis,
-    parsed_optimization_progress,
 )
 from ..frequencies import (
     FrequencyAnalysis,
@@ -21,8 +20,7 @@ from ..frequencies import (
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_blocks import file_route_lines
-from ..orca_opt_progress import OptProgress
+from ..input_syntax import file_route_lines
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
@@ -30,7 +28,7 @@ from .attempts import (
     attempts_metric_card,
     attempts_table_html,
     duration_text,
-    latest_attempt_with_content,
+    latest_optimization_progress,
     terminal_actions_html,
 )
 from .frequencies import (
@@ -95,7 +93,7 @@ def collect_opt_report_data(
     # Prefer the latest attempt output that actually contains optimization
     # cycles; an execution that died before the first cycle parses to an empty
     # trace and must not mask an earlier attempt's convergence data.
-    selected = latest_attempt_with_content(attempts, parsed_optimization_progress, _has_opt_steps)
+    selected = latest_optimization_progress(attempts)
     if selected is not None:
         formula, method, basis_set = selected.formula, selected.method, selected.basis_set
         steps = tuple((step.cycle, step.energy_hartree) for step in selected.steps)
@@ -151,10 +149,6 @@ def collect_opt_report_data(
         frequency_from_earlier_attempt=frequency_from_earlier_attempt,
         last_out_name=final_out_name(state),
     )
-
-
-def _has_opt_steps(progress: OptProgress) -> bool:
-    return bool(progress.steps)
 
 
 def _attempt_index_for_output(attempts: Sequence[Mapping[str, Any]], out_path: Path) -> int | None:

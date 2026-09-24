@@ -7,9 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core import engine_runner as _engine_runner
-from orca_auto.core.engine_process import require_confined_regular_file
-from orca_auto.core.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
+from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.queue.engine.input_snapshot import (
     cleanup_unowned_direct_generation_directory,
 )
@@ -18,13 +16,12 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_TOKEN_KEY,
     discard_snapshot_intent_if_generations_absent,
 )
+from orca_auto.orca import engine_runner as _engine_runner
+from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 
 from .. import input_references
-from ..input_blocks import (
-    orca_input_requests_moread,
-    orca_moinp_references,
-    validate_supported_xyz_geometry_syntax,
-)
+from ..input_references import orca_input_requests_moread, orca_moinp_references
+from ..input_validation import validate_supported_xyz_geometry_syntax
 from ..resource_directives import resource_request_from_lines
 from ._confinement import (
     _confined_reference_path,

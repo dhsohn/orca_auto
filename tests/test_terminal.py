@@ -4,8 +4,8 @@ import io
 
 import pytest
 
+from orca_auto import terminal
 from orca_auto.activity_labels import activity_status_icon
-from orca_auto.core import terminal
 
 
 @pytest.fixture(autouse=True)

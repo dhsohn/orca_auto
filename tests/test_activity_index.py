@@ -11,15 +11,15 @@ from threading import Event
 import pytest
 
 from orca_auto.activity import _list, _orca, _orca_index, list_activities
+from orca_auto.activity.model import ActivityListRequest, ActivitySourceRequest, sort_key
 from orca_auto.core import activity_index as index
 from orca_auto.core import activity_invalidation as journal
-from orca_auto.core.activity import ActivityListRequest, ActivitySourceRequest, sort_key
 from orca_auto.core.indexing import JobLocationRecord, upsert_job_location
 from orca_auto.core.indexing import store as locations
 from orca_auto.core.queue import persistence as queue
 from orca_auto.core.queue.publication import QUEUE_RECORD_SYNC_BLOCKED_KEY
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.orca import run_snapshot, state
+from orca_auto.orca import run_snapshot, run_status, state
 
 
 def _config(tmp_path: Path) -> tuple[Path, str]:
@@ -87,8 +87,8 @@ def test_warm_limited_query_does_not_read_history(
         raise AssertionError("warm limited query read historical source/state files")
 
     monkeypatch.setattr(queue, "load_entries", forbidden)
-    monkeypatch.setattr(locations, "_load_records", forbidden)
-    monkeypatch.setattr(run_snapshot, "_load_pinned_state", forbidden)
+    monkeypatch.setattr(locations, "load_job_locations", forbidden)
+    monkeypatch.setattr(run_snapshot, "load_pinned_state", forbidden)
     # Also bound SQLite work: no full table scan/sort hidden behind fewer JSON reads.
     original_connect = index.connect
     steps = []
@@ -122,13 +122,13 @@ def test_terminal_state_changes_update_only_changed_job(
     payload["status"] = "failed"
     state.save_state(target, payload)
     reads = []
-    load = run_snapshot._load_pinned_state
+    load = run_snapshot.load_pinned_state
 
     def counted(fd: int):
         reads.append(fd)
         return load(fd)
 
-    monkeypatch.setattr(run_snapshot, "_load_pinned_state", counted)
+    monkeypatch.setattr(run_snapshot, "load_pinned_state", counted)
     assert _query(root, limit=1, statuses=("failed",))[0]["activity_id"] == "run"
     assert len(reads) == 1
     assert _query(root) == [
@@ -181,7 +181,7 @@ def test_lock_changes_are_refreshed_before_filter_and_limit(
     root, _config_path = _config(tmp_path)
     _state(root, root / "orphan", status="running")
     held = True
-    monkeypatch.setattr(_orca, "run_lock_is_held", lambda *_a, **_k: held)
+    monkeypatch.setattr(run_status, "run_lock_is_held", lambda *_a, **_k: held)
     assert _query(root, limit=1, statuses=("running",))[0]["status"] == "running"
     held = False
     assert _query(root, limit=1, statuses=("failed",))[0]["status"] == "failed"
@@ -279,13 +279,13 @@ def test_pruning_the_first_location_row_dirties_only_that_row(
     assert dirty == index.source_tokens("location", {"original_run_dir": str(root / "job-0")})
     assert [tuple(row) for row in mirrored] == [("run-1", 0), ("run-2", 1)]
     reads: list[int] = []
-    load = run_snapshot._load_pinned_state
+    load = run_snapshot.load_pinned_state
 
     def counted(fd: int):
         reads.append(fd)
         return load(fd)
 
-    monkeypatch.setattr(run_snapshot, "_load_pinned_state", counted)
+    monkeypatch.setattr(run_snapshot, "load_pinned_state", counted)
     assert [row["activity_id"] for row in _query(root)] == ["run-2", "run-1"]
     assert reads == []
 
@@ -309,7 +309,7 @@ def test_filtered_page_keeps_catalog_wide_blockers_and_active_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, config = _config(tmp_path)
-    monkeypatch.setattr(_orca, "run_lock_is_held", lambda *_a, **_k: True)
+    monkeypatch.setattr(run_status, "run_lock_is_held", lambda *_a, **_k: True)
     _state(root, root / "done")
     blocked = replace(
         _entry(root, 0),
@@ -337,14 +337,14 @@ def test_filtered_page_keeps_catalog_wide_blockers_and_active_count(
     # The admission slot count is the global truth when it is readable; here
     # the listing's own count is what reaches the payload as its fallback.
     monkeypatch.setattr(
-        _list, "global_active_simulations", lambda *, config_path, fallback: fallback
+        _list, "global_active_simulations", lambda *, config_path, fallback: (fallback, None)
     )
     payload = list_activities(orca_config=config, statuses=("completed",), limit=1)
     assert payload["count"] == 1
     assert payload["active_simulations"] == 1
     assert payload["admission_blockers"] == list(listing.blockers)
     # The disk catalog pages through the same shared pass.
-    from orca_auto.core.activity import listing_from_records
+    from orca_auto.activity.model import listing_from_records
 
     direct = listing_from_records(
         _orca.orca_records(config_path=config), statuses=("completed",), limit=1
@@ -400,11 +400,11 @@ def test_live_rerun_poll_does_not_rematerialize_shared_path_history(
     )
     queue.save_entries(root, [*entries, live])
     held = True
-    monkeypatch.setattr(_orca, "run_lock_is_held", lambda *_a, **_k: held)
+    monkeypatch.setattr(run_status, "run_lock_is_held", lambda *_a, **_k: held)
     assert _query(root, statuses=("running",))[0]["activity_id"] == live.queue_id
     monkeypatch.setattr(
         run_snapshot,
-        "_load_pinned_state",
+        "load_pinned_state",
         lambda *_a: pytest.fail("lock poll reread historical state"),
     )
     calls = []
@@ -453,7 +453,7 @@ def test_source_change_during_state_read_retries_current_generation(
     _state(root, job)
     entry = replace(_entry(root, 0), metadata={"reaction_dir": str(job), "run_id": "run"})
     queue.save_entries(root, [entry])
-    load = run_snapshot._load_pinned_state
+    load = run_snapshot.load_pinned_state
     injected = False
 
     def interleave(fd: int):
@@ -463,7 +463,7 @@ def test_source_change_during_state_read_retries_current_generation(
             queue.save_entries(root, [replace(entry, status=QueueStatus.FAILED)])
         return load(fd)
 
-    monkeypatch.setattr(run_snapshot, "_load_pinned_state", interleave)
+    monkeypatch.setattr(run_snapshot, "load_pinned_state", interleave)
     assert _query(root)[0]["status"] == "failed"
 
 

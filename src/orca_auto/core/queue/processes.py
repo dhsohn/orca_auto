@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import errno
-import json
 import logging
 import os
 import signal
@@ -9,14 +8,32 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
-from orca_auto.core.utils import process as process_utils
-from orca_auto.core.utils.persistence import atomic_write_text, now_utc_iso
-from orca_auto.core.utils.process_tracking import read_pid_file
-
 LOGGER = logging.getLogger(__name__)
+
+# One child's stop: SIGTERM, then SIGKILL after the graceful wait, then the
+# kill wait. The worker stops children in parallel first, then each job in turn, so its whole shutdown
+# needs at most this per child; the supervisor and the systemd unit derive
+# their stop budgets from the same numbers through
+# ``worker_shutdown_budget_seconds``.
+GRACEFUL_TIMEOUT_SECONDS = 10.0
+KILL_TIMEOUT_SECONDS = 5.0
+# Covers the per-job requeue or replay that follows each child's exit.
+SHUTDOWN_MARGIN_SECONDS = 15.0
+# SIGTERM does not interrupt a sleeping poll (PEP 475): the worker may finish
+# its current poll sleep (up to 5 s) and the supervisor polls the worker once a
+# second before it notices the exit, so both latencies are part of the budget.
+SHUTDOWN_POLL_LATENCY_SECONDS = 6.0
+
+
+def worker_shutdown_budget_seconds(max_concurrent: int) -> float:
+    """Worst-case seconds a worker needs to stop every child and requeue each row."""
+    return (
+        (GRACEFUL_TIMEOUT_SECONDS + KILL_TIMEOUT_SECONDS) * max(1, int(max_concurrent))
+        + SHUTDOWN_POLL_LATENCY_SECONDS
+        + SHUTDOWN_MARGIN_SECONDS
+    )
 
 
 class ManagedProcess(Protocol):
@@ -168,26 +185,33 @@ def _wait_for_managed_process_group_exit(
         deps.sleep(min(interval, remaining))
 
 
-def terminate_process_group(
+def _group_exists_fn(
+    deps: ProcessGroupTerminationDeps, killpg_fn: Callable[[int, int], None]
+) -> Callable[[int], bool]:
+    if deps.process_group_exists is not None:
+        return deps.process_group_exists
+    return lambda pgid: process_group_exists(pgid, killpg_fn=killpg_fn)
+
+
+def request_process_group_stop(
     proc: ManagedProcess,
     *,
-    graceful_timeout: float = 10,
-    kill_timeout: float = 5,
     killpg_fn: Callable[[int, int], None] | None = None,
     sigterm: int | None = None,
-    sigkill: int | None = None,
     deps: ProcessGroupTerminationDeps | None = None,
-) -> bool:
+) -> bool | None:
+    """Send SIGTERM to the group without waiting.
+
+    True: the group has already exited. None: the signal was sent (or the
+    leader was terminated directly). False: the group could not be signalled
+    safely. ``terminate_process_group`` waits and escalates after this step;
+    a shutdown sweep uses it first so every child stops concurrently.
+    """
     active_deps = deps or ProcessGroupTerminationDeps()
     active_killpg = os.killpg if killpg_fn is None else killpg_fn
     active_sigterm = active_deps.sigterm if sigterm is None else sigterm
-    active_sigkill = active_deps.sigkill if sigkill is None else sigkill
     logger = active_deps.logger
-    group_exists = active_deps.process_group_exists
-    if group_exists is None:
-
-        def group_exists(pgid: int) -> bool:
-            return process_group_exists(pgid, killpg_fn=active_killpg)
+    group_exists = _group_exists_fn(active_deps, active_killpg)
 
     if managed_process_group_has_exited(
         proc,
@@ -224,6 +248,31 @@ def terminate_process_group(
             proc.terminate()
         except Exception:  # noqa: BLE001
             logger.debug("failed to terminate process after group signal failed", exc_info=True)
+    return None
+
+
+def terminate_process_group(
+    proc: ManagedProcess,
+    *,
+    graceful_timeout: float = GRACEFUL_TIMEOUT_SECONDS,
+    kill_timeout: float = KILL_TIMEOUT_SECONDS,
+    killpg_fn: Callable[[int, int], None] | None = None,
+    sigterm: int | None = None,
+    sigkill: int | None = None,
+    deps: ProcessGroupTerminationDeps | None = None,
+) -> bool:
+    active_deps = deps or ProcessGroupTerminationDeps()
+    active_killpg = os.killpg if killpg_fn is None else killpg_fn
+    active_sigkill = active_deps.sigkill if sigkill is None else sigkill
+    logger = active_deps.logger
+    group_exists = _group_exists_fn(active_deps, active_killpg)
+
+    requested = request_process_group_stop(
+        proc, killpg_fn=killpg_fn, sigterm=sigterm, deps=active_deps
+    )
+    if requested is not None:
+        return requested
+    pid = proc.pid
 
     if _wait_for_managed_process_group_exit(
         proc,
@@ -277,51 +326,17 @@ def install_shutdown_signal_handlers(request_shutdown: Callable[[], None]) -> No
         LOGGER.debug("shutdown signal handlers can only be installed from the main thread")
 
 
-def _process_start_ticks(pid: int) -> int | None:
-    return process_utils.process_start_ticks(pid, proc_root=Path("/proc"))
-
-
-def current_worker_pid_payload() -> dict[str, int | str]:
-    return process_utils.current_pid_payload(
-        now_fn=now_utc_iso,
-        process_start_ticks_fn=_process_start_ticks,
-        pid_fn=os.getpid,
-        boot_id_fn=lambda: process_utils.linux_boot_id(proc_root=Path("/proc")),
-    )
-
-
-def worker_pid_file_path(allowed_root: Path | str, file_name: str = "queue_worker.pid") -> Path:
-    return Path(allowed_root).expanduser().resolve() / file_name
-
-
-def write_worker_pid_file(allowed_root: Path | str, file_name: str = "queue_worker.pid") -> None:
-    payload = current_worker_pid_payload()
-    atomic_write_text(
-        worker_pid_file_path(allowed_root, file_name),
-        json.dumps(payload, ensure_ascii=True) + "\n",
-    )
-
-
-def remove_worker_pid_file(allowed_root: Path | str, file_name: str = "queue_worker.pid") -> None:
-    process_utils.remove_file_silent(worker_pid_file_path(allowed_root, file_name))
-
-
-def read_worker_pid_file(
-    allowed_root: Path | str, file_name: str = "queue_worker.pid"
-) -> int | None:
-    return read_pid_file(worker_pid_file_path(allowed_root, file_name))
-
-
 __all__ = [
+    "GRACEFUL_TIMEOUT_SECONDS",
+    "KILL_TIMEOUT_SECONDS",
+    "SHUTDOWN_MARGIN_SECONDS",
+    "SHUTDOWN_POLL_LATENCY_SECONDS",
     "ManagedProcess",
     "ProcessGroupTerminationDeps",
-    "current_worker_pid_payload",
     "install_shutdown_signal_handlers",
     "managed_process_group_has_exited",
     "process_group_exists",
-    "read_worker_pid_file",
-    "remove_worker_pid_file",
+    "request_process_group_stop",
     "terminate_process_group",
-    "worker_pid_file_path",
-    "write_worker_pid_file",
+    "worker_shutdown_budget_seconds",
 ]

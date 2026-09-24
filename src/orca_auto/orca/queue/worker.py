@@ -1,16 +1,21 @@
 """ORCA queue-worker composition under external supervision.
 
-``OrcaQueueWorker`` owns ORCA cancellation, shutdown, recovery and its replay
-state. Its common base owns process supervision, admission and the PID-file
-lifecycle. The replay engine in ``queue/replay.py`` is called with explicit
-state and never reaches back into the worker.
+``OrcaQueueWorker`` is the one queue worker: it owns the PID-file lifecycle,
+admission (slot reserved before the row is claimed), child start and attach,
+terminal finalization, cancellation, shutdown and recovery. The poll loop it
+inherits from ``core.queue.worker.loop`` only orders the passes. The replay
+engine in ``queue/replay.py`` is called with explicit state and never reaches
+back into the worker.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import sys
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -21,27 +26,35 @@ from orca_auto.core.admission import (
     update_slot_metadata,
 )
 from orca_auto.core.config.schema import resolved_admission_limit
-from orca_auto.core.engine_catalog import get_engine_catalog_entry
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
-from orca_auto.core.queue.dependencies import ChildQueueWorkerDeps
+from orca_auto.core.queue.engine.snapshot_intent import (
+    finalize_queued_snapshot_intent,
+    reconcile_orphaned_snapshot_generations,
+    snapshot_runtime_roots_for_cfg,
+)
 from orca_auto.core.queue.processes import ManagedProcess
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker import (
-    PidFileChildProcessQueueWorker,
+    WORKER_PID_FILE_NAME,
+    QueueWorkerLoop,
+    ReservedQueueEntry,
+    ReserveStatus,
+    admission_has_capacity,
+    remove_worker_pid_file,
+    reserve_dequeued_entry,
     start_background_process,
     terminate_process_group,
+    worker_pid_file_path,
+    write_worker_pid_file,
 )
-from orca_auto.core.queue.worker.models import ReservedQueueEntry, ReserveStatus
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING
-from orca_auto.orca.worker_execution import (
-    BackgroundRunJobProcess,
-    build_worker_child_command,
-)
+from orca_auto.core.utils.lock import file_lock
+from orca_auto.orca.engine_catalog import get_engine_catalog_entry
+from orca_auto.orca.worker_execution import build_worker_child_command
 
 from ..config import AppConfig
-from ..engine import ENGINE_RUNTIME
-from . import publication_repair, replay, worker_tracking
+from . import publication_repair, replay, roots, worker_tracking
 from .adapter import (
     cancel_requested_ids,
     get_cancel_requested,
@@ -63,14 +76,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_CONCURRENT = 4
 POLL_INTERVAL_SECONDS = 5
-
-
-def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
-    return ENGINE_RUNTIME.queue_roots(cfg)
-
-
-def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
-    return ENGINE_RUNTIME.queue_entries_with_roots(cfg)
+_SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
+_WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
 
 
 def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
@@ -92,23 +99,11 @@ def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
     return admission_token
 
 
-def _start_background_job_process(
-    *,
-    config_path: str,
-    queue_root: Path,
-    entry: QueueEntry,
-    admission_token: str,
-) -> BackgroundRunJobProcess[str]:
-    log_path = str(worker_log_path(queue_root, queue_entry_id(entry)))
-    return start_background_process(
-        build_worker_child_command(
-            config_path=config_path,
-            queue_root=queue_root,
-            queue_id=queue_entry_id(entry),
-            admission_token=admission_token,
-        ),
-        log_path=log_path,
-    )
+def _host_core_count() -> int | None:
+    try:
+        return len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        return os.cpu_count()
 
 
 def _worker_admission_limit(cfg: AppConfig, fallback_max_concurrent: int) -> int:
@@ -127,10 +122,12 @@ def _worker_config_with_effective_concurrency(
     return replace(cfg, runtime=replace(cfg.runtime, max_concurrent=configured_max))
 
 
-class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob]):
+class OrcaQueueWorker(QueueWorkerLoop):
     """Supervise ORCA children with explicit cancellation and recovery ownership."""
 
-    worker_pid_file_name = ENGINE_RUNTIME.worker_pid_file_name
+    worker_pid_file_name = WORKER_PID_FILE_NAME
+    worker_lock_timeout_seconds = 0.0
+    _running: dict[str, OrcaRunningJob]
 
     def __init__(
         self,
@@ -138,35 +135,79 @@ class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob])
         config_path: str,
         *,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
-        deps: ChildQueueWorkerDeps[AppConfig] | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
         configured_max = max(1, int(max_concurrent))
         worker_cfg = _worker_config_with_effective_concurrency(cfg, configured_max)
-        if deps is None:
-            deps = ChildQueueWorkerDeps(
-                poll_interval_seconds=POLL_INTERVAL_SECONDS,
-                sleep=time.sleep,
-                release_slot=release_slot,
-                start_background_job_process=_start_background_job_process,
-                has_admission_capacity=ENGINE_RUNTIME.has_admission_capacity,
-                peek_next_entry=ENGINE_RUNTIME.peek_next_entry,
-                dequeue_next_entry=ENGINE_RUNTIME.dequeue_next_entry,
-                try_reserve_admission_slot=_try_reserve_admission_slot,
-            )
         super().__init__(
-            worker_cfg,
-            config_path=str(config_path or "").strip(),
             max_concurrent=configured_max,
-            deps=deps,
-            admission_root=worker_cfg.runtime.resolved_admission_root,
+            poll_interval_seconds=POLL_INTERVAL_SECONDS,
+            sleep_fn=sleep_fn,
+        )
+        self.cfg = worker_cfg
+        self.config_path = str(config_path or "").strip()
+        self.allowed_root = Path(str(worker_cfg.runtime.allowed_root)).expanduser().resolve()
+        self.admission_root = (
+            Path(str(worker_cfg.runtime.resolved_admission_root)).expanduser().resolve()
         )
         self.admission_limit = _worker_admission_limit(worker_cfg, self.max_concurrent)
         self.replay_state = OrcaWorkerReplayState()
+        self._worker_state_last_reconcile: float | None = None
+        self._snapshot_intent_last_reconcile: float | None = None
+
+    # -- pid file and singleton lock ----------------------------------------
+
+    def _pid_file_path(self) -> Path:
+        return worker_pid_file_path(self.allowed_root, self.worker_pid_file_name)
+
+    def _lock_file_path(self) -> Path:
+        return self._pid_file_path().with_name(f"{self.worker_pid_file_name}.lock")
+
+    def _write_pid_file(self) -> None:
+        write_worker_pid_file(self.allowed_root, self.worker_pid_file_name)
+
+    def _remove_pid_file(self) -> None:
+        remove_worker_pid_file(self.allowed_root, self.worker_pid_file_name)
+
+    def _acquire_worker_lock(self, stack: contextlib.ExitStack) -> bool:
+        lock_path = self._lock_file_path()
+        try:
+            stack.enter_context(
+                file_lock(lock_path, timeout_seconds=self.worker_lock_timeout_seconds)
+            )
+        except TimeoutError:
+            print(
+                f"error: queue worker already running (lock={lock_path})",
+                file=sys.stderr,
+            )
+            return False
+        return True
 
     # -- loop lifecycle -----------------------------------------------------
 
+    def run(self) -> int:
+        with contextlib.ExitStack() as stack:
+            if not self._acquire_worker_lock(stack):
+                return 1
+            return super().run()
+
+    def run_once(
+        self,
+        *,
+        idle_message: str | None = "No pending jobs.",
+        blocked_message: str | None = "status: waiting_for_slot",
+    ) -> int:
+        with contextlib.ExitStack() as stack:
+            if not self._acquire_worker_lock(stack):
+                return 1
+            return super().run_once(
+                idle_message=idle_message,
+                blocked_message=blocked_message,
+            )
+
     def _before_run(self) -> None:
-        super()._before_run()
+        self._write_pid_file()
+        self._reconcile_worker_state_now()
         logger.info(
             "Queue worker started (pid=%d, max_concurrent=%d, admission_root=%s, admission_limit=%d)",
             os.getpid(),
@@ -174,9 +215,25 @@ class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob])
             self.admission_root,
             self.admission_limit,
         )
+        self._warn_if_concurrency_exceeds_host_cores()
+
+    def _warn_if_concurrency_exceeds_host_cores(self) -> None:
+        host_cores = _host_core_count()
+        cores_per_task = int(self.cfg.resources.max_cores_per_task)
+        requested = self.max_concurrent * cores_per_task
+        if host_cores is None or requested <= host_cores:
+            return
+        logger.warning(
+            "Configured concurrency can oversubscribe the host: max_concurrent=%d x "
+            "max_cores_per_task=%d requests %d cores, but this worker can use %d",
+            self.max_concurrent,
+            cores_per_task,
+            requested,
+            host_cores,
+        )
 
     def _after_run(self) -> None:
-        super()._after_run()
+        self._remove_pid_file()
         logger.info("Queue worker stopped")
 
     def _run_iteration(self) -> None:
@@ -186,17 +243,84 @@ class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob])
             logger.info("Queue worker interrupted")
             raise
 
+    def _sleep(self) -> None:
+        # A replacement parent may initially observe a live child from the
+        # previous parent and correctly skip it. Periodically reconcile so that,
+        # once that child exits (or is killed), its queue entry/engine record is
+        # recovered without repeatedly scanning every runtime root on each
+        # short queue-poll cycle.
+        # Do not race a completed in-memory job whose finalization is being
+        # retained for retry after an error.
+        completed_retry_pending = any(
+            self._poll_job(job) is not None for _queue_id, job in self._running_jobs()
+        )
+        if not completed_retry_pending:
+            self._reconcile_worker_state_if_due()
+        super()._sleep()
+
+    def _running_jobs(self) -> list[tuple[str, OrcaRunningJob]]:
+        return list(self._running.items())
+
+    # -- recovery -----------------------------------------------------------
+
+    def _reconcile_worker_state_now(self) -> None:
+        self._reconcile_worker_state()
+        self._worker_state_last_reconcile = time.monotonic()
+
+    def _reconcile_worker_state_if_due(self) -> None:
+        last_reconcile = self._worker_state_last_reconcile
+        if (
+            last_reconcile is None
+            or time.monotonic() - last_reconcile >= _WORKER_STATE_RECONCILE_INTERVAL_SECONDS
+        ):
+            self._reconcile_worker_state_now()
+
     def _reconcile_worker_state(self) -> None:
-        super()._reconcile_worker_state()
+        self._reconcile_snapshot_intents_if_due()
         replay.reconcile_worker_state(
             self.cfg,
             admission_root=self.admission_root,
             replay_state=self.replay_state,
         )
 
+    def _reconcile_snapshot_intents_if_due(self) -> None:
+        now = time.monotonic()
+        last_reconcile = self._snapshot_intent_last_reconcile
+        if (
+            last_reconcile is not None
+            and now - last_reconcile < _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS
+        ):
+            return
+        self._snapshot_intent_last_reconcile = now
+        try:
+            removed = reconcile_orphaned_snapshot_generations(
+                snapshot_runtime_roots_for_cfg(self.cfg)
+            )
+        except Exception:
+            logger.exception("Snapshot orphan reconciliation failed; retaining all candidates")
+        else:
+            if removed:
+                logger.info("Removed %d abandoned pre-enqueue snapshot intent(s)", removed)
+
     # -- admission ----------------------------------------------------------
 
-    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedQueueEntry[QueueEntry] | None]:
+    def _admission_has_capacity(self) -> bool:
+        return admission_has_capacity(self.cfg)
+
+    def _peek_next_entry(self) -> tuple[Path, QueueEntry] | None:
+        return roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
+
+    def _dequeue_next_entry(self) -> tuple[Path, QueueEntry] | None:
+        return roots.dequeue_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
+
+    def _reserve_admission_slot(self) -> str | None:
+        return _try_reserve_admission_slot(self.cfg)
+
+    def _release_admission_slot(self, admission_token: str) -> object:
+        released: object = release_slot(self.admission_root, admission_token)
+        return released
+
+    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
         # A failed terminal side effect retains its completed job and durable marker.
         # Until it is replayed, no new generation may start in that reaction
         # directory: max_concurrent > 1 could otherwise start a forced successor in
@@ -223,7 +347,13 @@ class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob])
         if not publication_repair.repair_queue_publications(self.cfg):
             logger.warning("Queue admission paused until ORCA queued publication repair succeeds")
             return "blocked", None
-        return super()._reserve_next_entry()
+        return reserve_dequeued_entry(
+            has_capacity_fn=self._admission_has_capacity,
+            peek_next_fn=self._peek_next_entry,
+            reserve_slot_fn=self._reserve_admission_slot,
+            dequeue_next_fn=self._dequeue_next_entry,
+            release_slot_fn=self._release_admission_slot,
+        )
 
     def _unresolved_terminal_reaction_keys(self) -> frozenset[str] | None:
         """Reaction directories whose last generation has unpublished terminal state.
@@ -270,16 +400,115 @@ class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob])
         return key is None or key in withheld
 
     def _skip_entry(self, entry: QueueEntry) -> bool:
+        """Rows this worker must not claim now; rows behind them stay eligible."""
+        # A child can return its own row to pending and only then exit. Until
+        # that exit has been finalized here, starting the row again would
+        # replace the tracked job and strand its admission slot.
         return (
-            super()._skip_entry(entry)
+            queue_entry_id(entry) in self._running
             or queue_entry_is_retired_workflow_owned(entry, self.cfg.runtime.allowed_root)
             or self._entry_waits_for_terminal_replay(entry)
         )
 
     # -- child start --------------------------------------------------------
 
-    def _running_queue_id(self, entry: QueueEntry) -> str:
-        return queue_entry_id(entry)
+    def _start_reserved(self, reserved: ReservedQueueEntry) -> bool:
+        try:
+            # Retire the journal before execution so even a very fast terminal
+            # job cannot lose its queue row while an ENQUEUEING intent remains.
+            finalize_queued_snapshot_intent(reserved.queue_root, reserved.entry)
+        except Exception as exc:  # noqa: BLE001
+            self._handle_worker_start_error(
+                reserved.queue_root,
+                reserved.entry,
+                reserved.admission_token,
+                OSError(f"snapshot intent finalization failed: {exc}"),
+            )
+            return False
+        return self._start_job(
+            reserved.queue_root,
+            reserved.entry,
+            admission_token=reserved.admission_token,
+        )
+
+    def _start_background_process(
+        self,
+        *,
+        queue_root: Path,
+        entry: QueueEntry,
+        admission_token: str,
+    ) -> ManagedProcess:
+        """Spawn the detached ORCA child for *entry*; tests substitute this seam."""
+        log_path = str(worker_log_path(queue_root, queue_entry_id(entry)))
+        return start_background_process(
+            build_worker_child_command(
+                config_path=self.config_path,
+                queue_root=queue_root,
+                queue_id=queue_entry_id(entry),
+                admission_token=admission_token,
+            ),
+            log_path=log_path,
+        )
+
+    def _start_job(self, queue_root: Path, entry: QueueEntry, *, admission_token: str) -> bool:
+        try:
+            proc = self._start_background_process(
+                queue_root=queue_root,
+                entry=entry,
+                admission_token=admission_token,
+            )
+        except OSError as exc:
+            self._handle_worker_start_error(queue_root, entry, admission_token, exc)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            self._handle_worker_start_error(
+                queue_root,
+                entry,
+                admission_token,
+                OSError(f"worker start failed: {exc}"),
+            )
+            return False
+
+        try:
+            if not self._on_worker_process_started(
+                queue_root,
+                entry,
+                process=proc,
+                admission_token=admission_token,
+            ):
+                # The one refusal: the reserved slot vanished before attach. The
+                # child must not run unadmitted; fail the row and release once.
+                terminate_process_group(proc)
+                self._handle_worker_start_error(
+                    queue_root,
+                    entry,
+                    admission_token,
+                    OSError("admission_slot_missing"),
+                )
+                return False
+        except Exception as exc:  # noqa: BLE001
+            self._terminate_untracked_process(proc)
+            self._handle_worker_start_error(
+                queue_root,
+                entry,
+                admission_token,
+                OSError(f"worker attach failed: {exc}"),
+            )
+            return False
+
+        self._running[queue_entry_id(entry)] = self._make_running_job(
+            queue_root=queue_root,
+            entry=entry,
+            process=proc,
+            admission_token=admission_token,
+        )
+        return True
+
+    def _terminate_untracked_process(self, process: ManagedProcess) -> None:
+        terminate = getattr(process, "terminate", None)
+        if callable(terminate):
+            with contextlib.suppress(Exception):
+                terminate()
 
     def _make_running_job(
         self,
@@ -306,13 +535,26 @@ class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob])
         exc: OSError,
     ) -> None:
         logger.error("Failed to start job %s: %s", queue_entry_id(entry), exc)
-        self._mark_entry_failed_and_release(
-            queue_root,
-            entry,
-            admission_token,
-            error=str(exc),
-            mark_failed_fn=mark_failed,
-        )
+        self._mark_entry_failed_and_release(queue_root, entry, admission_token, error=str(exc))
+
+    def _mark_entry_failed_and_release(
+        self,
+        queue_root: Path,
+        entry: QueueEntry,
+        admission_token: str,
+        *,
+        error: str,
+    ) -> None:
+        """Mark the selected generation failed, then release its slot even if the mark fails."""
+        try:
+            mark_failed(
+                queue_root,
+                queue_entry_id(entry),
+                error=error,
+                expected_entry=entry,
+            )
+        finally:
+            self._release_admission_slot(admission_token)
 
     def _on_worker_process_started(
         self,
@@ -347,14 +589,6 @@ class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob])
                 "Failed to attach queue identity to admission slot %s for job %s",
                 admission_token,
                 queue_id,
-            )
-            terminate_process_group(process)
-            self._mark_entry_failed_and_release(
-                queue_root,
-                entry,
-                admission_token,
-                error="admission_slot_missing",
-                mark_failed_fn=mark_failed,
             )
             return False
         try:

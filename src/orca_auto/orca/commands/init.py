@@ -5,7 +5,7 @@ from __future__ import annotations
 import getpass
 import logging
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypedDict
@@ -17,10 +17,8 @@ from orca_auto.core.config.discovery import (
 )
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
-    load_shared_config_mapping,
     messenger_mapping_from_root,
     secure_config_file_permissions,
-    validate_shared_config_sections,
 )
 from orca_auto.core.config.schema import (
     CommonResourceConfig,
@@ -32,7 +30,15 @@ from orca_auto.core.paths import validate_configured_executable_path
 from orca_auto.core.paths.validation import validated_absolute_linux_path_text
 from orca_auto.core.utils.persistence import atomic_write_text
 
+from ..config import load_orca_shared_config_mapping, validate_orca_shared_config
+
 logger = logging.getLogger(__name__)
+
+
+def _print_error_line(message: str) -> None:
+    """Default ``report_error``: a plain ``error:`` line on stderr."""
+
+    print(f"error: {message}", file=sys.stderr)
 
 
 class _PromptedEngineRuntime(TypedDict):
@@ -200,7 +206,7 @@ def _prompt_orca_runtime() -> _PromptedEngineRuntime:
 def _validate_generated_config(payload: Mapping[str, object]) -> None:
     """Apply the one shared rule set to the mapping before it is written."""
 
-    validate_shared_config_sections(payload)
+    validate_orca_shared_config(payload)
 
 
 def _write_config(config_path: Path, payload: Mapping[str, object]) -> None:
@@ -215,9 +221,11 @@ def _resolve_init_config_path(args: Any) -> Path:
     return Path(raw_config_path).expanduser().resolve()
 
 
-def _confirm_existing_config_overwrite(config_path: Path) -> int | None:
+def _confirm_existing_config_overwrite(
+    config_path: Path, *, report_error: Callable[[str], None]
+) -> int | None:
     if not _stdin_supports_interactive_prompts():
-        print(
+        report_error(
             f"Config already exists at {config_path}. "
             "Re-run with --force to overwrite it without confirmation."
         )
@@ -290,7 +298,7 @@ def _print_init_summary(config_path: Path, values: _PromptedInitValues) -> None:
 
 def _load_existing_messenger_mapping(config_path: Path) -> dict[str, object] | None:
     try:
-        _, parsed = load_shared_config_mapping(config_path)
+        _, parsed = load_orca_shared_config_mapping(config_path)
     except YAML_CONFIG_LOAD_EXCEPTIONS:
         print("warning: existing messenger settings could not be read and will be configured again")
         return None
@@ -310,12 +318,15 @@ def _load_existing_messenger_mapping(config_path: Path) -> dict[str, object] | N
     return preserved
 
 
-def cmd_init(args: Any) -> int:
+def cmd_init(args: Any, *, report_error: Callable[[str], None] = _print_error_line) -> int:
+    """Run the wizard; refusals and write failures go through ``report_error``."""
     force = bool(getattr(args, "force", False))
     config_path = _resolve_init_config_path(args)
 
     if config_path.exists() and not force:
-        overwrite_status = _confirm_existing_config_overwrite(config_path)
+        overwrite_status = _confirm_existing_config_overwrite(
+            config_path, report_error=report_error
+        )
         if overwrite_status is not None:
             return overwrite_status
 
@@ -336,7 +347,7 @@ def cmd_init(args: Any) -> int:
         _write_config(config_path, payload)
     except Exception as exc:
         logger.exception("Failed to generate config: %s", exc)
-        print(f"Failed to generate config: {exc}")
+        report_error(f"Failed to generate config: {exc}")
         return 1
 
     _print_init_summary(config_path, values)

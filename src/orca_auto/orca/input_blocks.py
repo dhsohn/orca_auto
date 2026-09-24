@@ -1,3 +1,14 @@
+"""Structural units of an ORCA input: the geometry section and ``%name`` blocks.
+
+Sits on :mod:`.input_syntax` (tokens, comments, route lines) and provides the
+two primitives every input rewriter and scanner shares: locating the single
+``* xyz`` / ``* xyzfile`` geometry block, and walking ``%name ... end`` blocks
+under the package-wide block-termination rule of :class:`OrcaBlock`. Editing
+helpers here (``set_block_key_value``, ``replace_geometry_with_xyzfile``)
+change one block at a time and never look at external file references; that
+is :mod:`.input_references`.
+"""
+
 from __future__ import annotations
 
 import re
@@ -5,330 +16,19 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from .input_syntax import (
+    OrcaLineToken,
+    active_orca_directive_text,
+    active_orca_line_text,
+    orca_line_tokens,
+)
+
 GEOM_HEADER_RE = re.compile(
     r"^\s*\*\s+(xyzfile|xyz)\s+(-?\d+)\s+(\d+)(?:\s+(.*))?$",
     re.IGNORECASE,
 )
-COORDS_BLOCK_RE = re.compile(r"^\s*%\s*coords\b", re.IGNORECASE)
 BLOCK_START_RE = re.compile(r"^\s*%([A-Za-z0-9_\-]+)")
-MOINP_RE = re.compile(r"^\s*%moinp\b", re.IGNORECASE)
-MAXCORE_DIRECTIVE_RE = re.compile(r"^\s*%maxcore\b", re.IGNORECASE)
-NPROCS_DIRECTIVE_RE = re.compile(r"\bnprocs\s+\d+\b", re.IGNORECASE)
-PAL_ROUTE_TOKEN_RE = re.compile(r"\APAL\d+\Z", re.IGNORECASE)
-_SAFE_UNQUOTED_ORCA_PATH_RE = re.compile(r"^[A-Za-z0-9._/+\-]+$")
 NESTED_BLOCK_NAMES = frozenset({"scan", "constraints"})
-
-
-@dataclass(frozen=True)
-class OrcaLineToken:
-    value: str
-    start: int
-    end: int
-    quoted: bool = False
-
-
-def validate_supported_xyz_geometry_syntax(
-    lines: list[str],
-    *,
-    label: str,
-) -> None:
-    """Fail closed for geometry forms whose atom count and dependencies are not bound."""
-
-    validate_unambiguous_orca_directives(lines, label=label)
-    geometry_block_count = 0
-    inline_geometry_open = False
-    for line in lines:
-        stripped = line.strip()
-        tokens = orca_line_tokens(line)
-        if not tokens:
-            continue
-        first_lower = tokens[0].value.lower()
-        if any(
-            not token.quoted and token.value.lower() == "scants"
-            for token in orca_route_tokens(line)
-        ):
-            raise ValueError(f"{label} uses unsupported ORCA route keyword ScanTS")
-        if any(
-            token.value.lower() in {"compound", "compound_file"}
-            or token.value.lower().startswith("%compound")
-            for token in orca_route_tokens(line)
-            if not token.quoted
-        ):
-            raise ValueError(f"{label} uses an unsupported multiple-job geometry construct")
-        spaced_percent_keyword = (
-            f"%{tokens[1].value.lower()}" if len(tokens) >= 2 and tokens[0].value == "%" else ""
-        )
-        if (
-            COORDS_BLOCK_RE.match(stripped)
-            or first_lower == "%coords"
-            or spaced_percent_keyword == "%coords"
-        ):
-            raise ValueError(f"{label} uses an unsupported %coords geometry block")
-        if (
-            first_lower in {"$new_job", "$newjob", "compound", "compound_file"}
-            or first_lower.startswith("%compound")
-            or spaced_percent_keyword.startswith("%compound")
-        ):
-            raise ValueError(f"{label} uses an unsupported multiple-job geometry construct")
-        first = tokens[0].value
-        if stripped == "*" or (first == "*" and len(tokens) == 1):
-            if not inline_geometry_open:
-                raise ValueError(f"{label} has an unexpected ORCA geometry terminator")
-            inline_geometry_open = False
-            continue
-        if first == "*" or first.startswith("*"):
-            if inline_geometry_open:
-                raise ValueError(f"{label} has an unterminated inline ORCA geometry block")
-            match = GEOM_HEADER_RE.match(stripped)
-            if match is None or match.group(1).lower() not in {"xyz", "xyzfile"}:
-                raise ValueError(f"{label} uses an unsupported ORCA geometry format")
-            geometry_type = match.group(1).lower()
-            expected_token_count = 5 if geometry_type == "xyzfile" else 4
-            if len(tokens) != expected_token_count:
-                raise ValueError(f"{label} has an invalid {geometry_type} geometry header")
-            geometry_block_count += 1
-            if geometry_block_count > 1:
-                raise ValueError(f"{label} uses unsupported multiple ORCA geometry blocks")
-            inline_geometry_open = geometry_type == "xyz"
-    if geometry_block_count != 1:
-        raise ValueError(f"{label} must define exactly one supported ORCA geometry block")
-    if inline_geometry_open:
-        raise ValueError(f"{label} has an unterminated inline ORCA geometry block")
-
-
-def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> None:
-    """Reject duplicate resource/checkpoint directives with unclear ORCA precedence."""
-
-    maxcore_count = 0
-    moinp_count = len(orca_moinp_references(lines))
-    # ``iter_blocks`` owns the block-termination rule, so the ``nprocs`` count
-    # covers exactly the body rows that ``read_nprocs`` reads: tokens after a
-    # closing ``end`` (which ORCA does not parse as %pal content) are ignored,
-    # while duplicate blocks and duplicate ``nprocs`` rows stay rejected.
-    pal_blocks = list(iter_blocks(lines, "pal"))
-    pal_block_count = len(pal_blocks)
-    pal_nprocs_count = sum(
-        len(NPROCS_DIRECTIVE_RE.findall(row.text)) for block in pal_blocks for row in block.rows
-    )
-    pal_route_count = 0
-    for line in lines:
-        if MAXCORE_DIRECTIVE_RE.match(active_orca_directive_text(line)):
-            maxcore_count += 1
-        pal_route_count += sum(
-            1
-            for token in orca_route_tokens(line)
-            if not token.quoted and PAL_ROUTE_TOKEN_RE.fullmatch(token.value)
-        )
-
-    duplicate_labels = [
-        name
-        for name, count in (
-            ("%maxcore", maxcore_count),
-            ("%moinp", moinp_count),
-            ("%pal blocks", pal_block_count),
-            ("%pal nprocs", pal_nprocs_count),
-            ("PAL route shorthands", pal_route_count),
-        )
-        if count > 1
-    ]
-    if pal_block_count and pal_route_count:
-        duplicate_labels.append("mixed %pal and PAL route shorthands")
-    if duplicate_labels:
-        raise ValueError(
-            f"{label} has ambiguous duplicate ORCA directives: {', '.join(duplicate_labels)}"
-        )
-
-
-def orca_line_tokens(line: str, *, start: int = 0) -> list[OrcaLineToken]:
-    """Return non-comment ORCA tokens with source spans.
-
-    ORCA permits both end-of-line ``#`` comments and ``# ... #`` inline
-    comments.  Keeping spans lets callers replace path/value tokens without
-    rebuilding the rest of the input line.
-    """
-
-    tokens: list[OrcaLineToken] = []
-    index = max(0, int(start))
-    while index < len(line):
-        character = line[index]
-        if character.isspace():
-            index += 1
-            continue
-        if character == "#":
-            closing = line.find("#", index + 1)
-            if closing < 0:
-                break
-            index = closing + 1
-            continue
-        if character == "=":
-            tokens.append(OrcaLineToken("=", index, index + 1))
-            index += 1
-            continue
-
-        token_start = index
-        if character in {'"', "'"}:
-            quote = character
-            index += 1
-            value_chars: list[str] = []
-            while index < len(line):
-                character = line[index]
-                if character == "\\" and index + 1 < len(line):
-                    value_chars.append(line[index + 1])
-                    index += 2
-                    continue
-                if character == quote:
-                    index += 1
-                    break
-                value_chars.append(character)
-                index += 1
-            tokens.append(OrcaLineToken("".join(value_chars), token_start, index, quoted=True))
-            continue
-
-        while index < len(line):
-            character = line[index]
-            if character.isspace() or character in {"#", "="}:
-                break
-            index += 1
-        tokens.append(OrcaLineToken(line[token_start:index], token_start, index))
-    return tokens
-
-
-def nonempty_file(path: Path) -> bool:
-    """True when ``path`` exists with size > 0; False when missing or unreadable."""
-    try:
-        return path.exists() and path.stat().st_size > 0
-    except OSError:
-        return False
-
-
-CHECKPOINT_HEAD_BYTES = 16
-
-
-def checkpoint_file_looks_intact(path: Path) -> bool:
-    """Whether a ``.gbw`` checkpoint is worth seeding orbitals from.
-
-    A crash while ORCA writes its checkpoint can leave a file of the right
-    size whose blocks were never flushed: the filesystem then reads them back
-    as zeros. ORCA's checkpoint starts with a non-zero header, so a leading
-    window without a single non-zero byte is a torn file, not orbitals;
-    seeding it with ``MORead`` would make the restarted run fail on a corrupt
-    guess instead of degrading to a geometry-only restart. Only the leading
-    bytes are inspected; a short non-zero file still counts as a checkpoint.
-    """
-    if not nonempty_file(path):
-        return False
-    try:
-        with path.open("rb") as handle:
-            head = handle.read(CHECKPOINT_HEAD_BYTES)
-    except OSError:
-        return False
-    return any(head)
-
-
-def active_orca_line_text(line: str) -> str:
-    """Return active ORCA tokens with closed ``# ... #`` comments removed."""
-
-    tokens = orca_line_tokens(line)
-    if not tokens:
-        return ""
-    prefix = line[: tokens[0].start]
-    indentation = prefix if not prefix or prefix.isspace() else ""
-    return indentation + " ".join(token.value for token in tokens)
-
-
-def active_orca_directive_text(line: str) -> str:
-    """Return canonical active text for a percent-directive line."""
-
-    return re.sub(
-        r"\A(?P<indent>\s*)%\s+(?=[A-Za-z])",
-        r"\g<indent>%",
-        active_orca_line_text(line),
-        count=1,
-    )
-
-
-def orca_route_tokens(line: str) -> list[OrcaLineToken]:
-    """Return tokens after the first active ORCA ``!`` route marker."""
-
-    tokens = orca_line_tokens(line)
-    if not tokens:
-        return []
-    first = tokens[0]
-    if first.value == "!":
-        return tokens[1:]
-    if not first.value.startswith("!"):
-        return []
-    compact_value = first.value[1:]
-    if not compact_value:
-        return tokens[1:]
-    return [
-        OrcaLineToken(
-            compact_value,
-            first.start + 1,
-            first.end,
-            quoted=first.quoted,
-        ),
-        *tokens[1:],
-    ]
-
-
-def orca_route_line(line: str) -> str | None:
-    """Return one canonical active route line, or ``None`` for a non-route line."""
-
-    tokens = orca_route_tokens(line)
-    active_tokens = orca_line_tokens(line)
-    if not active_tokens or not active_tokens[0].value.startswith("!"):
-        return None
-    suffix = " ".join(token.value for token in tokens)
-    return f"! {suffix}".rstrip()
-
-
-def find_route_idx(lines: list[str]) -> int | None:
-    for idx, line in enumerate(lines):
-        if orca_route_line(line) is not None:
-            return idx
-    return None
-
-
-def route_line_indices(lines: list[str]) -> list[int]:
-    return [idx for idx, line in enumerate(lines) if orca_route_line(line) is not None]
-
-
-def file_route_lines(inp_path: Path) -> list[str]:
-    """All route (``!``) lines of an ORCA input, stripped; ``[]`` when unreadable.
-
-    ORCA accepts multiple route lines and allows ``%`` blocks before them, so
-    callers deciding "does this input request X" must scan every route line,
-    not just the first one. ``#`` comments are cut before returning: keyword
-    regexes (TS/IRC/OPT/...) run on these lines, and a comment like
-    ``# TS guess`` must never reclassify the job.
-    """
-    try:
-        lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return []
-    return [
-        route
-        for idx in route_line_indices(lines)
-        if (route := orca_route_line(lines[idx])) is not None
-    ]
-
-
-def ensure_route_keywords(lines: list[str], keywords: list[str]) -> bool:
-    idx = find_route_idx(lines)
-    if idx is None:
-        lines.insert(0, "! " + " ".join(keywords))
-        return True
-
-    current = orca_route_line(lines[idx])
-    if current is None:
-        raise ValueError("ORCA route index does not identify an active route line")
-    token_set = {token.value.upper() for token in orca_route_tokens(lines[idx])}
-    missing = [kw for kw in keywords if kw.upper() not in token_set]
-    if not missing:
-        return False
-    lines[idx] = current + " " + " ".join(missing)
-    return True
 
 
 @dataclass(frozen=True)
@@ -395,6 +95,39 @@ def find_geometry_start(lines: list[str]) -> int | None:
     return None if block is None else block.header_index
 
 
+def geometry_range(lines: list[str]) -> tuple[int, int, int, int] | None:
+    """Return ``(start, end, charge, multiplicity)`` of the first geometry block."""
+
+    block = find_geometry_block(lines)
+    if block is None:
+        return None
+    if block.kind == "xyzfile":
+        end = block.header_index + 1
+    elif block.terminator_index is not None:
+        end = block.terminator_index + 1
+    else:
+        end = len(lines)
+    return block.header_index, end, block.charge, block.multiplicity
+
+
+def replace_geometry_with_xyzfile(lines: list[str], geom_file: Path, base_dir: Path) -> bool:
+    geo = geometry_range(lines)
+    if geo is None:
+        return False
+    start, end, charge, mult = geo
+    geom_resolved = geom_file.resolve()
+    base_resolved = base_dir.resolve()
+    try:
+        rel = geom_resolved.relative_to(base_resolved)
+    except ValueError:
+        rel = geom_resolved
+    ref = str(rel).replace("\\", "/")
+    if " " in ref:
+        ref = f'"{ref}"'
+    lines[start:end] = [f"* xyzfile {charge} {mult} {ref}"]
+    return True
+
+
 @dataclass(frozen=True)
 class OrcaBlockRow:
     """One active body row of a ``%block``: its line index and non-comment tokens."""
@@ -436,6 +169,18 @@ class OrcaBlock:
         return not self.closed
 
 
+def percent_directive_header(tokens: list[OrcaLineToken]) -> tuple[str, int] | None:
+    """``(block name, body start index)`` for a ``%name`` / ``% name`` line, else ``None``."""
+
+    if not tokens or tokens[0].quoted:
+        return None
+    if tokens[0].value.startswith("%") and tokens[0].value != "%":
+        return tokens[0].value[1:].lower(), 1
+    if len(tokens) >= 2 and tokens[0].value == "%" and not tokens[1].quoted:
+        return tokens[1].value.lower(), 2
+    return None
+
+
 def _unquoted_end_index(tokens: Sequence[OrcaLineToken], start: int) -> int:
     return next(
         (
@@ -467,7 +212,7 @@ def _scan_block(
         if not tokens:
             continue
         first = tokens[0]
-        if _percent_directive_header(tokens) is not None or (
+        if percent_directive_header(tokens) is not None or (
             not first.quoted and first.value.startswith("*")
         ):
             return OrcaBlock(name, start, index, False, tuple(rows))
@@ -494,7 +239,7 @@ def iter_blocks(lines: Sequence[str], block_name: str) -> Iterator[OrcaBlock]:
     index = 0
     while index < len(lines):
         tokens = orca_line_tokens(lines[index])
-        header = _percent_directive_header(tokens)
+        header = percent_directive_header(tokens)
         if header is None or header[0] != name:
             index += 1
             continue
@@ -648,202 +393,3 @@ def _set_inline_block_key_value(
         lines[index] = updated
         return True
     return None
-
-
-def format_relative_or_absolute(path: Path, base_dir: Path) -> str:
-    resolved = path.resolve()
-    base_resolved = base_dir.resolve()
-    try:
-        ref = resolved.relative_to(base_resolved)
-    except ValueError:
-        ref = resolved
-    return str(ref).replace("\\", "/")
-
-
-def quote_orca_path(path_text: str) -> str:
-    escaped = path_text.replace('"', '\\"')
-    return f'"{escaped}"'
-
-
-def is_safe_unquoted_orca_path(path_text: str) -> bool:
-    return bool(path_text and _SAFE_UNQUOTED_ORCA_PATH_RE.fullmatch(path_text))
-
-
-def unquoted_orca_path(path_text: str) -> str:
-    if not is_safe_unquoted_orca_path(path_text):
-        raise ValueError(f"Unsafe unquoted ORCA input path reference: {path_text!r}")
-    return path_text
-
-
-def set_moinp(lines: list[str], checkpoint: Path, base_dir: Path) -> bool:
-    ref = quote_orca_path(format_relative_or_absolute(checkpoint, base_dir))
-    new_line = f"%moinp {ref}"
-    matches = [
-        idx for idx, line in enumerate(lines) if MOINP_RE.match(active_orca_directive_text(line))
-    ]
-    semantic_references = orca_moinp_references(lines)
-    noncanonical_references = [
-        reference for reference in semantic_references if reference.line_index not in matches
-    ]
-    if noncanonical_references:
-        if len(semantic_references) != 1:
-            raise ValueError("ORCA input has duplicate semantic MOInp declarations")
-        reference = noncanonical_references[0]
-        current = lines[reference.line_index]
-        updated = current[: reference.start] + ref + current[reference.end :]
-        if updated == current:
-            return False
-        lines[reference.line_index] = updated
-        return True
-    if matches:
-        first = matches[0]
-        changed = lines[first] != new_line or len(matches) > 1
-        lines[first] = new_line
-        for idx in reversed(matches[1:]):
-            del lines[idx]
-        return changed
-
-    insert_at = find_geometry_start(lines)
-    if insert_at is None:
-        insert_at = len(lines)
-    lines.insert(insert_at, new_line)
-    return True
-
-
-def geometry_range(lines: list[str]) -> tuple[int, int, int, int] | None:
-    """Return ``(start, end, charge, multiplicity)`` of the first geometry block."""
-
-    block = find_geometry_block(lines)
-    if block is None:
-        return None
-    if block.kind == "xyzfile":
-        end = block.header_index + 1
-    elif block.terminator_index is not None:
-        end = block.terminator_index + 1
-    else:
-        end = len(lines)
-    return block.header_index, end, block.charge, block.multiplicity
-
-
-def replace_geometry_with_xyzfile(lines: list[str], geom_file: Path, base_dir: Path) -> bool:
-    geo = geometry_range(lines)
-    if geo is None:
-        return False
-    start, end, charge, mult = geo
-    geom_resolved = geom_file.resolve()
-    base_resolved = base_dir.resolve()
-    try:
-        rel = geom_resolved.relative_to(base_resolved)
-    except ValueError:
-        rel = geom_resolved
-    ref = str(rel).replace("\\", "/")
-    if " " in ref:
-        ref = f'"{ref}"'
-    lines[start:end] = [f"* xyzfile {charge} {mult} {ref}"]
-    return True
-
-
-@dataclass(frozen=True)
-class OrcaFileReference:
-    """One external file reference of an ORCA input, with its source span."""
-
-    line_index: int
-    value: str
-    start: int
-    end: int
-    kind: str  # "geometry" | "neb_geometry" | "auxiliary"
-
-
-def _percent_directive_header(tokens: list[OrcaLineToken]) -> tuple[str, int] | None:
-    if not tokens or tokens[0].quoted:
-        return None
-    if tokens[0].value.startswith("%") and tokens[0].value != "%":
-        return tokens[0].value[1:].lower(), 1
-    if len(tokens) >= 2 and tokens[0].value == "%" and not tokens[1].quoted:
-        return tokens[1].value.lower(), 2
-    return None
-
-
-def _scf_body_token_rows(lines: list[str]) -> list[tuple[int, list[OrcaLineToken]]]:
-    """Return active ``%scf`` body tokens per row (see :func:`iter_blocks`)."""
-
-    return [
-        (row.line_index, list(row.tokens))
-        for block in iter_blocks(lines, "scf")
-        for row in block.rows
-    ]
-
-
-def _reference_after_keyword(
-    *,
-    line_index: int,
-    line: str,
-    tokens: list[OrcaLineToken],
-    keyword_index: int,
-) -> OrcaFileReference:
-    value_index = keyword_index + 1
-    if value_index < len(tokens) and tokens[value_index].value == "=":
-        value_index += 1
-    if value_index >= len(tokens):
-        raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
-    value_token = tokens[value_index]
-    value = value_token.value.strip()
-    if not value or (not value_token.quoted and value.lower() == "end"):
-        raise ValueError(f"Invalid ORCA auxiliary file reference: {line.strip()}")
-    return OrcaFileReference(
-        line_index=line_index,
-        value=value,
-        start=value_token.start,
-        end=value_token.end,
-        kind="auxiliary",
-    )
-
-
-def orca_moinp_references(lines: list[str]) -> list[OrcaFileReference]:
-    """Return every semantic top-level or ``%scf`` ``MOInp`` occurrence."""
-
-    references: list[OrcaFileReference] = []
-    for line_index, line in enumerate(lines):
-        tokens = orca_line_tokens(line)
-        header = _percent_directive_header(tokens)
-        if header is None or header[0] != "moinp":
-            continue
-        references.append(
-            _reference_after_keyword(
-                line_index=line_index,
-                line=line,
-                tokens=tokens,
-                keyword_index=header[1] - 1,
-            )
-        )
-    for line_index, body_tokens in _scf_body_token_rows(lines):
-        for token_index, token in enumerate(body_tokens):
-            if token.quoted or token.value.lower() != "moinp":
-                continue
-            references.append(
-                _reference_after_keyword(
-                    line_index=line_index,
-                    line=lines[line_index],
-                    tokens=body_tokens,
-                    keyword_index=token_index,
-                )
-            )
-    return sorted(references, key=lambda reference: (reference.line_index, reference.start))
-
-
-def orca_input_requests_moread(lines: list[str]) -> bool:
-    """Return whether active route or ``%scf`` semantics request orbital reuse."""
-
-    if orca_moinp_references(lines):
-        return True
-    if any(
-        not token.quoted and token.value.lower() == "moread"
-        for line in lines
-        for token in orca_route_tokens(line)
-    ):
-        return True
-    return any(
-        not token.quoted and token.value.lower() == "moread"
-        for _line_index, tokens in _scf_body_token_rows(lines)
-        for token in tokens
-    )

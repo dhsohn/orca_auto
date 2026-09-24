@@ -1,3 +1,5 @@
+"""Read and inject ``%pal nprocs`` / ``%maxcore`` resource directives of an ORCA input."""
+
 from __future__ import annotations
 
 import math
@@ -6,15 +8,10 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from orca_auto.core.engine_process import atomic_write_confined_bytes
+from orca_auto.core.confined_io import atomic_write_confined_bytes
 
-from .input_blocks import (
-    active_orca_directive_text,
-    find_route_idx,
-    iter_blocks,
-    orca_route_line,
-    set_block_key_value,
-)
+from .input_blocks import iter_blocks, set_block_key_value
+from .input_syntax import active_orca_directive_text, find_route_idx, orca_route_line
 
 MAXCORE_RE = re.compile(r"^\s*%maxcore\s+(\d+)", re.IGNORECASE)
 NPROCS_RE = re.compile(r"\bnprocs\s+(\d+)\b", re.IGNORECASE)

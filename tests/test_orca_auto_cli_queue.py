@@ -12,9 +12,8 @@ from typing import Any
 import pytest
 import yaml
 
-from orca_auto import activity_labels, terminal_table
+from orca_auto import activity_labels, terminal, terminal_table
 from orca_auto import cli_queue as unified_cli
-from orca_auto.core import terminal
 from orca_auto.core.queue import QueueStoreCorruptError
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
@@ -523,6 +522,7 @@ def test_cmd_queue_list_json_emits_the_listing_payload_unchanged(
     assert captured["statuses"] == ("running",)
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
+        "ok": True,
         "count": 1,
         "active_simulations": 1,
         "activities": page,
@@ -663,8 +663,49 @@ def test_cmd_queue_list_clear_json_output(
 
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
     assert payload["total_cleared"] == 0
     assert payload["sources"]["orca_config"] == "/tmp/orca_auto.yaml"
+
+
+def test_cmd_queue_list_text_names_the_worker_log_of_running_and_failed_rows_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def row(activity_id: str, status: str, worker_log: str) -> dict[str, Any]:
+        return {
+            "activity_id": activity_id,
+            "kind": "job",
+            "engine": "orca",
+            "status": status,
+            "label": activity_id,
+            "source": "orca_auto_orca",
+            "worker_log": worker_log,
+            "metadata": {},
+        }
+
+    _fake_listing(
+        monkeypatch,
+        [
+            row("q-run", "running", "/runs/logs/q-run.log"),
+            row("q-failed", "failed", "/runs/logs/q-failed.log"),
+            row("q-done", "completed", "/runs/logs/q-done.log"),
+            row("q-pending", "pending", ""),
+        ],
+        active_simulations=1,
+    )
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(orca_auto_config=None, limit=0, refresh=False, status=None, json=False)
+    )
+
+    assert result == 0
+    out = capsys.readouterr().out
+    assert "worker_log: q-run /runs/logs/q-run.log" in out
+    assert "worker_log: q-failed /runs/logs/q-failed.log" in out
+    assert "q-done.log" not in out
+    # The note sits under the table, never inside a width-capped cell.
+    assert out.index("q-pending") < out.index("worker_log: q-run")
 
 
 def test_cmd_queue_list_clear_rejects_filters(
@@ -756,7 +797,8 @@ def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceba
 
     captured = capsys.readouterr()
     assert result == 1
-    assert captured.out == ""
+    # --json keeps the human line on stderr and adds the error document on stdout.
+    assert json.loads(captured.out) == {"ok": False, "error": str(failure)}
     assert captured.err.startswith("error: ")
     assert "hint: Check the config path" in captured.err
     assert "Traceback" not in captured.err
@@ -952,7 +994,7 @@ def test_cmd_queue_cancel_reports_expected_state_errors_without_traceback(
 
     captured = capsys.readouterr()
     assert result == 1
-    assert captured.out == ""
+    assert json.loads(captured.out) == {"ok": False, "error": str(failure)}
     assert captured.err.startswith("error: ")
     assert "hint: Check the configured runtime state" in captured.err
     assert "Traceback" not in captured.err
@@ -1019,9 +1061,131 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
 
     assert result == 1
     captured = capsys.readouterr()
-    assert captured.out == ""
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "error": f"runs_root does not exist: {tmp_path / 'does_not_exist_root'}",
+    }
     assert "runs_root does not exist" in captured.err
     assert "does_not_exist_root" in captured.err
+
+
+def test_cmd_queue_list_clear_rejects_a_missing_runs_root_without_creating_it(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    missing_root = tmp_path / "typo_runs"
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(f"runs_root: {missing_root}\n", encoding="utf-8")
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action="clear",
+            orca_auto_config=str(config),
+            limit=0,
+            refresh=False,
+            status=None,
+            json=False,
+        )
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "runs_root does not exist" in captured.err
+    assert not missing_root.exists()
+
+
+@pytest.mark.parametrize("action", [None, "clear"])
+def test_cmd_queue_list_fails_when_no_config_is_discoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    action: str | None,
+) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=action,
+            orca_auto_config=None,
+            limit=0,
+            refresh=False,
+            status=None,
+            json=False,
+        )
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: No orca_auto.yaml found: pass --config, set ")
+    assert "ORCA_AUTO_CONFIG" in captured.err
+    assert "~/orca_auto/config/orca_auto.yaml" in captured.err
+
+
+def test_cmd_queue_cancel_fails_when_no_config_is_discoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
+
+    result = unified_cli.cmd_queue_cancel(
+        SimpleNamespace(target="orca-q-1", orca_auto_config=None, json=False)
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: No orca_auto.yaml found: pass --config, set ")
+    assert "Activity target not found" not in captured.err
+
+
+def test_cmd_queue_list_reports_a_corrupt_admission_store_as_a_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "runs"
+    admission_root = root / ".admission"
+    admission_root.mkdir(parents=True)
+    slots_file = admission_root / "admission_slots.json"
+    slots_file.write_text("{not json", encoding="utf-8")
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(f"runs_root: {root}\n", encoding="utf-8")
+    monkeypatch.setattr(unified_cli, "_layout_interactive", lambda: False)
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=None,
+            orca_auto_config=str(config),
+            limit=0,
+            refresh=False,
+            status=None,
+            json=False,
+        )
+    )
+
+    assert result == 0
+    stdout = capsys.readouterr().out
+    assert f"admission_blocked: ORCA queue {root} (queue_id=*)" in stdout
+    assert f"Admission slot file is not valid JSON: {slots_file}" in stdout
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action=None,
+            orca_auto_config=str(config),
+            limit=0,
+            refresh=False,
+            status=None,
+            json=True,
+        )
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [blocker["scope"] for blocker in payload["admission_blockers"]] == ["admission_store"]
+    assert str(slots_file) in payload["admission_blockers"][0]["reason"]
 
 
 #: One transition in the shape `_stored_cancellation_transitions` accepts.

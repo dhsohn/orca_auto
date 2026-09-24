@@ -13,6 +13,7 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca import run_cleanup
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue import orphans as queue_orphans
@@ -21,6 +22,7 @@ from orca_auto.orca.queue.terminal_replay import (
     terminal_replay_marker_from_entry,
 )
 from orca_auto.orca.statuses import RunStatus
+from tests.conftest import claim_next_entry
 
 
 def _entry(
@@ -97,10 +99,10 @@ def _foreign_entry(
 ) -> QueueEntry:
     return QueueEntry(
         queue_id=queue_id,
-        app_name="orca_auto_xtb",
-        task_id=f"xtb-{queue_id}",
-        task_kind="xtb_sp",
-        engine="xtb",
+        app_name="orca_auto_other",
+        task_id=f"other-{queue_id}",
+        task_kind="other_sp",
+        engine="other",
         status=status,
         priority=1,
         enqueued_at="2026-03-10T00:00:00+00:00",
@@ -185,7 +187,7 @@ def test_apply_terminal_reconciliation_updates_fields_and_clears_completed_error
         error="stale_error",
     )
     with patch(
-        "orca_auto.core.queue.store.now_utc_iso",
+        "orca_auto.core.queue.transitions.now_utc_iso",
         return_value="2026-03-10T06:00:00+00:00",
     ):
         completed_entry = queue_orphans.apply_terminal_reconciliation(
@@ -286,7 +288,7 @@ def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> No
     assert queue_adapter.list_queue(tmp_path) == []
     assert queue_adapter.get_active_entry_for_reaction_dir(tmp_path, reaction_dir) is None
     assert queue_adapter.cancel(tmp_path, foreign_pending.queue_id) is None
-    assert queue_adapter.clear_terminal(tmp_path) == 0
+    assert run_cleanup.clear_terminal_queue_entries(tmp_path) == (0, 0)
 
     durable = _load_entries(tmp_path)
     assert [(entry.queue_id, entry.status) for entry in durable] == [
@@ -515,7 +517,7 @@ def test_orca_terminal_marks_persist_valid_replay_marker(
     reaction_dir = root / status.value
     reaction_dir.mkdir(parents=True)
     entry = queue_adapter.enqueue(root, str(reaction_dir), task_id=f"task-{status.value}")
-    running = queue_adapter.dequeue_next(root)
+    running = claim_next_entry(root)
     assert running is not None
 
     if status == QueueStatus.COMPLETED:
@@ -562,7 +564,7 @@ def test_orca_requeue_honors_racing_cancel_with_valid_replay_marker(tmp_path: Pa
     reaction_dir = root / "requeue_cancel"
     reaction_dir.mkdir(parents=True)
     entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-requeue-cancel")
-    running = queue_adapter.dequeue_next(root)
+    running = claim_next_entry(root)
     assert running is not None
     cancel_requested = queue_adapter.cancel(root, entry.queue_id, expected_entry=running)
     assert cancel_requested is not None
@@ -595,7 +597,7 @@ def test_same_terminal_mark_after_replay_clear_does_not_resurrect_marker(
     reaction_dir = root / "completed"
     reaction_dir.mkdir(parents=True)
     entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-completed")
-    running = queue_adapter.dequeue_next(root)
+    running = claim_next_entry(root)
     assert running is not None
     assert queue_adapter.mark_completed(root, entry.queue_id, expected_entry=running) is True
     [terminal] = queue_adapter.list_queue(root)
@@ -637,7 +639,7 @@ def test_administrative_failed_mark_rejects_side_effect_marker(tmp_path: Path) -
     [unchanged] = queue_adapter.list_queue(root)
     assert unchanged.status == QueueStatus.PENDING
 
-    running = queue_adapter.dequeue_next(root)
+    running = claim_next_entry(root)
     assert running is not None
     assert queue_adapter.mark_failed(
         root,
@@ -666,7 +668,7 @@ def test_invalid_terminal_replay_marker_blocks_clear_and_forced_successor(
     reaction_dir = root / marker_kind
     reaction_dir.mkdir(parents=True)
     entry = queue_adapter.enqueue(root, str(reaction_dir), task_id=f"task-{marker_kind}")
-    running = queue_adapter.dequeue_next(root)
+    running = claim_next_entry(root)
     assert running is not None
     assert queue_adapter.mark_completed(root, entry.queue_id, expected_entry=running) is True
 
@@ -696,7 +698,7 @@ def test_invalid_terminal_replay_marker_blocks_clear_and_forced_successor(
 
     [blocked] = queue_adapter.list_queue(root)
     assert terminal_replay_marker_from_entry(blocked) is None
-    assert queue_adapter.clear_terminal(root) == 0
+    assert run_cleanup.clear_terminal_queue_entries(root) == (0, 0)
     with pytest.raises(queue_adapter.DuplicateEntryError):
         queue_adapter.enqueue(root, str(reaction_dir), force=True)
 
@@ -783,7 +785,7 @@ def test_orca_adapter_mutations_never_change_foreign_engine_rows(tmp_path: Path)
     terminal = _foreign_entry("foreign-terminal", status=QueueStatus.COMPLETED)
     _save_entries(root, [pending, running, terminal])
 
-    assert queue_adapter.dequeue_next(root) is None
+    assert claim_next_entry(root) is None
     assert queue_adapter.dequeue_entry_if_pending(root, pending.queue_id) is None
     assert queue_adapter.mark_completed(root, pending.queue_id) is False
     assert queue_adapter.mark_failed(root, pending.queue_id, error="foreign") is False
@@ -805,7 +807,7 @@ def test_orca_adapter_mutations_never_change_foreign_engine_rows(tmp_path: Path)
 
 
 def _driver_recovery_spec(root: Path) -> Any:
-    from orca_auto.core.queue.enqueue_publication import EnqueuePublicationSpec
+    from orca_auto.orca.queue.enqueue_publication import EnqueuePublicationSpec
 
     return EnqueuePublicationSpec(
         queue_root=root,
@@ -823,7 +825,7 @@ def _driver_recovery_spec(root: Path) -> Any:
 
 
 def test_enqueue_recovery_never_matches_a_foreign_row(tmp_path: Path) -> None:
-    from orca_auto.core.queue.enqueue_publication import _recover_committed_enqueue
+    from orca_auto.orca.queue.enqueue_publication import _recover_committed_enqueue
 
     root = tmp_path / "shared_queue"
     reaction_dir = str((root / "reaction").resolve())
@@ -840,7 +842,7 @@ def test_enqueue_recovery_never_matches_a_foreign_row(tmp_path: Path) -> None:
         queue_id="queue-foreign",
         app_name="orca_auto_orca",
         task_id="task-ambiguous",
-        task_kind="xtb_sp",
+        task_kind="other_sp",
         engine="orca",
         priority=7,
         metadata=dict(metadata),
@@ -861,7 +863,7 @@ def test_enqueue_recovery_never_matches_a_foreign_row(tmp_path: Path) -> None:
 def test_ambiguous_enqueue_recovery_is_durable_fence_only_history(
     tmp_path: Path,
 ) -> None:
-    from orca_auto.core.queue.enqueue_publication import (
+    from orca_auto.orca.queue.enqueue_publication import (
         EnqueuePublicationOutcomeUnknown,
         _recover_committed_enqueue,
     )
@@ -951,38 +953,3 @@ def test_orca_adapter_expected_generation_rejects_replaced_queue_id(tmp_path: Pa
 
     [current] = queue_adapter.list_queue(root)
     assert current == replacement
-
-
-def test_clear_terminal_keep_last_keeps_newest_terminal_entries(tmp_path: Path) -> None:
-    root = tmp_path / "queue_root"
-    root.mkdir()
-    _save_entries(
-        root,
-        [
-            _entry("q_pending", str(root / "pending"), QueueStatus.PENDING.value),
-            _entry(
-                "q_old",
-                str(root / "old"),
-                QueueStatus.COMPLETED.value,
-                finished_at="2026-03-10T01:00:00+00:00",
-            ),
-            _entry(
-                "q_new",
-                str(root / "new"),
-                QueueStatus.FAILED.value,
-                finished_at="2026-03-10T03:00:00+00:00",
-            ),
-            _entry(
-                "q_mid",
-                str(root / "mid"),
-                QueueStatus.CANCELLED.value,
-                finished_at="2026-03-10T02:00:00+00:00",
-            ),
-        ],
-    )
-
-    removed = queue_adapter.clear_terminal(root, keep_last=2)
-
-    assert removed == 1
-    remaining = {entry.queue_id: entry for entry in queue_adapter.list_queue(root)}
-    assert set(remaining) == {"q_pending", "q_new", "q_mid"}

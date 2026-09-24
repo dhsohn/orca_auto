@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import subprocess
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,7 +17,6 @@ import pytest
 from orca_auto.core.queue import processes as process_helpers
 from orca_auto.core.queue import worker as worker_common
 from orca_auto.core.queue.child import process as child_process_helpers
-from orca_auto.core.queue.dependencies import BackgroundJobProcessStarter, ChildQueueWorkerDeps
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -24,80 +24,14 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_PREPARING,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
 )
-from orca_auto.core.queue.types import QueueEntry
-from orca_auto.core.queue.worker import process as worker_process_helpers
-from orca_auto.core.queue.worker.models import (
-    BackgroundRunningJob,
-    ReservedQueueEntry,
-    ReserveStatus,
-)
+from orca_auto.core.queue.worker import pid_file
+from orca_auto.core.queue.worker.models import ReserveStatus
 from tests.process_helpers import FakeManagedProcess, recording_killpg
 
 
 def _append_and_return(items: Any, value: Any, result: Any) -> Any:
     items.append(value)
     return result
-
-
-def _cfg(**runtime_overrides: object) -> SimpleNamespace:
-    runtime: dict[str, object] = {
-        "allowed_root": "/allowed",
-        "admission_root": "",
-        "admission_limit": None,
-        "max_concurrent": 3,
-    }
-    runtime.update(runtime_overrides)
-    runtime.setdefault(
-        "resolved_admission_root", runtime["admission_root"] or runtime["allowed_root"]
-    )
-    runtime.setdefault(
-        "resolved_admission_limit", runtime["admission_limit"] or runtime["max_concurrent"]
-    )
-    return SimpleNamespace(runtime=SimpleNamespace(**runtime))
-
-
-def _worker_deps(
-    *,
-    poll_interval_seconds: float = 1,
-    sleep: Callable[[float], None] = lambda _seconds: None,
-    start_background_job_process: BackgroundJobProcessStarter | None = None,
-) -> ChildQueueWorkerDeps[SimpleNamespace]:
-    return ChildQueueWorkerDeps(
-        poll_interval_seconds=poll_interval_seconds,
-        sleep=sleep,
-        release_slot=lambda _root, _token: None,
-        has_admission_capacity=lambda _cfg: True,
-        peek_next_entry=lambda _cfg, **_kwargs: None,
-        dequeue_next_entry=lambda _cfg, **_kwargs: None,
-        start_background_job_process=start_background_job_process
-        or (lambda **_kwargs: FakeManagedProcess()),
-        try_reserve_admission_slot=lambda _cfg: None,
-    )
-
-
-def _queue_entry(queue_id: str, task_id: str = "task-1") -> QueueEntry:
-    return QueueEntry(queue_id, "orca_auto_orca", task_id, "orca_run_inp", "orca")
-
-
-class _RecordingWorker(
-    worker_common.PidFileChildProcessQueueWorker[SimpleNamespace, BackgroundRunningJob]
-):
-    worker_pid_file_name = "engine.pid"
-
-    def __init__(
-        self, cfg: SimpleNamespace, calls: list[tuple[str, str]], *, fail_finalize: bool = False
-    ) -> None:
-        super().__init__(cfg, config_path="/tmp/config.yaml", max_concurrent=2, deps=_worker_deps())
-        self.calls = calls
-        self.fail_finalize = fail_finalize
-
-    def _finalize_completed_job(self, queue_id: str, job: BackgroundRunningJob, rc: int) -> None:
-        self.calls.append(("finalize", queue_id))
-        if self.fail_finalize:
-            raise RuntimeError("finalize failed once")
-
-    def _shutdown_running_job(self, queue_id: str, job: BackgroundRunningJob) -> None:
-        self.calls.append(("shutdown", queue_id))
 
 
 def _entry(
@@ -108,7 +42,7 @@ def _entry(
     enqueued_at: str = "2026-01-01T00:00:00Z",
     cancel_requested: bool = False,
     metadata: dict[str, object] | None = None,
-) -> SimpleNamespace:
+) -> Any:
     entry_metadata: dict[str, object] = {QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_COMPLETE}
     entry_metadata.update(metadata or {})
     return SimpleNamespace(
@@ -121,140 +55,45 @@ def _entry(
     )
 
 
+def _select(entries: list[Any], accept_entry_fn: Any = None) -> Any:
+    return worker_common.select_next_claimable_entry(entries, accept_entry_fn=accept_entry_fn)
+
+
 def test_resolve_admission_root_reads_the_runtime_property() -> None:
-    cfg = _cfg(
-        resolved_admission_root="/resolved",
-        admission_root="/configured",
+    cfg = SimpleNamespace(
+        runtime=SimpleNamespace(admission_root="/configured", resolved_admission_root="/resolved")
     )
 
-    # The config owns the resolution; this adapter only exposes it as a callable
-    # for the worker modules that inject it as a value.
+    # The config owns the resolution; this adapter only exposes it as a callable.
     assert worker_common.resolve_admission_root(cfg) == "/resolved"
 
 
-def test_dequeue_next_across_roots_handles_single_root_idle_and_selected_entry(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "queue"
+def test_select_next_claimable_entry_handles_empty_and_single_pending_listing() -> None:
     entry = _entry("q-1")
 
-    assert (
-        worker_common.dequeue_next_across_roots(
-            (root,),
-            list_queue_fn=lambda _root: [],
-            dequeue_next_fn=lambda _root: None,
-        )
-        is None
-    )
-    assert worker_common.dequeue_next_across_roots(
-        (root,),
-        list_queue_fn=lambda _root: [],
-        dequeue_next_fn=lambda _root: entry,
-    ) == (root, entry)
+    assert _select([]) is None
+    assert _select([entry]) is entry
 
 
-def test_dequeue_next_across_roots_filters_single_root_and_dequeues_accepted_entry(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "queue"
-    rejected = _entry("q-rejected", priority=1)
-    rejected.app_name = "orca_auto_orca"
-    accepted = _entry("q-accepted", priority=9)
-    accepted.app_name = "orca_auto_crest"
-    entries = [rejected, accepted]
-    dequeued_ids: list[str] = []
+def test_select_next_claimable_entry_skips_running_cancelled_and_lower_priority_rows() -> None:
+    winner = _entry("winner", priority=1)
+    entries = [
+        _entry("running", status="running", priority=0),
+        _entry("cancelled", priority=0, cancel_requested=True),
+        _entry("later", priority=5),
+        winner,
+    ]
 
-    def dequeue_entry(
-        _root: Path,
-        queue_id: str,
-        **_kwargs: object,
-    ) -> SimpleNamespace | None:
-        dequeued_ids.append(queue_id)
-        for entry in entries:
-            if entry.queue_id == queue_id:
-                return entry
-        return None
-
-    result = worker_common.dequeue_next_across_roots(
-        (root,),
-        list_queue_fn=lambda _root: entries,
-        dequeue_next_fn=lambda _root: pytest.fail("filtered dequeue should use selected id"),
-        dequeue_entry_fn=dequeue_entry,
-        accept_entry_fn=lambda entry: getattr(entry, "app_name", "") == "orca_auto_crest",
-    )
-
-    assert result == (root, accepted)
-    assert dequeued_ids == ["q-accepted"]
+    assert _select(entries) is winner
 
 
-def test_dequeue_next_across_roots_single_root_filter_without_id_dequeuer_does_not_claim(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "queue"
-    rejected = _entry("q-rejected", priority=1)
-    rejected.app_name = "orca_auto_orca"
-    accepted = _entry("q-accepted", priority=9)
-    accepted.app_name = "orca_auto_crest"
-    dequeue_next_calls = 0
-
-    def dequeue_next(_root: Path) -> SimpleNamespace | None:
-        nonlocal dequeue_next_calls
-        dequeue_next_calls += 1
-        return rejected
-
-    result = worker_common.dequeue_next_across_roots(
-        (root,),
-        list_queue_fn=lambda _root: [rejected, accepted],
-        dequeue_next_fn=dequeue_next,
-        accept_entry_fn=lambda entry: getattr(entry, "app_name", "") == "orca_auto_crest",
-    )
-
-    assert result is None
-    assert dequeue_next_calls == 0
-
-
-def test_dequeue_next_across_roots_selects_best_pending_entry(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    queues = {
-        first: [
-            _entry("running", status="running", priority=1),
-            _entry("cancelled", priority=1, cancel_requested=True),
-            _entry("later", priority=5, enqueued_at="2026-01-02T00:00:00Z"),
-        ],
-        second: [_entry("winner", priority=1, enqueued_at="2026-01-01T00:00:00Z")],
-    }
-
-    result = worker_common.dequeue_next_across_roots(
-        (first, second),
-        list_queue_fn=lambda root: queues[root],
-        dequeue_next_fn=lambda root: queues[root][0],
-    )
-
-    assert result == (second, queues[second][0])
-
-
-def test_dequeue_next_across_roots_preserves_zero_priority(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
+def test_select_next_claimable_entry_preserves_zero_priority() -> None:
     zero_priority = _entry("zero", priority=0)
-    queues = {
-        first: [zero_priority],
-        second: [_entry("one", priority=1)],
-    }
 
-    result = worker_common.dequeue_next_across_roots(
-        (first, second),
-        list_queue_fn=lambda root: queues[root],
-        dequeue_next_fn=lambda root: queues[root][0],
-    )
-
-    assert result == (first, zero_priority)
+    assert _select([_entry("one", priority=1), zero_priority]) is zero_priority
 
 
-def test_dequeue_next_across_roots_skips_entry_with_live_publisher(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
+def test_select_next_claimable_entry_skips_entry_with_live_publisher() -> None:
     publishing = _entry(
         "publishing",
         priority=1,
@@ -265,184 +104,84 @@ def test_dequeue_next_across_roots_skips_entry_with_live_publisher(tmp_path: Pat
         },
     )
     ready = _entry("ready", priority=9)
-    queues = {first: [publishing], second: [ready]}
 
-    result = worker_common.dequeue_next_across_roots(
-        (first, second),
-        list_queue_fn=lambda root: queues[root],
-        dequeue_next_fn=lambda root: queues[root][0],
-    )
-
-    assert result == (second, ready)
+    assert _select([publishing, ready]) is ready
 
 
-def test_dequeue_next_across_roots_accept_entry_fn_skips_other_engine_entries(
-    tmp_path: Path,
-) -> None:
-    # After the single-runs-root collapse, an internal-engine worker's queue
-    # roots include the standalone ORCA queue alongside its workflow stage
-    # queues. Without an app filter the cross-root selection would claim the
-    # higher-priority ORCA job (first root) and mis-run it as CREST; the
-    # accept_entry_fn must skip it and pick this engine's own entry.
-    orca_root = tmp_path / "orca_runs"
-    crest_root = tmp_path / "orca_runs" / "wf_x" / "01_crest"
+def test_select_next_claimable_entry_accept_entry_fn_skips_other_engine_entries() -> None:
+    # Engine workers share the runs root. Without the identity filter the
+    # selection would claim the higher-priority foreign job and mis-run it;
+    # the accept_entry_fn must skip it and pick this engine's own entry, and
+    # rows behind a skipped one stay eligible.
     orca_entry = _entry("q_orca", priority=1)
     orca_entry.app_name = "orca_auto_orca"
     crest_entry = _entry("q_crest", priority=9)
     crest_entry.app_name = "orca_auto_crest"
-    queues = {orca_root: [orca_entry], crest_root: [crest_entry]}
 
-    result = worker_common.dequeue_next_across_roots(
-        (orca_root, crest_root),
-        list_queue_fn=lambda root: queues[root],
-        dequeue_next_fn=lambda root: queues[root][0],
+    accepted = _select(
+        [orca_entry, crest_entry],
         accept_entry_fn=lambda entry: getattr(entry, "app_name", "") == "orca_auto_crest",
     )
 
-    assert result == (crest_root, crest_entry)
+    assert accepted is crest_entry
 
 
-def test_dequeue_next_across_roots_keeps_root_fifo_when_the_clock_steps_backwards(
-    tmp_path: Path,
-) -> None:
+def test_select_next_claimable_entry_keeps_fifo_when_the_clock_steps_backwards() -> None:
     # Regression: within one root the row position is the arrival order. A
     # WSL2 skew correction between two enqueues can stamp the first arrival
     # with a later enqueued_at than the second; the old sort key then
     # dispatched the second arrival first
     # (tests/test_queue_worker.py::TestFillSlots flake, 2026-07-16).
-    root = tmp_path / "queue"
     first_arrival = _entry("q-first", priority=1, enqueued_at="2026-07-16T14:18:22.5+00:00")
     second_arrival = _entry("q-second", priority=1, enqueued_at="2026-07-16T14:18:19.4+00:00")
-    entries = [first_arrival, second_arrival]
 
-    def dequeue_entry(
-        _root: Path,
-        queue_id: str,
-        **_kwargs: object,
-    ) -> SimpleNamespace | None:
-        return next((entry for entry in entries if entry.queue_id == queue_id), None)
+    assert _select([first_arrival, second_arrival]) is first_arrival
 
-    result = worker_common.dequeue_next_across_roots(
-        (root,),
-        list_queue_fn=lambda _root: entries,
-        dequeue_next_fn=lambda _root: pytest.fail("id dequeuer should claim the selection"),
-        dequeue_entry_fn=dequeue_entry,
-        accept_entry_fn=lambda _entry: True,
+
+def test_select_next_claimable_entry_returns_none_when_only_ineligible_rows_remain() -> None:
+    foreign = _entry("foreign")
+    unpublished = _entry(
+        "unpublished", metadata={QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING}
     )
+    cancelled = _entry("cancelled", cancel_requested=True)
+    running = _entry("running", status="running")
+    later = _entry("later")
 
-    assert result == (root, first_arrival)
+    def accept(entry: Any) -> bool:
+        return entry.queue_id != "foreign"
 
-
-def test_dequeue_next_across_roots_dequeues_selected_queue_id(tmp_path: Path) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-    winner = _entry("winner", priority=1, enqueued_at="2026-01-01T00:00:00Z")
-    queues = {
-        first: [_entry("wrong-root-entry", priority=5)],
-        second: [winner, _entry("same-root-later", priority=9)],
-    }
-    dequeued_calls: list[tuple[Path, str, dict[str, object]]] = []
-
-    def dequeue_entry(
-        root: Path,
-        queue_id: str,
-        **kwargs: object,
-    ) -> SimpleNamespace | None:
-        dequeued_calls.append((root, queue_id, kwargs))
-        for entry in queues[root]:
-            if entry.queue_id == queue_id:
-                return entry
-        return None
-
-    def fail_dequeue_next(_root: Path) -> SimpleNamespace | None:
-        pytest.fail("dequeue_next should not ignore selected id")
-
-    result = worker_common.dequeue_next_across_roots(
-        (first, second),
-        list_queue_fn=lambda root: queues[root],
-        dequeue_next_fn=fail_dequeue_next,
-        dequeue_entry_fn=dequeue_entry,
-    )
-
-    assert result == (second, winner)
-    assert dequeued_calls == [
-        (second, "winner", {"expected_entry": winner}),
-    ]
-
-
-def test_dequeue_next_across_roots_returns_none_when_selected_entry_disappears(
-    tmp_path: Path,
-) -> None:
-    first = tmp_path / "first"
-    second = tmp_path / "second"
-
-    def fail_dequeue_next(_root: Path) -> SimpleNamespace | None:
-        pytest.fail("dequeue_next should not run with id dequeuer")
-
-    def missing_entry(
-        _root: Path,
-        _queue_id: str,
-        **_kwargs: object,
-    ) -> SimpleNamespace | None:
-        return None
-
-    result = worker_common.dequeue_next_across_roots(
-        (first, second),
-        list_queue_fn=lambda _root: [_entry("pending")],
-        dequeue_next_fn=fail_dequeue_next,
-        dequeue_entry_fn=missing_entry,
-    )
-
-    assert result is None
-
-
-def test_dequeue_next_across_roots_returns_none_when_selected_root_dequeues_empty(
-    tmp_path: Path,
-) -> None:
-    root = tmp_path / "root"
-
-    assert (
-        worker_common.dequeue_next_across_roots(
-            (root, tmp_path / "other"),
-            list_queue_fn=lambda _root: [_entry("pending")],
-            dequeue_next_fn=lambda _root: None,
-        )
-        is None
-    )
+    assert _select([foreign, unpublished, cancelled, running, later], accept) is later
+    assert _select([foreign, unpublished, cancelled, running], accept) is None
 
 
 def test_reserve_dequeued_entry_releases_slot_when_dequeue_raises() -> None:
-    released: list[tuple[str, str]] = []
+    released: list[str] = []
 
     with pytest.raises(RuntimeError, match="queue corrupt"):
         worker_common.reserve_dequeued_entry(
-            _cfg(admission_root="/tmp/admission"),
-            admission_root="/tmp/admission",
-            has_capacity_fn=lambda _cfg: True,
-            peek_next_fn=lambda _cfg: (Path("/allowed"), _entry("q-1")),
-            reserve_slot_fn=lambda _cfg: "slot-1",
-            dequeue_next_fn=lambda _cfg: (_ for _ in ()).throw(RuntimeError("queue corrupt")),
-            release_slot_fn=lambda root, token: released.append((str(root), token)),
+            has_capacity_fn=lambda: True,
+            peek_next_fn=lambda: (Path("/allowed"), _entry("q-1")),
+            reserve_slot_fn=lambda: "slot-1",
+            dequeue_next_fn=lambda: (_ for _ in ()).throw(RuntimeError("queue corrupt")),
+            release_slot_fn=released.append,
         )
 
-    assert released == [("/tmp/admission", "slot-1")]
+    assert released == ["slot-1"]
 
 
 def test_reserve_dequeued_entry_writes_nothing_to_admission_when_nothing_is_claimable() -> None:
-    def reserve_slot(_cfg: Any) -> str:
+    def reserve_slot() -> str:
         raise AssertionError("an idle poll must not reserve an admission slot")
 
-    def release_slot(_root: Any, _token: str) -> None:
+    def release_slot(_token: str) -> None:
         raise AssertionError("an idle poll has no slot to release")
 
-    def dequeue_next(_cfg: Any) -> None:
+    def dequeue_next() -> None:
         raise AssertionError("an idle poll must not attempt a dequeue")
 
     assert worker_common.reserve_dequeued_entry(
-        _cfg(admission_root="/tmp/admission"),
-        admission_root="/tmp/admission",
-        has_capacity_fn=lambda _cfg: True,
-        peek_next_fn=lambda _cfg: None,
+        has_capacity_fn=lambda: True,
+        peek_next_fn=lambda: None,
         reserve_slot_fn=reserve_slot,
         dequeue_next_fn=dequeue_next,
         release_slot_fn=release_slot,
@@ -450,20 +189,18 @@ def test_reserve_dequeued_entry_writes_nothing_to_admission_when_nothing_is_clai
 
 
 def test_reserve_dequeued_entry_is_blocked_before_any_queue_read_when_the_pool_is_full() -> None:
-    def peek_next(_cfg: Any) -> None:
+    def peek_next() -> None:
         raise AssertionError("a full pool must not list any queue root")
 
-    def reserve_slot(_cfg: Any) -> str:
+    def reserve_slot() -> str:
         raise AssertionError("a full pool must not attempt a reservation")
 
     assert worker_common.reserve_dequeued_entry(
-        _cfg(admission_root="/tmp/admission"),
-        admission_root="/tmp/admission",
-        has_capacity_fn=lambda _cfg: False,
+        has_capacity_fn=lambda: False,
         peek_next_fn=peek_next,
         reserve_slot_fn=reserve_slot,
-        dequeue_next_fn=lambda _cfg: None,
-        release_slot_fn=lambda _root, _token: None,
+        dequeue_next_fn=lambda: None,
+        release_slot_fn=lambda _token: None,
     ) == ("blocked", None)
 
 
@@ -471,22 +208,20 @@ def test_reserve_dequeued_entry_reserves_only_after_a_claimable_preview() -> Non
     calls: list[str] = []
     entry = _entry("q-1")
 
-    def reserve_slot(_cfg: Any) -> str:
+    def reserve_slot() -> str:
         calls.append("reserve")
         return "slot-1"
 
-    def dequeue_next(_cfg: Any) -> tuple[Path, Any]:
+    def dequeue_next() -> tuple[Path, Any]:
         calls.append("dequeue")
         return Path("/allowed"), entry
 
     status, reserved = worker_common.reserve_dequeued_entry(
-        _cfg(admission_root="/tmp/admission"),
-        admission_root="/tmp/admission",
-        has_capacity_fn=lambda _cfg: _append_and_return(calls, "capacity", True),
-        peek_next_fn=lambda _cfg: _append_and_return(calls, "peek", (Path("/allowed"), entry)),
+        has_capacity_fn=lambda: _append_and_return(calls, "capacity", True),
+        peek_next_fn=lambda: _append_and_return(calls, "peek", (Path("/allowed"), entry)),
         reserve_slot_fn=reserve_slot,
         dequeue_next_fn=dequeue_next,
-        release_slot_fn=lambda _root, _token: calls.append("release"),
+        release_slot_fn=lambda _token: calls.append("release"),
     )
 
     assert status == "processed"
@@ -497,121 +232,16 @@ def test_reserve_dequeued_entry_reserves_only_after_a_claimable_preview() -> Non
 
 
 def test_reserve_dequeued_entry_releases_slot_when_previewed_row_is_lost() -> None:
-    released: list[tuple[str, str]] = []
+    released: list[str] = []
 
     assert worker_common.reserve_dequeued_entry(
-        _cfg(admission_root="/tmp/admission"),
-        admission_root="/tmp/admission",
-        has_capacity_fn=lambda _cfg: True,
-        peek_next_fn=lambda _cfg: (Path("/allowed"), _entry("q-1")),
-        reserve_slot_fn=lambda _cfg: "slot-1",
-        dequeue_next_fn=lambda _cfg: None,
-        release_slot_fn=lambda root, token: released.append((str(root), token)),
+        has_capacity_fn=lambda: True,
+        peek_next_fn=lambda: (Path("/allowed"), _entry("q-1")),
+        reserve_slot_fn=lambda: "slot-1",
+        dequeue_next_fn=lambda: None,
+        release_slot_fn=released.append,
     ) == ("idle", None)
-    assert released == [("/tmp/admission", "slot-1")]
-
-
-def test_peek_next_across_roots_selects_exactly_what_the_dequeue_would_claim(
-    tmp_path: Path,
-) -> None:
-    root_a = tmp_path / "a"
-    root_b = tmp_path / "b"
-    foreign = _entry("foreign", enqueued_at="2026-01-01T00:00:00Z")
-    unpublished = _entry(
-        "unpublished",
-        enqueued_at="2026-01-01T00:00:01Z",
-        metadata={QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING},
-    )
-    cancelled = _entry("cancelled", enqueued_at="2026-01-01T00:00:02Z", cancel_requested=True)
-    running = _entry("running", status="running", enqueued_at="2026-01-01T00:00:03Z")
-    later = _entry("later", enqueued_at="2026-01-01T00:00:09Z")
-    earlier = _entry("earlier", enqueued_at="2026-01-01T00:00:04Z")
-    queues = {root_a: [foreign, unpublished, cancelled, running, later], root_b: [earlier]}
-    dequeued: list[tuple[Path, str]] = []
-
-    def accept(entry: Any) -> bool:
-        return entry.queue_id != "foreign"
-
-    def dequeue_entry(root: Path, queue_id: str, *, expected_entry: Any) -> Any:
-        dequeued.append((root, queue_id))
-        return expected_entry
-
-    preview = worker_common.peek_next_across_roots(
-        (root_a, root_b),
-        list_queue_fn=lambda root: queues[root],
-        select_all_rows=True,
-        accept_entry_fn=accept,
-    )
-    claimed = worker_common.dequeue_next_across_roots(
-        (root_a, root_b),
-        list_queue_fn=lambda root: queues[root],
-        dequeue_next_fn=lambda _root: None,
-        dequeue_entry_fn=dequeue_entry,
-        accept_entry_fn=accept,
-    )
-
-    assert preview == (root_b, earlier)
-    assert claimed == (root_b, earlier)
-    assert dequeued == [(root_b, "earlier")]
-
-    assert (
-        worker_common.peek_next_across_roots(
-            (root_a,),
-            list_queue_fn=lambda _root: [foreign, unpublished, cancelled, running],
-            select_all_rows=True,
-            accept_entry_fn=accept,
-        )
-        is None
-    )
-
-
-def test_peek_next_across_roots_defers_eligibility_to_the_single_root_dequeue() -> None:
-    root = Path("/allowed")
-    unpublished = _entry(
-        "unpublished", metadata={QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING}
-    )
-    cancelled = _entry("cancelled", cancel_requested=True)
-
-    # With one root and no acceptance filter the dequeue fast path hands the
-    # whole eligibility rule to the store, so the preview may only demand a
-    # pending, uncancelled row: it must never be stricter than that dequeue.
-    assert worker_common.peek_next_across_roots(
-        (root,),
-        list_queue_fn=lambda _root: [cancelled, unpublished],
-        select_all_rows=False,
-    ) == (root, unpublished)
-    assert (
-        worker_common.peek_next_across_roots(
-            (root,),
-            list_queue_fn=lambda _root: [cancelled, _entry("done", status="completed")],
-            select_all_rows=False,
-        )
-        is None
-    )
-
-
-def test_queue_entry_by_id_scans_queue_with_injected_lister(tmp_path: Path) -> None:
-    entries = [
-        QueueEntry(queue_id=qid, app_name="app", task_id=qid, task_kind="task", engine="orca")
-        for qid in ("q-1", "q-2")
-    ]
-
-    assert (
-        worker_common.queue_entry_by_id(
-            tmp_path,
-            "q-2",
-            list_queue_fn=lambda root: entries if root == tmp_path else [],
-        )
-        is entries[1]
-    )
-    assert (
-        worker_common.queue_entry_by_id(
-            tmp_path,
-            "missing",
-            list_queue_fn=lambda _root: entries,
-        )
-        is None
-    )
+    assert released == ["slot-1"]
 
 
 def test_start_background_process_uses_detached_devnull_popen(
@@ -667,187 +297,6 @@ def test_start_background_process_redirects_output_to_log_file(
     assert calls[0]["stdin"] == child_process_helpers.subprocess.DEVNULL
     assert calls[0]["start_new_session"] is True
     assert calls[0]["text"] is True
-
-
-def test_pidfile_worker_reconciles_snapshots_and_finalizes_intent(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    worker = _RecordingWorker(_cfg(allowed_root=str(tmp_path)), [])
-    reconciled: list[tuple[Path, ...]] = []
-    events: list[str] = []
-    monkeypatch.setattr(
-        worker_process_helpers, "snapshot_runtime_roots_for_cfg", lambda _cfg: (tmp_path,)
-    )
-    monkeypatch.setattr(
-        worker_process_helpers,
-        "reconcile_orphaned_snapshot_generations",
-        lambda roots: _append_and_return(reconciled, roots, 0),
-    )
-    monkeypatch.setattr(
-        worker_process_helpers,
-        "finalize_queued_snapshot_intent",
-        lambda *_args: events.append("intent"),
-    )
-    monkeypatch.setattr(
-        worker, "_start_job", lambda *_args, **_kwargs: _append_and_return(events, "start", True)
-    )
-    entry = _queue_entry("q-1")
-    assert worker._start_reserved(ReservedQueueEntry(tmp_path, entry, "slot"))
-    assert events == ["intent", "start"]
-    worker._reconcile_worker_state()
-    worker._reconcile_worker_state()
-    assert reconciled == [(tmp_path,)]
-
-
-def test_child_process_worker_throttles_idle_state_reconciliation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    now = [0.0]
-    reconcile_calls: list[float] = []
-    sleep_calls: list[float] = []
-
-    class _Worker(worker_process_helpers.ChildProcessQueueWorker):
-        def _reconcile_worker_state(self) -> None:
-            reconcile_calls.append(now[0])
-
-    monkeypatch.setattr(worker_process_helpers.time, "monotonic", lambda: now[0])
-    worker = _Worker(
-        _cfg(),
-        config_path="/tmp/config.yaml",
-        deps=_worker_deps(poll_interval_seconds=5.0, sleep=sleep_calls.append),
-    )
-
-    worker._before_run()
-    worker._sleep()
-    now[0] = 59.0
-    worker._sleep()
-    now[0] = 60.0
-    worker._sleep()
-
-    assert reconcile_calls == [0.0, 60.0]
-    assert sleep_calls == [5.0, 5.0, 5.0]
-
-
-def test_shutdown_all_reaps_finished_job_before_requeuing(tmp_path: Path) -> None:
-    # A child that finished during the final poll interval must be reaped through
-    # the normal completion path at shutdown, not force-terminated and requeued
-    # (which would needlessly re-run a completed job on the next worker start).
-    cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
-    calls: list[tuple[str, str]] = []
-    worker = _RecordingWorker(cfg, calls, fail_finalize=False)
-    finished = BackgroundRunningJob(
-        tmp_path, _queue_entry("done"), FakeManagedProcess(poll_result=0), "slot-done"
-    )
-    still_running = BackgroundRunningJob(
-        tmp_path, _queue_entry("busy"), FakeManagedProcess(), "slot-busy"
-    )
-    worker._running = {"done": finished, "busy": still_running}
-
-    worker._shutdown_all()
-
-    # The finished job is finalized (completed), never requeued via shutdown.
-    assert ("finalize", "done") in calls
-    assert ("shutdown", "done") not in calls
-    # The still-running job is shut down (terminated + requeued) as before.
-    assert ("shutdown", "busy") in calls
-    assert worker._running == {}
-
-
-def test_shutdown_all_does_not_requeue_exited_job_after_finalize_failure(
-    tmp_path: Path,
-) -> None:
-    cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
-    calls: list[tuple[str, str]] = []
-
-    worker = _RecordingWorker(cfg, calls, fail_finalize=True)
-    finished = BackgroundRunningJob(
-        tmp_path, _queue_entry("done"), FakeManagedProcess(poll_result=0), "slot-done"
-    )
-    still_running = BackgroundRunningJob(
-        tmp_path, _queue_entry("busy"), FakeManagedProcess(), "slot-busy"
-    )
-    worker._running = {"done": finished, "busy": still_running}
-
-    worker._shutdown_all()
-
-    assert ("finalize", "done") in calls
-    assert ("shutdown", "done") not in calls
-    assert ("shutdown", "busy") in calls
-    assert worker._running == {"done": finished}
-
-
-def test_pidfile_child_worker_run_once_returns_error_when_singleton_lock_held(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    cfg = _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission"))
-    worker = _RecordingWorker(cfg, [])
-    lock_calls: list[tuple[Path, float]] = []
-
-    def locked_file_lock(path: Path, *, timeout_seconds: float) -> object:
-        lock_calls.append((path, timeout_seconds))
-        raise TimeoutError("held")
-
-    monkeypatch.setattr(
-        worker_process_helpers,
-        "file_lock",
-        locked_file_lock,
-    )
-
-    assert worker.run_once(idle_message=None, blocked_message=None) == 1
-
-    captured = capsys.readouterr()
-    assert "queue worker already running" in captured.err
-    assert lock_calls == [(tmp_path / "engine.pid.lock", 0.0)]
-    assert not worker._pid_file_path().exists()
-
-
-def test_child_worker_rejected_attach_terminates_and_marks_start_error(tmp_path: Path) -> None:
-    terminate_calls = 0
-    start_errors: list[tuple[Path, str, str]] = []
-
-    class RejectingWorker(worker_common.ChildProcessQueueWorker):
-        def _on_worker_process_started(
-            self,
-            queue_root: Path,
-            entry: object,
-            *,
-            process: object,
-            admission_token: str,
-        ) -> bool:
-            del queue_root, entry, process, admission_token
-            return False
-
-        def _handle_worker_start_error(
-            self,
-            queue_root: Path,
-            entry: object,
-            admission_token: str,
-            exc: OSError,
-        ) -> None:
-            start_errors.append((queue_root, admission_token, str(exc)))
-
-    class FakeProcess(FakeManagedProcess):
-        def terminate(self) -> None:
-            nonlocal terminate_calls
-            terminate_calls += 1
-
-    process = FakeProcess()
-    deps = _worker_deps(start_background_job_process=lambda **_kwargs: process)
-    worker = RejectingWorker(
-        _cfg(allowed_root=str(tmp_path), admission_root=str(tmp_path / "admission")),
-        config_path="/tmp/config.yaml",
-        max_concurrent=1,
-        deps=deps,
-    )
-    entry = _queue_entry("queue-reject")
-
-    assert not worker._start_job(tmp_path / "queue", entry, admission_token="slot-1")
-    assert terminate_calls == 1
-    assert start_errors == [(tmp_path / "queue", "slot-1", "worker attach rejected")]
-    assert worker._running == {}
 
 
 def test_fill_worker_slots_starts_until_capacity_and_reports_processed() -> None:
@@ -1165,7 +614,7 @@ def test_install_shutdown_signal_handlers_invokes_callback(
     requested: list[bool] = []
 
     monkeypatch.setattr(
-        worker_common.signal,
+        signal,
         "signal",
         lambda _signum, handler: handlers.append(handler),
     )
@@ -1178,87 +627,81 @@ def test_install_shutdown_signal_handlers_invokes_callback(
 
 
 def test_install_shutdown_signal_handlers_ignores_non_main_thread_error(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.setattr(
-        worker_common.signal,
-        "signal",
-        lambda *_args: (_ for _ in ()).throw(ValueError("not main thread")),
-    )
+    attempted: list[int] = []
 
-    worker_common.install_shutdown_signal_handlers(lambda: pytest.fail("should not be called"))
+    def refuse(signum: int, _handler: object) -> None:
+        attempted.append(signum)
+        raise ValueError("not main thread")
+
+    monkeypatch.setattr(signal, "signal", refuse)
+
+    with caplog.at_level(logging.DEBUG, logger="orca_auto.core.queue.processes"):
+        worker_common.install_shutdown_signal_handlers(lambda: pytest.fail("should not be called"))
+
+    # The first refusal ends installation; no handler is left half-installed.
+    assert attempted == [signal.SIGTERM]
+    assert "only be installed from the main thread" in caplog.text
 
 
 def test_worker_pid_file_handles_live_stale_dead_missing_and_invalid_pids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pid_path = process_helpers.worker_pid_file_path(tmp_path)
-    boot_id = process_helpers.process_utils.linux_boot_id()
+    pid_path = pid_file.worker_pid_file_path(tmp_path)
+    boot_id = pid_file.process_utils.linux_boot_id()
     assert boot_id is not None
     payload = json.dumps({"pid": 123, "process_start_ticks": 111, "boot_id": boot_id})
 
     pid_path.write_text(payload, encoding="utf-8")
-    monkeypatch.setattr(process_helpers.process_utils.os, "kill", lambda _pid, _signal: None)
-    monkeypatch.setattr(
-        process_helpers.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 111
-    )
-    assert process_helpers.read_worker_pid_file(tmp_path) == 123
+    monkeypatch.setattr(pid_file.process_utils.os, "kill", lambda _pid, _signal: None)
+    monkeypatch.setattr(pid_file.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 111)
+    assert pid_file.read_worker_pid_file(tmp_path) == 123
 
     pid_path.write_text(payload, encoding="utf-8")
-    monkeypatch.setattr(
-        process_helpers.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 222
-    )
-    assert process_helpers.read_worker_pid_file(tmp_path) is None
+    monkeypatch.setattr(pid_file.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 222)
+    assert pid_file.read_worker_pid_file(tmp_path) is None
     assert not pid_path.exists()
 
     pid_path.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(pid_file.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 111)
     monkeypatch.setattr(
-        process_helpers.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 111
-    )
-    monkeypatch.setattr(
-        process_helpers.process_utils.os,
+        pid_file.process_utils.os,
         "kill",
         lambda _pid, _signal: (_ for _ in ()).throw(ProcessLookupError()),
     )
-    assert process_helpers.read_worker_pid_file(tmp_path) is None
+    assert pid_file.read_worker_pid_file(tmp_path) is None
     assert not pid_path.exists()
 
-    assert process_helpers.read_worker_pid_file(tmp_path) is None
+    assert pid_file.read_worker_pid_file(tmp_path) is None
 
     pid_path.write_text("not-a-pid\n", encoding="utf-8")
-    assert process_helpers.read_worker_pid_file(tmp_path) is None
+    assert pid_file.read_worker_pid_file(tmp_path) is None
 
 
-def test_start_error_mark_is_fenced_to_selected_entry(tmp_path: Path) -> None:
-    selected = _queue_entry("q-same", "task-a")
-    replacement = SimpleNamespace(queue_id="q-same", task_id="task-b")
-    durable = [replacement]
-    released: list[str] = []
-    worker = SimpleNamespace(
-        _running_queue_id=lambda entry: entry.queue_id,
-        _release_admission_slot=released.append,
-    )
+def test_run_once_reports_startup_failure_and_removes_pid_file(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from orca_auto.core.queue.worker import loop as loop_mod
 
-    def mark_failed(
-        _root: Path,
-        queue_id: str,
-        *,
-        expected_entry: object,
-        **_kwargs: object,
-    ) -> None:
-        if durable[0] is expected_entry:
-            durable.clear()
-        assert queue_id == "q-same"
+    events: list[str] = []
 
-    worker_process_helpers.ChildProcessQueueWorker._mark_entry_failed_and_release(
-        cast(Any, worker),
-        tmp_path,
-        selected,
-        "slot-a",
-        error="start failed",
-        mark_failed_fn=mark_failed,
-    )
+    class _Loop(loop_mod.QueueWorkerLoop):
+        def _before_run(self) -> None:
+            events.append("before")
+            raise TimeoutError("admission lock held by service restart")
 
-    assert durable == [replacement]
-    assert released == ["slot-a"]
+        def _after_run(self) -> None:
+            events.append("after")
+
+        def _fill_slots(self, *, max_new_jobs: int | None = None) -> str:
+            events.append("fill")
+            return "idle"
+
+    with caplog.at_level("ERROR", logger=loop_mod.LOGGER.name):
+        assert _Loop(max_concurrent=1, poll_interval_seconds=0).run_once() == 1
+    assert events == ["before", "after"]
+    assert [r.getMessage() for r in caplog.records] == [
+        "Queue worker startup failed: admission lock held by service restart"
+    ]

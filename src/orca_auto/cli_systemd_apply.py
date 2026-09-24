@@ -1,3 +1,5 @@
+"""``orca_auto systemd install``: render and install the unit files."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,15 +13,15 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.cli_systemd_units import run_command
-from orca_auto.core.terminal import emit_error
 from orca_auto.systemd_plan import (
     DEFAULT_SYSTEMD_UNIT_DIR,
     SystemdInstallPlan,
-    _is_root,
-    _print_plan,
-    _print_warnings,
     build_systemd_install_plan,
+    print_plan,
+    print_warnings,
+    running_as_root,
 )
+from orca_auto.terminal import emit_error
 
 
 def _write_unit_files(
@@ -115,7 +117,7 @@ def cmd_systemd_install(
 ) -> int:
     deps = deps or SystemdInstallCliDeps()
     run = deps.run or subprocess.run
-    is_root = deps.is_root or _is_root
+    is_root = deps.is_root or running_as_root
 
     try:
         plan = build_systemd_install_plan(
@@ -133,9 +135,9 @@ def cmd_systemd_install(
         emit_error(exc)
         return 1
 
-    _print_warnings(plan)
+    print_warnings(plan)
     if bool(getattr(args, "dry_run", False)):
-        _print_plan(plan)
+        print_plan(plan)
         return 0
     return int(apply_systemd_install_plan(plan, run=run))
 

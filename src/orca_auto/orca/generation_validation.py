@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca_auto.core.engine_process import require_confined_regular_file
+from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.queue.generation import is_visible_generation_name
 
 

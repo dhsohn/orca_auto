@@ -18,10 +18,11 @@ from orca_auto.orca.execution_binding import (
     orca_execution_provenance,
 )
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
-from orca_auto.orca.queue.adapter import dequeue_next, enqueue, list_queue
+from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
+from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
 
 
 def _bound_orca_metadata(
@@ -56,6 +57,18 @@ def _bound_orca_metadata(
     }
 
 
+def _worker_config(tmp_path: Path, queue_root: Path) -> Path:
+    """Write the ``orca_auto.yaml`` the worker child loads; ``fake-orca`` is its executable."""
+
+    executable = tmp_path / "fake-orca"
+    if not executable.exists():
+        write_fake_orca(executable)
+    return write_config_file(
+        tmp_path / "orca_auto.yaml",
+        make_app_cfg(queue_root, orca_executable=executable, admission_root=tmp_path / "admission"),
+    )
+
+
 def test_build_worker_child_command_uses_queue_identity(tmp_path: Path) -> None:
     command = worker_job.build_worker_child_command(
         config_path="/tmp/config.yaml",
@@ -83,11 +96,7 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
 ) -> None:
     queue_root = tmp_path / "queue"
     reaction_dir = queue_root / "rxn"
-    cfg = AppConfig(
-        runtime=OrcaRuntimeConfig(
-            allowed_root=str(queue_root), admission_root=str(tmp_path / "admission")
-        )
-    )
+    config = _worker_config(tmp_path, queue_root)
     entry = QueueEntry(
         queue_id="queue-1",
         app_name="orca_auto_orca",
@@ -99,7 +108,6 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     )
     calls: dict[str, Any] = {}
 
-    monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "_queue_entry_by_id", lambda _root, _queue_id: entry)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
 
@@ -111,7 +119,7 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     monkeypatch.setattr(worker_job, "execute_orca_run", fake_execute_orca_run)
 
     rc = worker_job.run_worker_child_job(
-        config_path="/tmp/config.yaml",
+        config_path=str(config),
         queue_root=tmp_path / "queue",
         queue_id="queue-1",
         admission_token="slot-1",
@@ -275,7 +283,6 @@ def test_run_worker_child_job_finds_real_queue_entry_and_preserves_exit_code(
     tmp_path: Path,
 ) -> None:
     queue_root = tmp_path / "queue"
-    admission_root = tmp_path / "admission"
     rxn = queue_root / "rxn"
     rxn.mkdir(parents=True)
     entry = enqueue(
@@ -285,14 +292,11 @@ def test_run_worker_child_job_finds_real_queue_entry_and_preserves_exit_code(
         task_id="task-real",
         metadata=_bound_orca_metadata(tmp_path, rxn),
     )
-    running = dequeue_next(queue_root)
+    running = claim_next_entry(queue_root)
     assert running is not None
-    cfg = AppConfig(
-        runtime=OrcaRuntimeConfig(allowed_root=str(queue_root), admission_root=str(admission_root))
-    )
+    config = _worker_config(tmp_path, queue_root)
     calls: dict[str, Any] = {}
 
-    monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
 
     def fake_execute_orca_run(*args: Any, **kwargs: Any) -> int:
@@ -303,7 +307,7 @@ def test_run_worker_child_job_finds_real_queue_entry_and_preserves_exit_code(
     monkeypatch.setattr(worker_job, "execute_orca_run", fake_execute_orca_run)
 
     rc = worker_job.run_worker_child_job(
-        config_path="/tmp/config.yaml",
+        config_path=str(config),
         queue_root=queue_root,
         queue_id=entry.queue_id,
         admission_token="slot-real",
@@ -325,7 +329,6 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
     tmp_path: Path,
 ) -> None:
     queue_root = tmp_path / "queue"
-    admission_root = tmp_path / "admission"
     rxn = queue_root / "rxn_shutdown"
     rxn.mkdir(parents=True)
     entry = enqueue(
@@ -335,13 +338,10 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
         task_id="task-shutdown",
         metadata=_bound_orca_metadata(tmp_path, rxn),
     )
-    running = dequeue_next(queue_root)
+    running = claim_next_entry(queue_root)
     assert running is not None
-    cfg = AppConfig(
-        runtime=OrcaRuntimeConfig(allowed_root=str(queue_root), admission_root=str(admission_root))
-    )
+    config = _worker_config(tmp_path, queue_root)
 
-    monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(worker_job, "install_shutdown_signal_handlers", lambda _callback: None)
     monkeypatch.setattr(
         worker_job,
@@ -350,7 +350,7 @@ def test_run_worker_child_job_requeues_on_worker_shutdown(
     )
 
     rc = worker_job.run_worker_child_job(
-        config_path="/tmp/config.yaml",
+        config_path=str(config),
         queue_root=queue_root,
         queue_id=entry.queue_id,
         admission_token="slot-shutdown",
@@ -369,12 +369,8 @@ def test_run_worker_child_job_refuses_entry_that_is_not_running(
     tmp_path: Path,
 ) -> None:
     queue_root = tmp_path / "queue"
-    admission_root = tmp_path / "admission"
-    cfg = AppConfig(
-        runtime=OrcaRuntimeConfig(allowed_root=str(queue_root), admission_root=str(admission_root))
-    )
+    config = _worker_config(tmp_path, queue_root)
 
-    monkeypatch.setattr(worker_job, "load_config", lambda _path: cfg)
     monkeypatch.setattr(
         worker_job,
         "_queue_entry_by_id",
@@ -395,7 +391,7 @@ def test_run_worker_child_job_refuses_entry_that_is_not_running(
     )
 
     rc = worker_job.run_worker_child_job(
-        config_path="/tmp/config.yaml",
+        config_path=str(config),
         queue_root=queue_root,
         queue_id="queue-1",
         admission_token="slot-1",
