@@ -1,15 +1,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol
 from unittest.mock import patch
 
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.queue import replay as replay_mod
-from orca_auto.orca.queue.worker import OrcaQueueWorker
+from orca_auto.orca.queue.models import OrcaWorkerReplayState
 from orca_auto.orca.state import finalize_state, new_state
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
+
+
+class ReplayStateOwner(Protocol):
+    """What ``replay.reconcile_worker_state`` needs: an ``OrcaQueueWorker`` or a stand-in."""
+
+    cfg: AppConfig
+    admission_root: str | Path
+    replay_state: OrcaWorkerReplayState
 
 
 def make_queue_worker_cfg(tmp: str) -> AppConfig:
@@ -67,14 +76,14 @@ def write_completed_run_state(reaction_dir: Path) -> None:
     )
 
 
-def reconcile_statuses(worker: OrcaQueueWorker) -> dict[tuple[str, str], str]:
+def reconcile_statuses(worker: ReplayStateOwner) -> dict[tuple[str, str], str]:
     statuses = worker.replay_state.reconcile_statuses
     assert statuses is not None
     return statuses
 
 
 def run_terminal_replay(
-    worker: OrcaQueueWorker,
+    worker: ReplayStateOwner,
     tmp_path: Path,
     entry: QueueEntry,
     *,
@@ -100,10 +109,15 @@ def run_terminal_replay(
         patch.object(replay_mod, "reconcile_stale_slots"),
         patch.object(replay_mod, "reconcile_orphaned_running_entries"),
     ):
-        replay_mod.reconcile_worker_state(worker)
+        replay_mod.reconcile_worker_state(
+            worker.cfg,
+            admission_root=worker.admission_root,
+            replay_state=worker.replay_state,
+        )
 
 
 __all__ = [
+    "ReplayStateOwner",
     "current_orca_queue_metadata",
     "make_queue_worker_cfg",
     "reconcile_statuses",

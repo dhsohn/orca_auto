@@ -17,8 +17,12 @@ from pathlib import Path
 from typing import Any
 
 DB_NAME = ".activity.sqlite3"
-SCHEMA_VERSION = "1"
+# Bump whenever the mirrored layout changes; an older projection is dropped and
+# rebuilt from the canonical sources instead of being read with new rules.
+# 2: location rows are keyed by job_id (position is only an ordering column).
+SCHEMA_VERSION = "2"
 LOGGER = logging.getLogger(__name__)
+_TABLES = ("meta", "sources", "watches", "links", "dirty", "activities")
 
 
 class ActivityIndexError(RuntimeError):
@@ -52,7 +56,7 @@ def connect(root: Path) -> sqlite3.Connection:
     return connection
 
 
-def initialize(connection: sqlite3.Connection, root: Path) -> None:
+def _create_tables(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -76,10 +80,21 @@ def initialize(connection: sqlite3.Connection, root: Path) -> None:
         CREATE INDEX IF NOT EXISTS activity_blocked ON activities(blocked) WHERE blocked=1;
         """
     )
+
+
+def initialize(connection: sqlite3.Connection, root: Path) -> None:
+    _create_tables(connection)
     expected = {"schema": SCHEMA_VERSION, "root": str(root.resolve())}
     stored = dict(connection.execute("SELECT key, value FROM meta WHERE key IN ('schema','root')"))
-    if stored and stored != expected:
-        raise ActivityIndexError("Activity projection belongs to another root or schema")
+    if stored.get("root", expected["root"]) != expected["root"]:
+        raise ActivityIndexError("Activity projection belongs to another root")
+    if stored.get("schema", expected["schema"]) != expected["schema"]:
+        # A projection written under another layout is disposable: drop it and
+        # let this reader rebuild deterministically from the canonical sources.
+        with connection:
+            for table in _TABLES:
+                connection.execute(f"DROP TABLE IF EXISTS {table}")
+        _create_tables(connection)
     with connection:
         connection.executemany("INSERT OR IGNORE INTO meta VALUES (?, ?)", expected.items())
         connection.execute("INSERT OR IGNORE INTO meta VALUES ('revision', '0')")
@@ -141,6 +156,27 @@ def replace_source(
     )
 
 
+def source_key(kind: str, body: dict[str, Any], position: int, seen: set[str]) -> str:
+    """The stable identity of one canonical row inside the projection.
+
+    Queue rows carry a unique queue id and location rows a job id that the
+    index store keeps unique per upsert, so removing or appending a row leaves
+    every other key unchanged. Other kinds have no identity beyond their slot.
+    A duplicated identity (a hand-edited file) is suffixed with its slot so the
+    mirror stays deterministic instead of overwriting one row with the other.
+    """
+    if kind == "queue":
+        key = str(body["queue_id"])
+    elif kind == "location":
+        key = str(body.get("job_id", ""))
+    else:
+        key = str(position)
+    if key in seen:
+        key = f"{key}#{position}"
+    seen.add(key)
+    return key
+
+
 def sync_source(
     connection: sqlite3.Connection,
     root: Path,
@@ -153,16 +189,20 @@ def sync_source(
         str(row["id"]): row
         for row in connection.execute("SELECT * FROM sources WHERE kind=?", (kind,))
     }
+    seen: set[str] = set()
     with connection:
         for position, body in enumerate(records):
-            key = str(body["queue_id"]) if kind == "queue" else str(position)
+            key = source_key(kind, body, position, seen)
             previous = old.pop(key, None)
             encoded = json.dumps(body, sort_keys=True)
-            if (
-                previous is not None
-                and previous["body"] == encoded
-                and previous["position"] == position
-            ):
+            if previous is not None and previous["body"] == encoded:
+                # Only the slot moved (a row before it was pruned): the ordering
+                # column follows, but nothing this row materialized has changed.
+                if previous["position"] != position:
+                    connection.execute(
+                        "UPDATE sources SET position=? WHERE kind=? AND id=?",
+                        (position, kind, key),
+                    )
                 continue
             tokens = source_tokens(kind, body)
             if previous is not None:

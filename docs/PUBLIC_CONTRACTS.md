@@ -17,6 +17,7 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 | `queue list clear` | Clears terminal queue records and unlinks job-root run states while preserving generation artifacts on disk. |
 | `queue cancel TARGET` | Cancels a job by queue ID, run ID, or unambiguous directory path alias. |
 | `index prune` | Previews indexed rows whose disk paths no longer exist. Removes them only when `--apply` is passed. |
+| `index rebuild` | Re-derives `job_locations.json` rows from every `job_state.json` under `runs_root`, adding or updating rows by job id and never removing one. `--dry-run` reports without writing. |
 | `systemd install` | Installs systemd unit templates for the specified user and repository or prepared runtime root (`--repo`). |
 | `service status` | Inspects systemd units and verifies worker process freshness against the checkout HEAD or the installed runtime build. Returns non-zero when a unit is unhealthy or a worker is stale or undetermined. |
 | `service restart` | Refuses restart if active calculations or reservations exist, preventing accidental data loss. Use `--force` to bypass. |

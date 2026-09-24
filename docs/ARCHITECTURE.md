@@ -77,11 +77,16 @@ is best effort and does not retain execution admission slots.
 
 The worker CLI loads config, checks the PID file, then constructs and runs the
 ORCA worker directly. `EngineQueueRuntime` owns root selection, queue lookup and
-admission preview; it has no child-start or terminal policy callbacks. ORCA
-attaches admission metadata and marks terminal generations in `queue/replay.py`,
-stops/requeues children in `queue/worker.py`, and finalizes cancellation in
-`queue/cancellation.py`. These paths call concrete adapters with the selected
-entry and task identity. Terminal replay must finish before admission release.
+admission preview; it has no child-start or terminal policy callbacks.
+`OrcaQueueWorker` in `queue/worker.py` owns admission-slot attach, terminal
+marking, cancellation, shutdown and orphan reconciliation as methods;
+`queue/replay.py` is only the replay engine (work items, strict finish, the
+reconcile pipeline and generation owners) and takes its state explicitly, and
+`queue/run_state_replay.py` synthesizes terminal `job_state.json` under
+`run.lock`. These paths call concrete adapters with the selected entry and task
+identity. Terminal replay must finish before admission release. RUNNING-row
+reconciliation is worker-owned: a submission never sweeps the queue and recovers
+only its own directory's dead row when no worker pid is live.
 
 The ORCA child directly resolves its queue entry, recovers a crashed generation,
 waits for parent admission handoff, and runs that generation. The parent retains
@@ -94,7 +99,7 @@ empty lifecycle callbacks.
 
 ## 4. Operational Architecture
 
-- **SQLite Activity Projection**: High-performance querying is provided by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The `--refresh` flag scans for unindexed runs.
+- **SQLite Activity Projection**: High-performance querying is provided by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The projection keys location rows by job id; `job_locations.json` itself is rebuildable from the run states on disk with `index rebuild`, and `--refresh` persists unindexed runs through the same rebuild.
 - **Scratch Operator Surface**: `orca_auto scratch list` and `scratch clear` inspect and remove non-live RAM-scratch workspaces; one stale, unverifiable or invalid-manifest workspace otherwise blocks every later scratch launch (fail-closed).
 - **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation to eliminate risks associated with running directly out of mutable development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
 - **Historical Data Protection**: Retired workflow directories from previous versions are protected as read-only to ensure historical calculations are preserved without risk of accidental overwrite.

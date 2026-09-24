@@ -231,6 +231,27 @@ def add_index_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
     add_json_argument(prune_parser)
     prune_parser.set_defaults(func=cli_handlers.cmd_index_prune)
 
+    rebuild_parser = index_subparsers.add_parser(
+        "rebuild",
+        help=(
+            "Re-derive index rows from every job_state.json under runs_root; "
+            "rows are added or updated by job id, never removed."
+        ),
+    )
+    rebuild_parser.add_argument(
+        "--orca_auto-config",
+        "--config",
+        dest="orca_auto_config",
+        help="Path to shared orca_auto.yaml",
+    )
+    rebuild_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report the rows that would be added or updated without writing the index",
+    )
+    add_json_argument(rebuild_parser)
+    rebuild_parser.set_defaults(func=cli_handlers.cmd_index_rebuild)
+
 
 def add_scratch_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     scratch_parser = subparsers.add_parser(
@@ -377,6 +398,7 @@ examples:
   orca_auto queue list --status running
   orca_auto queue cancel <target>
   orca_auto index prune --apply
+  orca_auto index rebuild --dry-run
   orca_auto scratch list
   orca_auto scratch clear attempt-<pid>-<token>
   orca_auto service status

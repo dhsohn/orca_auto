@@ -50,7 +50,7 @@ from .entries import (
     queue_entry_status,
     queue_entry_task_id,
 )
-from .orphans import reconcile_orphaned_running_entries
+from .orphans import reconcile_dead_running_rows_for_dir, reconcile_orphaned_running_entries
 from .terminal_replay import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
     TERMINAL_REPLAY_METADATA_KEY,
@@ -219,10 +219,18 @@ def enqueue(
     metadata: dict[str, Any] | None = None,
     before_commit_fn: Callable[[], Any] | None = None,
     after_commit_fn: Callable[[], Any] | None = None,
+    admission_root: Path | None = None,
 ) -> QueueEntry:
-    """Add a reaction directory to the ORCA queue."""
+    """Add a reaction directory to the ORCA queue.
+
+    RUNNING-row reconciliation belongs to the worker. A submission only recovers
+    this directory's own rows, and only when ``admission_root`` is given so the
+    worker's live-slot protection can be applied; see
+    ``reconcile_dead_running_rows_for_dir``.
+    """
     resolved = str(Path(reaction_dir).expanduser().resolve())
-    reconcile_orphaned_running_entries(allowed_root)
+    if admission_root is not None:
+        reconcile_dead_running_rows_for_dir(allowed_root, resolved, admission_root=admission_root)
     normalized_priority = normalize_queue_priority(priority)
     normalized_task_id = normalize_text(task_id)
     normalized_task_kind = normalize_text(task_kind) or QUEUE_TASK_KIND

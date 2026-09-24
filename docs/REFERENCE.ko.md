@@ -38,7 +38,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 ```
 - `--status STATUS`: 특정 상태의 작업만 필터링 (`pending`, `running`, `completed`, `failed`, `cancelled`)
 - `--limit N`: 출력할 최대 작업 개수 지정
-- `--refresh`: 인덱스에 등록되지 않은 디렉터리까지 파일시스템을 스캔하여 조회
+- `--refresh`: 인덱스에 등록되지 않은 계산 디렉터리를 파일시스템에서 스캔하여 `job_locations.json`에 기록 (`index rebuild`와 같은 재구성)
 - `--json`: 자동화 및 스크립팅을 위한 구조화된 JSON 출력
 
 ---
@@ -58,6 +58,19 @@ orca_auto queue cancel <TARGET> [--config PATH] [--json]
 orca_auto queue list clear [--config PATH] [--json]
 ```
 > **참고**: 큐 목록 및 작업 루트의 terminal `job_state.json` 메타데이터(중복 방지 배리어)를 정리하여 이후 재제출 시 `--force` 없이 제출 가능하도록 합니다. 디스크 상의 generation 하위 디렉터리, 계산 산출물, 로그 파일은 일체 삭제되지 않습니다.
+
+---
+
+### `orca_auto index rebuild`
+디스크의 실행 상태에서 `job_locations.json`을 다시 유도합니다. 항목 삭제는 `index prune`이 담당합니다.
+```bash
+orca_auto index rebuild [--config PATH] [--dry-run] [--json]
+```
+- `runs_root` 아래의 모든 `job_state.json`을 순회하며(식별자는 `report.json`이 상태 파일보다 우선) 작업 ID 기준으로 항목을 추가·갱신합니다. 항목은 삭제되지 않습니다. 작업 ID도 실행 ID도 없는 상태 파일은 건너뛴 항목으로 보고됩니다.
+- 같은 작업 ID가 여러 디렉터리에서 발견되어도 조용히 고르지 않습니다. 기존 항목이 가리키는 디렉터리에 그 작업의 상태 파일이 남아 있으면 그 디렉터리를 유지하고, 완료된(`completed`/`failed`/`cancelled`) 항목은 실행 중 상태로 되돌리지 않으며, 그 외에는 종결 상태가 비종결 상태보다, 그다음은 가장 최근의 `job_state.json`이 우선합니다. 이런 경우마다 유지한 디렉터리와 무시한 디렉터리를 `conflict:` 줄로 출력합니다.
+- `--dry-run`: 인덱스를 기록하지 않고 추가·갱신될 항목만 출력
+- `--json`: `index_path`, `scanned`, `total`, `added_count`, `updated_count`, `unchanged_count`, `skipped_count`, `applied`, `added`·`updated`·`skipped` 목록과 `conflicts` 목록(`job_id`, `kept_path`, `ignored_paths`)을 출력
+- 변경이 없어도 종료 코드는 0입니다. `runs_root`가 설정되지 않았거나 설정 파일이 손상된 경우, `runs_root`가 없는 경우, 인덱스가 손상된 경우, OS 오류가 발생한 경우 1을 반환하며 아무것도 기록하지 않습니다.
 
 ---
 

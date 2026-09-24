@@ -11,7 +11,14 @@ from typing import Any
 
 from orca_auto.core import activity_index as index
 from orca_auto.core import activity_invalidation as journal
-from orca_auto.core.activity import ActivityListRequest, ActivityRecord, sort_key
+from orca_auto.core.activity import (
+    ACTIVE_SIMULATION_STATUSES,
+    ActivityListing,
+    ActivityListRequest,
+    ActivityRecord,
+    blocker_payload,
+    sort_key,
+)
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.indexing import store as locations
 from orca_auto.core.queue import persistence as queue
@@ -241,43 +248,60 @@ def _refresh(connection: sqlite3.Connection, root: Path) -> None:
     raise index.ActivityIndexError("Activity sources kept changing during query; retry queue list")
 
 
-def _select(connection: sqlite3.Connection, request: ActivityListRequest) -> list[ActivityRecord]:
-    selected = {}
+def _decode_activity(body: str) -> ActivityRecord:
+    payload = json.loads(body)
+    payload["aliases"] = tuple(payload["aliases"])
+    return ActivityRecord(**payload)
+
+
+def _select(connection: sqlite3.Connection, request: ActivityListRequest) -> ActivityListing:
     # A separate bounded range per status avoids SQLite sorting every matching
-    # historical row for a multi-status IN predicate. The caller merges top K.
+    # historical row for a multi-status IN predicate; the ranges are merged on
+    # the indexed sort columns and only the final page is JSON-decoded. With
+    # no limit every matching row is the page, so that decode is O(matches).
+    candidates: list[tuple[tuple[str, str, str], str]] = []
     for status in request.statuses or ("",):
         where = " WHERE status=?" if status else ""
         values: list[Any] = [status] if status else []
         sql = (
-            "SELECT kind,id,body FROM activities"
+            "SELECT updated,submitted,activity_id,body FROM activities"
             + where
             + " ORDER BY updated DESC, submitted DESC, activity_id DESC"
         )
         if request.limit > 0:
             sql += " LIMIT ?"
             values.append(request.limit)
-        selected.update(
-            {(row["kind"], row["id"]): row["body"] for row in connection.execute(sql, values)}
+        candidates.extend(
+            ((row["updated"], row["submitted"], row["activity_id"]), row["body"])
+            for row in connection.execute(sql, values)
         )
-    # Global summaries must survive filters and limits. These indexed lookups
-    # add only live jobs/blockers, not the rest of the historical catalog.
-    for query in (
-        "SELECT kind,id,body FROM activities WHERE status IN ('running','retrying','cancel_requested')",
-        "SELECT kind,id,body FROM activities WHERE blocked=1",
-    ):
-        for row in connection.execute(query):
-            selected[(row["kind"], row["id"])] = row["body"]
-    records = []
-    for body in selected.values():
-        payload = json.loads(body)
-        payload["aliases"] = tuple(payload["aliases"])
-        records.append(ActivityRecord(**payload))
-    return records
+    if len(request.statuses) > 1:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+    if request.limit > 0:
+        del candidates[request.limit :]
+    # Catalog-wide summaries must survive the filter and the page. Both are
+    # served by partial indexes, so they add live/blocked rows, not history.
+    # Every ORCA record is kind "job", so the status index alone counts them.
+    marks = ",".join("?" for _ in ACTIVE_SIMULATION_STATUSES)
+    active_count = connection.execute(
+        f"SELECT COUNT(*) FROM activities WHERE status IN ({marks})",
+        sorted(ACTIVE_SIMULATION_STATUSES),
+    ).fetchone()[0]
+    blockers = [
+        payload
+        for row in connection.execute("SELECT body FROM activities WHERE blocked=1")
+        if (payload := blocker_payload(_decode_activity(row["body"]))) is not None
+    ]
+    return ActivityListing(
+        records=tuple(_decode_activity(body) for _order, body in candidates),
+        blockers=tuple(blockers),
+        active_count=int(active_count),
+    )
 
 
-def query_records(root: Path, request: ActivityListRequest) -> list[ActivityRecord]:
+def query_listing(root: Path, request: ActivityListRequest) -> ActivityListing:
     if not root.is_dir():
-        return []
+        return ActivityListing()
     root = root.resolve()
     try:
         with file_lock(root / ".activity-query.lock"):
@@ -298,13 +322,13 @@ def query_records(root: Path, request: ActivityListRequest) -> list[ActivityReco
                     _refresh(connection, root)
                     with connection:
                         connection.execute("BEGIN")
-                        records = _select(connection, request)
+                        listing = _select(connection, request)
                         if (
                             not connection.execute("SELECT 1 FROM dirty LIMIT 1").fetchone()
                             and _sources_current(connection, root)
                             and not journal.capture(root)
                         ):
-                            return records
+                            return listing
                 raise index.ActivityIndexError(
                     "Activity sources kept changing during selection; retry queue list"
                 )

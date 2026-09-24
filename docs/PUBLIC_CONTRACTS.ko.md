@@ -17,6 +17,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 | `queue list clear` | 계산 산출물 파일은 그대로 보존하면서, 큐 목록 및 작업 루트의 terminal job_state.json 기록(중복 방지 배리어)을 정리합니다. |
 | `queue cancel TARGET` | 큐 ID, Run ID, 또는 대상 작업 디렉터리 경로를 지정하여 작업을 안전하게 취소합니다. |
 | `index prune` | 디스크에서 실제 경로가 삭제된 인덱스 항목을 확인합니다. `--apply` 플래그를 넘길 때만 실제 정리가 수행됩니다. |
+| `index rebuild` | `runs_root` 아래의 모든 `job_state.json`에서 `job_locations.json` 항목을 다시 유도합니다. 작업 ID 기준으로 추가·갱신만 하며 삭제하지 않습니다. `--dry-run`은 기록 없이 결과만 출력합니다. |
 | `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. |
 | `service status` | 등록된 유닛의 상태와 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지(freshness) 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 0이 아닌 종료 코드를 반환합니다. |
 | `service restart` | 활성 계산이나 예약된 작업이 진행 중일 때는 중단을 방지하기 위해 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 사용합니다. |

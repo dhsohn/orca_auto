@@ -51,6 +51,7 @@ bash examples/fake_orca_smoke/run.sh
 ```
 
 - **Unit & Integration Tests**: Tests use lightweight fake ORCA binaries and isolated temporary fixtures (`tmp_path`). You do not need a commercial ORCA installation to run the test suite.
+- **Docs Parity**: `make check` runs `scripts/check_docs_parity.py`, which fails when an `X.md`/`X.ko.md` pair drifts in heading levels, tables, fenced code blocks or relative links; prose may differ.
 - **Real-Engine Acceptance**: If you modify engine execution or scientific output parsing behavior, record a bounded real-engine run according to [VALIDATION.md](VALIDATION.md).
 
 ---

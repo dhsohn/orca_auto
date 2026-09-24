@@ -7,8 +7,9 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +24,7 @@ from orca_auto.core.statuses import (
 )
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.queue import replay as replay_mod
+from orca_auto.orca.queue import run_state_replay as run_state_replay_mod
 from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
 from orca_auto.orca.queue.adapter import (
     cancel,
@@ -32,14 +34,16 @@ from orca_auto.orca.queue.adapter import (
     mark_failed,
     requeue_running_entry,
 )
-from orca_auto.orca.queue.replay import (
+from orca_auto.orca.queue.models import OrcaWorkerReplayState
+from orca_auto.orca.queue.run_state_replay import (
     record_cancelled_run_state as _record_cancelled_run_state,
 )
-from orca_auto.orca.queue.replay import (
+from orca_auto.orca.queue.run_state_replay import (
     record_failed_run_state as _record_failed_run_state,
 )
 from orca_auto.orca.queue.terminal_replay import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    StateGenerationFingerprint,
     terminal_replay_marker,
 )
 from orca_auto.orca.queue.worker_tracking import (
@@ -54,6 +58,19 @@ from orca_auto.orca.state_reading import load_state, report_json_path, state_pat
 from tests.engine_artifact_helpers import orca_artifact_payload
 from tests.queue_worker_helpers import reconcile_statuses as _reconcile_statuses
 from tests.queue_worker_helpers import run_terminal_replay as _run_terminal_replay
+
+
+def _replay_worker(cfg: AppConfig, admission_root: Path) -> SimpleNamespace:
+    """The explicit state ``replay.reconcile_worker_state`` takes, as one object."""
+    return SimpleNamespace(
+        cfg=cfg, admission_root=admission_root, replay_state=OrcaWorkerReplayState()
+    )
+
+
+def _reconcile(worker: Any) -> None:
+    replay_mod.reconcile_worker_state(
+        worker.cfg, admission_root=worker.admission_root, replay_state=worker.replay_state
+    )
 
 
 def _terminal_replay_entry(tmp_path: Path, status: QueueStatus) -> QueueEntry:
@@ -133,7 +150,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
         },
     )
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     if existing_cursor:
         worker.replay_state.reconcile_statuses = {
             (str(tmp_path.resolve()), "other-queue"): STATUS_RUNNING
@@ -176,7 +193,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
         ) as notify,
         patch.object(replay_mod, "_clear_terminal_replay_marker") as clear_marker,
     ):
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
 
     record_failed.assert_not_called()
     record_cancelled.assert_not_called()
@@ -249,8 +266,8 @@ def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
         ) as notify,
     ):
         for _restart in range(2):
-            worker = MagicMock(cfg=cfg, admission_root=tmp_path)
-            replay_mod.reconcile_worker_state(worker)
+            worker = _replay_worker(cfg, tmp_path)
+            _reconcile(worker)
 
     record_failed.assert_not_called()
     update.assert_not_called()
@@ -352,8 +369,8 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
             return_value=False,
         ) as notify,
     ):
-        replay_mod.reconcile_worker_state(MagicMock(cfg=cfg, admission_root=tmp_path))
-        replay_mod.reconcile_worker_state(MagicMock(cfg=cfg, admission_root=tmp_path))
+        _reconcile(_replay_worker(cfg, tmp_path))
+        _reconcile(_replay_worker(cfg, tmp_path))
 
     upsert.assert_called_once()
     notify.assert_called_once()
@@ -508,7 +525,7 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
         metadata=metadata,
     )
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
 
     with (
         patch.object(replay_mod, "record_failed_run_state") as record_failed,
@@ -570,7 +587,7 @@ def test_terminal_replay_completes_when_the_notification_fails(tmp_path: Path) -
             discord=DiscordConfig(bot_token="token", default_channel_id="123")
         ),
     )
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     state = {
         "job_id": entry.task_id,
         "final_result": {"status": "completed"},
@@ -609,7 +626,7 @@ def test_terminal_replay_completes_when_the_notifier_raises(tmp_path: Path) -> N
             discord=DiscordConfig(bot_token="token", default_channel_id="123")
         ),
     )
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     state = {
         "job_id": entry.task_id,
         "final_result": {"status": "completed"},
@@ -645,7 +662,7 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
     (tmp_path / "rxn").mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.COMPLETED)
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
 
     with (
         patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=False),
@@ -668,7 +685,7 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(tmp_path:
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
 
     with (
         patch.object(
@@ -710,7 +727,7 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
     reaction_dir.mkdir()
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
 
     with (
         patch.object(
@@ -745,7 +762,7 @@ def test_terminal_replay_observes_pending_to_cancelled_transition(tmp_path: Path
     reaction_dir.mkdir()
     pending = _terminal_replay_entry(tmp_path, QueueStatus.PENDING)
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
 
     with (
         patch.object(
@@ -805,7 +822,7 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
     current_state["status"] = STATUS_RUNNING
     save_state(reaction_dir, current_state)
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     entries = [
         (old_queue_root, old_cancelled),
         (current_queue_root, current_running),
@@ -828,7 +845,7 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
         patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
         upsert.assert_not_called()
         notify.assert_not_called()
 
@@ -846,7 +863,7 @@ def test_terminal_replay_skips_superseded_cancelled_generation(tmp_path: Path) -
             current_queue_root,
             replace(current_running, status=QueueStatus.COMPLETED),
         )
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
 
     written = load_state(reaction_dir)
     assert written is not None
@@ -895,7 +912,7 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
     reaction_key = str(reaction_dir.resolve())
     entries = [(root_a, active_a), (root_b, failed_b)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     worker.replay_state.generation_owners = {reaction_key: owner_b}
     worker.replay_state.generation_owner_active = {reaction_key: True}
     worker.replay_state.reconcile_statuses = {
@@ -921,7 +938,7 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
         patch.object(worker_tracking_mod, "upsert_terminal_job_record") as upsert,
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
 
     assert worker.replay_state.generation_owners[reaction_key] == owner_a
     assert worker.replay_state.generation_owner_active[reaction_key] is True
@@ -968,7 +985,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     )
     entries = [(old_root, old_cancelled), (new_root, new_cancelled)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     worker.replay_state.reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
     }
@@ -996,7 +1013,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
         patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
     ):
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
 
     written = load_state(reaction_dir)
     assert written is not None
@@ -1041,7 +1058,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     )
     entries = [(root_a, cancelled_a), (root_b, cancelled_b)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     worker.replay_state.reconcile_statuses = {
         (str(root.resolve()), entry.queue_id): STATUS_RUNNING for root, entry in entries
     }
@@ -1069,14 +1086,14 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
         patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
     ):
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
         record_cancelled.assert_not_called()
         assert all(status == STATUS_RUNNING for status in _reconcile_statuses(worker).values())
 
         state = new_state(reaction_dir, reaction_dir / "b.inp")
         state["job_id"] = cancelled_b.task_id
         save_state(reaction_dir, state)
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
 
     record_cancelled.assert_called_once()
     assert record_cancelled.call_args.args == (reaction_dir.resolve(),)
@@ -1091,7 +1108,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     worker.replay_state.reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
     }
@@ -1127,11 +1144,11 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(tmp_path: Path) -
             return_value=False,
         ) as notify,
     ):
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
         pending = worker.replay_state.pending_replays
         assert len(pending) == 1
 
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
 
     update.assert_called_once()
     assert upsert.call_count == 2
@@ -1152,7 +1169,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
     entry = _terminal_replay_entry(tmp_path, QueueStatus.CANCELLED)
     entries = [(tmp_path, entry)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     worker.replay_state.reconcile_statuses = {
         (str(tmp_path.resolve()), entry.queue_id): STATUS_RUNNING
     }
@@ -1188,12 +1205,12 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
             return_value=False,
         ) as notify,
     ):
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
         pending = worker.replay_state.pending_replays
         assert len(pending) == 1
         assert not next(iter(pending.values())).state_prepared
 
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
 
     assert record_cancelled.call_count == 2
     update.assert_not_called()
@@ -1228,7 +1245,7 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
         final_result={"status": STATUS_COMPLETED, "reason": "old-generation"},
     )
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
 
     with (
         patch.object(
@@ -1285,7 +1302,7 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
     current["job_id"] = cancelled.task_id
     save_state(reaction_dir, current)
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
 
     with (
         patch.object(
@@ -1360,7 +1377,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
         final_result={"status": STATUS_COMPLETED, "reason": "normal_termination"},
     )
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
 
     with (
         patch.object(replay_mod, "record_cancelled_run_state") as record_cancelled,
@@ -1402,7 +1419,7 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
     old_entries = [(old_root, old_cancelled)]
     new_entries = [(new_root, new_running)]
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = MagicMock(cfg=cfg, admission_root=tmp_path)
+    worker = _replay_worker(cfg, tmp_path)
     worker.replay_state.reconcile_statuses = {
         (str(old_root.resolve()), old_cancelled.queue_id): STATUS_RUNNING
     }
@@ -1434,10 +1451,10 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
         ) as upsert,
         patch.object(worker_tracking_mod, "notify_terminal_job_from_state") as notify,
     ):
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
         assert len(worker.replay_state.pending_replays) == 1
 
-        replay_mod.reconcile_worker_state(worker)
+        _reconcile(worker)
 
     record_cancelled.assert_called_once()
     upsert.assert_called_once()
@@ -1552,7 +1569,7 @@ def test_terminal_state_helper_cannot_write_while_current_run_lock_is_held(
     save_state(tmp_path, state)
     before = state_path(tmp_path).read_bytes()
 
-    with replay_mod.acquire_run_lock(tmp_path):
+    with run_state_replay_mod.acquire_run_lock(tmp_path):
         with pytest.raises(RuntimeError, match="already running"):
             _record_failed_run_state(
                 tmp_path,
@@ -1603,7 +1620,7 @@ def test_terminal_state_cas_rejects_changed_terminal_fingerprint(tmp_path: Path)
 def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
     tmp_path: Path,
 ) -> None:
-    observed = replay_mod.StateGenerationFingerprint(
+    observed = StateGenerationFingerprint(
         present=True,
         readable=True,
         job_id="task-old",
@@ -1625,7 +1642,7 @@ def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
     with patch.object(
         replay_mod,
         "load_state_generation_fingerprint",
-        return_value=replay_mod.StateGenerationFingerprint(
+        return_value=StateGenerationFingerprint(
             present=True,
             readable=False,
         ),
@@ -1634,7 +1651,7 @@ def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
 
     unreadable_observed = replace(
         item,
-        observed_state=replay_mod.StateGenerationFingerprint(
+        observed_state=StateGenerationFingerprint(
             present=True,
             readable=False,
         ),
@@ -1642,7 +1659,7 @@ def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
     with patch.object(
         replay_mod,
         "load_state_generation_fingerprint",
-        return_value=replay_mod.StateGenerationFingerprint(
+        return_value=StateGenerationFingerprint(
             present=True,
             readable=True,
             job_id="task-other",

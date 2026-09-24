@@ -10,7 +10,6 @@ from orca_auto.core.commands.run_dir import (
     active_run_dir_pinned_target,
     assert_run_dir_publication_allowed,
 )
-from orca_auto.core.messaging import build_channel
 from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
@@ -39,7 +38,7 @@ from .execution_binding import (
 )
 from .inp_rewriter import prepare_submission_resource_request, read_resource_request_from_input
 from .input_artifacts import OrcaSelectedInputArtifacts, selected_input_artifacts
-from .notifications import notify_queue_enqueued_event
+from .notifications import notification_channel, notify_queue_enqueued_event
 from .queue import adapter as queue_adapter
 from .queue.entries import queue_entry_is_retired_workflow_owned
 from .resource_directives import PreparedSubmissionResourceInput
@@ -463,6 +462,7 @@ def create_queued_submission(
             metadata=kwargs["metadata"],
             before_commit_fn=kwargs.get("before_commit_fn"),
             after_commit_fn=kwargs.get("after_commit_fn"),
+            admission_root=Path(cfg.runtime.resolved_admission_root),
         )
 
     spec = EnqueuePublicationSpec(
@@ -521,7 +521,7 @@ def notify_queued_submission(
     result: QueuedSubmissionResult,
 ) -> bool:
     notification = build_queue_enqueued_notification(result.entry)
-    channel = build_channel(cfg.messenger)
+    channel = notification_channel(cfg)
     delivered = bool(notify_queue_enqueued_event(channel, notification))
     # A disabled channel is an intentional no-op, not a failed delivery.
     return delivered or not channel.enabled
@@ -562,6 +562,7 @@ def submit_reaction_dir_to_queue(
 
     try:
         from .queue.adapter import DuplicateEntryError
+        from .queue.orphans import DeadRunningRowUnjudgeableError
 
         queued = create_queued_submission(
             context.cfg,
@@ -569,7 +570,10 @@ def submit_reaction_dir_to_queue(
             context.reaction_dir,
             selected_inp=context.selected_inp,
         )
-    except DuplicateEntryError as exc:
+    except (DuplicateEntryError, DeadRunningRowUnjudgeableError) as exc:
+        # Both are this directory's own queue row standing in the way: an
+        # active duplicate, or a dead RUNNING row whose slot protection cannot
+        # be read. The message carries the hint; no traceback.
         return DirectQueueSubmission(
             status="failed",
             reason="submission_conflict",

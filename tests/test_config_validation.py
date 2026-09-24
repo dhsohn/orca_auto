@@ -393,7 +393,8 @@ class TestConfigValidation:
         example = Path(__file__).resolve().parents[1] / "config" / "orca_auto.yaml.example"
         _, raw = load_shared_config_mapping(example)
         messenger = messenger_config_from_mapping(raw.get("messenger"))
-        assert messenger.normalized_provider == "discord"
+        # The template ships blank credentials, so notifications stay off.
+        assert messenger.enabled is False
 
     def test_missing_required_paths_raise_with_explicit_path_hint(self) -> None:
         with tempfile.TemporaryDirectory() as td:

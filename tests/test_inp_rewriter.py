@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pytest
+
 from orca_auto.orca.inp_rewriter import (
     _latest_geometry_file,
     ensure_submission_resource_request,
@@ -434,3 +436,32 @@ def test_set_block_key_value_updates_a_body_row_that_carries_the_closing_end() -
     assert set_block_key_value(lines, "pal", "nprocs", "4") is True
     assert lines == ["! Opt", "%pal", "  nprocs 4 end", "* xyz 0 1", "H 0 0 0", "*"]
     assert set_block_key_value(lines, "pal", "nprocs", "4") is False
+
+
+def test_validate_unambiguous_directives_counts_pal_nprocs_via_the_shared_block_rule() -> None:
+    from orca_auto.orca.input_blocks import validate_unambiguous_orca_directives
+
+    def rejects(lines: list[str], fragment: str) -> None:
+        with pytest.raises(ValueError, match=f"ambiguous duplicate ORCA directives: .*{fragment}"):
+            validate_unambiguous_orca_directives(lines, label="job.inp")
+
+    # Duplicate blocks and duplicate ``nprocs`` rows inside one block stay rejected,
+    # whether the second copy hides behind a closed ``# ... #`` comment or not.
+    rejects(["%pal nprocs 4 end", "# hidden # %pal nprocs 8 end"], "%pal blocks")
+    rejects(["%pal nprocs 4 nprocs 8 end"], "%pal nprocs")
+    rejects(["%pal", "  nprocs 4", "  nprocs 8", "end"], "%pal nprocs")
+    rejects(["%pal", "  # end #", "  nprocs 4 # cores", "  nprocs 8", "end"], "%pal nprocs")
+    rejects(["! SP PAL4", "%pal nprocs 4 end"], "mixed %pal and PAL route shorthands")
+    # An unterminated block is cut by the geometry section; a later %pal is a duplicate.
+    rejects(["%pal", "  nprocs 4", "* xyz 0 1", "H 0 0 0", "*", "%pal nprocs 8 end"], "%pal blocks")
+
+    # Tokens after the closing ``end`` are not %pal content (ORCA does not parse
+    # them as such and ``read_nprocs`` ignores them), so they are not duplicates.
+    for after_end in (
+        ["%pal nprocs 4 end nprocs 8"],
+        ["%pal", "  nprocs 4 end", "  nprocs 8"],
+        ["%pal nprocs 4 end", "nprocs 8"],
+    ):
+        validate_unambiguous_orca_directives(after_end, label="job.inp")
+        assert read_nprocs(after_end) == 4
+    validate_unambiguous_orca_directives(["%pal", "  nprocs 4", "end", "%maxcore 512"], label="x")

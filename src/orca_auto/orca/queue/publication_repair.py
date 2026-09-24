@@ -5,7 +5,6 @@ import stat
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from orca_auto.core.engines import entry_matches_engine_identity
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
@@ -34,9 +33,6 @@ from .adapter import (
 )
 from .entries import queue_entry_id, queue_entry_is_retired_workflow_owned, queue_entry_reaction_dir
 from .worker_tracking import upsert_queued_job_record
-
-if TYPE_CHECKING:
-    from .worker import OrcaQueueWorker
 
 logger = logging.getLogger(__name__)
 
@@ -264,9 +260,10 @@ def repair_queue_publication(
     return True
 
 
-def repair_queue_publications(worker: OrcaQueueWorker) -> bool:
+def repair_queue_publications(cfg: AppConfig) -> bool:
+    """Repair every claimable ORCA publication under ``cfg``'s queue roots."""
     repaired_all = True
-    for queue_root in ENGINE_RUNTIME.queue_roots(worker.cfg):
+    for queue_root in ENGINE_RUNTIME.queue_roots(cfg):
         try:
             entries = list_queue(queue_root)
         except Exception:
@@ -274,7 +271,7 @@ def repair_queue_publications(worker: OrcaQueueWorker) -> bool:
             repaired_all = False
             continue
         for entry in entries:
-            if not repair_queue_publication(worker.cfg, queue_root, entry):
+            if not repair_queue_publication(cfg, queue_root, entry):
                 repaired_all = False
     return repaired_all
 

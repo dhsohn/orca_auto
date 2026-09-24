@@ -80,10 +80,15 @@ graph TD
 
 워커 CLI는 설정 로드, PID 확인, ORCA 워커 생성·실행을 직접 수행한다.
 `EngineQueueRuntime`은 루트 선택·큐 조회·수용량 확인을 담당하며 자식 시작이나
-종료 정책 콜백을 받지 않는다. ORCA의 슬롯 메타데이터 연결과 종료 세대 표시는
-`queue/replay.py`, 자식 중지·재대기는 `queue/worker.py`, 취소 완료 처리는
-`queue/cancellation.py`가 소유한다. 각 경로는 선택한 큐 행과 작업 식별자를
-구체적인 어댑터에 전달한다. 종료 재처리가 끝난 뒤 실행 슬롯을 해제한다.
+종료 정책 콜백을 받지 않는다. `queue/worker.py`의 `OrcaQueueWorker`가 실행 슬롯
+메타데이터 연결, 종료 표시, 취소, 셧다운, 고아 행 정리를 메서드로 소유한다.
+`queue/replay.py`는 재처리 엔진(작업 항목, 엄격한 마무리, 정리 파이프라인,
+generation 소유자 결정)만 담당하며 상태를 인자로 명시적으로 받고,
+`queue/run_state_replay.py`는 `run.lock` 아래에서 종료 `job_state.json`을
+합성한다. 각 경로는 선택한 큐 행과 작업 식별자를 구체적인 어댑터에 전달한다.
+종료 재처리가 끝난 뒤 실행 슬롯을 해제한다. RUNNING 행 정리는 워커가 소유한다:
+제출은 큐 전체를 훑지 않으며, 살아 있는 워커 pid가 없을 때 자기 디렉터리의
+죽은 행만 복구한다.
 
 ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행권 인계 대기,
 해당 generation 실행을 직접 수행한다. 성공·중단·예외 모두 최종 슬롯 해제는
@@ -95,7 +100,7 @@ ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행�
 
 ## 4. 모니터링 및 운영 아키텍처
 
-- **SQLite 조회 캐시**: 대량의 계산 이력이 쌓여도 빠른 조회가 가능하도록 SQLite 기반 activity 인덱스를 운영합니다. 파일시스템에 직접적인 변경이 일어난 경우 `--refresh` 플래그로 인덱스를 갱신할 수 있습니다.
+- **SQLite 조회 캐시**: 대량의 계산 이력이 쌓여도 빠른 조회가 가능하도록 SQLite 기반 activity 인덱스를 운영합니다. 이 캐시는 위치 항목을 작업 ID 기준으로 관리하며, `job_locations.json` 자체는 디스크의 실행 상태에서 `index rebuild`로 재구성할 수 있고 `--refresh`는 같은 재구성으로 미등록 실행을 기록합니다.
 - **Scratch 운영 명령**: `orca_auto scratch list`와 `scratch clear`로 비활성(non-live) RAM scratch 워크스페이스를 점검·제거합니다. stale, unverifiable, invalid-manifest 워크스페이스가 하나라도 남아 있으면 이후의 모든 scratch 실행이 차단(fail-closed)됩니다.
 - **불변 휠 런타임 (Prepared Wheel Runtime)**: 프로덕션 서버 환경에서는 Git 체크아웃 대신 검증된 불변 wheel 런타임을 독립 경로에 설치하여, 운영 중 소스 코드 변경으로 인한 혼선을 원천 차단할 수 있습니다. ([docs/RUNTIME.md](RUNTIME.md) 참고)
 - **과거 데이터 보호**: 7.0에서 지원 종료된 이전 워크플로우 디렉터리는 과거 계산 데이터를 보존하기 위해 읽기 전용으로 보호되며, 해당 디렉터리에서 새로운 실행이 시작되는 것을 방지합니다.

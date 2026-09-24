@@ -5,7 +5,8 @@ import re
 import stat
 from pathlib import Path
 
-from orca_auto.core.utils.persistence import open_pinned_readonly
+from orca_auto.core.utils import stable_fs
+from orca_auto.core.utils.stable_fs import StableFsError
 
 MAX_INPUT_SNAPSHOT_BYTES = 64 * 1024 * 1024
 _ROLE_RE = re.compile(r"[^A-Za-z0-9._-]+")
@@ -33,14 +34,10 @@ def canonical_input_snapshot_namespace(namespace: str) -> str:
     return canonical
 
 
-def _directory_open_flags() -> int:
-    return os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
-
-
-def _directory_identity(details: os.stat_result) -> tuple[int, int]:
-    if not stat.S_ISDIR(details.st_mode):
-        raise ValueError("Snapshot cleanup path must be a directory")
-    return int(details.st_dev), int(details.st_ino)
+def _stable_directory_error(exc: StableFsError, *, label: str) -> ValueError:
+    if exc.reason in {"unsafe_name", "symlink", "not_directory"}:
+        return ValueError(f"{label} is unavailable or unsafe")
+    return ValueError(f"{label} identity changed")
 
 
 def _open_stable_directory(
@@ -50,23 +47,11 @@ def _open_stable_directory(
     expected_identity: tuple[int, int] | None = None,
 ) -> tuple[int, tuple[int, int]]:
     try:
-        before = os.stat(path, follow_symlinks=False)
-        before_identity = _directory_identity(before)
-        descriptor = os.open(path, _directory_open_flags())
-    except (OSError, ValueError) as exc:
+        return stable_fs.open_pinned_directory(path, expected_identity=expected_identity)
+    except StableFsError as exc:
+        raise _stable_directory_error(exc, label=label) from exc
+    except OSError as exc:
         raise ValueError(f"{label} is unavailable or unsafe") from exc
-    try:
-        opened_identity = _directory_identity(os.fstat(descriptor))
-        after_identity = _directory_identity(os.stat(path, follow_symlinks=False))
-        if not (
-            before_identity == opened_identity == after_identity
-            and (expected_identity is None or opened_identity == expected_identity)
-        ):
-            raise ValueError(f"{label} identity changed")
-        return descriptor, opened_identity
-    except BaseException:
-        os.close(descriptor)
-        raise
 
 
 def _open_stable_directory_at(
@@ -78,28 +63,16 @@ def _open_stable_directory_at(
     expected_identity: tuple[int, int] | None = None,
 ) -> tuple[int, tuple[int, int]] | None:
     try:
-        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        if missing_ok:
-            return None
-        raise ValueError(f"{label} identity changed") from None
-    try:
-        before_identity = _directory_identity(before)
-        descriptor = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
-    except (OSError, ValueError) as exc:
+        return stable_fs.open_pinned_directory_at(
+            parent_fd,
+            name,
+            expected_identity=expected_identity,
+            missing_ok=missing_ok,
+        )
+    except StableFsError as exc:
+        raise _stable_directory_error(exc, label=label) from exc
+    except OSError as exc:
         raise ValueError(f"{label} is unavailable or unsafe") from exc
-    try:
-        opened_identity = _directory_identity(os.fstat(descriptor))
-        after_identity = _directory_identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False))
-        if not (
-            before_identity == opened_identity == after_identity
-            and (expected_identity is None or opened_identity == expected_identity)
-        ):
-            raise ValueError(f"{label} identity changed")
-        return descriptor, opened_identity
-    except BaseException:
-        os.close(descriptor)
-        raise
 
 
 def _direct_generation_owner_payload(token: str) -> bytes:
@@ -329,47 +302,26 @@ def read_stable_regular_file(
         raise ValueError("Stable file read limit must be positive")
     effective_max_bytes = int(max_bytes)
     try:
-        descriptor = open_pinned_readonly(source_path)
+        payload, _details = stable_fs.read_stable_regular_file_at(
+            source_path,
+            max_bytes=effective_max_bytes,
+            require_single_link=require_single_link,
+        )
+    except StableFsError as exc:
+        if exc.reason == "not_regular":
+            raise ValueError(f"Input source is not a regular file: {source_path}") from exc
+        if exc.reason == "not_single_link":
+            raise ValueError(
+                f"Input source must be a single-link regular file: {source_path}"
+            ) from exc
+        if exc.reason == "too_large":
+            raise ValueError(
+                f"Input source exceeds {effective_max_bytes} bytes: {source_path}"
+            ) from exc
+        raise ValueError(f"Input source changed while it was read: {source_path}") from exc
     except OSError as exc:
         raise ValueError(f"Input source is not a readable regular file: {source_path}") from exc
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError(f"Input source is not a regular file: {source_path}")
-        if require_single_link and before.st_nlink != 1:
-            raise ValueError(f"Input source must be a single-link regular file: {source_path}")
-        if before.st_size > effective_max_bytes:
-            raise ValueError(f"Input source exceeds {effective_max_bytes} bytes: {source_path}")
-        chunks: list[bytes] = []
-        total_bytes = 0
-        while True:
-            remaining = effective_max_bytes - total_bytes
-            chunk = os.read(descriptor, min(1024 * 1024, remaining + 1))
-            if not chunk:
-                break
-            total_bytes += len(chunk)
-            if total_bytes > effective_max_bytes:
-                raise ValueError(f"Input source exceeds {effective_max_bytes} bytes: {source_path}")
-            chunks.append(chunk)
-        after = os.fstat(descriptor)
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-        ) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-        ):
-            raise ValueError(f"Input source changed while it was read: {source_path}")
-        payload = b"".join(chunks)
-        if len(payload) != after.st_size:
-            raise ValueError(f"Input source changed while it was read: {source_path}")
-        return payload
-    finally:
-        os.close(descriptor)
+    return payload
 
 
 __all__ = [

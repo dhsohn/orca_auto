@@ -18,7 +18,6 @@ from orca_auto.core.admission import (
 from orca_auto.core.admission import activate_reserved_slot as _activate_reserved_slot
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
-from orca_auto.core.messaging import build_channel
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, run_lock_status
 
 from .attempt.engine import _exit_with_result, run_attempts
@@ -26,6 +25,7 @@ from .attempt.reporting import last_out_path_from_state
 from .attempt.resume import resume_terminal_decision
 from .completion_rules import detect_completion_mode
 from .notifications import (
+    notification_channel,
     notify_run_finished_event,
     notify_run_started_event,
 )
@@ -257,7 +257,7 @@ def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> st
 
 
 def notification_callbacks(cfg: Any) -> tuple[Any, Any]:
-    channel = build_channel(cfg.messenger, logger=logging.getLogger(__name__))
+    channel = notification_channel(cfg)
     if not channel.enabled:
         return None, None
 

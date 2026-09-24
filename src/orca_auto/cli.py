@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from collections.abc import Callable
 from typing import Any
+
+from orca_auto.orca.cli_logging import remove_managed_handlers
 
 
 class _BrokenPipeGuardedStdout:
@@ -99,6 +102,10 @@ def main(
         guarded_stdout.flush()
     finally:
         sys.stdout = original_stdout
+        # A command that configured file/stream logging must not leave its
+        # handler on the root logger: the stream it captured may be closed by
+        # the time an in-process caller runs the next command.
+        remove_managed_handlers(logging.getLogger())
         if guarded_stdout.broken:
             _silence_broken_stdout()
     return result

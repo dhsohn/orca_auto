@@ -115,5 +115,8 @@ echo "[check] mypy"
 echo "[check] import-linter"
 "$VENV_PY" scripts/check_imports.py
 
+echo "[check] docs parity"
+"$VENV_PY" scripts/check_docs_parity.py
+
 echo "[check] pytest"
 "$VENV_PY" -m pytest --cov --cov-report=term-missing -q "$@"

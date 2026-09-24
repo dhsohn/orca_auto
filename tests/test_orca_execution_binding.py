@@ -12,10 +12,10 @@ from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca import input_blocks, input_references
 from orca_auto.orca.execution_binding import (
-    _inline_geometry_atom_count,
     build_orca_execution_snapshot,
     verify_orca_execution_snapshot,
 )
+from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count
 
 
 @pytest.mark.parametrize(
@@ -473,7 +473,7 @@ def test_orca_execution_snapshot_creates_sequential_sibling_generations(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
+    from orca_auto.orca.execution_binding import _reservation
 
     generation_names = iter(
         (
@@ -481,7 +481,7 @@ def test_orca_execution_snapshot_creates_sequential_sibling_generations(
             "20260714-224055-deadbeef",
         )
     )
-    monkeypatch.setattr(binding, "new_visible_generation_name", lambda: next(generation_names))
+    monkeypatch.setattr(_reservation, "new_visible_generation_name", lambda: next(generation_names))
     job_dir, selected, first, resources = _snapshot(tmp_path)
     second = build_orca_execution_snapshot(
         job_dir,
@@ -749,7 +749,7 @@ def test_orca_cleanup_rejects_same_name_replacement_even_if_inode_identity_match
 def test_orca_execution_directory_collision_preserves_existing_generation(
     tmp_path: Path,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
+    from orca_auto.orca.execution_binding import _reservation
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -760,7 +760,7 @@ def test_orca_execution_directory_collision_preserves_existing_generation(
     marker.write_text("owner", encoding="utf-8")
 
     with pytest.raises(FileExistsError):
-        binding._execution_directory(job_dir, generation_name)
+        _reservation._execution_directory(job_dir, generation_name)
 
     assert marker.read_text(encoding="utf-8") == "owner"
 
@@ -769,7 +769,7 @@ def test_orca_cleanup_failure_retains_durable_intent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
+    from orca_auto.orca.execution_binding import _cleanup
 
     job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
     intent_path = (
@@ -779,9 +779,9 @@ def test_orca_cleanup_failure_retains_durable_intent(
     def fail_remove(*_args: object, **_kwargs: object) -> None:
         raise OSError("simulated execution cleanup failure")
 
-    monkeypatch.setattr(binding, "cleanup_unowned_direct_generation_directory", fail_remove)
+    monkeypatch.setattr(_cleanup, "cleanup_unowned_direct_generation_directory", fail_remove)
     with pytest.raises(OSError, match="simulated"):
-        binding.cleanup_unowned_orca_execution_snapshot(job_dir, snapshot)
+        _cleanup.cleanup_unowned_orca_execution_snapshot(job_dir, snapshot)
 
     assert Path(snapshot["execution_dir"]).is_dir()
     assert intent_path.is_file()
@@ -1198,13 +1198,15 @@ def test_orca_execution_snapshot_rejects_private_dependency_mutation(tmp_path: P
 def test_orca_execution_snapshot_rejects_materialized_basename_metadata_tamper(
     tmp_path: Path,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
+    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir, selected, snapshot, resources = _snapshot(tmp_path)
     generation = Path(snapshot["execution_dir"])
     tampered = generation / "renamed.pc"
     tampered.write_bytes((job_dir / "charges.pc").read_bytes())
-    snapshot["materialized_inputs"]["dependency_000000"] = binding._file_identity(tampered)
+    snapshot["materialized_inputs"]["dependency_000000"] = _snapshot_identity._file_identity(
+        tampered
+    )
 
     with pytest.raises(ValueError, match="does not preserve its source basename"):
         _verify(job_dir, selected, snapshot, resources)
@@ -1215,7 +1217,7 @@ def test_orca_execution_snapshot_rejects_materialized_basename_metadata_tamper(
 def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
     tmp_path: Path,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
+    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir, selected, snapshot, resources = _snapshot(tmp_path)
     role = "dependency_000000"
@@ -1225,7 +1227,7 @@ def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
     original_private.rename(reserved_private)
     snapshot["dependency_paths"][0] = str(reserved_source.resolve())
     snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
-    snapshot["materialized_inputs"][role] = binding._file_identity(reserved_private)
+    snapshot["materialized_inputs"][role] = _snapshot_identity._file_identity(reserved_private)
     bound_selected = Path(snapshot["selected_inp"])
     bound_selected.chmod(0o600)
     bound_selected.write_text(
@@ -1233,7 +1235,7 @@ def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
         encoding="utf-8",
     )
     bound_selected.chmod(0o400)
-    snapshot["bound_selected_identity"] = binding._file_identity(bound_selected)
+    snapshot["bound_selected_identity"] = _snapshot_identity._file_identity(bound_selected)
 
     with pytest.raises(ValueError, match="runtime/output file: job.resume.out"):
         _verify(job_dir, selected, snapshot, resources)
@@ -1262,7 +1264,7 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
     tmp_path: Path,
     output_route: str,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
+    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -1288,7 +1290,7 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
     original_private.rename(reserved_private)
     snapshot["dependency_paths"][0] = str(reserved_source.resolve())
     snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
-    snapshot["materialized_inputs"][role] = binding._file_identity(reserved_private)
+    snapshot["materialized_inputs"][role] = _snapshot_identity._file_identity(reserved_private)
     bound_selected = Path(snapshot["selected_inp"])
     bound_selected.chmod(0o600)
     bound_selected.write_text(
@@ -1298,7 +1300,7 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
         encoding="utf-8",
     )
     bound_selected.chmod(0o400)
-    snapshot["bound_selected_identity"] = binding._file_identity(bound_selected)
+    snapshot["bound_selected_identity"] = _snapshot_identity._file_identity(bound_selected)
 
     with pytest.raises(ValueError, match="runtime/output file: job.engrad"):
         verify_orca_execution_snapshot(
@@ -1415,7 +1417,7 @@ def test_verify_orca_execution_snapshot_rejects_selected_input_as_dependency(
 def test_verify_orca_execution_snapshot_rejects_dependency_role_substitution(
     tmp_path: Path,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
+    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir, selected, snapshot, resources = _snapshot(tmp_path)
     role = "dependency_000001"
@@ -1425,7 +1427,7 @@ def test_verify_orca_execution_snapshot_rejects_dependency_role_substitution(
     replacement_private.write_bytes(original_private.read_bytes())
     snapshot["dependency_paths"][1] = str(replacement_source.resolve())
     snapshot["source_inputs"][role]["source_path"] = str(replacement_source.resolve())
-    snapshot["materialized_inputs"][role] = binding._file_identity(replacement_private)
+    snapshot["materialized_inputs"][role] = _snapshot_identity._file_identity(replacement_private)
 
     with pytest.raises(ValueError, match="bound input references do not match"):
         _verify(job_dir, selected, snapshot, resources)
@@ -1512,7 +1514,7 @@ def test_orca_execution_snapshot_checks_aggregate_budget_before_dependency_copy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import orca_auto.orca.execution_binding as binding
+    from orca_auto.orca.execution_binding import _confinement
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -1521,13 +1523,13 @@ def test_orca_execution_snapshot_checks_aggregate_budget_before_dependency_copy(
     selected = job_dir / "job.inp"
     selected.write_text("! SP\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     monkeypatch.setattr(
-        binding,
+        _confinement,
         "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES",
         selected.stat().st_size + dependency.stat().st_size - 1,
     )
 
     with pytest.raises(ValueError, match="aggregate snapshot size"):
-        binding.build_orca_execution_snapshot(
+        build_orca_execution_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(dependency),
@@ -1721,7 +1723,7 @@ def test_orca_frequency_snapshot_rejects_inline_geometry_above_hessian_atom_cap(
 def test_removed_route_rejected_before_generation_reservation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: str
 ) -> None:
-    from orca_auto.orca import execution_binding
+    from orca_auto.orca.execution_binding import _build
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -1732,7 +1734,7 @@ def test_removed_route_rejected_before_generation_reservation(
     def unexpected_reservation(*args: object, **kwargs: object) -> None:
         raise AssertionError("Unsupported route reached generation reservation")
 
-    monkeypatch.setattr(execution_binding, "_reserve_execution_generation", unexpected_reservation)
+    monkeypatch.setattr(_build, "_reserve_execution_generation", unexpected_reservation)
     with pytest.raises(ValueError, match="unsupported.*ScanTS"):
         build_orca_execution_snapshot(
             job_dir,

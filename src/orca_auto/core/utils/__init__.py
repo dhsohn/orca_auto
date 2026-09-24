@@ -24,8 +24,19 @@ from .persistence import (
     parse_iso_utc,
     timestamped_token,
 )
+from .stable_fs import (
+    StableFsError,
+    atomic_write_bytes_at,
+    open_pinned_directory,
+    open_pinned_directory_at,
+    read_stable_regular_file_at,
+    require_directory_path_identity,
+    unlink_at_if_present,
+)
 
 __all__ = [
+    "StableFsError",
+    "atomic_write_bytes_at",
     "atomic_write_json",
     "atomic_write_text",
     "coerce_bool",
@@ -43,9 +54,14 @@ __all__ = [
     "normalize_bool",
     "normalize_text",
     "now_utc_iso",
+    "open_pinned_directory",
+    "open_pinned_directory_at",
     "parse_iso_utc",
+    "read_stable_regular_file_at",
+    "require_directory_path_identity",
     "safe_float",
     "safe_int",
     "set_mapping_field",
     "timestamped_token",
+    "unlink_at_if_present",
 ]

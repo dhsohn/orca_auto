@@ -63,33 +63,24 @@ def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: P
 def test_filtered_list_still_explains_queue_wide_publication_block(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    activity = {
-        "activity_id": "blocked-row",
-        "kind": "job",
-        "engine": "orca",
-        "status": "pending",
-        "metadata": {
-            "queue_id": "blocked-row",
-            "allowed_root": "/runs",
-            "publication_blocked_reason": "index unavailable",
-            "publication_blocked_scope": "orca_queue",
-            "publication_blocked_action": "Restore index access; worker retries, or queue cancel blocked-row.",
-        },
+    # The listing reports blockers for the whole catalog even when the status
+    # filter leaves the page empty; the CLI prints them under the empty table.
+    blocker = {
+        "queue_id": "blocked-row",
+        "allowed_root": "/runs",
+        "scope": "orca_queue",
+        "reason": "index unavailable",
+        "next_action": "Restore index access; worker retries, or queue cancel blocked-row.",
     }
-    request = cli_queue._QueueListRequest(
-        shared_config=None,
-        limit=1,
-        status_values=("completed",),
-        json_output=False,
-    )
-    monkeypatch.setattr(cli_queue, "count_global_active_simulations", lambda *args, **kwargs: 0)
     monkeypatch.setattr(cli_queue, "_layout_interactive", lambda: False)
-    payload = {"activities": [activity], "sources": {}}
-    filtered, activities = cli_queue._filtered_queue_payload(payload, request)
-    assert filtered["count"] == 0
-    assert filtered["admission_blockers"][0]["queue_id"] == "blocked-row"
     cli_queue._print_queue_list_text(
-        payload=payload, filtered_payload=filtered, filtered_activities=activities, request=request
+        payload={
+            "count": 0,
+            "active_simulations": 0,
+            "activities": [],
+            "sources": {},
+            "admission_blockers": [blocker],
+        }
     )
     output = capsys.readouterr().out
     assert "index unavailable" in output

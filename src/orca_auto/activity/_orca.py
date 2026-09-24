@@ -289,11 +289,8 @@ def _snapshot_is_superseded(snapshot: RunSnapshot, superseded_dirs: set[str]) ->
     return not run_lock_is_held(Path(reaction_dir), logger=_LOGGER)
 
 
-def orca_records(
-    *,
-    config_path: str,
-    refresh: bool = False,
-) -> list[ActivityRecord]:
+def orca_records(*, config_path: str) -> list[ActivityRecord]:
+    """Every ORCA activity from the canonical queue, index and state files."""
     from orca_auto.orca import run_snapshot
     from orca_auto.orca.queue import adapter as queue_adapter
 
@@ -307,7 +304,7 @@ def orca_records(
     ]
     snapshots = run_snapshot.collect_run_snapshots(
         allowed_root,
-        discover_unindexed=refresh,
+        discover_unindexed=False,
         known_dirs=(
             Path(reaction_dir)
             for entry in queue_entries

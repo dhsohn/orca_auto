@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.statuses import STATUS_CANCEL_REQUESTED, STATUS_RETRYING, STATUS_RUNNING
 from orca_auto.core.utils import normalize_text, parse_iso_utc
+
+ACTIVE_SIMULATION_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING, STATUS_CANCEL_REQUESTED})
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,66 @@ def sort_key(record: ActivityRecord) -> tuple[datetime, datetime, str]:
         parse_iso_utc(record.updated_at) or datetime.min.replace(tzinfo=UTC),
         parse_iso_utc(record.submitted_at) or datetime.min.replace(tzinfo=UTC),
         record.activity_id,
+    )
+
+
+@dataclass(frozen=True)
+class ActivityListing:
+    """One page of activities plus the catalog-wide summaries a list shows.
+
+    ``records`` is already status-filtered, newest first and cut to the
+    requested limit; nobody downstream filters or slices again. ``blockers``
+    and ``active_count`` describe the whole catalog regardless of the page.
+    """
+
+    records: tuple[ActivityRecord, ...] = ()
+    blockers: tuple[dict[str, Any], ...] = ()
+    active_count: int = 0
+
+
+def blocker_payload(record: ActivityRecord) -> dict[str, Any] | None:
+    metadata = record.metadata
+    reason = normalize_text(metadata.get("publication_blocked_reason"))
+    if not reason:
+        return None
+    return {
+        "queue_id": metadata.get("queue_id", record.activity_id),
+        "allowed_root": metadata.get("allowed_root", ""),
+        "scope": metadata.get("publication_blocked_scope", ""),
+        "reason": reason,
+        "next_action": metadata.get("publication_blocked_action", ""),
+    }
+
+
+def is_active_simulation(record: ActivityRecord) -> bool:
+    return (
+        normalize_text(record.kind).lower() == "job"
+        and normalize_text(record.status).lower() in ACTIVE_SIMULATION_STATUSES
+    )
+
+
+def listing_from_records(
+    records: Iterable[ActivityRecord],
+    *,
+    statuses: Sequence[str] = (),
+    limit: int = 0,
+) -> ActivityListing:
+    """Filter, order and page an in-memory catalog exactly once."""
+    ordered = sorted(records, key=sort_key, reverse=True)
+    wanted = {normalize_text(status).lower() for status in statuses if normalize_text(status)}
+    page = [
+        record
+        for record in ordered
+        if not wanted or normalize_text(record.status).lower() in wanted
+    ]
+    if limit > 0:
+        page = page[:limit]
+    return ActivityListing(
+        records=tuple(page),
+        blockers=tuple(
+            payload for record in ordered if (payload := blocker_payload(record)) is not None
+        ),
+        active_count=sum(1 for record in ordered if is_active_simulation(record)),
     )
 
 

@@ -23,9 +23,11 @@ from orca_auto.core.artifacts import (
 from orca_auto.core.engine_process import require_confined_regular_file
 from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.utils import process as process_utils
+from orca_auto.core.utils import stable_fs
 from orca_auto.core.utils.lock import FileLockTimeoutError, file_lock_at
 from orca_auto.core.utils.persistence import open_pinned_readonly
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
+from orca_auto.core.utils.stable_fs import unlink_at_if_present as _unlink_at_if_present
 
 SCRATCH_MANIFEST_FILE_NAME = ".orca_auto_scratch.json"
 SCRATCH_RUNTIME_HOME_DIR_NAME = ".orca_auto_scratch_runtime_home"
@@ -637,18 +639,6 @@ def _prepare_scratch_root(policy: EngineScratchPolicy) -> Path:
     return policy.root
 
 
-def _directory_open_flags() -> int:
-    flags = os.O_RDONLY
-    flags |= os.O_DIRECTORY
-    flags |= os.O_NOFOLLOW
-    flags |= os.O_CLOEXEC
-    return flags
-
-
-def _identity(info: os.stat_result) -> tuple[int, int]:
-    return int(info.st_dev), int(info.st_ino)
-
-
 def _filesystem_free_bytes(directory_fd: int) -> int:
     details = os.fstatvfs(directory_fd)
     return int(details.f_bavail) * int(details.f_frsize)
@@ -661,18 +651,20 @@ def _open_pinned_directory_at(
     display_path: Path,
     label: str,
 ) -> tuple[int, tuple[int, int]]:
-    if not name or Path(name).name != name or name in {".", ".."}:
-        raise EngineScratchError(f"{label} has an unsafe basename: {name!r}")
-    descriptor = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
     try:
-        info = os.fstat(descriptor)
-        path_info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat.S_ISDIR(info.st_mode) or _identity(info) != _identity(path_info):
-            raise EngineScratchError(f"{label} identity changed: {display_path}")
-        return descriptor, _identity(info)
-    except BaseException:
-        os.close(descriptor)
-        raise
+        opened = stable_fs.open_pinned_directory_at(parent_fd, name)
+    except stable_fs.StableFsError as exc:
+        if exc.reason == "unsafe_name":
+            raise EngineScratchError(f"{label} has an unsafe basename: {name!r}") from exc
+        if exc.reason == "missing":
+            raise EngineScratchError(f"{label} pathname disappeared: {display_path}") from exc
+        if exc.reason == "symlink":
+            raise EngineScratchError(f"{label} is a symlink: {display_path}") from exc
+        if exc.reason == "not_directory":
+            raise EngineScratchError(f"{label} is not a directory: {display_path}") from exc
+        raise EngineScratchError(f"{label} identity changed: {display_path}") from exc
+    assert opened is not None
+    return opened
 
 
 def _open_pinned_directory(
@@ -681,26 +673,18 @@ def _open_pinned_directory(
     label: str,
     expected_identity: tuple[int, int] | None = None,
 ) -> tuple[int, tuple[int, int]]:
-    if path.is_symlink():
-        raise EngineScratchError(f"{label} is a symlink: {path}")
-    descriptor = os.open(path, _directory_open_flags())
     try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISDIR(info.st_mode):
-            raise EngineScratchError(f"{label} is not a directory: {path}")
-        observed = _identity(info)
-        if expected_identity is not None and observed != expected_identity:
-            raise EngineScratchError(f"{label} identity changed before scratch launch: {path}")
-        _require_directory_path_identity(
-            path,
-            descriptor,
-            observed,
-            label=label,
-        )
-        return descriptor, observed
-    except BaseException:
-        os.close(descriptor)
-        raise
+        return stable_fs.open_pinned_directory(path, expected_identity=expected_identity)
+    except stable_fs.StableFsError as exc:
+        if exc.reason == "symlink":
+            raise EngineScratchError(f"{label} is a symlink: {path}") from exc
+        if exc.reason == "not_directory":
+            raise EngineScratchError(f"{label} is not a directory: {path}") from exc
+        if exc.reason == "unexpected_identity":
+            raise EngineScratchError(
+                f"{label} identity changed before scratch launch: {path}"
+            ) from exc
+        raise _path_identity_error(exc, label=label, path=path) from exc
 
 
 def _require_directory_path_identity(
@@ -710,17 +694,21 @@ def _require_directory_path_identity(
     *,
     label: str,
 ) -> None:
-    descriptor_info = os.fstat(descriptor)
     try:
-        path_info = path.stat(follow_symlinks=False)
-    except FileNotFoundError as exc:
-        raise EngineScratchError(f"{label} pathname disappeared: {path}") from exc
-    if (
-        not stat.S_ISDIR(path_info.st_mode)
-        or _identity(descriptor_info) != expected_identity
-        or _identity(path_info) != expected_identity
-    ):
-        raise EngineScratchError(f"{label} pathname identity changed: {path}")
+        stable_fs.require_directory_path_identity(path, descriptor, expected_identity)
+    except stable_fs.StableFsError as exc:
+        raise _path_identity_error(exc, label=label, path=path) from exc
+
+
+def _path_identity_error(
+    exc: stable_fs.StableFsError,
+    *,
+    label: str,
+    path: Path,
+) -> EngineScratchError:
+    if exc.reason == "missing":
+        return EngineScratchError(f"{label} pathname disappeared: {path}")
+    return EngineScratchError(f"{label} pathname identity changed: {path}")
 
 
 def _atomic_write_bytes_at(
@@ -730,37 +718,18 @@ def _atomic_write_bytes_at(
     *,
     mode: int,
 ) -> None:
-    if not name or Path(name).name != name or name in {".", ".."}:
-        raise EngineScratchError(f"engine scratch staging name is unsafe: {name!r}")
-    temporary_name = f"{_STAGING_TEMP_PREFIX}{secrets.token_hex(16)}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    flags |= os.O_NOFOLLOW
-    descriptor = os.open(temporary_name, flags, mode, dir_fd=directory_fd)
     try:
-        view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise EngineScratchError(f"Failed to stage engine scratch input: {name}")
-            view = view[written:]
-        os.fchmod(descriptor, mode)
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = -1
-        os.replace(
-            temporary_name,
+        stable_fs.atomic_write_bytes_at(
+            directory_fd,
             name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
+            payload,
+            mode=mode,
+            temp_prefix=_STAGING_TEMP_PREFIX,
         )
-        os.fsync(directory_fd)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        try:
-            os.unlink(temporary_name, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
+    except stable_fs.StableFsError as exc:
+        if exc.reason == "unsafe_name":
+            raise EngineScratchError(f"engine scratch staging name is unsafe: {name!r}") from exc
+        raise EngineScratchError(f"Failed to stage engine scratch input: {name}") from exc
 
 
 def _write_workspace_manifest(
@@ -911,7 +880,11 @@ def _workspace_size_bytes(directory_fd: int, *, max_entries: int) -> tuple[int, 
                         elif stat.S_ISDIR(info.st_mode):
                             try:
                                 pending.append(
-                                    os.open(entry.name, _directory_open_flags(), dir_fd=current_fd)
+                                    os.open(
+                                        entry.name,
+                                        stable_fs.directory_open_flags(),
+                                        dir_fd=current_fd,
+                                    )
                                 )
                             except OSError:
                                 truncated = True
@@ -1306,39 +1279,26 @@ def _read_stable_regular_file_at(
     display_path: Path,
     max_bytes: int = MAX_INPUT_SNAPSHOT_BYTES,
 ) -> tuple[bytes, int]:
-    descriptor = open_pinned_readonly(name, dir_fd=directory_fd)
     try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-            raise EngineScratchError(f"engine input is not a private regular file: {display_path}")
-        if before.st_size > max_bytes:
+        payload, details = stable_fs.read_stable_regular_file_at(
+            name,
+            dir_fd=directory_fd,
+            max_bytes=max_bytes,
+            require_single_link=True,
+            chunk_bytes=_COPY_CHUNK_BYTES,
+        )
+    except stable_fs.StableFsError as exc:
+        if exc.reason == "too_large":
             raise EngineScratchError(
-                f"engine input exceeds the scratch staging limit ({max_bytes} bytes): {display_path}"
-            )
-        payload = bytearray()
-        while chunk := os.read(descriptor, min(_COPY_CHUNK_BYTES, max_bytes + 1 - len(payload))):
-            payload.extend(chunk)
-            if len(payload) > max_bytes:
-                raise EngineScratchError(
-                    f"engine input exceeds the scratch staging limit ({max_bytes} bytes): "
-                    f"{display_path}"
-                )
-        after = os.fstat(descriptor)
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-        ) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-        ) or len(payload) != after.st_size:
-            raise EngineScratchError(f"engine input changed while staged: {display_path}")
-        return bytes(payload), stat.S_IMODE(after.st_mode)
-    finally:
-        os.close(descriptor)
+                f"engine input exceeds the scratch staging limit ({max_bytes} bytes): "
+                f"{display_path}"
+            ) from exc
+        if exc.reason == "changed":
+            raise EngineScratchError(f"engine input changed while staged: {display_path}") from exc
+        raise EngineScratchError(
+            f"engine input is not a private regular file: {display_path}"
+        ) from exc
+    return payload, stat.S_IMODE(details.st_mode)
 
 
 def _capture_input_closure(
@@ -1580,9 +1540,9 @@ def _copy_artifact_to_staging(
                 dir_fd=durable_dir_fd,
                 follow_symlinks=False,
             )
-            if _identity(linked) != _identity(target_info) or _identity(
-                current_target
-            ) != _identity(target_info):
+            if stable_fs.inode_identity(linked) != stable_fs.inode_identity(
+                target_info
+            ) or stable_fs.inode_identity(current_target) != stable_fs.inode_identity(target_info):
                 raise EngineScratchError(
                     f"Durable engine artifact target changed while prepared: {durable_dir / target_name}"
                 )
@@ -1609,37 +1569,18 @@ def _copy_artifact_to_staging(
 
 
 def _atomic_write_json_at(directory_fd: int, name: str, payload: dict[str, Any]) -> None:
-    temporary_name = f"{_PUBLICATION_META_TEMP_PREFIX}{secrets.token_hex(16)}.tmp"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    flags |= os.O_NOFOLLOW
-    descriptor = os.open(temporary_name, flags, 0o600, dir_fd=directory_fd)
+    encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
     try:
-        encoded = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(
-            "utf-8"
-        )
-        view = memoryview(encoded)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise EngineScratchError("Failed to persist engine scratch publication journal")
-            view = view[written:]
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = -1
-        os.replace(
-            temporary_name,
+        stable_fs.atomic_write_bytes_at(
+            directory_fd,
             name,
-            src_dir_fd=directory_fd,
-            dst_dir_fd=directory_fd,
+            encoded,
+            mode=0o600,
+            temp_prefix=_PUBLICATION_META_TEMP_PREFIX,
+            force_mode=False,
         )
-        os.fsync(directory_fd)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        try:
-            os.unlink(temporary_name, dir_fd=directory_fd)
-        except FileNotFoundError:
-            pass
+    except stable_fs.StableFsError as exc:
+        raise EngineScratchError("Failed to persist engine scratch publication journal") from exc
 
 
 def _publication_journal_payload(
@@ -1740,13 +1681,6 @@ def _entry_exists_at(directory_fd: int, name: str) -> bool:
     return True
 
 
-def _unlink_at_if_present(directory_fd: int, name: str) -> None:
-    try:
-        os.unlink(name, dir_fd=directory_fd)
-    except FileNotFoundError:
-        pass
-
-
 def _assert_no_orphan_publication_files(directory_fd: int) -> None:
     for name in os.listdir(directory_fd):
         if not name.startswith(
@@ -1802,7 +1736,9 @@ def _recover_incomplete_publication(
                     )
                 except FileNotFoundError:
                     target_info = None
-                if target_info is not None and _identity(target_info) == _identity(backup_info):
+                if target_info is not None and stable_fs.inode_identity(
+                    target_info
+                ) == stable_fs.inode_identity(backup_info):
                     _unlink_at_if_present(durable_dir_fd, item.backup_name)
                 else:
                     if target_info is not None:
@@ -2045,7 +1981,7 @@ def _remove_owned_workspace_at(
 ) -> None:
     tombstone_name = f"{_CLEANUP_TOMBSTONE_PREFIX}{secrets.token_hex(16)}"
     before = os.stat(workspace_name, dir_fd=root_fd, follow_symlinks=False)
-    if not stat.S_ISDIR(before.st_mode) or _identity(before) != workspace_identity:
+    if not stat.S_ISDIR(before.st_mode) or stable_fs.inode_identity(before) != workspace_identity:
         raise EngineScratchError("engine scratch workspace identity changed before cleanup")
     os.rename(
         workspace_name,
@@ -2054,7 +1990,7 @@ def _remove_owned_workspace_at(
         dst_dir_fd=root_fd,
     )
     after = os.stat(tombstone_name, dir_fd=root_fd, follow_symlinks=False)
-    if not stat.S_ISDIR(after.st_mode) or _identity(after) != workspace_identity:
+    if not stat.S_ISDIR(after.st_mode) or stable_fs.inode_identity(after) != workspace_identity:
         try:
             os.rename(
                 tombstone_name,

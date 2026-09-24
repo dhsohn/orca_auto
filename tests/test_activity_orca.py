@@ -495,12 +495,12 @@ def test_list_activities_autodiscovers_defaults_when_no_args(monkeypatch) -> Non
 
     def fake_collect(
         resolved: activity.ResolvedActivitySources, request: activity.ActivityListRequest
-    ) -> list[activity.ActivityRecord]:
+    ) -> _activity_model.ActivityListing:
         captured.update(vars(resolved))
         assert request.indexed
-        return []
+        return _activity_model.ActivityListing()
 
-    monkeypatch.setattr(_activity_list, "collect_activity_records", fake_collect)
+    monkeypatch.setattr(_activity_list, "collect_activity_listing", fake_collect)
 
     payload = activity.list_activities()
 

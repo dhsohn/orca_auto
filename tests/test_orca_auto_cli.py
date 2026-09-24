@@ -281,6 +281,173 @@ def test_cmd_index_prune_reports_a_damaged_index_without_writing(
     assert index_path.read_text(encoding="utf-8") == "{not valid json"
 
 
+def test_build_parser_parses_index_rebuild() -> None:
+    parser = unified_cli.build_parser()
+
+    args = parser.parse_args(
+        ["index", "rebuild", "--config", "/tmp/orca_auto.yaml", "--dry-run", "--json"]
+    )
+    assert args.command == "index"
+    assert args.index_command == "rebuild"
+    assert args.orca_auto_config == "/tmp/orca_auto.yaml"
+    assert args.dry_run is True
+    assert args.json is True
+    assert args.func is cli_run_dir.cmd_index_rebuild
+
+    apply_args = parser.parse_args(["index", "rebuild"])
+    assert apply_args.dry_run is False
+    assert apply_args.json is False
+
+
+def _write_index_rebuild_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    from orca_auto.orca.state import save_state
+
+    runs_root = tmp_path / "runs"
+    for name, status in (("alpha", "completed"), ("beta", "failed")):
+        job = runs_root / name
+        job.mkdir(parents=True)
+        save_state(
+            job,
+            {
+                "run_id": f"run-{name}",
+                "status": status,
+                "started_at": "2026-01-01T00:00:00+00:00",
+                "selected_inp": str(job / "calc.inp"),
+                "attempts": [],
+            },
+        )
+    # A directory without an identity cannot become a row and is reported.
+    (runs_root / "anonymous").mkdir()
+    (runs_root / "anonymous" / "job_state.json").write_text("{}", encoding="utf-8")
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(f"runs_root: {runs_root}\n", encoding="utf-8")
+    return runs_root / "job_locations.json", config_path
+
+
+def test_cmd_index_rebuild_dry_run_reports_rows_without_writing(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    index_path, config_path = _write_index_rebuild_fixture(tmp_path)
+
+    assert unified_cli.main(["index", "rebuild", "--config", str(config_path), "--dry-run"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert f"index: {index_path}" in captured.out
+    assert "scanned: 3" in captured.out
+    assert "rows: 2" in captured.out
+    assert "added: 2" in captured.out
+    assert "updated: 0" in captured.out
+    assert "skipped: 1" in captured.out
+    assert "+ run-alpha" in captured.out and "+ run-beta" in captured.out
+    assert "anonymous" in captured.out
+    assert "dry run: rerun without --dry-run" in captured.out
+    assert not index_path.exists()
+
+
+def test_cmd_index_rebuild_writes_rows_once_and_reports_json(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    index_path, config_path = _write_index_rebuild_fixture(tmp_path)
+
+    assert unified_cli.main(["index", "rebuild", "--config", str(config_path), "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["index_path"] == str(index_path)
+    assert payload["scanned"] == 3
+    assert payload["total"] == 2
+    assert payload["added_count"] == 2
+    assert payload["updated_count"] == 0
+    assert payload["unchanged_count"] == 0
+    assert payload["skipped_count"] == 1
+    assert payload["applied"] is True
+    assert sorted(row["job_id"] for row in payload["added"]) == ["run-alpha", "run-beta"]
+    assert payload["added"][0]["latest_known_path"] == str(index_path.parent / "alpha")
+    assert payload["updated"] == []
+    assert payload["skipped"] == [str(index_path.parent / "anonymous")]
+    assert payload["conflicts"] == []
+    rows = json.loads(index_path.read_text(encoding="utf-8"))
+    assert [row["job_id"] for row in rows] == ["run-alpha", "run-beta"]
+    assert rows[1]["status"] == "failed"
+    before = index_path.read_bytes()
+
+    # A second rebuild finds nothing to change and leaves the bytes alone.
+    assert unified_cli.main(["index", "rebuild", "--config", str(config_path)]) == 0
+    out = capsys.readouterr().out
+    assert "unchanged: 2" in out
+    assert "nothing to change." in out
+    assert index_path.read_bytes() == before
+
+
+def test_cmd_index_rebuild_reports_a_job_id_claimed_by_two_directories(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    from orca_auto.orca.state import save_state
+
+    index_path, config_path = _write_index_rebuild_fixture(tmp_path)
+    runs_root = index_path.parent
+    # A mid-run copy of alpha that sorts before it: the finished directory is
+    # kept, the copy is reported rather than silently dropped.
+    copy = runs_root / "aaa_copy_of_alpha"
+    copy.mkdir()
+    save_state(
+        copy,
+        {
+            "run_id": "run-alpha",
+            "status": "running",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "selected_inp": str(copy / "calc.inp"),
+            "attempts": [],
+        },
+    )
+
+    assert unified_cli.main(["index", "rebuild", "--config", str(config_path), "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["conflicts"] == [
+        {
+            "job_id": "run-alpha",
+            "kept_path": str(runs_root / "alpha"),
+            "ignored_paths": [str(copy)],
+        }
+    ]
+    [alpha] = [row for row in payload["added"] if row["job_id"] == "run-alpha"]
+    assert (alpha["status"], alpha["latest_known_path"]) == ("completed", str(runs_root / "alpha"))
+
+    assert unified_cli.main(["index", "rebuild", "--config", str(config_path)]) == 0
+    out = capsys.readouterr().out
+    assert f"conflict: run-alpha kept {runs_root / 'alpha'}; ignored {copy}" in out
+    assert "nothing to change." in out
+
+
+def test_cmd_index_rebuild_reports_a_damaged_index_without_writing(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    index_path, config_path = _write_index_rebuild_fixture(tmp_path)
+    index_path.write_text("{not valid json", encoding="utf-8")
+
+    assert unified_cli.main(["index", "rebuild", "--config", str(config_path)]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error:" in captured.err
+    assert "Traceback" not in captured.err
+    assert index_path.read_text(encoding="utf-8") == "{not valid json"
+
+
+def test_cmd_index_rebuild_rejects_a_missing_runs_root(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    config_path = tmp_path / "orca_auto.yaml"
+    config_path.write_text(f"runs_root: {tmp_path / 'absent'}\n", encoding="utf-8")
+
+    assert unified_cli.main(["index", "rebuild", "--config", str(config_path)]) == 1
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "runs_root does not exist" in captured.err
+
+
 @pytest.mark.parametrize("removed_args", [["--watch"], ["--interval", "1"]])
 def test_build_parser_rejects_removed_queue_watch_options(removed_args: list[str]) -> None:
     parser = unified_cli.build_parser()

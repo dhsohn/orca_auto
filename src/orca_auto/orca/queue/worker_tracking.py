@@ -5,7 +5,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.messaging import MessageChannel, build_channel
+from orca_auto.core.messaging import MessageChannel
 from orca_auto.core.queue.resource_requests import coerce_resource_request
 from orca_auto.core.statuses import (
     STATUS_QUEUED,
@@ -27,7 +27,7 @@ from ..job_locations import (
     resource_dict,
     upsert_job_record,
 )
-from ..notifications import notify_run_finished_event
+from ..notifications import notification_channel, notify_run_finished_event
 from ..run_lock import acquire_run_lock
 from ..state import now_utc_iso, save_state
 from ..state_reading import load_state, state_payload_job_id
@@ -220,7 +220,7 @@ def notify_terminal_job_from_state(
     A crash or saturated sender after the claim may lose an advisory message.
     Transport never writes state: the job directory may already hold a successor.
     """
-    channel = build_channel(cfg.messenger, logger=logger)
+    channel = notification_channel(cfg)
     if not channel.enabled:
         return False
 

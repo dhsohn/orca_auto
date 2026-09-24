@@ -101,32 +101,19 @@ def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> Non
 
     maxcore_count = 0
     moinp_count = len(orca_moinp_references(lines))
-    pal_block_count = 0
-    pal_nprocs_count = 0
+    # ``iter_blocks`` owns the block-termination rule, so the ``nprocs`` count
+    # covers exactly the body rows that ``read_nprocs`` reads: tokens after a
+    # closing ``end`` (which ORCA does not parse as %pal content) are ignored,
+    # while duplicate blocks and duplicate ``nprocs`` rows stay rejected.
+    pal_blocks = list(iter_blocks(lines, "pal"))
+    pal_block_count = len(pal_blocks)
+    pal_nprocs_count = sum(
+        len(NPROCS_DIRECTIVE_RE.findall(row.text)) for block in pal_blocks for row in block.rows
+    )
     pal_route_count = 0
-    in_pal_block = False
     for line in lines:
-        active_directive = active_orca_directive_text(line)
-        if MAXCORE_DIRECTIVE_RE.match(active_directive):
+        if MAXCORE_DIRECTIVE_RE.match(active_orca_directive_text(line)):
             maxcore_count += 1
-        block_match = BLOCK_START_RE.match(active_directive)
-        if block_match is not None:
-            in_pal_block = block_match.group(1).lower() == "pal"
-            if in_pal_block:
-                pal_block_count += 1
-                pal_nprocs_count += len(NPROCS_DIRECTIVE_RE.findall(active_directive))
-                if any(
-                    not token.quoted and token.value.lower() == "end"
-                    for token in orca_line_tokens(active_directive, start=block_match.end())
-                ):
-                    in_pal_block = False
-        elif in_pal_block:
-            active_text = active_orca_line_text(line)
-            if active_text.strip().lower() == "end":
-                in_pal_block = False
-            else:
-                pal_nprocs_count += len(NPROCS_DIRECTIVE_RE.findall(active_text))
-
         pal_route_count += sum(
             1
             for token in orca_route_tokens(line)

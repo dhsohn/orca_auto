@@ -33,7 +33,9 @@ def test_slow_notification_does_not_block_loop_or_write_successor(
             delivered.set()
             return SendResult(sent=True)
 
-    monkeypatch.setattr(worker_tracking, "build_channel", lambda *_args, **_kwargs: Channel())
+    monkeypatch.setattr(
+        worker_tracking, "notification_channel", lambda *_args, **_kwargs: Channel()
+    )
 
     class Loop(QueueWorkerLoop):
         def __init__(self) -> None:
@@ -95,7 +97,9 @@ def test_ambiguous_notification_claim_never_dispatches(
             sends.append(message)
             return SendResult(sent=True)
 
-    monkeypatch.setattr(worker_tracking, "build_channel", lambda *_args, **_kwargs: Channel())
+    monkeypatch.setattr(
+        worker_tracking, "notification_channel", lambda *_args, **_kwargs: Channel()
+    )
 
     def fail_save(path: Path, state: RunState) -> None:
         if after_commit:
@@ -127,7 +131,7 @@ def test_wrong_run_claim_does_not_write_or_send(
     before = state_path(tmp_path).read_bytes()
     monkeypatch.setattr(
         worker_tracking,
-        "build_channel",
+        "notification_channel",
         lambda *_args, **_kwargs: type("Channel", (), {"enabled": True})(),
     )
     assert not worker_tracking.notify_terminal_job_from_state(
@@ -156,7 +160,9 @@ def test_bounded_sends_recover_capacity_after_transport_and_start_failures(
             assert release.wait(30)
             raise RuntimeError("synthetic transport failure")
 
-    monkeypatch.setattr(worker_tracking, "build_channel", lambda *_args, **_kwargs: Channel())
+    monkeypatch.setattr(
+        worker_tracking, "notification_channel", lambda *_args, **_kwargs: Channel()
+    )
     roots = [tmp_path / str(i) for i in range(6)]
     for root in roots:
         root.mkdir()
@@ -207,7 +213,9 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
             assert release.wait(10)
             return SendResult(sent=True)
 
-    monkeypatch.setattr(worker_tracking, "build_channel", lambda *_args, **_kwargs: Channel())
+    monkeypatch.setattr(
+        worker_tracking, "notification_channel", lambda *_args, **_kwargs: Channel()
+    )
     monkeypatch.setattr(
         worker_tracking, "upsert_terminal_job_record", lambda *_args, **_kwargs: True
     )

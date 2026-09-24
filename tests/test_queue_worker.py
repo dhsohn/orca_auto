@@ -30,7 +30,6 @@ from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.engine import read_worker_pid
-from orca_auto.orca.queue import cancellation as cancellation_mod
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
@@ -397,7 +396,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(active_slot_count(self.root), 0)
 
     @patch(
-        "orca_auto.orca.queue.replay.update_slot_metadata",
+        "orca_auto.orca.queue.worker.update_slot_metadata",
         side_effect=RuntimeError("metadata store down"),
     )
     @patch("orca_auto.orca.queue.worker.start_background_process")
@@ -492,7 +491,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             admission_token=token or "",
         )
 
-        with self.assertLogs("orca_auto.orca.queue.replay", level="WARNING") as logs:
+        with self.assertLogs("orca_auto.orca.queue.worker", level="WARNING") as logs:
             self.worker._check_completed_jobs()
 
         self.assertEqual(len(self.worker._running), 0)
@@ -549,7 +548,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch.object(
-                replay_mod,
+                queue_worker_mod,
                 "recover_slot_engine_process",
                 side_effect=[RuntimeError("engine recovery failed"), True],
             ) as recover,
@@ -609,7 +608,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
 
         with (
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
                 replay_mod,
                 "record_failed_run_state",
@@ -714,7 +713,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return started
 
         with (
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
                 worker_tracking_mod,
                 "upsert_terminal_job_record",
@@ -884,13 +883,13 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 metadata={"reaction_dir": reaction_dir},
             )
 
-        self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, row(str(alias))))
-        self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, row("")))
+        self.assertTrue(self.worker._entry_waits_for_terminal_replay(row(str(alias))))
+        self.assertTrue(self.worker._entry_waits_for_terminal_replay(row("")))
         self.assertFalse(
-            replay_mod.entry_waits_for_terminal_replay(self.worker, row(str(self.root / "other")))
+            self.worker._entry_waits_for_terminal_replay(row(str(self.root / "other")))
         )
         state.admission_withheld_keys = frozenset()
-        self.assertFalse(replay_mod.entry_waits_for_terminal_replay(self.worker, row("")))
+        self.assertFalse(self.worker._entry_waits_for_terminal_replay(row("")))
 
     def test_row_whose_directory_cannot_be_resolved_is_withheld_while_any_is(self) -> None:
         state = self.worker.replay_state
@@ -905,9 +904,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
 
         with patch.object(replay_mod, "reaction_generation_key", side_effect=OSError("loop")):
-            self.assertTrue(replay_mod.entry_waits_for_terminal_replay(self.worker, candidate))
+            self.assertTrue(self.worker._entry_waits_for_terminal_replay(candidate))
             state.admission_withheld_keys = frozenset()
-            self.assertFalse(replay_mod.entry_waits_for_terminal_replay(self.worker, candidate))
+            self.assertFalse(self.worker._entry_waits_for_terminal_replay(candidate))
 
     def test_withheld_keys_follow_a_directory_retargeted_after_the_replay_item_was_built(
         self,
@@ -931,7 +930,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.worker.replay_state.pending_replays[item.key] = item
 
         self.assertEqual(
-            replay_mod.unresolved_terminal_reaction_keys(self.worker),
+            self.worker._unresolved_terminal_reaction_keys(),
             frozenset({str(self.root / "proj" / "job"), str(moved.resolve())}),
         )
 
@@ -1076,7 +1075,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             release_slot(self.root, current_token)
 
         with (
-            patch.object(replay_mod, "recover_slot_engine_process", side_effect=recover),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", side_effect=recover),
             patch.object(
                 replay_mod,
                 "mark_terminal_queue_entry",
@@ -1137,7 +1136,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch.object(
-                replay_mod,
+                queue_worker_mod,
                 "recover_slot_engine_process",
                 side_effect=lambda *_args: events.append("recover"),
             ),
@@ -1214,7 +1213,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         )
 
         with (
-            patch.object(replay_mod, "recover_slot_engine_process"),
+            patch.object(queue_worker_mod, "recover_slot_engine_process"),
             patch.object(replay_mod, "record_failed_run_state") as record_failed,
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
@@ -1225,7 +1224,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(list_queue(self.root), [closed])
         self.assertIsNone(closed.metadata.get("orca_terminal_replay"))
 
-    def test_finalize_child_exit_recovers_once_and_releases_on_benign_mark_noop(
+    def test_finalize_completed_job_recovers_once_and_releases_on_benign_mark_noop(
         self,
     ) -> None:
         result = TerminalQueueMarkResult(
@@ -1244,7 +1243,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             task_id="task-moved",
         )
         with (
-            patch.object(replay_mod, "recover_slot_engine_process") as recover,
+            patch.object(queue_worker_mod, "recover_slot_engine_process") as recover,
             patch.object(
                 replay_mod,
                 "mark_terminal_queue_entry",
@@ -1256,7 +1255,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             ) as side_effects,
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
-            replay_mod.finalize_child_exit(self.worker, job, rc=1)
+            self.worker._finalize_completed_job(job.queue_id, job, rc=1)
 
         recover.assert_called_once_with(self.worker.admission_root, job.admission_token)
         side_effects.assert_not_called()
@@ -1694,8 +1693,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(len(self.worker._running), 1)
 
     @patch(
-        "orca_auto.orca.queue.replay.mark_cancelled",
-        wraps=replay_mod.mark_cancelled,
+        "orca_auto.orca.queue.worker.mark_cancelled",
+        wraps=queue_worker_mod.mark_cancelled,
     )
     def test_check_cancel_requests(self, mock_mark_cancelled: MagicMock) -> None:
         rxn = self.root / "mol_cancel"
@@ -1719,7 +1718,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process.poll.return_value = 0
             return True
 
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate):
+        with patch("orca_auto.orca.queue.worker.terminate_process_group", side_effect=terminate):
             self.worker._check_cancel_requests()
         self.assertNotIn(entry.queue_id, self.worker._running)
         mock_mark_cancelled.assert_called_once()
@@ -1729,7 +1728,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(cancelled.status, QueueStatus.CANCELLED)
         self.assertIsNone(cancelled.metadata.get("orca_terminal_replay"))
 
-    @patch("orca_auto.orca.queue.replay.mark_cancelled", return_value=True)
+    @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
     def test_check_cancel_requests_retains_live_job_when_termination_fails(
         self,
         mock_mark_cancelled: MagicMock,
@@ -1749,13 +1748,13 @@ class TestQueueWorkerMethods(unittest.TestCase):
             admission_token="slot_cancel_live",
         )
 
-        with patch("orca_auto.orca.queue.replay.terminate_process", return_value=False):
+        with patch("orca_auto.orca.queue.worker.terminate_process_group", return_value=False):
             self.worker._check_cancel_requests()
 
         self.assertIn(entry.queue_id, self.worker._running)
         mock_mark_cancelled.assert_not_called()
 
-    @patch("orca_auto.orca.queue.replay.mark_cancelled", return_value=True)
+    @patch("orca_auto.orca.queue.worker.mark_cancelled", return_value=True)
     def test_check_cancel_requests_ignores_replacement_generation(
         self,
         mock_mark_cancelled: MagicMock,
@@ -1782,7 +1781,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             task_id="task-a",
         )
 
-        with patch("orca_auto.orca.queue.replay.terminate_process") as terminate:
+        with patch("orca_auto.orca.queue.worker.terminate_process_group") as terminate:
             self.worker._check_cancel_requests()
 
         terminate.assert_not_called()
@@ -1867,9 +1866,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
             release_slot(self.root, token_to_release)
 
         with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
+            patch.object(queue_worker_mod, "terminate_process_group", side_effect=terminate),
             patch.object(
-                replay_mod,
+                queue_worker_mod,
                 "recover_slot_engine_process",
                 side_effect=lambda *_args: events.append("recover"),
             ),
@@ -1884,13 +1883,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 side_effect=release,
             ),
         ):
-            self.assertTrue(
-                cancellation_mod.cancel_running_job(
-                    self.worker,
-                    entry.queue_id,
-                    job,
-                )
-            )
+            self.assertTrue(self.worker._cancel_running_job(entry.queue_id, job))
 
         self.assertEqual(events, ["terminate", "recover", "finalize", "release"])
         self.assertEqual(active_slot_count(self.root), 0)
@@ -1930,18 +1923,12 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return True
 
         with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
-            patch.object(replay_mod, "mark_cancelled", return_value=False),
+            patch.object(queue_worker_mod, "terminate_process_group", side_effect=terminate),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(queue_worker_mod, "mark_cancelled", return_value=False),
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
-            self.assertFalse(
-                cancellation_mod.cancel_running_job(
-                    self.worker,
-                    entry.queue_id,
-                    job,
-                )
-            )
+            self.assertFalse(self.worker._cancel_running_job(entry.queue_id, job))
 
         release.assert_not_called()
         self.assertEqual(active_slot_count(self.root), 1)
@@ -1979,8 +1966,11 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return True
 
         with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(queue_worker_mod, "terminate_process_group", side_effect=terminate),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            # Cancel marks from the worker; the completion retry marks through the
+            # replay engine's terminal mark. Both refuse here.
+            patch.object(queue_worker_mod, "mark_cancelled", return_value=False),
             patch.object(replay_mod, "mark_cancelled", return_value=False),
         ):
             self.worker._check_cancel_requests()
@@ -2027,7 +2017,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return False
 
         with (
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            # The completion path marks through the replay engine's terminal mark.
             patch.object(
                 replay_mod,
                 "mark_cancelled",
@@ -2074,7 +2065,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             admission_token=token or "",
             task_id=entry.task_id,
         )
-        real_mark_cancelled = replay_mod.mark_cancelled
+        real_mark_cancelled = queue_worker_mod.mark_cancelled
         mark_attempts = 0
 
         def terminate(current: MagicMock) -> bool:
@@ -2089,8 +2080,11 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return real_mark_cancelled(*args, **kwargs)
 
         with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(queue_worker_mod, "terminate_process_group", side_effect=terminate),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
+            # The cancel path marks from the worker; the completion retry marks
+            # through the replay engine's terminal mark. Both must see the flake.
+            patch.object(queue_worker_mod, "mark_cancelled", side_effect=flaky_mark_cancelled),
             patch.object(replay_mod, "mark_cancelled", side_effect=flaky_mark_cancelled),
             patch.object(worker_tracking_mod, "upsert_terminal_job_record", return_value=True),
             patch.object(worker_tracking_mod, "notify_terminal_job_from_state", return_value=False),
@@ -2155,8 +2149,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
             release_slot(self.root, current_token)
 
         with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(queue_worker_mod, "terminate_process_group", side_effect=terminate),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
                 replay_mod,
                 "record_cancelled_run_state",
@@ -2178,13 +2172,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 side_effect=release,
             ),
         ):
-            self.assertFalse(
-                cancellation_mod.cancel_running_job(
-                    self.worker,
-                    entry.queue_id,
-                    job,
-                )
-            )
+            self.assertFalse(self.worker._cancel_running_job(entry.queue_id, job))
             self.assertEqual(released, [])
             upsert.assert_not_called()
             notify.assert_not_called()
@@ -2239,8 +2227,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return True
 
         with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
-            patch.object(replay_mod, "recover_slot_engine_process", return_value=True),
+            patch.object(queue_worker_mod, "terminate_process_group", side_effect=terminate),
+            patch.object(queue_worker_mod, "recover_slot_engine_process", return_value=True),
             patch.object(
                 worker_tracking_mod,
                 "upsert_terminal_job_record",
@@ -2260,7 +2248,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             )
             successor = self._insert_pending_successor(rxn, queue_id="q_cancel_successor")
             self.assertEqual(
-                replay_mod.unresolved_terminal_reaction_keys(self.worker),
+                self.worker._unresolved_terminal_reaction_keys(),
                 frozenset({str(rxn.resolve())}),
             )
             self.assertEqual(self.worker._fill_slots(), "idle")
@@ -2273,7 +2261,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         self.assertEqual(active_slot_count(self.root), 0)
         replayed = next(row for row in list_queue(self.root) if row.queue_id == entry.queue_id)
         self.assertIsNone(replayed.metadata.get("orca_terminal_replay"))
-        self.assertEqual(replay_mod.unresolved_terminal_reaction_keys(self.worker), frozenset())
+        self.assertEqual(self.worker._unresolved_terminal_reaction_keys(), frozenset())
 
     def test_cancel_recovery_failure_retains_queue_slot_and_skips_mark(self) -> None:
         rxn = self.root / "mol_cancel_recovery_failure"
@@ -2306,22 +2294,16 @@ class TestQueueWorkerMethods(unittest.TestCase):
             return True
 
         with (
-            patch.object(replay_mod, "terminate_process", side_effect=terminate),
+            patch.object(queue_worker_mod, "terminate_process_group", side_effect=terminate),
             patch.object(
-                replay_mod,
+                queue_worker_mod,
                 "recover_slot_engine_process",
                 side_effect=RuntimeError("engine recovery failed"),
             ),
-            patch.object(replay_mod, "mark_cancelled") as mark_cancelled_entry,
+            patch.object(queue_worker_mod, "mark_cancelled") as mark_cancelled_entry,
             patch.object(self.worker, "_release_admission_slot") as release,
         ):
-            self.assertFalse(
-                cancellation_mod.cancel_running_job(
-                    self.worker,
-                    entry.queue_id,
-                    job,
-                )
-            )
+            self.assertFalse(self.worker._cancel_running_job(entry.queue_id, job))
 
         mark_cancelled_entry.assert_not_called()
         release.assert_not_called()
@@ -2349,7 +2331,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process=mock_proc,
             admission_token="slot_shutdown",
         )
-        with patch("orca_auto.orca.queue.replay.terminate_process", return_value=True):
+        with patch("orca_auto.orca.queue.worker.terminate_process_group", return_value=True):
             self.worker._shutdown_all()
         self.assertEqual(len(self.worker._running), 0)
         mock_requeue.assert_called_once()
@@ -2387,7 +2369,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch(
-                "orca_auto.orca.queue.replay.terminate_process",
+                "orca_auto.orca.queue.worker.terminate_process_group",
                 side_effect=terminate_process,
             ),
             patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
@@ -2439,7 +2421,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch(
-                "orca_auto.orca.queue.replay.terminate_process",
+                "orca_auto.orca.queue.worker.terminate_process_group",
                 side_effect=terminate_process,
             ),
             patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
@@ -2486,7 +2468,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch(
-                "orca_auto.orca.queue.replay.terminate_process",
+                "orca_auto.orca.queue.worker.terminate_process_group",
                 side_effect=terminate_process,
             ),
             patch("orca_auto.orca.queue.worker.requeue_running_entry") as mock_requeue,
@@ -2526,7 +2508,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
         released: list[str] = []
         with (
             patch(
-                "orca_auto.orca.queue.replay.terminate_process",
+                "orca_auto.orca.queue.worker.terminate_process_group",
                 side_effect=terminate_process,
             ),
             patch.object(self.worker, "_release_admission_slot", side_effect=released.append),
@@ -2589,11 +2571,12 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch(
-                "orca_auto.orca.queue.replay.terminate_process",
+                "orca_auto.orca.queue.worker.terminate_process_group",
                 side_effect=terminate_process,
             ),
-            patch(
-                "orca_auto.orca.queue.replay.finalize_completed_job",
+            patch.object(
+                self.worker,
+                "_finalize_completed_job",
                 side_effect=RuntimeError("finalize failed"),
             ),
             patch.object(self.worker, "_check_completed_jobs"),
@@ -2655,7 +2638,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
 
         with (
             patch(
-                "orca_auto.orca.queue.replay.terminate_process",
+                "orca_auto.orca.queue.worker.terminate_process_group",
                 side_effect=terminate_process,
             ),
             patch(
@@ -2704,7 +2687,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process.poll.return_value = 1
             return True
 
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
+        with patch(
+            "orca_auto.orca.queue.worker.terminate_process_group", side_effect=terminate_process
+        ):
             self.worker._shutdown_all()
 
         mock_requeue.assert_called_once()
@@ -2769,7 +2754,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 queue_worker_mod, "get_cancel_requested", side_effect=get_cancel_requested
             ),
             patch(
-                "orca_auto.orca.queue.replay.terminate_process",
+                "orca_auto.orca.queue.worker.terminate_process_group",
                 side_effect=terminate_process,
             ),
             patch(
@@ -2825,7 +2810,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process.poll.return_value = 1
             return True
 
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
+        with patch(
+            "orca_auto.orca.queue.worker.terminate_process_group", side_effect=terminate_process
+        ):
             self.worker._shutdown_all()
 
         mock_requeue.assert_not_called()
@@ -2874,7 +2861,7 @@ class TestQueueWorkerMethods(unittest.TestCase):
                 side_effect=RuntimeError("simulated queue read failure"),
             ),
             patch(
-                "orca_auto.orca.queue.replay.terminate_process",
+                "orca_auto.orca.queue.worker.terminate_process_group",
                 side_effect=terminate_process,
             ),
             patch.object(self.worker, "_release_admission_slot", side_effect=released.append),
@@ -2921,7 +2908,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process.poll.return_value = 0
             return True
 
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
+        with patch(
+            "orca_auto.orca.queue.worker.terminate_process_group", side_effect=terminate_process
+        ):
             self.worker._shutdown_all()
 
         mock_requeue.assert_called_once()
@@ -2951,7 +2940,9 @@ class TestQueueWorkerMethods(unittest.TestCase):
             process.poll.return_value = -15
             return True
 
-        with patch("orca_auto.orca.queue.replay.terminate_process", side_effect=terminate_process):
+        with patch(
+            "orca_auto.orca.queue.worker.terminate_process_group", side_effect=terminate_process
+        ):
             self.worker._shutdown_all()
 
         mock_requeue.assert_called_once()

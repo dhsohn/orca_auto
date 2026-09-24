@@ -693,3 +693,37 @@ def test_cancellation_waits_for_publication_boundary(
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.status == QueueStatus.CANCELLED
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
+
+
+def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.orca.queue.orphans import DeadRunningRowUnjudgeableError
+
+    context = SimpleNamespace(
+        cfg=None,
+        allowed_root=tmp_path,
+        reaction_dir=tmp_path / "job",
+        selected_inp=None,
+    )
+    message = (
+        f"{tmp_path / 'job'} has a RUNNING queue row left by a dead worker, and whether a "
+        f"live slot still protects it cannot be judged: Admission slot file is not valid JSON: "
+        f"{tmp_path / 'admission_slots.json'}. Repair or remove "
+        f"{tmp_path / 'admission_slots.json'} before resubmitting."
+    )
+
+    def raise_unjudgeable(*_args: Any, **_kwargs: Any) -> Any:
+        raise DeadRunningRowUnjudgeableError(message)
+
+    monkeypatch.setattr(
+        submission_mod, "resolve_submission_context", lambda *_args, **_kwargs: context
+    )
+    monkeypatch.setattr(submission_mod, "find_submission_conflict", lambda *_args: None)
+    monkeypatch.setattr(submission_mod, "create_queued_submission", raise_unjudgeable)
+
+    result = submission_mod.submit_reaction_dir_to_queue(SimpleNamespace())
+
+    assert result.status == "failed"
+    assert result.reason == "submission_conflict"
+    assert result.stderr == message

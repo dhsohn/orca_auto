@@ -8,7 +8,7 @@ import pytest
 
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry
-from orca_auto.orca.queue import cancellation, replay, worker_runtime
+from orca_auto.orca.queue import worker as worker_mod
 from orca_auto.orca.queue.models import OrcaRunningJob
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from tests.process_helpers import FakeManagedProcess
@@ -66,12 +66,12 @@ def test_cancel_requests_discard_only_successfully_cancelled_jobs(
         checks.append((root, tasks))
         return {"1"}
 
-    def cancel(_worker: OrcaQueueWorker, qid: str, _job: OrcaRunningJob) -> bool:
+    def cancel(qid: str, _job: OrcaRunningJob) -> bool:
         cancelled.append(qid)
         return True
 
-    monkeypatch.setattr(worker_runtime, "cancel_requested_ids", requested)
-    monkeypatch.setattr(cancellation, "cancel_running_job", cancel)
+    monkeypatch.setattr(worker_mod, "cancel_requested_ids", requested)
+    monkeypatch.setattr(worker, "_cancel_running_job", cancel)
     worker._check_cancel_requests()
     assert cancelled == ["1"]
     assert list(worker._running) == ["2"]
@@ -84,7 +84,7 @@ def test_cancel_requests_never_signal_retained_completed_child(
     worker = _worker(tmp_path)
     worker._running = {"1": _job(tmp_path, "1", exited=True)}
     monkeypatch.setattr(
-        worker_runtime,
+        worker_mod,
         "cancel_requested_ids",
         lambda *_args: pytest.fail("completed child must not be considered for cancellation"),
     )
@@ -106,12 +106,12 @@ def test_busy_root_does_not_delay_cancellation_at_another_root(
             raise QueueLockTimeoutError("busy")
         return {"2", "3"}
 
-    def cancel(_worker: OrcaQueueWorker, qid: str, _job: OrcaRunningJob) -> bool:
+    def cancel(qid: str, _job: OrcaRunningJob) -> bool:
         cancelled.append(qid)
         return qid == "2"
 
-    monkeypatch.setattr(worker_runtime, "cancel_requested_ids", requested)
-    monkeypatch.setattr(cancellation, "cancel_running_job", cancel)
+    monkeypatch.setattr(worker_mod, "cancel_requested_ids", requested)
+    monkeypatch.setattr(worker, "_cancel_running_job", cancel)
     worker._check_cancel_requests()
     assert checks == [tmp_path / "0", tmp_path / "1"]
     assert cancelled == ["2", "3"]
@@ -143,7 +143,7 @@ def test_injected_process_and_sleep_are_used_by_worker(
         "config.yaml",
         deps=replace(seed.deps, sleep=sleeps.append, start_background_job_process=start),
     )
-    monkeypatch.setattr(replay, "on_worker_process_started", lambda *_args: True)
+    monkeypatch.setattr(worker, "_on_worker_process_started", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(worker, "_reconcile_worker_state", lambda: None)
     entry = QueueEntry(
         "q",
@@ -173,7 +173,7 @@ def test_running_identity_prevents_reclaiming_normalized_queue_id(
     worker = _worker(tmp_path)
     process = FakeManagedProcess()
     worker.deps = replace(worker.deps, start_background_job_process=lambda **_kwargs: process)
-    monkeypatch.setattr(replay, "on_worker_process_started", lambda *_args: True)
+    monkeypatch.setattr(worker, "_on_worker_process_started", lambda *_args, **_kwargs: True)
     entry = QueueEntry(
         " queue-1 ",
         "orca_auto_orca",

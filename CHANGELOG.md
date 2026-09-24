@@ -44,6 +44,15 @@ and [RUNTIME](docs/RUNTIME.md).
   written; existing `admission_slots.json` rows that contain it still load,
   while 7.0.x readers reject rows written without it (roll back only with an
   empty slot file, see RELEASE).
+- `core.messaging.registry`, the `MessengerConfig.provider` and
+  `normalized_provider` attributes and `SUPPORTED_MESSENGER_PROVIDERS` (YAML
+  `messenger.provider: discord` is still accepted and any other value is still
+  rejected), `core/activity_icons.py`, the `activity_view` helpers
+  `filter_activity_items`, `count_active_simulations`,
+  `count_global_active_simulations` and `activity_counter_config_path`, and
+  `orca.queue.cancellation` / `orca.queue.worker_runtime` (folded into
+  `OrcaQueueWorker`). Unused richtext `Line`, `Group.heading` and bold spans
+  are gone.
 
 ### Changed
 
@@ -77,6 +86,45 @@ and [RUNTIME](docs/RUNTIME.md).
 - `OrcaRuntimeConfig` is frozen; the queue worker derives its effective
   concurrency with `dataclasses.replace`. Optimization-convergence reads share
   the output line iterator instead of `str.splitlines()`.
+- `OrcaQueueWorker` (`orca/queue/worker.py`) owns admission-slot attach,
+  terminal marking, cancellation, shutdown and orphan reconciliation as
+  methods; `queue/replay.py` is only the replay engine (work items, strict
+  finish, reconcile pipeline, generation owners) and takes its state
+  explicitly; `queue/run_state_replay.py` synthesizes terminal
+  `job_state.json` under `run.lock`; `publication_repair.repair_queue_publications(cfg)`
+  is the publication-repair entry point.
+- RUNNING-row reconciliation is worker-owned: a submission no longer sweeps
+  every RUNNING row; it recovers only its own directory's dead row
+  (`orphans.reconcile_dead_running_rows_for_dir`) when no worker pid is live,
+  under the worker's admission-slot protection predicate; the admission file is
+  read only when such a row exists, and an unreadable one fails that submission
+  with a message naming `admission_slots.json`.
+- `queue list --refresh` persists its discoveries through the same rebuild as
+  `index rebuild`; a run whose state names neither a job id nor a run id cannot
+  be indexed. The SQLite projection keys location rows by job id
+  (`SCHEMA_VERSION` 2; an older projection is dropped and rebuilt). Listing
+  filters and pages once, with the indexed path bounded per status; `--limit 0`
+  stays unbounded.
+- Messaging: `build_channel(messenger)` returns `DiscordBotChannel` when the bot
+  token and channel id are set, else a null `DisabledChannel`;
+  `orca.notifications.notification_channel(cfg)` is the one resolver. An
+  unsupported `messenger.provider` is reported as `expected discord`; Discord
+  embeds carry fields only (no `description`). The status icon map lives in
+  `activity_labels.py`.
+- `core/utils/stable_fs.py` is the one fd-pinned directory/file primitive set
+  used by `core/engine_scratch.py` and `core/queue/engine/input_snapshot.py`
+  (the stricter identity rule of each former copy is kept); a scratch entry
+  that disappears or turns into a symlink between listing and opening is
+  reported as `EngineScratchError` instead of a raw `OSError`.
+  `orca/execution_binding.py` became the package `orca/execution_binding/`
+  with the same public names.
+- `make check` runs `scripts/check_docs_parity.py`, which requires each
+  `X.md`/`X.ko.md` pair to keep the same heading levels, tables and row counts,
+  fenced code blocks (comments may differ) and relative links.
+- `validate_unambiguous_orca_directives` uses the shared block primitive;
+  tokens after an inline `end` are no longer counted as `%pal` content.
+- `cli.main` removes the managed root log handler when a command returns, so an
+  in-process caller's next command never writes to a closed stream.
 
 ### Fixed
 
@@ -98,6 +146,16 @@ and [RUNTIME](docs/RUNTIME.md).
   removes `stale`, `unverifiable` or `invalid-manifest` workspaces through the
   worker's own removal path. Live workspaces are refused; the command exits 1
   when nothing was removed or any target was refused.
+- `orca_auto index rebuild [--config PATH] [--dry-run] [--json]` re-derives
+  `job_locations.json` rows from every `job_state.json` under `runs_root`
+  (`report.json` outranks the state for identity), adding or updating rows by
+  job id and never removing one; a job id found in several directories keeps
+  the directory the row already points at, never turns a finished row back into
+  a running one, and is reported as a `conflict:`. It exits 0 also when nothing changes and 1 on
+  an unconfigured or damaged config, a missing `runs_root`, a corrupt index or
+  an OS error; `--json` reports `index_path`, `scanned`, `total`,
+  `added_count`, `updated_count`, `unchanged_count`, `skipped_count`, `applied`
+  and the `added`, `updated` and `skipped` rows.
 
 ## [7.0.1] - 2026-09-24
 

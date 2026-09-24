@@ -10,7 +10,8 @@ import pytest
 
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
-from orca_auto.orca.queue import cancellation, replay
+from orca_auto.orca.queue import replay, worker_tracking
+from orca_auto.orca.queue import worker as worker_mod
 from orca_auto.orca.queue.models import OrcaRunningJob
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from tests.process_helpers import FakeManagedProcess
@@ -55,8 +56,8 @@ def test_attach_preserves_admission_identity_and_work_dir(
     entry = replace(_entry(tmp_path), metadata={metadata_key: " /chosen/path "})
     attach = Mock(return_value=True)
     upsert = Mock()
-    monkeypatch.setattr(replay, "update_slot_metadata", attach)
-    monkeypatch.setattr(replay.worker_tracking, "upsert_running_job_record", upsert)
+    monkeypatch.setattr(worker_mod, "update_slot_metadata", attach)
+    monkeypatch.setattr(worker_tracking, "upsert_running_job_record", upsert)
     assert worker._on_worker_process_started(
         tmp_path,
         entry,
@@ -84,15 +85,15 @@ def test_rejected_attach_stops_child_then_marks_selected_generation_then_release
     entry = _entry(tmp_path)
     process = FakeManagedProcess()
     events: list[str] = []
-    monkeypatch.setattr(replay, "update_slot_metadata", Mock(return_value=False))
+    monkeypatch.setattr(worker_mod, "update_slot_metadata", Mock(return_value=False))
     monkeypatch.setattr(
-        replay, "terminate_process", Mock(side_effect=lambda _proc: events.append("stop"))
+        worker_mod, "terminate_process_group", Mock(side_effect=lambda _proc: events.append("stop"))
     )
     mark = Mock(side_effect=lambda *_args, **_kwargs: events.append("mark"))
-    monkeypatch.setattr(replay, "mark_failed", mark)
+    monkeypatch.setattr(worker_mod, "mark_failed", mark)
     monkeypatch.setattr(worker, "_release_admission_slot", lambda _token: events.append("release"))
     upsert = Mock()
-    monkeypatch.setattr(replay.worker_tracking, "upsert_running_job_record", upsert)
+    monkeypatch.setattr(worker_tracking, "upsert_running_job_record", upsert)
     assert not worker._on_worker_process_started(
         tmp_path,
         entry,
@@ -114,9 +115,9 @@ def test_running_record_failure_does_not_untrack_started_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     worker = _worker(tmp_path)
-    monkeypatch.setattr(replay, "update_slot_metadata", Mock(return_value=True))
+    monkeypatch.setattr(worker_mod, "update_slot_metadata", Mock(return_value=True))
     monkeypatch.setattr(
-        replay.worker_tracking,
+        worker_tracking,
         "upsert_running_job_record",
         Mock(side_effect=OSError("record unavailable")),
     )
@@ -221,15 +222,15 @@ def test_cancel_failure_retains_slot_and_retry_owner(
     if failure == "surviving":
         job.process = FakeManagedProcess(poll_result=None)
     monkeypatch.setattr(
-        replay,
-        "terminate_process",
+        worker_mod,
+        "terminate_process_group",
         Mock(
             return_value=True,
             side_effect=OSError("stop failed") if failure == "terminate" else None,
         ),
     )
     monkeypatch.setattr(
-        replay,
+        worker_mod,
         "recover_slot_engine_process",
         Mock(
             side_effect=OSError("recover failed") if failure == "recover" else None,
@@ -237,10 +238,10 @@ def test_cancel_failure_retains_slot_and_retry_owner(
     )
     monkeypatch.setattr(replay, "queue_entry_by_id", Mock(return_value=_entry(tmp_path)))
     mark = Mock(side_effect=OSError("mark failed"))
-    monkeypatch.setattr(replay, "mark_cancelled", mark)
+    monkeypatch.setattr(worker_mod, "mark_cancelled", mark)
     release = Mock()
     monkeypatch.setattr(worker, "_release_admission_slot", release)
-    assert not cancellation.cancel_running_job(worker, "queue-1", job)
+    assert not worker._cancel_running_job("queue-1", job)
     release.assert_not_called()
     if failure in {"terminate", "surviving", "recover"}:
         mark.assert_not_called()
@@ -270,7 +271,7 @@ def test_reconciliation_keeps_scoped_and_legacy_live_slot_protection(
     monkeypatch.setattr(replay, "queue_roots", lambda _cfg: (root,))
     reconcile = Mock(side_effect=lambda *_args, **_kwargs: events.append("orphans"))
     monkeypatch.setattr(replay, "reconcile_orphaned_running_entries", reconcile)
-    replay.reconcile_worker_state(worker)
+    worker._reconcile_worker_state()
     assert events == ["recover", "stale", "orphans"]
     reconcile.assert_called_once_with(
         root,

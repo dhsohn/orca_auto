@@ -38,7 +38,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 ```
 - `--status STATUS`: Filter by state (`pending`, `running`, `completed`, `failed`, `cancelled`).
 - `--limit N`: Limit the number of returned entries.
-- `--refresh`: Scan the filesystem for unindexed calculation directories.
+- `--refresh`: Scan the filesystem for unindexed calculation directories and record them in `job_locations.json` (the same rebuild as `index rebuild`).
 - `--json`: Structured JSON output for downstream automation and tooling.
 
 ---
@@ -58,6 +58,19 @@ Cleans up terminal entries (`completed`, `failed`, `cancelled`) from the queue v
 orca_auto queue list clear [--config PATH] [--json]
 ```
 > **Note**: Clears terminal queue records and unlinks job-root terminal `job_state.json` metadata (resetting the duplicate submission barrier so subsequent submissions do not require `--force`). All generation subdirectories, calculation artifacts, and output files remain untouched on disk.
+
+---
+
+### `orca_auto index rebuild`
+Re-derives `job_locations.json` from the run states on disk; `index prune` owns removal.
+```bash
+orca_auto index rebuild [--config PATH] [--dry-run] [--json]
+```
+- Walks every `job_state.json` under `runs_root` (`report.json` outranks the state for identity) and adds or updates rows by job id; rows are never removed. A state that names neither a job id nor a run id is reported as skipped.
+- A job id found in several directories is never chosen silently: the row keeps the directory it already points at while that directory still holds the job's state, a finished (`completed`/`failed`/`cancelled`) row is never turned back into a running one, and otherwise a terminal state beats a non-terminal one, then the newest `job_state.json`. Each such case is printed as a `conflict:` line naming the kept and ignored directories.
+- `--dry-run`: Report the rows that would be added or updated without writing the index.
+- `--json`: Emits `index_path`, `scanned`, `total`, `added_count`, `updated_count`, `unchanged_count`, `skipped_count`, `applied`, the `added`, `updated` and `skipped` lists and the `conflicts` list (`job_id`, `kept_path`, `ignored_paths`).
+- Exit code is 0 also when nothing changes; 1 when `runs_root` is unconfigured, the config is damaged, `runs_root` is missing, the index is corrupt or an OS error occurs (nothing is written).
 
 ---
 

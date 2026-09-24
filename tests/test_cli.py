@@ -818,3 +818,28 @@ class TestCli(unittest.TestCase):
         self.assertEqual(rc, 1)
         # Error should go to stderr (via logger.error), not stdout
         self.assertNotIn("allowed root", captured_stdout.getvalue())
+
+
+def test_main_removes_the_managed_log_handler_after_a_command(tmp_path, monkeypatch) -> None:
+    import logging
+
+    from orca_auto import cli as unified_cli
+    from orca_auto.orca.cli_logging import configure_logging
+
+    root = logging.getLogger()
+    before = list(root.handlers)
+
+    def command(args):
+        configure_logging(args)
+        assert len(root.handlers) == len(before) + 1
+        return 0
+
+    parser = unified_cli.build_parser()
+    monkeypatch.setattr(
+        parser,
+        "parse_args",
+        lambda argv: __import__("argparse").Namespace(func=command, verbose=False, log_file=None),
+    )
+    monkeypatch.setattr(unified_cli, "build_parser", lambda: parser)
+    assert unified_cli.main(["queue", "list"]) == 0
+    assert root.handlers == before

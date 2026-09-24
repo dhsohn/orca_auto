@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from orca_auto.activity._orca import orca_records
-from orca_auto.activity._orca_index import query_records
+from orca_auto.activity._orca_index import query_listing
 from orca_auto.core.activity import ActivityListRequest, ActivitySourceRequest
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.orca.config import load_config
@@ -81,7 +81,11 @@ def test_activity_borrows_state_only_from_its_queue_generation(
         write_state(job_dir, state)
 
     rows = (
-        query_records(runs_root, ActivityListRequest(ActivitySourceRequest(), indexed=True))
+        list(
+            query_listing(
+                runs_root, ActivityListRequest(ActivitySourceRequest(), indexed=True)
+            ).records
+        )
         if indexed
         else orca_records(config_path=str(config_path))
     )

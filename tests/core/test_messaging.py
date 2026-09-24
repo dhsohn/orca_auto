@@ -13,15 +13,14 @@ from orca_auto.core.config import (
     messenger_config_from_mapping,
 )
 from orca_auto.core.messaging import (
+    DisabledChannel,
     DiscordBotChannel,
     Message,
     Severity,
-    Span,
     build_channel,
     code,
     field_row,
     group,
-    line,
     raw,
     render_discord_embed,
     text,
@@ -71,16 +70,6 @@ def test_render_discord_embed_maps_fields() -> None:
     assert "author" not in embed
 
 
-def test_render_discord_embed_routes_lines_and_headings_to_description() -> None:
-    message = Message(
-        title="T",
-        groups=(group(line(raw("hello "), code("world")), heading=(Span("Section", "bold"),)),),
-    )
-    embed = render_discord_embed(message)
-    assert embed["description"] == "**Section**\nhello `world`"
-    assert "fields" not in embed
-
-
 def test_render_discord_embed_escapes_markdown_and_embedded_backticks() -> None:
     message = Message(
         title="*literal*",
@@ -102,21 +91,14 @@ def test_render_discord_embed_escapes_markdown_and_embedded_backticks() -> None:
 def test_render_discord_embed_enforces_aggregate_budget_and_marks_omissions() -> None:
     message = Message(
         title="T" * 256,
-        groups=(
-            group(
-                line(text("D" * 5000)),
-                *(field_row(f"field-{index}", text("V" * 1024)) for index in range(25)),
-            ),
-        ),
+        groups=(group(*(field_row(f"field-{index}", text("V" * 1024)) for index in range(25))),),
     )
     embed = render_discord_embed(message)
-    total = (
-        len(embed["title"])
-        + len(embed.get("description", ""))
-        + sum(len(item["name"]) + len(item["value"]) for item in embed.get("fields", []))
+    total = len(embed["title"]) + sum(
+        len(item["name"]) + len(item["value"]) for item in embed.get("fields", [])
     )
     assert total <= 6000
-    assert len(embed["description"]) <= 4096
+    assert "description" not in embed
     assert len(embed["fields"]) <= 25
     assert embed["fields"][-1] == {"name": "More", "value": "…", "inline": False}
 
@@ -153,18 +135,32 @@ def test_render_discord_embed_marks_inline_fields() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Registry / config
+# Channel resolution / config
 # --------------------------------------------------------------------------- #
-def test_build_channel_selects_provider() -> None:
+def test_build_channel_returns_discord_bot_when_config_complete() -> None:
     discord = build_channel(
-        MessengerConfig(
-            provider="discord",
-            discord=DiscordConfig(bot_token="token", default_channel_id="123"),
-        )
+        MessengerConfig(discord=DiscordConfig(bot_token="token", default_channel_id="123"))
     )
     assert isinstance(discord, DiscordBotChannel)
-    with pytest.raises(ValueError, match="Unsupported messenger provider"):
-        build_channel(MessengerConfig(provider="bogus"))
+    assert discord.enabled
+
+
+@pytest.mark.parametrize(
+    "messenger",
+    [
+        MessengerConfig(),
+        MessengerConfig(discord=DiscordConfig(bot_token="token")),
+        MessengerConfig(discord=DiscordConfig(default_channel_id="123")),
+    ],
+)
+def test_build_channel_returns_null_channel_when_config_incomplete(
+    messenger: MessengerConfig,
+) -> None:
+    channel = build_channel(messenger)
+    assert isinstance(channel, DisabledChannel)
+    assert not channel.enabled
+    result = channel.send(Message(title="T"))
+    assert (result.sent, result.skipped, result.error) == (False, True, "messenger_disabled")
 
 
 def test_messenger_config_from_mapping() -> None:
@@ -174,16 +170,18 @@ def test_messenger_config_from_mapping() -> None:
             "discord": {"bot_token": "token", "default_channel_id": "123"},
         }
     )
-    assert cfg.normalized_provider == "discord"
     assert cfg.discord.bot_token == "token"
     assert cfg.discord.bot_notification_enabled
+    assert cfg.enabled
 
     empty = messenger_config_from_mapping(None)
-    assert empty.normalized_provider == "discord"
     assert not empty.discord.bot_notification_enabled
+    assert not empty.enabled
 
     with pytest.raises(ValueError, match="messenger.provider"):
         messenger_config_from_mapping({"provider": "disocrd"})
+    with pytest.raises(ValueError, match="messenger.provider"):
+        messenger_config_from_mapping({"provider": ""})
 
 
 @pytest.mark.parametrize(

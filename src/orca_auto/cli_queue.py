@@ -11,15 +11,10 @@ from typing import Any
 from orca_auto import activity_labels, terminal_table
 from orca_auto import activity_rendering as _activity_rendering
 from orca_auto.activity import cancel_activity, clear_activities, list_activities
-from orca_auto.activity_view import (
-    activity_counter_config_path,
-    count_global_active_simulations,
-    filter_activity_items,
-    normalize_activity_filter_values,
-)
+from orca_auto.activity_labels import activity_status_icon
+from orca_auto.activity_view import normalize_activity_filter_values
 from orca_auto.core import statuses as _s
 from orca_auto.core import terminal
-from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.activity_index import ActivityIndexError
 from orca_auto.core.config import discovery
 from orca_auto.core.config.discovery import (
@@ -46,18 +41,6 @@ class _QueueListRequest:
     limit: int
     status_values: tuple[str, ...]
     json_output: bool
-
-
-def _activity_counter_config_path(
-    *,
-    payload: dict[str, Any],
-    config_hint: str | None,
-) -> str | None:
-    return activity_counter_config_path(
-        payload,
-        config_hints=(config_hint,),
-        prefer_hints=True,
-    )
 
 
 def _stdout_isatty() -> bool:
@@ -267,6 +250,8 @@ def _missing_runs_root(args: Any, request: _QueueListRequest) -> str | None:
 
 
 def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
+    # ``list_activities`` owns the status filter and the page; its payload is
+    # rendered as is, so the count, rows and summaries can never disagree.
     return list_activities(
         limit=request.limit,
         statuses=request.status_values,
@@ -275,64 +260,12 @@ def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]
     )
 
 
-def _filtered_queue_payload(
-    payload: dict[str, Any],
-    request: _QueueListRequest,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    activities = filter_activity_items(
-        payload.get("activities", []),
-        statuses=request.status_values,
-    )
-    limited_activities = activities[: request.limit] if request.limit > 0 else list(activities)
-    if "active_simulations" in payload:
-        active_simulations = int(payload["active_simulations"])
-    else:
-        active_simulations = count_global_active_simulations(
-            payload.get("activities", []),
-            config_path=_activity_counter_config_path(
-                payload=payload, config_hint=request.shared_config
-            ),
-        )
-    blockers = []
-    for item in payload.get("activities", []):
-        metadata = item.get("metadata", {})
-        reason = normalize_text(metadata.get("publication_blocked_reason"))
-        if reason:
-            blockers.append(
-                {
-                    "queue_id": metadata.get("queue_id", item.get("activity_id", "")),
-                    "allowed_root": metadata.get("allowed_root", ""),
-                    "scope": metadata.get("publication_blocked_scope", ""),
-                    "reason": reason,
-                    "next_action": metadata.get("publication_blocked_action", ""),
-                }
-            )
-    if "admission_blockers" in payload:
-        blockers = list(payload["admission_blockers"])
-    return {
-        "count": len(limited_activities),
-        "active_simulations": active_simulations,
-        "activities": [dict(item) for item in limited_activities],
-        "sources": dict(payload.get("sources", {})),
-        **({"admission_blockers": blockers} if blockers else {}),
-    }, activities
-
-
-def _print_queue_list_text(
-    *,
-    payload: dict[str, Any],
-    filtered_payload: dict[str, Any],
-    filtered_activities: Sequence[dict[str, Any]],
-    request: _QueueListRequest,
-) -> int:
+def _print_queue_list_text(*, payload: dict[str, Any]) -> int:
     tty = _layout_interactive()
     term_width = terminal_table.terminal_max_width()
     rail_width = terminal_table.display_width(_QUEUE_RAIL)
-    display_items = list(filtered_activities)
-    if request.limit > 0:
-        display_items = display_items[: request.limit]
-    display_rows = [(0, item) for item in display_items]
-    active_simulations = filtered_payload["active_simulations"]
+    display_rows = [(0, item) for item in payload.get("activities", [])]
+    active_simulations = int(payload.get("active_simulations", 0))
     lines = _queue_list_text_lines(
         display_rows,
         active_simulations=active_simulations,
@@ -353,7 +286,7 @@ def _print_queue_list_text(
         print(lines[0])
 
     blocker_lines = _activity_rendering.queue_admission_blocker_lines(
-        filtered_payload.get("admission_blockers", [])
+        payload.get("admission_blockers", [])
     )
     if not display_rows:
         print(lines[1])
@@ -406,21 +339,11 @@ def _print_queue_list_text(
     return 0
 
 
-def _emit_queue_list_once(
-    payload: dict[str, Any],
-    filtered_payload: dict[str, Any],
-    filtered_activities: Sequence[dict[str, Any]],
-    request: _QueueListRequest,
-) -> int:
+def _emit_queue_list_once(payload: dict[str, Any], request: _QueueListRequest) -> int:
     if request.json_output:
-        print(json.dumps(filtered_payload, ensure_ascii=True, indent=2))
+        print(json.dumps(payload, ensure_ascii=True, indent=2))
         return 0
-    return _print_queue_list_text(
-        payload=payload,
-        filtered_payload=filtered_payload,
-        filtered_activities=filtered_activities,
-        request=request,
-    )
+    return _print_queue_list_text(payload=payload)
 
 
 def cmd_queue_list(args: Any) -> int:
@@ -459,7 +382,6 @@ def cmd_queue_list(args: Any) -> int:
         return 1
     try:
         payload = _queue_list_payload(args, request)
-        filtered_payload, filtered_activities = _filtered_queue_payload(payload, request)
     except _QUEUE_STATE_ERRORS as exc:
         emit_error(
             exc,
@@ -467,12 +389,7 @@ def cmd_queue_list(args: Any) -> int:
         )
         return 1
     try:
-        return _emit_queue_list_once(
-            payload,
-            filtered_payload,
-            filtered_activities,
-            request,
-        )
+        return _emit_queue_list_once(payload, request)
     except BrokenPipeError:
         return 0
 
