@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.cli_systemd_units import _run_command
+from orca_auto.cli_systemd_units import run_command
 from orca_auto.core.terminal import emit_error
 from orca_auto.systemd_plan import (
     DEFAULT_SYSTEMD_UNIT_DIR,
@@ -28,7 +28,7 @@ def _write_unit_files(
     run: Callable[..., subprocess.CompletedProcess[Any]],
 ) -> int:
     if plan.use_sudo:
-        rc = _run_command(("mkdir", "-p", str(plan.unit_dir)), use_sudo=True, run=run)
+        rc = run_command(("mkdir", "-p", str(plan.unit_dir)), use_sudo=True, run=run)
         if rc != 0:
             return rc
         with tempfile.TemporaryDirectory(prefix="orca_auto-systemd-") as staging_text:
@@ -37,7 +37,7 @@ def _write_unit_files(
                 staged = staging / unit.name
                 staged.write_text(unit.content, encoding="utf-8")
                 staged.chmod(0o644)
-                rc = _run_command(
+                rc = run_command(
                     ("install", "-m", "0644", str(staged), str(unit.destination)),
                     use_sudo=True,
                     run=run,
@@ -81,7 +81,7 @@ def apply_systemd_install_plan(
 
     for command in plan.commands:
         try:
-            rc = _run_command(command, use_sudo=plan.use_sudo, run=run)
+            rc = run_command(command, use_sudo=plan.use_sudo, run=run)
         except OSError as exc:
             emit_error(
                 "systemd install command failed after unit files were updated: "

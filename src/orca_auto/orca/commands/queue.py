@@ -1,4 +1,4 @@
-"""CLI commands for the queue subsystem."""
+"""Parent queue worker entry point: ``python -m orca_auto.orca.commands.queue --config X``."""
 
 from __future__ import annotations
 
@@ -6,20 +6,19 @@ import argparse
 import logging
 from pathlib import Path
 
-from orca_auto.core.engines.queue_worker import build_engine_queue_worker_parser
-
 from ..config import load_config
 from ..engine import read_worker_pid
 from ..queue.worker import OrcaQueueWorker
 
 logger = logging.getLogger(__name__)
 
-
-# -- Subcommands ----------------------------------------------------------
+QUEUE_WORKER_MODULE = "orca_auto.orca.commands.queue"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    return build_engine_queue_worker_parser("python -m orca_auto.orca.commands.queue")
+    parser = argparse.ArgumentParser(prog=f"python -m {QUEUE_WORKER_MODULE}")
+    parser.add_argument("--config", required=True)
+    return parser
 
 
 def cmd_queue_worker(args: argparse.Namespace) -> int:
@@ -42,6 +41,9 @@ def cmd_queue_worker(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     return cmd_queue_worker(build_parser().parse_args(argv))
+
+
+__all__ = ["QUEUE_WORKER_MODULE", "build_parser", "cmd_queue_worker", "main"]
 
 
 if __name__ == "__main__":

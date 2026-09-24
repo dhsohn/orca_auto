@@ -281,17 +281,3 @@ def read_live_pid_file(
         remove_file_fn(pid_path)
         return None
     return pid
-
-
-def memory_limit_preexec(
-    max_memory_gb: int,
-    *,
-    setrlimit_fn: Callable[[int, tuple[int, int]], object],
-    limit_resource: int,
-) -> Callable[[], None]:
-    limit_bytes = max(1, int(max_memory_gb)) * 1024 * 1024 * 1024
-
-    def apply_limit() -> None:
-        setrlimit_fn(limit_resource, (limit_bytes, limit_bytes))
-
-    return apply_limit

@@ -9,6 +9,8 @@ from typing import Any, TypeVar
 from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue import store as _core_queue
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.statuses import ACTIVE_STATUSES as ACTIVE_STATUSES
+from orca_auto.core.statuses import TERMINAL_STATUSES as TERMINAL_STATUSES
 from orca_auto.core.utils import normalize_bool as _shared_normalize_bool
 from orca_auto.core.utils import normalize_text as _shared_normalize_text
 
@@ -18,20 +20,6 @@ WORKER_PID_FILE_NAME = "queue_worker.pid"
 QUEUE_APP_NAME = ORCA_AUTO_ORCA_APP_NAME
 QUEUE_ENGINE = "orca"
 QUEUE_TASK_KIND = "orca_run_inp"
-
-TERMINAL_STATUSES = frozenset(
-    {
-        QueueStatus.COMPLETED.value,
-        QueueStatus.FAILED.value,
-        QueueStatus.CANCELLED.value,
-    }
-)
-ACTIVE_STATUSES = frozenset(
-    {
-        QueueStatus.PENDING.value,
-        QueueStatus.RUNNING.value,
-    }
-)
 
 _QueueEntryT = TypeVar("_QueueEntryT", bound=QueueEntry)
 

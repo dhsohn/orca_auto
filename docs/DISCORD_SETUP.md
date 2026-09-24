@@ -22,7 +22,7 @@ In Discord, enable **User Settings → Advanced → Developer Mode**, right-clic
 
 ## 3. Configure ORCA_auto
 
-Edit `config/orca_auto.yaml`:
+Edit `~/orca_auto/config/orca_auto.yaml` (or the file passed with `--config` / `ORCA_AUTO_CONFIG`):
 
 ```yaml
 messenger:
@@ -38,7 +38,7 @@ messenger:
 Restrict file permissions for safety:
 
 ```bash
-chmod 600 config/orca_auto.yaml
+chmod 600 ~/orca_auto/config/orca_auto.yaml
 ```
 
 You can also configure this interactively by running `orca_auto init`.
@@ -63,4 +63,4 @@ A notification card will be sent when the job is queued, followed by a summary c
 ## Troubleshooting
 
 - **No notifications received:** Ensure the bot is added to your server and has `Send Messages` and `Embed Links` permissions in the target channel.
-- **Invalid token error:** Regenerate the token in the Developer Portal, update `config/orca_auto.yaml`, and restart the service.
+- **Invalid token error:** Regenerate the token in the Developer Portal, update `~/orca_auto/config/orca_auto.yaml`, and restart the service.

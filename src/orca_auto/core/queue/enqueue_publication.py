@@ -53,6 +53,7 @@ from orca_auto.core.queue.store import (
     enqueue,
     mark_failed,
     mutate_entries,
+    terminal_entry,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import now_utc_iso
@@ -283,12 +284,15 @@ def _recover_committed_enqueue(
                 )
                 if spec.ambiguous_fence_metadata:
                     metadata.update(spec.ambiguous_fence_metadata)
-                entries[index] = replace(
+                # A deliberate cancel_requested=True: the fence records that
+                # this attempt's outcome is unknown and no owner may resume it.
+                entries[index] = terminal_entry(
                     current,
                     status=QueueStatus.CANCELLED,
-                    cancel_requested=True,
+                    error=None,
                     finished_at=finished_at,
                     metadata=metadata,
+                    cancel_requested=True,
                 )
             return None, True
         index, current = matches[0]

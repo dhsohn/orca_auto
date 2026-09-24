@@ -4,7 +4,9 @@ import copy
 import logging
 import os
 import subprocess
+import sys
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -16,10 +18,6 @@ from orca_auto.core.engine_scratch import (
     scratch_provenance_from_exception,
 )
 from orca_auto.core.engines import entry_matches_engine_identity
-from orca_auto.core.engines.worker_child import (
-    WORKER_CHILD_MODULE,
-    build_worker_child_command_for_engine,
-)
 from orca_auto.core.queue.child.execution import (
     ChildWorkerShutdownController,
     find_queue_entry_by_id,
@@ -83,7 +81,7 @@ from .run_context import RunExecutionContext, configured_admission_root
 from .run_lock import acquire_run_lock
 from .state import finalize_state
 from .state_reading import load_state
-from .statuses import AnalyzerStatus
+from .statuses import AnalyzerStatus, RunStatus
 from .submission import mark_orca_snapshot_owned
 
 logger = logging.getLogger(__name__)
@@ -103,7 +101,7 @@ _RECOVERY_REBIND_INTENT_TOKEN_RE = timestamped_token_pattern(
 )
 
 BackgroundRunJobProcess = subprocess.Popen
-WORKER_JOB_MODULE = WORKER_CHILD_MODULE
+WORKER_JOB_MODULE = "orca_auto.orca.commands.worker_child"
 
 
 @dataclass(frozen=True)
@@ -140,7 +138,28 @@ class OrcaWorkerExecutionOutcome:
     entry: QueueEntry
 
 
-build_worker_child_command = build_worker_child_command_for_engine("orca")
+def build_worker_child_command(
+    *,
+    config_path: str,
+    queue_root: str | Path,
+    queue_id: str,
+    admission_token: str | None = None,
+) -> list[str]:
+    """Argv for the child job process (``python -m orca_auto.orca.commands.worker_child``)."""
+    command = [
+        sys.executable,
+        "-m",
+        WORKER_JOB_MODULE,
+        "--config",
+        str(config_path),
+        "--queue-root",
+        str(queue_root),
+        "--queue-id",
+        str(queue_id),
+    ]
+    if admission_token:
+        command.extend(["--admission-token", str(admission_token)])
+    return command
 
 
 class WorkerShutdownRequested(RuntimeError):
@@ -360,21 +379,48 @@ def _run_orca_job_for_entry(
         return _defer_admission(context, queue_root, reason=str(exc))
     except WorkerShutdownInterrupt as exc:
         if should_cancel():
-            state = load_state(Path(context.reaction_dir))
-            if state is not None and not isinstance(state.get("final_result"), dict):
-                cancelled_result = build_final_result(
-                    status="cancelled",
-                    analyzer_status=AnalyzerStatus.INCOMPLETE,
-                    reason="cancel_requested",
-                    last_out_path=last_out_path_from_state(state),
-                )
-                finalize_state(
-                    Path(context.reaction_dir),
-                    state,
-                    status="cancelled",
-                    final_result=cancelled_result,
-                )
+            _finalize_cancelled_run_state(Path(context.reaction_dir))
         raise WorkerShutdownRequested(context) from exc
+
+
+def _finalize_cancelled_run_state(reaction_dir: Path) -> None:
+    """Record the cancelled outcome the interrupted run never wrote.
+
+    ``execute_orca_run`` released ``run.lock`` when the interrupt propagated,
+    so this load -> finalize takes the same non-blocking lock every other
+    ``job_state.json`` finalizer takes (``replay._record_terminal_run_state``,
+    ``worker_tracking``) and cannot interleave with them.  When the lock is
+    already held, fail closed by skipping: the shutdown path still marks the
+    queue row cancelled with its replay marker, and the parent's terminal
+    replay then calls ``record_cancelled_run_state`` under this lock, which
+    writes the cancelled result or keeps a terminal one written meanwhile.
+    """
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(acquire_run_lock(reaction_dir))
+        except RuntimeError as exc:
+            logger.warning(
+                "Skipping cancel finalization of %s; run lock is held and terminal "
+                "replay settles the state: %s",
+                reaction_dir,
+                exc,
+            )
+            return
+        state = load_state(reaction_dir)
+        if state is None or isinstance(state.get("final_result"), dict):
+            return
+        cancelled_result = build_final_result(
+            status=RunStatus.CANCELLED,
+            analyzer_status=AnalyzerStatus.INCOMPLETE,
+            reason="cancel_requested",
+            last_out_path=last_out_path_from_state(state),
+        )
+        finalize_state(
+            reaction_dir,
+            state,
+            status=RunStatus.CANCELLED,
+            final_result=cancelled_result,
+        )
 
 
 def _defer_admission(

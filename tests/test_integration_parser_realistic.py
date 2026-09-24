@@ -1,4 +1,4 @@
-"""Integration tests: realistic ORCA outputs → parser.
+"""Integration tests: realistic ORCA outputs → parser, frequency analysis, analyzer.
 
 Each fixture mirrors the structure of a real ORCA .out file with representative
 sections (input line, coordinates, energy, convergence, frequencies, thermo,
@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from orca_auto.orca.completion_rules import CompletionMode
+from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.parser import parse_orca_output
 
 # ---------------------------------------------------------------------------
@@ -347,7 +350,6 @@ class TestParserRealisticOutputs:
 
         r = parse_orca_output(str(out))
 
-        assert r.status == "completed"
         assert r.method == "B3LYP"
         assert r.basis_set == "6-31G(d)"
         assert r.charge == 0
@@ -358,12 +360,13 @@ class TestParserRealisticOutputs:
         assert r.energy_ev is not None
         assert r.energy_kcalmol is not None
         assert r.opt_converged is True
-        assert r.has_imaginary_freq is False
-        assert r.lowest_freq_cm1 is not None
-        assert r.lowest_freq_cm1 > 0
         assert r.enthalpy == pytest.approx(-113.834210)
         assert r.gibbs_energy == pytest.approx(-113.862100)
         assert r.wall_time_seconds == 2 * 3600 + 15 * 60 + 30
+        analysis = parse_frequency_analysis(out)
+        assert analysis is not None
+        assert analysis.imaginary_count() == 0
+        assert min(f for f in analysis.frequencies if f != 0.0) == pytest.approx(1167.32)
 
     def test_dlpno_single_point(self, tmp_path: Path) -> None:
         """DLPNO-CCSD(T)/cc-pVTZ single point — no opt/freq data."""
@@ -372,16 +375,15 @@ class TestParserRealisticOutputs:
 
         r = parse_orca_output(str(out))
 
-        assert r.status == "completed"
         assert r.method == "DLPNO-CCSD(T)"
         assert r.basis_set == "cc-pVTZ"
         assert r.formula == "H3N"
         assert r.n_atoms == 4
         assert r.energy_hartree == pytest.approx(-56.520893412)
         assert r.opt_converged is None
-        assert r.has_imaginary_freq is None
         assert r.enthalpy is None
         assert r.wall_time_seconds == 5 * 3600 + 42 * 60 + 18
+        assert parse_frequency_analysis(out) is None
 
     def test_ts_with_imaginary_frequency(self, tmp_path: Path) -> None:
         """OptTS with one imaginary frequency (expected for TS)."""
@@ -390,39 +392,45 @@ class TestParserRealisticOutputs:
 
         r = parse_orca_output(str(out))
 
-        assert r.status == "completed"
         assert r.method == "B3LYP"
         assert r.basis_set == "def2-TZVP"
         assert r.formula == "CH4Cl"
         assert r.n_atoms == 6
         assert r.opt_converged is True
-        assert r.has_imaginary_freq is True
-        assert r.lowest_freq_cm1 == pytest.approx(-432.15)
         assert r.enthalpy == pytest.approx(-500.089123)
         assert r.gibbs_energy == pytest.approx(-500.112345)
+        analysis = parse_frequency_analysis(out)
+        assert analysis is not None
+        assert analysis.imaginary_count() == 1
+        assert min(analysis.frequencies) == pytest.approx(-432.15)
 
     def test_real_orca_vibrational_section_with_scaling_factor(self, tmp_path: Path) -> None:
         """Real ORCA freq output separates the header rule from the numbered
-        list with a 'Scaling factor' line and blank lines; the parser must still
-        capture the frequencies. Regression: the section body previously
-        terminated at the first blank line and dropped every frequency, so
-        has_imaginary_freq/lowest_freq_cm1 came back None on real output."""
+        list with a 'Scaling factor' line and blank lines; the frequency
+        analysis must still capture the frequencies. Regression: a blank-line
+        terminated section body once dropped every frequency on real output."""
         out = tmp_path / "ts_real.out"
         out.write_text(_TS_REAL_VIB_FORMAT, encoding="utf-8")
 
-        r = parse_orca_output(str(out))
+        analysis = parse_frequency_analysis(out)
 
-        assert r.has_imaginary_freq is True
-        assert r.lowest_freq_cm1 == pytest.approx(-432.15)
+        assert analysis is not None
+        assert analysis.imaginary_count() == 1
+        assert min(analysis.frequencies) == pytest.approx(-432.15)
+        assert (
+            analyze_output(out, CompletionMode("ts", False, "! OptTS Freq")).status == "completed"
+        )
 
     def test_scf_failure(self, tmp_path: Path) -> None:
-        """SCF not converged → error termination → status=failed."""
+        """SCF not converged → error termination → SCF-gradient abort verdict."""
         out = tmp_path / "fe_complex_scf_fail.out"
         out.write_text(_SCF_FAILED, encoding="utf-8")
 
         r = parse_orca_output(str(out))
 
-        assert r.status == "failed"
+        assert analyze_output(out, CompletionMode("opt", False, "! Opt")).status == (
+            "error_scfgrad_abort"
+        )
         assert r.method == "wB97X-D3"
         assert r.basis_set == "def2-TZVP"
         assert r.charge == -1
@@ -433,13 +441,15 @@ class TestParserRealisticOutputs:
         assert r.wall_time_seconds is None
 
     def test_opt_not_converged(self, tmp_path: Path) -> None:
-        """Optimization did not converge but terminated normally → failed."""
+        """Optimization did not converge but terminated normally → not completed."""
         out = tmp_path / "ethane_opt_fail.out"
         out.write_text(_OPT_NOT_CONVERGED, encoding="utf-8")
 
         r = parse_orca_output(str(out))
 
-        assert r.status == "failed"
+        assert analyze_output(out, CompletionMode("opt", False, "! Opt")).status == (
+            "geom_not_converged"
+        )
         assert r.method == "PBE0"
         assert r.basis_set == "def2-SVP"
         assert r.formula == "C2H6"
@@ -449,13 +459,13 @@ class TestParserRealisticOutputs:
         assert r.wall_time_seconds == 12 * 3600
 
     def test_running_calculation(self, tmp_path: Path) -> None:
-        """Incomplete output (no termination marker) → status=running."""
+        """Incomplete output (no termination marker) → incomplete verdict."""
         out = tmp_path / "methylamine_running.out"
         out.write_text(_RUNNING_M06_2X, encoding="utf-8")
 
         r = parse_orca_output(str(out))
 
-        assert r.status == "running"
+        assert analyze_output(out, CompletionMode("opt", False, "! Opt")).status == "incomplete"
         assert r.method == "M06-2X"
         assert r.basis_set == "6-311+G(d,p)"
         assert r.charge == 1
@@ -465,14 +475,14 @@ class TestParserRealisticOutputs:
         assert r.energy_hartree == pytest.approx(-95.72)
         assert r.wall_time_seconds is None
 
-    def test_empty_file_returns_running(self, tmp_path: Path) -> None:
-        """An empty output file (just started) → running status."""
+    def test_empty_file_is_incomplete(self, tmp_path: Path) -> None:
+        """An empty output file (just started) → incomplete verdict, no metadata."""
         out = tmp_path / "empty.out"
         out.write_text("", encoding="utf-8")
 
         r = parse_orca_output(str(out))
 
-        assert r.status == "running"
+        assert analyze_output(out, CompletionMode("opt", False, "! Opt")).status == "incomplete"
         assert r.method == ""
         assert r.energy_hartree is None
 

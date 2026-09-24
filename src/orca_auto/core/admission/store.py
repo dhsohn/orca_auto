@@ -245,7 +245,6 @@ def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> Adm
         source=slot.source if update.source is None else update.source.strip(),
         app_name=slot.app_name if update.app_name is None else update.app_name.strip(),
         task_id=slot.task_id if update.task_id is None else update.task_id.strip(),
-        workflow_id=slot.workflow_id,
         engine_process_state=engine_process_state,
     )
 
@@ -266,7 +265,6 @@ def _metadata_updated_slot(
         queue_id=slot.queue_id if update.queue_id is None else update.queue_id.strip(),
         app_name=slot.app_name if update.app_name is None else update.app_name.strip(),
         task_id=slot.task_id if update.task_id is None else update.task_id.strip(),
-        workflow_id=slot.workflow_id,
         work_dir=slot.work_dir if update.work_dir is None else _normalize_work_dir(update.work_dir),
         owner_pid=resolved_owner_pid,
         process_start_ticks=owner_start_ticks,

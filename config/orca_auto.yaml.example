@@ -1,6 +1,6 @@
 # Linux/WSL configuration. Unknown keys and malformed values are rejected.
-# Discovery: explicit --config, ORCA_AUTO_CONFIG, checkout config/orca_auto.yaml,
-# then ~/orca_auto/config/orca_auto.yaml. Keep real tokens out of source control.
+# Discovery: explicit --config, ORCA_AUTO_CONFIG, then ~/orca_auto/config/orca_auto.yaml.
+# A source checkout is not probed. Keep real tokens out of source control.
 runs_root: /home/user/orca_runs
 
 resources:

@@ -1,3 +1,5 @@
+"""Interactive ``orca_auto init``: prompts build a mapping, the shared validator judges it."""
+
 from __future__ import annotations
 
 import getpass
@@ -10,20 +12,25 @@ from typing import Any, TypedDict
 
 import yaml
 
-from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
-from orca_auto.core.config.engines import (
+from orca_auto.core.config.discovery import (
     default_shared_config_path as default_config_path,
 )
 from orca_auto.core.config.files import (
+    YAML_CONFIG_LOAD_EXCEPTIONS,
     load_shared_config_mapping,
     messenger_mapping_from_root,
     secure_config_file_permissions,
+    validate_shared_config_sections,
 )
-from orca_auto.core.config.schema import discord_config_from_mapping
-from orca_auto.core.paths import is_rejected_windows_path, validate_configured_executable_path
+from orca_auto.core.config.schema import (
+    CommonResourceConfig,
+    SchedulerConfig,
+    discord_config_from_mapping,
+    explicit_positive_int,
+)
+from orca_auto.core.paths import validate_configured_executable_path
+from orca_auto.core.paths.validation import validated_absolute_linux_path_text
 from orca_auto.core.utils.persistence import atomic_write_text
-
-from ..config import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -77,23 +84,20 @@ def _prompt_yes_no(label: str, *, default: bool) -> bool:
 
 
 def _normalize_linux_path(raw: str, *, label: str) -> Path | None:
+    # Same rule and wording as the config loader, so an accepted path cannot
+    # be rejected at startup and the rejected text is never echoed.
     if not raw.strip():
         print(f"{label} is required.")
         return None
-    if is_rejected_windows_path(raw):
-        print(f"{label} must be a Linux path, not a Windows path: {raw}")
+    try:
+        validated = validated_absolute_linux_path_text(raw.strip(), field_name=label)
+    except ValueError as exc:
+        print(str(exc))
         return None
-
-    path = Path(raw).expanduser()
-    if not path.is_absolute():
-        print(f"{label} must be an absolute Linux path.")
-        return None
-    return path.resolve(strict=False)
+    return Path(validated)
 
 
 def _prompt_executable_path(prompt_label: str, label: str, display_name: str) -> str:
-    # The prompt applies the rule the config loader will apply later, so a
-    # path accepted here cannot be rejected at startup.
     while True:
         try:
             executable = validate_configured_executable_path(
@@ -133,22 +137,21 @@ def _ensure_directory(path: Path, *, label: str) -> bool:
     return True
 
 
-def _prompt_int(label: str, *, default: str, minimum: int) -> int:
+def _prompt_positive_int(label: str, *, field_name: str, default: int) -> int:
     while True:
-        raw = _prompt_text(label, default)
+        raw = _prompt_text(label, str(default))
         try:
-            value = int(raw)
-        except ValueError:
-            print(f"{label} must be an integer >= {minimum}.")
-            continue
-        if value < minimum:
-            print(f"{label} must be an integer >= {minimum}.")
-            continue
-        return value
+            return explicit_positive_int(raw, field_name=field_name)
+        except ValueError as exc:
+            print(str(exc))
 
 
 def _prompt_max_active_simulations() -> int:
-    return _prompt_int("max_active_simulations", default="4", minimum=1)
+    return _prompt_positive_int(
+        "max_active_simulations",
+        field_name="scheduler.max_active_simulations",
+        default=SchedulerConfig.max_active_simulations,
+    )
 
 
 def _prompt_discord_config() -> dict[str, object]:
@@ -194,8 +197,10 @@ def _prompt_orca_runtime() -> _PromptedEngineRuntime:
     }
 
 
-def _validate_generated_config(config_path: str) -> None:
-    load_config(config_path)
+def _validate_generated_config(payload: Mapping[str, object]) -> None:
+    """Apply the one shared rule set to the mapping before it is written."""
+
+    validate_shared_config_sections(payload)
 
 
 def _write_config(config_path: Path, payload: Mapping[str, object]) -> None:
@@ -253,12 +258,14 @@ def _prompt_init_values(
 
 def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
     # scheduler.admission_root is intentionally omitted: the shared admission
-    # directory defaults to <runs_root>/.admission.
+    # directory defaults to <runs_root>/.admission. Resource defaults are the
+    # schema's own so the wizard cannot drift from the loader.
+    resources = CommonResourceConfig()
     return {
         "runs_root": str(values.orca_runtime["runs_root"]),
         "resources": {
-            "max_cores_per_task": 8,
-            "max_memory_gb_per_task": 32,
+            "max_cores_per_task": resources.max_cores_per_task,
+            "max_memory_gb_per_task": resources.max_memory_gb_per_task,
         },
         "scheduler": {
             "max_active_simulations": values.max_active_simulations,
@@ -323,9 +330,10 @@ def cmd_init(args: Any) -> int:
         print("\nCancelled.")
         return 1
 
+    payload = _init_config_payload(values)
     try:
-        _write_config(config_path, _init_config_payload(values))
-        _validate_generated_config(str(config_path))
+        _validate_generated_config(payload)
+        _write_config(config_path, payload)
     except Exception as exc:
         logger.exception("Failed to generate config: %s", exc)
         print(f"Failed to generate config: {exc}")

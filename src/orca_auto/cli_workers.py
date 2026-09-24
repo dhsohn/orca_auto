@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -14,7 +13,6 @@ from typing import Any
 
 import orca_auto.cli_worker_supervision as cli_worker_supervision
 from orca_auto.core.config.discovery import (
-    repo_root_for_subprocess,
     resolve_shared_config_path,
     shared_config_text_from_args,
 )
@@ -23,88 +21,37 @@ from orca_auto.core.utils import normalize_text
 
 LOGGER = logging.getLogger(__name__)
 
-_ENGINE_WORKER_MODULES = {"orca": "orca_auto.core.engines.queue_worker"}
-_KNOWN_WORKER_APPS = ("orca",)
-_DEFAULT_WORKER_APPS = ("orca",)
-
-
-def _selected_worker_apps(values: Sequence[str] | None) -> list[str]:
-    selected = list(values or [])
-    if not selected:
-        return list(_DEFAULT_WORKER_APPS)
-
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for value in selected:
-        text = normalize_text(value).lower()
-        if not text or text in seen:
-            continue
-        if text not in _KNOWN_WORKER_APPS:
-            raise ValueError(f"Unsupported worker app: {text}")
-        seen.add(text)
-        ordered.append(text)
-    return ordered
-
-
-def _engine_worker_tail_argv(*, app: str) -> list[str]:
-    return ["--engine", app]
+ORCA_WORKER_APP = "orca"
+ORCA_QUEUE_WORKER_MODULE = "orca_auto.orca.commands.queue"
 
 
 def worker_module_command(
     *,
     config_path: str,
-    repo_root: str | None,
     module_name: str,
-    tail_argv: list[str],
-) -> tuple[list[str], str | None, dict[str, str] | None]:
-    argv = [sys.executable, "-m", module_name, "--config", config_path, *tail_argv]
-    if repo_root is None:
-        return argv, None, None
-
-    root_path = Path(repo_root).expanduser().resolve()
-    env = dict(os.environ)
-    existing = env.get("PYTHONPATH", "")
-    candidates = [str(root_path)]
-    src_root = root_path / "src"
-    if src_root.is_dir():
-        candidates.insert(0, str(src_root))
-    pythonpath = ":".join(candidates)
-    env["PYTHONPATH"] = pythonpath if not existing else f"{pythonpath}:{existing}"
-    return argv, str(root_path), env
+    tail_argv: Sequence[str] = (),
+) -> list[str]:
+    # The supervisor's own interpreter resolves the installed package (editable
+    # checkout, wheel, or prepared runtime); no checkout PYTHONPATH is injected.
+    return [sys.executable, "-m", module_name, "--config", config_path, *tail_argv]
 
 
-def _engine_worker_spec(
-    *,
-    app: str,
-    config_path: str,
-) -> cli_worker_supervision.WorkerSpec:
-    argv, cwd, env = worker_module_command(
+def _orca_worker_spec(*, config_path: str) -> cli_worker_supervision.WorkerSpec:
+    argv = worker_module_command(
         config_path=config_path,
-        repo_root=repo_root_for_subprocess(),
-        module_name=_ENGINE_WORKER_MODULES[app],
-        tail_argv=_engine_worker_tail_argv(app=app),
+        module_name=ORCA_QUEUE_WORKER_MODULE,
     )
-    env_payload = dict(env) if isinstance(env, dict) else None
-    return cli_worker_supervision.WorkerSpec(
-        app=app,
-        argv=tuple(argv),
-        cwd=cwd,
-        env=env_payload,
-    )
-
-
-def _validate_engine_worker_config(engine_apps: Sequence[str], config_path: str | None) -> None:
-    if engine_apps and not normalize_text(config_path):
-        raise ValueError(
-            "Could not discover orca_auto.yaml for engine workers. Pass --orca_auto-config or set ORCA_AUTO_CONFIG."
-        )
+    return cli_worker_supervision.WorkerSpec(app=ORCA_WORKER_APP, argv=tuple(argv))
 
 
 def _build_worker_specs(args: Any) -> list[cli_worker_supervision.WorkerSpec]:
-    apps = _selected_worker_apps(list(getattr(args, "app", None) or []))
     config_path = resolve_shared_config_path(shared_config_text_from_args(args))
-    _validate_engine_worker_config(apps, config_path)
-    return [_engine_worker_spec(app=app, config_path=str(config_path)) for app in apps]
+    if not normalize_text(config_path):
+        raise ValueError(
+            "Could not discover orca_auto.yaml for the ORCA queue worker. "
+            "Pass --orca_auto-config or set ORCA_AUTO_CONFIG."
+        )
+    return [_orca_worker_spec(config_path=str(config_path))]
 
 
 @dataclass(frozen=True)
@@ -136,7 +83,7 @@ def _detect_existing_orca_worker_conflict(
     *,
     args: argparse.Namespace,
 ) -> _ExistingWorkerConflict | None:
-    if not any(spec.app == "orca" for spec in specs):
+    if not any(spec.app == ORCA_WORKER_APP for spec in specs):
         return None
 
     config_path = resolve_shared_config_path(shared_config_text_from_args(args))

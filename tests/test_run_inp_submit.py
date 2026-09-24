@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -27,8 +28,7 @@ def _make_cfg(tmp: str, *, max_cores: int = 8, max_memory_gb: int = 32) -> AppCo
             max_memory_gb_per_task=max_memory_gb,
         ),
     )
-    cfg.runtime.max_concurrent = 1
-    return cfg
+    return replace(cfg, runtime=replace(cfg.runtime, max_concurrent=1))
 
 
 def _write_inp(reaction_dir: Path, content: str | None = None) -> None:

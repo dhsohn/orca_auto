@@ -10,7 +10,6 @@ from orca_auto.core import engine_scratch as scratch_mod
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
     EngineScratchError,
-    EngineScratchPolicy,
     EngineScratchWorkspace,
     is_transient_scratch_file,
 )
@@ -40,38 +39,6 @@ def _durable_input(tmp_path: Path) -> Path:
 
 def _scratch_attempts(root: Path) -> list[Path]:
     return [path for path in root.iterdir() if path.name.startswith("attempt-")]
-
-
-def test_publish_name_omitted_directory_contributes_no_dirent_bytes(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    # Engine allowlist policies (CREST/xTB publish_name) can omit whole scratch
-    # directories; only regular-file bytes may count toward the omitted volume.
-    shm = tmp_path / "shm"
-    shm.mkdir()
-    monkeypatch.setattr(scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
-    monkeypatch.setattr(scratch_mod, "_linux_available_memory_bytes", lambda: 2**63)
-    policy = EngineScratchPolicy(
-        root=shm / "engine",
-        min_free_bytes=1,
-        max_task_memory_bytes=1,
-        publish_name={"sp.out"}.__contains__,
-    )
-    selected = _durable_input(tmp_path)
-
-    workspace = EngineScratchWorkspace.create(policy, selected)
-    (workspace.path / "sp.out").write_text("done\n", encoding="utf-8")
-    (workspace.path / "work.bin").write_bytes(b"x" * 1024)
-    work_dir = workspace.path / "workdir"
-    work_dir.mkdir()
-    (work_dir / "inner.bin").write_bytes(b"z" * 512)
-
-    publication = workspace.publish()
-
-    assert {path.name for path in publication.paths} == {"sp.out"}
-    assert set(publication.omitted_transient_files) == {"work.bin", "workdir"}
-    assert publication.omitted_transient_bytes == 1024
 
 
 def test_scratch_create_sweeps_interrupted_cleanup_tombstones(
@@ -890,3 +857,352 @@ def test_attempt_stem_containing_tmp_does_not_hide_results(
 )
 def test_transient_orca_scratch_file_classification(name: str, expected: bool) -> None:
     assert is_transient_scratch_file(name) is expected
+
+
+# --- operator inspection and removal -----------------------------------------------------
+
+
+def _manifest_payload(durable_dir: Path, **overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": 2,
+        "owner_pid": os.getpid(),
+        "owner_process_start_ticks": scratch_mod.process_utils.current_process_start_ticks(),
+        "owner_boot_id": scratch_mod.process_utils.linux_boot_id(proc_root=Path("/proc")),
+        "durable_dir": str(durable_dir.resolve()),
+        "max_task_memory_bytes": 1,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _write_workspace(root: Path, name: str, manifest: dict[str, object] | str) -> Path:
+    workspace = root / name
+    workspace.mkdir()
+    text = manifest if isinstance(manifest, str) else json.dumps(manifest, sort_keys=True) + "\n"
+    (workspace / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).write_text(text, encoding="utf-8")
+    return workspace
+
+
+_UNVERIFIABLE_PID = 2**22 - 7
+
+
+def _patch_unverifiable_pid(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make one sentinel pid look alive with unreadable start ticks; leave others real."""
+
+    real_alive = scratch_mod.process_utils.is_process_alive
+    real_ticks = scratch_mod.process_utils.process_start_ticks
+    monkeypatch.setattr(
+        scratch_mod.process_utils,
+        "is_process_alive",
+        lambda pid: True if pid == _UNVERIFIABLE_PID else real_alive(pid),
+    )
+    monkeypatch.setattr(
+        scratch_mod.process_utils,
+        "process_start_ticks",
+        lambda pid, **kwargs: None if pid == _UNVERIFIABLE_PID else real_ticks(pid, **kwargs),
+    )
+
+
+def test_inspect_scratch_root_classifies_every_workspace_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    durable = selected.parent
+    _patch_unverifiable_pid(monkeypatch)
+    live = _write_workspace(root, "attempt-live", _manifest_payload(durable))
+    (live / "sp.out").write_bytes(b"x" * 3000)
+    (live / scratch_mod.SCRATCH_RUNTIME_HOME_DIR_NAME).mkdir()
+    (live / scratch_mod.SCRATCH_RUNTIME_HOME_DIR_NAME / "nested.bin").write_bytes(b"y" * 1000)
+    _write_workspace(
+        root,
+        "attempt-stale",
+        _manifest_payload(durable, owner_pid=999999, owner_boot_id="old-boot"),
+    )
+    _write_workspace(root, "attempt-invalid", "not json\n")
+    _write_workspace(
+        root,
+        "attempt-unverifiable",
+        _manifest_payload(durable, owner_pid=_UNVERIFIABLE_PID, owner_process_start_ticks=5),
+    )
+    (root / "unrelated.txt").write_text("ignored\n", encoding="utf-8")
+    tombstone = root / (".orca_auto_cleanup." + "b" * 32)
+    tombstone.mkdir()
+
+    reports = scratch_mod.inspect_scratch_root(policy.root)
+
+    by_name = {report.name: report for report in reports}
+    assert set(by_name) == {
+        "attempt-live",
+        "attempt-stale",
+        "attempt-invalid",
+        "attempt-unverifiable",
+        tombstone.name,
+    }
+    assert by_name["attempt-live"].state == scratch_mod.SCRATCH_STATE_LIVE
+    assert by_name["attempt-live"].blocks_launch is False
+    assert by_name["attempt-live"].detail is None
+    assert by_name["attempt-live"].owner_pid == os.getpid()
+    assert by_name["attempt-live"].durable_dir == str(durable.resolve())
+    assert by_name["attempt-live"].max_task_memory_bytes == 1
+    manifest_size = (live / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).stat().st_size
+    assert by_name["attempt-live"].size_bytes == 4000 + manifest_size
+    assert by_name["attempt-live"].size_walk_truncated is False
+    assert by_name["attempt-live"].publication_journal is None
+
+    stale = by_name["attempt-stale"]
+    assert stale.state == scratch_mod.SCRATCH_STATE_STALE
+    assert stale.blocks_launch is True
+    assert stale.manifest_valid is True
+    assert stale.owner_pid == 999999
+    assert stale.owner_boot_id == "old-boot"
+    assert stale.detail is not None and "stale workspace" in stale.detail
+
+    invalid = by_name["attempt-invalid"]
+    assert invalid.state == scratch_mod.SCRATCH_STATE_INVALID_MANIFEST
+    assert invalid.manifest_valid is False
+    assert invalid.owner_pid is None
+    assert invalid.detail is not None and "without valid ownership" in invalid.detail
+
+    unverifiable = by_name["attempt-unverifiable"]
+    assert unverifiable.state == scratch_mod.SCRATCH_STATE_UNVERIFIABLE
+    assert unverifiable.blocks_launch is True
+    assert unverifiable.detail is not None and "owner cannot be verified" in unverifiable.detail
+
+    assert by_name[tombstone.name].state == scratch_mod.SCRATCH_STATE_TOMBSTONE
+    assert by_name[tombstone.name].blocks_launch is False
+
+    # The sweep raises with exactly the detail the report carries.
+    with pytest.raises(EngineScratchError) as excinfo:
+        EngineScratchWorkspace.create(policy, selected)
+    assert str(excinfo.value) in {report.detail for report in reports if report.detail is not None}
+
+
+def test_inspect_scratch_root_handles_missing_root_and_unsafe_entries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    assert scratch_mod.inspect_scratch_root(policy.root) == []
+
+    root = scratch_mod._prepare_scratch_root(policy)
+    (root / "attempt-file").write_bytes(b"not a directory")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (root / "attempt-link").symlink_to(elsewhere)
+
+    reports = scratch_mod.inspect_scratch_root(policy.root)
+
+    assert {report.name: report.state for report in reports} == {
+        "attempt-file": scratch_mod.SCRATCH_STATE_UNSAFE,
+        "attempt-link": scratch_mod.SCRATCH_STATE_UNSAFE,
+    }
+    assert all(report.blocks_launch for report in reports)
+    with pytest.raises(EngineScratchError, match="name is unsafe"):
+        scratch_mod.remove_scratch_workspace(policy.root, "attempt-link/../attempt-link")
+    with pytest.raises(EngineScratchError, match="refusing to remove unsafe"):
+        scratch_mod.remove_scratch_workspace(policy.root, "attempt-link")
+    assert (root / "attempt-link").is_symlink()
+    assert elsewhere.is_dir()
+
+
+def test_inspect_scratch_root_bounds_the_size_walk(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    durable = _durable_input(tmp_path).parent
+    workspace = _write_workspace(root, "attempt-big", _manifest_payload(durable))
+    for index in range(10):
+        (workspace / f"chunk-{index}.bin").write_bytes(b"z" * 100)
+
+    [report] = scratch_mod.inspect_scratch_root(policy.root, max_size_entries=4)
+
+    assert report.size_walk_truncated is True
+    assert (
+        0
+        < report.size_bytes
+        < 1000 + (workspace / scratch_mod.SCRATCH_MANIFEST_FILE_NAME).stat().st_size
+    )
+
+
+def test_remove_scratch_workspace_refuses_live_and_unblocks_after_stale_removal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    selected = _durable_input(tmp_path)
+    live = _write_workspace(root, "attempt-live", _manifest_payload(selected.parent))
+    stale = _write_workspace(
+        root,
+        "attempt-stale",
+        _manifest_payload(selected.parent, owner_pid=999999, owner_boot_id="old-boot"),
+    )
+    (stale / "partial.out").write_bytes(b"evidence")
+
+    with pytest.raises(EngineScratchError, match="stale workspace"):
+        EngineScratchWorkspace.create(policy, selected)
+    with pytest.raises(EngineScratchError, match="refusing to remove live"):
+        scratch_mod.remove_scratch_workspace(policy.root, "attempt-live")
+    with pytest.raises(ValueError, match="live"):
+        scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale", allow_states=("live",))
+    with pytest.raises(EngineScratchError, match="does not exist"):
+        scratch_mod.remove_scratch_workspace(policy.root, "attempt-missing")
+    assert live.is_dir() and stale.is_dir()
+
+    removal = scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale")
+
+    assert removal.report.state == scratch_mod.SCRATCH_STATE_STALE
+    assert removal.removed_durable_entries == ()
+    assert removal.publication_journal_removed is False
+    assert not stale.exists()
+    assert live.is_dir()
+    assert _scratch_attempts(policy.root) == [live]
+    # The live peer still counts toward the guard; the stale one no longer blocks.
+    workspace = EngineScratchWorkspace.create(policy, selected)
+    assert workspace.path.is_dir()
+    workspace.discard_unlaunched()
+
+
+def test_remove_scratch_workspace_clears_only_unjournaled_publication_temps(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    durable = _durable_input(tmp_path).parent
+    _write_workspace(
+        root,
+        "attempt-stale",
+        _manifest_payload(durable, owner_pid=999999, owner_boot_id="old-boot"),
+    )
+    stray = durable / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'a' * 32}.tmp"
+    stray.write_bytes(b"half-copied")
+    journaled = durable / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'b' * 32}.tmp"
+    journaled.write_bytes(b"journaled")
+    other_dir = tmp_path / "other-generation"
+    other_dir.mkdir()
+    unrelated = other_dir / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'c' * 32}.tmp"
+    unrelated.write_bytes(b"other generation")
+    journal = durable / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME
+    journal.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "phase": "prepared",
+                "items": [
+                    {
+                        "temporary_name": journaled.name,
+                        "target_name": "sp.out",
+                        "backup_name": None,
+                        "sha256": "0" * 64,
+                        "size_bytes": 9,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    status = scratch_mod.durable_publication_journal_status(durable)
+    assert status is not None and (status.phase, status.item_count, status.corrupt) == (
+        "prepared",
+        1,
+        False,
+    )
+    [report] = scratch_mod.inspect_scratch_root(policy.root)
+    assert report.publication_journal is not None
+    assert report.publication_journal.phase == "prepared"
+
+    removal = scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale")
+
+    assert removal.removed_durable_entries == (stray.name,)
+    assert removal.publication_journal_removed is False
+    assert removal.durable_note is not None and "left in place for replay" in removal.durable_note
+    assert not stray.exists()
+    assert journaled.read_bytes() == b"journaled"
+    assert journal.is_file()
+    assert unrelated.read_bytes() == b"other generation"
+
+
+def test_remove_scratch_workspace_drops_a_finished_committed_journal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    durable = _durable_input(tmp_path).parent
+    (durable / "sp.out").write_bytes(b"committed")
+    _write_workspace(
+        root,
+        "attempt-stale",
+        _manifest_payload(durable, owner_pid=999999, owner_boot_id="old-boot"),
+    )
+    journal = durable / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME
+    journal.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "phase": "committed",
+                "items": [
+                    {
+                        "temporary_name": f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'d' * 32}.tmp",
+                        "target_name": "sp.out",
+                        "backup_name": None,
+                        "sha256": "0" * 64,
+                        "size_bytes": 9,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    removal = scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale")
+
+    assert removal.publication_journal_removed is True
+    assert not journal.exists()
+    assert (durable / "sp.out").read_bytes() == b"committed"
+
+
+def test_remove_scratch_workspace_leaves_durable_files_of_a_live_peer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = scratch_mod._prepare_scratch_root(policy)
+    durable = _durable_input(tmp_path).parent
+    _write_workspace(root, "attempt-live", _manifest_payload(durable))
+    _write_workspace(
+        root,
+        "attempt-stale",
+        _manifest_payload(durable, owner_pid=999999, owner_boot_id="old-boot"),
+    )
+    stray = durable / f"{scratch_mod._PUBLICATION_TEMP_PREFIX}{'e' * 32}.tmp"
+    stray.write_bytes(b"in flight")
+
+    removal = scratch_mod.remove_scratch_workspace(policy.root, "attempt-stale")
+
+    assert removal.removed_durable_entries == ()
+    assert removal.durable_note is not None and "live workspace" in removal.durable_note
+    assert stray.read_bytes() == b"in flight"
+
+
+def test_durable_publication_journal_status_reports_corrupt_and_absent(
+    tmp_path: Path,
+) -> None:
+    durable = tmp_path / "durable"
+    durable.mkdir()
+    assert scratch_mod.durable_publication_journal_status(durable) is None
+    assert scratch_mod.durable_publication_journal_status(tmp_path / "missing") is None
+
+    (durable / scratch_mod._PUBLICATION_JOURNAL_FILE_NAME).write_text("{broken", encoding="utf-8")
+    status = scratch_mod.durable_publication_journal_status(durable)
+
+    assert status is not None
+    assert status.corrupt is True
+    assert status.phase is None
+    assert status.detail is not None and "corrupt" in status.detail

@@ -88,18 +88,3 @@ def has_normal_termination(text: str) -> bool:
 
 def has_error_termination(text: str) -> bool:
     return any(termination_line(line)[1] for line in iter_output_lines(text))
-
-
-def coarse_orca_status(
-    text: str,
-    *,
-    opt_converged: bool | None = None,
-    wall_time_seconds: int | None = None,
-) -> str:
-    if has_error_termination(text):
-        return "failed"
-    if has_normal_termination(text):
-        return "failed" if opt_converged is False else "completed"
-    if wall_time_seconds is not None:
-        return "failed"
-    return "running"

@@ -64,9 +64,12 @@ graph TD
 `OrcaQueueWorker` owns ORCA cancellation, shutdown, recovery and its replay state.
 Its common base owns process supervision, admission and the PID-file lifecycle.
 The worker composes its typed dependencies once; tests can substitute process
-creation and sleep directly. `EngineDefinition[AppConfig]` preserves configuration
-and queue-entry types through the runtime, including the keyword-only
-`expected_entry` comparison when claiming a selected generation.
+creation and sleep directly. The parent entry point is
+`python -m orca_auto.orca.commands.queue --config …`; the child is
+`python -m orca_auto.orca.commands.worker_child --config … --queue-root …
+--queue-id … [--admission-token …]`. The parent constructs `EngineQueueRuntime`
+directly from the concrete ORCA configuration and queue-entry types, including
+the keyword-only `expected_entry` comparison when claiming a selected generation.
 
 Cancellation observations reuse unchanged queue snapshots. Terminal notification
 dispatch has a durable claim and bounded background sends; notification delivery
@@ -92,5 +95,6 @@ empty lifecycle callbacks.
 ## 4. Operational Architecture
 
 - **SQLite Activity Projection**: High-performance querying is provided by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The `--refresh` flag scans for unindexed runs.
+- **Scratch Operator Surface**: `orca_auto scratch list` and `scratch clear` inspect and remove non-live RAM-scratch workspaces; one stale, unverifiable or invalid-manifest workspace otherwise blocks every later scratch launch (fail-closed).
 - **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation to eliminate risks associated with running directly out of mutable development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
 - **Historical Data Protection**: Retired workflow directories from previous versions are protected as read-only to ensure historical calculations are preserved without risk of accidental overwrite.

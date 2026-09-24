@@ -31,12 +31,15 @@ def test_bootstrap_installs_only_the_requested_local_projects(tmp_path: Path) ->
     )
     python.chmod(0o755)
     calls = tmp_path / "calls"
+    home = tmp_path / "home"
+    home.mkdir()
     result = subprocess.run(
         ["bash", "scripts/bootstrap_wsl.sh"],
         cwd=repo,
         env={
             **os.environ,
             "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
+            "HOME": str(home),
             "PYTHON_BIN": str(python),
             "ORCA_BIN": str(tmp_path / "no-engine"),
             "BOOTSTRAP_TEST_LOG": str(calls),
@@ -51,7 +54,11 @@ def test_bootstrap_installs_only_the_requested_local_projects(tmp_path: Path) ->
         line for line in calls.read_text().splitlines() if line.startswith("-m pip install -e")
     ]
     assert installs == ["-m pip install -e ."]
-    assert (repo / "config/orca_auto.yaml").stat().st_mode & 0o777 == 0o600
+    # The template lands where discovery looks: the home default, not the checkout.
+    home_config = home / "orca_auto" / "config" / "orca_auto.yaml"
+    assert home_config.read_text(encoding="utf-8") == "runs_root: /example\n"
+    assert home_config.stat().st_mode & 0o777 == 0o600
+    assert not (repo / "config/orca_auto.yaml").exists()
 
 
 @pytest.mark.parametrize(

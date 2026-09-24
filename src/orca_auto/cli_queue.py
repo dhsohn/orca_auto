@@ -22,11 +22,10 @@ from orca_auto.core import terminal
 from orca_auto.core.activity_icons import activity_status_icon
 from orca_auto.core.activity_index import ActivityIndexError
 from orca_auto.core.config import discovery
-from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.config.discovery import (
     shared_config_text_from_args,
 )
-from orca_auto.core.config.files import shared_runs_root_from_config
+from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS, shared_runs_root_from_config
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
 from orca_auto.core.terminal import emit_error
@@ -45,9 +44,7 @@ _QUEUE_CANCEL_ERRORS: tuple[type[Exception], ...] = (LookupError, *_QUEUE_STATE_
 class _QueueListRequest:
     shared_config: str | None
     limit: int
-    engine_values: tuple[str, ...]
     status_values: tuple[str, ...]
-    kind_values: tuple[str, ...]
     json_output: bool
 
 
@@ -92,31 +89,44 @@ _QUEUE_RAIL = _QUEUE_RAIL_GLYPH + " "
 # queued glyph, so a bucket glyph illustrates its group rather than matching every
 # row in it exactly.
 _PENDING_STATUSES = frozenset(_s.QUEUE_ACTIVE_STATUSES - {_s.STATUS_RUNNING})
-_FAILED_STATUSES = frozenset(_s.FAILED_STATUSES | {"error", _s.STATUS_REPAIR_BLOCKED})
-_SUMMARY_ORDER = ("running", "pending", "done", "failed", "cancelled", "other")
+# Bucket keys reuse the representative status name where one exists.
+_GROUP_RUNNING = _s.STATUS_RUNNING
+_GROUP_PENDING = _s.STATUS_PENDING
+_GROUP_DONE = "done"
+_GROUP_FAILED = _s.STATUS_FAILED
+_GROUP_CANCELLED = _s.STATUS_CANCELLED
+_GROUP_OTHER = "other"
+_SUMMARY_ORDER = (
+    _GROUP_RUNNING,
+    _GROUP_PENDING,
+    _GROUP_DONE,
+    _GROUP_FAILED,
+    _GROUP_CANCELLED,
+    _GROUP_OTHER,
+)
 _SUMMARY_META: dict[str, tuple[str, str]] = {
-    "running": ("running", _s.STATUS_RUNNING),
-    "pending": ("queued", _s.STATUS_QUEUED),
-    "done": ("done", _s.STATUS_COMPLETED),
-    "failed": ("failed", _s.STATUS_FAILED),
-    "cancelled": ("cancelled", _s.STATUS_CANCELLED),
-    "other": ("other", _s.STATUS_UNKNOWN),
+    _GROUP_RUNNING: ("running", _s.STATUS_RUNNING),
+    _GROUP_PENDING: ("queued", _s.STATUS_QUEUED),
+    _GROUP_DONE: ("done", _s.STATUS_COMPLETED),
+    _GROUP_FAILED: ("failed", _s.STATUS_FAILED),
+    _GROUP_CANCELLED: ("cancelled", _s.STATUS_CANCELLED),
+    _GROUP_OTHER: ("other", _s.STATUS_UNKNOWN),
 }
 
 
 def _summary_status_group(status: object) -> str:
     normalized = _s.normalize_status(status)
     if normalized == _s.STATUS_RUNNING:
-        return "running"
+        return _GROUP_RUNNING
     if normalized in _PENDING_STATUSES:
-        return "pending"
+        return _GROUP_PENDING
     if normalized == _s.STATUS_COMPLETED:
-        return "done"
-    if normalized in _FAILED_STATUSES:
-        return "failed"
+        return _GROUP_DONE
+    if normalized in _s.FAILED_STATUSES:
+        return _GROUP_FAILED
     if normalized == _s.STATUS_CANCELLED:
-        return "cancelled"
-    return "other"
+        return _GROUP_CANCELLED
+    return _GROUP_OTHER
 
 
 def _queue_header_band_lines(
@@ -222,21 +232,13 @@ def _queue_list_text_lines(
 
 
 def _queue_list_request(args: Any) -> _QueueListRequest:
-    engine_values = normalize_activity_filter_values(getattr(args, "engine", None))
-    kind_values = normalize_activity_filter_values(getattr(args, "kind", None))
-    if any(engine != "orca" for engine in engine_values) or any(
-        kind != "job" for kind in kind_values
-    ):
-        raise ValueError("Only ORCA jobs are supported.")
     explicit_config = shared_config_text_from_args(args) or None
     return _QueueListRequest(
         # Resolve one effective config up front so activity rows and the global
         # active count use the same checkout and runtime roots.
         shared_config=discovery.resolve_shared_config_path(explicit_config),
         limit=int(getattr(args, "limit", 0) or 0),
-        engine_values=engine_values,
         status_values=normalize_activity_filter_values(getattr(args, "status", None)),
-        kind_values=kind_values,
         json_output=bool(getattr(args, "json", False)),
     )
 
@@ -267,9 +269,7 @@ def _missing_runs_root(args: Any, request: _QueueListRequest) -> str | None:
 def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
     return list_activities(
         limit=request.limit,
-        engines=request.engine_values,
         statuses=request.status_values,
-        kinds=request.kind_values,
         refresh=bool(getattr(args, "refresh", False)),
         orca_config=request.shared_config,
     )
@@ -281,9 +281,7 @@ def _filtered_queue_payload(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     activities = filter_activity_items(
         payload.get("activities", []),
-        engines=request.engine_values,
         statuses=request.status_values,
-        kinds=request.kind_values,
     )
     limited_activities = activities[: request.limit] if request.limit > 0 else list(activities)
     if "active_simulations" in payload:
@@ -436,14 +434,8 @@ def cmd_queue_list(args: Any) -> int:
         return 1
 
     if normalize_text(getattr(args, "action", None)).lower() == "clear":
-        if (
-            any(getattr(args, field, None) for field in ("engine", "status", "kind"))
-            or request.limit != 0
-        ):
-            emit_error(
-                "`orca_auto queue list clear` does not support "
-                "--engine/--status/--kind/--limit filters."
-            )
+        if getattr(args, "status", None) or request.limit != 0:
+            emit_error("`orca_auto queue list clear` does not support --status/--limit filters.")
             return 1
         try:
             clear_payload = _queue_list_clear_payload(args, request)
@@ -487,7 +479,7 @@ def cmd_queue_list(args: Any) -> int:
 
 def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
     result = payload.get("result", {})
-    if result.get("returncode", 0) != 0 or payload.get("status") == "failed":
+    if result.get("returncode", 0) != 0 or payload.get("status") == _s.STATUS_FAILED:
         emit_error(
             normalize_text(result.get("stderr"))
             or normalize_text(result.get("reason"))

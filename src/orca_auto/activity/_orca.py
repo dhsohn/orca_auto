@@ -10,24 +10,27 @@ from orca_auto.core.engine_runtime import engine_runtime_paths
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.publication import QUEUE_RECORD_SYNC_BLOCKED_KEY
+from orca_auto.core.queue.types import QueueStatus, effective_queue_status
 from orca_auto.core.statuses import (
+    ACTIVE_STATUSES,
+    STATUS_FAILED,
     STATUS_PENDING,
-    STATUS_RETRYING,
-    STATUS_RUNNING,
+    STATUS_UNKNOWN,
     TERMINAL_STATUSES,
 )
 from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.process_tracking import run_lock_is_held
+from orca_auto.orca.statuses import ACTIVE_RUN_STATUS_VALUES
 
 if TYPE_CHECKING:
     from orca_auto.orca.run_snapshot import RunSnapshot
 
 _LOGGER = logging.getLogger(__name__)
-_ORCA_ACTIVE_QUEUE_STATUSES = frozenset({STATUS_PENDING, STATUS_RUNNING})
+_ORCA_ACTIVE_QUEUE_STATUSES = ACTIVE_STATUSES
 _ORCA_TERMINAL_QUEUE_STATUSES = TERMINAL_STATUSES
 # Snapshot run states that imply a live process; without a live run lock the run
 # was cancelled/killed/crashed and must not keep showing as in progress.
-_STALE_SNAPSHOT_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING})
+_STALE_SNAPSHOT_STATUSES = ACTIVE_RUN_STATUS_VALUES
 
 
 def snapshot_matches_entry(
@@ -92,10 +95,8 @@ def snapshot_indexes(
 
 
 def queue_entry_status(queue_adapter: Any, entry: Any, snapshot: RunSnapshot | None) -> str:
-    status = normalize_text(queue_adapter.queue_entry_status(entry)) or "unknown"
-    if bool(getattr(entry, "cancel_requested", False)) and status == "running":
-        return "cancel_requested"
-    if status != "running":
+    status = effective_queue_status(entry)
+    if status != QueueStatus.RUNNING.value:
         return status
     snapshot_status = normalize_text(snapshot.status) if snapshot is not None else ""
     if snapshot_status and snapshot_status not in _STALE_SNAPSHOT_STATUSES:
@@ -187,7 +188,7 @@ def snapshot_reaction_dir(snapshot: RunSnapshot) -> str:
 
 
 def _snapshot_display_status(snapshot: RunSnapshot) -> str:
-    status = normalize_text(snapshot.status).lower() or "unknown"
+    status = normalize_text(snapshot.status).lower() or STATUS_UNKNOWN
     if status not in _STALE_SNAPSHOT_STATUSES:
         return status
     reaction_dir = snapshot_reaction_dir(snapshot)
@@ -197,7 +198,7 @@ def _snapshot_display_status(snapshot: RunSnapshot) -> str:
     # stale (the run was cancelled/killed/crashed); surface it as failed instead of
     # leaving it stuck "in progress" in the activity list.
     if not run_lock_is_held(Path(reaction_dir), logger=_LOGGER):
-        return "failed"
+        return STATUS_FAILED
     return status
 
 
@@ -296,7 +297,7 @@ def orca_records(
     from orca_auto.orca import run_snapshot
     from orca_auto.orca.queue import adapter as queue_adapter
 
-    runtime_paths = engine_runtime_paths(config_path, engine="orca")
+    runtime_paths = engine_runtime_paths(config_path)
     allowed_root = runtime_paths["allowed_root"]
 
     queue_entries = [

@@ -31,12 +31,12 @@ from .publication import (
     queue_record_publication_lock,
     queue_record_sync_metadata,
 )
-from .types import QueueEntry, QueueStatus
+from .types import ACTIVE_QUEUE_STATUSES, TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 
 QUEUE_FILE_NAME = _queue_persistence.QUEUE_FILE_NAME
 QUEUE_LOCK_NAME = _queue_persistence.QUEUE_LOCK_NAME
-_ACTIVE_STATUSES = frozenset({QueueStatus.PENDING, QueueStatus.RUNNING})
-_TERMINAL_STATUSES = frozenset({QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED})
+_ACTIVE_STATUSES = ACTIVE_QUEUE_STATUSES
+_TERMINAL_STATUSES = TERMINAL_QUEUE_STATUSES
 _QueueEntryT = TypeVar("_QueueEntryT", bound=QueueEntry)
 _MutationResultT = TypeVar("_MutationResultT")
 _TOKEN_COLLISION_RETRY_LIMIT = 32
@@ -142,6 +142,45 @@ def _merged_metadata(
                 raise TypeError("metadata update callback must return a mapping or None")
             merged.update(generated_update)
     return merged
+
+
+def terminal_entry(
+    entry: QueueEntry,
+    *,
+    status: QueueStatus,
+    error: str | None,
+    finished_at: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    cancel_requested: bool | None = None,
+) -> QueueEntry:
+    """Build the terminal row for ``entry``.
+
+    This is the only constructor of COMPLETED/FAILED/CANCELLED rows, so the
+    terminal rules live in one place:
+
+    * ``status`` must be terminal; anything else raises ``ValueError``.
+    * ``finished_at`` defaults to now. An explicit value keeps an
+      authoritative timestamp (an idempotent re-mark, an orphan's state file).
+    * ``cancel_requested`` is cleared by a CANCELLED row (the request has been
+      honored) and preserved otherwise. A caller that records the flag on
+      purpose (a pending row cancelled on request, an ambiguous-identity
+      fence) passes it explicitly.
+    * ``error`` ``None`` keeps the row's current error; a string is stripped.
+    * ``metadata`` ``None`` keeps the row's metadata; a mapping replaces it.
+    """
+    target = QueueStatus(status)
+    if target not in _TERMINAL_STATUSES:
+        raise ValueError(f"terminal_entry requires a terminal status, got {target.value!r}")
+    if cancel_requested is None:
+        cancel_requested = False if target == QueueStatus.CANCELLED else entry.cancel_requested
+    return replace(
+        entry,
+        status=target,
+        finished_at=now_utc_iso() if finished_at is None else finished_at,
+        cancel_requested=cancel_requested,
+        error=entry.error if error is None else error.strip(),
+        metadata=entry.metadata if metadata is None else dict(metadata),
+    )
 
 
 def find_entry_by_key(
@@ -646,12 +685,13 @@ def request_cancel(
         return metadata
 
     def cancelled_pending_entry(entry: QueueEntry, *, finished_at: str) -> QueueEntry:
-        candidate = replace(
+        candidate = terminal_entry(
             entry,
             status=QueueStatus.CANCELLED,
-            cancel_requested=True,
+            error=None,
             finished_at=finished_at,
             metadata=pending_cancel_metadata(entry, finished_at=finished_at),
+            cancel_requested=True,
         )
         return replace(
             candidate,
@@ -878,12 +918,7 @@ def requeue_running_entry(
                 # is the chokepoint that keeps "cancel" from turning into "resume".
                 # Clear cancel_requested: it has now been honored, so the terminal
                 # entry should not keep advertising a pending cancellation.
-                candidate = replace(
-                    entry,
-                    status=QueueStatus.CANCELLED,
-                    finished_at=now_utc_iso(),
-                    cancel_requested=False,
-                )
+                candidate = terminal_entry(entry, status=QueueStatus.CANCELLED, error=None)
                 updated = replace(
                     candidate,
                     metadata=_merged_metadata(
@@ -958,12 +993,11 @@ def _mark_status(
             )
             if before_update_fn is not None:
                 before_update_fn()
-            updated = replace(
+            updated = terminal_entry(
                 entry,
-                cancel_requested=(
-                    False if status == QueueStatus.CANCELLED else entry.cancel_requested
-                ),
-                error=error.strip() or entry.error,
+                status=status,
+                error=error.strip() or None,
+                finished_at=entry.finished_at,
                 metadata=merged,
             )
             return updated, (updated if updated != entry else None)
@@ -980,13 +1014,70 @@ def _mark_status(
         )
         if before_update_fn is not None:
             before_update_fn()
-        updated = replace(
+        updated = terminal_entry(entry, status=status, error=error, metadata=merged)
+        return updated, updated
+
+    return QueueStore.for_root(
+        root,
+        load_entries_fn=load_entries_fn,
+        save_entries_fn=save_entries_fn,
+    ).mutate_entry_by_id(queue_id, update, missing_result=None)
+
+
+def correct_terminal_status(
+    root: str | Path,
+    queue_id: str,
+    *,
+    status: QueueStatus,
+    error: str | None = None,
+    metadata_update: Mapping[str, Any] | None = None,
+    metadata_update_fn: _MetadataUpdateFn | None = None,
+    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
+    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+) -> QueueEntry | None:
+    """Correct an already-terminal row to another terminal status.
+
+    This is the recovery-only terminal -> terminal transition: a durable
+    state file proved a different outcome than the row records. Active rows
+    are refused; they must go through ``mark_*``/``request_cancel`` so their
+    side-effect evidence is written in the same queue mutation. The row is
+    built by :func:`terminal_entry` (``finished_at`` is re-stamped; ``error``
+    ``None`` keeps the recorded error; ``cancel_requested`` is left as
+    recorded) and ``metadata_update``/``metadata_update_fn`` are merged under
+    the same queue lock.
+    """
+    target = QueueStatus(status)
+    if target not in _TERMINAL_STATUSES:
+        raise ValueError(
+            f"correct_terminal_status requires a terminal status, got {target.value!r}"
+        )
+
+    def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
+        if entry.status not in _TERMINAL_STATUSES:
+            return None, None
+        if accept_entry_fn is not None and not accept_entry_fn(entry):
+            return None, None
+        if expected_entry is not None and not queue_entries_same_generation(
             entry,
-            status=status,
-            finished_at=now_utc_iso(),
-            cancel_requested=(False if status == QueueStatus.CANCELLED else entry.cancel_requested),
-            error=error.strip(),
+            expected_entry,
+        ):
+            return None, None
+        if expected_task_id is not None and entry.task_id != expected_task_id:
+            return None, None
+        merged = _merged_metadata(
+            entry,
+            metadata_update=metadata_update,
+            metadata_update_fn=metadata_update_fn,
+        )
+        updated = terminal_entry(
+            entry,
+            status=target,
+            error=error,
             metadata=merged,
+            cancel_requested=entry.cancel_requested,
         )
         return updated, updated
 

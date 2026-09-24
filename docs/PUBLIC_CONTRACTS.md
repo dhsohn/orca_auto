@@ -18,8 +18,10 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 | `queue cancel TARGET` | Cancels a job by queue ID, run ID, or unambiguous directory path alias. |
 | `index prune` | Previews indexed rows whose disk paths no longer exist. Removes them only when `--apply` is passed. |
 | `systemd install` | Installs systemd unit templates for the specified user and repository or prepared runtime root (`--repo`). |
-| `service status` | Inspects systemd units and verifies worker process freshness against the installed build. Returns non-zero on drift. |
+| `service status` | Inspects systemd units and verifies worker process freshness against the checkout HEAD or the installed runtime build. Returns non-zero when a unit is unhealthy or a worker is stale or undetermined. |
 | `service restart` | Refuses restart if active calculations or reservations exist, preventing accidental data loss. Use `--force` to bypass. |
+| `scratch list` | Lists RAM-scratch workspaces under `orca.runtime.scratch_root` and whether any non-live workspace blocks new scratch launches. Exits 0 even when blockers exist; supports `--json`. |
+| `scratch clear NAME` / `--all-stale` | Removes non-live (`stale`, `unverifiable`, `invalid-manifest`) scratch workspaces. Live workspaces are refused; exits 1 when nothing was removed or a target was refused. |
 
 ### `run-dir` Behavior
 - Automatically detects the most recently modified eligible `.inp` file in the target directory (ties broken alphabetically by filename).
@@ -35,8 +37,9 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 Configuration files are resolved in the following priority order:
 1. Explicit CLI argument (`--config PATH`)
 2. Environment variable `ORCA_AUTO_CONFIG`
-3. Checkout configuration (`config/orca_auto.yaml`)
-4. User home default (`~/orca_auto/config/orca_auto.yaml`)
+3. User home default (`~/orca_auto/config/orca_auto.yaml`)
+
+A source checkout is not probed.
 
 > **Validation Policy**:
 > Invalid mappings, explicit nulls, unrecognized keys, and retired workflow configuration sections are rejected before default values are applied. See [config/orca_auto.yaml.example](../config/orca_auto.yaml.example) for accepted settings.

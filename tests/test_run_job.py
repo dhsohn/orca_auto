@@ -65,7 +65,9 @@ def test_build_worker_child_command_uses_queue_identity(tmp_path: Path) -> None:
     )
 
     assert command[:3] == [sys.executable, "-m", worker_job.WORKER_JOB_MODULE]
-    assert command[3:5] == ["--engine", "orca"]
+    assert worker_job.WORKER_JOB_MODULE == "orca_auto.orca.commands.worker_child"
+    assert command[3:5] == ["--config", "/tmp/config.yaml"]
+    assert "--engine" not in command
     assert "--queue-root" in command
     assert str(tmp_path / "queue") in command
     assert "--queue-id" in command

@@ -68,7 +68,7 @@ class _Evidence:
                 "Environment": shlex.quote(f"ORCA_AUTO_CONFIG={site.config}"),
                 "ExecStart": (
                     "{ path=/fixture/.venv/bin/python ; argv[]=/fixture/.venv/bin/python -m orca_auto.cli "
-                    "queue worker --app orca ; ignore_errors=no ; }"
+                    "queue worker ; ignore_errors=no ; }"
                 ),
                 "MainPID": str(index),
                 "ExecMainStartTimestamp": "Mon 2099-01-05 00:00:00 UTC",
@@ -355,6 +355,14 @@ def test_process_identity_changes_during_check_refuse_restart(tmp_path: Path, ta
         (
             "ExecStart",
             "{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 custom_worker.py ; }",
+            "Unsupported worker command",
+        ),
+        (
+            # A unit installed before the ``--app`` selector was retired must be
+            # reinstalled (``orca_auto systemd install``) before a guarded restart.
+            "ExecStart",
+            "{ path=/fixture/.venv/bin/python ; argv[]=/fixture/.venv/bin/python -m orca_auto.cli "
+            "queue worker --app orca ; ignore_errors=no ; }",
             "Unsupported worker command",
         ),
     ],

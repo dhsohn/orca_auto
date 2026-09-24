@@ -102,7 +102,16 @@ def test_systemd_plan_pins_build_and_external_config(bundle: Path, tmp_path: Pat
     assert f"ReadOnlyPaths={bundle}" in worker
     assert f"{bundle}/.venv/bin/python -I -m orca_auto.cli" in worker
     with pytest.raises(ValueError, match="configuration must be outside"):
-        build_systemd_install_plan(target_user="testuser", repo=bundle, no_enable=True)
+        build_systemd_install_plan(
+            target_user="testuser",
+            repo=bundle,
+            config=bundle / "config.yaml",
+            no_enable=True,
+        )
+    # Omitting --config renders the target user's discoverable home config,
+    # never a path inside the runtime.
+    default_plan = build_systemd_install_plan(target_user="testuser", repo=bundle, no_enable=True)
+    assert default_plan.config == Path("/home/testuser/orca_auto/config/orca_auto.yaml")
 
 
 def test_incomplete_runtime_cannot_install_units(tmp_path: Path) -> None:
@@ -269,7 +278,6 @@ def test_status_detects_installed_unit_cutover_before_worker_restart(
                 deps=cli_systemd_status.ServiceStatusDeps(
                     which=lambda command: command,
                     collect_service_status=lambda *args, **kwargs: (status,),
-                    installed_version_drift=lambda: None,
                     collect_worker_staleness=lambda *args, **kwargs: payload,
                 ),
             )

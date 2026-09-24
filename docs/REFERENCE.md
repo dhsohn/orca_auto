@@ -61,13 +61,27 @@ orca_auto queue list clear [--config PATH] [--json]
 
 ---
 
+### `orca_auto scratch list` & `scratch clear`
+Inspects and clears RAM-scratch workspaces under `orca.runtime.scratch_root`. One stale, unverifiable or invalid-manifest workspace blocks every later scratch launch until it is removed.
+```bash
+orca_auto scratch list [--config PATH] [--json]
+orca_auto scratch clear NAME [--config PATH] [--json]
+orca_auto scratch clear --all-stale [--config PATH] [--json]
+```
+- `list`: Prints each workspace with its state (`live`, `stale`, `unverifiable`, `invalid-manifest`, `unsafe`, `tombstone`), owner PID and size, and names the workspaces that block new launches. Exits 0 even when blockers exist; exits 1 when scratch is not configured or the root is unreadable.
+- `clear NAME`: Removes the named workspace as printed by `scratch list` (`attempt-...`). Live workspaces are refused.
+- `--all-stale`: Removes every `stale`, `unverifiable` or `invalid-manifest` workspace. Exactly one of `NAME` or `--all-stale` is required.
+- Exit code is 1 when nothing was removed or any target was refused.
+
+---
+
 ### `orca_auto service status` & `service restart`
 Inspects background workers and controls systemd services safely.
 ```bash
 orca_auto service status [--json]
 orca_auto service restart [--force]
 ```
-- `status`: Verifies that running worker processes match the installed systemd unit build.
+- `status`: Verifies that running worker processes match the checkout HEAD or the installed runtime build. Returns non-zero when a unit is unhealthy or a worker is stale or undetermined.
 - `restart`: Refuses to restart if active calculations are in flight to prevent calculation interruption. Use `--force` to override.
 
 ---

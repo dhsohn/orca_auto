@@ -10,6 +10,7 @@ from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.indexing.roots import runtime_roots_for_cfg
 from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import process as process_utils
@@ -703,16 +704,7 @@ def reconcile_orphaned_snapshot_generations(
 
 
 def snapshot_runtime_roots_for_cfg(cfg: Any) -> tuple[Path, ...]:
-    from orca_auto.core.engine_catalog import known_engine_ids
-    from orca_auto.core.indexing.roots import runtime_roots_for_cfg
-
-    roots: list[Path] = []
-    for engine in known_engine_ids():
-        for root in runtime_roots_for_cfg(cfg, engine=engine):
-            resolved = Path(root).expanduser().resolve()
-            if resolved not in roots:
-                roots.append(resolved)
-    return tuple(roots)
+    return runtime_roots_for_cfg(cfg)
 
 
 __all__ = [

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto import cli_systemd_freshness, cli_systemd_units
+from orca_auto import cli_systemd_evidence, cli_systemd_units
 from orca_auto.core.admission import (
     AdmissionStoreCorruptError,
     admission_lock,
@@ -21,7 +21,7 @@ from orca_auto.core.admission import (
 )
 from orca_auto.core.admission.persistence import ADMISSION_LOCK_NAME
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.orca.config import load_config
 
 
@@ -43,7 +43,7 @@ def _property(
     run: Callable[..., subprocess.CompletedProcess[Any]],
 ) -> str:
     try:
-        completed = cli_systemd_units._show_unit_property(unit, name, run=run)
+        completed = cli_systemd_units.show_unit_property(unit, name, run=run)
     except OSError:
         raise ValueError(f"Cannot inspect {name} for {unit}.") from None
     if completed.returncode != 0 or str(completed.stderr or "").strip():
@@ -86,9 +86,9 @@ def _installed_config(
         argv = shlex.split(argv_matches[0])
     except ValueError:
         raise ValueError(f"Cannot verify installed worker command for {unit}.") from None
-    worker_args = ["-m", "orca_auto.cli", "queue", "worker", "--app", "orca"]
+    worker_args = ["-m", "orca_auto.cli", "queue", "worker"]
     if (
-        len(argv) not in {7, 8}
+        len(argv) not in {5, 6}
         or not Path(argv[0]).is_absolute()
         or not argv[0].endswith("/.venv/bin/python")
         or executable_matches[0] != argv[0]
@@ -128,7 +128,7 @@ def _worker_binding(
     started: float | None = None
     if pid:
         try:
-            ticks = cli_systemd_freshness._read_process_start_ticks(
+            ticks = cli_systemd_evidence.read_process_start_ticks(
                 pid, read_process_file=read_process_file
             )
             environment = read_process_file(f"/proc/{pid}/environ")
@@ -139,7 +139,7 @@ def _worker_binding(
             if values != [os.fsencode(str(config))]:
                 raise ValueError
             if (
-                cli_systemd_freshness._read_process_start_ticks(
+                cli_systemd_evidence.read_process_start_ticks(
                     pid, read_process_file=read_process_file
                 )
                 != ticks
@@ -152,7 +152,7 @@ def _worker_binding(
                     raise ValueError
                 return result
 
-            started = cli_systemd_freshness._unit_start_epoch(unit, run=checked_run)
+            started = cli_systemd_evidence.unit_start_epoch(unit, run=checked_run)
             # This conservative timestamp check rejects ordinary live config
             # edits; it is not a frozen copy of the process's loaded config.
             # Operating policy still forbids reconfiguring running workers.
@@ -178,7 +178,7 @@ def guard_service_restart(
     worker_units: tuple[str, ...],
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
-    read_process_file: Callable[[str], bytes] = cli_systemd_freshness._read_process_file,
+    read_process_file: Callable[[str], bytes] = cli_systemd_evidence.read_process_file,
 ) -> Iterator[None]:
     """Hold existing admission locks from verified idleness through restart.
 

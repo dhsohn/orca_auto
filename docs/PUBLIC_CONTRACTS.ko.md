@@ -18,8 +18,10 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 | `queue cancel TARGET` | 큐 ID, Run ID, 또는 대상 작업 디렉터리 경로를 지정하여 작업을 안전하게 취소합니다. |
 | `index prune` | 디스크에서 실제 경로가 삭제된 인덱스 항목을 확인합니다. `--apply` 플래그를 넘길 때만 실제 정리가 수행됩니다. |
 | `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. |
-| `service status` | 등록된 유닛 템플릿과 실제 실행 중인 워커 프로세스의 빌드 일치 여부를 검사합니다. 불일치 시 0이 아닌 종료 코드를 반환합니다. |
+| `service status` | 등록된 유닛의 상태와 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지(freshness) 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 0이 아닌 종료 코드를 반환합니다. |
 | `service restart` | 활성 계산이나 예약된 작업이 진행 중일 때는 중단을 방지하기 위해 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 사용합니다. |
+| `scratch list` | `orca.runtime.scratch_root` 아래의 RAM scratch 워크스페이스 목록과, 비활성(non-live) 워크스페이스가 새 scratch 실행을 막고 있는지 표시합니다. 차단 항목이 있어도 종료 코드는 0이며 `--json`을 지원합니다. |
+| `scratch clear NAME` / `--all-stale` | 비활성(`stale`, `unverifiable`, `invalid-manifest`) scratch 워크스페이스를 제거합니다. 실행 중(live)인 워크스페이스는 거부하며, 제거된 항목이 없거나 거부된 대상이 있으면 종료 코드 1을 반환합니다. |
 
 ### `run-dir` 세부 동작 규격
 - 디렉터리 내에서 가장 최근에 수정된 적합한 `.inp` 파일을 자동 선택하며, 수정 시각이 동일한 경우 파일명 알파벳 순으로 결정합니다.
@@ -35,8 +37,9 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 설정 파일은 다음 순서로 탐색되며, 가장 먼저 발견된 유효한 설정을 채택합니다:
 1. CLI 인자로 명시한 경로 (`--config PATH`)
 2. 환경 변수 `ORCA_AUTO_CONFIG`
-3. 소스 체크아웃 경로의 `config/orca_auto.yaml`
-4. 사용자 홈 기본 경로 `~/orca_auto/config/orca_auto.yaml`
+3. 사용자 홈 기본 경로 `~/orca_auto/config/orca_auto.yaml`
+
+소스 체크아웃 경로는 탐색하지 않습니다.
 
 > **설정 검증 원칙**:
 > 유효하지 않은 매핑, 명시적 null, 알 수 없는 키 또는 7.0에서 지원 종료된 이전 워크플로우 설정 키는 실행 전 엄격히 거부(fail-closed)됩니다. 전체 설정 항목 예시는 [config/orca_auto.yaml.example](../config/orca_auto.yaml.example)를 참고하세요.

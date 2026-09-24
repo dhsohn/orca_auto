@@ -22,10 +22,13 @@ def exec_with_import_source_evidence() -> None:
     mutating ``os.environ`` after Python starts is not reliable process evidence.
     Re-exec preserves the systemd MainPID and kernel process start identity while
     making the source path observable without a sidecar state file.
+
+    The caller decides which parsed subcommand needs the evidence (the module
+    CLI binds it to ``queue worker``); this function only publishes it. The
+    re-exec replays ``sys.argv`` unchanged, so the second process parses the
+    same command line and finds the evidence already installed.
     """
 
-    if sys.argv[1:3] != ["queue", "worker"]:
-        return
     import_source = str(Path(__file__).resolve(strict=False))
     environment = os.environ.copy()
     environment[PROCESS_IMPORT_SOURCE_ENV] = import_source

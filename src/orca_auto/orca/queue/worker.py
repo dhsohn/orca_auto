@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import copy
 import logging
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from orca_auto.core.admission import (
@@ -26,7 +26,7 @@ from orca_auto.orca.worker_execution import (
 )
 
 from ..config import AppConfig
-from ..engine import ENGINE_DEFINITION, ENGINE_RUNTIME
+from ..engine import ENGINE_RUNTIME
 from . import cancellation, publication_repair, replay, worker_runtime
 from .adapter import (
     get_cancel_requested,
@@ -104,10 +104,7 @@ def _worker_config_with_effective_concurrency(
 ) -> AppConfig:
     if cfg.runtime.admission_limit not in (None, "", 0):
         return cfg
-    worker_cfg = copy.copy(cfg)
-    worker_cfg.runtime = copy.copy(cfg.runtime)
-    worker_cfg.runtime.max_concurrent = configured_max
-    return worker_cfg
+    return replace(cfg, runtime=replace(cfg.runtime, max_concurrent=configured_max))
 
 
 def _shutdown_running_job(worker: OrcaQueueWorker, queue_id: str, job: OrcaRunningJob) -> None:
@@ -213,7 +210,7 @@ def _orca_reserve_gate(
 class OrcaQueueWorker(PidFileChildProcessQueueWorker[AppConfig, OrcaRunningJob]):
     """Supervise ORCA children with explicit cancellation and recovery ownership."""
 
-    worker_pid_file_name = ENGINE_DEFINITION.queue_functions.worker_pid_file_name
+    worker_pid_file_name = ENGINE_RUNTIME.worker_pid_file_name
 
     def __init__(
         self,

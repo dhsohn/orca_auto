@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
-import logging
 import os
 import re
 import secrets
@@ -67,6 +67,27 @@ _DURABLE_RESERVED_FILE_NAMES = frozenset(
     }
 )
 _COPY_CHUNK_BYTES = 1024 * 1024
+_MANIFEST_MAX_BYTES = 64 * 1024
+# Inspection walks a workspace with a bounded entry budget so a runaway engine
+# output tree cannot turn `scratch list` into a full tmpfs scan.
+_INSPECT_SIZE_WALK_MAX_ENTRIES = 20_000
+
+# Operator-facing workspace states. Only ``live`` counts toward the launch
+# guard; every other state blocks new scratch launches until removed.
+SCRATCH_STATE_LIVE = "live"
+SCRATCH_STATE_STALE = "stale"
+SCRATCH_STATE_UNVERIFIABLE = "unverifiable"
+SCRATCH_STATE_INVALID_MANIFEST = "invalid-manifest"
+# An ``attempt-*`` entry that is not a directory (or is a symlink); the sweep
+# refuses the whole root and this command cannot remove it either.
+SCRATCH_STATE_UNSAFE = "unsafe"
+# A rename-for-deletion left by an interrupted cleanup; the next sweep removes it.
+SCRATCH_STATE_TOMBSTONE = "tombstone"
+SCRATCH_REMOVABLE_STATES: tuple[str, ...] = (
+    SCRATCH_STATE_STALE,
+    SCRATCH_STATE_INVALID_MANIFEST,
+    SCRATCH_STATE_UNVERIFIABLE,
+)
 
 
 class EngineScratchError(RuntimeError):
@@ -89,7 +110,6 @@ class EngineScratchPolicy:
     max_task_memory_bytes: int
     dependency_names_from_primary: Callable[[bytes], Sequence[str]] | None = None
     normalize_primary_newline: bool = False
-    publish_name: Callable[[str], bool] | None = None
 
     def __post_init__(self) -> None:
         root = self.root.expanduser().resolve(strict=False)
@@ -136,6 +156,91 @@ class ScratchPublication:
     paths: tuple[Path, ...]
     omitted_transient_files: tuple[str, ...]
     omitted_transient_bytes: int
+
+
+@dataclass(frozen=True)
+class PublicationJournalStatus:
+    """What an interrupted publication left in a durable generation directory."""
+
+    path: Path
+    phase: str | None
+    item_count: int
+    corrupt: bool
+    detail: str | None
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "phase": self.phase,
+            "item_count": self.item_count,
+            "corrupt": self.corrupt,
+            "detail": self.detail,
+        }
+
+
+@dataclass(frozen=True)
+class ScratchWorkspaceReport:
+    """Read-only classification of one entry under the scratch root.
+
+    ``blocks_launch`` mirrors the sweep inside ``EngineScratchWorkspace.create``:
+    it is true exactly when that sweep would raise for this entry, and
+    ``detail`` is the message it would raise with.
+    """
+
+    path: Path
+    name: str
+    state: str
+    manifest_valid: bool
+    owner_pid: int | None
+    owner_process_start_ticks: int | None
+    owner_boot_id: str | None
+    durable_dir: str | None
+    max_task_memory_bytes: int | None
+    size_bytes: int
+    size_walk_truncated: bool
+    blocks_launch: bool
+    detail: str | None
+    publication_journal: PublicationJournalStatus | None = None
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "path": str(self.path),
+            "name": self.name,
+            "state": self.state,
+            "manifest_valid": self.manifest_valid,
+            "owner_pid": self.owner_pid,
+            "owner_process_start_ticks": self.owner_process_start_ticks,
+            "owner_boot_id": self.owner_boot_id,
+            "durable_dir": self.durable_dir,
+            "max_task_memory_bytes": self.max_task_memory_bytes,
+            "size_bytes": self.size_bytes,
+            "size_walk_truncated": self.size_walk_truncated,
+            "blocks_launch": self.blocks_launch,
+            "detail": self.detail,
+            "publication_journal": (
+                None if self.publication_journal is None else self.publication_journal.as_payload()
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class ScratchWorkspaceRemoval:
+    report: ScratchWorkspaceReport
+    removed_durable_entries: tuple[str, ...]
+    publication_journal_removed: bool
+    durable_note: str | None
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "name": self.report.name,
+            "path": str(self.report.path),
+            "state": self.report.state,
+            "durable_dir": self.report.durable_dir,
+            "size_bytes": self.report.size_bytes,
+            "removed_durable_entries": list(self.removed_durable_entries),
+            "publication_journal_removed": self.publication_journal_removed,
+            "durable_note": self.durable_note,
+        }
 
 
 _EXCEPTION_SCRATCH_PROVENANCE_ATTRIBUTE = "_engine_scratch_provenance"
@@ -410,7 +515,6 @@ class EngineScratchWorkspace:
             self.durable_dir_identity,
             self.scratch_input.stem,
             self.staged_inputs,
-            publish_name=self.policy.publish_name,
         )
         self._published = True
         return publication
@@ -475,31 +579,6 @@ class EngineScratchWorkspace:
             or self.workspace_dir_fd < 0
         ):
             raise EngineScratchError("engine scratch workspace is already closed")
-
-
-def publish_engine_scratch_workspace(
-    workspace: EngineScratchWorkspace,
-    *,
-    logger: logging.Logger,
-) -> ScratchPublication:
-    """Publish once, clean a committed workspace, and retain unresolved work."""
-
-    try:
-        publication = workspace.publish()
-    except BaseException:
-        workspace.close()
-        raise
-    try:
-        workspace.cleanup()
-    except BaseException:
-        logger.exception(
-            "Published engine scratch workspace could not be removed; future scratch runs "
-            "will remain fail-closed until it is inspected: %s",
-            workspace.path,
-        )
-    finally:
-        workspace.close()
-    return publication
 
 
 def is_transient_scratch_file(name: str) -> bool:
@@ -737,6 +816,182 @@ def _manifest_owner_state(payload: dict[str, Any]) -> str:
     return "live" if observed_ticks == owner_ticks else "stale"
 
 
+def _read_workspace_manifest_at(workspace_fd: int, workspace: Path) -> dict[str, Any] | None:
+    """Return the parsed manifest mapping, or ``None`` when it is missing or invalid."""
+
+    try:
+        raw_payload, _mode = _read_stable_regular_file_at(
+            workspace_fd,
+            SCRATCH_MANIFEST_FILE_NAME,
+            display_path=workspace / SCRATCH_MANIFEST_FILE_NAME,
+            max_bytes=_MANIFEST_MAX_BYTES,
+        )
+        parsed = json.loads(raw_payload.decode("utf-8", errors="strict"))
+    except (OSError, ValueError, EngineScratchError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _classify_workspace_manifest(
+    payload: dict[str, Any] | None,
+    workspace: Path,
+) -> tuple[str, str | None]:
+    """Return ``(state, detail)`` for a workspace manifest.
+
+    ``detail`` is the sweep's refusal message and is ``None`` only for a live
+    workspace. The message texts are part of the operator-facing contract.
+    """
+
+    task_memory = payload.get("max_task_memory_bytes") if payload is not None else None
+    if (
+        payload is None
+        or payload.get("schema_version") != _WORKSPACE_MANIFEST_SCHEMA_VERSION
+        or type(task_memory) is not int
+        or task_memory < 1
+    ):
+        return (
+            SCRATCH_STATE_INVALID_MANIFEST,
+            f"engine scratch contains an unresolved workspace without valid ownership: {workspace}",
+        )
+    owner_state = _manifest_owner_state(payload)
+    if owner_state == "stale":
+        return (
+            SCRATCH_STATE_STALE,
+            "engine scratch contains a stale workspace with uncertain child ownership; "
+            f"preserving it for inspection: {workspace}",
+        )
+    if owner_state != "live":
+        return (
+            SCRATCH_STATE_UNVERIFIABLE,
+            "engine scratch contains a workspace whose owner cannot be verified; "
+            f"preserving it for inspection: {workspace}",
+        )
+    return SCRATCH_STATE_LIVE, None
+
+
+def _manifest_int(payload: dict[str, Any] | None, key: str) -> int | None:
+    value = payload.get(key) if payload is not None else None
+    return value if type(value) is int else None
+
+
+def _manifest_str(payload: dict[str, Any] | None, key: str) -> str | None:
+    value = payload.get(key) if payload is not None else None
+    return value if isinstance(value, str) else None
+
+
+def _workspace_size_bytes(directory_fd: int, *, max_entries: int) -> tuple[int, bool]:
+    """Sum regular-file sizes below ``directory_fd`` without following symlinks.
+
+    The walk stops once ``max_entries`` directory entries were visited and
+    reports ``truncated``; an unreadable subtree also reports ``truncated``
+    rather than failing the inspection.
+    """
+
+    total = 0
+    visited = 0
+    truncated = False
+    pending: list[int] = [os.dup(directory_fd)]
+    try:
+        while pending and visited <= max_entries:
+            current_fd = pending.pop()
+            try:
+                with os.scandir(current_fd) as entries:
+                    for entry in entries:
+                        visited += 1
+                        if visited > max_entries:
+                            truncated = True
+                            break
+                        try:
+                            info = entry.stat(follow_symlinks=False)
+                        except OSError:
+                            truncated = True
+                            continue
+                        if stat.S_ISREG(info.st_mode):
+                            total += int(info.st_size)
+                        elif stat.S_ISDIR(info.st_mode):
+                            try:
+                                pending.append(
+                                    os.open(entry.name, _directory_open_flags(), dir_fd=current_fd)
+                                )
+                            except OSError:
+                                truncated = True
+            except OSError:
+                truncated = True
+            finally:
+                os.close(current_fd)
+    finally:
+        for descriptor in pending:
+            os.close(descriptor)
+    return total, truncated
+
+
+def _inspect_workspace_entry(
+    root: Path,
+    root_fd: int,
+    name: str,
+    *,
+    measure_size: bool,
+    max_size_entries: int = _INSPECT_SIZE_WALK_MAX_ENTRIES,
+) -> tuple[ScratchWorkspaceReport, tuple[int, int] | None]:
+    """Classify one ``attempt-*`` entry; return its report and pinned identity."""
+
+    candidate = root / name
+    info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(info.st_mode):
+        return (
+            ScratchWorkspaceReport(
+                path=candidate,
+                name=name,
+                state=SCRATCH_STATE_UNSAFE,
+                manifest_valid=False,
+                owner_pid=None,
+                owner_process_start_ticks=None,
+                owner_boot_id=None,
+                durable_dir=None,
+                max_task_memory_bytes=None,
+                size_bytes=int(info.st_size) if stat.S_ISREG(info.st_mode) else 0,
+                size_walk_truncated=False,
+                blocks_launch=True,
+                detail=f"engine scratch root contains an unsafe entry: {candidate}",
+            ),
+            None,
+        )
+    workspace_fd, workspace_identity = _open_pinned_directory_at(
+        root_fd,
+        name,
+        display_path=candidate,
+        label="engine scratch workspace",
+    )
+    try:
+        payload = _read_workspace_manifest_at(workspace_fd, candidate)
+        state, detail = _classify_workspace_manifest(payload, candidate)
+        size_bytes, size_truncated = (
+            _workspace_size_bytes(workspace_fd, max_entries=max_size_entries)
+            if measure_size
+            else (0, True)
+        )
+    finally:
+        os.close(workspace_fd)
+    return (
+        ScratchWorkspaceReport(
+            path=candidate,
+            name=name,
+            state=state,
+            manifest_valid=state != SCRATCH_STATE_INVALID_MANIFEST,
+            owner_pid=_manifest_int(payload, "owner_pid"),
+            owner_process_start_ticks=_manifest_int(payload, "owner_process_start_ticks"),
+            owner_boot_id=_manifest_str(payload, "owner_boot_id"),
+            durable_dir=_manifest_str(payload, "durable_dir"),
+            max_task_memory_bytes=_manifest_int(payload, "max_task_memory_bytes"),
+            size_bytes=size_bytes,
+            size_walk_truncated=size_truncated,
+            blocks_launch=state != SCRATCH_STATE_LIVE,
+            detail=detail,
+        ),
+        workspace_identity,
+    )
+
+
 def _sweep_scratch_root(root: Path, root_fd: int) -> int:
     """Finish interrupted cleanups and return the summed task-memory caps of live workspaces.
 
@@ -759,53 +1014,289 @@ def _sweep_scratch_root(root: Path, root_fd: int) -> int:
             continue
         if not name.startswith(SCRATCH_WORKSPACE_PREFIX):
             continue
-        candidate = root / name
-        info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
-        if not stat.S_ISDIR(info.st_mode):
-            raise EngineScratchError(f"engine scratch root contains an unsafe entry: {candidate}")
-        workspace_fd, _workspace_identity = _open_pinned_directory_at(
-            root_fd,
-            name,
-            display_path=candidate,
-            label="engine scratch workspace",
-        )
-        try:
-            try:
-                raw_payload, _mode = _read_stable_regular_file_at(
-                    workspace_fd,
-                    SCRATCH_MANIFEST_FILE_NAME,
-                    display_path=candidate / SCRATCH_MANIFEST_FILE_NAME,
-                    max_bytes=64 * 1024,
-                )
-                parsed = json.loads(raw_payload.decode("utf-8", errors="strict"))
-                payload = parsed if isinstance(parsed, dict) else None
-            except (OSError, ValueError):
-                payload = None
-        finally:
-            os.close(workspace_fd)
-        task_memory = payload.get("max_task_memory_bytes") if payload is not None else None
-        if (
-            payload is None
-            or payload.get("schema_version") != _WORKSPACE_MANIFEST_SCHEMA_VERSION
-            or type(task_memory) is not int
-            or task_memory < 1
-        ):
-            raise EngineScratchError(
-                f"engine scratch contains an unresolved workspace without valid ownership: {candidate}"
-            )
-        owner_state = _manifest_owner_state(payload)
-        if owner_state == "stale":
-            raise EngineScratchError(
-                "engine scratch contains a stale workspace with uncertain child ownership; "
-                f"preserving it for inspection: {candidate}"
-            )
-        if owner_state != "live":
-            raise EngineScratchError(
-                "engine scratch contains a workspace whose owner cannot be verified; "
-                f"preserving it for inspection: {candidate}"
-            )
-        live_task_memory_bytes += task_memory
+        report, _identity = _inspect_workspace_entry(root, root_fd, name, measure_size=False)
+        if report.blocks_launch:
+            raise EngineScratchError(report.detail)
+        live_task_memory_bytes += report.max_task_memory_bytes or 0
     return live_task_memory_bytes
+
+
+def durable_publication_journal_status(durable_dir: Path) -> PublicationJournalStatus | None:
+    """Report an interrupted publication journal in ``durable_dir`` without touching it.
+
+    Returns ``None`` when the directory has no journal or cannot be opened.
+    Replay and cleanup stay with ``EngineScratchWorkspace.create``.
+    """
+
+    try:
+        durable_dir_fd, _identity = _open_pinned_directory(
+            durable_dir,
+            label="engine durable generation",
+        )
+    except (OSError, EngineScratchError):
+        return None
+    try:
+        return _publication_journal_status_at(durable_dir_fd, durable_dir)
+    finally:
+        os.close(durable_dir_fd)
+
+
+def _publication_journal_status_at(
+    durable_dir_fd: int,
+    durable_dir: Path,
+) -> PublicationJournalStatus | None:
+    journal_path = durable_dir / _PUBLICATION_JOURNAL_FILE_NAME
+    try:
+        loaded = _load_publication_journal(durable_dir_fd, durable_dir)
+    except EngineScratchError as exc:
+        return PublicationJournalStatus(
+            path=journal_path,
+            phase=None,
+            item_count=0,
+            corrupt=True,
+            detail=str(exc),
+        )
+    except OSError as exc:
+        return PublicationJournalStatus(
+            path=journal_path,
+            phase=None,
+            item_count=0,
+            corrupt=True,
+            detail=f"engine scratch publication journal is unreadable: {exc}",
+        )
+    if loaded is None:
+        return None
+    phase, items = loaded
+    return PublicationJournalStatus(
+        path=journal_path,
+        phase=phase,
+        item_count=len(items),
+        corrupt=False,
+        detail=None,
+    )
+
+
+def inspect_scratch_root(
+    root: Path,
+    *,
+    max_size_entries: int = _INSPECT_SIZE_WALK_MAX_ENTRIES,
+) -> list[ScratchWorkspaceReport]:
+    """Classify every workspace and tombstone under ``root`` without modifying it.
+
+    A missing root yields an empty list; an unsafe or unreadable root raises
+    ``EngineScratchError`` or ``OSError``. The root lock is not taken: the
+    listing is advisory and must never wait behind a staging peer.
+    """
+
+    if root.is_symlink():
+        raise EngineScratchError(f"engine scratch root is a symlink: {root}")
+    if not root.exists():
+        return []
+    root_fd, _identity = _open_pinned_directory(root, label="engine scratch root")
+    reports: list[ScratchWorkspaceReport] = []
+    try:
+        for name in sorted(os.listdir(root_fd)):
+            if _CLEANUP_TOMBSTONE_NAME_RE.fullmatch(name):
+                info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                reports.append(
+                    ScratchWorkspaceReport(
+                        path=root / name,
+                        name=name,
+                        state=SCRATCH_STATE_TOMBSTONE,
+                        manifest_valid=False,
+                        owner_pid=None,
+                        owner_process_start_ticks=None,
+                        owner_boot_id=None,
+                        durable_dir=None,
+                        max_task_memory_bytes=None,
+                        size_bytes=0,
+                        size_walk_truncated=True,
+                        blocks_launch=not stat.S_ISDIR(info.st_mode),
+                        detail=(
+                            None
+                            if stat.S_ISDIR(info.st_mode)
+                            else f"engine scratch root contains an unsafe entry: {root / name}"
+                        ),
+                    )
+                )
+                continue
+            if not name.startswith(SCRATCH_WORKSPACE_PREFIX):
+                continue
+            report, _workspace_identity = _inspect_workspace_entry(
+                root,
+                root_fd,
+                name,
+                measure_size=True,
+                max_size_entries=max_size_entries,
+            )
+            if report.durable_dir is not None:
+                report = dataclasses.replace(
+                    report,
+                    publication_journal=durable_publication_journal_status(
+                        Path(report.durable_dir)
+                    ),
+                )
+            reports.append(report)
+    finally:
+        os.close(root_fd)
+    return reports
+
+
+def remove_scratch_workspace(
+    root: Path,
+    workspace_name: str,
+    *,
+    allow_states: Sequence[str] = SCRATCH_REMOVABLE_STATES,
+) -> ScratchWorkspaceRemoval:
+    """Remove one non-live workspace under the scratch-root lock.
+
+    The workspace is re-classified under the lock and refused (``EngineScratchError``)
+    unless its state is in ``allow_states``; ``live`` is never removable through
+    this path. After the fd-pinned removal, publication temp files in the
+    durable generation the manifest names are unlinked when no journal claims
+    them, and a ``committed`` journal is unlinked when none of its temporary or
+    backup entries remain. Both steps are skipped while another live workspace
+    targets the same durable generation.
+    """
+
+    if SCRATCH_STATE_LIVE in allow_states:
+        raise ValueError("live engine scratch workspaces cannot be removed by operators")
+    if (
+        not workspace_name
+        or Path(workspace_name).name != workspace_name
+        or not workspace_name.startswith(SCRATCH_WORKSPACE_PREFIX)
+    ):
+        raise EngineScratchError(f"engine scratch workspace name is unsafe: {workspace_name!r}")
+    if root.is_symlink():
+        raise EngineScratchError(f"engine scratch root is a symlink: {root}")
+    root_fd, _root_identity = _open_pinned_directory(root, label="engine scratch root")
+    try:
+        try:
+            lock = file_lock_at(
+                root_fd,
+                _SCRATCH_ROOT_LOCK_FILE_NAME,
+                display_path=root / _SCRATCH_ROOT_LOCK_FILE_NAME,
+                timeout_seconds=_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS,
+            )
+        except FileLockTimeoutError as exc:
+            raise EngineScratchError(
+                "engine scratch root stayed busy with a peer workspace for "
+                f"{_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS:.0f} s"
+            ) from exc
+        with lock:
+            try:
+                report, identity = _inspect_workspace_entry(
+                    root,
+                    root_fd,
+                    workspace_name,
+                    measure_size=True,
+                )
+            except FileNotFoundError as exc:
+                raise EngineScratchError(
+                    f"engine scratch workspace does not exist: {root / workspace_name}"
+                ) from exc
+            if report.state not in allow_states or identity is None:
+                raise EngineScratchError(
+                    f"refusing to remove {report.state} engine scratch workspace: {report.path}"
+                )
+            _remove_owned_workspace_at(root_fd, workspace_name, identity)
+            if report.durable_dir is None:
+                return ScratchWorkspaceRemoval(
+                    report=report,
+                    removed_durable_entries=(),
+                    publication_journal_removed=False,
+                    durable_note="manifest names no durable generation; nothing else to clean",
+                )
+            if _other_live_workspace_targets(root, root_fd, workspace_name, report.durable_dir):
+                return ScratchWorkspaceRemoval(
+                    report=report,
+                    removed_durable_entries=(),
+                    publication_journal_removed=False,
+                    durable_note=(
+                        "a live workspace still publishes into this durable generation; "
+                        "its publication files were left alone"
+                    ),
+                )
+            removed, journal_removed, note = _clean_durable_publication_leftovers(
+                Path(report.durable_dir)
+            )
+            return ScratchWorkspaceRemoval(
+                report=report,
+                removed_durable_entries=removed,
+                publication_journal_removed=journal_removed,
+                durable_note=note,
+            )
+    finally:
+        os.close(root_fd)
+
+
+def _other_live_workspace_targets(
+    root: Path,
+    root_fd: int,
+    removed_name: str,
+    durable_dir: str,
+) -> bool:
+    for name in os.listdir(root_fd):
+        if name == removed_name or not name.startswith(SCRATCH_WORKSPACE_PREFIX):
+            continue
+        try:
+            report, _identity = _inspect_workspace_entry(root, root_fd, name, measure_size=False)
+        except (OSError, EngineScratchError):
+            continue
+        if report.state == SCRATCH_STATE_LIVE and report.durable_dir == durable_dir:
+            return True
+    return False
+
+
+def _clean_durable_publication_leftovers(
+    durable_dir: Path,
+) -> tuple[tuple[str, ...], bool, str | None]:
+    try:
+        durable_dir_fd, _identity = _open_pinned_directory(
+            durable_dir,
+            label="engine durable generation",
+        )
+    except (OSError, EngineScratchError) as exc:
+        return (), False, f"durable generation could not be opened: {exc}"
+    try:
+        try:
+            loaded = _load_publication_journal(durable_dir_fd, durable_dir)
+        except (OSError, EngineScratchError) as exc:
+            return (), False, f"publication journal left in place: {exc}"
+        journaled: set[str] = set()
+        if loaded is not None:
+            for item in loaded[1]:
+                journaled.add(item.temporary_name)
+                if item.backup_name is not None:
+                    journaled.add(item.backup_name)
+        removed: list[str] = []
+        for name in sorted(os.listdir(durable_dir_fd)):
+            if _PUBLICATION_TEMP_NAME_RE.fullmatch(name) is None or name in journaled:
+                continue
+            info = os.stat(name, dir_fd=durable_dir_fd, follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                continue
+            os.unlink(name, dir_fd=durable_dir_fd)
+            removed.append(name)
+        journal_removed = False
+        note: str | None = None
+        if loaded is not None:
+            phase, _items = loaded
+            if phase == "committed" and not any(
+                _entry_exists_at(durable_dir_fd, name) for name in journaled
+            ):
+                _unlink_at_if_present(durable_dir_fd, _PUBLICATION_JOURNAL_FILE_NAME)
+                journal_removed = True
+            else:
+                note = (
+                    f"publication journal ({phase}) left in place for replay by the next "
+                    "scratch launch into this generation"
+                )
+        if removed or journal_removed:
+            os.fsync(durable_dir_fd)
+        return tuple(removed), journal_removed, note
+    finally:
+        os.close(durable_dir_fd)
 
 
 def _read_stable_regular_file_at(
@@ -1241,6 +1732,14 @@ def _load_publication_journal(
     return phase, items
 
 
+def _entry_exists_at(directory_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def _unlink_at_if_present(directory_fd: int, name: str) -> None:
     try:
         os.unlink(name, dir_fd=directory_fd)
@@ -1395,8 +1894,6 @@ def _publish_workspace(
     durable_dir_identity: tuple[int, int],
     attempt_stem: str,
     staged_inputs: dict[str, _StagedInput],
-    *,
-    publish_name: Callable[[str], bool] | None,
 ) -> ScratchPublication:
     staged_publications: list[_PreparedPublication] = []
     omitted: list[str] = []
@@ -1422,13 +1919,6 @@ def _publish_workspace(
                 dir_fd=workspace_dir_fd,
                 follow_symlinks=False,
             )
-            if publish_name is not None and not publish_name(source_name):
-                omitted.append(source_name)
-                # Only regular-file content counts; a directory's st_size is
-                # its dirent size, not an omitted volume.
-                if stat.S_ISREG(source_info.st_mode):
-                    omitted_bytes += int(source_info.st_size)
-                continue
             if not stat.S_ISREG(source_info.st_mode):
                 raise EngineScratchError(
                     f"engine scratch produced an unsupported entry: {workspace / source_name}"
@@ -1584,12 +2074,24 @@ __all__ = [
     "EngineScratchError",
     "EngineScratchPolicy",
     "EngineScratchWorkspace",
+    "PublicationJournalStatus",
+    "SCRATCH_REMOVABLE_STATES",
     "SCRATCH_RUNTIME_HOME_DIR_NAME",
+    "SCRATCH_STATE_INVALID_MANIFEST",
+    "SCRATCH_STATE_LIVE",
+    "SCRATCH_STATE_STALE",
+    "SCRATCH_STATE_TOMBSTONE",
+    "SCRATCH_STATE_UNSAFE",
+    "SCRATCH_STATE_UNVERIFIABLE",
     "ScratchPublication",
+    "ScratchWorkspaceRemoval",
+    "ScratchWorkspaceReport",
     "attach_scratch_provenance_mapping_to_exception",
     "attach_scratch_provenance_to_exception",
+    "durable_publication_journal_status",
+    "inspect_scratch_root",
     "is_transient_scratch_file",
-    "publish_engine_scratch_workspace",
+    "remove_scratch_workspace",
     "scratch_provenance_from_exception",
     "scratch_publication_provenance",
 ]

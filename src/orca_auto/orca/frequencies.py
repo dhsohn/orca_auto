@@ -8,6 +8,15 @@ Hessian of an optimization) and is discarded, so only a frequency calculation
 at the final geometry is reported. Summaries condense a mode into its dominant
 atom displacements and, when a bond pair is given, its alignment with that
 coordinate.
+
+This module is the single source of truth for which frequency section counts,
+which lines of it are frequencies, and which of those are imaginary. The
+completion analyzer (``out_analyzer``) verifies a TS through
+:func:`scan_frequency_sections` and :meth:`FrequencyAnalysis.imaginary_count`,
+the same calls the SI and reports publish from, so a verified TS can never be
+re-counted differently downstream (``docs/PUBLIC_CONTRACTS.md`` §4). Lines are
+split like a file read (CR, LF, CRLF only) and input echoes and comments are
+skipped, as every other execution diagnostic does.
 """
 
 from __future__ import annotations
@@ -15,12 +24,13 @@ from __future__ import annotations
 import logging
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1
+from .output_status import is_execution_output_line, iter_output_lines
 from .parser.io import read_orca_text
 
 logger = logging.getLogger(__name__)
@@ -35,7 +45,11 @@ _FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
 _FINAL_ENERGY_HEADER = "FINAL SINGLE POINT ENERGY"
 _MODES_HEADER = "NORMAL MODES"
 _COORDS_HEADER = "CARTESIAN COORDINATES (ANGSTROEM)"
-_FREQ_LINE_RE = re.compile(r"^\s*(\d+):\s*(-?\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
+# One printed wavenumber: a signed number followed by ``cm**-1``, preceded by
+# the line start, whitespace, or the mode index's colon (``   6:  -412.34 cm**-1``).
+# This is the rule the completion analyzer has always verified a TS by; it
+# also accepts the numbered form ORCA prints.
+FREQUENCY_VALUE_RE = re.compile(r"(?:^|[\s:])(-?\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
 _COORD_LINE_RE = re.compile(r"^\s*([A-Za-z]{1,2})\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s*$")
 
 
@@ -50,7 +64,34 @@ class FrequencyAnalysis:
         return [self.mode_matrix.get(row, {}).get(mode_index, 0.0) for row in range(n_rows)]
 
     def imaginary_count(self) -> int:
-        return sum(1 for freq in self.frequencies if freq < -FREQ_EPS_CM)
+        """Number of modes below ``-IMAGINARY_FREQ_THRESHOLD_CM1``; the published Nimag."""
+        return sum(1 for freq in self.frequencies if is_imaginary_frequency(freq))
+
+
+@dataclass(frozen=True)
+class FrequencySections:
+    """Outcome of one pass over an output's ``VIBRATIONAL FREQUENCIES`` sections.
+
+    ``analysis`` is the section (with its modes and geometry) that follows the
+    last final single point energy, or ``None``. ``seen`` is True when any
+    section header was read at all: with ``analysis`` None that means every
+    section was superseded by a later final energy (or printed no
+    frequencies), which is not the same as an output that never ran a
+    frequency calculation.
+    """
+
+    analysis: FrequencyAnalysis | None
+    seen: bool
+
+
+def is_imaginary_frequency(frequency_cm: float) -> bool:
+    """True below the shared noise threshold; ``-5 cm**-1`` is noise, not a mode."""
+    return frequency_cm < -IMAGINARY_FREQ_THRESHOLD_CM1
+
+
+def frequency_values(line: str) -> list[float]:
+    """Wavenumbers printed on one output line; empty for any other line."""
+    return [float(match.group(1)) for match in FREQUENCY_VALUE_RE.finditer(line)]
 
 
 @dataclass(frozen=True)
@@ -81,7 +122,18 @@ def parse_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
 
 def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
     """Last final-geometry frequency/mode/geometry blocks of decoded ORCA output."""
+    return scan_frequency_sections(iter_output_lines(text)).analysis
+
+
+def scan_frequency_sections(lines: Iterable[str]) -> FrequencySections:
+    """Single pass over output lines (a file handle or :func:`iter_output_lines`).
+
+    Only CR, LF and CRLF may separate the lines fed here; ``str.splitlines()``
+    also breaks on form feeds and Unicode separators and would section a small
+    output differently from the same output streamed from disk.
+    """
     freqs: list[float] | None = None
+    seen = False
     modes: dict[int, dict[int, float]] | None = None
     coords: list[tuple[str, float, float, float]] | None = None
 
@@ -103,7 +155,9 @@ def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
         section = ""
         started = False
 
-    for line in text.splitlines():
+    for line in lines:
+        if not is_execution_output_line(line):
+            continue
         stripped = line.strip()
         upper = stripped.upper()
         if upper.startswith(_FINAL_ENERGY_HEADER):
@@ -117,6 +171,7 @@ def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
         if upper == _FREQ_HEADER:
             close_section()
             section, current_freqs = "freq", []
+            seen = True
             continue
         if upper == _MODES_HEADER:
             close_section()
@@ -127,9 +182,9 @@ def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
             section, current_coords = "coords", []
             continue
         if section == "freq":
-            match = _FREQ_LINE_RE.match(line)
-            if match is not None:
-                current_freqs.append(float(match.group(2)))
+            values = frequency_values(line)
+            if values:
+                current_freqs.extend(values)
                 started = True
             elif stripped and started:
                 close_section()
@@ -158,11 +213,14 @@ def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
     close_section()
 
     if freqs is None:
-        return None
-    return FrequencyAnalysis(
-        frequencies=tuple(freqs),
-        mode_matrix=modes or {},
-        atoms=tuple(coords or []),
+        return FrequencySections(analysis=None, seen=seen)
+    return FrequencySections(
+        analysis=FrequencyAnalysis(
+            frequencies=tuple(freqs),
+            mode_matrix=modes or {},
+            atoms=tuple(coords or []),
+        ),
+        seen=seen,
     )
 
 
@@ -226,7 +284,9 @@ def mode_summaries(
     alignment_pair: tuple[int, int] | None,
 ) -> tuple[ModeSummary, ...]:
     """All imaginary modes, or the lowest real mode when none are imaginary."""
-    imaginary = [idx for idx, freq in enumerate(analysis.frequencies) if freq < -FREQ_EPS_CM]
+    imaginary = [
+        idx for idx, freq in enumerate(analysis.frequencies) if is_imaginary_frequency(freq)
+    ]
     if imaginary:
         chosen = imaginary
     else:
@@ -245,7 +305,7 @@ def mode_summaries(
             ModeSummary(
                 mode_index=mode_index,
                 frequency_cm=analysis.frequencies[mode_index],
-                imaginary=analysis.frequencies[mode_index] < -FREQ_EPS_CM,
+                imaginary=is_imaginary_frequency(analysis.frequencies[mode_index]),
                 top_atoms=_top_atom_displacements(analysis, vector),
                 scan_alignment=_pair_alignment(analysis, vector, alignment_pair),
             )

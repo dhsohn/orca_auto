@@ -41,7 +41,7 @@ from ..state import (
     new_state,
 )
 from ..state_reading import load_state, state_path, state_payload_job_id
-from ..statuses import AnalyzerStatus
+from ..statuses import TERMINAL_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
 from ..types import RunState
 from . import worker_tracking
 from .adapter import (
@@ -59,7 +59,11 @@ from .adapter import (
     update_terminal,
 )
 from .adapter import update_metadata as update_queue_metadata
-from .entries import queue_entry_is_retired_workflow_owned
+from .entries import (
+    ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
+    queue_entry_is_retired_workflow_owned,
+)
 from .models import OrcaRunningJob as RunningJob
 from .terminal_replay import (
     TERMINAL_REPLAY_METADATA_KEY,
@@ -77,9 +81,6 @@ if TYPE_CHECKING:
     from .worker import OrcaQueueWorker
 
 logger = logging.getLogger(__name__)
-
-ACTIVE_QUEUE_STATUSES = frozenset({"pending", "running"})
-TERMINAL_QUEUE_STATUSES = frozenset({STATUS_COMPLETED, STATUS_CANCELLED, STATUS_FAILED})
 
 
 def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
@@ -111,7 +112,7 @@ class ReactionGenerationRow:
 
     @property
     def active(self) -> bool:
-        return self.status in ACTIVE_QUEUE_STATUSES
+        return self.status in ACTIVE_STATUSES
 
 
 @dataclass(frozen=True)
@@ -803,7 +804,7 @@ def _collect_durable_terminal_replays(
 ) -> set[tuple[str, str]]:
     blocked_marker_keys: set[tuple[str, str]] = set()
     for queue_root, entry in after_entries:
-        if normalized_entry_status(entry) not in TERMINAL_QUEUE_STATUSES:
+        if normalized_entry_status(entry) not in TERMINAL_STATUSES:
             continue
         resolved_root = str(Path(queue_root).expanduser().resolve())
         key = (resolved_root, queue_entry_id(entry))
@@ -885,7 +886,7 @@ def _select_replay_generation_owners(
         pending_replay = isinstance(pending_item, TerminalReplayWorkItem)
         current_generation_keys.add(owner)
         marker_kind = terminal_replay_marker_kind(entry)
-        if normalized_entry_status(entry) in TERMINAL_QUEUE_STATUSES and (
+        if normalized_entry_status(entry) in TERMINAL_STATUSES and (
             terminal_replay_is_fence_only(entry)
             or marker_kind is TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED
         ):
@@ -907,7 +908,7 @@ def _select_replay_generation_owners(
                 # Once preparation succeeds, state identity becomes authoritative
                 # and a mismatch correctly supersedes this pending replay.
                 transitioned_from_active=(
-                    before_status in ACTIVE_QUEUE_STATUSES
+                    before_status in ACTIVE_STATUSES
                     or (
                         isinstance(pending_item, TerminalReplayWorkItem)
                         and not pending_item.state_prepared
@@ -965,7 +966,7 @@ def _replay_current_terminal_entries(
         key = (str(Path(queue_root).expanduser().resolve()), queue_id)
         status = normalized_entry_status(entry)
         after_statuses[key] = status
-        if status not in TERMINAL_QUEUE_STATUSES:
+        if status not in TERMINAL_STATUSES:
             pending_replays.pop(key, None)
             continue
         marker_kind = terminal_replay_marker_kind(entry)
@@ -989,8 +990,7 @@ def _replay_current_terminal_entries(
         # transition; replaying it can rewrite its state/run identity and resend
         # an old notification.
         observed_active_transition = (
-            before_status in ACTIVE_QUEUE_STATUSES
-            or previous_statuses.get(key) in ACTIVE_QUEUE_STATUSES
+            before_status in ACTIVE_STATUSES or previous_statuses.get(key) in ACTIVE_STATUSES
         )
         if key not in pending_replays and not observed_active_transition:
             continue
@@ -1007,7 +1007,7 @@ def _replay_current_terminal_entries(
             )
             # Ambiguity is retryable: state/report identity may become durable on
             # the next poll without another queue status transition.
-            after_statuses[key] = "running"
+            after_statuses[key] = STATUS_RUNNING
             if reaction_key in latest_generation_by_reaction:
                 pending_replays.pop(key, None)
             continue
@@ -1062,7 +1062,7 @@ def _replay_current_terminal_entries(
             )
             # Keep this transition pending so the next periodic reconcile
             # retries the idempotent terminal side effects.
-            after_statuses[key] = "running"
+            after_statuses[key] = STATUS_RUNNING
         else:
             try:
                 _clear_terminal_replay_marker(item)
@@ -1071,7 +1071,7 @@ def _replay_current_terminal_entries(
                     "Failed to clear completed ORCA terminal replay marker: %s",
                     item.queue_id,
                 )
-                after_statuses[key] = "running"
+                after_statuses[key] = STATUS_RUNNING
             else:
                 pending_replays.pop(key, None)
                 after_statuses[key] = item.resolved_status
@@ -1294,7 +1294,7 @@ def _load_state_for_terminal_generation(
 def _record_terminal_run_state(
     job_dir: Path,
     *,
-    status: str,
+    status: RunStatus,
     reason: str,
     fallback_job_id: str | None = None,
     selected_inp: str | None = None,
@@ -1335,7 +1335,7 @@ def _record_terminal_run_state(
         final_result = state.get("final_result")
         if isinstance(final_result, dict):
             existing_status = str(final_result.get("status") or "").strip()
-            if existing_status in {STATUS_COMPLETED, STATUS_CANCELLED, STATUS_FAILED}:
+            if existing_status in TERMINAL_RUN_STATUS_VALUES:
                 # A real terminal outcome was already recorded (e.g. the run finished
                 # just before cancellation landed); do not clobber it, and report the
                 # real status so the queue entry is reconciled to what actually
@@ -1356,7 +1356,7 @@ def _record_terminal_run_state(
         )
         finalize_state(job_dir, state, status=status, final_result=terminal_result)
         write_report_files(job_dir, state)
-        return run_id, status
+        return run_id, status.value
 
 
 def record_cancelled_run_state(
@@ -1371,7 +1371,7 @@ def record_cancelled_run_state(
 
     return _record_terminal_run_state(
         job_dir,
-        status=STATUS_CANCELLED,
+        status=RunStatus.CANCELLED,
         reason="cancel_requested",
         fallback_job_id=fallback_job_id,
         selected_inp=selected_inp,
@@ -1393,7 +1393,7 @@ def record_failed_run_state(
 
     return _record_terminal_run_state(
         job_dir,
-        status=STATUS_FAILED,
+        status=RunStatus.FAILED,
         reason=reason,
         fallback_job_id=fallback_job_id,
         selected_inp=selected_inp,

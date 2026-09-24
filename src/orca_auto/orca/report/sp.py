@@ -17,6 +17,7 @@ from typing import Any
 from ..evidence import (
     OrcaEvidenceError,
     collect_structure_evidence,
+    final_out_name,
     final_out_path,
     parsed_final_output,
     parsed_frequency_analysis,
@@ -33,6 +34,7 @@ from .attempts import (
     AttemptReportRow,
     attempt_dicts,
     attempt_report_rows,
+    attempts_metric_card,
     attempts_table_html,
     duration_text,
     terminal_actions_html,
@@ -106,9 +108,6 @@ def collect_sp_report_data(reaction_dir: Path, state: Mapping[str, Any]) -> SpRe
 
     final_result = state.get("final_result")
     final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
-    last_out = str(final_payload.get("last_out_path") or "").strip()
-    if not last_out and attempts:
-        last_out = str(attempts[-1].get("out_path") or "").strip()
 
     return SpReportData(
         title=reaction_dir.name or str(reaction_dir),
@@ -126,7 +125,7 @@ def collect_sp_report_data(reaction_dir: Path, state: Mapping[str, Any]) -> SpRe
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         si_block_text=si_block_text,
-        last_out_name=Path(last_out).name if last_out else "",
+        last_out_name=final_out_name(state),
     )
 
 
@@ -208,13 +207,7 @@ def _metric_cards(data: SpReportData) -> str:
         cards.append(metric_card("Charge / multiplicity", electronic_state, note))
     if data.imaginary_count is not None:
         cards.append(metric_card("Imaginary frequencies", str(data.imaginary_count), ""))
-    cards.append(
-        metric_card(
-            "Attempts",
-            str(len(data.attempts)),
-            data.total_duration_text and f"total wall time {data.total_duration_text}",
-        )
-    )
+    cards.append(attempts_metric_card(data.attempts, data.total_duration_text))
     return "".join(cards)
 
 

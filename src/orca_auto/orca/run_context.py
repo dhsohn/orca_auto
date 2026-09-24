@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.config.schema import normalize_max_concurrent
 from orca_auto.core.paths import is_subpath
 from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.orca.config import AppConfig
@@ -66,7 +65,7 @@ class RunSubmissionContext:
 
 
 def configured_max_concurrent(cfg: AppConfig) -> int:
-    return normalize_max_concurrent(cfg.runtime.max_concurrent, 4)
+    return cfg.runtime.max_concurrent
 
 
 def configured_admission_root(cfg: AppConfig) -> Path:

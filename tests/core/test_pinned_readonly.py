@@ -13,7 +13,7 @@ _FIFO_READER = """
 import os
 import sys
 from pathlib import Path
-from orca_auto.core import engine_process, engine_scratch
+from orca_auto.core import engine_scratch
 
 reader, root_text = sys.argv[1:]
 root = Path(root_text)
@@ -23,11 +23,7 @@ durable_fd = os.open(root / "durable", os.O_RDONLY | os.O_DIRECTORY)
 before_fds = len(list(Path("/proc/self/fd").iterdir()))
 try:
     try:
-        if reader == "tail":
-            engine_process.read_confined_tail_lines(
-                root, path, label="Tail", max_lines=5
-            )
-        elif reader == "scratch_input":
+        if reader == "scratch_input":
             engine_scratch._read_stable_regular_file_at(
                 directory_fd, path.name, display_path=path
             )
@@ -43,7 +39,6 @@ try:
             raise AssertionError(reader)
     except (ValueError, engine_scratch.EngineScratchError) as exc:
         expected = {
-            "tail": "Tail must be a single-link regular file: ",
             "scratch_input": "engine input is not a private regular file: ",
             "scratch_hash": "engine durable artifact is unsafe: ",
             "scratch_copy": "engine scratch artifact is unsafe: ",
@@ -59,7 +54,7 @@ finally:
 """
 
 
-@pytest.mark.parametrize("reader", ["tail", "scratch_input", "scratch_hash", "scratch_copy"])
+@pytest.mark.parametrize("reader", ["scratch_input", "scratch_hash", "scratch_copy"])
 def test_pinned_readers_reject_fifo_without_blocking(tmp_path: Path, reader: str) -> None:
     os.mkfifo(tmp_path / "artifact.out")
     (tmp_path / "durable").mkdir()

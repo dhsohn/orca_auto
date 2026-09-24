@@ -28,6 +28,35 @@ checkout. They also verify a prepared immutable runtime. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading to the next major
+
+The next major release removes public contracts and needs an idle-window
+cutover; publishing the package alone performs none of these steps.
+
+- The worker unit `ExecStart` no longer passes `--app orca`, and the new
+  worker rejects that option. A unit that still carries it cannot start the new
+  code: an automatic restart after a crash or a reboot would hit the systemd
+  start limit, and `service restart` refuses such a unit. Install the new units
+  before anything restarts: during an idle window (`active_simulations: 0`) run
+  `orca_auto systemd install --user USER --repo <repo>` (it rewrites `ExecStart`
+  without going through the restart guard), then restart under the guard and
+  verify `service status --json` against the running worker as in
+  [RUNTIME](RUNTIME.md).
+- Rolling back to 7.0.x: admission slot rows written by the new version omit the
+  retired `workflow_id` field, which 7.0.x readers require. Released slots are
+  removed from `admission_slots.json`, so roll back only in an idle window with
+  no reserved or active slots; do not carry a slot file with new-format rows
+  back to 7.0.x.
+- Configuration discovery no longer probes a checkout-local
+  `config/orca_auto.yaml`; only `--config`, `ORCA_AUTO_CONFIG` and
+  `~/orca_auto/config/orca_auto.yaml` are consulted. Move a checkout-local file
+  to `~/orca_auto/config/orca_auto.yaml`, or pass it with `--config` or
+  `ORCA_AUTO_CONFIG`, before restarting. `systemd install --config` defaults to
+  the target user's `~/orca_auto/config/orca_auto.yaml`.
+- `queue worker --app`, `queue list --engine` and `queue list --kind` are
+  removed; drop them from scripts. `service status --json` no longer carries
+  `version_drift`.
+
 ## Upgrading to 7.0
 
 This release removes all workflow support: the `orca_auto_workflows` extension,

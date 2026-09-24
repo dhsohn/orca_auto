@@ -4,8 +4,6 @@ import signal as signal
 
 from ..child.process import (
     live_queue_slot_keys_for_slots,
-    reconcile_orphaned_child_queue_entries,
-    shutdown_child_process_with_grace,
     start_background_process,
     status_matches,
 )
@@ -62,11 +60,9 @@ __all__ = [
     "pop_completed_worker_jobs",
     "queue_entry_by_id",
     "read_worker_pid_file",
-    "reconcile_orphaned_child_queue_entries",
     "remove_worker_pid_file",
     "reserve_dequeued_entry",
     "resolve_admission_root",
-    "shutdown_child_process_with_grace",
     "signal",
     "start_background_process",
     "status_matches",

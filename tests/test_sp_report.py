@@ -151,6 +151,24 @@ def test_sp_report_html_renders_energy_and_embedded_si_block(tmp_path: Path) -> 
     assert "si_block.md" in text
 
 
+def test_sp_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
+    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text())
+    missing_out = tmp_path / "rxn_retry.out"
+    state["attempts"].append({"index": 2, "out_path": str(missing_out)})
+    state["final_result"]["last_out_path"] = str(missing_out)
+
+    path = write_job_html_report(
+        tmp_path, state, generation_target=report_generation_target(tmp_path)
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "SP report" in text
+    assert "last output:" not in text
+    assert "rxn_retry.out" not in text
+    assert "<code>rxn.out</code>" not in text
+
+
 def test_sp_report_does_not_publish_unverified_electronic_state(tmp_path: Path) -> None:
     state = _job_dir(
         tmp_path,

@@ -8,11 +8,40 @@ from orca_auto.activity_view import (
     filter_activity_items,
     normalize_activity_filter_values,
 )
-from orca_auto.core.activity import ActivityListRequest, ActivitySourceRequest
+from orca_auto.core.activity import (
+    ActivityListRequest,
+    ActivityRecord,
+    ActivitySourceRequest,
+    ResolvedActivitySources,
+    sort_key,
+)
+from orca_auto.core.config import discovery
+from orca_auto.core.engine_runtime import engine_runtime_paths
 from orca_auto.core.utils import normalize_text
 
-from . import _sources
-from ._collectors import collect_activity_records_from_request
+from . import _orca, _orca_index
+
+
+def resolve_activity_sources(request: ActivitySourceRequest) -> ResolvedActivitySources:
+    config = normalize_text(request.orca_config) or normalize_text(request.shared_config)
+    return ResolvedActivitySources(orca_config=discovery.resolve_shared_config_path(config or None))
+
+
+def collect_activity_records(
+    resolved: ResolvedActivitySources,
+    request: ActivityListRequest,
+) -> list[ActivityRecord]:
+    config_path = normalize_text(resolved.orca_config)
+    if not config_path:
+        return []
+    if request.indexed:
+        root = engine_runtime_paths(config_path)["allowed_root"]
+        indexed = _orca_index.query_records(root, request)
+        if not request.refresh:
+            return sorted(indexed, key=sort_key, reverse=True)
+        # Explicit unindexed discoveries remain local to this one query.
+    records = _orca.orca_records(config_path=config_path, refresh=request.refresh)
+    return sorted(records, key=sort_key, reverse=True)
 
 
 def list_activities(
@@ -21,9 +50,7 @@ def list_activities(
     refresh: bool = False,
     limit: int = 0,
     orca_config: str | None = None,
-    engines: Sequence[str] = (),
     statuses: Sequence[str] = (),
-    kinds: Sequence[str] = (),
 ) -> dict[str, Any]:
     request = ActivityListRequest(
         sources=ActivitySourceRequest(
@@ -33,16 +60,12 @@ def list_activities(
         refresh=refresh,
         limit=limit,
         indexed=True,
-        engines=normalize_activity_filter_values(engines),
         statuses=normalize_activity_filter_values(statuses),
-        kinds=normalize_activity_filter_values(kinds),
     )
-    resolved = _sources.resolve_activity_source_request(request.sources)
-    records = collect_activity_records_from_request(request)
+    resolved = resolve_activity_sources(request.sources)
+    records = collect_activity_records(resolved, request)
     all_items = [record.to_dict() for record in records]
-    items = filter_activity_items(
-        all_items, engines=request.engines, statuses=request.statuses, kinds=request.kinds
-    )
+    items = filter_activity_items(all_items, statuses=request.statuses)
     if request.limit > 0:
         items = items[: request.limit]
     blockers = []
@@ -69,4 +92,4 @@ def list_activities(
     }
 
 
-__all__ = ["list_activities"]
+__all__ = ["collect_activity_records", "list_activities", "resolve_activity_sources"]

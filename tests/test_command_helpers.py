@@ -9,8 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as CONFIG_ENV_VAR
-from orca_auto.core.config import engines as config_engines
-from orca_auto.core.config.engines import default_shared_config_path as default_config_path
+from orca_auto.core.config.discovery import default_shared_config_path as default_config_path
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution import _emit
 from orca_auto.orca.run_context import _validate_reaction_dir
@@ -62,55 +61,20 @@ class TestCommandPathValidators(unittest.TestCase):
 
 
 class TestHelperUtilities(unittest.TestCase):
-    def test_default_config_path_prefers_primary_repo_then_home_then_repo_default(self) -> None:
-        repo_root = Path(config_engines.__file__).resolve().parents[4]
-        repo_default = repo_root / "config" / "orca_auto.yaml"
-        original_exists = Path.exists
+    def test_default_config_path_prefers_env_then_home_default(self) -> None:
+        fake_home = Path(tempfile.gettempdir()) / "tmp_home_for_test"
+        home_default = fake_home / "orca_auto" / "config" / "orca_auto.yaml"
 
-        with patch.dict(os.environ, {CONFIG_ENV_VAR: ""}, clear=False):
+        with (
+            patch.dict(os.environ, {CONFIG_ENV_VAR: ""}, clear=False),
+            patch.object(Path, "home", return_value=fake_home),
+        ):
+            # The home default is the only implicit location, whether or not
+            # the file exists yet; no checkout-relative path is probed.
+            self.assertEqual(default_config_path(), str(home_default))
 
-            def repo_exists(path: Path) -> bool:
-                if path == repo_default:
-                    return True
-                return original_exists(path)
-
-            with patch.object(Path, "exists", repo_exists):
-                self.assertEqual(default_config_path(), str(repo_default))
-
-            fake_home = repo_root / "tmp_home_for_test"
-            home_default = fake_home / "orca_auto" / "config" / "orca_auto.yaml"
-
-            def home_exists(path: Path) -> bool:
-                if path == repo_default:
-                    return False
-                if path == home_default:
-                    return True
-                return original_exists(path)
-
-            with (
-                patch.object(Path, "home", return_value=fake_home),
-                patch.object(
-                    Path,
-                    "exists",
-                    home_exists,
-                ),
-            ):
-                self.assertEqual(default_config_path(), str(home_default))
-
-            def fallback_exists(path: Path) -> bool:
-                if path in {repo_default, home_default}:
-                    return False
-                return original_exists(path)
-
-            with (
-                patch.object(Path, "home", return_value=fake_home),
-                patch.object(
-                    Path,
-                    "exists",
-                    fallback_exists,
-                ),
-            ):
-                self.assertEqual(default_config_path(), str(repo_default))
+        with patch.dict(os.environ, {CONFIG_ENV_VAR: "/tmp/env.yaml"}, clear=False):
+            self.assertEqual(default_config_path(), "/tmp/env.yaml")
 
     def test_emit_prints_only_known_keys(self) -> None:
         payload = {

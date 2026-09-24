@@ -366,3 +366,71 @@ class TestInpRewriter(unittest.TestCase):
                 "* xyzfile 0 1 input.xyz",
             ],
         )
+
+    def test_block_scanner_owns_termination_and_comment_rules(self) -> None:
+        from orca_auto.orca.input_blocks import find_block_range, iter_blocks
+
+        # Inline ``end`` closes the block on its header line; the following
+        # %scf body must not leak into the %pal rows.
+        inline = ["%pal nprocs 8 end", "%scf", "  MaxIter 100", "end", "* xyz 0 1", "H 0 0 0", "*"]
+        self.assertEqual(read_nprocs(inline), 8)
+        self.assertEqual(find_block_range(inline, "pal"), (0, 0, False))
+        self.assertEqual(find_block_range(inline, "scf"), (1, 3, False))
+
+        # ``end`` inside comments never closes a block; trailing comments are cut.
+        commented = ["%pal", "  # end #", "  # end", "  nprocs 6 # cores", "end"]
+        self.assertEqual(read_nprocs(commented), 6)
+        self.assertEqual(find_block_range(commented, "pal"), (0, 4, False))
+
+        # The geometry header and the next %directive cut an unterminated block.
+        unterminated = ["%pal", "  nprocs 4", "* xyz 0 1", "H 0 0 0", "*", "%maxcore 512"]
+        self.assertEqual(read_nprocs(unterminated), 4)
+        self.assertEqual(read_maxcore(unterminated), 512)
+        self.assertEqual(find_block_range(unterminated, "pal"), (0, 2, True))
+        cut_by_directive = ["%pal", "  nprocs 4", "%maxcore 512"]
+        self.assertEqual(find_block_range(cut_by_directive, "pal"), (0, 2, True))
+        self.assertEqual(
+            [[row.text for row in block.rows] for block in iter_blocks(cut_by_directive, "pal")],
+            [["nprocs 4"]],
+        )
+
+    def test_geometry_scanners_share_the_comment_tokenizer(self) -> None:
+        from orca_auto.orca.input_blocks import (
+            find_geometry_block,
+            find_geometry_start,
+            geometry_range,
+            replace_geometry_with_xyzfile,
+        )
+
+        lines = [
+            "! Freq",
+            "# header note # * xyz 0 1 # charge, mult",
+            "# fragment A",
+            "H 0 0 0 # first",
+            "  # fragment B #",
+            "H 0 0 0.74",
+            "* # done",
+            "%maxcore 512",
+        ]
+        block = find_geometry_block(lines)
+        assert block is not None
+        self.assertEqual(block.kind, "xyz")
+        self.assertEqual(block.atom_rows, ((3, "H 0 0 0"), (5, "H 0 0 0.74")))
+        self.assertEqual(block.terminator_index, 6)
+        self.assertEqual(find_geometry_start(lines), 1)
+        self.assertEqual(geometry_range(lines), (1, 7, 0, 1))
+        self.assertTrue(replace_geometry_with_xyzfile(lines, Path("/tmp/a.xyz"), Path("/tmp")))
+        self.assertEqual(lines, ["! Freq", "* xyzfile 0 1 a.xyz", "%maxcore 512"])
+
+        quoted = find_geometry_block(['* xyzfile 0 1 "my mol.xyz" # reference'])
+        assert quoted is not None
+        self.assertEqual((quoted.kind, quoted.reference), ("xyzfile", "my mol.xyz"))
+
+
+def test_set_block_key_value_updates_a_body_row_that_carries_the_closing_end() -> None:
+    from orca_auto.orca.input_blocks import set_block_key_value
+
+    lines = ["! Opt", "%pal", " nprocs 8 end", "* xyz 0 1", "H 0 0 0", "*"]
+    assert set_block_key_value(lines, "pal", "nprocs", "4") is True
+    assert lines == ["! Opt", "%pal", "  nprocs 4 end", "* xyz 0 1", "H 0 0 0", "*"]
+    assert set_block_key_value(lines, "pal", "nprocs", "4") is False

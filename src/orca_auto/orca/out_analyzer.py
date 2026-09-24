@@ -1,27 +1,23 @@
 from __future__ import annotations
 
 import logging
-import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypedDict, cast
 
-from .completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1, CompletionMode
+from .completion_rules import CompletionMode
+from .frequencies import frequency_values, is_imaginary_frequency, scan_frequency_sections
 from .output_status import (
     is_execution_output_line,
     iter_output_lines,
     optimization_convergence_line,
     termination_line,
 )
+from .parser.io import open_orca_text, read_orca_text
 from .statuses import AnalyzerStatus
 
 logger = logging.getLogger(__name__)
-
-
-NEG_FREQ_RE = re.compile(r"(^|\s)(-\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
-VIB_FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
-FINAL_ENERGY_HEADER = "FINAL SINGLE POINT ENERGY"
 
 _DEFAULT_BUFFER_BYTES = 64 * 1024
 _TS_BUFFER_BYTES = 256 * 1024
@@ -217,74 +213,58 @@ def _interpret_ts_completion(markers: OutMarkers, mode: CompletionMode) -> OutAn
     )
 
 
-def _scan_full_for_markers(out_path: Path, encoding: str, markers: OutMarkers) -> None:
+def _scan_full_for_markers(out_path: Path, markers: OutMarkers) -> None:
     """Stream complete lines with the same diagnostic rules as buffered reads."""
-    with out_path.open("r", encoding=encoding, errors="ignore") as handle:
+    with open_orca_text(out_path) as handle:
         for line in handle:
             _scan_line_for_markers(line, markers)
 
 
-def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool, bool]:
+def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
     """Imaginary modes of the frequency section that verifies the final geometry.
 
     ORCA prints a ``VIBRATIONAL FREQUENCIES`` section for every Hessian it
     computes, including the initial and recalculated Hessians of an ``OptTS``
     run. A section followed by another final single point energy belongs to an
     earlier geometry and verifies nothing; only a section after the last final
-    energy counts. An output whose sections were all superseded reports zero
-    modes, and an output without any section keeps the legacy whole-file count.
+    energy counts. Section selection, the frequency line rule and the noise
+    threshold are ``frequencies.scan_frequency_sections``: the count is the
+    ``imaginary_count()`` of the very analysis the SI and reports publish, so
+    the verdict and the published Nimag cannot disagree. An output whose
+    sections were all superseded reports zero modes, and an output without any
+    section keeps the legacy whole-file count of imaginary wavenumbers.
 
-    Returns ``(imaginary_count, irc_found, final_section)`` where
-    ``final_section`` is True only when the count came from a section after
-    the last final energy.
+    Returns ``(imaginary_count, final_section)`` where ``final_section`` is
+    True only when the count came from a section after the last final energy.
 
     Every caller feeds the same universal-newline line stream, so the count
     does not depend on whether the file was small enough to be read whole.
     """
-    total_negative_count = 0
-    last_vib_section_negative_count = 0
-    saw_vib_section = False
-    superseded_vib_section = False
-    irc_found = False
+    headerless_count = 0
 
-    for line in lines:
-        if not is_execution_output_line(line):
-            continue
-        upper = line.upper()
-        if "IRC PATH SUMMARY" in upper or "IRC-DRV" in upper:
-            irc_found = True
-        if VIB_FREQ_HEADER in upper:
-            saw_vib_section = True
-            last_vib_section_negative_count = 0
-            continue
-        if saw_vib_section and upper.lstrip().startswith(FINAL_ENERGY_HEADER):
-            saw_vib_section = False
-            superseded_vib_section = True
-            last_vib_section_negative_count = 0
-            continue
+    def counted_lines() -> Iterator[str]:
+        nonlocal headerless_count
+        for line in lines:
+            if is_execution_output_line(line):
+                headerless_count += sum(
+                    1 for value in frequency_values(line) if is_imaginary_frequency(value)
+                )
+            yield line
 
-        neg_count = sum(
-            1
-            for match in NEG_FREQ_RE.finditer(line)
-            if abs(float(match.group(2))) > IMAGINARY_FREQ_THRESHOLD_CM1
-        )
-        total_negative_count += neg_count
-        if saw_vib_section:
-            last_vib_section_negative_count += neg_count
-
-    if saw_vib_section:
-        return last_vib_section_negative_count, irc_found, True
-    if superseded_vib_section:
-        return 0, irc_found, False
-    return total_negative_count, irc_found, False
+    sections = scan_frequency_sections(counted_lines())
+    if sections.analysis is not None:
+        return sections.analysis.imaginary_count(), True
+    if sections.seen:
+        return 0, False
+    return headerless_count, False
 
 
-def _scan_ts_full_for_imag_count(out_path: Path, encoding: str) -> tuple[int, bool, bool]:
-    with out_path.open("r", encoding=encoding, errors="ignore") as handle:
+def _scan_ts_full_for_imag_count(out_path: Path) -> tuple[int, bool]:
+    with open_orca_text(out_path) as handle:
         return scan_ts_lines_for_imag_count(handle)
 
 
-def _scan_ts_text_for_imag_count(text: str) -> tuple[int, bool, bool]:
+def _scan_ts_text_for_imag_count(text: str) -> tuple[int, bool]:
     # The shared iterator splits exactly where reading the file
     # would: on LF, CR and CRLF only. ``str.splitlines()`` also breaks on the
     # vertical tab, the form feed, the file/group/record separators, NEL, and
@@ -303,31 +283,27 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
         )
 
     try:
-        encoding = "utf-8"
         file_size = out_path.stat().st_size
         buffer_bytes = _TS_BUFFER_BYTES if mode.kind == "ts" else _DEFAULT_BUFFER_BYTES
         full_text: str | None = None
 
+        # Both branches decode by the parser's rule (``parser.io``), so the
+        # verdict reads the same text as the frequency analysis and the reports.
         if file_size <= buffer_bytes:
             # Buffer small files so TS verification can reuse the same text.
-            with out_path.open("r", encoding=encoding, errors="ignore") as handle:
-                full_text = handle.read()
+            full_text = read_orca_text(out_path)
             _scan_text_for_markers(full_text, markers)
         else:
-            _scan_full_for_markers(out_path, encoding, markers)
+            _scan_full_for_markers(out_path, markers)
 
         # TS mode needs exact imaginary frequency count from the final vibration block.
         if mode.kind == "ts" and markers["terminated_normally"]:
             if full_text is None:
-                imag_count, irc_found, final_section = _scan_ts_full_for_imag_count(
-                    out_path, encoding
-                )
+                imag_count, final_section = _scan_ts_full_for_imag_count(out_path)
             else:
-                imag_count, irc_found, final_section = _scan_ts_text_for_imag_count(full_text)
+                imag_count, final_section = _scan_ts_text_for_imag_count(full_text)
             markers["imaginary_frequency_count"] = imag_count
             markers["final_frequency_section"] = final_section
-            if irc_found:
-                markers["irc_marker_found"] = True
 
     except OSError:
         return OutAnalysis(

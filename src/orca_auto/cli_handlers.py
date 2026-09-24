@@ -15,16 +15,16 @@ from orca_auto.core.commands.run_dir import (
     use_run_dir_publication_guard,
     validate_production_run_dir_target,
 )
-from orca_auto.core.config.bounded_yaml import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.config.discovery import (
     engine_config_for_args,
     resolve_shared_config_path,
     shared_config_text_from_args,
 )
 from orca_auto.core.config.files import (
-    load_shared_config_mapping,
+    YAML_CONFIG_LOAD_EXCEPTIONS,
+    load_shared_config,
     shared_runs_root_from_config,
-    usable_runs_root_from_mapping,
+    usable_runs_root_text,
 )
 from orca_auto.core.indexing import (
     JobLocationIndexError,
@@ -275,14 +275,14 @@ def cmd_index_prune(args: argparse.Namespace) -> int:
     try:
         # Load through the shared validator so a missing or damaged config
         # names its own failure instead of reading as "not configured".
-        _config, parsed = load_shared_config_mapping(config_path)
+        _config, shared = load_shared_config(config_path)
     except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
         emit_error(
             exc,
             hint="Check the config path and repair the reported state file before retrying.",
         )
         return 1
-    root_text = usable_runs_root_from_mapping(parsed)
+    root_text = usable_runs_root_text(shared.runs_root)
     if not root_text:
         emit_error(
             f"runs_root is missing or invalid in {config_path}",

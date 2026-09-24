@@ -44,7 +44,7 @@ class ServiceUnitStatus:
     enabled: str
 
 
-def _default_service_user() -> str:
+def default_service_user() -> str:
     # These commands act on system units, so operators reach for `sudo
     # orca_auto service ...`. getpass.getuser() reports root under sudo, and
     # every unit name then resolves to an @root instance nobody installed.
@@ -59,16 +59,16 @@ def _default_service_user() -> str:
     return getpass.getuser()
 
 
-def _service_target_user(
+def service_target_user(
     args: argparse.Namespace,
     *,
-    default_service_user: Callable[[], str] | None = None,
+    default_user: Callable[[], str] | None = None,
 ) -> str:
-    default_user = default_service_user or _default_service_user
-    return normalize_text(getattr(args, "target_user", None)) or normalize_text(default_user())
+    resolve_default = default_user or default_service_user
+    return normalize_text(getattr(args, "target_user", None)) or normalize_text(resolve_default())
 
 
-def _service_units_for_user(target_user: str) -> tuple[tuple[str, str], ...]:
+def service_units_for_user(target_user: str) -> tuple[tuple[str, str], ...]:
     user_text = normalize_text(target_user)
     if not user_text:
         raise ValueError("service user is required")
@@ -77,7 +77,7 @@ def _service_units_for_user(target_user: str) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _single_line_command_output(completed: subprocess.CompletedProcess[Any]) -> str:
+def single_line_command_output(completed: subprocess.CompletedProcess[Any]) -> str:
     output = normalize_text(completed.stdout)
     if not output:
         output = normalize_text(completed.stderr)
@@ -103,7 +103,7 @@ def _run_systemctl(
     )
 
 
-def _show_unit_property(
+def show_unit_property(
     unit: str,
     property_name: str,
     *,
@@ -118,7 +118,7 @@ def _show_unit_property(
     )
 
 
-def _query_systemctl(
+def query_systemctl(
     action: str,
     unit: str,
     *,
@@ -128,22 +128,22 @@ def _query_systemctl(
         completed = _run_systemctl(action, unit, run=run)
     except OSError as exc:
         return f"error: {exc}"
-    return _single_line_command_output(completed)
+    return single_line_command_output(completed)
 
 
-def _unit_load_state(
+def unit_load_state(
     unit: str,
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> str:
     try:
-        completed = _show_unit_property(unit, "LoadState", run=run)
+        completed = show_unit_property(unit, "LoadState", run=run)
     except OSError as exc:
         return f"error: {exc}"
-    return _single_line_command_output(completed)
+    return single_line_command_output(completed)
 
 
-def _run_command(
+def run_command(
     command: Sequence[str],
     *,
     use_sudo: bool,
@@ -155,7 +155,7 @@ def _run_command(
     return int(completed.returncode)
 
 
-def _select_service_mode(
+def select_service_mode(
     *,
     enabled_state: Callable[[str], str | None],
     runtime_active: Callable[[], bool],
@@ -197,15 +197,28 @@ def collect_service_status(
         ServiceUnitStatus(
             label=label,
             unit=unit,
-            active=_query_systemctl("is-active", unit, run=run),
-            enabled=_query_systemctl("is-enabled", unit, run=run),
+            active=query_systemctl("is-active", unit, run=run),
+            enabled=query_systemctl("is-enabled", unit, run=run),
         )
-        for label, unit in _service_units_for_user(target_user)
+        for label, unit in service_units_for_user(target_user)
     )
 
 
-def _systemctl_available(*, which: Callable[[str], str | None] = shutil.which) -> bool:
+def systemctl_available(*, which: Callable[[str], str | None] = shutil.which) -> bool:
     return which("systemctl") is not None
 
 
-__all__ = ["ServiceUnitStatus", "collect_service_status"]
+__all__ = [
+    "ServiceUnitStatus",
+    "collect_service_status",
+    "default_service_user",
+    "query_systemctl",
+    "run_command",
+    "select_service_mode",
+    "service_target_user",
+    "service_units_for_user",
+    "show_unit_property",
+    "single_line_command_output",
+    "systemctl_available",
+    "unit_load_state",
+]

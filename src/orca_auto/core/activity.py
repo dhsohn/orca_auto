@@ -20,9 +20,7 @@ class ActivityListRequest:
     refresh: bool = False
     limit: int = 0
     indexed: bool = False
-    engines: tuple[str, ...] = ()
     statuses: tuple[str, ...] = ()
-    kinds: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

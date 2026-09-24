@@ -13,7 +13,7 @@ from orca_auto import cli as unified_cli
 from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as CONFIG_ENV_VAR
-from orca_auto.core.config.engines import default_shared_config_path as default_config_path
+from orca_auto.core.config.discovery import default_shared_config_path as default_config_path
 from orca_auto.orca.cli_logging import (
     configure_logging as _configure_logging,
 )
@@ -204,7 +204,7 @@ class TestCli(unittest.TestCase):
 
     @patch("orca_auto.cli_queue.cmd_queue_list", return_value=9)
     def test_main_dispatches_list_command(self, mock_cmd_list: MagicMock) -> None:
-        rc = main(["queue", "list", "--engine", "orca"])
+        rc = main(["queue", "list", "--status", "running"])
 
         self.assertEqual(rc, 9)
         mock_cmd_list.assert_called_once()

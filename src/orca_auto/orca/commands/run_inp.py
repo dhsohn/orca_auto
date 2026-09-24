@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.statuses import STATUS_QUEUED
+
 from .. import submission
 
 logger = logging.getLogger(__name__)
@@ -20,7 +22,7 @@ def _queued_submission_payload(
     worker_detail: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "status": "queued",
+        "status": STATUS_QUEUED,
         "job_dir": str(reaction_dir),
         "queue_id": submission.queue_adapter.queue_entry_id(entry),
     }

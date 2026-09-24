@@ -16,10 +16,9 @@ def _make_cfg(tmp: str) -> AppConfig:
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
     cfg = AppConfig(
-        runtime=OrcaRuntimeConfig(allowed_root=tmp),
+        runtime=OrcaRuntimeConfig(allowed_root=tmp, max_concurrent=1),
         paths=PathsConfig(orca_executable=str(fake_orca)),
     )
-    cfg.runtime.max_concurrent = 1
     return cfg
 
 

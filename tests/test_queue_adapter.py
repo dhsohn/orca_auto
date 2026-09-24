@@ -9,7 +9,7 @@ from unittest.mock import patch
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.processes import write_worker_pid_file
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.orca.engine import ENGINE_DEFINITION
+from orca_auto.orca.engine import ENGINE_RUNTIME
 from orca_auto.orca.queue.adapter import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
     TERMINAL_REPLAY_METADATA_KEY,
@@ -639,9 +639,7 @@ class TestQueueStore(unittest.TestCase):
         )
         queue_store.save_entries(self.root, [foreign, orca_entry])
 
-        queue_functions = ENGINE_DEFINITION.queue_functions
-        assert queue_functions is not None
-        dequeue = queue_functions.dequeue_next
+        dequeue = ENGINE_RUNTIME.dequeue_next
 
         claimed = dequeue(self.root)
         assert claimed is not None

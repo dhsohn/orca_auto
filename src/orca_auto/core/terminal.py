@@ -63,21 +63,16 @@ def color_enabled(stream: IO[str] | None = None) -> bool:
 
 _ACTIVITY_STATUS_COLORS = {
     _s.STATUS_CREATED: DIM,
-    _s.STATUS_PLANNED: DIM,
     _s.STATUS_PENDING: DIM,
     _s.STATUS_QUEUED: DIM,
-    _s.STATUS_SUBMITTED: CYAN,
     _s.STATUS_RUNNING: BLUE,
     _s.STATUS_RETRYING: YELLOW,
     _s.STATUS_CANCEL_REQUESTED: YELLOW,
     _s.STATUS_COMPLETED: GREEN,
     _s.STATUS_FAILED: RED,
-    _s.STATUS_CANCEL_FAILED: RED,
-    _s.STATUS_SUBMISSION_FAILED: RED,
     _s.STATUS_REPAIR_BLOCKED: RED,
     _s.STATUS_CANCELLED: MAGENTA,
-    # ORCA run results can report this bare failure variant.
-    "error": RED,
+    _s.STATUS_ERROR: RED,
 }
 
 

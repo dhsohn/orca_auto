@@ -308,8 +308,8 @@ class TestQueueWorkerMethods(unittest.TestCase):
             mock_start_background_process.call_args.kwargs["log_path"],
             str((self.root / "logs" / "q_test.log").resolve()),
         )
-        self.assertIn("orca_auto.core.engines.worker_child", command)
-        self.assertEqual(_command_arg(command, "--engine"), "orca")
+        self.assertIn("orca_auto.orca.commands.worker_child", command)
+        self.assertNotIn("--engine", command)
         self.assertEqual(_command_arg(command, "--queue-root"), str(self.root))
         self.assertEqual(_command_arg(command, "--queue-id"), "q_test")
         self.assertEqual(_command_arg(command, "--admission-token"), token or "")
@@ -3059,7 +3059,7 @@ class TestFillSlots(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = _make_cfg(tmp)
-            cfg.runtime.admission_limit = 5
+            cfg = replace(cfg, runtime=replace(cfg.runtime, admission_limit=5))
             original_max_concurrent = cfg.runtime.max_concurrent
 
             worker = OrcaQueueWorker(cfg, str(root / "config.yaml"), max_concurrent=2)

@@ -11,7 +11,7 @@ from ..deferral import queue_entry_admission_is_deferred
 from ..dependencies import ConfigT, QueueEntryDequeuer, WorkerConfig
 from ..priority import normalize_queue_priority
 from ..publication import queue_entry_is_claimable
-from ..types import QueueEntry
+from ..types import QueueEntry, QueueStatus
 from .models import ReservedQueueEntry, ReserveStatus
 
 T = TypeVar("T")
@@ -56,7 +56,7 @@ def _select_next_claimable_entry(
         for entry_index, entry in enumerate(list_queue_fn(root)):
             status_value = getattr(getattr(entry, "status", None), "value", None)
             status = str(status_value).strip().lower()
-            if status != "pending" or getattr(entry, "cancel_requested", False):
+            if status != QueueStatus.PENDING.value or getattr(entry, "cancel_requested", False):
                 continue
             if not queue_entry_is_claimable(entry):
                 continue
@@ -122,7 +122,7 @@ def peek_next_across_roots(
             status_value = getattr(getattr(entry, "status", None), "value", None)
             status = str(status_value).strip().lower()
             if (
-                status == "pending"
+                status == QueueStatus.PENDING.value
                 and not getattr(entry, "cancel_requested", False)
                 and not queue_entry_admission_is_deferred(entry)
             ):

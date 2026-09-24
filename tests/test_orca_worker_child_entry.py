@@ -1,17 +1,18 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from orca_auto.core.engines import worker_child
+from orca_auto.orca import worker_execution
+from orca_auto.orca.commands import worker_child
 
 
 def test_worker_child_parser_preserves_spawned_entrypoint_contract() -> None:
     args = worker_child.build_parser().parse_args(
         [
-            "--engine",
-            "crest",
             "--config",
             "/tmp/orca_auto.yaml",
             "--queue-root",
@@ -23,17 +24,34 @@ def test_worker_child_parser_preserves_spawned_entrypoint_contract() -> None:
         ]
     )
 
-    assert args.engine == "crest"
     assert args.config == "/tmp/orca_auto.yaml"
     assert args.queue_root == "/tmp/queue"
     assert args.queue_id == "queue-1"
     assert args.admission_token == "slot-1"
 
 
-def test_worker_child_parser_requires_the_engine_it_dispatches_on() -> None:
+@pytest.mark.parametrize("missing", ["--config", "--queue-root", "--queue-id"])
+def test_worker_child_parser_requires_the_queue_identity(missing: str) -> None:
+    argv = [
+        "--config",
+        "/tmp/orca_auto.yaml",
+        "--queue-root",
+        "/tmp/queue",
+        "--queue-id",
+        "queue-1",
+    ]
+    index = argv.index(missing)
+    del argv[index : index + 2]
+    with pytest.raises(SystemExit):
+        worker_child.build_parser().parse_args(argv)
+
+
+def test_worker_child_parser_rejects_the_retired_engine_selector() -> None:
     with pytest.raises(SystemExit):
         worker_child.build_parser().parse_args(
             [
+                "--engine",
+                "orca",
                 "--config",
                 "/tmp/orca_auto.yaml",
                 "--queue-root",
@@ -49,20 +67,14 @@ def test_worker_child_main_dispatches_the_parsed_queue_identity(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def fake_run_engine_worker_child_job(**kwargs: Any) -> int:
+    def fake_run_worker_child_job(**kwargs: Any) -> int:
         captured.update(kwargs)
         return 37
 
-    monkeypatch.setattr(
-        worker_child,
-        "run_engine_worker_child_job",
-        fake_run_engine_worker_child_job,
-    )
+    monkeypatch.setattr(worker_child, "run_worker_child_job", fake_run_worker_child_job)
 
     result = worker_child.main(
         [
-            "--engine",
-            "xtb",
             "--config",
             "/tmp/orca_auto.yaml",
             "--queue-root",
@@ -75,11 +87,12 @@ def test_worker_child_main_dispatches_the_parsed_queue_identity(
     )
 
     assert result == 37
-    assert captured["engine"] == "xtb"
-    assert captured["config_path"] == "/tmp/orca_auto.yaml"
-    assert captured["queue_root"] == "/tmp/queue"
-    assert captured["queue_id"] == "q-1"
-    assert captured["admission_token"] == "slot-1"
+    assert captured == {
+        "config_path": "/tmp/orca_auto.yaml",
+        "queue_root": "/tmp/queue",
+        "queue_id": "q-1",
+        "admission_token": "slot-1",
+    }
 
 
 def test_worker_child_main_treats_a_blank_admission_token_as_absent(
@@ -88,14 +101,12 @@ def test_worker_child_main_treats_a_blank_admission_token_as_absent(
     captured: dict[str, Any] = {}
     monkeypatch.setattr(
         worker_child,
-        "run_engine_worker_child_job",
+        "run_worker_child_job",
         lambda **kwargs: captured.update(kwargs) or 0,
     )
 
     worker_child.main(
         [
-            "--engine",
-            "orca",
             "--config",
             "/tmp/orca_auto.yaml",
             "--queue-root",
@@ -108,3 +119,29 @@ def test_worker_child_main_treats_a_blank_admission_token_as_absent(
     )
 
     assert captured["admission_token"] is None
+
+
+def test_spawned_child_command_round_trips_through_the_child_parser(tmp_path: Path) -> None:
+    command = worker_execution.build_worker_child_command(
+        config_path="/tmp/orca_auto.yaml",
+        queue_root=tmp_path / "queue",
+        queue_id="q-1",
+        admission_token="slot-1",
+    )
+
+    assert command[:3] == [sys.executable, "-m", "orca_auto.orca.commands.worker_child"]
+    assert "--engine" not in command
+    args = worker_child.build_parser().parse_args(command[3:])
+    assert (args.config, args.queue_root, args.queue_id, args.admission_token) == (
+        "/tmp/orca_auto.yaml",
+        str(tmp_path / "queue"),
+        "q-1",
+        "slot-1",
+    )
+
+    without_token = worker_execution.build_worker_child_command(
+        config_path="/tmp/orca_auto.yaml",
+        queue_root=tmp_path / "queue",
+        queue_id="q-1",
+    )
+    assert "--admission-token" not in without_token

@@ -74,7 +74,8 @@ def test_refresh_is_available_without_workflows(monkeypatch: pytest.MonkeyPatch)
 
     assert not hasattr(cli_queue, "require_workflows")
     request = cli_queue._queue_list_request(Namespace(refresh=True))
-    assert request.engine_values == ()
+    assert request.status_values == ()
+    assert not hasattr(request, "engine_values")
 
 
 def test_queue_known_run_does_not_require_an_index_entry(

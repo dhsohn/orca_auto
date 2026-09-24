@@ -666,3 +666,53 @@ class TestState(unittest.TestCase):
             with acquire_run_lock(reaction):
                 payload = json.loads(lock_path.read_text(encoding="utf-8"))
                 self.assertEqual(payload["pid"], os.getpid())
+
+
+class FinalizeStateContractTests(unittest.TestCase):
+    def _final_result(self, status: str) -> RunFinalResult:
+        return {
+            "status": status,
+            "analyzer_status": "incomplete",
+            "reason": "test",
+            "last_out_path": None,
+        }
+
+    def test_finalize_state_rejects_non_terminal_status(self) -> None:
+        from orca_auto.orca.statuses import RunStatus
+
+        with tempfile.TemporaryDirectory() as tmp:
+            reaction_dir = Path(tmp)
+            state = new_state(reaction_dir, reaction_dir / "job.inp")
+            for status in (RunStatus.RUNNING, RunStatus.CREATED, "running", "bogus", ""):
+                with self.subTest(status=status), self.assertRaises(ValueError):
+                    state_module.finalize_state(
+                        reaction_dir,
+                        state,
+                        status=status,
+                        final_result=self._final_result("failed"),
+                    )
+            self.assertEqual(state["status"], RunStatus.CREATED.value)
+            self.assertIsNone(state.get("final_result"))
+            self.assertFalse(state_reading_module.state_path(reaction_dir).exists())
+
+    def test_finalize_state_accepts_each_terminal_status_member_or_value(self) -> None:
+        from orca_auto.orca.statuses import TERMINAL_RUN_STATUSES, RunStatus
+
+        self.assertEqual(
+            TERMINAL_RUN_STATUSES,
+            {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED},
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            reaction_dir = Path(tmp)
+            for status in TERMINAL_RUN_STATUSES:
+                for given in (status, status.value):
+                    state = new_state(reaction_dir, reaction_dir / "job.inp")
+                    state_module.finalize_state(
+                        reaction_dir,
+                        state,
+                        status=given,
+                        final_result=self._final_result(status.value),
+                    )
+                    self.assertEqual(state["status"], status.value)
+                    self.assertIsInstance(state["status"], str)
+                    self.assertNotIsInstance(state["status"], RunStatus)

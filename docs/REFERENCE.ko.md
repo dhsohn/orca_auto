@@ -61,13 +61,27 @@ orca_auto queue list clear [--config PATH] [--json]
 
 ---
 
+### `orca_auto scratch list` & `scratch clear`
+`orca.runtime.scratch_root` 아래의 RAM scratch 워크스페이스를 점검하고 정리합니다. stale, unverifiable 또는 invalid-manifest 워크스페이스가 하나라도 있으면 제거 전까지 이후의 모든 scratch 실행이 차단됩니다.
+```bash
+orca_auto scratch list [--config PATH] [--json]
+orca_auto scratch clear NAME [--config PATH] [--json]
+orca_auto scratch clear --all-stale [--config PATH] [--json]
+```
+- `list`: 각 워크스페이스의 상태(`live`, `stale`, `unverifiable`, `invalid-manifest`, `unsafe`, `tombstone`), 소유 PID, 크기를 출력하고 새 실행을 막는 워크스페이스 이름을 표시합니다. 차단 항목이 있어도 종료 코드는 0이며, scratch가 설정되지 않았거나 루트를 읽을 수 없으면 1을 반환합니다.
+- `clear NAME`: `scratch list`에 출력된 이름(`attempt-...`)의 워크스페이스를 제거합니다. 실행 중(live)인 워크스페이스는 거부합니다.
+- `--all-stale`: `stale`, `unverifiable`, `invalid-manifest` 상태의 워크스페이스를 모두 제거합니다. `NAME`과 `--all-stale` 중 정확히 하나를 지정해야 합니다.
+- 제거된 항목이 없거나 거부된 대상이 있으면 종료 코드 1을 반환합니다.
+
+---
+
 ### `orca_auto service status` & `service restart`
 백그라운드 워커 및 systemd 서비스 상태를 점검하거나 안전하게 재시작합니다.
 ```bash
 orca_auto service status [--json]
 orca_auto service restart [--force]
 ```
-- `status`: 현재 실행 중인 워커 프로세스의 빌드 버전과 설치된 systemd 유닛의 일치 여부를 검사합니다.
+- `status`: 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 0이 아닌 종료 코드를 반환합니다.
 - `restart`: 기본적으로 실행 중인 계산이 있을 때는 재시작을 거부하여 데이터 유실을 방지합니다. 즉시 재시작하려면 `--force`를 전달합니다.
 
 ---

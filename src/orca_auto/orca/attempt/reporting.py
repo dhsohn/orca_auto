@@ -186,7 +186,7 @@ def finalize_and_emit(
     finalize_state(
         reaction_dir,
         state,
-        status=run_status_text(status),
+        status=status,
         final_result=final_result,
     )
     payload: dict[str, Any] = {

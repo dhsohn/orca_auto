@@ -6,20 +6,18 @@ import pytest
 
 from orca_auto.cli_parsers import build_parser
 from orca_auto.core.config.files import validate_shared_config_sections
-from orca_auto.core.engine_catalog import known_engine_ids
-from orca_auto.core.engines import registry
+from orca_auto.core.engine_catalog import engine_catalog, get_engine_catalog_entry
 
 
 @pytest.mark.parametrize(
     "argv",
     [
         ["scaffold", "conformer_search", "/tmp/retired"],
+        ["queue", "worker", "--app", "orca"],
         ["queue", "worker", "--app", "workflow"],
-        ["queue", "worker", "--app", "xtb"],
-        ["queue", "worker", "--app", "crest"],
+        ["queue", "list", "--engine", "orca"],
         ["queue", "list", "--engine", "workflow"],
-        ["queue", "list", "--engine", "xtb"],
-        ["queue", "list", "--engine", "crest"],
+        ["queue", "list", "--kind", "job"],
         ["queue", "list", "--kind", "workflow"],
         ["queue", "worker", "--no-submit"],
         ["queue", "worker", "--refresh-registry"],
@@ -38,15 +36,10 @@ def test_removed_workflow_commands_are_not_parser_options(argv: list[str]) -> No
 
 
 @pytest.mark.parametrize("engine", ["workflow", "xtb", "crest"])
-def test_retired_engine_resolution_rejects_before_import(
-    engine: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    assert known_engine_ids() == ("orca",)
-    monkeypatch.setattr(
-        registry, "import_module", lambda _name: pytest.fail("retired engine imported")
-    )
+def test_retired_engines_are_absent_from_the_catalog(engine: str) -> None:
+    assert tuple(entry.engine_id for entry in engine_catalog()) == ("orca",)
     with pytest.raises(ValueError, match="unsupported engine"):
-        registry.get_engine_definition(engine)
+        get_engine_catalog_entry(engine)
 
 
 @pytest.mark.parametrize(

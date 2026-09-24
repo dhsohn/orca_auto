@@ -42,38 +42,11 @@ def test_cli_workers_does_not_forward_supervision_symbols(name: str) -> None:
     assert not hasattr(unified_cli, name)
 
 
-def test_worker_module_command_without_repo_root_uses_module_execution() -> None:
-    argv, cwd, env = worker_specs.worker_module_command(
+def test_worker_module_command_uses_the_supervisor_interpreter_without_pythonpath() -> None:
+    # The interpreter that runs the supervisor resolves the installed package;
+    # no checkout src/ is injected, so wheel and editable layouts behave alike.
+    argv = worker_specs.worker_module_command(
         config_path="/tmp/config.yaml",
-        repo_root=None,
-        module_name="orca_auto.orca.commands.queue",
-        tail_argv=["--engine", "orca"],
-    )
-
-    assert argv == [
-        sys.executable,
-        "-m",
-        "orca_auto.orca.commands.queue",
-        "--config",
-        "/tmp/config.yaml",
-        "--engine",
-        "orca",
-    ]
-    assert cwd is None
-    assert env is None
-
-
-def test_worker_module_command_with_repo_root_uses_module_execution_and_prepends_pythonpath(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    monkeypatch.setenv("PYTHONPATH", "/existing/site-packages")
-
-    argv, cwd, env = worker_specs.worker_module_command(
-        config_path="/tmp/config.yaml",
-        repo_root=str(repo_root),
         module_name="orca_auto.cli",
         tail_argv=["queue", "cancel", "job-1"],
     )
@@ -88,9 +61,15 @@ def test_worker_module_command_with_repo_root_uses_module_execution_and_prepends
         "cancel",
         "job-1",
     ]
-    assert cwd == str(repo_root.resolve())
-    assert env is not None
-    assert env["PYTHONPATH"] == f"{repo_root.resolve()}:/existing/site-packages"
+
+
+def test_orca_worker_spec_inherits_the_supervisor_environment() -> None:
+    spec = worker_specs._orca_worker_spec(config_path="/tmp/orca_auto.yaml")
+
+    assert spec.app == "orca"
+    assert spec.cwd is None
+    assert spec.env is None
+    assert spec.to_dict()["env"] is None
 
 
 def test_build_worker_specs_defaults_to_orca_only(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,57 +77,51 @@ def test_build_worker_specs_defaults_to_orca_only(monkeypatch: pytest.MonkeyPatc
         worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
 
-    def fake_worker_module_command(
-        *,
-        config_path: str,
-        repo_root: str | None,
-        module_name: str,
-        tail_argv: list[str],
-    ) -> tuple[list[str], str | None, dict[str, str] | None]:
-        del repo_root
-        return (["python", "-m", module_name, "--config", config_path, *tail_argv], None, {})
+    def fake_worker_module_command(*, config_path: str, module_name: str) -> list[str]:
+        return ["python", "-m", module_name, "--config", config_path]
 
     monkeypatch.setattr(worker_specs, "worker_module_command", fake_worker_module_command)
 
-    specs = worker_specs._build_worker_specs(SimpleNamespace(app=None, orca_auto_config=None))
+    specs = worker_specs._build_worker_specs(SimpleNamespace(orca_auto_config=None))
 
     assert [spec.app for spec in specs] == ["orca"]
-    assert str(specs[0].argv[2]) == "orca_auto.core.engines.queue_worker"
-    assert specs[0].argv[-2:] == ("--engine", "orca")
-    assert specs[0].env is not None
-    assert specs[0].env == {}
+    assert specs[0].argv == (
+        "python",
+        "-m",
+        "orca_auto.orca.commands.queue",
+        "--config",
+        "/tmp/orca_auto.yaml",
+    )
+    assert specs[0].env is None
 
 
-def test_build_worker_specs_runs_each_selected_default_engine_once(
+def test_build_worker_specs_ignores_a_stale_app_selection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         worker_specs, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
     )
-
-    def fake_worker_module_command(
-        *,
-        config_path: str,
-        repo_root: str | None,
-        module_name: str,
-        tail_argv: list[str],
-    ) -> tuple[list[str], str | None, dict[str, str] | None]:
-        del repo_root
-        return (["python", "-m", module_name, "--config", config_path, *tail_argv], None, {})
-
-    monkeypatch.setattr(worker_specs, "worker_module_command", fake_worker_module_command)
+    monkeypatch.setattr(
+        worker_specs,
+        "worker_module_command",
+        lambda **kwargs: ["python", "-m", kwargs["module_name"]],
+    )
 
     specs = worker_specs._build_worker_specs(
-        SimpleNamespace(
-            app=["orca", "orca"],
-            orca_auto_config=None,
-        )
+        SimpleNamespace(app=["workflow", "xtb"], orca_auto_config=None)
     )
 
     assert [spec.app for spec in specs] == ["orca"]
-    assert [spec.argv[-2:] for spec in specs] == [
-        ("--engine", "orca"),
-    ]
+    assert specs[0].argv == ("python", "-m", "orca_auto.orca.commands.queue")
+
+
+def test_build_worker_specs_requires_a_discoverable_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(worker_specs, "resolve_shared_config_path", lambda explicit: None)
+
+    with pytest.raises(ValueError, match="Could not discover orca_auto.yaml"):
+        worker_specs._build_worker_specs(SimpleNamespace(orca_auto_config=None))
 
 
 def test_engine_config_for_args_uses_discovered_shared_config(
@@ -222,9 +195,7 @@ def test_cmd_queue_worker_returns_supervisor_status(monkeypatch: pytest.MonkeyPa
         lambda built_specs: 0 if built_specs == specs else 1,
     )
 
-    result = unified_cli.cmd_queue_worker(
-        SimpleNamespace(app=["orca"], orca_auto_config=None, json=False)
-    )
+    result = unified_cli.cmd_queue_worker(SimpleNamespace(orca_auto_config=None, json=False))
 
     assert result == 0
 
@@ -252,7 +223,7 @@ def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
     monkeypatch.setattr(worker_supervision, "_run_worker_supervisor", lambda built_specs: 99)
 
     result = unified_cli.cmd_queue_worker(
-        SimpleNamespace(app=["orca"], orca_auto_config="/tmp/orca_auto.yaml", json=False)
+        SimpleNamespace(orca_auto_config="/tmp/orca_auto.yaml", json=False)
     )
 
     assert result == 1
@@ -273,22 +244,20 @@ def test_cmd_queue_worker_json_outputs_commands(
             argv=(
                 "python",
                 "-m",
-                "orca_auto.core.engines.queue_worker",
-                "--engine",
-                "orca",
+                "orca_auto.orca.commands.queue",
+                "--config",
+                "/tmp/orca_auto.yaml",
             ),
         )
     ]
     monkeypatch.setattr(unified_cli, "_build_worker_specs", lambda args: specs)
 
-    result = unified_cli.cmd_queue_worker(
-        SimpleNamespace(app=["orca"], orca_auto_config=None, json=True)
-    )
+    result = unified_cli.cmd_queue_worker(SimpleNamespace(orca_auto_config=None, json=True))
 
     assert result == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["workers"][0]["app"] == "orca"
-    assert payload["workers"][0]["argv"][2] == "orca_auto.core.engines.queue_worker"
+    assert payload["workers"][0]["argv"][2] == "orca_auto.orca.commands.queue"
 
 
 def test_worker_command_and_selection_helpers_cover_edges() -> None:
@@ -297,18 +266,6 @@ def test_worker_command_and_selection_helpers_cover_edges() -> None:
     assert worker_conflicts._format_command_argv(("python", "-m", "orca_auto.cli")) == (
         "python -m orca_auto.cli"
     )
-    assert worker_specs._selected_worker_apps(["orca", "orca", ""]) == [
-        "orca",
-    ]
-
-    with pytest.raises(ValueError, match="Unsupported worker app"):
-        worker_specs._selected_worker_apps(["bad-app"])
-
-
-@pytest.mark.parametrize("app", ["xtb", "crest", "workflow"])
-def test_workflow_engine_workers_are_not_direct_app_selections(app: str) -> None:
-    with pytest.raises(ValueError, match=f"Unsupported worker app: {app}"):
-        worker_specs._selected_worker_apps([app])
 
 
 def test_cmd_queue_worker_reports_spec_build_errors(
