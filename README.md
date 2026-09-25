@@ -54,3 +54,24 @@ These are independent, local-first companion tools that connect through standard
 
 [Citation](https://github.com/dhsohn/orca_auto/blob/v7.0.1/CITATION.cff) · [Contributing](https://github.com/dhsohn/orca_auto/blob/v7.0.1/CONTRIBUTING.md) ·
 [Support](https://github.com/dhsohn/orca_auto/blob/v7.0.1/SUPPORT.md) · [Security](https://github.com/dhsohn/orca_auto/blob/v7.0.1/SECURITY.md) · [Code of Conduct](https://github.com/dhsohn/orca_auto/blob/main/CODE_OF_CONDUCT.md)
+
+## How this was built
+
+I'm a chemist, not a programmer. AI coding agents write the code in this repository.
+I decide what ORCA_auto should do, keep its public behavior written down in the
+[public contracts](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/PUBLIC_CONTRACTS.md),
+and set the checks a change must pass before it merges.
+
+I don't review the code line by line, so a change is accepted on evidence, not on an
+agent's report that it works:
+
+- `make check` runs lint, formatting, type checks, import-boundary checks, a bilingual
+  documentation check and the full test suite with coverage. CI runs the same gate and
+  validates emitted `machine.json` files against the shared
+  [machine-contracts](https://github.com/dhsohn/machine-contracts) validator.
+- A change to public behavior updates the contract document in the same change.
+- A change to how ORCA_auto runs the engine also needs a bounded run with the real
+  ORCA engine, judged by the calculation's own evidence such as termination, geometry
+  convergence or frequencies ([validation](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/VALIDATION.md)).
+- High-impact changes, such as recovery, queue state and result correctness, get an
+  independent adversarial review from a separate agent.

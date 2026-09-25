@@ -170,11 +170,11 @@ hide failed calculations. Required expectations:
 
 ## AI assistance disclosure
 
-AI tools may be used to draft code, tests, documentation, or reviews. The human
-maintainer or contributor remains responsible for reviewing, editing, validating,
-and licensing the result. If AI assistance was substantial, disclose it briefly
-in the PR body and include the same verification evidence required for any other
-change.
+AI tools may be used to draft code, tests, documentation, or reviews. Whoever
+submits the change remains responsible for the result: its validation, its
+licensing and the evidence behind it. If AI assistance was substantial in an
+outside contribution, disclose it briefly in the PR body and include the same
+verification evidence required for any other change.
 
 Do not paste secrets, private credentials, proprietary ORCA output, or private
 research data into AI tools.
