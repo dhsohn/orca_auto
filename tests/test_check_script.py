@@ -8,6 +8,8 @@ import sys
 import venv
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECK_SCRIPT = REPO_ROOT / "scripts" / "check.sh"
 
@@ -26,7 +28,15 @@ def _copy_check_script(tmp_path: Path) -> tuple[Path, Path]:
     (scripts / "check_imports.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
     # Likewise the docs parity gate: it has its own suite (test_check_docs_parity).
     (scripts / "check_docs_parity.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    # The provenance guard requires the gate to import this checkout's package.
+    package = repo / "src" / "orca_auto"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
     return repo, script
+
+
+def _expected_package(repo: Path) -> str:
+    return str((repo / "src" / "orca_auto" / "__init__.py").resolve())
 
 
 def _write_bootstrap_python(path: Path) -> None:
@@ -46,7 +56,9 @@ if [[ "${1:-}" == "-m" && "${2:-}" == "venv" && -n "${3:-}" ]]; then
 fi
 
 if [[ "$(basename -- "$0")" == "python" ]]; then
-  if [[ "${1:-}" == "-c" ]]; then
+  if [[ "${1:-}" == "-c" && "${2:-}" == *orca_auto* ]]; then
+    printf '%s\n' "${FAKE_ORCA_AUTO_FILE:-}"
+  elif [[ "${1:-}" == "-c" ]]; then
     printf '%s\n' "$0"
   fi
   exit 0
@@ -59,21 +71,79 @@ exit 91
     path.chmod(0o755)
 
 
+def _write_discoverable_python(path: Path, *, suitable: bool) -> None:
+    """A bootstrap fake that also answers the interpreter-suitability probe."""
+    _write_bootstrap_python(path)
+    probe_rc = 0 if suitable else 1
+    text = path.read_text(encoding="utf-8").replace(
+        "set -euo pipefail\n",
+        f'set -euo pipefail\n\nif [[ "${{1:-}}" == "-" ]]; then\n  exit {probe_rc}\nfi\n',
+        1,
+    )
+    path.write_text(text, encoding="utf-8")
+
+
+def _minimal_tool_path(tmp_path: Path) -> Path:
+    """A PATH directory holding only the tools check.sh needs, and no python."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for tool in ("bash", "realpath", "dirname", "basename", "mkdir", "cp", "rm", "touch", "chmod"):
+        found = shutil.which(tool)
+        assert found is not None, tool
+        (tools / tool).symlink_to(found)
+    return tools
+
+
+def _run_discovery_check(
+    repo: Path, script: Path, *, home: Path, path: Path
+) -> subprocess.CompletedProcess[str]:
+    env = {
+        "HOME": str(home),
+        "PATH": str(path),
+        "ORCA_AUTO_CHECK_SKIP_INSTALL": "1",
+        "FAKE_ORCA_AUTO_FILE": _expected_package(repo),
+    }
+    return subprocess.run(
+        [shutil.which("bash") or "bash", str(script)],
+        cwd=repo,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+_SYSTEM_PYTHON_DIRS = (Path("/usr/local/bin"), Path("/opt/homebrew/bin"), Path("/opt/conda/bin"))
+
+
+def _system_dirs_have_python() -> bool:
+    return any(
+        (directory / name).exists()
+        for directory in _SYSTEM_PYTHON_DIRS
+        for name in ("python3.13", "python3.12", "python3.11", "python3")
+    )
+
+
 def _run_check(
     repo: Path,
     script: Path,
     bootstrap_python: Path,
     *,
     venv: Path | None = None,
+    pythonpath: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.pop("ORCA_AUTO_VENV", None)
+    env.pop("PYTHONPATH", None)
     env.update(
         {
             "ORCA_AUTO_CHECK_SKIP_INSTALL": "1",
             "PYTHON_BIN": str(bootstrap_python),
+            "FAKE_ORCA_AUTO_FILE": _expected_package(repo),
         }
     )
+    if pythonpath is not None:
+        env["PYTHONPATH"] = str(pythonpath)
     if venv is not None:
         env["ORCA_AUTO_VENV"] = str(venv)
     return subprocess.run(
@@ -86,7 +156,7 @@ def _run_check(
     )
 
 
-def _create_usable_test_venv(path: Path) -> None:
+def _create_usable_test_venv(path: Path, *, source_root: Path | None = None) -> None:
     venv.EnvBuilder(with_pip=False).create(path)
     python = path / "bin" / "python"
     purelib = Path(
@@ -101,6 +171,9 @@ def _create_usable_test_venv(path: Path) -> None:
             text=True,
         ).stdout.strip()
     )
+    if source_root is not None:
+        # Stand-in for the editable install: put the checkout's src on sys.path.
+        (purelib / "_orca_auto_src.pth").write_text(f"{source_root}\n", encoding="utf-8")
     for module in ("ruff", "mypy", "pytest"):
         package = purelib / module
         package.mkdir()
@@ -226,7 +299,7 @@ def test_accepts_usable_explicit_external_venv(tmp_path: Path) -> None:
     bootstrap_python = tmp_path / "bootstrap-python"
     _write_bootstrap_python(bootstrap_python)
     external = tmp_path / "usable-shared-venv"
-    _create_usable_test_venv(external)
+    _create_usable_test_venv(external, source_root=repo / "src")
     sentinel = external / "sentinel"
     sentinel.write_text("keep", encoding="utf-8")
 
@@ -254,3 +327,76 @@ def test_rejects_absent_path_that_normalizes_to_existing_repo(tmp_path: Path) ->
     assert sentinel.read_text(encoding="utf-8") == "keep"
     assert not (repo / "pyvenv.cfg").exists()
     assert not (repo / "bin").exists()
+
+
+def test_discovers_suitable_interpreter_outside_minimal_path(tmp_path: Path) -> None:
+    repo, script = _copy_check_script(tmp_path)
+    home = tmp_path / "home"
+    local_bin = home / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    too_old = local_bin / "python3.13"
+    _write_discoverable_python(too_old, suitable=False)
+    suitable = local_bin / "python3.12"
+    _write_discoverable_python(suitable, suitable=True)
+
+    result = _run_discovery_check(repo, script, home=home, path=_minimal_tool_path(tmp_path))
+
+    assert result.returncode == 0, result.stderr
+    assert f"Bootstrap interpreter: {suitable}" in result.stdout
+    assert "Creating virtual environment" in result.stdout
+    assert (repo / ".venv" / ".created-by-bootstrap").is_file()
+
+
+def test_reports_rejected_interpreters_when_none_is_suitable(tmp_path: Path) -> None:
+    if _system_dirs_have_python():
+        pytest.skip("a system python location is populated; discovery could succeed")
+    repo, script = _copy_check_script(tmp_path)
+    home = tmp_path / "home"
+    local_bin = home / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    too_old = local_bin / "python3"
+    _write_discoverable_python(too_old, suitable=False)
+
+    result = _run_discovery_check(repo, script, home=home, path=_minimal_tool_path(tmp_path))
+
+    assert result.returncode == 1
+    assert "Python 3.11 or newer (with the venv module) is required" in result.stderr
+    assert str(too_old) in result.stderr
+    assert "Set PYTHON_BIN=" in result.stderr
+    assert not (repo / ".venv").exists()
+
+
+def test_refuses_package_imported_from_another_tree(tmp_path: Path) -> None:
+    repo, script = _copy_check_script(tmp_path)
+    bootstrap_python = tmp_path / "bootstrap-python"
+    _write_bootstrap_python(bootstrap_python)
+    external = tmp_path / "usable-shared-venv"
+    _create_usable_test_venv(external, source_root=repo / "src")
+    other_src = tmp_path / "other-checkout" / "src"
+    (other_src / "orca_auto").mkdir(parents=True)
+    other_init = other_src / "orca_auto" / "__init__.py"
+    other_init.write_text("", encoding="utf-8")
+
+    result = _run_check(repo, script, bootstrap_python, venv=external, pythonpath=other_src)
+
+    assert result.returncode == 1
+    assert "orca_auto is not imported from this checkout" in result.stderr
+    assert f"Imported: {other_init.resolve()}" in result.stderr
+    assert f"Expected: {_expected_package(repo)}" in result.stderr
+    assert "Unset PYTHONPATH" in result.stderr
+    assert "[check] Ruff" not in result.stdout
+    assert "[check] pytest" not in result.stdout
+
+
+def test_refuses_venv_without_checkout_package(tmp_path: Path) -> None:
+    repo, script = _copy_check_script(tmp_path)
+    bootstrap_python = tmp_path / "bootstrap-python"
+    _write_bootstrap_python(bootstrap_python)
+    external = tmp_path / "usable-shared-venv"
+    _create_usable_test_venv(external)
+
+    result = _run_check(repo, script, bootstrap_python, venv=external)
+
+    assert result.returncode == 1
+    assert "Imported: (import failed)" in result.stderr
+    assert "[check] pytest" not in result.stdout
