@@ -6,8 +6,8 @@ import os
 import re
 import subprocess
 import sys
-import tarfile
 import tempfile
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -45,7 +45,7 @@ def validate_common_machine(path: Path) -> None:
             "the dev extras: python -m pip install -c constraints-dev.txt -e '.[dev]'"
         )
     archive = subprocess.run(
-        ["git", "-C", str(repo), "archive", pin], capture_output=True, check=False
+        ["git", "-C", str(repo), "archive", "--format=zip", pin], capture_output=True, check=False
     )
     if archive.returncode != 0:
         pytest.fail(
@@ -54,8 +54,8 @@ def validate_common_machine(path: Path) -> None:
             "Clone dhsohn/machine-contracts there and fetch, or set FACTORY_MACHINE_CONTRACT_REPO."
         )
     with tempfile.TemporaryDirectory() as snapshot:
-        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as contract:
-            contract.extractall(snapshot, filter="data")
+        with zipfile.ZipFile(io.BytesIO(archive.stdout)) as contract:
+            contract.extractall(snapshot)
         validation = subprocess.run(
             [
                 sys.executable,
