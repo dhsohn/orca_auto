@@ -33,6 +33,7 @@ python -m pip install orca_auto==8.0.0
 - **[Quickstart guide](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/QUICKSTART.md)** — configure settings, start background services, and submit your first calculation.
 
 For upgrades from 7.x, see the [upgrade guide](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-80).
+For 6.x or earlier, complete the [7.0 migration](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-70) first, then follow the 8.0 upgrade guide.
 
 ## Chemistry ecosystem
 

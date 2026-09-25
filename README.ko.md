@@ -32,7 +32,8 @@ python -m pip install orca_auto==8.0.0
 - **[설치 상세 안내](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/INSTALLATION.ko.md)** — PyPI 패키지 설치 및 환경 설정
 - **[빠른 시작 가이드](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/QUICKSTART.ko.md)** — 기본 환경 설정, 워커 서비스 등록 및 첫 계산 제출
 
-기존 환경 업그레이드는 [업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-80)(영어)를 참고하세요.
+7.x에서 업그레이드할 때는 [8.0 업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-80)(영어)를 따릅니다.
+6.x 이하에서는 먼저 [7.0 마이그레이션](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-70)(영어)을 완료한 뒤 8.0 업그레이드를 진행합니다.
 
 ## 계산화학 도구 생태계
 
