@@ -1,15 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1360" height="270" viewBox="0 0 1360 270" role="img" aria-labelledby="title desc">
   <title id="title">ORCA_auto</title>
-  <desc id="desc">Submit durably. Execute reliably. Recover explicitly. A queue-to-node symbol within a hexagon.</desc>
+  <desc id="desc">An orca inside a hexagon. Submit durably. Execute reliably. Recover explicitly.</desc>
   <rect width="1360" height="270" fill="#123e39"/>
   <rect y="258" width="1360" height="12" fill="#0d9488"/>
-  <g transform="translate(54 46) scale(1.7)" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
-    <polygon points="50,17 77,33.25 77,66.75 50,83 23,66.75 23,33.25" stroke-width="6"/>
-    <path d="M35 39h10l9 11M35 50h19M35 61h10l9-11" stroke-width="3.5"/>
-    <circle cx="60" cy="50" r="6" fill="#57cabc" stroke="none"/>
+  <g transform="translate(54 46) scale(1.7)">
+    <polygon points="50,17 77,33.25 77,66.75 50,83 23,66.75 23,33.25" fill="none" stroke="#ffffff" stroke-width="6" stroke-linejoin="round"/>
+    <g transform="translate(-3.4 -4.5) scale(.085)" fill="#ffffff">
+      <path d="M452 711 C476 627 510 591 554 552 C581 528 564 476 528 439 C504 413 548 409 579 421 C611 434 643 462 660 484 C666 491 674 490 686 487 C760 468 834 455 862 482 C899 518 866 548 821 574 L773 610 C779 655 755 714 719 741 C694 759 683 747 686 726 L699 676 C650 690 629 686 592 680 C548 674 517 690 492 711 C485 718 488 725 498 742 C510 766 518 797 513 818 C510 834 502 831 495 815 C480 785 457 770 453 744 C435 757 414 756 385 772 C369 780 367 768 377 754 C397 729 425 716 452 711 Z"/>
+      <path d="M466 717 C480 646 513 601 563 559 C594 533 582 475 550 440 C545 434 551 434 560 437 C598 446 632 474 650 498 L648 513 C713 497 783 473 833 479 C870 483 874 509 863 530 C826 540 785 566 749 595 C711 627 689 644 662 644 C634 644 619 630 586 630 C535 629 505 665 479 713 C472 727 462 735 466 717 Z" fill="#123e39"/>
+      <path d="M714 639 C730 631 741 617 750 619 C763 630 750 674 731 699 C716 719 701 727 701 715 C701 690 706 664 714 639 Z" fill="#123e39"/>
+      <ellipse cx="751" cy="535" rx="43" ry="20" transform="rotate(-29 751 535)"/>
+    </g>
   </g>
   <g font-family="DejaVu Sans, sans-serif">
-    <text x="265" y="139" font-size="86" font-weight="700" fill="#ffffff">ORCA<tspan fill="#57cabc">_auto</tspan></text>
+    <text x="265" y="139" font-size="86" font-weight="700" fill="#ffffff">ORCA_auto</text>
     <text x="268" y="194" font-size="28" fill="#c5e9df">Submit durably. Execute reliably. Recover explicitly.</text>
   </g>
 </svg>

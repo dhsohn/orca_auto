@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="docs/images/icon.png" alt="ORCA_auto" width="180">
+  <img src="docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
-
-<h1 align="center">ORCA_auto</h1>
 
 <p align="center">
   <a href="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml"><img src="https://github.com/dhsohn/orca_auto/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
