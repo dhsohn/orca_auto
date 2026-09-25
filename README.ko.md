@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
+  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v8.0.0/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
@@ -32,7 +32,7 @@ python -m pip install orca_auto==8.0.0
 - **[설치 상세 안내](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/INSTALLATION.ko.md)** — PyPI 패키지 설치 및 환경 설정
 - **[빠른 시작 가이드](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/QUICKSTART.ko.md)** — 기본 환경 설정, 워커 서비스 등록 및 첫 계산 제출
 
-기존 환경 업그레이드는 [업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-70)(영어)를 참고하세요.
+기존 환경 업그레이드는 [업그레이드 안내](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-80)(영어)를 참고하세요.
 
 ## 계산화학 도구 생태계
 
@@ -53,7 +53,7 @@ python -m pip install orca_auto==8.0.0
 [로드맵](https://github.com/dhsohn/orca_auto/blob/v8.0.0/ROADMAP.md) · [변경 이력](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CHANGELOG.md)
 
 [인용](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CITATION.cff) · [기여](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CONTRIBUTING.md) ·
-[지원](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SUPPORT.md) · [보안](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SECURITY.md) · [행동 강령](https://github.com/dhsohn/orca_auto/blob/main/CODE_OF_CONDUCT.ko.md)
+[지원](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SUPPORT.md) · [보안](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SECURITY.md) · [행동 강령](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CODE_OF_CONDUCT.ko.md)
 
 ## 만든 방식
 

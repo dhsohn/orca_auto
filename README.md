@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
+  <img src="https://raw.githubusercontent.com/dhsohn/orca_auto/v8.0.0/docs/images/banner.svg" alt="ORCA_auto — Submit durably. Execute reliably. Recover explicitly." width="680">
 </p>
 
 <p align="center">
@@ -32,7 +32,7 @@ python -m pip install orca_auto==8.0.0
 - **[Installation details](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/INSTALLATION.md)** — install the standalone ORCA package.
 - **[Quickstart guide](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/QUICKSTART.md)** — configure settings, start background services, and submit your first calculation.
 
-For upgrades from 6.x, see the [upgrade guide](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-70).
+For upgrades from 7.x, see the [upgrade guide](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/RELEASE.md#upgrading-to-80).
 
 ## Chemistry ecosystem
 
@@ -53,7 +53,7 @@ These are independent, local-first companion tools that connect through standard
 [Roadmap](https://github.com/dhsohn/orca_auto/blob/v8.0.0/ROADMAP.md) · [Changelog](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CHANGELOG.md)
 
 [Citation](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CITATION.cff) · [Contributing](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CONTRIBUTING.md) ·
-[Support](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SUPPORT.md) · [Security](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SECURITY.md) · [Code of Conduct](https://github.com/dhsohn/orca_auto/blob/main/CODE_OF_CONDUCT.md)
+[Support](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SUPPORT.md) · [Security](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SECURITY.md) · [Code of Conduct](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CODE_OF_CONDUCT.md)
 
 ## How this was built
 
