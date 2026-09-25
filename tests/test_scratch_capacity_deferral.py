@@ -405,8 +405,8 @@ def _scratch_run(
     monkeypatch.setattr(run_inp_execution, "_admission_context", passthrough)
     monkeypatch.setattr(
         run_inp_execution,
-        "notification_callbacks",
-        lambda _cfg: (notifications.append, notifications.append),
+        "started_notification_callback",
+        lambda _cfg: notifications.append,
     )
     _ManagedRunner.launches = []
     context = RunExecutionContext(
@@ -561,7 +561,7 @@ def test_capacity_refusal_after_the_run_started_is_a_failed_attempt_not_a_deferr
     assert state is not None and state["status"] == "failed"
     final_result = state["final_result"]
     assert final_result is not None and final_result["reason"] == "runner_exception"
-    assert len(notifications) == 2
+    assert len(notifications) == 1
 
 
 def test_unsafe_scratch_root_still_fails_the_attempt_with_its_state_and_notifications(
@@ -583,7 +583,7 @@ def test_unsafe_scratch_root_still_fails_the_attempt_with_its_state_and_notifica
     assert state is not None and state["status"] == "failed"
     final_result = state["final_result"]
     assert final_result is not None and final_result["reason"] == "runner_exception"
-    assert len(notifications) == 2
+    assert len(notifications) == 1
     assert _ManagedRunner.launches == []
 
 
@@ -606,8 +606,8 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     notifications: list[Any] = []
     monkeypatch.setattr(
         run_inp_execution,
-        "notification_callbacks",
-        lambda _cfg: (notifications.append, notifications.append),
+        "started_notification_callback",
+        lambda _cfg: notifications.append,
     )
 
     queue_root = tmp_path / "queue"
@@ -679,7 +679,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     [finished] = list_queue(queue_root)
     assert worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY not in finished.metadata
     assert finished.metadata["execution_snapshot"] == running.metadata["execution_snapshot"]
-    assert len(notifications) == 2
+    assert len(notifications) == 1
 
 
 # --- what an operator sees ------------------------------------------------------------------

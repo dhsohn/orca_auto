@@ -62,6 +62,8 @@ orca_auto queue list clear [--config PATH] [--json]
 ```
 > **참고**: 큐 목록 및 작업 루트의 terminal `job_state.json` 메타데이터(중복 방지 배리어)를 정리하여 이후 재제출 시 `--force` 없이 제출 가능하도록 합니다. 디스크 상의 generation 하위 디렉터리, 계산 산출물, 출력 파일은 일체 삭제되지 않습니다. 정리된 행의 워커 로그와 publication lock 파일은 제거되며, `--json`은 제거한 로그 수를 `removed_worker_logs`로 보고합니다.
 
+종료되었어도 발행 처리가 남은 항목은 복구 표식을 유지하며 목록 정리와 강제 재제출 대상에서 제외됩니다. 실행 슬롯은 이미 반환되었을 수 있으며, 워커는 ORCA를 다시 실행하지 않고 인덱스 발행과 표식 제거를 재시도합니다.
+
 ---
 
 ### `orca_auto index rebuild`
@@ -121,12 +123,13 @@ orca_auto service restart [--force]
 ```text
 water/
 ├── water.inp                  # 대상 입력 파일
-├── job_state.json             # 작업 루트 레벨 상태 (활성/완료 generation 추적)
+├── job_state.json             # 현재 실행 상태와 부모의 알림 처리 기록
 └── 20260921-022823-b43c48b7/     # 격리된 generation 실행 디렉터리
     ├── water.inp              # 스테이징된 입력 파일 사본
     ├── water.out              # ORCA 표준 출력 원본 로그 (입력 파일명 기반)
-    ├── job_state.json         # 해당 generation 실행 상태 기록
+    ├── job_state.json         # 실행 근거; 실행 사실이 바뀔 때만 갱신
     ├── machine.json           # v1 엔벨로프(Envelope) 규격의 구조화된 실행 결과
+    ├── execution_provenance.json # 접수·실행 식별 정보가 기록된 경우의 출처 파일
     ├── job_report.html        # (옵션) Supporting Information 및 계산 요약 리포트
     └── si_block.md            # (옵션) Supporting Information 마크다운 블록
 ```

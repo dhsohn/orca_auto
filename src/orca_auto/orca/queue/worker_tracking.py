@@ -14,10 +14,6 @@ from orca_auto.core.statuses import (
     normalize_status,
 )
 
-from ..attempt.reporting import (
-    build_run_finished_notification,
-    finished_notification_already_sent,
-)
 from ..config import AppConfig
 from ..inp_rewriter import read_resource_request_from_input
 from ..input_artifacts import selected_input_artifacts
@@ -27,7 +23,12 @@ from ..job_locations import (
     resource_dict,
     upsert_job_record,
 )
-from ..notifications import notification_channel, notify_run_finished_event
+from ..notifications import (
+    build_run_finished_notification,
+    finished_notification_already_sent,
+    notification_channel,
+    notify_run_finished_event,
+)
 from ..run_lock import acquire_run_lock
 from ..state import now_utc_iso, save_state
 from ..state_reading import load_state, state_payload_job_id

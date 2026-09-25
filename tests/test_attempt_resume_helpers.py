@@ -6,7 +6,7 @@ from typing import cast
 from orca_auto.orca.attempt import resume as attempt_resume
 from orca_auto.orca.state import new_state
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
-from orca_auto.orca.types import RunFinishedNotification, RunState
+from orca_auto.orca.types import RunState
 
 
 def test_attempt_resume_text_and_patch_action_helpers_cover_existing_and_missing_values() -> None:
@@ -90,9 +90,6 @@ def test_resume_terminal_decision_covers_non_resumed_malformed_and_defaulted_ter
     }
     exit_calls: list[dict[str, object]] = []
 
-    def notify_finished(payload: RunFinishedNotification) -> None:
-        del payload
-
     def _exit_with_result(*args: object, **kwargs: object) -> int:
         del args
         exit_calls.append(dict(kwargs))
@@ -106,7 +103,6 @@ def test_resume_terminal_decision_covers_non_resumed_malformed_and_defaulted_ter
         last_out_path_from_state=lambda current_state: "state.out",
         exit_with_result=_exit_with_result,
         emit=lambda _payload: None,
-        notify_finished=notify_finished,
     )
 
     assert result == 7
@@ -115,4 +111,3 @@ def test_resume_terminal_decision_covers_non_resumed_malformed_and_defaulted_ter
     assert exit_calls[0]["analyzer_status"] == AnalyzerStatus.INCOMPLETE.value
     assert exit_calls[0]["reason"] == "resume_last_attempt"
     assert exit_calls[0]["last_out_path"] == "state.out"
-    assert exit_calls[0]["notify_finished"] is notify_finished

@@ -12,6 +12,7 @@ title.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -32,8 +33,10 @@ from .statuses import RunStatus
 if TYPE_CHECKING:
     from .types import (
         QueueEnqueuedNotification,
+        RunFinalResult,
         RunFinishedNotification,
         RunStartedNotification,
+        RunState,
     )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,45 @@ def notification_channel(cfg: Any) -> MessageChannel:
 # --------------------------------------------------------------------------- #
 # Run lifecycle message builders
 # --------------------------------------------------------------------------- #
+def build_run_finished_notification(
+    *,
+    reaction_dir: Path,
+    selected_inp: Path,
+    state: RunState,
+    status: RunStatus | str,
+    final_result: RunFinalResult,
+) -> RunFinishedNotification:
+    attempts = state.get("attempts")
+    final_status = str(
+        final_result.get("status", status.value if isinstance(status, RunStatus) else str(status))
+    )
+    analyzer_status = str(final_result.get("analyzer_status", ""))
+    reason = str(final_result.get("reason", ""))
+    completed_at = str(final_result.get("completed_at", ""))
+    last_out_path = final_result.get("last_out_path")
+    skipped_execution = bool(final_result.get("skipped_execution", False))
+    return {
+        "reaction_dir": str(reaction_dir),
+        "selected_inp": str(selected_inp),
+        "run_id": str(state.get("run_id", "")),
+        "status": final_status,
+        "analyzer_status": analyzer_status,
+        "reason": reason,
+        "attempt_count": len(attempts) if isinstance(attempts, list) else 0,
+        "completed_at": completed_at,
+        "last_out_path": last_out_path if isinstance(last_out_path, str) else None,
+        "resumed": bool(final_result.get("resumed", False)),
+        "skipped_execution": skipped_execution,
+    }
+
+
+def finished_notification_already_sent(state: Mapping[str, Any]) -> bool:
+    final_result = state.get("final_result")
+    if not isinstance(final_result, Mapping):
+        return False
+    return bool(str(final_result.get("finished_notification_sent_at") or "").strip())
+
+
 def run_started_message(event: RunStartedNotification) -> Message:
     reaction_dir = Path(event["reaction_dir"])
     current_inp = Path(event["current_inp"])

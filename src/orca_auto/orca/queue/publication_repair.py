@@ -260,20 +260,24 @@ def repair_queue_publication(
     return True
 
 
-def repair_queue_publications(cfg: AppConfig) -> bool:
-    """Repair every claimable ORCA publication under ``cfg``'s queue roots."""
-    repaired_all = True
+def repair_queue_publications(cfg: AppConfig) -> frozenset[str] | None:
+    """Return withheld queue IDs, or ``None`` when the queue cannot be inspected.
+
+    A publication failure belongs to its row. Include refusals even for a
+    COMPLETE lease: path validation or persisting its safety fence can fail,
+    and the durable lease alone must not make that row eligible this pass.
+    """
+    withheld_ids: set[str] = set()
     for queue_root in queue_roots(cfg):
         try:
             entries = list_queue(queue_root)
         except Exception:
             logger.exception("Failed to inspect ORCA publication repairs: %s", queue_root)
-            repaired_all = False
-            continue
+            return None
         for entry in entries:
             if not repair_queue_publication(cfg, queue_root, entry):
-                repaired_all = False
-    return repaired_all
+                withheld_ids.add(queue_entry_id(entry))
+    return frozenset(withheld_ids)
 
 
 __all__ = ["repair_queue_publication", "repair_queue_publications"]

@@ -21,7 +21,6 @@ from ..state import decide_attempt_outcome, now_utc_iso, save_state
 from ..statuses import AnalyzerStatus, RunStatus
 from ..types import (
     AttemptRecord,
-    RunFinishedNotification,
     RunStartedNotification,
     RunState,
 )
@@ -51,7 +50,6 @@ class AttemptRunContext:
     runner: RunnerLike
     emit: Callable[[dict[str, Any]], None]
     notify_started: Callable[[RunStartedNotification], Any] | None
-    notify_finished: Callable[[RunFinishedNotification], Any] | None
 
 
 @dataclass
@@ -195,7 +193,6 @@ def _finish_attempt(
         exit_code=exit_code,
         emit=ctx.emit,
         extra=extra,
-        notify_finished=ctx.notify_finished,
     )
 
 
@@ -208,7 +205,6 @@ def _resume_attempts_if_terminal(ctx: AttemptRunContext) -> int | None:
         last_out_path_from_state=_last_out_path_from_state,
         exit_with_result=_exit_with_result,
         emit=ctx.emit,
-        notify_finished=ctx.notify_finished,
     )
 
 
@@ -428,7 +424,6 @@ def run_attempts(
     runner: RunnerLike,
     emit: Callable[[dict[str, Any]], None],
     notify_started: Callable[[RunStartedNotification], Any] | None = None,
-    notify_finished: Callable[[RunFinishedNotification], Any] | None = None,
 ) -> int:
     ctx = AttemptRunContext(
         reaction_dir=reaction_dir,
@@ -438,7 +433,6 @@ def run_attempts(
         runner=runner,
         emit=emit,
         notify_started=notify_started,
-        notify_finished=notify_finished,
     )
     resumed_exit = _resume_attempts_if_terminal(ctx)
     if resumed_exit is not None:

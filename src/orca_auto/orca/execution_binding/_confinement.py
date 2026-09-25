@@ -6,7 +6,11 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE, RUN_STATE_FILE
+from orca_auto.core.artifacts import (
+    EXECUTION_PROVENANCE_FILE,
+    RUN_REPORT_JSON_FILE,
+    RUN_STATE_FILE,
+)
 from orca_auto.core.confined_io import (
     atomic_write_confined_bytes,
     require_confined_regular_file,
@@ -22,6 +26,7 @@ from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 
 _GENERATION_RUNTIME_FILE_NAMES = frozenset(
     {
+        EXECUTION_PROVENANCE_FILE,
         RUN_REPORT_JSON_FILE,
         RUN_STATE_FILE,
     }

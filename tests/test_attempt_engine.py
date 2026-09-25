@@ -11,7 +11,6 @@ from orca_auto.core.engine_scratch import (
 )
 from orca_auto.orca.attempt import engine as attempt_engine
 from orca_auto.orca.attempt.engine import (
-    RunFinishedNotification,
     RunStartedNotification,
     run_attempts,
 )
@@ -364,12 +363,11 @@ def test_neb_ts_failure_is_terminal(tmp_path: Path) -> None:
     assert final_result.get("reason") == "ts_criteria_failed"
 
 
-def test_start_and_finish_callbacks_emit_immediate_terminal_lifecycle_events(
+def test_start_notification_and_persisted_terminal_result_describe_one_attempt(
     tmp_path: Path,
 ) -> None:
     selected_inp, state = _fresh_run(tmp_path)
     started_notifications: list[RunStartedNotification] = []
-    finished_notifications: list[RunFinishedNotification] = []
 
     rc = run_attempts(
         tmp_path,
@@ -379,23 +377,23 @@ def test_start_and_finish_callbacks_emit_immediate_terminal_lifecycle_events(
         runner=_CaptureSuccessRunner(),
         emit=lambda _payload: None,
         notify_started=started_notifications.append,
-        notify_finished=finished_notifications.append,
     )
 
     assert rc == 0
     assert len(started_notifications) == 1
-    assert len(finished_notifications) == 1
 
     started = started_notifications[0]
     assert started["attempt_index"] == 1
     assert started["status"] == "running"
     assert started["current_inp"].endswith("rxn.inp")
 
-    finished = finished_notifications[0]
+    saved = _saved_state(tmp_path)
+    finished = saved["final_result"]
+    assert finished is not None
     assert finished["status"] == "completed"
     assert finished["analyzer_status"] == "completed"
     assert finished["reason"] == "normal_termination"
-    assert finished["attempt_count"] == 1
+    assert len(saved["attempts"]) == 1
     last_out_path = finished["last_out_path"]
     assert last_out_path is not None
     assert last_out_path.endswith("rxn.out")
@@ -419,7 +417,6 @@ def test_resumed_terminal_attempt_finishes_without_running_again(tmp_path: Path)
             "ended_at": "2026-03-22T00:00:01+00:00",
         }
     )
-    finished_notifications: list[RunFinishedNotification] = []
     emitted_payloads: list[object] = []
 
     rc = run_attempts(
@@ -429,15 +426,16 @@ def test_resumed_terminal_attempt_finishes_without_running_again(tmp_path: Path)
         resumed=True,
         runner=_UnusedRunner(),
         emit=emitted_payloads.append,
-        notify_finished=finished_notifications.append,
     )
 
     assert rc == 0
     assert len(emitted_payloads) == 1
-    assert len(finished_notifications) == 1
-    assert finished_notifications[0]["status"] == "completed"
-    assert finished_notifications[0]["resumed"]
-    assert finished_notifications[0]["last_out_path"] == str(out_path)
+    saved = _saved_state(tmp_path)
+    final = saved["final_result"]
+    assert final is not None
+    assert final["status"] == "completed"
+    assert final["resumed"]
+    assert final["last_out_path"] == str(out_path)
 
 
 def test_resumed_run_uses_gbw_checkpoint_restart_input(tmp_path: Path) -> None:

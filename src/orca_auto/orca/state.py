@@ -1,4 +1,4 @@
-"""Normalize and persist ORCA run state with generation ownership checks."""
+"""Own execution-state persistence and the current job-root operational view."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -56,16 +57,48 @@ def now_utc_iso() -> str:
     return _now_utc_iso()
 
 
-def _write_generation_json(
+def _existing_generation_payload(generation_dir: Path) -> dict[str, Any] | None:
+    if not _state_reading.state_path(generation_dir).exists():
+        return None
+    loaded = _state_reading.load_generation_state(generation_dir)
+    if loaded is None:
+        raise ValueError("Cannot classify an unreadable ORCA generation state")
+    return loaded[0]
+
+
+def _generation_execution_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep execution facts; notification delivery belongs to the current root."""
+    execution = deepcopy(dict(payload))
+    final_result = _dict(execution.get("engine_payload")).get("final_result")
+    if isinstance(final_result, dict):
+        final_result.pop("finished_notification_claimed_at", None)
+        final_result.pop("finished_notification_sent_at", None)
+    return execution
+
+
+def _write_generation_state(
     target: tuple[Path, tuple[int, int]],
-    path: Path,
     payload: Mapping[str, Any],
 ) -> None:
+    existing = _existing_generation_payload(target[0])
+    if existing is not None and "max_retries" in _dict(existing.get("engine_payload")):
+        return
+    execution = _generation_execution_payload(payload)
+    if existing is not None:
+        recorded = _generation_execution_payload(existing)
+        # Root bookkeeping advances its own timestamp. An identical execution
+        # record keeps its original bytes, timestamp and historical fields.
+        recorded["timestamps"] = {
+            **_dict(recorded.get("timestamps")),
+            "updated_at": _dict(execution.get("timestamps")).get("updated_at"),
+        }
+        if recorded == execution:
+            return
     write_generation_bytes(
         target,
-        path,
+        _state_reading.state_path(target[0]),
         json.dumps(
-            payload,
+            execution,
             ensure_ascii=True,
             indent=2,
             sort_keys=False,
@@ -110,6 +143,11 @@ atomic_write_text = _atomic_write_text
 
 
 def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
+    """Save changed generation evidence before refreshing the current root view.
+
+    Both writes share the root mutation lock. A failed root refresh leaves the
+    generation evidence intact; retrying the same execution only refreshes root.
+    """
     state_payload = dict(state)
     state_payload["updated_at"] = now_utc_iso()
     path = _state_reading.state_path(reaction_dir)
@@ -134,12 +172,8 @@ def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
             generation_target = _state_reading.verified_generation_artifact_target(
                 reaction_dir, state_payload
             )
-            if generation_target is not None and not retired_generation(generation_target[0]):
-                _write_generation_json(
-                    generation_target,
-                    _state_reading.state_path(generation_target[0]),
-                    payload,
-                )
+            if generation_target is not None:
+                _write_generation_state(generation_target, payload)
             atomic_write_confined_bytes(
                 reaction_dir,
                 path,
@@ -255,13 +289,8 @@ def normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any]) 
 
 def retired_generation(generation_dir: Path) -> bool:
     """Keep pre-removal generation artifacts immutable; root bookkeeping stays current."""
-    if not _state_reading.state_path(generation_dir).exists():
-        return False
-    loaded = _state_reading.load_generation_state(generation_dir)
-    if loaded is None:
-        raise ValueError("Cannot classify an unreadable ORCA generation state")
-    payload, _state = loaded
-    return "max_retries" in _dict(payload.get("engine_payload"))
+    payload = _existing_generation_payload(generation_dir)
+    return payload is not None and "max_retries" in _dict(payload.get("engine_payload"))
 
 
 # --- attempt decisions and resumability ------------------------------------

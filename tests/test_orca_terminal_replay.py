@@ -1579,10 +1579,12 @@ def test_retired_generation_is_frozen_across_terminal_replay_and_notification(
     tmp_path: Path,
     budget: int,
     terminal: bool,
+    recording_channel: Any,
 ) -> None:
-    from orca_auto.orca.attempt.reporting import mark_finished_notification_sent
+    from orca_auto.orca.queue.worker_tracking import notify_terminal_job_from_state
     from orca_auto.orca.report.publication import write_report_files
     from orca_auto.orca.state_reading import load_report_json_with_output_receipt
+    from tests.conftest import make_app_cfg
     from tests.engine_artifact_helpers import bind_report_generation
 
     selected = tmp_path / "job.inp"
@@ -1625,14 +1627,16 @@ def test_retired_generation_is_frozen_across_terminal_replay_and_notification(
         current = load_state(tmp_path)
         assert current is not None
         assert current["status"] == "failed"
-        mark_finished_notification_sent(tmp_path, current, sent_at="2026-09-05T00:00:00+00:00")
+        notify_terminal_job_from_state(
+            make_app_cfg(tmp_path), str(tmp_path), expected_job_id="retired-job"
+        )
         assert {path: path.read_bytes() for path in frozen} == frozen
         assert "max_retries" not in json.loads(state_path(tmp_path).read_text())["engine_payload"]
         notified = load_state(tmp_path)
         assert notified is not None
         final_result = notified["final_result"]
         assert final_result is not None
-        assert final_result["finished_notification_sent_at"]
+        assert final_result["finished_notification_claimed_at"]
 
     if terminal:
         assert load_report_json_with_output_receipt(generation) is not None

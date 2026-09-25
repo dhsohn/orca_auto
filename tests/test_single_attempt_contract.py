@@ -11,7 +11,6 @@ from orca_auto.orca.input_syntax import orca_route_tokens
 from orca_auto.orca.input_validation import validate_supported_xyz_geometry_syntax
 from orca_auto.orca.state import decide_attempt_outcome, new_state
 from orca_auto.orca.state_reading import load_state
-from orca_auto.orca.types import RunFinishedNotification
 
 
 @pytest.mark.parametrize("keyword", ["ScanTS", "scants", "SCANTS"])
@@ -99,7 +98,6 @@ def test_nonzero_exit_rejects_otherwise_completed_attempt(
     selected.write_text(f"{route}\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
     seen: list[Path] = []
     events: list[dict] = []
-    notifications: list[RunFinishedNotification] = []
 
     class Runner:
         def run(self, path: Path):
@@ -123,7 +121,6 @@ def test_nonzero_exit_rejects_otherwise_completed_attempt(
             resumed=False,
             runner=Runner(),
             emit=events.append,
-            notify_finished=notifications.append,
         )
         == 1
     )
@@ -144,10 +141,8 @@ def test_nonzero_exit_rejects_otherwise_completed_attempt(
     assert saved["final_result"]["status"] == "failed"
     assert saved["final_result"]["reason"] == "nonzero_exit_code"
     assert len(events) == 1 and events[0]["status"] == "failed"
-    assert len(notifications) == 1
-    assert notifications[0]["status"] == "failed"
-    assert notifications[0]["reason"] == "nonzero_exit_code"
-    assert notifications[0]["attempt_count"] == 1
+    assert events[0]["reason"] == "nonzero_exit_code"
+    assert events[0]["attempt_count"] == 1
 
 
 @pytest.mark.parametrize(

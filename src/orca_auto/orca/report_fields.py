@@ -8,6 +8,8 @@ from typing import Any
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils import normalize_text
 
+EXECUTION_PROVENANCE_ARTIFACT_ID = "execution-provenance"
+
 
 def report_result_fields(
     payload: Mapping[str, Any],
@@ -30,4 +32,6 @@ def report_result_fields(
         "skipped_execution": bool(final.get("skipped_execution", False)),
         "runner_error": normalize_text(final.get("runner_error") or ""),
     }
+    if _dict(engine.get("execution_provenance")).get("source_inputs"):
+        results["execution_provenance_artifact"] = EXECUTION_PROVENANCE_ARTIFACT_ID
     return summary, results

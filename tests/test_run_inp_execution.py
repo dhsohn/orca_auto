@@ -45,8 +45,8 @@ def test_run_with_state_rejects_admitted_runner_without_process_registrar(
 
     monkeypatch.setattr(
         run_inp_execution,
-        "notification_callbacks",
-        lambda _cfg: (None, None),
+        "started_notification_callback",
+        lambda _cfg: None,
     )
     monkeypatch.setattr(run_inp_execution, "run_attempts", lambda *_args, **_kwargs: 0)
     cfg = SimpleNamespace(

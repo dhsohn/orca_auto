@@ -8,7 +8,7 @@ from typing import Any
 from ..inp_rewriter import prepare_checkpoint_restart_input, resume_checkpoint_input_path
 from ..state import decide_attempt_outcome
 from ..statuses import AnalyzerStatus
-from ..types import RunFinishedNotification, RunState
+from ..types import RunState
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,6 @@ def resume_terminal_decision(
     last_out_path_from_state: Callable[[RunState], str | None],
     exit_with_result: Callable[..., int],
     emit: Callable[[dict[str, Any]], None],
-    notify_finished: Callable[[RunFinishedNotification], Any] | None = None,
 ) -> int | None:
     if not resumed:
         return None
@@ -91,5 +90,4 @@ def resume_terminal_decision(
         resumed=resumed,
         exit_code=decision.exit_code,
         emit=emit,
-        notify_finished=notify_finished,
     )

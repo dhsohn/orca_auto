@@ -1,4 +1,4 @@
-"""ORCA terminal-replay engine: work items, strict finish, reconcile pipeline, owners.
+"""ORCA terminal-replay engine: preparation, publication, reconciliation and owners.
 
 Every function here takes its state explicitly (``cfg``, ``admission_root``,
 ``replay_state``); the worker that owns that state lives in ``queue/worker.py``.
@@ -368,7 +368,15 @@ def _prepare_terminal_replay_work_item(
     if not reaction_text:
         raise RuntimeError("terminal replay has no reaction directory")
     reaction_dir = Path(reaction_text).expanduser().resolve()
-    if item.observed_status == STATUS_FAILED:
+    if item.observed_status == STATUS_COMPLETED:
+        # Exit code zero alone is not an execution result. Resolve the actual
+        # outcome and run identity before the parent returns execution capacity.
+        current = load_state_generation_fingerprint(reaction_dir)
+        if not current.readable or current.job_id != item.task_id or not current.terminal_status:
+            raise RuntimeError("terminal run state is not ready for the completed queue entry")
+        run_id = current.run_id or None
+        terminal_status = current.terminal_status
+    elif item.observed_status == STATUS_FAILED:
         run_id, terminal_status = record_failed_run_state(
             reaction_dir,
             fallback_job_id=item.task_id,
@@ -411,13 +419,13 @@ def _run_terminal_replay_side_effects(cfg: AppConfig, item: TerminalReplayWorkIt
         raise RuntimeError("terminal job record artifacts are not ready")
     # The notification is advisory, as it is at submission: a delivery failure
     # is logged (redacted) by the notifier and does not retain the replay.
-    # Retaining it pinned the finished job's slot and blocked every ORCA
-    # admission until the messenger recovered, and left the row unclearable.
+    # Retaining it would unnecessarily fence the next generation in this
+    # directory even though execution capacity has already been returned.
     # The notifier durably claims one attempt before background delivery; it
     # never writes state after sending, when a successor may already own it.
     # A failed dispatch or delivery is one missed message, not a retry loop.
     # An exception out of the notifier is the same missed message:
-    # only the record upsert above and the marker may retain the replay.
+    # only the record upsert above and the marker may retain the publication.
     try:
         worker_tracking.notify_terminal_job_from_state(
             cfg,
@@ -444,44 +452,58 @@ def _clear_terminal_replay_marker_or_confirm_absent(item: TerminalReplayWorkItem
     )
 
 
-def strictly_finish_terminal_replay(
-    cfg: AppConfig,
-    job: OrcaRunningJob,
-    item: TerminalReplayWorkItem,
-) -> None:
-    """Finish one durable terminal generation before making its slot reusable."""
-
-    job.pending_terminal_replay = item
-    if _pending_replay_state_is_superseded(item):
-        _clear_terminal_replay_marker_or_confirm_absent(item)
-        return
-
-    prepared_item = item if item.state_prepared else _prepare_terminal_replay_work_item(item)
-    job.pending_terminal_replay = prepared_item
-    if prepared_item.resolved_status != item.observed_status or (
-        prepared_item.run_id and prepared_item.recorded_run_id != prepared_item.run_id
+def _update_terminal_replay_entry(item: TerminalReplayWorkItem) -> TerminalReplayWorkItem:
+    """Bind the queue projection to the prepared run's actual outcome and identity."""
+    current = queue_entry_by_id(item.queue_root, item.queue_id)
+    if item.resolved_status != normalized_entry_status(current) or (
+        item.run_id and item.recorded_run_id != item.run_id
     ):
         updated = update_terminal(
-            prepared_item.queue_root,
-            prepared_item.queue_id,
-            prepared_item.resolved_status,
-            run_id=prepared_item.run_id,
-            expected_task_id=prepared_item.task_id,
+            item.queue_root,
+            item.queue_id,
+            item.resolved_status,
+            run_id=item.run_id,
+            expected_task_id=item.task_id,
         )
         if not updated:
             logger.info(
                 "Queue entry disappeared after terminal state preparation; "
                 "continuing side effects: queue_id=%s",
-                prepared_item.queue_id,
+                item.queue_id,
             )
-        prepared_item = replace(
-            prepared_item,
-            recorded_run_id=prepared_item.run_id or prepared_item.recorded_run_id,
-        )
-        job.pending_terminal_replay = prepared_item
+        item = replace(item, recorded_run_id=item.run_id or item.recorded_run_id)
+    return item
 
-    _run_terminal_replay_side_effects(cfg, prepared_item)
-    _clear_terminal_replay_marker_or_confirm_absent(prepared_item)
+
+def prepare_terminal_replay(
+    job: OrcaRunningJob,
+    item: TerminalReplayWorkItem,
+) -> TerminalReplayWorkItem | None:
+    """Prepare durable execution evidence while the finalizer still owns capacity.
+
+    Keep the retry snapshot on the job until the worker transfers it to replay
+    bookkeeping and releases the slot. A superseded generation has no work left.
+    """
+    job.pending_terminal_replay = item
+    if _pending_replay_state_is_superseded(item):
+        _clear_terminal_replay_marker_or_confirm_absent(item)
+        return None
+
+    prepared_item = item if item.state_prepared else _prepare_terminal_replay_work_item(item)
+    job.pending_terminal_replay = prepared_item
+    prepared_item = _update_terminal_replay_entry(prepared_item)
+    job.pending_terminal_replay = prepared_item
+    return prepared_item
+
+
+def finish_terminal_replay(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
+    """Publish the derived index and advisory notification, then retire the marker.
+
+    Failure leaves the durable generation pending; it needs no execution slot.
+    Normal completion and restart reconciliation use this same finish boundary.
+    """
+    _run_terminal_replay_side_effects(cfg, item)
+    _clear_terminal_replay_marker_or_confirm_absent(item)
 
 
 def _pending_replay_state_is_superseded(item: TerminalReplayWorkItem) -> bool:
@@ -764,23 +786,9 @@ def _replay_current_terminal_entries(
             if not item.state_prepared:
                 item = _prepare_terminal_replay_work_item(item)
                 pending_replays[key] = item
-            if item.resolved_status != status or (
-                item.run_id and item.recorded_run_id != item.run_id
-            ):
-                updated = update_terminal(
-                    item.queue_root,
-                    item.queue_id,
-                    item.resolved_status,
-                    run_id=item.run_id,
-                    expected_task_id=item.task_id,
-                )
-                if not updated:
-                    logger.info(
-                        "Queue entry disappeared after terminal state preparation; "
-                        "continuing side effects: queue_id=%s",
-                        item.queue_id,
-                    )
-            _run_terminal_replay_side_effects(cfg, item)
+            item = _update_terminal_replay_entry(item)
+            pending_replays[key] = item
+            finish_terminal_replay(cfg, item)
         except Exception:
             logger.exception(
                 "Failed to replay terminal side effects for reconciled ORCA job %s",
@@ -790,17 +798,8 @@ def _replay_current_terminal_entries(
             # retries the idempotent terminal side effects.
             after_statuses[key] = STATUS_RUNNING
         else:
-            try:
-                _clear_terminal_replay_marker(item)
-            except Exception:
-                logger.exception(
-                    "Failed to clear completed ORCA terminal replay marker: %s",
-                    item.queue_id,
-                )
-                after_statuses[key] = STATUS_RUNNING
-            else:
-                pending_replays.pop(key, None)
-                after_statuses[key] = item.resolved_status
+            pending_replays.pop(key, None)
+            after_statuses[key] = item.resolved_status
     return after_statuses
 
 
@@ -939,5 +938,6 @@ __all__ = [
     "reaction_generation_key",
     "reaction_key_for_dir",
     "reconcile_worker_state",
-    "strictly_finish_terminal_replay",
+    "prepare_terminal_replay",
+    "finish_terminal_replay",
 ]

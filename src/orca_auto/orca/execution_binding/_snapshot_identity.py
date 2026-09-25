@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -31,21 +32,26 @@ def orca_execution_provenance(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     execution_dir_identity = snapshot.get("execution_dir_identity")
     if not isinstance(execution_dir_identity, Mapping):
         raise ValueError("ORCA execution snapshot has no generation directory identity")
-    return {
-        "execution_dir": str(snapshot.get("execution_dir") or ""),
-        "execution_dir_identity": {
-            "device": int(execution_dir_identity.get("device", -1)),
-            "inode": int(execution_dir_identity.get("inode", -1)),
-        },
-        "generation_owner_token": str(snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or ""),
-        "source_selected_inp": str(snapshot.get("source_selected_inp") or ""),
-        "bound_selected_identity": dict(snapshot.get("bound_selected_identity") or {}),
-        "materialized_inputs": dict(snapshot.get("materialized_inputs") or {}),
-        "runtime_mutable_input_roles": list(snapshot.get("runtime_mutable_input_roles") or []),
-        "executable_identity": dict(
-            (snapshot.get("executable_identities") or {}).get("orca") or {}
-        ),
-    }
+    return deepcopy(
+        {
+            "execution_dir": str(snapshot.get("execution_dir") or ""),
+            "execution_dir_identity": {
+                "device": int(execution_dir_identity.get("device", -1)),
+                "inode": int(execution_dir_identity.get("inode", -1)),
+            },
+            "generation_owner_token": str(snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or ""),
+            "source_selected_inp": str(snapshot.get("source_selected_inp") or ""),
+            "source_inputs": dict(snapshot.get("source_inputs") or {}),
+            "resource_request": dict(snapshot.get("resource_request") or {}),
+            "recovery": dict(snapshot.get("recovery") or {}),
+            "bound_selected_identity": dict(snapshot.get("bound_selected_identity") or {}),
+            "materialized_inputs": dict(snapshot.get("materialized_inputs") or {}),
+            "runtime_mutable_input_roles": list(snapshot.get("runtime_mutable_input_roles") or []),
+            "executable_identity": dict(
+                (snapshot.get("executable_identities") or {}).get("orca") or {}
+            ),
+        }
+    )
 
 
 def verify_orca_snapshot_executable(
