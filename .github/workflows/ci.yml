@@ -57,13 +57,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Run checks
-        run: bash scripts/check.sh
-
-      - name: Package smoke
-        run: |
-          .venv/bin/python -m scripts.check_distributions
-
       - name: Check out machine observation contract
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -72,10 +65,11 @@ jobs:
           path: .machine-contracts
           persist-credentials: false
 
-      - name: Verify emitted machine.json files against the common contract
+      - name: Run checks
         env:
-          FACTORY_MACHINE_CONTRACT_VALIDATOR: ${{ github.workspace }}/.machine-contracts/scripts/validate.py
+          FACTORY_MACHINE_CONTRACT_REPO: ${{ github.workspace }}/.machine-contracts
+        run: bash scripts/check.sh
+
+      - name: Package smoke
         run: |
-          .venv/bin/python -m pip install -r .machine-contracts/requirements.txt
-          .venv/bin/python -m pytest -q \
-            tests/test_state.py::test_write_report_files_json_fields
+          .venv/bin/python -m scripts.check_distributions

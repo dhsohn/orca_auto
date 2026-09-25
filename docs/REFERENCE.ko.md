@@ -2,7 +2,7 @@
 
 [English](REFERENCE.md) | **한국어**
 
-ORCA_auto 7.0의 CLI 명령어, 옵션 플래그, 큐 상태 전이 모델 및 산출물 규격을 설명합니다.
+ORCA_auto 7.0의 CLI 명령어, 옵션 플래그, 큐 상태 전이 모델 및 산출물 규격입니다.
 공개 동작에 대한 정식 규격은 [공개 인터페이스 규격(PUBLIC_CONTRACTS.ko.md)](PUBLIC_CONTRACTS.ko.md)을 참고하세요.
 
 ---
@@ -62,7 +62,7 @@ orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```bash
 orca_auto queue list clear [--config PATH] [--json]
 ```
-> **참고**: 큐 목록 및 작업 루트의 terminal `job_state.json` 메타데이터(중복 방지 배리어)를 정리하여 이후 재제출 시 `--force` 없이 제출 가능하도록 합니다. 디스크 상의 generation 하위 디렉터리, 계산 산출물, 출력 파일은 일체 삭제되지 않습니다. 정리된 행의 워커 로그와 publication lock 파일은 제거되며, `--json`은 제거한 로그 수를 `removed_worker_logs`로 보고합니다.
+> **참고**: 큐 목록 및 작업 루트의 terminal `job_state.json` 메타데이터(중복 방지 배리어)를 정리하여 이후 재제출 시 `--force` 없이 제출 가능하도록 합니다. 디스크 상의 generation 하위 디렉터리, 계산 산출물, 출력 파일은 삭제되지 않습니다. 정리된 행의 워커 로그와 publication lock 파일은 제거되며, `--json`은 제거한 로그 수를 `removed_worker_logs`로 보고합니다.
 
 종료되었어도 발행 처리가 남은 항목은 복구 표식을 유지하며 목록 정리와 강제 재제출 대상에서 제외됩니다. 실행 슬롯은 이미 반환되었을 수 있으며, 워커는 ORCA를 다시 실행하지 않고 인덱스 발행과 표식 제거를 재시도합니다.
 

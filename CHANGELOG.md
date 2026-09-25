@@ -216,6 +216,15 @@ and [RUNTIME](docs/RUNTIME.md).
 
 ### Fixed
 
+- `machine.json` conformance tests now fail when the pinned common-contract
+  validator or its dependencies are unavailable. The regular suite validates
+  completed and failed ORCA observations, and checks that changed artifact bytes
+  are rejected. CI and release builds provide the contract clone before testing.
+- Queue clear regression tests cover each supported filter, invalid limits,
+  configuration/index errors, a closed output pipe after clearing, and a queue
+  row becoming active before its terminal state is removed.
+
+
 - A comment-only line inside an inline `* xyz … *` block is no longer counted
   as an atom for the Hessian and atom-count admission limits.
 - The report "last output" footer follows the evidence rule: it is omitted when

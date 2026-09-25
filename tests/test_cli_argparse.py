@@ -33,18 +33,41 @@ def test_parser_error_suggests_subcommand(capsys: pytest.CaptureFixture[str]) ->
     assert "did you mean `queue`?" in stderr
 
 
-def test_queue_list_parser_rejects_negative_limit(
+@pytest.mark.parametrize("limit", ["-1", "2.5", "1e3"])
+def test_queue_list_parser_rejects_a_limit_that_is_not_a_non_negative_integer(
     capsys: pytest.CaptureFixture[str],
+    limit: str,
 ) -> None:
     parser = unified_cli.build_parser()
 
     with pytest.raises(SystemExit) as exc:
-        parser.parse_args(["queue", "list", "--limit", "-1"])
+        parser.parse_args(["queue", "list", "--limit", limit])
 
     assert exc.value.code == 2
     stderr = capsys.readouterr().err
     assert "error:" in stderr
     assert "--limit must be a non-negative integer" in stderr
+
+
+@pytest.mark.parametrize(("limit", "expected"), [("0", 0), ("1", 1), ("25", 25)])
+def test_queue_list_parser_accepts_a_non_negative_integer_limit(limit: str, expected: int) -> None:
+    args = unified_cli.build_parser().parse_args(["queue", "list", "--limit", limit])
+
+    assert args.limit == expected
+
+
+@pytest.mark.parametrize("action", ["Clear", "claer"])
+def test_queue_list_parser_rejects_an_action_other_than_clear(
+    capsys: pytest.CaptureFixture[str],
+    action: str,
+) -> None:
+    parser = unified_cli.build_parser()
+
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["queue", "list", action])
+
+    assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err
 
 
 def test_main_version_prints_package_version(capsys: pytest.CaptureFixture[str]) -> None:

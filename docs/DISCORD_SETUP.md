@@ -58,7 +58,9 @@ Test notification delivery by submitting a job:
 orca_auto run-dir <job_path>
 ```
 
-A notification card will be sent when the job is queued, followed by a summary card upon completion.
+The worker attempts a queued notification and a completion summary. Delivery is
+best effort; use `orca_auto queue list` and the generation reports to confirm
+calculation status.
 
 ## Troubleshooting
 

@@ -1,8 +1,8 @@
-# 빠른 시작 가이드 (Quickstart)
+# 빠른 시작 가이드
 
 [English](QUICKSTART.md) | **한국어**
 
-ORCA_auto 설정을 생성하고 백그라운드 워커를 등록한 뒤, 첫 번째 ORCA 계산을 큐에 제출하고 모니터링하는 기본 가이드입니다.
+ORCA_auto 설정 생성, 백그라운드 워커 등록, 계산 작업 큐 제출 및 모니터링 절차입니다.
 아직 패키지를 설치하지 않았다면 [설치 안내](INSTALLATION.ko.md)를 먼저 확인하세요.
 
 ---
@@ -46,7 +46,7 @@ orca_auto service status
 orca_auto run-dir ~/orca_runs/water --config ~/orca_auto.yaml
 ```
 
-작업이 큐에 안전하게 등록되면 CLI는 즉시 반환되며, 백그라운드 워커가 호스트 자원과 큐 우선순위를 검토하여 순차적으로 계산을 시작합니다.
+작업이 큐에 등록되면 CLI는 즉시 반환되며, 백그라운드 워커가 호스트 자원과 큐 우선순위를 검토하여 순차적으로 계산을 시작합니다.
 
 ---
 
