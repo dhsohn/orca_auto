@@ -31,8 +31,8 @@ from .adapter import (
     queue_entries_same_publication_generation,
 )
 from .entries import queue_entry_id, queue_entry_is_retired_workflow_owned, queue_entry_reaction_dir
+from .job_records import upsert_queued_job_record
 from .roots import queue_roots
-from .worker_tracking import upsert_queued_job_record
 
 logger = logging.getLogger(__name__)
 

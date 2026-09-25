@@ -133,6 +133,8 @@ def queue_detail_text(item: dict[str, Any]) -> str:
     if engine == "orca":
         detail = infer_orca_detail_from_metadata(metadata)
         if normalize_text(metadata.get("publication_blocked_reason")):
+            if metadata.get("publication_blocked_scope") == "orca_terminal_publication":
+                return f"{detail} (result publication pending)"
             return f"{detail} (waiting for publication repair)"
         if normalize_text(metadata.get("admission_deferral_reason")):
             # The full reason is in the JSON record; the table only says why

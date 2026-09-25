@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -368,6 +370,11 @@ def test_start_notification_and_persisted_terminal_result_describe_one_attempt(
 ) -> None:
     selected_inp, state = _fresh_run(tmp_path)
     started_notifications: list[RunStartedNotification] = []
+    delivered = threading.Event()
+
+    def notify(event: RunStartedNotification) -> None:
+        started_notifications.append(event)
+        delivered.set()
 
     rc = run_attempts(
         tmp_path,
@@ -376,10 +383,11 @@ def test_start_notification_and_persisted_terminal_result_describe_one_attempt(
         resumed=False,
         runner=_CaptureSuccessRunner(),
         emit=lambda _payload: None,
-        notify_started=started_notifications.append,
+        notify_started=notify,
     )
 
     assert rc == 0
+    assert delivered.wait(5)
     assert len(started_notifications) == 1
 
     started = started_notifications[0]
@@ -470,3 +478,46 @@ def test_resumed_run_uses_gbw_checkpoint_restart_input(tmp_path: Path) -> None:
     assert attempt["executable_identity"]["sha256"] == "b" * 64
     assert "resume_checkpoint_restart_from_rxn.gbw" in attempt["patch_actions"]
     assert "resume_geometry_restart_from_rxn.xyz" in attempt["patch_actions"]
+
+
+def test_stalled_started_callback_does_not_delay_calculation(tmp_path: Path) -> None:
+    selected_inp, state = _fresh_run(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    received: list[RunStartedNotification] = []
+
+    def notify(event: RunStartedNotification) -> None:
+        entered.set()
+        assert release.wait(10)
+        received.append(event)
+        raise RuntimeError("synthetic delivery failure")
+
+    class Runner(_CaptureSuccessRunner):
+        def run(self, inp_path: Path):
+            assert entered.wait(5)
+            assert not release.is_set()
+            return super().run(inp_path)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            future = pool.submit(
+                run_attempts,
+                tmp_path,
+                selected_inp,
+                state,
+                resumed=False,
+                runner=Runner(),
+                emit=lambda _payload: None,
+                notify_started=notify,
+            )
+            assert entered.wait(5)
+            assert future.result(timeout=5) == 0
+            saved = _saved_state(tmp_path)
+            assert saved["status"] == "completed"
+            before = (tmp_path / "job_state.json").read_bytes()
+        finally:
+            release.set()
+            for thread in threading.enumerate():
+                if thread.name == "orca-started-notification":
+                    thread.join(timeout=5)
+    assert received[0]["status"] == "running"
+    assert (tmp_path / "job_state.json").read_bytes() == before

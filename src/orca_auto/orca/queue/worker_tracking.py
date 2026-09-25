@@ -1,30 +1,23 @@
 from __future__ import annotations
 
 import logging
-import threading
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.messaging import MessageChannel
-from orca_auto.core.queue.resource_requests import coerce_resource_request
 from orca_auto.core.statuses import (
-    STATUS_QUEUED,
     STATUS_RUNNING,
     TERMINAL_STATUSES,
     normalize_status,
 )
 
 from ..config import AppConfig
-from ..inp_rewriter import read_resource_request_from_input
-from ..input_artifacts import selected_input_artifacts
 from ..job_locations import (
     record_from_artifacts,
-    resolve_job_metadata,
-    resource_dict,
     upsert_job_record,
 )
 from ..notifications import (
     build_run_finished_notification,
+    dispatch_notification,
     finished_notification_already_sent,
     notification_channel,
     notify_run_finished_event,
@@ -32,38 +25,10 @@ from ..notifications import (
 from ..run_lock import acquire_run_lock
 from ..state import now_utc_iso, save_state
 from ..state_reading import load_state, state_payload_job_id
-from ..types import RunFinishedNotification
-from .entries import queue_entry_metadata, queue_entry_reaction_dir, queue_entry_task_id
+from .entries import queue_entry_reaction_dir, queue_entry_task_id
+from .job_records import tracking_metadata_from_queue_entry
 
 logger = logging.getLogger(__name__)
-_NOTIFICATION_SLOTS = threading.BoundedSemaphore(4)
-
-
-def _dispatch_finished_notification(
-    channel: MessageChannel, notification: RunFinishedNotification
-) -> bool:
-    """Bound advisory sends without blocking scheduler or interpreter shutdown."""
-    slots = _NOTIFICATION_SLOTS
-    if not slots.acquire(blocking=False):
-        logger.warning("Terminal notification skipped: delivery capacity exhausted")
-        return False
-    send = notify_run_finished_event
-
-    def deliver() -> None:
-        try:
-            send(channel, notification)
-        except Exception as exc:  # noqa: BLE001 - advisory transport
-            logger.warning("Terminal notification failed: %s", type(exc).__name__)
-        finally:
-            slots.release()
-
-    try:
-        threading.Thread(target=deliver, name="orca-terminal-notification", daemon=True).start()
-    except Exception as exc:  # noqa: BLE001 - no retry after the durable claim
-        slots.release()
-        logger.warning("Terminal notification dispatch failed: %s", type(exc).__name__)
-        return False
-    return True
 
 
 def payload_matches_expected_job_id(payload: Any, expected_job_id: str | None) -> bool:
@@ -94,7 +59,6 @@ def upsert_running_job_record(
     selected_input, job_type, molecule_key, requested, actual = tracking_metadata_from_queue_entry(
         cfg,
         entry,
-        reaction_dir=reaction_dir,
     )
     upsert_job_record(
         cfg,
@@ -107,72 +71,6 @@ def upsert_running_job_record(
         resource_request=requested,
         resource_actual=actual,
     )
-
-
-def upsert_queued_job_record(
-    cfg: AppConfig,
-    entry: Any,
-) -> None:
-    task_id = queue_entry_task_id(entry)
-    if not task_id:
-        raise ValueError("ORCA publication repair requires a queue task_id")
-    reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser().resolve()
-    selected_input, job_type, molecule_key, requested, actual = tracking_metadata_from_queue_entry(
-        cfg,
-        entry,
-        reaction_dir=reaction_dir,
-    )
-    upsert_job_record(
-        cfg,
-        job_id=task_id,
-        status=STATUS_QUEUED,
-        job_dir=reaction_dir,
-        job_type=job_type,
-        selected_input_xyz=selected_input,
-        molecule_key=molecule_key,
-        resource_request=requested,
-        resource_actual=actual,
-    )
-
-
-def tracking_metadata_from_queue_entry(
-    cfg: AppConfig,
-    entry: Any,
-    *,
-    reaction_dir: Path,
-) -> tuple[str, str, str, dict[str, int], dict[str, int]]:
-    metadata = queue_entry_metadata(entry)
-    selected_inp = str(metadata.get("selected_inp") or "").strip()
-    selected_xyz = str(metadata.get("selected_input_xyz") or "").strip()
-    selected_input = str(
-        selected_xyz
-        or metadata.get("selected_input_path")
-        or selected_input_artifacts(selected_inp).selected_input_path
-    ).strip()
-    job_type = str(metadata.get("job_type") or "").strip()
-    molecule_key = str(metadata.get("molecule_key") or "").strip()
-    if not job_type or not molecule_key:
-        derived_job_type, derived_molecule_key = resolve_job_metadata(
-            selected_inp or selected_input,
-            reaction_dir,
-        )
-        job_type = job_type or derived_job_type
-        molecule_key = molecule_key or derived_molecule_key
-
-    requested = coerce_resource_request(metadata.get("resource_request"))
-    resource_inp = selected_inp or selected_input
-    if not requested and resource_inp.lower().endswith(".inp"):
-        selected_inp_path = Path(resource_inp).expanduser().resolve()
-        if selected_inp_path.exists():
-            requested = read_resource_request_from_input(selected_inp_path)
-    if not requested:
-        requested = resource_dict(
-            cfg.resources.max_cores_per_task,
-            cfg.resources.max_memory_gb_per_task,
-        )
-
-    actual = coerce_resource_request(metadata.get("resource_actual")) or dict(requested)
-    return selected_input, job_type, molecule_key, requested, actual
 
 
 def upsert_terminal_job_record(
@@ -250,15 +148,15 @@ def notify_terminal_job_from_state(
         )
         final_result["finished_notification_claimed_at"] = now_utc_iso()
         save_state(job_dir, state)
-    return _dispatch_finished_notification(channel, notification)
+    return dispatch_notification(
+        lambda: notify_run_finished_event(channel, notification), kind="terminal"
+    )
 
 
 __all__ = [
     "get_run_id_from_state",
     "notify_terminal_job_from_state",
     "payload_matches_expected_job_id",
-    "tracking_metadata_from_queue_entry",
-    "upsert_queued_job_record",
     "upsert_running_job_record",
     "upsert_terminal_job_record",
 ]

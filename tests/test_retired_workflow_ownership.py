@@ -166,7 +166,6 @@ def test_public_run_dir_preserves_metadata_owned_job_and_allows_standalone(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from orca_auto.orca import submission
 
     _cfg, job, entry = _fixture(tmp_path, ownership="metadata")
     retired = replace(entry, status=QueueStatus.COMPLETED)
@@ -178,7 +177,6 @@ def test_public_run_dir_preserves_metadata_owned_job_and_allows_standalone(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(submission, "notify_queued_submission", lambda _cfg, _result: True)
     before = _files(tmp_path)
     original_job_dirs = {path.relative_to(job) for path in job.rglob("*") if path.is_dir()}
     argv = ["run-dir", str(job), "--config", str(config), "--json"]

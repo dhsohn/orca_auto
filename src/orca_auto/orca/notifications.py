@@ -12,7 +12,8 @@ title.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+import threading
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +41,37 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+
+_NOTIFICATION_SLOTS = threading.BoundedSemaphore(4)
+
+
+def dispatch_notification(deliver: Callable[[], object], *, kind: str) -> bool:
+    """Attempt advisory delivery without blocking execution or interpreter shutdown.
+
+    Callers settle ownership and capture the event before dispatch. A saturated
+    sender or process exit can lose a message; the sender never mutates run state.
+    """
+    slots = _NOTIFICATION_SLOTS
+    if not slots.acquire(blocking=False):
+        logger.warning("%s notification skipped: delivery capacity exhausted", kind)
+        return False
+
+    def send() -> None:
+        try:
+            deliver()
+        except Exception as exc:  # noqa: BLE001 - advisory transport
+            logger.warning("%s notification failed: %s", kind, type(exc).__name__)
+        finally:
+            slots.release()
+
+    try:
+        threading.Thread(target=send, name=f"orca-{kind}-notification", daemon=True).start()
+    except Exception as exc:  # noqa: BLE001 - no retry after ownership was settled
+        slots.release()
+        logger.warning("%s notification dispatch failed: %s", kind, type(exc).__name__)
+        return False
+    return True
 
 
 def notification_channel(cfg: Any) -> MessageChannel:
@@ -216,6 +248,7 @@ def _log_delivery(kind: str, sent: bool, **context: object) -> None:
 
 
 __all__ = [
+    "dispatch_notification",
     "notification_channel",
     "notify_queue_enqueued_event",
     "notify_run_finished_event",

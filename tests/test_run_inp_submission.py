@@ -30,6 +30,7 @@ from orca_auto.orca.input_artifacts import OrcaSelectedInputArtifacts
 from orca_auto.orca.notifications import notify_queue_enqueued_event
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import enqueue_publication as core_enqueue_publication
+from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue import publication_repair
 from orca_auto.orca.run_dir_guard import use_run_dir_publication_guard
 from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
@@ -86,7 +87,9 @@ def _real_submission(
         "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        queue_notifications, "notify_queue_enqueued_event", lambda *_args, **_kwargs: True
+    )
     monkeypatch.setattr(run_inp, "read_worker_pid", lambda _root: None)
     args = SimpleNamespace(
         config=str(config),
@@ -112,6 +115,7 @@ def test_queue_metadata_assembles_supplied_values_without_creating_files(tmp_pat
     )
     assert metadata == {
         "submitted_via": "run_inp",
+        "orca_queued_notification_pending": True,
         "job_type": "opt",
         "molecule_key": "sample",
         "resource_request": {"max_cores": 2, "max_memory_gb": 4},
@@ -270,16 +274,24 @@ def test_notification_delivery_failure_does_not_park_queue_publication(
             discord=DiscordConfig(bot_token="synthetic-token", default_channel_id="123")
         ),
     )
-    monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        queue_notifications, "notify_queue_enqueued_event", lambda *_args, **_kwargs: False
+    )
 
     result = run_inp.submit_reaction_dir_to_queue(args)
 
     assert result.status == "submitted"
     assert result.queued_result is not None
-    assert "queued notification delivery failed" in result.queued_result.worker_info.detail
+    cfg = run_inp.load_config(args.config)
+    queue_notifications.notify_queued_jobs(cfg)
+    for thread in threading.enumerate():
+        if thread.name == "orca-queued-notification":
+            thread.join(timeout=5)
+    assert not result.queued_result.worker_info.detail
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
     assert queue_entry_is_claimable(entry)
+    assert entry.metadata[queue_notifications.QUEUED_NOTIFICATION_PENDING_KEY] is False
 
 
 def test_truncated_discord_response_does_not_park_queue_publication(
@@ -313,7 +325,9 @@ def test_truncated_discord_response_does_not_park_queue_publication(
         def __exit__(self, *_args: object) -> Literal[False]:
             return False
 
-    monkeypatch.setattr(run_inp, "notify_queue_enqueued_event", notify_queue_enqueued_event)
+    monkeypatch.setattr(
+        queue_notifications, "notify_queue_enqueued_event", notify_queue_enqueued_event
+    )
     monkeypatch.setattr(
         discord_bot_mod,
         "urlopen",
@@ -324,10 +338,16 @@ def test_truncated_discord_response_does_not_park_queue_publication(
 
     assert result.status == "submitted"
     assert result.queued_result is not None
-    assert "queued notification delivery failed" in result.queued_result.worker_info.detail
+    cfg = run_inp.load_config(args.config)
+    queue_notifications.notify_queued_jobs(cfg)
+    for thread in threading.enumerate():
+        if thread.name == "orca-queued-notification":
+            thread.join(timeout=5)
+    assert not result.queued_result.worker_info.detail
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
     assert queue_entry_is_claimable(entry)
+    assert entry.metadata[queue_notifications.QUEUED_NOTIFICATION_PENDING_KEY] is False
 
 
 def test_submission_rejects_distinct_sources_with_same_basename_before_enqueue(
@@ -564,8 +584,7 @@ def test_orca_compensation_failure_fences_row_without_publication(
     monkeypatch.setattr(
         core_enqueue_publication, "_recover_committed_enqueue", reject_normal_recovery
     )
-    monkeypatch.setattr(submission_mod, "record_queued_job_side_effect", reject_publication)
-    monkeypatch.setattr(submission_mod, "notify_queued_submission", reject_publication)
+    monkeypatch.setattr(submission_mod, "upsert_queued_job_record", reject_publication)
 
     with use_run_dir_publication_guard(reject_after_commit):
         result = run_inp.submit_reaction_dir_to_queue(args)

@@ -8,6 +8,7 @@ import pytest
 
 from orca_auto.core.messaging.channel import SendResult
 from orca_auto.core.queue.worker.loop import QueueWorkerLoop
+from orca_auto.orca import notifications
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.queue import worker_tracking
 from orca_auto.orca.state import new_state, save_state
@@ -136,7 +137,7 @@ def test_bounded_sends_recover_capacity_after_transport_and_start_failures(
     guard = threading.Lock()
     sends = []
     slots = threading.BoundedSemaphore(4)
-    monkeypatch.setattr(worker_tracking, "_NOTIFICATION_SLOTS", slots)
+    monkeypatch.setattr(notifications, "_NOTIFICATION_SLOTS", slots)
 
     class Channel:
         enabled = True

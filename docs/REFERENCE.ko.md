@@ -46,6 +46,8 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 
 ---
 
+종료 복구 표시가 제거될 때까지 실행 상태(`completed`, `failed`, `cancelled`)는 유지하고 상세에 `result publication pending`을 표시합니다. JSON 메타데이터는 `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action`, `publication_owner=orca_queue_worker`를 제공합니다. 해당 폴더의 제한은 행이 필터·페이지 범위 밖이어도 `admission_blockers`에 남습니다. 잘못된 표시는 발행 완료로 간주하지 않고 워커 로그와 복구 표시의 점검을 안내합니다.
+
 ### `orca_auto queue cancel`
 대기 중이거나 실행 중인 작업을 안전하게 취소합니다.
 ```bash

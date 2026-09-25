@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..notifications import dispatch_notification
 from ..statuses import RunStatus
 from ..types import RunStartedNotification, RunState
 from .reporting import build_run_started_notification
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,14 +41,8 @@ def notify_attempt_started(ctx: AttemptStartedNotification) -> None:
         attempt_started_at=ctx.attempt_started_at,
         resumed=ctx.resumed,
     )
-    try:
-        ctx.notify_started(notification)
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            "Started notification callback failed for attempt %d",
-            ctx.execution_index,
-            exc_info=True,
-        )
+    notify = ctx.notify_started
+    dispatch_notification(lambda: notify(notification), kind="started")
 
 
 __all__ = [

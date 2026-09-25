@@ -2,10 +2,10 @@
 
 ``create_queued_submission`` runs the staged pipeline (prepare inputs, build
 the execution snapshot, validate its intent, assemble queue metadata, publish
-the row with its job record and notification, own the snapshot);
+the row with its job record, own the snapshot);
 ``submit_reaction_dir_to_queue`` wraps it for the CLI with conflict detection
 and one-line failure reporting. The smaller helpers here (worker status,
-queue metadata, job-record upsert, notification) are shared with the queue
+queue metadata, job-record projection) are shared with the queue
 worker and the CLI status views.
 """
 
@@ -33,6 +33,7 @@ from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca.queue.enqueue_publication import (
+    EnqueuePublicationOutcome,
     EnqueuePublicationOutcomeUnknown,
     EnqueuePublicationSpec,
     run_enqueue_publication,
@@ -48,17 +49,17 @@ from .execution_binding import (
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
 )
-from .inp_rewriter import prepare_submission_resource_request, read_resource_request_from_input
+from .inp_rewriter import prepare_submission_resource_request
 from .input_artifacts import OrcaSelectedInputArtifacts, selected_input_artifacts
-from .job_locations import resolve_job_metadata, upsert_job_record
-from .notifications import notification_channel, notify_queue_enqueued_event
+from .job_locations import resolve_job_metadata
 from .queue import adapter as queue_adapter
 from .queue.adapter import DuplicateEntryError
 from .queue.entries import queue_entry_is_retired_workflow_owned
+from .queue.job_records import upsert_queued_job_record
+from .queue.notifications import QUEUED_NOTIFICATION_PENDING_KEY
 from .queue.orphans import DeadRunningRowUnjudgeableError, read_worker_pid
 from .resource_directives import PreparedSubmissionResourceInput
 from .run_context import WorkerStatusInfo, resolve_submission_context
-from .types import QueueEnqueuedNotification
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +118,6 @@ class QueuePublicationCancelledError(RuntimeError):
     """Raised when cancellation revokes publication before its side effects."""
 
 
-class _QueuedRecordPartiallyPublished(RuntimeError):
-    """The queued record is incomplete; raising parks the lease for worker repair."""
-
-
 def active_queue_entry(allowed_root: Path, reaction_dir: Path) -> QueueEntry | None:
     return queue_adapter.get_active_entry_for_reaction_dir(allowed_root, str(reaction_dir))
 
@@ -166,30 +163,6 @@ def worker_status_with_log_file(
     )
 
 
-def build_queue_enqueued_notification(entry: Any) -> QueueEnqueuedNotification:
-    return {
-        "queue_id": queue_adapter.queue_entry_id(entry),
-        "reaction_dir": queue_adapter.queue_entry_reaction_dir(entry),
-        "priority": queue_adapter.queue_entry_priority(entry),
-        "force": queue_adapter.queue_entry_force(entry),
-        "enqueued_at": getattr(entry, "enqueued_at", ""),
-    }
-
-
-def resource_request_from_selected_inp(
-    cfg: Any,
-    selected_inp: Path | None,
-    *,
-    logger: logging.Logger,
-) -> dict[str, int]:
-    prepared = prepared_resource_input_from_selected_inp(
-        cfg,
-        selected_inp,
-        logger=logger,
-    )
-    return dict(prepared.resource_request)
-
-
 def prepared_resource_input_from_selected_inp(
     cfg: Any,
     selected_inp: Path | None,
@@ -232,6 +205,7 @@ def build_queue_metadata(
     """Assemble queue values from an already-created snapshot without filesystem work."""
     metadata: dict[str, Any] = {
         "submitted_via": "run_inp",
+        QUEUED_NOTIFICATION_PENDING_KEY: True,
         "job_type": job_type,
         "molecule_key": molecule_key,
         "resource_request": dict(resource_request),
@@ -244,78 +218,6 @@ def build_queue_metadata(
     metadata["selected_input_xyz"] = artifacts.selected_input_xyz
     metadata["execution_snapshot"] = execution_snapshot
     return metadata
-
-
-def upsert_queued_job_record(
-    cfg: Any,
-    *,
-    reaction_dir: Path,
-    selected_inp: Path | None,
-    job_id: str,
-    queue_metadata: dict[str, Any] | None = None,
-) -> None:
-    artifacts = selected_input_artifacts(selected_inp)
-    selected_input = artifacts.selected_input_path
-    metadata = dict(queue_metadata or {})
-    job_type = str(metadata.get("job_type") or "").strip()
-    molecule_key = str(metadata.get("molecule_key") or "").strip()
-    if not job_type or not molecule_key:
-        derived_job_type, derived_molecule_key = resolve_job_metadata(
-            artifacts.selected_inp or selected_input,
-            reaction_dir,
-        )
-        job_type = job_type or derived_job_type
-        molecule_key = molecule_key or derived_molecule_key
-    requested = metadata.get("resource_request")
-    if not isinstance(requested, dict):
-        requested = {}
-    if not requested and selected_inp is not None and selected_inp.exists():
-        requested = read_resource_request_from_input(selected_inp)
-    if not requested and selected_inp is not None and selected_inp.exists():
-        requested = resource_request_from_selected_inp(cfg, selected_inp, logger=logger)
-    actual = metadata.get("resource_actual")
-    if not isinstance(actual, dict):
-        actual = dict(requested)
-    upsert_job_record(
-        cfg,
-        job_id=job_id,
-        status="queued",
-        job_dir=reaction_dir,
-        job_type=job_type,
-        selected_input_xyz=selected_input,
-        molecule_key=molecule_key,
-        resource_request=requested,
-        resource_actual=actual,
-    )
-
-
-def record_queued_job_side_effect(
-    cfg: Any,
-    *,
-    reaction_dir: Path,
-    selected_inp: Path | None,
-    job_id: str,
-    queue_metadata: dict[str, Any],
-) -> str | None:
-    try:
-        upsert_queued_job_record(
-            cfg,
-            reaction_dir=reaction_dir,
-            selected_inp=selected_inp,
-            job_id=job_id,
-            queue_metadata=queue_metadata,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "queued job record update failed after queue submission succeeded: "
-            "reaction_dir=%s job_id=%s error=%s",
-            reaction_dir,
-            job_id,
-            exc,
-            exc_info=True,
-        )
-        return "queued job record update failed; queue submission succeeded"
-    return None
 
 
 def worker_status_with_detail(
@@ -470,45 +372,6 @@ def _cleanup_submission_snapshot(reaction_dir: Path, execution_snapshot: Any) ->
     )
 
 
-def _record_and_notify_queued_entry(
-    cfg: Any,
-    current: QueueEntry,
-    *,
-    reaction_dir: Path,
-    selected_inp: Path,
-    queue_metadata: dict[str, Any],
-    detail_warnings: list[str],
-) -> None:
-    """Stage 6 (inside publication): job record upsert, then the notification."""
-    side_effect_warning: str | None = None
-    current_task_id = queue_adapter.queue_entry_task_id(current)
-    if current_task_id:
-        side_effect_warning = record_queued_job_side_effect(
-            cfg,
-            reaction_dir=reaction_dir,
-            selected_inp=selected_inp,
-            job_id=str(current_task_id),
-            queue_metadata=queue_metadata,
-        )
-    notification_result = QueuedSubmissionResult(
-        entry=current,
-        reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
-        queue_metadata=queue_metadata,
-        worker_info=_publication_worker_placeholder(),
-    )
-    if not notify_queued_submission(cfg, notification_result):
-        detail_warnings.append(
-            "queued notification delivery failed; state/index recorded and "
-            "notification was not retried (at-most-once delivery)"
-        )
-    if side_effect_warning:
-        # The queue row is durably committed but its published record is
-        # incomplete; raising here makes the driver park the lease for the
-        # worker repair pass instead of marking the publication COMPLETE.
-        raise _QueuedRecordPartiallyPublished(side_effect_warning)
-
-
 def _publish_submission(
     cfg: Any,
     reaction_dir: Path,
@@ -518,23 +381,11 @@ def _publish_submission(
     task_id: str,
     queue_metadata: dict[str, Any],
     execution_snapshot: dict[str, Any],
-) -> tuple[Any, list[str]]:
-    """Stage 5: commit the queue row through the generic publication driver.
-
-    Returns the publication outcome and the warnings the record/notify stage
-    collected while the row was being published.
-    """
-    detail_warnings: list[str] = []
+) -> EnqueuePublicationOutcome:
+    """Commit the row and publish its location record before completing the lease."""
 
     def publish(current: QueueEntry) -> None:
-        _record_and_notify_queued_entry(
-            cfg,
-            current,
-            reaction_dir=reaction_dir,
-            selected_inp=inputs.selected_inp,
-            queue_metadata=queue_metadata,
-            detail_warnings=detail_warnings,
-        )
+        upsert_queued_job_record(cfg, current)
 
     def mark_failed_via_adapter(root: Path, queue_id: str, **kwargs: Any) -> Any:
         # The adapter's mark_failed installs the administrative fence-only
@@ -587,7 +438,7 @@ def _publish_submission(
         job_dir_metadata_key="reaction_dir",
         same_generation=queue_adapter.queue_entries_same_publication_generation,
     )
-    return run_enqueue_publication(spec), detail_warnings
+    return run_enqueue_publication(spec)
 
 
 def _submission_worker_info(
@@ -613,9 +464,9 @@ def create_queued_submission(
     """Submit one ORCA input directory to the durable queue.
 
     Stages, in order: prepare inputs, build the execution snapshot, validate
-    its intent, assemble the queue metadata, publish the row (which records
-    the job and notifies), then take ownership of the snapshot. A failure
-    between snapshot creation and publication removes the unowned generation;
+    its intent, assemble the queue metadata, publish the row and job record,
+    then take ownership of the snapshot. The parent worker owns queued delivery.
+    A failure between snapshot creation and publication removes the unowned generation;
     a compensated publication failure removes it through the driver.
     """
     queue_root = _submission_queue_root(cfg, reaction_dir)
@@ -634,7 +485,7 @@ def create_queued_submission(
     except BaseException:
         _cleanup_submission_snapshot(reaction_dir, execution_snapshot)
         raise
-    outcome, detail_warnings = _publish_submission(
+    outcome = _publish_submission(
         cfg,
         reaction_dir,
         inputs,
@@ -652,7 +503,7 @@ def create_queued_submission(
     worker_info = _submission_worker_info(
         queue_root,
         entry,
-        [marker_warning, *detail_warnings, *outcome.warnings],
+        [marker_warning, *outcome.warnings],
     )
     return QueuedSubmissionResult(
         entry=entry,
@@ -661,21 +512,6 @@ def create_queued_submission(
         queue_metadata=queue_metadata,
         worker_info=worker_info,
     )
-
-
-def notify_queued_submission(
-    cfg: Any,
-    result: QueuedSubmissionResult,
-) -> bool:
-    notification = build_queue_enqueued_notification(result.entry)
-    channel = notification_channel(cfg)
-    delivered = bool(notify_queue_enqueued_event(channel, notification))
-    # A disabled channel is an intentional no-op, not a failed delivery.
-    return delivered or not channel.enabled
-
-
-def _publication_worker_placeholder() -> WorkerStatusInfo:
-    return WorkerStatusInfo(status="unknown")
 
 
 def submit_reaction_dir_to_queue(

@@ -137,3 +137,48 @@ def test_complete_publication_clears_resolved_path_error(tmp_path: Path) -> None
     assert not queue_record(adapter, recovered, None, allowed_root=tmp_path).metadata[
         "publication_blocked_reason"
     ]
+
+
+@pytest.mark.parametrize(
+    "status", [QueueStatus.COMPLETED, QueueStatus.FAILED, QueueStatus.CANCELLED]
+)
+@pytest.mark.parametrize("invalid", [False, True])
+def test_terminal_publication_is_visible_until_marker_clears(
+    tmp_path: Path, config_path, status: QueueStatus, invalid: bool
+) -> None:
+    from orca_auto.activity import list_activities
+    from orca_auto.activity_labels import queue_detail_text
+    from orca_auto.core.queue.store import save_entries
+    from orca_auto.orca.queue.terminal_replay import (
+        TERMINAL_REPLAY_METADATA_KEY,
+        terminal_replay_marker_for_entry,
+    )
+    from tests.conftest import make_queue_entry
+
+    config = str(config_path(runs_root=tmp_path))
+    entry = make_queue_entry(reaction_dir=tmp_path / "job", status=status)
+    marker = terminal_replay_marker_for_entry(entry, status=status.value)
+    if invalid:
+        marker["version"] = 999
+    entry.metadata[TERMINAL_REPLAY_METADATA_KEY] = marker
+    save_entries(tmp_path, [entry])
+    before = (tmp_path / "queue.json").read_bytes()
+
+    payload = list_activities(orca_config=config)
+    [row] = payload["activities"]
+    assert row["status"] == status.value
+    assert row["metadata"]["publication_owner"] == "orca_queue_worker"
+    assert "result publication pending" in queue_detail_text(row)
+    [blocker] = payload["admission_blockers"]
+    assert blocker["scope"] == "orca_terminal_publication"
+    assert ("invalid" in blocker["reason"]) == invalid
+    assert payload["active_simulations"] == 0
+    assert (tmp_path / "queue.json").read_bytes() == before
+    filtered = list_activities(orca_config=config, statuses=["running"])
+    assert filtered["activities"] == []
+    assert filtered["admission_blockers"] == [blocker]
+
+    assert adapter.update_metadata(tmp_path, entry.queue_id, {TERMINAL_REPLAY_METADATA_KEY: None})
+    cleared = list_activities(orca_config=config)
+    assert "admission_blockers" not in cleared
+    assert "publication pending" not in queue_detail_text(cleared["activities"][0])

@@ -46,6 +46,8 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 
 ---
 
+The row keeps its execution status (`completed`, `failed` or `cancelled`) and shows `result publication pending` in its detail until the terminal replay marker clears. JSON metadata includes `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action` and `publication_owner=orca_queue_worker`. The same per-directory fence appears in `admission_blockers`, including when the row is outside the requested filter/page. An invalid marker directs inspection of the worker log and marker; it is not silently treated as published.
+
 ### `orca_auto queue cancel`
 Safely cancels a pending or running job.
 ```bash

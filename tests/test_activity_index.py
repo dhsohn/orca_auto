@@ -290,12 +290,13 @@ def test_pruning_the_first_location_row_dirties_only_that_row(
     assert reads == []
 
 
-def test_older_projection_schema_is_rebuilt_not_read(tmp_path: Path) -> None:
+@pytest.mark.parametrize("previous_schema", ["1", "2"])
+def test_older_projection_schema_is_rebuilt_not_read(tmp_path: Path, previous_schema: str) -> None:
     root, _config_path = _config(tmp_path)
     _state(root, root / "job")
     assert [row["activity_id"] for row in _query(root)] == ["run"]
     with closing(index.connect(root)) as connection, connection:
-        connection.execute("UPDATE meta SET value='1' WHERE key='schema'")
+        connection.execute("UPDATE meta SET value=? WHERE key='schema'", (previous_schema,))
         connection.execute(
             "INSERT INTO activities VALUES ('snapshot','stale','completed','9','9','stale','{}',0)"
         )
