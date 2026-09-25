@@ -25,7 +25,7 @@ orca_auto init --config ~/orca_auto.yaml
 
 ## 2. Install and Start Background Services
 
-Register and start the systemd worker service so calculations continue reliably even after the terminal session closes:
+Register and start the systemd worker service so calculations continue in the background after the terminal session closes:
 
 ```bash
 # Install and enable systemd units for the current user (provide repo or runtime path)
@@ -67,7 +67,7 @@ journalctl -u "orca_auto-queue-worker@$(id -un)" -f
 
 ## 5. Cancel Jobs and Inspect Results
 
-- **Cancel a job**: Safely cancel a pending or running calculation:
+- **Cancel a job**: Cancel a pending or running calculation:
   ```bash
   orca_auto queue cancel <QUEUE_ID_OR_DIRECTORY> --config ~/orca_auto.yaml
   ```

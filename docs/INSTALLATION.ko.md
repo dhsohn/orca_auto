@@ -28,7 +28,7 @@ source ~/.local/share/orca_auto/venv/bin/activate
 
 # ORCA_auto 설치
 pip install --upgrade pip
-pip install orca_auto==7.0.1
+pip install orca_auto==8.0.0
 
 # 정상 설치 확인
 orca_auto --version
@@ -46,7 +46,7 @@ orca_auto init --config ~/orca_auto.yaml
 ```
 
 ### systemd 백그라운드 워커 등록
-백그라운드에서 계산을 안정적으로 수행하려면 systemd 유닛을 등록합니다. 설치 명령어(`systemd install`)는 `.venv`가 포함된 소스 체크아웃 경로 또는 빌드된 런타임 경로(`--repo`)를 필요로 합니다:
+백그라운드에서 계산을 감독하려면 systemd 유닛을 등록합니다. 설치 명령어(`systemd install`)는 `.venv`가 포함된 소스 체크아웃 경로 또는 빌드된 런타임 경로(`--repo`)를 필요로 합니다:
 
 ```bash
 # 현재 사용자 기준으로 systemd 워커 등록 (체크아웃 또는 런타임 경로 지정)

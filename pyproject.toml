@@ -38,8 +38,8 @@ dependencies = [
 Homepage = "https://github.com/dhsohn/orca_auto"
 Repository = "https://github.com/dhsohn/orca_auto"
 Issues = "https://github.com/dhsohn/orca_auto/issues"
-Documentation = "https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/INSTALLATION.md"
-Changelog = "https://github.com/dhsohn/orca_auto/blob/v7.0.1/CHANGELOG.md"
+Documentation = "https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/INSTALLATION.md"
+Changelog = "https://github.com/dhsohn/orca_auto/blob/v8.0.0/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

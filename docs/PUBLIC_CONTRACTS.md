@@ -2,7 +2,7 @@
 
 **English** | [한국어](PUBLIC_CONTRACTS.ko.md)
 
-This document defines the stable public contracts, runtime behaviors, configuration rules, and artifact schemas for ORCA_auto 7.0.
+This document defines the stable public contracts, runtime behaviors, configuration rules, and artifact schemas for ORCA_auto.
 ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, using absolute Linux paths.
 
 ---
@@ -55,7 +55,7 @@ A source checkout is not probed.
 
 1. **Atomic Submission**: A successful submission (`status: queued`) guarantees that the input snapshot is created and the job is permanently recorded on disk.
 2. **Generation Isolation**: Calculations run within versioned, generation-isolated directories to prevent state contamination across repeated attempts.
-3. **Explicit Failure Handling**: Failed runs record clear diagnostic exit reasons without attempting automatic, blind retries.
+3. **Explicit Failure Handling**: Failed runs record clear diagnostic exit reasons without attempting automatic retries.
 4. **Capacity Deferral**: When RAM Scratch is enabled, temporary host memory constraints defer launching (job remains in `pending` with `metadata.admission_deferral_reason` set) rather than failing the calculation.
 5. **Publication Failure Isolation**: A queued location-index publication that is busy or fails keeps that submission pending while unrelated eligible jobs may use available capacity. The worker retries publication on subsequent admission passes; persisted failure details remain visible through `queue list` and its `admission_blockers`. Those publication blockers identify individual queue rows. Path/generation checks still apply, and an unreadable queue stops admission.
 

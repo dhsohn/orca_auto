@@ -25,7 +25,7 @@ orca_auto init --config ~/orca_auto.yaml
 
 ## 2. 백그라운드 워커 서비스 등록
 
-터미널 세션이 종료되어도 백그라운드에서 계산을 안정적으로 수행할 수 있도록 systemd 서비스를 등록하고 상태를 확인합니다.
+터미널 세션이 종료되어도 계산이 백그라운드에서 계속 실행되도록 systemd 서비스를 등록하고 상태를 확인합니다.
 
 ```bash
 # systemd 유닛 등록 (현재 사용자 기준, 소스 체크아웃 또는 런타임 경로 지정)
@@ -46,7 +46,7 @@ orca_auto service status
 orca_auto run-dir ~/orca_runs/water --config ~/orca_auto.yaml
 ```
 
-작업이 큐에 등록되면 CLI는 즉시 반환되며, 백그라운드 워커가 호스트 자원과 큐 우선순위를 검토하여 순차적으로 계산을 시작합니다.
+작업이 큐에 기록되면 CLI는 즉시 반환되며, 백그라운드 워커가 호스트 자원과 우선순위에 따라 격리된 generation 디렉터리에서 계산을 시작합니다.
 
 ---
 
@@ -67,7 +67,7 @@ journalctl -u "orca_auto-queue-worker@$(id -un)" -f
 
 ## 5. 작업 취소 및 결과 확인
 
-- **작업 취소**: 대기 중이거나 실행 중인 작업을 안전하게 취소합니다.
+- **작업 취소**: 대기 중이거나 실행 중인 작업을 취소합니다.
   ```bash
   orca_auto queue cancel <QUEUE_ID_OR_DIRECTORY> --config ~/orca_auto.yaml
   ```

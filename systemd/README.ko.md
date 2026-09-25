@@ -8,7 +8,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 시스템 레벨 템플릿 유닛을 사
 
 ## 1. systemd 유닛 구조
 
-ORCA_auto 7.0은 사용자별(`@USER`) 인스턴스로 동작하는 3개의 템플릿 유닛을 제공합니다:
+ORCA_auto는 사용자별(`@USER`) 인스턴스로 동작하는 3개의 템플릿 유닛을 제공합니다:
 
 ```text
 orca_auto-runtime@USER.target          # 런타임 최상위 관리 타깃
@@ -39,8 +39,8 @@ orca_auto systemd install --user "$(id -un)" --repo /path/to/orca_auto --config 
 orca_auto service status
 ```
 
-### 안전한 서비스 재시작
-진행 중인 계산 작업의 중단을 방지하기 위해, 활성 시뮬레이션이 없는 유휴(idle) 상태일 때만 안전하게 재시작됩니다:
+### 서비스 재시작
+진행 중인 계산 작업의 중단을 방지하기 위해, 활성 시뮬레이션이 없는 유휴(idle) 상태일 때만 재시작을 허용합니다:
 ```bash
 orca_auto service restart
 

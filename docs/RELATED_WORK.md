@@ -1,6 +1,6 @@
 # Related Work and Project Scope
 
-ORCA_auto provides a reliable runtime and observability layer for ORCA-centered computational chemistry calculations on Linux and WSL.
+ORCA_auto provides a runtime and observability layer for standalone ORCA quantum chemistry calculations on Linux and WSL.
 
 ## Local-first Companion Tools
 
@@ -10,7 +10,7 @@ ORCA_auto connects with neighboring open-source tools:
 - **ORCA_auto**: Durable queueing, execution management, and observability for quantum chemical calculations.
 - **[LLMdocx](https://github.com/dhsohn/LLMdocx)**: Generating research reports, Supporting Information, and paper drafts.
 
-These tools share a versioned `machine.json` schema and standardized output bundles, allowing them to be composed smoothly in local-first research pipelines.
+These tools share a versioned `machine.json` schema and standardized output bundles, allowing them to connect through local-first research pipelines.
 
 ## Shell Scripts vs. ORCA_auto
 
@@ -30,7 +30,7 @@ Cluster schedulers like SLURM and PBS manage compute resources across large clus
 
 ## General Workflow Engines
 
-General workflow engines (such as Nextflow, Snakemake, and AiiDA) provide DAG abstractions across multi-step distributed pipelines. ORCA_auto handles durable submission, execution and reporting for standalone ORCA jobs on Linux/WSL. External tools can consume its documented machine observations; version 7 does not provide workflow orchestration.
+General workflow engines (such as Nextflow, Snakemake, and AiiDA) provide DAG abstractions across multi-step distributed pipelines. ORCA_auto handles durable submission, execution and reporting for standalone ORCA jobs on Linux/WSL. External tools can consume its documented machine observations; ORCA_auto does not provide workflow orchestration.
 
 ## Chemistry Libraries
 

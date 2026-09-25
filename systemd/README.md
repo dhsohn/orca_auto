@@ -8,7 +8,7 @@ ORCA_auto uses system-level templated `systemd` units instantiated per user (`@U
 
 ## 1. Unit Architecture
 
-ORCA_auto 7.0 provides three templated systemd units configured per user (`@USER`):
+ORCA_auto provides three templated systemd units configured per user (`@USER`):
 
 ```text
 orca_auto-runtime@USER.target          # Top-level runtime target
@@ -39,7 +39,7 @@ Verifies unit health and that running worker processes match the checkout HEAD o
 orca_auto service status
 ```
 
-### Safe Service Restart
+### Service Restart
 To protect running calculations from accidental interruption, restarts are only permitted during an idle maintenance window (zero active simulations):
 ```bash
 orca_auto service restart

@@ -35,7 +35,7 @@ messenger:
     retry_backoff_seconds: 0.5
 ```
 
-Restrict file permissions for safety:
+Restrict file permissions:
 
 ```bash
 chmod 600 ~/orca_auto/config/orca_auto.yaml

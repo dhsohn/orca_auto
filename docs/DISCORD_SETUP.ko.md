@@ -35,7 +35,7 @@ messenger:
     retry_backoff_seconds: 0.5
 ```
 
-설정 파일 권한을 안전하게 제한합니다:
+설정 파일의 읽기 권한을 제한합니다:
 
 ```bash
 chmod 600 ~/orca_auto/config/orca_auto.yaml
@@ -52,7 +52,7 @@ orca_auto service restart
 orca_auto service status
 ```
 
-간단한 계산 작업을 큐에 등록하여 알림이 정상적으로 전송되는지 확인합니다:
+계산 작업을 큐에 등록하여 알림 전송을 확인합니다:
 
 ```bash
 orca_auto run-dir <job_path>

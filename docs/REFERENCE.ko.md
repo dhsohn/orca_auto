@@ -2,7 +2,7 @@
 
 [English](REFERENCE.md) | **한국어**
 
-ORCA_auto 7.0의 CLI 명령어, 옵션 플래그, 큐 상태 전이 모델 및 산출물 규격입니다.
+ORCA_auto의 CLI 명령어, 옵션 플래그, 큐 상태 전이 모델 및 산출물 규격입니다.
 공개 동작에 대한 정식 규격은 [공개 인터페이스 규격(PUBLIC_CONTRACTS.ko.md)](PUBLIC_CONTRACTS.ko.md)을 참고하세요.
 
 ---
@@ -49,7 +49,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 종료 복구 표시가 제거될 때까지 실행 상태(`completed`, `failed`, `cancelled`)는 유지하고 상세에 `result publication pending`을 표시합니다. JSON 메타데이터는 `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action`, `publication_owner=orca_queue_worker`를 제공합니다. 해당 폴더의 제한은 행이 필터·페이지 범위 밖이어도 `admission_blockers`에 남습니다. 잘못된 표시는 발행 완료로 간주하지 않고 워커 로그와 복구 표시의 점검을 안내합니다.
 
 ### `orca_auto queue cancel`
-대기 중이거나 실행 중인 작업을 안전하게 취소합니다.
+대기 중이거나 실행 중인 작업을 취소합니다.
 ```bash
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
@@ -97,7 +97,7 @@ orca_auto scratch clear --all-stale [--config PATH] [--json]
 ---
 
 ### `orca_auto service status` & `service restart`
-백그라운드 워커 및 systemd 서비스 상태를 점검하거나 안전하게 재시작합니다.
+백그라운드 워커 및 systemd 서비스 상태를 점검하거나 재시작합니다.
 ```bash
 orca_auto service status [--json]
 orca_auto service restart [--force]
@@ -111,8 +111,8 @@ orca_auto service restart [--force]
 
 | 상태 | 설명 |
 | :--- | :--- |
-| `pending` | 작업이 큐에 안전하게 등록되어 가용 워커와 실행 슬롯을 기다리는 상태 (RAM Scratch 메모리 부족 등 일시적 자원 제약 시 대기 상태를 유지하며 `metadata.admission_deferral_reason`에 사유가 기록됨) |
-| `running` | 워커가 슬롯을 예약하고 독립 실행 디렉터리(`generation`)에서 ORCA를 구동 중인 상태 |
+| `pending` | 작업이 큐에 등록되어 가용 워커와 실행 슬롯을 기다리는 상태 (RAM Scratch 메모리 부족 등 일시적 자원 제약 시 대기 상태를 유지하며 `metadata.admission_deferral_reason`에 사유가 기록됨) |
+| `running` | 워커가 슬롯을 예약하고 격리된 generation 디렉터리에서 ORCA를 실행 중인 상태 |
 | `completed` | ORCA 정상 종료 배너(`ORCA TERMINATED NORMALLY`)가 확인되고 진단 오류 마커가 발견되지 않은 상태 (모든 수치적 속성의 수렴을 보장하지는 않으며, SCF 미수렴 시 해당 에너지 값은 null로 생략됨) |
 | `failed` | 수렴 실패, 프로세스 비정상 종료 등으로 계산이 종료된 상태 (자동 재시도 없음) |
 | `cancelled` | 사용자가 명시적으로 취소한 상태 |

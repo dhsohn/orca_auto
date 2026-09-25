@@ -4,7 +4,7 @@
 
 The root `pyproject.toml` is the version source of truth. Public contract removal
 requires a major release; fixes use patch releases and compatible additions use
-minor releases. ORCA_auto 7.0.0 retires workflow support and ships one package.
+minor releases. ORCA_auto 7.0 retired workflow support and shipped one package.
 Development metadata uses `Unreleased` and omits the citation release date.
 Release metadata must agree in `pyproject.toml`, `CHANGELOG.md` and `CITATION.cff`.
 

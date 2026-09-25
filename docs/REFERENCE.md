@@ -2,7 +2,7 @@
 
 **English** | [한국어](REFERENCE.ko.md)
 
-CLI commands, flags, lifecycle states, and output artifacts for ORCA_auto 7.0.
+CLI commands, flags, lifecycle states, and output artifacts for ORCA_auto.
 For formal runtime guarantees, refer to [Public Contracts (PUBLIC_CONTRACTS.md)](PUBLIC_CONTRACTS.md).
 
 ---
@@ -49,7 +49,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 The row keeps its execution status (`completed`, `failed` or `cancelled`) and shows `result publication pending` in its detail until the terminal replay marker clears. JSON metadata includes `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action` and `publication_owner=orca_queue_worker`. The same per-directory fence appears in `admission_blockers`, including when the row is outside the requested filter/page. An invalid marker directs inspection of the worker log and marker; it is not silently treated as published.
 
 ### `orca_auto queue cancel`
-Safely cancels a pending or running job.
+Cancels a pending or running job.
 ```bash
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
@@ -97,7 +97,7 @@ orca_auto scratch clear --all-stale [--config PATH] [--json]
 ---
 
 ### `orca_auto service status` & `service restart`
-Inspects background workers and controls systemd services safely.
+Inspects background workers and controls systemd services.
 ```bash
 orca_auto service status [--json]
 orca_auto service restart [--force]
