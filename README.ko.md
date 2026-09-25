@@ -54,3 +54,23 @@ python -m pip install orca_auto==8.0.0
 
 [인용](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CITATION.cff) · [기여](https://github.com/dhsohn/orca_auto/blob/v8.0.0/CONTRIBUTING.md) ·
 [지원](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SUPPORT.md) · [보안](https://github.com/dhsohn/orca_auto/blob/v8.0.0/SECURITY.md) · [행동 강령](https://github.com/dhsohn/orca_auto/blob/main/CODE_OF_CONDUCT.ko.md)
+
+## 만든 방식
+
+저는 프로그래머가 아니라 화학자입니다. 이 저장소의 코드는 AI 코딩 에이전트가 작성합니다.
+저는 ORCA_auto가 무엇을 해야 하는지 정하고, 공개 동작을
+[공개 인터페이스 규격](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/PUBLIC_CONTRACTS.ko.md)에
+기록하고, 변경이 병합되기 전에 통과해야 할 검사를 정합니다.
+
+코드를 한 줄씩 리뷰하지 않기 때문에, 변경은 에이전트의 "동작한다"는 보고가 아니라 증거로
+받아들입니다.
+
+- `make check`가 lint, 포맷, 타입 검사, import 경계 검사, 한영 문서 대칭 검사, 전체 테스트와
+  coverage를 실행합니다. CI도 같은 게이트를 실행하고, 생성된 `machine.json`을 공통
+  [machine-contracts](https://github.com/dhsohn/machine-contracts) validator로 검증합니다.
+- 공개 동작을 바꾸는 변경은 같은 변경 안에서 규격 문서도 고칩니다.
+- ORCA_auto가 엔진을 실행하는 방식을 바꾸는 변경은 실제 ORCA 엔진으로 범위를 제한한 계산을 돌리고,
+  정상 종료, 구조 수렴, 진동수처럼 계산 자체의 증거로 판정합니다
+  ([검증](https://github.com/dhsohn/orca_auto/blob/v8.0.0/docs/VALIDATION.md)).
+- 복구, 큐 상태, 결과 정확성처럼 영향이 큰 변경은 별도 에이전트가 독립적으로 적대적 리뷰를
+  합니다.

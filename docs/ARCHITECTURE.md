@@ -68,8 +68,8 @@ Normal submission and publication repair both call `queue/job_records.py` with t
 ### 2. Dequeue & Admission
 - The background resident worker polls the queue for pending jobs.
 - Publication repair derives each queued location record from its durable queue row. A busy publisher or failed index write withholds that row while other eligible rows can use available slots. The worker keeps per-row refusals for the current admission pass even when a lease says `complete` but path validation or persisting its safety fence fails. It inspects and repairs again on the next pass; an unreadable queue stops admission because the source cannot be verified.
-- When an eligible job is found, the worker checks available execution slots (`scheduler.max_active_simulations`) and host memory capacity (when RAM Scratch is enabled).
-- If resources are sufficient, the worker claims the slot and launches the calculation in an isolated generation workspace. If memory is temporarily constrained, the job returns to `pending` without failing, and `queue list` shows it as waiting for resources.
+- When an eligible job is found, the worker checks the available execution slots (`scheduler.max_active_simulations`), claims one and launches the calculation child.
+- When RAM Scratch is enabled, the child reserves its scratch workspace before it writes any run state; the reservation checks host memory and tmpfs capacity ([ADR 0004](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)). If capacity is temporarily short, the job returns to `pending` without failing, and `queue list` shows it as waiting for resources. Otherwise the calculation runs in an isolated generation workspace.
 
 ### 3. Supervision & Clean Exit
 - The worker tracks child process status and guarantees clean shutdown upon external signals (`SIGTERM`).
@@ -145,3 +145,14 @@ empty lifecycle callbacks.
 - **Scratch Operator Surface**: `orca_auto scratch list` and `scratch clear` inspect and remove non-live RAM-scratch workspaces; one stale, unverifiable or invalid-manifest workspace otherwise blocks every later scratch launch (fail-closed).
 - **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation, isolating runtime execution from development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
 - **Historical Data Protection**: Retired workflow directories from previous versions are protected as read-only to ensure historical calculations are preserved without risk of accidental overwrite.
+
+---
+
+## 5. Architecture Decision Records (ADR)
+
+When to write an ADR, its rules and its template are in [the ADR guide](adr/README.md).
+
+- [ADR 0001: One public machine.json per generation](adr/0001-one-public-machine-json-per-generation.md)
+- [ADR 0002: No automatic retry of failed calculations](adr/0002-no-automatic-retry-of-failed-calculations.md)
+- [ADR 0003: Retire workflows for standalone ORCA jobs](adr/0003-retire-workflows-for-standalone-orca-jobs.md)
+- [ADR 0004: Concurrent RAM scratch under a summed memory guard](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)
