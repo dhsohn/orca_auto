@@ -50,6 +50,18 @@ make check-packages
 bash examples/fake_orca_smoke/run.sh
 ```
 
+`make check` creates or repairs the repository `.venv` itself and runs from a
+minimal `PATH` such as `/usr/bin:/bin`. An existing usable `.venv` needs no
+other interpreter. To create one, it takes the first Python 3.11+ with the
+`venv` module from `python`, `python3.13`, `python3.12`, `python3.11` and
+`python3` on `PATH`, then from `~/.local/bin`, `~/miniconda3/bin`,
+`~/anaconda3/bin`, `/usr/local/bin`, `/opt/homebrew/bin` and `/opt/conda/bin`.
+An older interpreter is skipped, and the gate fails listing what it rejected
+when none qualifies. Set `PYTHON_BIN=/path/to/python3.11` to choose the
+interpreter explicitly. Before linting, the gate also checks that `orca_auto`
+is imported from this checkout's `src/` and stops otherwise, for example when
+`PYTHONPATH` points at another tree; unset it or recreate `.venv`.
+
 The `machine.json` conformance tests use the `machine-contracts` commit pinned
 in `.github/workflows/ci.yml`. Clone `https://github.com/dhsohn/machine-contracts.git`
 to `~/machine_contracts`, or set `FACTORY_MACHINE_CONTRACT_REPO` to an existing

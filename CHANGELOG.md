@@ -216,6 +216,17 @@ and [RUNTIME](docs/RUNTIME.md).
 
 ### Fixed
 
+- `make check` no longer requires `PYTHON_BIN` when `PATH` holds only a
+  Python older than 3.11 (for example `/usr/bin:/bin`). After `PATH`,
+  `scripts/check.sh` also searches `~/.local/bin`, `~/miniconda3/bin`,
+  `~/anaconda3/bin`, `/usr/local/bin`, `/opt/homebrew/bin` and
+  `/opt/conda/bin`, and skips interpreters without the `venv` module, so a
+  fresh checkout builds its own `.venv`. When nothing qualifies it fails
+  listing the rejected interpreters; `PYTHON_BIN` remains an explicit override.
+- `make check` refuses to lint and test when the venv interpreter imports
+  `orca_auto` from outside the checkout's `src/` (for example through an
+  exported `PYTHONPATH` or a venv installed from another tree). It prints the
+  imported and expected paths instead of testing a different tree's code.
 - `machine.json` conformance tests now fail when the pinned common-contract
   validator or its dependencies are unavailable. The regular suite validates
   completed and failed ORCA observations, and checks that changed artifact bytes

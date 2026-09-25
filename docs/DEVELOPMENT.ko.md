@@ -50,6 +50,18 @@ make check-packages
 bash examples/fake_orca_smoke/run.sh
 ```
 
+`make check`는 저장소 `.venv`를 직접 생성하거나 복구하며 `/usr/bin:/bin` 같은
+최소 `PATH`에서도 실행됩니다. 사용 가능한 `.venv`가 이미 있으면 다른 인터프리터가
+필요하지 않습니다. 새로 만들 때는 `PATH`의 `python`, `python3.13`, `python3.12`,
+`python3.11`, `python3`을 먼저 찾고, 이어서 `~/.local/bin`, `~/miniconda3/bin`,
+`~/anaconda3/bin`, `/usr/local/bin`, `/opt/homebrew/bin`, `/opt/conda/bin`에서
+`venv` 모듈이 있는 Python 3.11+ 중 처음 찾은 것을 사용합니다. 더 오래된
+인터프리터는 건너뛰며, 조건을 만족하는 것이 없으면 거부한 목록을 보여 주고
+실패합니다. 인터프리터를 직접 지정하려면 `PYTHON_BIN=/path/to/python3.11`을 설정합니다. 린트 전에는 `orca_auto`가
+이 체크아웃의 `src/`에서 임포트되는지도 확인하며, `PYTHONPATH`가 다른 트리를
+가리키는 경우처럼 그렇지 않으면 중단합니다. 이때는 `PYTHONPATH`를 해제하거나
+`.venv`를 다시 만듭니다.
+
 `machine.json` 적합성 테스트는 `.github/workflows/ci.yml`에 고정된
 `machine-contracts` 커밋을 사용합니다. `https://github.com/dhsohn/machine-contracts.git`을
 `~/machine_contracts`에 클론하거나, 해당 커밋이 있는 클론 경로를
