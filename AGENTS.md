@@ -20,6 +20,7 @@ make check
 | 범위 | 문서 |
 | --- | --- |
 | 설계 변경·원본·변경 책임·결과 추적 | [ARCHITECTURE](docs/ARCHITECTURE.ko.md) |
+| 설계 결정 기록 — 공개 계약·메이저 버전·기능 제거·상태 소유권 이동·외부 동작 의존은 같은 PR에 ADR을 쓴다 | [ADR 안내](docs/adr/README.md) |
 | CLI·설정·상태·복구 규격 | [PUBLIC_CONTRACTS](docs/PUBLIC_CONTRACTS.md) |
 | 명령·운영 | [REFERENCE](docs/REFERENCE.md) |
 | 검증·실제 엔진 acceptance | [VALIDATION](docs/VALIDATION.md) |
