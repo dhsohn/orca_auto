@@ -48,6 +48,7 @@ from orca_auto.core.queue.store import list_queue
 from orca_auto.core.queue.transitions import request_cancel
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.queue import enqueue_publication as core_enqueue_publication
+from orca_auto.orca.queue import notifications as queue_notifications
 from tests.conftest import claim_next_entry
 
 FOREIGN_TOKEN = "foreign-lease-token"
@@ -122,7 +123,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
         return True
 
     write_config_file(root / "orca_auto.yaml", cfg)
-    monkeypatch.setattr(orca_submission, "notify_queue_enqueued_event", count_notification)
+    monkeypatch.setattr(queue_notifications, "notify_queue_enqueued_event", count_notification)
     monkeypatch.setattr(orca_submission, "read_worker_pid", lambda _root: None)
     monkeypatch.setattr(orca_submission, "upsert_queued_job_record", controllable_upsert)
     args = SimpleNamespace(
@@ -155,10 +156,10 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
         record_published=lambda: (root / "job_locations.json").exists(),
         set_publish_failing=lambda value: publish_failing.__setitem__("value", value),
         notification_count=lambda: len(notifications),
-        expected_notifications_after_clean_submit=1,
+        expected_notifications_after_clean_submit=0,
         # The queued notification is sent inside the publication lock before
         # the partial-publish park; the worker repair republishes suppressed.
-        expected_notifications_after_publish_failure=1,
+        expected_notifications_after_publish_failure=0,
     )
 
 

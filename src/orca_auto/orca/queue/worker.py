@@ -70,6 +70,7 @@ from .adapter import (
 )
 from .entries import queue_entry_is_retired_workflow_owned
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
+from .notifications import notify_queued_jobs
 from .terminal_replay import terminal_replay_marker_from_entry
 
 logger = logging.getLogger(__name__)
@@ -245,6 +246,8 @@ class OrcaQueueWorker(QueueWorkerLoop):
             raise
 
     def _sleep(self) -> None:
+        # Deliver accepted submissions even while every execution slot is occupied.
+        notify_queued_jobs(self.cfg)
         # A replacement parent may initially observe a live child from the
         # previous parent and correctly skip it. Periodically reconcile so that,
         # once that child exits (or is killed), its queue entry/engine record is
@@ -350,6 +353,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             logger.warning("Queue admission paused: ORCA queue could not be inspected")
             return "blocked", None
         self._publication_withheld_ids = publication_withheld_ids
+        notify_queued_jobs(self.cfg)
         return reserve_dequeued_entry(
             has_capacity_fn=self._admission_has_capacity,
             peek_next_fn=self._peek_next_entry,

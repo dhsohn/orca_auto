@@ -60,8 +60,9 @@ from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_F
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 from orca_auto.orca import execution as execution_mod
+from orca_auto.orca import notifications as lifecycle_notifications
 from orca_auto.orca.config import AppConfig
-from orca_auto.orca.queue import publication_repair, worker_tracking
+from orca_auto.orca.queue import job_records, publication_repair
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import (
@@ -1416,7 +1417,7 @@ def test_terminal_index_failure_releases_capacity_and_replays_after_recovery(
         task_id="task-unrelated",
         metadata=current_orca_queue_metadata(other_dir),
     )
-    worker_tracking.upsert_queued_job_record(worker.cfg, other)
+    job_records.upsert_queued_job_record(worker.cfg, other)
     index_path = queue_root / "job_locations.json"
     index_before = index_path.read_bytes()
     index_path.write_text("{unreadable index", encoding="utf-8")
@@ -1758,7 +1759,7 @@ def test_publication_repair_failure_withholds_only_its_row_and_later_recovers(
         task_id="task-unrelated",
         metadata=current_orca_queue_metadata(unrelated),
     )
-    worker_tracking.upsert_queued_job_record(worker.cfg, other)
+    job_records.upsert_queued_job_record(worker.cfg, other)
     index_path = queue_root / "job_locations.json"
     index_before = index_path.read_bytes()
     with ExitStack() as stack:
@@ -2226,7 +2227,7 @@ def test_child_publishes_and_parent_releases_slot_while_terminal_sender_is_block
     selected = Path(state["selected_inp"])
     started, release = Event(), Event()
     slots = BoundedSemaphore(1)
-    monkeypatch.setattr(worker_tracking, "_NOTIFICATION_SLOTS", slots)
+    monkeypatch.setattr(lifecycle_notifications, "_NOTIFICATION_SLOTS", slots)
     monkeypatch.setattr(execution_mod, "notification_channel", lambda _cfg: recording_channel)
 
     def on_send(message: object) -> None:

@@ -11,6 +11,7 @@ import pytest
 
 from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.commands.run_inp import cmd_run_inp
+from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.submission import submit_reaction_dir_to_queue
@@ -99,7 +100,7 @@ def worker_seams(monkeypatch: pytest.MonkeyPatch) -> _WorkerSeams:
         return True
 
     monkeypatch.setattr(submission_mod, "read_worker_pid", read_worker_pid)
-    monkeypatch.setattr(submission_mod, "notify_queue_enqueued_event", notify)
+    monkeypatch.setattr(queue_notifications, "notify_queue_enqueued_event", notify)
     return seams
 
 
@@ -252,7 +253,7 @@ def test_submit_reaction_dir_to_queue_reports_inactive_worker_without_autostart(
     assert result.worker_info.pid is None
     assert result.worker_info.log_file == metadata["worker_log"]
     assert len(worker_seams.pid_reads) == 1
-    assert len(worker_seams.notifications) == 1
+    assert worker_seams.notifications == []
 
 
 def test_submit_reaction_dir_to_queue_reports_running_worker_pid(
@@ -274,7 +275,7 @@ def test_submit_reaction_dir_to_queue_reports_running_worker_pid(
     assert result.worker_info.pid == 4321
     assert result.worker_info.log_file == metadata["worker_log"]
     assert len(worker_seams.pid_reads) == 1
-    assert len(worker_seams.notifications) == 1
+    assert worker_seams.notifications == []
 
 
 def test_submit_reaction_dir_to_queue_separates_inp_and_xyzfile_artifacts(
@@ -332,7 +333,7 @@ def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
     assert "queue submission succeeded" in (result.worker_info.detail or "")
     assert len(upserts) == 1
     assert len(worker_seams.pid_reads) == 1
-    assert len(worker_seams.notifications) == 1
+    assert worker_seams.notifications == []
 
 
 def test_submit_reaction_dir_to_queue_reads_metadata_from_input_even_when_flags_are_present(
@@ -363,4 +364,4 @@ def test_submit_reaction_dir_to_queue_reads_metadata_from_input_even_when_flags_
     assert "nprocs 12" in inp_text
     assert "%maxcore 2048" in inp_text
     assert len(worker_seams.pid_reads) == 1
-    assert len(worker_seams.notifications) == 1
+    assert worker_seams.notifications == []

@@ -15,6 +15,10 @@ from orca_auto.orca import run_snapshot
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE
 from orca_auto.orca.engine_runtime import engine_runtime_paths
 from orca_auto.orca.queue import adapter as queue_adapter
+from orca_auto.orca.queue.terminal_replay import (
+    TerminalReplayMarkerKind,
+    terminal_replay_marker_kind,
+)
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.run_status import (
     queue_entry_status,
@@ -107,6 +111,21 @@ def queue_record(
     blocker = entry_metadata.get(QUEUE_RECORD_SYNC_BLOCKED_KEY)
     if not isinstance(blocker, dict) or status != STATUS_PENDING or entry.cancel_requested:
         blocker = {}
+    replay_kind = terminal_replay_marker_kind(entry)
+    if replay_kind != TerminalReplayMarkerKind.ABSENT:
+        invalid = replay_kind == TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED
+        blocker = {
+            "reason": "terminal publication marker invalid"
+            if invalid
+            else "terminal publication pending",
+            "scope": "orca_terminal_publication",
+            "next_action": (
+                "Inspect the worker log and repair the invalid replay marker before resubmitting."
+                if invalid
+                else "The queue worker retries result publication automatically. Inspect the worker log "
+                "if it persists; this directory remains fenced until publication finishes."
+            ),
+        }
     label = (
         normalize_text(snapshot_name)
         or normalize_text(Path(reaction_dir).name if reaction_dir else "")
@@ -155,6 +174,7 @@ def queue_record(
             "publication_blocked_reason": normalize_text(blocker.get("reason")),
             "publication_blocked_scope": normalize_text(blocker.get("scope")),
             "publication_blocked_action": normalize_text(blocker.get("next_action")),
+            "publication_owner": "orca_queue_worker" if blocker else "",
             **timestamp_metadata(
                 enqueued_at=submitted_at, started_at=started_at, finished_at=finished_at
             ),

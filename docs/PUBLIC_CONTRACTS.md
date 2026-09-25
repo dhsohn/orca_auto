@@ -63,6 +63,10 @@ A source checkout is not probed.
 
 7. **Terminal Completion Ownership**: The parent confirms child/engine termination and prepares the actual terminal run evidence before returning execution capacity. A zero exit code still requires a matching terminal state. Index publication and replay-marker removal can retry without an execution slot, including after worker restart. The durable marker fences subsequent submissions in the same directory until publication completes; unrelated eligible jobs may proceed. State preparation and slot-release failures retain supervised retry ownership. Notification delivery remains best effort.
 
+8. **Advisory Notification Ownership**: The parent claims queued notifications from a newly submitted durable row after queued publication completes; the child dispatches its captured start event after saving attempt state. Bounded background delivery does not hold publication completion or runner launch. Claim/send failures and process exit can lose advisory messages. Historical rows are not backfilled, and notification delivery never changes execution evidence.
+
+9. **Terminal Publication Visibility**: A terminal replay marker preserves the row's execution status and adds `result publication pending` detail. Metadata identifies `publication_blocked_scope=orca_terminal_publication` and `publication_owner=orca_queue_worker`, with reason and next action. These directory-specific fences also appear in `admission_blockers` across status filters and pagination; they do not imply an occupied execution slot.
+
 ---
 
 ## 4. Machine Observation (`machine.json`) Schema
