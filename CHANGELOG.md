@@ -8,11 +8,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
-The next release is a major version: the removals marked *public contract*
+## [8.0.0] - 2026-09-25
+
+This is a major release: the removals marked *public contract*
 below change CLI options, the configuration discovery order and the worker
 unit `ExecStart`. Upgrading requires reinstalling the systemd units with
 `orca_auto systemd install` during an idle window and restarting under the
-admission guard; see [Upgrading to the next major](docs/RELEASE.md#upgrading-to-the-next-major)
+admission guard; see [Upgrading to 8.0](docs/RELEASE.md#upgrading-to-80)
 and [RUNTIME](docs/RUNTIME.md).
 
 ### Removed
@@ -93,7 +95,8 @@ and [RUNTIME](docs/RUNTIME.md).
   publishes terminal state and reports without waiting for a webhook, and
   delivery no longer rewrites reports. Parent delivery remains bounded and
   best effort, with one durable claim per run and recognition of historical
-  sent markers. Submission and start notifications remain synchronous.
+  sent markers. Queued, start and terminal notifications use bounded background dispatch;
+  slow delivery does not hold admission capacity.
 - Worker entry points are `python -m orca_auto.orca.commands.queue --config …`
   (parent) and `python -m orca_auto.orca.commands.worker_child --config …
   --queue-root … --queue-id … [--admission-token …]` (child); the parent

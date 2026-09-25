@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orca_auto"
-version = "7.0.1"
+version = "8.0.0"
 description = "ORCA_auto: durable ORCA queues and supervised execution"
 readme = "README.md"
 requires-python = ">=3.11"

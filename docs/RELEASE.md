@@ -28,9 +28,9 @@ checkout. They also verify a prepared immutable runtime. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
-## Upgrading to the next major
+## Upgrading to 8.0
 
-The next major release removes public contracts and needs an idle-window
+Version 8.0 removes public contracts and needs an idle-window
 cutover; publishing the package alone performs none of these steps.
 
 - The worker unit `ExecStart` no longer passes `--app orca`, and the new
