@@ -8,7 +8,7 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
-## [8.0.0] - 2026-09-25
+## [8.0.0] - 2026-09-26
 
 This is a major release: the removals marked *public contract*
 below change CLI options, the configuration discovery order and the worker
