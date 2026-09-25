@@ -2,7 +2,7 @@
 
 **English** | [한국어](QUICKSTART.ko.md)
 
-This guide walks you through configuring ORCA_auto, setting up the background worker service, submitting your first ORCA calculation, and inspecting the results.
+Configure ORCA_auto, set up background worker services, submit calculations, and inspect results.
 If you have not installed the package yet, see the [Installation Guide](INSTALLATION.md).
 
 ---

@@ -33,6 +33,7 @@ from orca_auto.orca.state_reading import (
     report_json_path,
 )
 from tests.conftest import write_fake_orca
+from tests.machine_contract_helpers import validate_common_machine
 
 
 def _write_fake_orca(
@@ -220,6 +221,7 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert report is not None
     assert report["status"]["state"] == "completed"
     assert report_json_path(generation_dir).exists()
+    validate_common_machine(report_json_path(generation_dir))
     assert not report_json_path(reaction_dir).exists()
     report_html = generation_dir / RUN_REPORT_HTML_FILE
     assert report_html.exists()
@@ -418,6 +420,7 @@ def test_orca_worker_preflight_failure_publishes_generation_reports(
     assert generation_report is None
     raw_generation_report = json.loads(report_json_path(generation).read_text(encoding="utf-8"))
     assert raw_generation_report["lifecycle"]["outcome"] == "failed"
+    validate_common_machine(report_json_path(generation))
     assert load_report_json(reaction_dir) is None
     assert raw_generation_report["operation"]["id"] == entry.task_id
 

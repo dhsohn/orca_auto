@@ -14,6 +14,7 @@ import yaml
 
 from orca_auto import activity_labels, terminal, terminal_table
 from orca_auto import cli_queue as unified_cli
+from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 
@@ -708,54 +709,36 @@ def test_cmd_queue_list_text_names_the_worker_log_of_running_and_failed_rows_onl
     assert out.index("q-pending") < out.index("worker_log: q-run")
 
 
-def test_cmd_queue_list_clear_rejects_filters(
+@pytest.mark.parametrize(
+    "listing_filter",
+    [
+        {"status": ["completed"]},
+        {"limit": 1},
+        {"limit": -1},
+    ],
+    ids=["status", "positive-limit", "negative-limit"],
+)
+def test_cmd_queue_list_clear_rejects_each_listing_filter_before_clearing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    listing_filter: dict[str, Any],
 ) -> None:
     monkeypatch.setattr(
         unified_cli,
         "clear_activities",
         lambda **kwargs: pytest.fail("clear_activities should not run"),
     )
+    args = {
+        "action": "clear",
+        "orca_auto_config": "/tmp/orca_auto.yaml",
+        "limit": 0,
+        "refresh": False,
+        "status": None,
+        "json": False,
+        **listing_filter,
+    }
 
-    result = unified_cli.cmd_queue_list(
-        SimpleNamespace(
-            action="clear",
-            orca_auto_config="/tmp/orca_auto.yaml",
-            limit=0,
-            refresh=False,
-            status=["running"],
-            json=False,
-        )
-    )
-
-    assert result == 1
-    assert (
-        capsys.readouterr().err
-        == "error: `orca_auto queue list clear` does not support --status/--limit filters.\n"
-    )
-
-
-def test_cmd_queue_list_clear_rejects_negative_limit_fail_closed(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(
-        unified_cli,
-        "clear_activities",
-        lambda **kwargs: pytest.fail("clear_activities should not run"),
-    )
-
-    result = unified_cli.cmd_queue_list(
-        SimpleNamespace(
-            action="clear",
-            orca_auto_config="/tmp/orca_auto.yaml",
-            limit=-1,
-            refresh=False,
-            status=None,
-            json=False,
-        )
-    )
+    result = unified_cli.cmd_queue_list(SimpleNamespace(**args))
 
     assert result == 1
     assert (
@@ -769,7 +752,10 @@ def test_cmd_queue_list_clear_rejects_negative_limit_fail_closed(
     [
         (None, FileNotFoundError("configured file is missing")),
         (None, yaml.YAMLError("configuration YAML is invalid")),
+        ("clear", FileNotFoundError("configured file is missing")),
+        ("clear", yaml.YAMLError("configuration YAML is invalid")),
         ("clear", QueueStoreCorruptError("queue store is invalid")),
+        ("clear", JobLocationIndexError("job location index is invalid")),
     ],
 )
 def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceback(
@@ -1195,3 +1181,38 @@ _STORED_CANCEL_TRANSITION = {
     "previous_status": "running",
     "status": "cancelled",
 }
+
+
+def test_cmd_queue_list_clear_treats_closed_output_pipe_after_clearing_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    cleared: list[dict[str, Any]] = []
+
+    def fake_clear_activities(**kwargs: Any) -> dict[str, Any]:
+        cleared.append(kwargs)
+        return {"total_cleared": 1, "cleared": {"orca": 1}, "sources": {}}
+
+    monkeypatch.setattr(unified_cli, "clear_activities", fake_clear_activities)
+    monkeypatch.setattr(
+        unified_cli,
+        "_emit_queue_list_clear",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(BrokenPipeError("downstream closed")),
+    )
+
+    result = unified_cli.cmd_queue_list(
+        SimpleNamespace(
+            action="clear",
+            orca_auto_config=None,
+            limit=0,
+            refresh=False,
+            status=None,
+            json=True,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert len(cleared) == 1
+    assert result == 0
+    assert captured.out == ""
+    assert captured.err == ""

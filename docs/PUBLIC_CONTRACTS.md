@@ -84,5 +84,5 @@ Upon completion, each job publishes a structured `machine.json` artifact in its 
 ## 5. Version 7.0 Retirement & Migration
 
 - **Workflows Retired**: Conformer search orchestration, scaffolds, and internal xTB/CREST engines have been removed in version 7.0 to focus entirely on standalone ORCA execution.
-- **Historical Data Safety**: Existing 6.x workflow directories are retained intact as read-only workspaces and cannot be overwritten by 7.0 workers.
+- **Historical Data Safety**: Existing 6.x workflow directories remain read-only and will not be overwritten by 7.0 workers.
 - Refer to the [7.0 Upgrade Guide](RELEASE.md#upgrading-to-70) for operational transition steps.

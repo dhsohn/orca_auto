@@ -1,4 +1,4 @@
-# 설치 가이드 (Installation)
+# 설치 가이드
 
 [English](INSTALLATION.md) | **한국어**
 
@@ -13,22 +13,22 @@ ORCA_auto는 Linux 및 WSL2 환경에서 실행되는 백그라운드 큐 러너
 - **서비스 관리**: `systemd` (백그라운드 워커 데몬 감독용)
 - **ORCA 엔진**: 별도 설치된 ORCA 실행 바이너리 (버전 5.x ~ 6.x 호환)
 
-> **참고**: ORCA_auto 7.0.0부터 기존 워크플로우 확장(`orca_auto_workflows`, xTB/CREST 오케스트레이션) 지원이 공식 종료되고, **독립형 ORCA 단독 실행 및 큐 관리**에 집중하도록 단일 패키지로 간소화되었습니다. 이전 버전(6.x 이하)에서 마이그레이션하는 경우 [7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)를 참고하세요.
+> **업그레이드 참고**: 이전 버전(6.x 이하)에서 마이그레이션하는 경우 [7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)를 참고하세요.
 
 ---
 
 ## 1. PyPI 패키지 설치
 
-격리된 가상환경에 최신 릴리스를 설치합니다:
+격리된 가상환경에 패키지를 설치합니다:
 
 ```bash
 # 가상환경 생성 및 활성화
 python3 -m venv ~/.local/share/orca_auto/venv
 source ~/.local/share/orca_auto/venv/bin/activate
 
-# ORCA_auto 7.0.0 설치
+# ORCA_auto 설치
 pip install --upgrade pip
-pip install orca_auto==7.0.0
+pip install orca_auto==7.0.1
 
 # 정상 설치 확인
 orca_auto --version
@@ -58,7 +58,7 @@ orca_auto service status
 
 > **참고**: systemd 없이 대화형 세션이나 스크립트로 직접 실행하려면, `orca_auto run-dir`로 작업을 제출하고 포그라운드 워커(`orca_auto queue worker`)를 직접 실행할 수 있습니다.
 
-이후 작업 제출 방법은 [빠른 시작 가이드](QUICKSTART.ko.md)를 참고하세요.
+이후 작업 제출 방법은 [빠른 시작 가이드](QUICKSTART.ko.md)를 참고합니다.
 
 ---
 
@@ -83,4 +83,4 @@ pip install -e '.[dev]'
 # 정적 분석 및 전체 테스트 실행
 make check
 ```
-세부 개발 규칙은 [개발 가이드](DEVELOPMENT.ko.md)를 참고하세요.
+세부 개발 규칙은 [개발 가이드](DEVELOPMENT.ko.md)를 참고합니다.

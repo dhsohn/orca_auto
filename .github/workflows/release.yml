@@ -38,9 +38,13 @@ jobs:
         run: |
           git fetch --no-tags origin main:refs/remotes/origin/main
           python scripts/release.py guard --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT"
+      - name: Clone machine observation contract
+        # Tests read the commit pinned in ci.yml from this clone.
+        run: git clone --quiet https://github.com/dhsohn/machine-contracts.git "$RUNNER_TEMP/machine-contracts"
       - name: Check source
         env:
           PYTHON_BIN: python
+          FACTORY_MACHINE_CONTRACT_REPO: ${{ runner.temp }}/machine-contracts
         run: make check
       - name: Build and exercise distributions
         run: .venv/bin/python -m scripts.check_distributions --work-dir "$RUNNER_TEMP/package-check"

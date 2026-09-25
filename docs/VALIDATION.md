@@ -11,12 +11,15 @@ The package gate checks wheel and source inventories, sdist-rebuilt wheels,
 metadata/CLI versions, fresh external imports, dependency consistency, editable
 installation and a prepared immutable runtime. Fake-engine tests exercise durable
 submission, real worker subprocesses and terminal output without running chemistry.
-CI validates emitted `machine.json` against the pinned common v1 contract.
+The standard pytest suite validates emitted `machine.json` against the pinned
+common v1 contract. It requires a `machine-contracts` clone as described in
+[DEVELOPMENT](DEVELOPMENT.md); a missing validator fails the test instead of
+skipping validation. CI and release checks provide that clone.
 
 ## Real-engine acceptance
 
-If ORCA runtime behavior changes, add a bounded calculation using the supported
-ORCA executable. Use a disposable input copy, explicit resource limits, external
+If ORCA runtime or output-parsing behavior changes, add a bounded calculation using
+the supported ORCA executable. Use a disposable input copy, explicit resource limits, external
 configuration with notifications disabled, and the normal durable submission path.
 Respect shared admission and keep operational input/output untouched.
 

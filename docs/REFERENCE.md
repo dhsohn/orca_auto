@@ -2,7 +2,7 @@
 
 **English** | [한국어](REFERENCE.ko.md)
 
-This document provides a detailed reference for ORCA_auto 7.0 CLI commands, flags, lifecycle states, and output artifacts.
+CLI commands, flags, lifecycle states, and output artifacts for ORCA_auto 7.0.
 For formal runtime guarantees, refer to [Public Contracts (PUBLIC_CONTRACTS.md)](PUBLIC_CONTRACTS.md).
 
 ---
@@ -62,7 +62,7 @@ Cleans up terminal entries (`completed`, `failed`, `cancelled`) from the queue v
 ```bash
 orca_auto queue list clear [--config PATH] [--json]
 ```
-> **Note**: Clears terminal queue records and unlinks job-root terminal `job_state.json` metadata (resetting the duplicate submission barrier so subsequent submissions do not require `--force`). All generation subdirectories, calculation artifacts, and output files remain untouched on disk. The worker log and publication lock file of every cleared row are removed; `--json` reports the log count as `removed_worker_logs`.
+> **Note**: Clears terminal queue records and unlinks job-root terminal `job_state.json` metadata (resetting duplicate submission guards so subsequent submissions do not require `--force`). All generation subdirectories, calculation artifacts, and output files remain untouched on disk. The worker log and publication lock file of every cleared row are removed; `--json` reports the log count as `removed_worker_logs`.
 
 A terminal row with unfinished publication retains its replay marker and is excluded from clearing and force resubmission. Its execution slot may already be free; the worker retries index publication and marker removal without rerunning ORCA.
 
@@ -114,7 +114,7 @@ orca_auto service restart [--force]
 | `pending` | Job is durably recorded in the queue, awaiting worker admission and an available slot. (If admission is temporarily deferred due to transient host constraints like RAM scratch capacity, the job remains in `pending` with `metadata.admission_deferral_reason` set and display detail showing resource deferral). |
 | `running` | Worker has claimed an execution slot and ORCA is running inside an isolated generation directory. |
 | `completed` | ORCA calculation finished with normal termination (`ORCA TERMINATED NORMALLY`) and verified diagnostic checks. Does not guarantee convergence of every numerical property (e.g., unconverged SCF energy lines are omitted as null). |
-| `failed` | Calculation terminated with an error, SCF convergence failure, or non-zero exit code (no blind retries). |
+| `failed` | Calculation terminated with an error, SCF convergence failure, or non-zero exit code (no automatic retries). |
 | `cancelled` | Calculation was explicitly aborted by the user. |
 
 ---

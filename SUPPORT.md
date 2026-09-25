@@ -8,9 +8,9 @@ service or a substitute for local computational-chemistry judgment.
 
 Use GitHub Issues for:
 
-- reproducible CLI, queue, worker, report, parser, retry, or documentation bugs;
-- calculation-failure triage when ORCA_auto classified, retried, resumed, or
-  reported a job incorrectly;
+- reproducible CLI, queue, worker, report, parser, or documentation bugs;
+- calculation-failure triage when ORCA_auto classified, resumed, or reported a
+  job incorrectly;
 - feature requests that improve reusable ORCA-centered workflows;
 - documentation gaps or stale examples.
 
@@ -29,7 +29,7 @@ artifacts when available:
 - selected `.inp` snippet, output tail, and terminal marker;
 - terminal generation `machine.json`, plus relevant sanitized `job_state.json`
   or queue snippets for private recovery-state diagnosis;
-- retry attempt number and generated retry input name, if applicable.
+- attempt number, if applicable.
 
 Remove messenger bot tokens, channel IDs, private paths, proprietary structures, and
 private research data before posting.

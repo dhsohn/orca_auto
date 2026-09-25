@@ -537,3 +537,67 @@ def test_clear_does_not_follow_a_symlinked_logs_directory(tmp_path, monkeypatch)
 
     assert run_cleanup._remove_worker_log(runs_root, "q1") is False
     assert victim.read_text(encoding="utf-8") == "keep me"
+
+
+@pytest.mark.parametrize("active_status", ["pending", "running"])
+def test_clear_terminal_state_rechecks_active_queue_row_before_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    active_status: str,
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_active_race"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run-active-race", status="completed")
+    # An active row for another directory comes first, so the recheck must look past it.
+    other_dir = allowed_root / "rxn_other"
+    other_dir.mkdir()
+    queue_adapter.enqueue(allowed_root, str(other_dir))
+    assert claim_next_entry(allowed_root) is not None
+    real_open = run_cleanup._open_stable_reaction_dir
+    active_entry = None
+
+    def open_then_enqueue(
+        candidate: Path,
+        root: Path,
+        *,
+        expected_identity: tuple[int, int] | None,
+    ) -> int | None:
+        nonlocal active_entry
+        directory_fd = real_open(
+            candidate,
+            root,
+            expected_identity=expected_identity,
+        )
+        if directory_fd is not None and active_entry is None:
+            active_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir))
+            if active_status == "running":
+                target_id = active_entry.queue_id
+                running = claim_next_entry(allowed_root)
+                assert running is not None and running.queue_id == target_id
+        return directory_fd
+
+    monkeypatch.setattr(run_cleanup, "_open_stable_reaction_dir", open_then_enqueue)
+
+    assert run_cleanup.clear_terminal_records(allowed_root) == (0, 0, 0)
+    assert active_entry is not None
+    assert state_path(reaction_dir).exists()
+    active = next(
+        entry
+        for entry in queue_adapter.list_queue(allowed_root)
+        if entry.queue_id == active_entry.queue_id
+    )
+    assert active.status.value == active_status
+
+
+@pytest.mark.parametrize("status", ["created", "unrecognized"])
+def test_clear_terminal_records_keeps_a_state_that_is_not_terminal(
+    tmp_path: Path, status: str
+) -> None:
+    allowed_root = tmp_path / "orca_runs"
+    reaction_dir = allowed_root / "rxn_not_terminal"
+    allowed_root.mkdir()
+    _write_state(reaction_dir, run_id="run-not-terminal", status=status)
+
+    assert run_cleanup.clear_terminal_records(allowed_root) == (0, 0, 0)
+    assert state_path(reaction_dir).exists()

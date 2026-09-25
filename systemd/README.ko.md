@@ -55,7 +55,7 @@ orca_auto service restart --force
 
 ## 3. 실시간 워커 로그 모니터링
 
-워커의 디큐, 자원 할당, 계산 시작 및 종료 이벤트는 systemd 저널을 통해 실시간으로 확인할 수 있습니다:
+워커의 디큐, 자원 할당, 계산 시작 및 종료 이벤트는 systemd 저널을 통해 확인할 수 있습니다:
 
 ```bash
 journalctl -u "orca_auto-queue-worker@$(id -un)" -f

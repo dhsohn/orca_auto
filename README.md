@@ -20,7 +20,7 @@ It provides reliable background execution, queue scheduling, and structured resu
 - **Structured status & inspection.** Query job progress and system status via `orca_auto queue list --json` and `orca_auto service status --json`. Terminal `machine.json` records provide structured outcomes and artifact receipts for downstream tools and scripts.
 - **Predictable recovery.** Worker or host interruptions follow explicit, verified recovery paths without unwanted automatic retries of failed chemistry runs.
 
-## Get started
+## Getting started
 
 Python **3.11+**, Linux/WSL2, and a separately installed ORCA engine are
 required. Workers are managed with `systemd`.
@@ -32,7 +32,7 @@ python -m pip install orca_auto==7.0.1
 - **[Installation details](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/INSTALLATION.md)** — install the standalone ORCA package.
 - **[Quickstart guide](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/QUICKSTART.md)** — configure settings, start background services, and submit your first calculation.
 
-**Upgrading?** See the [upgrade guide](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/RELEASE.md#upgrading-to-70).
+For upgrades from 6.x, see the [upgrade guide](https://github.com/dhsohn/orca_auto/blob/v7.0.1/docs/RELEASE.md#upgrading-to-70).
 
 ## Chemistry ecosystem
 
@@ -53,4 +53,4 @@ These are independent, local-first companion tools that connect through standard
 [Roadmap](https://github.com/dhsohn/orca_auto/blob/v7.0.1/ROADMAP.md) · [Changelog](https://github.com/dhsohn/orca_auto/blob/v7.0.1/CHANGELOG.md)
 
 [Citation](https://github.com/dhsohn/orca_auto/blob/v7.0.1/CITATION.cff) · [Contributing](https://github.com/dhsohn/orca_auto/blob/v7.0.1/CONTRIBUTING.md) ·
-[Support](https://github.com/dhsohn/orca_auto/blob/v7.0.1/SUPPORT.md) · [Security](https://github.com/dhsohn/orca_auto/blob/v7.0.1/SECURITY.md)
+[Support](https://github.com/dhsohn/orca_auto/blob/v7.0.1/SUPPORT.md) · [Security](https://github.com/dhsohn/orca_auto/blob/v7.0.1/SECURITY.md) · [Code of Conduct](https://github.com/dhsohn/orca_auto/blob/main/CODE_OF_CONDUCT.md)

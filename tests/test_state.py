@@ -1,8 +1,6 @@
 import json
 import os
 import re
-import subprocess
-import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,12 +25,7 @@ from orca_auto.orca.state import (
 from orca_auto.orca.state_reading import load_report_json, load_state
 from orca_auto.orca.statuses import TERMINAL_RUN_STATUSES, RunStatus
 from orca_auto.orca.types import RunFinalResult, RunState
-
-
-def _validate_common_machine(path: Path) -> None:
-    validator = os.environ.get("FACTORY_MACHINE_CONTRACT_VALIDATOR")
-    if validator:
-        subprocess.run([sys.executable, validator, "--machine", str(path)], check=True)
+from tests.machine_contract_helpers import validate_common_machine
 
 
 def _bind_generation(reaction: Path, *, token: str) -> tuple[Path, dict]:
@@ -401,7 +394,7 @@ def test_write_report_files_json_fields(tmp_path: Path) -> None:
     report_json_path = Path(result["report_json"])
 
     observation = json.loads(report_json_path.read_text(encoding="utf-8"))
-    _validate_common_machine(report_json_path)
+    validate_common_machine(report_json_path)
     assert observation["contract"] == {"name": "factory/machine-observation", "version": 1}
     assert observation["operation"]["kind"] == "chemistry/orca-run"
     assert observation["lifecycle"]["outcome"] == "succeeded"
@@ -766,3 +759,20 @@ def test_historical_generation_notification_fields_are_not_rewritten(tmp_path: P
     execution = load_state(generation)
     assert execution is not None and execution["final_result"] is not None
     assert execution["final_result"]["finished_notification_sent_at"] == "historical"
+
+
+def test_common_machine_validation_rejects_changed_input_receipt(tmp_path: Path) -> None:
+    generation, state = _bound_state(tmp_path, token="receipt-validation-token-01")
+    write_state(tmp_path, state)
+    reports = write_report_files(tmp_path, state)
+    machine = Path(reports["report_json"])
+    validate_common_machine(machine)
+
+    inp = generation / "nebts.inp"
+    original = inp.read_bytes()
+    replacement = original.replace(b"NEB-TS", b"OptTS ", 1)
+    assert replacement != original and len(replacement) == len(original)
+    inp.write_bytes(replacement)
+
+    with pytest.raises(pytest.fail.Exception, match="artifact sha256 mismatch"):
+        validate_common_machine(machine)

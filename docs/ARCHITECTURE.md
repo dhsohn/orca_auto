@@ -2,7 +2,7 @@
 
 **English** | [한국어](ARCHITECTURE.ko.md)
 
-ORCA_auto is a queue runner and execution supervisor designed for durable execution and observable monitoring of standalone ORCA quantum chemistry calculations on Linux and WSL.
+ORCA_auto is a queue runner and execution supervisor for standalone ORCA quantum chemistry calculations on Linux and WSL.
 
 ---
 
@@ -25,8 +25,8 @@ A review should identify the original evidence, each state writer and the observ
 
 1. **Durable Queueing**: Submissions are committed atomically to disk. Calculation state is preserved across terminal disconnects and host reboots.
 2. **Generation Isolation**: Resubmitting within a job directory creates a fresh, isolated generation directory instead of overwriting prior attempts.
-3. **Explicit Recovery**: Calculation failures are triaged and permanently recorded. ORCA_auto never modifies inputs or blindly retries failed quantum calculations.
-4. **Authoritative Source of Truth**: On-disk persistent JSON files (`job_state.json`, `queue.json`) serve as the source of truth. The SQLite activity index is a projection that can be rebuilt deterministically from disk at any time.
+3. **Explicit Recovery**: Calculation failures are diagnosed and permanently recorded. ORCA_auto never modifies inputs or blindly retries failed quantum calculations.
+4. **Authoritative On-Disk State**: Persistent JSON files (`job_state.json`, `queue.json`) on disk serve as the source of truth. The SQLite activity index is a projection that can be rebuilt deterministically from disk at any time.
 
 ---
 
@@ -47,11 +47,11 @@ graph TD
 
 | Component | Responsibility |
 | :--- | :--- |
-| **`cli*.py`, `activity/`, `terminal.py`** | Command parsing, terminal formatting and ANSI styling (`terminal.py`), the activity record model (`activity/model.py`), queue querying, service status, and job cancellation interfaces |
-| **`orca/`** | Everything ORCA-specific: the engine catalog and runtime roots, scratch configuration, input (`.inp`) parsing, resource extraction, execution workspace setup, the queue worker, output log analysis, convergence verification, run status and snapshot-supersession rules (`run_status.py`), and result reporting (`machine.json`) |
-| **`core/`** | Generic infrastructure only: disk queue store, admission slots, process-group supervision and the worker pid file (`queue/worker/pid_file.py`), confined file I/O (`confined_io.py`), the configuration loader, the indexing store, systemd integration, and filesystem locks |
+| **`cli*.py`, `activity/`, `terminal.py`** | Command parsing, terminal formatting and ANSI styling, activity record models, queue/service status queries, and job cancellation interfaces |
+| **`orca/`** | ORCA-specific domain logic: input parsing, resource extraction, execution setup, queue worker and runner execution, output log analysis, convergence verification, and result reporting (`machine.json`) |
+| **`core/`** | Shared infrastructure: disk queue store, concurrency admission slots, process supervision and PID management, confined file I/O, configuration loader, index store, and filesystem locks |
 
-> **ORCA_auto 7.0 Structure**: Workflows, conformer scaffolds, and xTB/CREST engines (`flow/`) were retired in 7.0. The engine catalog contains only standalone `orca`, significantly simplifying the runtime architecture.
+> **Architecture Note**: ORCA is the only engine. Workflows, conformer scaffolds, and the xTB/CREST engines (`flow/`) were retired in 7.0.
 
 ---
 
@@ -69,7 +69,7 @@ Normal submission and publication repair both call `queue/job_records.py` with t
 - The background resident worker polls the queue for pending jobs.
 - Publication repair derives each queued location record from its durable queue row. A busy publisher or failed index write withholds that row while other eligible rows can use available slots. The worker keeps per-row refusals for the current admission pass even when a lease says `complete` but path validation or persisting its safety fence fails. It inspects and repairs again on the next pass; an unreadable queue stops admission because the source cannot be verified.
 - When an eligible job is found, the worker checks available execution slots (`scheduler.max_active_simulations`) and host memory capacity (when RAM Scratch is enabled).
-- If resources are sufficient, the worker claims the slot and launches the calculation in an isolated generation workspace. If memory is temporarily constrained, the job is deferred in `waiting for resources` state without failing.
+- If resources are sufficient, the worker claims the slot and launches the calculation in an isolated generation workspace. If memory is temporarily constrained, the job returns to `pending` without failing, and `queue list` shows it as waiting for resources.
 
 ### 3. Supervision & Clean Exit
 - The worker tracks child process status and guarantees clean shutdown upon external signals (`SIGTERM`).
@@ -101,6 +101,7 @@ The state writer saves changed generation evidence first, then refreshes the cur
 These two file replacements are ordered, not one atomic transaction. A generation write failure leaves root unchanged; a root write failure preserves the generation already saved and reports the error. Retrying the same execution refreshes root without rewriting the generation. An unreadable existing state in the verified generation is refused before either state file is replaced. `queue list clear` removes eligible root state while retaining generation artifacts.
 
 ### Worker ownership and child execution
+The worker separates supervision from execution.
 
 `OrcaQueueWorker` (`orca/queue/worker.py`) is the only queue worker. It owns the
 PID-file and singleton-lock lifecycle, admission (a slot is reserved before the
@@ -142,5 +143,5 @@ empty lifecycle callbacks.
 
 - **SQLite Activity Projection**: High-performance querying is provided by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The projection keys location rows by job id; `job_locations.json` itself is rebuildable from the run states on disk with `index rebuild`, and `--refresh` persists unindexed runs through the same rebuild. The run-status and snapshot-supersession rules the listing applies live in `orca/run_status.py`, not in the CLI layer. `index rebuild` merges disk-derived location rows; it does not rebuild the SQLite activity database.
 - **Scratch Operator Surface**: `orca_auto scratch list` and `scratch clear` inspect and remove non-live RAM-scratch workspaces; one stale, unverifiable or invalid-manifest workspace otherwise blocks every later scratch launch (fail-closed).
-- **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation to eliminate risks associated with running directly out of mutable development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
+- **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation, isolating runtime execution from development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
 - **Historical Data Protection**: Retired workflow directories from previous versions are protected as read-only to ensure historical calculations are preserved without risk of accidental overwrite.

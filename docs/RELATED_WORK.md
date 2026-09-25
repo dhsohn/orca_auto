@@ -1,10 +1,10 @@
 # Related Work and Project Scope
 
-ORCA_auto provides a reliable runtime and observability layer for ORCA-centered computational chemistry calculations on Linux and WSL. This page explains how ORCA_auto fits into the broader computational chemistry ecosystem.
+ORCA_auto provides a reliable runtime and observability layer for ORCA-centered computational chemistry calculations on Linux and WSL.
 
 ## Local-first Companion Tools
 
-ORCA_auto is designed to complement neighboring open-source tools:
+ORCA_auto connects with neighboring open-source tools:
 
 - **[Chemvas](https://github.com/dhsohn/Chemvas)**: Drawing molecular structures and reaction schemes.
 - **ORCA_auto**: Durable queueing, execution management, and observability for quantum chemical calculations.
@@ -14,9 +14,9 @@ These tools share a versioned `machine.json` schema and standardized output bund
 
 ## Shell Scripts vs. ORCA_auto
 
-For single one-off calculations, running `orca input.inp > input.out` directly is simple and effective. Research groups often build shell scripts for batch runs or directory organization.
-
-ORCA_auto augments this approach with structured, reliable infrastructure:
+Direct execution (`orca input.inp > input.out`) can suffice for a single calculation.
+For repeated jobs, ORCA_auto provides queue management, process supervision,
+recovery, and structured output:
 
 - Background queue execution that persists across terminal closures and reboots.
 - Process supervision via systemd rather than fragile foreground scripts.
@@ -34,4 +34,4 @@ General workflow engines (such as Nextflow, Snakemake, and AiiDA) provide DAG ab
 
 ## Chemistry Libraries
 
-Toolkits like ASE, RDKit, and cclib handle structure generation, file parsing, and cheminformatics. ORCA_auto complements these libraries by providing execution supervision and observable lifecycle management, rather than duplicating molecular modeling algorithms.
+Libraries like ASE, RDKit, and cclib handle structure generation, file parsing, and cheminformatics. ORCA_auto focuses on execution supervision and lifecycle management, rather than duplicating molecular modeling algorithms.

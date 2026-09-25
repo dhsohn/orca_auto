@@ -11,6 +11,9 @@ venv/
 build/
 dist/
 
+# CI checkout of the pinned machine-contracts repository
+.machine-contracts/
+
 # Test and tooling caches
 .pytest_cache/
 .mypy_cache/

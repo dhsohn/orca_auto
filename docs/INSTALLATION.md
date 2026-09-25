@@ -13,7 +13,7 @@ ORCA_auto is a queue runner and execution manager for ORCA on Linux and WSL2.
 - **Service Manager**: `systemd` (for supervised background execution)
 - **ORCA Engine**: Separately installed ORCA executable (compatible with ORCA 5.x and 6.x)
 
-> **Note**: Starting with ORCA_auto 7.0.0, the optional workflow extension (`orca_auto_workflows`, xTB/CREST orchestration) has been officially retired. ORCA_auto now ships as a unified package dedicated to **standalone ORCA execution and queue management**. When upgrading from 6.x or earlier, consult the [7.0 Upgrade Guide](RELEASE.md#upgrading-to-70).
+> **Upgrading**: If you are upgrading from 6.x or earlier, consult the [7.0 Upgrade Guide](RELEASE.md#upgrading-to-70).
 
 ---
 
@@ -26,9 +26,9 @@ Install the package into an isolated virtual environment:
 python3 -m venv ~/.local/share/orca_auto/venv
 source ~/.local/share/orca_auto/venv/bin/activate
 
-# Install ORCA_auto 7.0.0
+# Install ORCA_auto
 pip install --upgrade pip
-pip install orca_auto==7.0.0
+pip install orca_auto==7.0.1
 
 # Verify installation
 orca_auto --version
