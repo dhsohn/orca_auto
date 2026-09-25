@@ -6,6 +6,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -265,14 +266,14 @@ def test_write_state_fails_closed_when_pinned_reaction_directory_is_replaced(
     assert list(reaction.glob(".job_state.json.*.tmp")) == []
 
 
-def test_public_state_and_report_are_mirrored_into_visible_generation(tmp_path: Path) -> None:
+def test_execution_state_is_recorded_in_root_and_visible_generation(tmp_path: Path) -> None:
     generation, state = _bound_state(tmp_path, token="state-mirror-owner-token-0001")
 
     save_state(tmp_path, state)
     write_report_files(tmp_path, state)
 
-    # State stays mirrored (root is the live copy until terminal
-    # cleanup); reports live only inside the generation.
+    # Execution facts match before root-only notification bookkeeping;
+    # reports live only inside the generation.
     assert load_state(generation) == load_state(tmp_path)
     assert load_report_json(generation) is not None
     assert load_report_json(tmp_path) is None
@@ -603,3 +604,165 @@ def test_finalize_state_accepts_each_terminal_status_member_or_value(
     assert state["status"] == status.value
     assert isinstance(state["status"], str)
     assert not isinstance(state["status"], RunStatus)
+
+
+@pytest.mark.parametrize(
+    "marker", ["finished_notification_claimed_at", "finished_notification_sent_at"]
+)
+def test_generation_state_records_execution_without_notification_bookkeeping(
+    tmp_path: Path, marker: str
+) -> None:
+    generation, state = _bound_state(tmp_path, token="execution-state-owner-0001")
+    state["status"] = "completed"
+    final = {**_COMPLETED_RESULT, marker: "2026-09-25T10:00:00Z"}
+    state["final_result"] = cast(RunFinalResult, final)
+    save_state(tmp_path, state)
+
+    current = load_state(tmp_path)
+    execution = load_state(generation)
+    assert current is not None and current["final_result"] is not None
+    assert execution is not None and execution["final_result"] is not None
+    assert current["final_result"].get(marker) == "2026-09-25T10:00:00Z"
+    assert marker not in execution["final_result"]
+    assert execution["final_result"] == _COMPLETED_RESULT
+    assert final[marker] == "2026-09-25T10:00:00Z"
+
+
+def test_root_notification_and_replayed_finalization_leave_execution_state_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generation, state = _bound_state(tmp_path, token="execution-state-owner-0002")
+    monkeypatch.setattr(state_module, "now_utc_iso", lambda: "2026-09-25T10:00:00Z")
+    state_module.finalize_state(
+        tmp_path, state, status="completed", final_result=_COMPLETED_RESULT.copy()
+    )
+    generation_path = generation / "job_state.json"
+    before = generation_path.read_bytes()
+    before_stat = generation_path.stat()
+    monkeypatch.setattr(state_module, "now_utc_iso", lambda: "2026-09-25T11:00:00Z")
+    assert state["final_result"] is not None
+    state["final_result"]["finished_notification_claimed_at"] = "2026-09-25T11:00:00Z"
+    save_state(tmp_path, state)
+    state_module.finalize_state(
+        tmp_path, state, status="completed", final_result=state["final_result"]
+    )
+
+    assert generation_path.read_bytes() == before
+    assert generation_path.stat().st_mtime_ns == before_stat.st_mtime_ns
+    current = load_state(tmp_path)
+    execution = load_state(generation)
+    assert current is not None and execution is not None
+    assert current["updated_at"] == "2026-09-25T11:00:00Z"
+    assert execution["updated_at"] == "2026-09-25T10:00:00Z"
+    assert current["final_result"] is not None
+    assert current["final_result"]["finished_notification_claimed_at"]
+
+
+def test_execution_changes_still_update_generation_before_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    generation, state = _bound_state(tmp_path, token="execution-state-owner-0003")
+    save_state(tmp_path, state)
+    writes: list[Path] = []
+    original = state_module.atomic_write_confined_bytes
+
+    def observe(root: Path, path: Path, *args, **kwargs):
+        original(root, path, *args, **kwargs)
+        writes.append(path)
+
+    monkeypatch.setattr(state_module, "atomic_write_confined_bytes", observe)
+    state["status"] = "running"
+    save_state(tmp_path, state)
+    running = load_state(generation)
+    assert running is not None and running["status"] == "running"
+    state["attempts"].append(
+        {"index": 1, "inp_path": state["selected_inp"], "analyzer_status": "completed"}
+    )
+    save_state(tmp_path, state)
+    analyzed = load_state(generation)
+    assert analyzed is not None and analyzed["status"] == "running"
+    assert len(analyzed["attempts"]) == 1
+    assert analyzed["attempts"][0]["analyzer_status"] == "completed"
+    state_module.finalize_state(
+        tmp_path, state, status="completed", final_result=_COMPLETED_RESULT.copy()
+    )
+    completed = load_state(generation)
+    assert completed is not None and completed["status"] == "completed"
+    assert completed["final_result"] == _COMPLETED_RESULT
+    assert writes == [generation / "job_state.json", tmp_path / "job_state.json"] * 3
+
+
+@pytest.mark.parametrize("fail_at", ["generation", "root"])
+def test_state_write_failure_preserves_execution_evidence_and_retry_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_at: str
+) -> None:
+    generation, state = _bound_state(tmp_path, token="execution-state-owner-0004")
+    save_state(tmp_path, state)
+    root_path = tmp_path / "job_state.json"
+    generation_path = generation / "job_state.json"
+    root_before = root_path.read_bytes()
+    generation_before = generation_path.read_bytes()
+    original = state_module.atomic_write_confined_bytes
+    failed = False
+
+    def fail_once(root: Path, path: Path, *args, **kwargs):
+        nonlocal failed
+        target = generation_path if fail_at == "generation" else root_path
+        if path == target and not failed:
+            failed = True
+            raise OSError("injected state write failure")
+        return original(root, path, *args, **kwargs)
+
+    monkeypatch.setattr(state_module, "atomic_write_confined_bytes", fail_once)
+    state["status"] = "running"
+    with pytest.raises(OSError, match="injected state write failure"):
+        save_state(tmp_path, state)
+    assert root_path.read_bytes() == root_before
+    if fail_at == "generation":
+        assert generation_path.read_bytes() == generation_before
+    else:
+        execution = load_state(generation)
+        assert execution is not None and execution["status"] == "running"
+    after_failure = generation_path.read_bytes()
+    after_failure_stat = generation_path.stat()
+    save_state(tmp_path, state)
+    current = load_state(tmp_path)
+    execution = load_state(generation)
+    assert current is not None and current["status"] == "running"
+    assert execution is not None and execution["status"] == "running"
+    if fail_at == "root":
+        assert generation_path.read_bytes() == after_failure
+        assert generation_path.stat().st_mtime_ns == after_failure_stat.st_mtime_ns
+
+
+def test_unreadable_generation_refuses_both_state_writes(tmp_path: Path) -> None:
+    generation, state = _bound_state(tmp_path, token="execution-state-owner-0005")
+    save_state(tmp_path, state)
+    root_path = tmp_path / "job_state.json"
+    before = root_path.read_bytes()
+    generation_path = generation / "job_state.json"
+    generation_path.write_text("broken generation state")
+    state["status"] = "running"
+    with pytest.raises(ValueError, match="unreadable ORCA generation state"):
+        save_state(tmp_path, state)
+    assert root_path.read_bytes() == before
+    assert generation_path.read_text() == "broken generation state"
+
+
+def test_historical_generation_notification_fields_are_not_rewritten(tmp_path: Path) -> None:
+    generation, state = _bound_state(tmp_path, token="execution-state-owner-0006")
+    state_module.finalize_state(
+        tmp_path, state, status="completed", final_result=_COMPLETED_RESULT.copy()
+    )
+    generation_path = generation / "job_state.json"
+    payload = json.loads(generation_path.read_text())
+    payload["engine_payload"]["final_result"]["finished_notification_sent_at"] = "historical"
+    generation_path.write_text(json.dumps(payload))
+    before = generation_path.read_bytes()
+    assert state["final_result"] is not None
+    state["final_result"]["finished_notification_claimed_at"] = "2026-09-25T10:00:00Z"
+    save_state(tmp_path, state)
+    assert generation_path.read_bytes() == before
+    execution = load_state(generation)
+    assert execution is not None and execution["final_result"] is not None
+    assert execution["final_result"]["finished_notification_sent_at"] == "historical"

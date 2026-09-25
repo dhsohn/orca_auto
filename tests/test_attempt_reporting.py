@@ -8,14 +8,13 @@ from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_ow
 from orca_auto.orca.attempt.reporting import (
     build_final_result,
     exit_with_result,
-    finished_notification_already_sent,
     last_out_path_from_state,
 )
 from orca_auto.orca.engine_runner import executable_identity
+from orca_auto.orca.notifications import finished_notification_already_sent
 from orca_auto.orca.state import new_state
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
-from orca_auto.orca.types import RunFinishedNotification
 
 
 def test_finished_notification_marker_reads_canonical_state() -> None:
@@ -68,7 +67,9 @@ def test_build_final_result_keeps_supported_extra_fields_only() -> None:
     assert "ignored" not in result
 
 
-def test_exit_with_result_writes_state_reports_and_finished_notification(tmp_path: Path) -> None:
+def test_exit_with_result_publishes_state_and_reports_before_emitting_completion(
+    tmp_path: Path,
+) -> None:
     reaction_dir = tmp_path
     generation = reaction_dir / "20260714-224054-959479f2"
     generation.mkdir()
@@ -95,11 +96,15 @@ def test_exit_with_result_writes_state_reports_and_finished_notification(tmp_pat
         "bound_selected_identity": executable_identity(selected_inp),
     }
     emitted_payloads: list[dict[str, Any]] = []
-    finished_notifications: list[RunFinishedNotification] = []
 
-    def notify_finished(payload: RunFinishedNotification) -> bool:
-        finished_notifications.append(payload)
-        return True
+    def emit(payload: dict[str, Any]) -> None:
+        persisted = load_state(reaction_dir)
+        assert persisted is not None
+        assert persisted["run_id"] == state["run_id"]
+        assert persisted["status"] == "completed"
+        assert persisted["final_result"] == state["final_result"]
+        assert (generation / "machine.json").is_file()
+        emitted_payloads.append(payload)
 
     rc = exit_with_result(
         reaction_dir,
@@ -111,9 +116,8 @@ def test_exit_with_result_writes_state_reports_and_finished_notification(tmp_pat
         last_out_path=str(reaction_dir / "rxn.out"),
         resumed=True,
         exit_code=0,
-        emit=lambda payload: emitted_payloads.append(payload),
+        emit=emit,
         extra={"skipped_execution": True},
-        notify_finished=notify_finished,
     )
 
     saved = load_state(reaction_dir)
@@ -132,7 +136,7 @@ def test_exit_with_result_writes_state_reports_and_finished_notification(tmp_pat
     assert emitted_payloads[0]["report_json"] == str(generation / "machine.json")
     assert machine["lifecycle"]["outcome"] == "succeeded"
     assert machine["payload"]["data"]["summary"]["status"] == "completed"
-    assert "finished_notification_sent_at" in saved["final_result"]
-    assert len(finished_notifications) == 1
-    assert finished_notifications[0]["resumed"]
-    assert finished_notifications[0]["skipped_execution"]
+    assert "finished_notification_sent_at" not in saved["final_result"]
+    assert "finished_notification_claimed_at" not in saved["final_result"]
+    assert saved["final_result"]["resumed"]
+    assert saved["final_result"]["skipped_execution"]

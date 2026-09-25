@@ -72,7 +72,7 @@ def _execute(
 
     monkeypatch.setattr(run_inp_execution, "acquire_run_lock", passthrough)
     monkeypatch.setattr(run_inp_execution, "_admission_context", passthrough)
-    monkeypatch.setattr(run_inp_execution, "notification_callbacks", lambda _cfg: (None, None))
+    monkeypatch.setattr(run_inp_execution, "started_notification_callback", lambda _cfg: None)
     context = RunExecutionContext(
         reaction_dir=reaction_dir,
         selected_inp=inp,

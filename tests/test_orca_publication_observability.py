@@ -61,10 +61,10 @@ def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: P
     assert claim_next_entry(tmp_path) is not None
 
 
-def test_filtered_list_still_explains_queue_wide_publication_block(
+def test_filtered_list_still_explains_off_page_publication_blocker(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The listing reports blockers for the whole catalog even when the status
+    # The listing reports each affected row even when the status
     # filter leaves the page empty; the CLI prints them under the empty table.
     blocker = {
         "queue_id": "blocked-row",

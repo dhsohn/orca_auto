@@ -65,6 +65,35 @@ and [RUNTIME](docs/RUNTIME.md).
 
 ### Changed
 
+- Terminal finalization separates durable execution preparation from derived
+  publication. After engine recovery and matching terminal-state preparation,
+  the worker returns capacity before indexing, notification dispatch and replay
+  marker cleanup. Index/marker failures keep a durable per-directory replay
+  fence without retaining an execution slot, including across restarts. A zero
+  exit code is reconciled to the recorded run outcome before release. Live and
+  recovery paths share queue correction and verified publication completion.
+- Generation `job_state.json` records execution facts; notification claim/sent
+  markers belong to job-root state. Identical execution updates, including
+  terminal replay, preserve generation bytes and timestamps. Changed execution
+  evidence is saved before root; a failed root refresh can be retried without
+  rewriting the generation. Existing historical notification fields remain
+  readable and unchanged during bookkeeping-only updates.
+- Submission source hashes, resolved resources and crash-recovery origins now
+  survive into execution state. New results bind `execution_provenance.json`
+  through the `execution-provenance` artifact in `machine.json`, distinguishing
+  original input identities from rewritten execution inputs. Readers verify the
+  receipt against generation state without reopening sources. Terminal replay
+  preserves published provenance; historical reports are not backfilled. The new
+  provenance filename is reserved against referenced-input collisions.
+- Queued publication repair withholds only the affected queue rows. A busy
+  publication lock or failed location-index write no longer pauses unrelated
+  ready jobs. Failed path checks remain fenced even when diagnostic writes
+  fail; an unreadable queue still stops admission. Repair remains automatic.
+- Completion notifications are owned by the parent queue worker. The child
+  publishes terminal state and reports without waiting for a webhook, and
+  delivery no longer rewrites reports. Parent delivery remains bounded and
+  best effort, with one durable claim per run and recognition of historical
+  sent markers. Submission and start notifications remain synchronous.
 - Worker entry points are `python -m orca_auto.orca.commands.queue --config …`
   (parent) and `python -m orca_auto.orca.commands.worker_child --config …
   --queue-root … --queue-id … [--admission-token …]` (child); the parent

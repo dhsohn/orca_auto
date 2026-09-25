@@ -62,6 +62,8 @@ orca_auto queue list clear [--config PATH] [--json]
 ```
 > **Note**: Clears terminal queue records and unlinks job-root terminal `job_state.json` metadata (resetting the duplicate submission barrier so subsequent submissions do not require `--force`). All generation subdirectories, calculation artifacts, and output files remain untouched on disk. The worker log and publication lock file of every cleared row are removed; `--json` reports the log count as `removed_worker_logs`.
 
+A terminal row with unfinished publication retains its replay marker and is excluded from clearing and force resubmission. Its execution slot may already be free; the worker retries index publication and marker removal without rerunning ORCA.
+
 ---
 
 ### `orca_auto index rebuild`
@@ -121,12 +123,13 @@ Each calculation writes to a generation-isolated directory:
 ```text
 water/
 ├── water.inp                  # Target input file
-├── job_state.json             # Job-level state tracking active/terminal generations
+├── job_state.json             # Current execution and parent notification bookkeeping
 └── 20260921-022823-b43c48b7/     # Generation-isolated execution directory
     ├── water.inp              # Staged input copy
     ├── water.out              # Raw ORCA standard output (stem matches input)
-    ├── job_state.json         # Generation-level execution state
+    ├── job_state.json         # Execution evidence; updates only when execution facts change
     ├── machine.json           # Structured observation artifact (v1 envelope schema)
+    ├── execution_provenance.json # Captured submission/execution identities, when recorded
     ├── job_report.html        # (Optional) Supporting Information and web summary report
     └── si_block.md            # (Optional) Supporting Information markdown block
 ```

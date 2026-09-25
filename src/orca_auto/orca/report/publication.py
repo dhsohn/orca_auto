@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from orca_auto import __version__
 from orca_auto.core.artifacts import (
+    EXECUTION_PROVENANCE_FILE,
     MAX_RUN_ARTIFACT_JSON_BYTES,
     RUN_REPORT_HTML_FILE,
     SI_BLOCK_MD_FILE,
@@ -28,7 +29,10 @@ from orca_auto.orca.machine_observation import (
 )
 
 from .. import state_reading as _state_reading
-from ..report_fields import report_result_fields
+from ..report_fields import (
+    EXECUTION_PROVENANCE_ARTIFACT_ID,
+    report_result_fields,
+)
 from ..state import normalized_payload_from_state, retired_generation, write_generation_bytes
 from ..types import RunFinalResult, RunState
 from .composer import compose_job_report_html
@@ -115,6 +119,15 @@ def _machine_observation(
             required=False,
             role=role,
             media_type=media_type,
+        )
+
+    if result_details.get("execution_provenance_artifact"):
+        artifacts[EXECUTION_PROVENANCE_ARTIFACT_ID] = artifact_receipt(
+            generation_dir,
+            generation_dir / EXECUTION_PROVENANCE_FILE,
+            required=True,
+            role="supporting-information",
+            media_type="application/json",
         )
 
     complete = required_delivery_complete(artifacts)
@@ -234,6 +247,23 @@ def write_report_json(
             "report JSON not published: no verified execution generation for %s", reaction_dir
         )
         return None
+    existing_terminal = _published_terminal_observation(generation_target[0])
+    provenance = _dict(_dict(payload.get("engine_payload")).get("execution_provenance"))
+    if provenance.get("source_inputs"):
+        provenance_path = generation_target[0] / EXECUTION_PROVENANCE_FILE
+        provenance_bytes = machine_json_bytes(provenance)
+        if existing_terminal is None:
+            write_generation_bytes(generation_target, provenance_path, provenance_bytes)
+        elif (
+            read_confined_text(
+                generation_target[0],
+                provenance_path,
+                label="ORCA execution provenance",
+                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
+            ).encode("utf-8")
+            != provenance_bytes
+        ):
+            raise RuntimeError(f"terminal execution provenance is immutable: {provenance_path}")
     observation = _machine_observation(
         generation_target[0],
         payload,
@@ -241,7 +271,6 @@ def write_report_json(
     )
     path = _state_reading.report_json_path(generation_target[0])
     observation_bytes = machine_json_bytes(observation)
-    existing_terminal = _published_terminal_observation(generation_target[0])
     if existing_terminal is not None:
         existing_text, _ = existing_terminal
         if existing_text.encode("utf-8") == observation_bytes:

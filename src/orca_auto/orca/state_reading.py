@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from orca_auto.core.artifacts import (
+    EXECUTION_PROVENANCE_FILE,
     MAX_RUN_ARTIFACT_JSON_BYTES,
     RUN_REPORT_JSON_FILE,
     RUN_STATE_FILE,
@@ -20,8 +21,10 @@ from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils.persistence import load_json_mapping_file
 from orca_auto.orca.machine_observation import (
+    ReceiptDigest,
     VerifiedArtifact,
     artifact_receipt,
+    machine_json_bytes,
     read_verified_artifacts,
     results_payload_from_observation,
 )
@@ -30,7 +33,10 @@ from .generation_validation import (
     require_bound_generation_directory,
     require_generation_selected_input,
 )
-from .report_fields import report_result_fields
+from .report_fields import (
+    EXECUTION_PROVENANCE_ARTIFACT_ID,
+    report_result_fields,
+)
 from .statuses import ACTIVE_RUN_STATUS_VALUES, RunStatus
 from .types import RunFinalResult, RunState
 
@@ -350,6 +356,8 @@ def load_report_json_with_output_receipt(
         or any(summary.get(key) != value for key, value in expected_summary.items())
         or any(results.get(key) != value for key, value in expected_results.items())
         or results.get("max_retries") != engine_payload.get("max_retries")
+        or results.get("execution_provenance_artifact")
+        != expected_results.get("execution_provenance_artifact")
     ):
         return None
     artifacts = observation.get("artifacts")
@@ -395,6 +403,26 @@ def load_report_json_with_output_receipt(
             != dict(bound_selected_identity)
         ):
             return None
+        if expected_results.get("execution_provenance_artifact"):
+            expected_provenance = _report_artifact_receipt(
+                verified_artifacts,
+                EXECUTION_PROVENANCE_ARTIFACT_ID,
+                resolved_generation_dir,
+                resolved_generation_dir / EXECUTION_PROVENANCE_FILE,
+                required=True,
+                role="supporting-information",
+                media_type="application/json",
+            )
+            # A self-consistent replacement receipt must still match the
+            # submission evidence persisted in this generation's state.
+            expected_digest = ReceiptDigest()
+            expected_digest.update(machine_json_bytes(provenance))
+            if (
+                EXECUTION_PROVENANCE_ARTIFACT_ID not in result_data["artifact_refs"]
+                or artifacts.get(EXECUTION_PROVENANCE_ARTIFACT_ID) != expected_provenance
+                or not expected_digest.matches(expected_provenance)
+            ):
+                return None
     except (OSError, RuntimeError, TypeError, ValueError):
         return None
     expected_input = _report_artifact_receipt(

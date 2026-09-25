@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,6 @@ from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, run_lock_s
 from .attempt.engine import run_attempts
 from .notifications import (
     notification_channel,
-    notify_run_finished_event,
     notify_run_started_event,
 )
 from .orca_runner import OrcaRunner
@@ -47,6 +47,7 @@ from .scratch import OrcaScratchPolicy
 from .state import RESUMABLE_RUN_STATUSES, load_or_create_state, save_state
 from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
+from .types import RunStartedNotification
 
 ORCA_GENERATED_INP_RE = re.compile(
     r"\.(scfgrad|scfhess|cis|autoci|cipsi|mrci|mdci|eprnmr|loc|nbo|compound|hess)"
@@ -218,18 +219,15 @@ def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> st
     )
 
 
-def notification_callbacks(cfg: Any) -> tuple[Any, Any]:
+def started_notification_callback(cfg: Any) -> Callable[[RunStartedNotification], bool] | None:
     channel = notification_channel(cfg)
     if not channel.enabled:
-        return None, None
+        return None
 
-    def notify_started(event: Any) -> bool:
+    def notify_started(event: RunStartedNotification) -> bool:
         return notify_run_started_event(channel, event)
 
-    def notify_finished(event: Any) -> bool:
-        return notify_run_finished_event(channel, event)
-
-    return notify_started, notify_finished
+    return notify_started
 
 
 def _build_runner(
@@ -280,7 +278,7 @@ def run_with_state(
     reservation_token: str | None = None,
     runner: Any | None = None,
 ) -> int:
-    notify_started, notify_finished = notification_callbacks(cfg)
+    notify_started = started_notification_callback(cfg)
     if runner is None:
         runner = _build_runner(
             cfg=cfg,
@@ -296,7 +294,6 @@ def run_with_state(
         runner=runner,
         emit=_emit,
         notify_started=notify_started,
-        notify_finished=notify_finished,
     )
 
 

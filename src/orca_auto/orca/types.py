@@ -38,6 +38,7 @@ class RunFinalResult(TypedDict, total=False):
     resumed: bool
     skipped_execution: bool
     runner_error: str
+    # Root-only bookkeeping; older generation records may still contain it.
     finished_notification_sent_at: str
     finished_notification_claimed_at: str
 

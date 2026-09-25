@@ -57,15 +57,21 @@ A source checkout is not probed.
 2. **Generation Isolation**: Calculations run within versioned, generation-isolated directories to prevent state contamination across repeated attempts.
 3. **Explicit Failure Handling**: Failed runs record clear diagnostic exit reasons without attempting automatic, blind retries.
 4. **Capacity Deferral**: When RAM Scratch is enabled, temporary host memory constraints defer launching (job remains in `pending` with `metadata.admission_deferral_reason` set) rather than failing the calculation.
+5. **Publication Failure Isolation**: A queued location-index publication that is busy or fails keeps that submission pending while unrelated eligible jobs may use available capacity. The worker retries publication on subsequent admission passes; persisted failure details remain visible through `queue list` and its `admission_blockers`. Those publication blockers identify individual queue rows. Path/generation checks still apply, and an unreadable queue stops admission.
+
+6. **State Ownership**: Job-root `job_state.json` serves current execution control and parent notification bookkeeping. Generation `job_state.json` records execution evidence for result verification. The state writer saves changed generation facts before refreshing root; notification-only and identical-state saves preserve generation bytes and timestamps. Historical notification fields stay readable. If root refresh fails, the saved generation remains and the error is reported; retrying the same execution does not rewrite that evidence.
+
+7. **Terminal Completion Ownership**: The parent confirms child/engine termination and prepares the actual terminal run evidence before returning execution capacity. A zero exit code still requires a matching terminal state. Index publication and replay-marker removal can retry without an execution slot, including after worker restart. The durable marker fences subsequent submissions in the same directory until publication completes; unrelated eligible jobs may proceed. State preparation and slot-release failures retain supervised retry ownership. Notification delivery remains best effort.
 
 ---
 
 ## 4. Machine Observation (`machine.json`) Schema
 
-Upon completion, each job publishes a structured `machine.json` artifact for downstream tools (such as Chemvas and LLMdocx):
+Upon completion, each job publishes a structured `machine.json` artifact in its generation directory for downstream tools (such as Chemvas and LLMdocx):
 
 - **Envelope Schema**: Conforms to the standard `factory/machine-observation` v1 contract.
 - **Operation & Payload**: Emits `chemistry/orca-run` with a `chemistry/results-bundle` v1 payload.
+- **Input Provenance**: When submission source identities are recorded, `payload.data.results.execution_provenance_artifact` references the required `execution-provenance` artifact (`execution_provenance.json`, `application/json`). It preserves the captured original input/dependency identities, bound input and materialized-copy identities, resolved resource request, executable identity and any crash-recovery origin. `artifacts.input` refers to the execution `.inp`, which can differ from the original after resource normalization and reference rewriting. The provenance file records identities, not an archive of original file contents. Its filename is reserved; referenced input files with that basename are rejected before execution. Readers verify its receipt and agreement with generation state without reopening source paths. Historical reports lacking this evidence remain readable and are not backfilled; terminal publication and replay do not rewrite it.
 - **Verification**: Completion (`completed`) verifies normal termination (`ORCA TERMINATED NORMALLY`) without detected fatal crash markers (and for TS calculations, satisfies mode-specific stationary point criteria). It does not guarantee that every numerical property converged; for example, if the final single-point energy line is annotated `SCF not fully converged!`, energy fields are omitted (`null`) rather than populated with unverified numbers. Extracted chemical properties (energies, stationary points, electronic states) reflect verified evidence without synthetic defaults.
 - **Scope Boundary**: ORCA_auto supervises process lifecycle and structures output artifacts; scientific acceptance and chemical validity remain the researcher's responsibility.
 

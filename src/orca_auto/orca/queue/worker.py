@@ -69,7 +69,7 @@ from .adapter import (
     worker_log_path,
 )
 from .entries import queue_entry_is_retired_workflow_owned
-from .models import OrcaRunningJob, OrcaWorkerReplayState
+from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .terminal_replay import terminal_replay_marker_from_entry
 
 logger = logging.getLogger(__name__)
@@ -154,6 +154,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         self.replay_state = OrcaWorkerReplayState()
         self._worker_state_last_reconcile: float | None = None
         self._snapshot_intent_last_reconcile: float | None = None
+        self._publication_withheld_ids: frozenset[str] = frozenset()
 
     # -- pid file and singleton lock ----------------------------------------
 
@@ -321,7 +322,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         return released
 
     def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
-        # A failed terminal side effect retains its completed job and durable marker.
+        # Pending publication retains its replay snapshot and durable queue marker.
         # Until it is replayed, no new generation may start in that reaction
         # directory: max_concurrent > 1 could otherwise start a forced successor in
         # another slot. The row filter withholds exactly those rows; unrelated jobs
@@ -344,9 +345,11 @@ class OrcaQueueWorker(QueueWorkerLoop):
             else:
                 logger.info("ORCA admission is no longer withheld for any reaction dir")
             replay_state.admission_withheld_keys = withheld
-        if not publication_repair.repair_queue_publications(self.cfg):
-            logger.warning("Queue admission paused until ORCA queued publication repair succeeds")
+        publication_withheld_ids = publication_repair.repair_queue_publications(self.cfg)
+        if publication_withheld_ids is None:
+            logger.warning("Queue admission paused: ORCA queue could not be inspected")
             return "blocked", None
+        self._publication_withheld_ids = publication_withheld_ids
         return reserve_dequeued_entry(
             has_capacity_fn=self._admission_has_capacity,
             peek_next_fn=self._peek_next_entry,
@@ -406,6 +409,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         # replace the tracked job and strand its admission slot.
         return (
             queue_entry_id(entry) in self._running
+            or queue_entry_id(entry) in self._publication_withheld_ids
             or queue_entry_is_retired_workflow_owned(entry, self.cfg.runtime.allowed_root)
             or self._entry_waits_for_terminal_replay(entry)
         )
@@ -605,6 +609,26 @@ class OrcaQueueWorker(QueueWorkerLoop):
         job.pending_terminal_replay = None
         job.terminal_finalize_pending = False
 
+    def _finish_terminal_job(self, job: OrcaRunningJob, item: TerminalReplayWorkItem) -> None:
+        """Transfer prepared publication to replay before returning execution capacity."""
+        prepared = replay.prepare_terminal_replay(job, item)
+        if prepared is None:
+            self._release_terminal_job(job)
+            return
+        # The queue marker survives a restart. This in-memory handoff also fences
+        # same-directory admission before the next periodic reconciliation.
+        self.replay_state.pending_replays[prepared.key] = prepared
+        self._release_terminal_job(job)
+        try:
+            replay.finish_terminal_replay(self.cfg, prepared)
+        except Exception:
+            logger.exception(
+                "Terminal publication remains pending after releasing execution capacity: %s",
+                prepared.queue_id,
+            )
+        else:
+            self.replay_state.pending_replays.pop(prepared.key, None)
+
     def _finalize_completed_job(self, queue_id: str, job: OrcaRunningJob, rc: int) -> None:
         # A child can exit while its engine process is still recorded as active.  Do
         # not publish a terminal queue state (or make the capacity reusable) until
@@ -614,68 +638,56 @@ class OrcaQueueWorker(QueueWorkerLoop):
         recover_slot_engine_process(self.admission_root, job.admission_token)
         pending_item = job.pending_terminal_replay
         if pending_item is not None:
-            release_slot_after_finalize = False
-            try:
-                replay.strictly_finish_terminal_replay(self.cfg, job, pending_item)
-                release_slot_after_finalize = True
-            finally:
-                if release_slot_after_finalize:
-                    self._release_terminal_job(job)
+            self._finish_terminal_job(job, pending_item)
             return
 
         mark_result = replay.mark_terminal_queue_entry(queue_id, job, rc=rc)
-        release_slot_after_finalize = False
-        try:
-            # A no-op is benign only when another actor already moved or removed the
-            # queue row. The mark result carries a pre-mark snapshot, so re-read before
-            # deciding: an actually RUNNING row has no durable terminal owner and must
-            # retain the job and slot for the supervised completion retry.
-            current_after_mark = replay.queue_entry_by_id(mark_result.queue_root, queue_id)
-            if replay.normalized_entry_status(current_after_mark) == STATUS_RUNNING:
+        # A no-op is benign only when another actor already moved or removed the
+        # queue row. Re-read the pre-mark snapshot before giving up ownership.
+        current_after_mark = replay.queue_entry_by_id(mark_result.queue_root, queue_id)
+        if replay.normalized_entry_status(current_after_mark) == STATUS_RUNNING:
+            raise RuntimeError(
+                "terminal queue mark did not update the running entry; "
+                f"retaining retry ownership for {queue_id}"
+            )
+        deferral_reason = (
+            queue_entry_admission_deferral_reason(current_after_mark)
+            if replay.normalized_entry_status(current_after_mark) == STATUS_PENDING
+            else ""
+        )
+        if deferral_reason:
+            logger.warning(
+                "ORCA job %s was not started and waits in the queue: %s",
+                queue_id,
+                deferral_reason,
+            )
+        marker = (
+            terminal_replay_marker_from_entry(current_after_mark)
+            if current_after_mark is not None
+            else None
+        )
+        if marker is not None:
+            assert current_after_mark is not None
+            reaction_dir = queue_entry_reaction_dir(current_after_mark)
+            reaction_key = replay.reaction_generation_key(current_after_mark)
+            if not reaction_dir or not reaction_key:
                 raise RuntimeError(
-                    "terminal queue mark did not update the running entry; "
-                    f"retaining retry ownership for {queue_id}"
+                    f"terminal replay marker has no durable reaction identity: {queue_id}"
                 )
-            deferral_reason = (
-                queue_entry_admission_deferral_reason(current_after_mark)
-                if replay.normalized_entry_status(current_after_mark) == STATUS_PENDING
-                else ""
+            item = replay.new_terminal_replay_work_item(
+                mark_result.queue_root,
+                current_after_mark,
+                reaction_dir=reaction_dir,
+                reaction_key=reaction_key,
             )
-            if deferral_reason:
-                logger.warning(
-                    "ORCA job %s was not started and waits in the queue: %s",
-                    queue_id,
-                    deferral_reason,
-                )
-            marker = (
-                terminal_replay_marker_from_entry(current_after_mark)
-                if current_after_mark is not None
-                else None
+            self._finish_terminal_job(job, item)
+            return
+        if mark_result.marked:
+            logger.info(
+                "Terminal queue generation was already closed before finalizer replay: %s",
+                queue_id,
             )
-            if marker is not None:
-                assert current_after_mark is not None
-                reaction_dir = queue_entry_reaction_dir(current_after_mark)
-                reaction_key = replay.reaction_generation_key(current_after_mark)
-                if not reaction_dir or not reaction_key:
-                    raise RuntimeError(
-                        f"terminal replay marker has no durable reaction identity: {queue_id}"
-                    )
-                item = replay.new_terminal_replay_work_item(
-                    mark_result.queue_root,
-                    current_after_mark,
-                    reaction_dir=reaction_dir,
-                    reaction_key=reaction_key,
-                )
-                replay.strictly_finish_terminal_replay(self.cfg, job, item)
-            elif mark_result.marked:
-                logger.info(
-                    "Terminal queue generation was already closed before finalizer replay: %s",
-                    queue_id,
-                )
-            release_slot_after_finalize = True
-        finally:
-            if release_slot_after_finalize:
-                self._release_terminal_job(job)
+        self._release_terminal_job(job)
 
     # -- cancellation -------------------------------------------------------
 
@@ -705,7 +717,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         """Stop *job*, mark its row cancelled and finish the durable cancellation replay.
 
         Returns ``True`` only when the job's queue and admission ownership has
-        been fully released; otherwise the job is retained for retry.
+        been transferred to durable replay and its slot released; otherwise retry.
         """
         queue_root = replay.job_queue_root(job)
         logger.info("Cancelling running job: %s", queue_id)
@@ -775,20 +787,15 @@ class OrcaQueueWorker(QueueWorkerLoop):
             reaction_dir=reaction_dir,
             reaction_key=reaction_key,
         )
-        release_slot_after_replay = False
         try:
-            replay.strictly_finish_terminal_replay(self.cfg, job, replay_item)
-            release_slot_after_replay = True
+            self._finish_terminal_job(job, replay_item)
             return True
         except Exception:
             logger.exception(
-                "Failed to finish durable cancellation replay for %s; retaining retry ownership",
+                "Failed to prepare or release cancelled job %s; retaining retry ownership",
                 queue_id,
             )
             return False
-        finally:
-            if release_slot_after_replay:
-                self._release_terminal_job(job)
 
     # -- shutdown -----------------------------------------------------------
 

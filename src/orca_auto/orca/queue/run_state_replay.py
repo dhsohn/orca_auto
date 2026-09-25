@@ -157,7 +157,12 @@ def _record_terminal_run_state(
             state = new_state(job_dir, selected_path)
             if expected_job_id:
                 state["job_id"] = expected_job_id
-        if execution_provenance:
+        if execution_provenance and not (
+            state.get("execution_provenance") and terminal_status_from_run_state(state) is not None
+        ):
+            # Published terminal evidence belongs to the execution that wrote it.
+            # Replaying with a newer projection must not backfill old reports or
+            # replace their captured source identities.
             state["execution_provenance"] = dict(execution_provenance)
         run_id = str(state.get("run_id") or "").strip() or None
         final_result = state.get("final_result")

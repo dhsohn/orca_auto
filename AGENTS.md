@@ -15,6 +15,7 @@ Linux/WSL에서 독립 ORCA 작업을 디스크 큐와 백그라운드 감독 �
 
 | 범위 | 문서 |
 | --- | --- |
+| 설계 변경·원본·변경 책임·결과 추적 | [ARCHITECTURE](docs/ARCHITECTURE.ko.md) |
 | CLI·설정·상태·복구 규격 | [PUBLIC_CONTRACTS](docs/PUBLIC_CONTRACTS.md) |
 | 명령·운영 | [REFERENCE](docs/REFERENCE.md) |
 | 검증·실제 엔진 acceptance | [VALIDATION](docs/VALIDATION.md) |
