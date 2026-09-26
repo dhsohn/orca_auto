@@ -4,10 +4,8 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import textwrap
 import venv
-from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -115,7 +113,7 @@ def core_only_python(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
-def core_only(tmp_path: Path, core_only_python: Path) -> Iterator[_CoreOnlyInstallation]:
+def core_only(tmp_path: Path, core_only_python: Path) -> _CoreOnlyInstallation:
     imports = tmp_path / "imports"
     imports.mkdir()
     shutil.copytree(
@@ -188,21 +186,24 @@ def core_only(tmp_path: Path, core_only_python: Path) -> Iterator[_CoreOnlyInsta
         ),
         encoding="utf-8",
     )
-    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
-    site = core_only_python.parent.parent / "lib" / version / "site-packages"
-    startup_probe = site / "sitecustomize.py"
+    # Observe the executed gate directly, independently of startup hooks.
+    gate = imports / "orca_auto" / "orca" / "launch_gate.py"
+    entrypoint = 'if __name__ == "__main__":\n'
+    source = gate.read_text(encoding="utf-8")
+    assert source.count(entrypoint) == 1
     prefix_record = runtime / "launch-python-prefix"
-    startup_probe.write_text(
-        "import sys\nfrom pathlib import Path\n"
-        "if sys.argv[0].startswith('/proc/self/fd/'):\n"
-        f"    Path({str(prefix_record)!r}).write_text(sys.prefix)\n"
+    gate.write_text(
+        source.replace(
+            entrypoint,
+            entrypoint
+            + f"    with open({str(prefix_record)!r}, 'w') as prefix_probe:\n"
+            + "        prefix_probe.write(sys.prefix)\n",
+        ),
+        encoding="utf-8",
     )
-    try:
-        yield _CoreOnlyInstallation(
-            core_only_python, imports, runtime, runs, admission, config, counter
-        )
-    finally:
-        startup_probe.unlink()
+    return _CoreOnlyInstallation(
+        core_only_python, imports, runtime, runs, admission, config, counter
+    )
 
 
 def _assert_success(result: subprocess.CompletedProcess[str]) -> None:
