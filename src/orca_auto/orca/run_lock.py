@@ -15,13 +15,19 @@ from orca_auto.core.utils.process_tracking import (
 
 logger = logging.getLogger(__name__)
 
+# ``run_lock_status`` probes briefly flock a free run.lock; the wait covers
+# that window, while a real holder keeps the lock far longer.
+_RUN_LOCK_ACQUIRE_TIMEOUT_SECONDS = 1.0
+
 
 @contextmanager
 def acquire_run_lock(reaction_dir: Path) -> Iterator[None]:
     lock_path = reaction_dir / RUN_LOCK_FILE_NAME
     payload = json.dumps(current_process_lock_payload(), ensure_ascii=True)
     try:
-        with file_lock(lock_path, timeout_seconds=0.0, payload=payload):
+        with file_lock(
+            lock_path, timeout_seconds=_RUN_LOCK_ACQUIRE_TIMEOUT_SECONDS, payload=payload
+        ):
             logger.debug("Lock acquired: %s", lock_path)
             try:
                 yield

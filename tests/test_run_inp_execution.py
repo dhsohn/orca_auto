@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -150,9 +149,7 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
         cfg=AppConfig(),
     )
 
-    exit_code = run_inp_execution.execute_locked_run(
-        replace(context, force=True), runner_cls=object
-    )
+    exit_code = run_inp_execution.execute_locked_run(context, runner_cls=object)
 
     assert exit_code == 0
     assert events == [
@@ -228,9 +225,7 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
         cfg=AppConfig(),
     )
 
-    exit_code = run_inp_execution.execute_locked_run(
-        replace(context, force=False), runner_cls=object
-    )
+    exit_code = run_inp_execution.execute_locked_run(context, runner_cls=object)
 
     assert exit_code == 0
     assert saved_states == [{"job_id": "queue-task-id"}]

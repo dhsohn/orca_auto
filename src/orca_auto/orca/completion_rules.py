@@ -13,15 +13,36 @@ from .input_syntax import file_route_lines
 # a job ORCA would actually run as a TS search.
 TS_ROUTE_RE = re.compile(r"\b(OPTTS|NEB-TS)\b", re.IGNORECASE)
 IRC_ROUTE_RE = re.compile(r"\bIRC\b", re.IGNORECASE)
-# Every simple-input spelling of a geometry optimization: convergence-prefixed
-# (TightOpt, ...) and coordinate-system (COpt/ZOpt) variants included, so a
-# TightOpt job cannot slip through as a single point.
-OPT_ROUTE_RE = re.compile(r"\b(?:VERYTIGHT|TIGHT|NORMAL|LOOSE)?[CZ]?OPT\b", re.IGNORECASE)
+# ORCA 6.1 simple-input keywords that run a non-TS geometry optimization:
+# convergence-prefixed (TightOpt ... SloppyOpt), coordinate-system (COpt/ZOpt)
+# and L-BFGS (L-Opt) spellings, so a TightOpt job cannot slip through as a
+# single point. search() also hits the -Opt tail of MECP-Opt/CI-Opt; only
+# is_full_optimization_route decides a minimum claim.
+OPT_ROUTE_RE = re.compile(
+    r"\b(?:L-|(?:VERYTIGHT|TIGHT|NORMAL|LOOSE|SLOPPY|CRUDE)?[CZ]?)OPT\b", re.IGNORECASE
+)
+# Optimizations whose result is no minimum of the full surface: hydrogen-only
+# (OptH/L-OptH), QM/MM active region (QMMMOpt) and crossing-seam searches
+# (SurfCrossOpt = MECP-Opt, CI-Opt = ConicalIntersect-Opt).
+PARTIAL_OPT_ROUTE_RE = re.compile(
+    r"\b(?:(?:L-)?OPTH|QMMMOPT(?:/PDYNAMO)?|SURFCROSSOPT|MECP-OPT|CI-OPT|CONICALINTERSECT-OPT)\b",
+    re.IGNORECASE,
+)
 
 # Negative modes at or below this magnitude are numerical noise, not a reaction
 # coordinate. Shared by the completion analyzer and the SI/report renderers so
 # a verified TS can never be re-counted differently in the published SI.
 IMAGINARY_FREQ_THRESHOLD_CM1 = 10.0
+
+
+def is_optimization_route(routes: str) -> bool:
+    """Whether ``routes`` run a non-TS geometry optimization of any kind."""
+    return bool(OPT_ROUTE_RE.search(routes) or PARTIAL_OPT_ROUTE_RE.search(routes))
+
+
+def is_full_optimization_route(routes: str) -> bool:
+    """Whether ``routes`` minimize on the full surface, so the result may be claimed a minimum."""
+    return bool(OPT_ROUTE_RE.search(routes)) and not PARTIAL_OPT_ROUTE_RE.search(routes)
 
 
 @dataclass

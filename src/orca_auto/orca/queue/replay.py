@@ -85,6 +85,10 @@ class ReactionGenerationRow:
     status: str
     transitioned_from_active: bool = False
     pending_replay: bool = False
+    # Absent from the previous poll.  No row is enqueued for a reaction dir
+    # while another is active or has an unfinished replay marker there, so it
+    # was enqueued after every generation of its dir that poll saw had closed.
+    new_since_previous_poll: bool = False
 
     @property
     def active(self) -> bool:
@@ -293,6 +297,15 @@ def _select_generation_owner(
             selected = choose(matching_transition)
             if selected is not None:
                 return selected
+            # State of a generation enqueued since the previous poll is not
+            # stale evidence; it owns the artifacts.
+            newer_rows = [
+                row
+                for row in rows
+                if row.new_since_previous_poll and row.task_id == artifacts.state_job_id
+            ]
+            if newer_rows:
+                return choose(newer_rows)
         return choose(transition_rows)
 
     if not artifacts.readable:
@@ -616,9 +629,10 @@ def _drop_superseded_terminal_replays(
 def _select_replay_generation_owners(
     after_entries: list[tuple[Path, QueueEntry]],
     before_by_key: Mapping[tuple[str, str], Any],
+    previous_statuses: Mapping[tuple[str, str], str],
     pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
     replay_state: OrcaWorkerReplayState,
-) -> tuple[set[tuple[str, str]], dict[str, tuple[str, str]]]:
+) -> tuple[set[tuple[str, str]], dict[str, tuple[str, str]], set[tuple[str, str]]]:
     generation_rows: dict[str, list[ReactionGenerationRow]] = {}
     current_generation_keys: set[tuple[str, str]] = set()
     for queue_root, entry in after_entries:
@@ -663,6 +677,7 @@ def _select_replay_generation_owners(
                     )
                 ),
                 pending_replay=pending_replay,
+                new_since_previous_poll=owner not in previous_statuses,
             )
         )
     for key, item in pending_replays.items():
@@ -681,6 +696,7 @@ def _select_replay_generation_owners(
     previous_owner_active = replay_state.generation_owner_active
     latest_generation_by_reaction: dict[str, tuple[str, str]] = {}
     latest_owner_active: dict[str, bool] = {}
+    superseded_generation_keys: set[tuple[str, str]] = set()
     for reaction_key, rows in generation_rows.items():
         previous_owner = previous_owners.get(reaction_key)
         selected_owner = _select_generation_owner(
@@ -694,9 +710,15 @@ def _select_replay_generation_owners(
         latest_generation_by_reaction[reaction_key] = selected_owner
         selected_row = next(row for row in rows if row.owner == selected_owner)
         latest_owner_active[reaction_key] = selected_row.active
+        if selected_row.new_since_previous_poll:
+            # Every generation the previous poll saw closed before this owner
+            # was enqueued, so none of them can own the artifacts again.
+            superseded_generation_keys.update(
+                row.owner for row in rows if not row.new_since_previous_poll
+            )
     replay_state.generation_owners = latest_generation_by_reaction
     replay_state.generation_owner_active = latest_owner_active
-    return current_generation_keys, latest_generation_by_reaction
+    return current_generation_keys, latest_generation_by_reaction, superseded_generation_keys
 
 
 def _replay_current_terminal_entries(
@@ -727,6 +749,7 @@ def _replay_current_terminal_entries(
         if key in superseded_replay_keys:
             # The newer generation identity is definitive.  Advance the cursor
             # to this row's terminal status so it is not reconsidered forever.
+            pending_replays.pop(key, None)
             after_statuses[key] = status
             continue
         before_entry = before_by_key.get(key)
@@ -897,11 +920,14 @@ def reconcile_worker_state(
     )
     superseded_replay_keys = _drop_superseded_terminal_replays(pending_replays)
 
-    current_generation_keys, latest_generation_by_reaction = _select_replay_generation_owners(
-        after_entries,
-        before_by_key,
-        pending_replays,
-        replay_state,
+    current_generation_keys, latest_generation_by_reaction, superseded_generation_keys = (
+        _select_replay_generation_owners(
+            after_entries,
+            before_by_key,
+            previous_statuses,
+            pending_replays,
+            replay_state,
+        )
     )
 
     after_statuses = _replay_current_terminal_entries(
@@ -910,7 +936,7 @@ def reconcile_worker_state(
         before_by_key,
         previous_statuses,
         pending_replays,
-        superseded_replay_keys,
+        superseded_replay_keys | superseded_generation_keys,
         latest_generation_by_reaction,
     )
 

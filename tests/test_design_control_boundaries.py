@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import NoReturn
 
@@ -49,8 +50,16 @@ def test_cancel_failure_returns_error_without_success_output(
 
 @pytest.mark.parametrize("method", ["run", "run_once"])
 def test_worker_body_timeout_is_not_duplicate_worker(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], method: str
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    method: str,
 ) -> None:
+    workers: list[OrcaQueueWorker] = []
+
+    def stop(_seconds: float) -> None:
+        workers[0]._shutdown_requested = True
+
     class Worker(OrcaQueueWorker):
         def _install_signal_handlers(self) -> None:
             pass
@@ -67,7 +76,17 @@ def test_worker_body_timeout_is_not_duplicate_worker(
         def _reserve_next_entry(self) -> NoReturn:
             raise QueueLockTimeoutError("actual queue lock timed out")
 
-    worker = Worker(make_app_cfg(tmp_path, max_concurrent=1), "unused", max_concurrent=1)
-    with pytest.raises(QueueLockTimeoutError, match="actual queue lock"):
-        getattr(worker, method)()
+    worker = Worker(
+        make_app_cfg(tmp_path, max_concurrent=1), "unused", max_concurrent=1, sleep_fn=stop
+    )
+    workers.append(worker)
+    if method == "run":
+        # The long-running loop logs the failed pass and keeps supervising.
+        with caplog.at_level(logging.ERROR):
+            assert worker.run() == 0
+        assert "actual queue lock timed out" in caplog.text
+    else:
+        # The one-shot admission reports its own failure to the caller.
+        with pytest.raises(QueueLockTimeoutError, match="actual queue lock"):
+            worker.run_once()
     assert "already running" not in capsys.readouterr().err

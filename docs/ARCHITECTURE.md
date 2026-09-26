@@ -109,7 +109,12 @@ row is claimed by id, with the previewed row as `expected_entry`), child start
 and attach, terminal finalization, cancellation, shutdown and orphan
 reconciliation. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
 (reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
-and knows a job only as a process-backed record. Tests substitute
+and knows a job only as a process-backed record. An ordinary exception from one
+pass is logged and the pass is retried after the poll interval while running
+children stay supervised; KeyboardInterrupt, SystemExit and startup failures
+still end the worker. The periodic worker-state reconcile also releases an
+admission slot this worker reserved but never attached to a job, which a failed
+admission pass can leave behind. Tests substitute
 `_start_background_process` and `sleep_fn`; there is no injected dependency
 bag. The parent entry point is `python -m orca_auto.orca.commands.queue
 --config …`; the child is `python -m orca_auto.orca.commands.worker_child

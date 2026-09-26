@@ -20,6 +20,7 @@ from ..relaxed_scan import (
     ScanCoordinateSpec,
     ScanSurfacePoint,
     first_scan_coordinate_spec,
+    input_uses_relaxed_scan,
     parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
 )
@@ -89,9 +90,10 @@ def collect_scan_report_data(
     selected_inp = Path(selected_raw)
 
     route_lines = file_route_lines(selected_inp)
-    scan_spec = first_scan_coordinate_spec(selected_inp)
-    if scan_spec is None:
+    if not input_uses_relaxed_scan(selected_inp):
         return None
+    # ``None`` for an unreadable coordinate: the profile is still a scan.
+    scan_spec = first_scan_coordinate_spec(selected_inp)
     attempts = attempt_dicts(state)
 
     initial_label = "initial relaxed scan"
@@ -192,10 +194,13 @@ def _profile_chart_svg(data: ScanReportData) -> str:
         seen_roles.add(segment.role)
         series.append(ChartSeries(label=label, color=color, dash=dash, points=points))
 
-    x_label = data.scan_spec.label() if data.scan_spec is not None else "scan coordinate"
+    x_label = "scan coordinate"
+    if data.scan_spec is not None:
+        unit = data.scan_spec.unit()
+        x_label = f"{data.scan_spec.label()} / {unit}" if unit else data.scan_spec.label()
     return line_chart_svg(
         tuple(series),
-        x_label=f"{x_label} / Å",
+        x_label=x_label,
         y_label="ΔE / kcal mol⁻¹",
     )
 
@@ -207,9 +212,11 @@ def scan_report_badges(data: ScanReportData) -> tuple[tuple[str, str], ...]:
 def scan_report_meta_html(data: ScanReportData) -> str:
     scan_text = ""
     if data.scan_spec is not None:
+        unit = data.scan_spec.unit()
         scan_text = (
             f" &#183; {html.escape(data.scan_spec.label())} = "
-            f"{data.scan_spec.start:g} &#8594; {data.scan_spec.end:g} &#8491;, "
+            f"{data.scan_spec.start:g} &#8594; {data.scan_spec.end:g}"
+            f"{' ' + html.escape(unit) if unit else ''}, "
             f"{data.scan_spec.points} pt"
         )
     return job_meta_html(

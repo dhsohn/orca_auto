@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.orca import execution as run_inp_execution
 from orca_auto.orca import recovery_rebind as _rebind
 from orca_auto.orca import worker_execution as worker_job
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
@@ -31,7 +34,9 @@ from orca_auto.orca.execution_binding import (
     verify_orca_execution_snapshot,
 )
 from orca_auto.orca.execution_binding import _verify as _verify_stage
+from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.submission import mark_orca_snapshot_owned
 from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
 
@@ -1777,7 +1782,10 @@ def _sp_job(tmp_path: Path) -> tuple[Path, Path, Path]:
     return job_dir, selected, executable
 
 
-def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> None:
+def test_rebind_keeps_a_completed_generation_for_adoption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     queue_root = tmp_path / "queue"
     queue_root.mkdir()
     job_dir, selected, executable = _sp_job(queue_root)
@@ -1834,6 +1842,33 @@ def test_rebind_keeps_a_completed_generation_for_adoption(tmp_path: Path) -> Non
         admission_token=None,
     )
     assert context.execution_snapshot["generation_name"] == snapshot["generation_name"]
+
+    @contextmanager
+    def no_admission(**_kwargs: object) -> Iterator[str]:
+        yield ""
+
+    def must_not_launch(_runner: OrcaRunner, inp_path: Path) -> Any:
+        raise AssertionError(f"ORCA must not be launched for {inp_path}")
+
+    monkeypatch.setattr(run_inp_execution, "_admission_context", no_admission)
+    monkeypatch.setattr(OrcaRunner, "run", must_not_launch)
+    # The forced row's claim settles the kept generation by adoption instead
+    # of rerunning it.
+    exit_code = worker_job._run_orca_job_for_entry(
+        cfg,
+        context,
+        queue_root,
+        should_cancel=lambda: False,
+        shutdown_requested=None,
+    )
+
+    assert exit_code == 0
+    state = load_state(job_dir)
+    assert state is not None
+    final_result = state["final_result"]
+    assert final_result is not None
+    assert final_result["reason"] == "existing_out_completed"
+    assert not (generation / "h2.resume.inp").exists()
 
 
 def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> None:

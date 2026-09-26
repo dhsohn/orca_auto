@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -244,13 +245,37 @@ def test_orca_execution_snapshot_allows_same_stem_xyz_dependency(tmp_path: Path)
     assert "* xyzfile 0 1 h2.xyz" in Path(snapshot["selected_inp"]).read_text(encoding="utf-8")
 
 
-def test_orca_execution_snapshot_inlines_same_stem_xyz_for_optimization(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "route",
+    [
+        "! HF STO-3G Opt",
+        "! HF STO-3G TightOpt",
+        "! HF STO-3G SloppyOpt",
+        "! HF STO-3G CrudeOpt",
+        "! HF STO-3G OptH",
+        "! HF STO-3G L-OptH",
+        "! HF STO-3G MD-L-Opt",
+        "! HF STO-3G MD-L-OptH",
+        "! XTB QMMMOpt",
+        "! HF STO-3G SurfCrossOpt",
+        "! HF STO-3G MECP-Opt",
+        "! HF STO-3G CI-Opt",
+        "! HF STO-3G ConicalIntersect-Opt",
+        "! HF STO-3G OptTS(GMF)",
+        "! XTB GOAT",
+        "! XTB GOAT-Explore",
+    ],
+)
+def test_orca_execution_snapshot_inlines_same_stem_xyz_for_optimization(
+    tmp_path: Path,
+    route: str,
+) -> None:
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     geometry = job_dir / "h2.xyz"
     geometry.write_text("2\nH2\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
     selected = job_dir / "h2.inp"
-    selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 h2.xyz\n", encoding="utf-8")
+    selected.write_text(f"{route}\n* xyzfile 0 1 h2.xyz\n", encoding="utf-8")
 
     resources = {"max_cores": 1, "max_memory_gb": 1}
     snapshot = build_orca_execution_snapshot(
@@ -267,6 +292,7 @@ def test_orca_execution_snapshot_inlines_same_stem_xyz_for_optimization(tmp_path
     assert "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*" in bound_text
     assert snapshot["runtime_mutable_input_roles"] == ["dependency_000000"]
     runtime_xyz = generation / "h2.xyz"
+    assert stat.S_IMODE(runtime_xyz.stat().st_mode) == 0o600
     runtime_xyz.write_text("1\noptimized\nH 1 2 3\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="private dependency"):
@@ -358,8 +384,14 @@ def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
         ("! HF STO-3G L-OPT", "h2.engrad"),
         ("! HF STO-3G L-OPTH", "h2.engrad"),
         ("! HF STO-3G QMMMOpt", "h2.engrad"),
+        ("! HF STO-3G QMMMOpt/pDynamo", "h2.engrad"),
         ("! HF STO-3G CI-OPT", "h2.engrad"),
+        ("! HF STO-3G ConicalIntersect-Opt", "h2.engrad"),
+        ("! HF STO-3G SurfCrossOpt", "h2.engrad"),
+        ("! HF STO-3G MECP-Opt", "h2.engrad"),
         ("! HF STO-3G OptTS", "h2.engrad"),
+        ("! HF STO-3G OptTS(GMF)", "h2.engrad"),
+        ("! XTB GOAT", "h2.engrad"),
         ("! HF STO-3G IRC", "h2.engrad"),
         ("! HF STO-3G NumGrad", "h2.engrad"),
         ("! HF STO-3G Freq", "h2.resume.hess"),
@@ -393,6 +425,349 @@ def test_orca_execution_snapshot_rejects_resume_name_collisions(
     assert not _visible_generations(job_dir)
 
 
+def _neb_restart_job(tmp_path: Path, route: str, restart_name: str) -> tuple[Path, Path, Path]:
+    job_dir = tmp_path / "TS6_NEB-TS"
+    previous = job_dir / "20260724-231121-813ed27d"
+    previous.mkdir(parents=True)
+    (previous / restart_name).write_text(
+        "1\nimage0\nH 0 0 0\n>\n1\nimage1\nH 0 0 0.1\n",
+        encoding="utf-8",
+    )
+    (job_dir / "input.xyz").write_text("1\nreactant\nH 0 0 0\n", encoding="utf-8")
+    (job_dir / "output.xyz").write_text("1\nproduct\nH 0 0 1\n", encoding="utf-8")
+    selected = job_dir / "nebts.inp"
+    selected.write_text(
+        f'{route}\n%neb\n  Product "output.xyz"\n'
+        f'  Restart_ALLXYZFile "{previous.name}/{restart_name}"\nend\n'
+        "* xyzfile 0 1 input.xyz\n",
+        encoding="utf-8",
+    )
+    return job_dir, previous, selected
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "! HF STO-3G NEB",
+        "! HF STO-3G NEB-CI",
+        "! HF STO-3G NEB-TS",
+        "! HF STO-3G ZOOM-NEB-TS",
+    ],
+)
+def test_orca_execution_snapshot_rejects_neb_restart_path_named_like_neb_output(
+    tmp_path: Path,
+    route: str,
+) -> None:
+    job_dir, previous, selected = _neb_restart_job(tmp_path, route, "nebts_MEP.allxyz")
+
+    with pytest.raises(ValueError, match=r"runtime/output file: nebts_MEP\.allxyz; rename"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+
+    assert _visible_generations(job_dir) == [previous]
+
+
+@pytest.mark.parametrize(
+    "dependency_name",
+    [
+        "nebts_MEP_trj.xyz",
+        "nebts_MEP_ALL_trj.xyz",
+        "nebts_MEP_zoom.allxyz",
+        "nebts_initial_path_trj.xyz",
+        "nebts_NEB-CI_converged.xyz",
+        "nebts_NEB-TS_converged.xyz",
+        "nebts_trj.xyz",
+        "nebts_im0.gbw",
+        "nebts_im21.cpcm",
+        "nebts.interp",
+        "nebts.final.interp",
+        "nebts.NEB.log",
+        "nebts.opt",
+        "nebts.hess",
+        "nebts.resume_MEP.allxyz",
+        "nebts_MMFTSOpt_trj.xyz",
+        "nebts_spline.dat",
+    ],
+)
+def test_orca_execution_snapshot_rejects_neb_output_name_collisions(
+    tmp_path: Path,
+    dependency_name: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    previous = job_dir / "previous"
+    previous.mkdir(parents=True)
+    (previous / dependency_name).write_text("0\n", encoding="utf-8")
+    selected = job_dir / "nebts.inp"
+    selected.write_text(
+        f'! HF STO-3G NEB-TS\n%pointcharges "previous/{dependency_name}"\n* xyz 0 1\nH 0 0 0\n*\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=f"runtime/output file: {re.escape(dependency_name)}"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+
+    assert not _visible_generations(job_dir)
+
+
+@pytest.mark.parametrize(
+    ("neb_setting", "preoptimized"),
+    [
+        pytest.param("", False, id="default"),
+        pytest.param("  PreOpt_Ends false\n", False, id="preopt-ends-false"),
+        pytest.param("  PreOpt off\n", False, id="preopt-off"),
+        pytest.param("  PreOpt_EndPoints = 0\n", False, id="preopt-endpoints-0"),
+        pytest.param("  PreOpt_Minima NO\n", False, id="preopt-minima-no"),
+        pytest.param("  PreOpt_Ends true\n", True, id="preopt-ends-true"),
+        pytest.param("  PreOpt yes\n", True, id="preopt-yes"),
+        pytest.param("  PreOpt_EndPoints = 1\n", True, id="preopt-endpoints-1"),
+        pytest.param("  PreOpt_Minima On\n", True, id="preopt-minima-on"),
+        pytest.param("  PreOpt_Ends maybe\n", True, id="unreadable-value"),
+        pytest.param("  PreOpt_Ends\n", True, id="missing-value"),
+        pytest.param(
+            "  Monitor_Internals\n  { B 0 1 }\n  end\n  PreOpt_Ends true\n",
+            True,
+            id="after-monitor-internals",
+        ),
+        pytest.param(
+            "  Monitor_Internals{ B 0 1 }\n  end\n  PreOpt_Ends true\n",
+            True,
+            id="after-attached-brace-monitor-internals",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "dependency_name",
+    ["nebts_reactant.gbw", "nebts_reactant_trj.xyz", "nebts_product.opt"],
+)
+def test_orca_execution_snapshot_reserves_neb_preopt_names_only_with_preopt(
+    tmp_path: Path,
+    neb_setting: str,
+    preoptimized: bool,
+    dependency_name: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / dependency_name).write_text("0\n", encoding="utf-8")
+    selected = job_dir / "nebts.inp"
+    selected.write_text(
+        f"! HF STO-3G NEB-TS\n%neb\n{neb_setting}end\n"
+        f'%pointcharges "{dependency_name}"\n* xyz 0 1\nH 0 0 0\n*\n',
+        encoding="utf-8",
+    )
+
+    def build() -> dict[str, Any]:
+        return build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+
+    if preoptimized:
+        with pytest.raises(ValueError, match=f"runtime/output file: {re.escape(dependency_name)}"):
+            build()
+        assert not _visible_generations(job_dir)
+    else:
+        snapshot = build()
+        assert Path(snapshot["materialized_inputs"]["dependency_000000"]["path"]).name == (
+            dependency_name
+        )
+
+
+def test_orca_execution_snapshot_binds_neb_end_points_named_like_preopt_sub_jobs(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    for name in ("rxn_reactant.xyz", "rxn_product.xyz"):
+        (job_dir / name).write_text("1\nend point\nH 0 0 0\n", encoding="utf-8")
+    selected = job_dir / "rxn.inp"
+    selected.write_text(
+        '! HF STO-3G NEB-TS\n%neb\n  Product "rxn_product.xyz"\nend\n'
+        "* xyzfile 0 1 rxn_reactant.xyz\n",
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+    assert sorted(Path(path).name for path in snapshot["dependency_paths"]) == [
+        "rxn_product.xyz",
+        "rxn_reactant.xyz",
+    ]
+
+
+def test_orca_execution_snapshot_rejects_neb_end_point_after_monitor_internals_preopt(
+    tmp_path: Path,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    for name in ("rxn_reactant.xyz", "rxn_product.xyz"):
+        (job_dir / name).write_text("1\nend point\nH 0 0 0\n", encoding="utf-8")
+    selected = job_dir / "rxn.inp"
+    selected.write_text(
+        '! HF STO-3G NEB-TS\n%neb\n  Product "rxn_product.xyz"\n'
+        "  Monitor_Internals\n  { B 0 1 }\n  end\n  PreOpt_Ends true\nend\n"
+        "* xyzfile 0 1 rxn_reactant.xyz\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="runtime/output file: rxn_product.xyz"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+    assert not _visible_generations(job_dir)
+
+
+@pytest.mark.parametrize(
+    ("route", "neb_block", "geometry_reference", "dependency_name"),
+    [
+        pytest.param(
+            "! HF STO-3G NEB-TS",
+            '  Product "nebts_product.xyz"\n  PreOpt_Ends true\n',
+            "input.xyz",
+            "nebts_product.xyz",
+            id="product-endpoint",
+        ),
+        pytest.param(
+            "! HF STO-3G NEB-TS",
+            '  Product "output.xyz"\n  PreOpt_Ends true\n',
+            "nebts_reactant.xyz",
+            "nebts_reactant.xyz",
+            id="reactant-endpoint",
+        ),
+        pytest.param(
+            "! HF STO-3G NEB-MMFTS",
+            '  Product "output.xyz"\n  NEB_TS_XYZFILE "previous/nebts_MMF-TS_converged.xyz"\n',
+            "input.xyz",
+            "nebts_MMF-TS_converged.xyz",
+            id="mmfts-converged",
+        ),
+    ],
+)
+def test_orca_execution_snapshot_rejects_neb_endpoint_and_mmfts_output_names(
+    tmp_path: Path,
+    route: str,
+    neb_block: str,
+    geometry_reference: str,
+    dependency_name: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    previous = job_dir / "previous"
+    previous.mkdir(parents=True)
+    xyz = "1\nimage\nH 0 0 0\n"
+    (previous / "nebts_MMF-TS_converged.xyz").write_text(xyz, encoding="utf-8")
+    for name in ("input.xyz", "output.xyz", "nebts_product.xyz", "nebts_reactant.xyz"):
+        (job_dir / name).write_text(xyz, encoding="utf-8")
+    selected = job_dir / "nebts.inp"
+    selected.write_text(
+        f"{route}\n%neb\n{neb_block}end\n* xyzfile 0 1 {geometry_reference}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=f"runtime/output file: {re.escape(dependency_name)}"):
+        build_orca_execution_snapshot(
+            job_dir,
+            selected,
+            selected_input_xyz="",
+            resource_request={"max_cores": 1, "max_memory_gb": 1},
+            orca_executable=write_fake_orca(tmp_path / "orca"),
+        )
+
+    assert not _visible_generations(job_dir)
+
+
+@pytest.mark.parametrize(
+    ("route", "dependency_name"),
+    [
+        ("! HF STO-3G SP", "nebts_MEP.allxyz"),
+        ("! HF STO-3G SP", "nebts.interp"),
+        ("! HF STO-3G NEB-TS", "nebts_image.xyz"),
+        ("! HF STO-3G NEB-TS", "other_MEP.allxyz"),
+        ("! HF STO-3G NEB-TS", "nebts_products.xyz"),
+    ],
+)
+def test_orca_execution_snapshot_allows_names_outside_neb_outputs(
+    tmp_path: Path,
+    route: str,
+    dependency_name: str,
+) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    dependency = job_dir / dependency_name
+    dependency.write_text("0\n", encoding="utf-8")
+    selected = job_dir / "nebts.inp"
+    selected.write_text(
+        f'{route}\n%pointcharges "{dependency_name}"\n* xyz 0 1\nH 0 0 0\n*\n',
+        encoding="utf-8",
+    )
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request={"max_cores": 1, "max_memory_gb": 1},
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+    assert Path(snapshot["materialized_inputs"]["dependency_000000"]["path"]).name == (
+        dependency_name
+    )
+
+
+def test_orca_execution_snapshot_binds_renamed_neb_restart_path(tmp_path: Path) -> None:
+    job_dir, previous, selected = _neb_restart_job(
+        tmp_path, "! HF STO-3G NEB-TS", "restart_path.allxyz"
+    )
+    resources = {"max_cores": 1, "max_memory_gb": 1}
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request=resources,
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+    restart = Path(snapshot["execution_dir"]) / "restart_path.allxyz"
+    assert str((previous / "restart_path.allxyz").resolve()) in snapshot["dependency_paths"]
+    assert restart.read_bytes() == (previous / "restart_path.allxyz").read_bytes()
+    assert snapshot["runtime_mutable_input_roles"] == []
+    assert 'Restart_ALLXYZFile "restart_path.allxyz"' in Path(snapshot["selected_inp"]).read_text(
+        encoding="utf-8"
+    )
+    verified_selected, _executable = verify_orca_execution_snapshot(
+        job_dir,
+        snapshot,
+        expected_selected_inp=snapshot["selected_inp"],
+        expected_source_selected_inp=snapshot["source_selected_inp"],
+        expected_selected_input_xyz="",
+        expected_resource_request=resources,
+    )
+    assert verified_selected == Path(snapshot["selected_inp"])
+
+
 @pytest.mark.parametrize(
     "route",
     [
@@ -402,6 +777,7 @@ def test_orca_execution_snapshot_rejects_resume_name_collisions(
         "! HF STO-3G ZOOM-NEB-TS",
         "! HF STO-3G InterpOpt",
         "! HF STO-3G RigidBodyOpt",
+        "! HF STO-3G MD-L-Opt",
     ],
 )
 def test_orca_execution_snapshot_allows_same_stem_engrad_without_active_engrad_route(
@@ -676,7 +1052,7 @@ def test_orca_execution_snapshot_limits_neb_file_keys_to_end_boundary(
     selected = job_dir / "job.inp"
     selected.write_text(
         '! NEB-TS\n%NEB Product = # kept # "product.xyz" TS "guessTS.xyz" end '
-        'Product "missing-product.xyz" TS "missing-ts.xyz"\n'
+        "Product missing-product.xyz TS missing-ts.xyz\n"
         "%scf Product missing-scf-product.xyz TS missing-scf-ts.xyz end\n"
         "* xyz 0 1\nH 0 0 0\n*\n",
         encoding="utf-8",
@@ -697,9 +1073,13 @@ def test_orca_execution_snapshot_limits_neb_file_keys_to_end_boundary(
     bound_text = Path(snapshot["selected_inp"]).read_text(encoding="utf-8")
     assert '# kept # "product.xyz"' in bound_text
     assert 'TS "guessTS.xyz"' in bound_text
-    assert 'Product "missing-product.xyz" TS "missing-ts.xyz"' in bound_text
+    assert "Product missing-product.xyz TS missing-ts.xyz" in bound_text
     assert "%scf Product missing-scf-product.xyz TS missing-scf-ts.xyz end" in bound_text
     assert ".inputs/" not in bound_text
+    with pytest.raises(ValueError, match="Unsupported ORCA file reference"):
+        input_references.scan_orca_file_references(
+            ['%NEB Product "product.xyz" end Product "missing-product.xyz"']
+        )
 
 
 def test_orca_cleanup_rejects_a_mismatched_visible_generation(tmp_path: Path) -> None:
@@ -1156,6 +1536,165 @@ def test_orca_execution_snapshot_rejects_unbound_auxiliary_directives(
         )
 
 
+@pytest.mark.parametrize(
+    "keyword",
+    [
+        "GSHessian",
+        "ESHessian",
+        "TSHessian",
+        "ISCISHess",
+        "ISCFSHess",
+        "ICISHessian",
+        "ICFSHess",
+        "RRHessName",
+    ],
+)
+def test_scan_orca_file_references_binds_esd_hessian_inputs(keyword: str) -> None:
+    lines = ["! B3LYP def2-SVP ESD(FLUOR)", "%esd", f'  {keyword} "S0.hess"', "end"]
+
+    references = input_references.scan_orca_file_references(lines)
+
+    assert [(reference.kind, reference.value) for reference in references] == [
+        ("auxiliary", "S0.hess")
+    ]
+    assert lines[2][references[0].start : references[0].end] == '"S0.hess"'
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        '%docker\n  Guest "guest.xyz"\nend',
+        '%mtr\n  HessName "freq.hess"\nend',
+        '%geom\n  InHessName2 "second.hess"\nend',
+        '%esd\n  Unknown "/abs/source/S0"\nend',
+        '%esd\n  Unknown "../S0"\nend',
+        '%esd\n  Unknown "S0.hess "\nend',
+    ],
+)
+def test_scan_orca_file_references_rejects_unrecognized_file_values(directive: str) -> None:
+    with pytest.raises(ValueError, match="Unsupported ORCA file reference"):
+        input_references.scan_orca_file_references(
+            ["! SP", *directive.splitlines(), "* xyz 0 1", "H 0 0 0", "*"]
+        )
+
+
+def test_scan_orca_file_references_binds_neb_product_xyzfile() -> None:
+    lines = ["! HF STO-3G NEB-CI", "%neb", '  Product_XYZFile "product.xyz"', "end"]
+
+    references = input_references.scan_orca_file_references(lines, include_geometry=False)
+
+    assert [(reference.kind, reference.value) for reference in references] == [
+        ("auxiliary", "product.xyz")
+    ]
+
+
+@pytest.mark.parametrize("value", ['"ts.pdb"', "ts.pdb"])
+def test_scan_orca_file_references_rejects_neb_ts_pdbfile(value: str) -> None:
+    with pytest.raises(ValueError, match="Unsupported ORCA auxiliary file directive"):
+        input_references.scan_orca_file_references(
+            ["! HF STO-3G NEB-TS", "%neb", f"  NEB_TS_PDBFile {value}", "end"],
+            include_geometry=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        '%cpcm\n  SMDsolvent "water"\nend',
+        '%cpcm\n  SMDsolvent "THF"\nend',
+        '%cpcm\n  SMDsolvent "1,4-dioxane"\nend',
+        '%basis\n  AuxJ "def2/J"\n  AuxC "def2-TZVP/C"\nend',
+        '%basis\n  NewGTO Pt "def2-TZVP" end\nend',
+    ],
+)
+def test_scan_orca_file_references_accepts_non_file_strings(directive: str) -> None:
+    lines = ["! SP", *directive.splitlines(), "* xyz 0 1", "H 0 0 0", "*"]
+
+    assert input_references.scan_orca_file_references(lines) == []
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        '%md\n  Dump Position Stride 10 Filename "traj.xyz"\n  Run 100\nend',
+        '%md\n  Dump Position Stride 10 filename = "traj.xyz"\nend',
+        '%plots\n  Format Gaussian_Cube\n  MO( "orb.cube", 1, 0);\nend',
+        '%plots\n  MO("orb.cube",1,0);\n  ElDens( "dens.cube" );\n  SpinDens("spin.cube");\nend',
+    ],
+)
+def test_scan_orca_file_references_accepts_output_file_names(directive: str) -> None:
+    lines = ["! SP", *directive.splitlines(), "* xyz 0 1", "H 0 0 0", "*"]
+
+    assert input_references.scan_orca_file_references(lines) == []
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        '%md\n  Dump Position Stride 10 Filename "/abs/traj.xyz"\nend',
+        '%md\n  Dump Position Stride 10 Filename "../traj.xyz"\nend',
+        '%md\n  Dump Position Stride 10 Filename "~/traj.xyz"\nend',
+        '%md\n  Dump Position Stride 10 Filename "sub/traj.xyz"\nend',
+        '%plots\n  MO( "/abs/orb.cube", 1, 0);\nend',
+        '%plots\n  MO("/abs/orb.cube",1,0);\nend',
+        '%plots\n  ElDens("dens dir/dens.cube");\nend',
+    ],
+)
+def test_scan_orca_file_references_rejects_output_file_paths(directive: str) -> None:
+    with pytest.raises(ValueError, match="ORCA output file name must be a plain basename"):
+        input_references.scan_orca_file_references(
+            ["! SP", *directive.splitlines(), "* xyz 0 1", "H 0 0 0", "*"]
+        )
+
+
+def test_scan_orca_file_references_rejects_filename_outside_md_block() -> None:
+    with pytest.raises(ValueError, match="Unsupported ORCA file reference"):
+        input_references.scan_orca_file_references(
+            ["! SP", "%esd", '  Filename "traj.xyz"', "end", "* xyz 0 1", "H 0 0 0", "*"]
+        )
+
+
+def test_orca_execution_snapshot_binds_esd_hessian_inputs(tmp_path: Path) -> None:
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "g.xyz").write_text("1\ng\nH 0 0 0\n", encoding="utf-8")
+    (job_dir / "S0.hess").write_text("$hessian\nS0\n$end\n", encoding="utf-8")
+    (job_dir / "S1.hess").write_text("$hessian\nS1\n$end\n", encoding="utf-8")
+    selected = job_dir / "esd.inp"
+    selected.write_text(
+        "! B3LYP def2-SVP ESD(FLUOR)\n"
+        '%esd\n  GSHessian "S0.hess"\n  ESHessian "S1.hess"\nend\n'
+        "* xyzfile 0 1 g.xyz\n",
+        encoding="utf-8",
+    )
+    resources = {"max_cores": 1, "max_memory_gb": 1}
+
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request=resources,
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+
+    execution_dir = Path(snapshot["execution_dir"])
+    assert (execution_dir / "S0.hess").read_text(encoding="utf-8") == "$hessian\nS0\n$end\n"
+    assert (execution_dir / "S1.hess").read_text(encoding="utf-8") == "$hessian\nS1\n$end\n"
+    assert snapshot["dependency_paths"] == [
+        str((job_dir / "S0.hess").resolve()),
+        str((job_dir / "S1.hess").resolve()),
+        str((job_dir / "g.xyz").resolve()),
+    ]
+    verify_orca_execution_snapshot(
+        job_dir,
+        snapshot,
+        expected_selected_inp=snapshot["selected_inp"],
+        expected_source_selected_inp=snapshot["source_selected_inp"],
+        expected_selected_input_xyz="",
+        expected_resource_request=resources,
+    )
+
+
 @pytest.mark.parametrize("target_name", ["job.inp", "input.xyz", "initial.hess"])
 def test_orca_execution_snapshot_ignores_source_mutation_after_submission(
     tmp_path: Path,
@@ -1251,7 +1790,12 @@ def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
         "! HF STO-3G L-OPTH",
         "! HF STO-3G QMMMOpt",
         "! HF STO-3G CI-OPT",
+        "! HF STO-3G ConicalIntersect-Opt",
+        "! HF STO-3G SurfCrossOpt",
+        "! HF STO-3G MECP-Opt",
         "! HF STO-3G OptTS",
+        "! HF STO-3G OptTS(GMF)",
+        "! XTB GOAT",
         "! HF STO-3G Opt",
         "! HF STO-3G IRC",
         "! HF STO-3G NumGrad",
@@ -1300,6 +1844,66 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
     snapshot["bound_selected_identity"] = _snapshot_identity._file_identity(bound_selected)
 
     with pytest.raises(ValueError, match="runtime/output file: job.engrad"):
+        verify_orca_execution_snapshot(
+            job_dir,
+            snapshot,
+            expected_selected_inp=snapshot["selected_inp"],
+            expected_source_selected_inp=snapshot["source_selected_inp"],
+            expected_selected_input_xyz="",
+            expected_resource_request=resources,
+        )
+
+
+@pytest.mark.parametrize(
+    ("reserved_name", "neb_block"),
+    [
+        ("job_MEP.allxyz", ""),
+        ("job_reactant.xyz", "%neb PreOpt_Ends true end\n"),
+    ],
+)
+def test_verify_orca_execution_snapshot_rejects_neb_output_name_tamper(
+    tmp_path: Path,
+    reserved_name: str,
+    neb_block: str,
+) -> None:
+    from orca_auto.orca.execution_binding import _snapshot_identity
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    dependency = job_dir / "external.pc"
+    dependency.write_text("0\n", encoding="utf-8")
+    selected = job_dir / "job.inp"
+    selected.write_text(
+        '! HF STO-3G SP\n%pointcharges "external.pc"\n* xyz 0 1\nH 0 0 0\n*\n',
+        encoding="utf-8",
+    )
+    resources = {"max_cores": 1, "max_memory_gb": 1}
+    snapshot = build_orca_execution_snapshot(
+        job_dir,
+        selected,
+        selected_input_xyz="",
+        resource_request=resources,
+        orca_executable=write_fake_orca(tmp_path / "orca"),
+    )
+    role = "dependency_000000"
+    reserved_source = job_dir / reserved_name
+    reserved_private = Path(snapshot["execution_dir"]) / reserved_source.name
+    Path(snapshot["materialized_inputs"][role]["path"]).rename(reserved_private)
+    snapshot["dependency_paths"][0] = str(reserved_source.resolve())
+    snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
+    snapshot["materialized_inputs"][role] = _snapshot_identity._file_identity(reserved_private)
+    bound_selected = Path(snapshot["selected_inp"])
+    bound_selected.chmod(0o600)
+    bound_selected.write_text(
+        bound_selected.read_text(encoding="utf-8")
+        .replace("! HF STO-3G SP\n", f"! HF STO-3G NEB-TS\n{neb_block}")
+        .replace(dependency.name, reserved_source.name),
+        encoding="utf-8",
+    )
+    bound_selected.chmod(0o400)
+    snapshot["bound_selected_identity"] = _snapshot_identity._file_identity(bound_selected)
+
+    with pytest.raises(ValueError, match=f"runtime/output file: {re.escape(reserved_name)}"):
         verify_orca_execution_snapshot(
             job_dir,
             snapshot,

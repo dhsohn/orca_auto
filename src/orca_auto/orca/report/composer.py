@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import OPT_ROUTE_RE, TS_ROUTE_RE
+from ..completion_rules import TS_ROUTE_RE, is_full_optimization_route, is_optimization_route
 from ..evidence import (
     structure_kind,
 )
 from ..input_syntax import file_route_lines
-from ..relaxed_scan import first_scan_coordinate_spec
+from ..relaxed_scan import input_uses_relaxed_scan
 from .irc import (
     IrcReportData,
     collect_irc_report_data,
@@ -121,22 +121,26 @@ def collect_html_report_parts(
 
     has_irc = input_uses_irc(selected_inp)
     has_neb_ts = input_uses_neb_ts(selected_inp)
-    has_relaxed_scan = first_scan_coordinate_spec(selected_inp) is not None
+    has_relaxed_scan = input_uses_relaxed_scan(selected_inp)
     has_ts = bool(TS_ROUTE_RE.search(routes))
-    has_opt = bool(OPT_ROUTE_RE.search(routes))
+    has_opt = is_optimization_route(routes)
 
     neb = collect_neb_report_data(reaction_dir, state) if has_neb_ts else None
     scan: ScanReportData | None = None
-    if has_opt and has_relaxed_scan:
+    if has_relaxed_scan and has_opt:
         scan = collect_scan_report_data(reaction_dir, state)
 
     opt: OptReportData | None = None
     if (has_ts or has_opt) and neb is None and scan is None:
-        opt = collect_opt_report_data(
-            reaction_dir,
-            state,
-            kind="ts" if has_ts else "opt",
-        )
+        # A partial optimization (OptH, QMMMOpt, MECP-Opt, ...) is still an
+        # optimization, but only a full one may be presented as a minimum.
+        if has_ts:
+            kind = "ts"
+        elif is_full_optimization_route(routes):
+            kind = "opt"
+        else:
+            kind = "partial"
+        opt = collect_opt_report_data(reaction_dir, state, kind=kind)
 
     irc = collect_irc_report_data(reaction_dir, state) if has_irc else None
 

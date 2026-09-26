@@ -67,16 +67,18 @@ from .settings import ReportSetting, match_dotted_setting, settings_table_html
 _IRC_SETTINGS_HEADER_RE = re.compile(r"Intrinsic Reaction Coordinate Calculation", re.IGNORECASE)
 # Direction banners are boxed in asterisks, so the token sits mid-line.
 _IRC_DIRECTION_RE = re.compile(r"\b(FORWARD|BACKWARD)\s+IRC\b")
-# Iteration rows: iteration, E(Eh), dE(kcal/mol), max(|G|), RMS(G).
+# Iteration rows: iteration, E(Eh), dE(kcal/mol), max(|G|), RMS(G), then one
+# uncaptured column per Monitor_Internals coordinate.
 _IRC_ITERATION_RE = re.compile(
     r"^\s*(\d+)\s+"
     r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s+"
     r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s+"
     r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s+"
-    r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s*$"
+    r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)"
+    r"(?:\s+[-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)*\s*$"
 )
 _IRC_PATH_SUMMARY_HEADER_RE = re.compile(r"\bIRC\s+PATH\s+SUMMARY\b", re.IGNORECASE)
-_IRC_PATH_ROW_RE = path_summary_row_re(r"TS|[-+]?\d+")
+_IRC_PATH_ROW_RE = path_summary_row_re(r"TS|[-+]?\d+", trailing_columns=True)
 _SECTION_HEADER_RE = re.compile(
     r"\b(?:FORWARD|BACKWARD)\s+IRC\b|\bIRC\s+PATH\s+SUMMARY\b|"
     r"\bCARTESIAN\s+COORDINATES\b|\bFINAL\s+SINGLE\s+POINT\s+ENERGY\b",

@@ -81,7 +81,7 @@ def _attempt(inp: Path, out: Path, **fields: object) -> AttemptRecord:
     return record
 
 
-def _run_internal_execute(config: Path, reaction_dir: Path, *, force: bool = False) -> int:
+def _run_internal_execute(config: Path, reaction_dir: Path) -> int:
     # Shared admission slots live in the hidden .admission directory
     # under the runs root (= allowed_root).
     token = reserve_slot(
@@ -100,7 +100,6 @@ def _run_internal_execute(config: Path, reaction_dir: Path, *, force: bool = Fal
             selected_inp=select_latest_inp(reaction_dir),
             admission_root=configured_admission_root(cfg),
             reservation_token=token,
-            force=force,
         ),
     )
 

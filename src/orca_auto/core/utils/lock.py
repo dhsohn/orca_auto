@@ -115,8 +115,10 @@ def held_file_lock_payload(lock_path: Path) -> str | None:
         details = os.fstat(descriptor)
         if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
             raise ValueError(f"Lock path must be a single-link regular file: {lock_path}")
+        # A shared probe conflicts only with a real (exclusive) holder, never
+        # with a concurrent probe.
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError:
             payload = os.read(descriptor, _MAX_LOCK_PAYLOAD_BYTES + 1)
             if len(payload) > _MAX_LOCK_PAYLOAD_BYTES:

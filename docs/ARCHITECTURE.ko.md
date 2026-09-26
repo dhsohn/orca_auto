@@ -108,7 +108,11 @@ graph TD
 미리 읽은 행을 `expected_entry`로 사용), 자식 시작과 슬롯 연결, 종료 확정, 취소,
 셧다운, 고아 행 정리를 모두 소유한다. 기반 클래스 `core.queue.worker.QueueWorkerLoop`는
 패스 순서(회수, 취소, 수용, 대기), 셧다운 sweep, 시그널 핸들러만 담당하며 작업을
-프로세스가 딸린 레코드로만 안다. 테스트는 `_start_background_process`와 `sleep_fn`을
+프로세스가 딸린 레코드로만 안다. 한 패스에서 일반 예외가 나면 기록한 뒤 폴링 간격
+후 그 패스를 다시 시도하며, 실행 중인 자식은 계속 감독한다. KeyboardInterrupt,
+SystemExit, 시작 실패는 이전처럼 워커를 끝낸다. 주기적 워커 상태 정리는 실패한
+수용 패스가 남길 수 있는, 이 워커가 예약만 하고 작업에 연결하지 못한 실행 슬롯도
+해제한다. 테스트는 `_start_background_process`와 `sleep_fn`을
 교체하며, 주입되는 의존성 묶음은 없다. 부모 진입점은
 `python -m orca_auto.orca.commands.queue --config …`, 자식 진입점은
 `python -m orca_auto.orca.commands.worker_child --config … --queue-root …

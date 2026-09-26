@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 from orca_auto.orca.report import write_job_html_report
+from orca_auto.orca.report.composer import collect_html_report_parts
 from orca_auto.orca.report.opt import collect_opt_report_data
 from orca_auto.orca.statuses import AnalyzerStatus
 from tests.engine_artifact_helpers import report_generation_target
@@ -199,6 +200,88 @@ def test_opt_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
     assert "last output:" not in text
     assert "rxn_retry.out" not in text
     assert "<code>rxn.out</code>" not in text
+
+
+@pytest.mark.parametrize(
+    ("route", "kind"),
+    [
+        ("! SloppyOpt B3LYP def2-SVP", "opt"),
+        ("! CrudeOpt B3LYP def2-SVP", "opt"),
+        # Partial optimizations still get the optimization report, under a
+        # kind that claims no minimum.
+        ("! OptH B3LYP def2-SVP", "partial"),
+        ("! L-OptH B3LYP def2-SVP", "partial"),
+        ("! TightOpt OptH B3LYP def2-SVP", "partial"),
+        ("! QMMMOpt B3LYP def2-SVP", "partial"),
+        ("! QMMMOpt/pDynamo B3LYP def2-SVP", "partial"),
+        ("! SurfCrossOpt B3LYP def2-SVP", "partial"),
+        ("! MECP-Opt B3LYP def2-SVP", "partial"),
+        ("! CI-Opt B3LYP def2-SVP", "partial"),
+        ("! ConicalIntersect-Opt B3LYP def2-SVP", "partial"),
+    ],
+)
+def test_every_optimization_gets_the_opt_report(tmp_path: Path, route: str, kind: str) -> None:
+    _write_inp(tmp_path / "rxn.inp", route)
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path)
+
+    parts = collect_html_report_parts(
+        tmp_path, _state(tmp_path, out_path, reason="normal_termination")
+    )
+
+    assert parts is not None
+    assert parts.opt is not None
+    assert parts.opt.kind == kind
+    assert parts.sp is None
+
+
+def test_partial_opt_report_makes_no_minimum_claim(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! MECP-Opt Freq B3LYP def2-SVP")
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+
+    path = write_job_html_report(
+        tmp_path,
+        _state(tmp_path, out_path, reason="normal_termination"),
+        generation_target=report_generation_target(tmp_path),
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "Partial Opt report" in text
+    assert "Optimization convergence" in text
+    assert "Imaginary frequencies" in text
+    assert "-410.2" in text
+    assert "SP report" not in text
+    assert "minimum" not in text
+    assert "expected" not in text
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "! Opt B3LYP def2-SVP",
+        "! OptH B3LYP def2-SVP",
+        "! Opt OptH B3LYP def2-SVP",
+        "! TightOpt OptH B3LYP def2-SVP",
+    ],
+)
+def test_relaxed_scan_of_any_optimization_gets_the_scan_report(tmp_path: Path, route: str) -> None:
+    (tmp_path / "rxn.inp").write_text(
+        f"{route}\n%geom\n  Scan\n    B 0 1 = 1.0, 2.0, 5\n  end\nend\n* xyzfile 0 1 input.xyz\n",
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "rxn.out"
+    _write_opt_out(out_path)
+
+    parts = collect_html_report_parts(
+        tmp_path, _state(tmp_path, out_path, reason="normal_termination")
+    )
+
+    assert parts is not None
+    assert parts.scan is not None
+    assert parts.opt is None
+    assert parts.sp is None
 
 
 def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:

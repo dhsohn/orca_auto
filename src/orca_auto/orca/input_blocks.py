@@ -147,10 +147,13 @@ class OrcaBlock:
     This is the shared block-termination rule of the package: a block closes at
     the first unquoted ``end`` token outside a nested ``scan``/``constraints``
     sub-block -- on the header line itself (``%pal nprocs 8 end``) or on a
-    later line -- and an unterminated block is cut by the next ``%`` directive,
-    by the geometry section (``*``), or by end of input. ``rows`` are the
-    active body rows in order, starting with the header remainder when it
-    carries tokens; tokens after the closing ``end`` are not body rows.
+    later line. A ``scan``/``constraints`` token opens a sub-block wherever it
+    stands (``%geom Constraints``, ``Constraints {B 0 1 C} end``), and each
+    ``end`` closes the innermost open sub-block first. An unterminated block is
+    cut by the next ``%`` directive, by the geometry section (``*``), or by end
+    of input. ``rows`` are the active body rows in order, starting with the
+    header remainder when it carries tokens; tokens after the closing ``end``
+    are not body rows.
 
     ``end`` is the index of the line carrying the closing ``end`` token
     (``start`` for an inline-closed block). When ``closed`` is False it is the
@@ -181,15 +184,23 @@ def percent_directive_header(tokens: list[OrcaLineToken]) -> tuple[str, int] | N
     return None
 
 
-def _unquoted_end_index(tokens: Sequence[OrcaLineToken], start: int) -> int:
-    return next(
-        (
-            index
-            for index in range(start, len(tokens))
-            if not tokens[index].quoted and tokens[index].value.lower() == "end"
-        ),
-        len(tokens),
-    )
+def _closing_end_index(
+    tokens: Sequence[OrcaLineToken], start: int, nested_depth: int
+) -> tuple[int, int]:
+    """Index of the block-closing ``end`` (``len(tokens)`` if none) and the depth after the row."""
+
+    for index in range(start, len(tokens)):
+        token = tokens[index]
+        if token.quoted:
+            continue
+        word = token.value.lower()
+        if word in NESTED_BLOCK_NAMES:
+            nested_depth += 1
+        elif word == "end":
+            if nested_depth == 0:
+                return index, 0
+            nested_depth -= 1
+    return len(tokens), nested_depth
 
 
 def _scan_block(
@@ -201,12 +212,11 @@ def _scan_block(
     body_start: int,
 ) -> OrcaBlock:
     rows: list[OrcaBlockRow] = []
-    end_index = _unquoted_end_index(header_tokens, body_start)
+    end_index, nested_depth = _closing_end_index(header_tokens, body_start, 0)
     if header_tokens[body_start:end_index]:
         rows.append(OrcaBlockRow(start, tuple(header_tokens[body_start:end_index])))
     if end_index < len(header_tokens):
         return OrcaBlock(name, start, start, True, tuple(rows))
-    nested_depth = 0
     for index in range(start + 1, len(lines)):
         tokens = orca_line_tokens(lines[index])
         if not tokens:
@@ -216,19 +226,11 @@ def _scan_block(
             not first.quoted and first.value.startswith("*")
         ):
             return OrcaBlock(name, start, index, False, tuple(rows))
-        if len(tokens) == 1 and not first.quoted and first.value.lower() in NESTED_BLOCK_NAMES:
-            nested_depth += 1
-            rows.append(OrcaBlockRow(index, tuple(tokens)))
-            continue
-        end_index = _unquoted_end_index(tokens, 0)
-        if end_index == len(tokens) or nested_depth > 0:
-            if end_index < len(tokens):
-                nested_depth -= 1
-            rows.append(OrcaBlockRow(index, tuple(tokens)))
-            continue
+        end_index, nested_depth = _closing_end_index(tokens, 0, nested_depth)
         if end_index > 0:
             rows.append(OrcaBlockRow(index, tuple(tokens[:end_index])))
-        return OrcaBlock(name, start, index, True, tuple(rows))
+        if end_index < len(tokens):
+            return OrcaBlock(name, start, index, True, tuple(rows))
     return OrcaBlock(name, start, len(lines), False, tuple(rows))
 
 

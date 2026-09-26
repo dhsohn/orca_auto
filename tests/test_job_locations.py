@@ -21,6 +21,7 @@ from orca_auto.orca.job_locations import (
     list_job_location_records,
     rebuild_job_location_records,
     record_from_artifacts,
+    resolve_job_metadata,
     resolve_record_job_dir,
     upsert_job_record,
 )
@@ -223,6 +224,29 @@ def test_record_from_artifacts_uses_run_id_fallback() -> None:
         assert record.latest_known_path == str(job_dir.resolve())
         assert record.job_type == "orca_opt"
         assert record.molecule_key == "H2"
+
+
+def test_record_from_artifacts_reads_job_type_from_xyzfile_input(tmp_path: Path) -> None:
+    job_dir = tmp_path / "runs" / "rxn_xyzfile"
+    job_dir.mkdir(parents=True)
+    selected_xyz = job_dir / "rxn.xyz"
+    selected_xyz.write_text("2\n\nH 0 0 0\nH 0 0 0.74\n", encoding="utf-8")
+    selected_inp = job_dir / "rxn.inp"
+    selected_inp.write_text("! Opt\n* xyzfile 0 1 rxn.xyz\n", encoding="utf-8")
+    state: dict[str, object] = {
+        "job_id": "job_xyzfile_1",
+        "status": "completed",
+        "selected_inp": str(selected_inp),
+        "attempts": [],
+        "final_result": None,
+    }
+
+    record = record_from_artifacts(job_dir=job_dir, state=state, report=None)
+
+    assert record is not None
+    assert record.selected_input_xyz == str(selected_xyz.resolve())
+    assert (record.job_type, record.molecule_key) == ("orca_opt", "H2")
+    assert resolve_job_metadata(str(selected_inp), job_dir) == ("opt", "H2")
 
 
 def test_job_locations_uses_core_indexing_backend() -> None:

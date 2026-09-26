@@ -53,7 +53,7 @@ Cancels a pending or running job.
 ```bash
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
-- `<TARGET>`: Queue ID (`q_...`), Run ID (`run_...`), or job directory path.
+- `<TARGET>`: Queue ID (`q_...`), Run ID (`run_...`, including a running job's), or job directory path or name. A directory resolves to its active generation even when older finished rows of it remain.
 
 ---
 
@@ -146,4 +146,5 @@ journalctl -u "orca_auto-queue-worker@$(id -un)" -f
 ```
 - The journal carries the worker's INFO lifecycle lines (`Queue worker started`/`stopped`, orphan reconciliation, intent sweeps) plus its warnings and errors; each child's INFO lines go to its own `worker_log` file (`<runs_root>/logs/<queue_id>.log`, shown by `queue list`).
 - A failed startup reconciliation is one `Queue worker startup failed: <reason>` line; the worker removes its pid file and exits 1, and the supervisor restarts it up to its cap.
+- A failed poll pass (for example a queue-lock timeout during admission or the periodic reconcile) logs `Queue worker poll pass failed; retrying after the poll interval` with its traceback. Running calculations continue, and a persistent cause repeats the line every poll interval. An admission slot that such a pass left reserved is released at the next periodic reconcile with a `Released admission slot … never attached to a job` WARNING.
 - When `max_concurrent` × `resources.max_cores_per_task` exceeds the CPUs the worker may use (`sched_getaffinity`), the worker logs one WARNING naming both numbers at start. It does not refuse to start and there is no option to silence it.

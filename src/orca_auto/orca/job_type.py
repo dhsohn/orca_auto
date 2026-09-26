@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .completion_rules import OPT_ROUTE_RE, TS_ROUTE_RE
+from .completion_rules import TS_ROUTE_RE, is_optimization_route
 from .input_syntax import file_route_lines
 
 SP_RE = re.compile(r"\b(SP|Energy)\b", re.IGNORECASE)
@@ -15,11 +15,13 @@ FREQ_RE = re.compile(r"\b(Freq|NumFreq|AnFreq)\b", re.IGNORECASE)
 def detect_job_type(inp_path: Path) -> str:
     # Scan every route line through the shared keyword regexes so this label
     # can never disagree with completion/report classification (which also
-    # means TightOpt/COpt spellings count as "opt" here too).
+    # means TightOpt/COpt spellings count as "opt" here too). The coarse label
+    # includes partial optimizations (OptH, MECP, ...); minimum claims use
+    # structure_kind.
     route_line = " ".join(file_route_lines(inp_path))
     if TS_ROUTE_RE.search(route_line):
         return "ts"
-    if OPT_ROUTE_RE.search(route_line):
+    if is_optimization_route(route_line):
         return "opt"
     if SP_RE.search(route_line):
         return "sp"

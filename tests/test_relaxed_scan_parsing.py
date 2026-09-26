@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from orca_auto.orca.relaxed_scan import (
+    ScanCoordinateSpec,
     first_scan_coordinate_spec,
+    input_uses_relaxed_scan,
     parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
 )
@@ -334,10 +336,159 @@ def test_first_scan_coordinate_spec_follows_the_shared_block_rule(
     assert (spec.kind, spec.atoms, spec.start, spec.end, spec.points) == ("B", (0, 1), 1.2, 3.0, 10)
 
 
-def test_first_scan_coordinate_spec_ignores_scan_outside_geom(tmp_path: Path) -> None:
+def test_scan_after_a_geom_end_still_counts_as_a_relaxed_scan(tmp_path: Path) -> None:
+    # An ``end`` before ``Scan`` may close an unknown %geom sub-block rather
+    # than %geom itself, so the scan reader fails closed up to the next directive.
     inp = tmp_path / "scan.inp"
     inp.write_text(
         "! Opt\n%geom\n  MaxIter 50\nend\n  Scan\n    B 0 1 = 1.20, 3.00, 10\n  end\n* xyz 0 1\n*\n"
     )
 
+    spec = first_scan_coordinate_spec(inp)
+
+    assert spec is not None
+    assert (spec.kind, spec.atoms, spec.start, spec.end, spec.points) == ("B", (0, 1), 1.2, 3.0, 10)
+    assert input_uses_relaxed_scan(inp)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # ORCA manual form: ``Scan`` on the %geom header line.
+        (
+            "%geom Scan\n  B 0 1 = 1.35, 1.10, 12\n  end\nend\n",
+            ("B", (0, 1), 1.35, 1.10, 12),
+        ),
+        # Single-line form with a trailing ``end``, as real lab inputs write it.
+        (
+            "%geom\n MaxIter 80\n Scan D 36 20 58 59 = 84.96, -92.24, 19 end\nend\n",
+            ("D", (36, 20, 58, 59), 84.96, -92.24, 19),
+        ),
+        (
+            "%geom Scan A 0 1 2 = 100.0, 120.0, 5 end end\n",
+            ("A", (0, 1, 2), 100.0, 120.0, 5),
+        ),
+        # Coordinate on the ``Scan`` row, closed on a later line.
+        (
+            "%geom\n  Scan B 0 1 = 1.20, 3.00, 10\n  end\nend\n",
+            ("B", (0, 1), 1.2, 3.0, 10),
+        ),
+        # Explicit value list: first and last value, one point per value.
+        (
+            "%geom\n  Scan\n    B 0 1 [1.0 1.1 1.2]\n  end\nend\n",
+            ("B", (0, 1), 1.0, 1.2, 3),
+        ),
+        (
+            "%geom Scan\n  D 0 1 2 3 [180 150 120 90]\n  end\nend\n",
+            ("D", (0, 1, 2, 3), 180.0, 90.0, 4),
+        ),
+        # A ``Constraints`` sub-block before ``Scan`` must not close %geom early.
+        (
+            "%geom Constraints\n  {B 2 3 C}\n  end\n  Scan\n  B 0 1 = 1.0, 2.0, 5\n  end\nend\n",
+            ("B", (0, 1), 1.0, 2.0, 5),
+        ),
+        (
+            "%geom\n  Constraints {B 2 3 C} end\n  Scan\n    B 0 1 = 1.0, 2.0, 5\n  end\nend\n",
+            ("B", (0, 1), 1.0, 2.0, 5),
+        ),
+        (
+            "%geom\n  Constraints {B 2 3 C} end\n  Scan B 0 1 = 1.0, 2.0, 5 end\nend\n",
+            ("B", (0, 1), 1.0, 2.0, 5),
+        ),
+        # ORCA reads every %geom block, so a scan in a later one still counts.
+        (
+            "%geom MaxIter 100 end\n%geom Scan\n B 0 1 = 1.0, 2.0, 5\n end\nend\n",
+            ("B", (0, 1), 1.0, 2.0, 5),
+        ),
+        # Other end-terminated sub-blocks close %geom early under the shared
+        # block rule; a Scan after them must still be read.
+        (
+            "%geom\n modify_internal\n  { B 0 1 A }\n end\n Scan\n  B 0 1 = 1.0, 2.0, 5\n"
+            " end\nend\n",
+            ("B", (0, 1), 1.0, 2.0, 5),
+        ),
+        (
+            "%geom\n Hybrid_Hess {0 1} end\n Scan\n  B 0 1 = 1.0, 2.0, 5\n end\nend\n",
+            ("B", (0, 1), 1.0, 2.0, 5),
+        ),
+        (
+            "%geom\n TS_Active_Atoms {0 1} end\n Scan B 0 1 = 1.0, 2.0, 5 end\nend\n",
+            ("B", (0, 1), 1.0, 2.0, 5),
+        ),
+    ],
+    ids=[
+        "header",
+        "single-line",
+        "header-single-line",
+        "coord-on-scan-row",
+        "list",
+        "header-list",
+        "header-constraints-then-scan",
+        "one-line-constraints-then-scan",
+        "one-line-constraints-then-one-line-scan",
+        "second-geom-block",
+        "modify-internal-then-scan",
+        "hybrid-hess-then-scan",
+        "ts-active-atoms-then-one-line-scan",
+    ],
+)
+def test_first_scan_coordinate_spec_reads_every_orca_scan_form(
+    tmp_path: Path, body: str, expected: tuple[object, ...]
+) -> None:
+    inp = tmp_path / "scan.inp"
+    inp.write_text("! Opt B3LYP def2-SVP\n" + body + "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
+
+    spec = first_scan_coordinate_spec(inp)
+
+    assert spec is not None
+    assert (spec.kind, spec.atoms, spec.start, spec.end, spec.points) == expected
+    assert input_uses_relaxed_scan(inp)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "%geom\n  Scan\n    B 0 1 = 1.0 to 2.0\n  end\nend\n",
+        "%geom Scan\n  end\nend\n",
+        # The profile's axis is the first coordinate, so a readable second
+        # coordinate must not stand in for an unreadable first one.
+        "%geom\n  Scan\n    B 0 1 [1.0 x]\n    B 1 2 = 1.0, 2.0, 5\n  end\nend\n",
+    ],
+    ids=["unreadable-range", "empty", "unreadable-first"],
+)
+def test_unreadable_scan_coordinate_still_counts_as_a_relaxed_scan(
+    tmp_path: Path, body: str
+) -> None:
+    inp = tmp_path / "scan.inp"
+    inp.write_text("! Opt B3LYP def2-SVP\n" + body + "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
+
     assert first_scan_coordinate_spec(inp) is None
+    assert input_uses_relaxed_scan(inp)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "! SCAN def2-SVP Opt\n%geom\n  MaxIter 50\nend\n",
+        # The SCAN functional outside %geom is not a scan sub-block.
+        "! Opt\n%geom MaxIter 50 end\n! SCAN def2-SVP\n",
+        "! Opt\n%geom\n  MaxIter 50\nend\n%method Functional SCAN end\n",
+        "! Opt\n%geom\n  modify_internal\n  { B 0 1 A }\n  end\nend\n",
+    ],
+    ids=["route", "route-after-geom", "method-after-geom", "modify-internal-only"],
+)
+def test_input_without_scan_block_is_not_a_relaxed_scan(tmp_path: Path, text: str) -> None:
+    inp = tmp_path / "opt.inp"
+    inp.write_text(text + "* xyz 0 1\nH 0 0 0\n*\n")
+
+    assert not input_uses_relaxed_scan(inp)
+
+
+@pytest.mark.parametrize(
+    ("kind", "unit"),
+    [("B", "Å"), ("A", "°"), ("D", "°"), ("I", "°"), ("X", "")],
+)
+def test_scan_coordinate_unit_follows_the_coordinate_kind(kind: str, unit: str) -> None:
+    spec = ScanCoordinateSpec(kind=kind, atoms=(0, 1), start=1.0, end=2.0, points=3)
+
+    assert spec.unit() == unit

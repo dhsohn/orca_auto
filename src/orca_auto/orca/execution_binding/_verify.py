@@ -20,7 +20,9 @@ from ._confinement import (
 from ._constants import ORCA_EXECUTION_SNAPSHOT_VERSION
 from ._inputs import (
     _inline_geometry_atom_count,
+    _neb_preoptimizes_end_points,
     _route_requests_hessian,
+    _route_requests_neb,
     _route_writes_engrad,
     _route_writes_same_stem_xyz,
 )
@@ -290,6 +292,8 @@ def _verify_bound_snapshot_content(
     bound_references = input_references.scan_orca_file_references(selected_lines)
     engrad_is_output = _route_writes_engrad(selected_lines)
     hessian_requested = _route_requests_hessian(selected_lines)
+    neb_requested = _route_requests_neb(selected_lines)
+    neb_preopt_ends = _neb_preoptimizes_end_points(selected_lines)
     same_stem_xyz_is_output = _route_writes_same_stem_xyz(selected_lines)
     for role, _descriptor, source_path in verified.verified_dependencies:
         if role == verified.recovery_checkpoint_role:
@@ -299,6 +303,8 @@ def _verify_bound_snapshot_content(
             verified.source_selected_path,
             engrad_is_output=engrad_is_output,
             hessian_requested=hessian_requested,
+            neb_requested=neb_requested,
+            neb_preopt_ends=neb_preopt_ends,
             same_stem_xyz_is_output=same_stem_xyz_is_output,
             inline_same_stem_xyz=role in verified.mutable_roles,
         )

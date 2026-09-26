@@ -1,9 +1,10 @@
 """Single-point / bare-Freq job report: energy summary, attempt chain, SI block.
 
-Covers exactly the jobs that get an ``"sp"`` SI block (routes without an
-optimization: plain single points and bare Freq jobs). The rendered page
-embeds the copy-paste-ready ``si_block.md`` content so the numbers a paper
-needs can be copied straight from the browser.
+Covers routes without an optimization (plain single points and bare Freq
+jobs). Partial optimizations (OptH, QMMMOpt, MECP-Opt, ...) also get an
+``"sp"`` SI block but the optimization report. The rendered page embeds the
+copy-paste-ready ``si_block.md`` content so the numbers a paper needs can be
+copied straight from the browser.
 """
 
 from __future__ import annotations

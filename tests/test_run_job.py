@@ -144,7 +144,6 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     )
     assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
     assert calls["kwargs"] == {}
-    assert execution.force is True
     assert execution.reservation_token == "slot-1"
     assert execution.admission_app_name == "orca_auto_orca"
     assert execution.admission_task_id == "task-1"
@@ -269,7 +268,6 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
     assert bound_cfg.resources.max_memory_gb_per_task == 1
     assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
     assert calls["kwargs"] == {}
-    assert execution.force is True
     assert execution.reservation_token == "slot-1"
     assert execution.admission_app_name == "orca_auto_orca"
     assert execution.admission_task_id == "task-1"
@@ -317,7 +315,6 @@ def test_run_worker_child_job_finds_real_queue_entry_and_preserves_exit_code(
     assert rc == 8
     (execution,) = calls["args"]
     assert execution.reaction_dir == rxn.resolve()
-    assert execution.force is True
     assert execution.reservation_token == "slot-real"
     assert execution.admission_app_name == "orca_auto_orca"
     assert execution.admission_task_id == "task-real"

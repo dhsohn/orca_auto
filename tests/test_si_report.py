@@ -359,6 +359,43 @@ def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
         assert collect_structure_evidence(reaction_dir, state) is None, name
 
 
+@pytest.mark.parametrize(
+    "geom_block",
+    [
+        "%geom Scan\n  B 0 1 = 1.0, 2.0, 5\n  end\nend\n",
+        "%geom\n  MaxIter 80\n  Scan D 0 1 2 3 = 84.96, -92.24, 19 end\nend\n",
+        "%geom\n  Scan\n    B 0 1 [1.0 1.1 1.2]\n  end\nend\n",
+        # A scan block whose coordinate cannot be read is still a scan.
+        "%geom\n  Scan\n    B 0 1 = 1.0 to 2.0\n  end\nend\n",
+        "%geom\n  Constraints {B 1 2 C} end\n  Scan\n    B 0 1 = 1.0, 2.0, 5\n  end\nend\n",
+        "%geom MaxIter 100 end\n%geom Scan\n  B 0 1 = 1.0, 2.0, 5\n  end\nend\n",
+        "%geom\n  modify_internal\n  { B 1 2 A }\n  end\n  Scan\n    B 0 1 = 1.0, 2.0, 5\n"
+        "  end\nend\n",
+        "%geom\n  Hybrid_Hess {0 1} end\n  Scan\n    B 0 1 = 1.0, 2.0, 5\n  end\nend\n",
+    ],
+    ids=[
+        "header",
+        "single-line",
+        "value-list",
+        "unreadable",
+        "constraints-then-scan",
+        "second-geom-block",
+        "modify-internal-then-scan",
+        "hybrid-hess-then-scan",
+    ],
+)
+def test_every_relaxed_scan_form_gets_no_block(tmp_path: Path, geom_block: str) -> None:
+    reaction_dir, state = _job_dir(
+        tmp_path,
+        "scan_job",
+        inp_text="! B3LYP def2-SVP Opt\n" + geom_block + "* xyz 0 1\nC 0 0 0\n*\n",
+        out_text=_out_text(route="B3LYP def2-SVP Opt"),
+    )
+
+    assert structure_kind(Path(state["selected_inp"])) is None
+    assert collect_structure_evidence(reaction_dir, state) is None
+
+
 def test_write_si_block_writes_irc_summary_without_coordinates(tmp_path: Path) -> None:
     irc_summary = """
 ----------------------
@@ -478,6 +515,53 @@ def test_tightopt_route_is_a_min_block(tmp_path: Path) -> None:
     assert block is not None
     assert block.kind == "min"
     assert "⚠" not in render_si_block_md(block)
+
+
+@pytest.mark.parametrize(
+    ("route", "expected"),
+    [
+        # Looser convergence criteria still end on a stationary minimum.
+        ("! B3LYP def2-SVP SloppyOpt Freq", "min"),
+        ("! B3LYP def2-SVP CrudeOpt Freq", "min"),
+        # Hydrogen-only optimizations leave the heavy atoms where they were.
+        ("! B3LYP def2-SVP OptH Freq", "sp"),
+        ("! B3LYP def2-SVP L-OptH", "sp"),
+        ("! B3LYP def2-SVP TightOpt OptH", "sp"),
+        ("! B3LYP def2-SVP OptTS OptH", "ts"),
+        # QM/MM active-region and crossing-seam optima are not minima of the
+        # full surface; ORCA aliases of one search classify alike.
+        ("! XTB QMMMOpt", "sp"),
+        ("! B3LYP def2-SVP SurfCrossOpt", "sp"),
+        ("! B3LYP def2-SVP MECP-Opt", "sp"),
+        ("! B3LYP def2-SVP CI-Opt", "sp"),
+        ("! B3LYP def2-SVP ConicalIntersect-Opt", "sp"),
+    ],
+)
+def test_optimization_keyword_structure_kind(tmp_path: Path, route: str, expected: str) -> None:
+    inp = tmp_path / "job.inp"
+    inp.write_text(f"{route}\n* xyz 0 1\nC 0 0 0\n*\n", encoding="utf-8")
+    assert structure_kind(inp) == expected
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "! B3LYP def2-SVP SloppyOpt",
+        "! B3LYP def2-SVP OptH",
+        "! B3LYP def2-SVP Opt OptH",
+        "! B3LYP def2-SVP TightOpt OptH",
+        "! B3LYP def2-SVP L-OptH",
+    ],
+)
+def test_relaxed_scan_of_any_optimization_gets_no_block(tmp_path: Path, route: str) -> None:
+    inp_text = _SCAN_INP.replace("! B3LYP def2-SVP Opt\n", f"{route}\n")
+    assert inp_text.startswith(f"{route}\n%geom")
+    reaction_dir, state = _job_dir(
+        tmp_path, "scan_job", inp_text=inp_text, out_text=_out_text(route=route[2:])
+    )
+
+    assert structure_kind(Path(state["selected_inp"])) is None
+    assert collect_structure_evidence(reaction_dir, state) is None
 
 
 def test_route_comment_does_not_change_structure_kind(tmp_path: Path) -> None:

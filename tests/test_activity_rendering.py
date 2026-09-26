@@ -169,6 +169,31 @@ def test_queue_table_lines_shrinks_detail_before_id(monkeypatch) -> None:
     assert "orca_keep_this_id" in "\n".join(lines)
 
 
+def test_queue_table_lines_keeps_elapsed_of_one_hundred_hours_or_more() -> None:
+    rows = [
+        (
+            0,
+            {
+                "activity_id": "orca_long_job",
+                "kind": "job",
+                "engine": "orca",
+                "status": "running",
+                "label": "multi_day_freq",
+                "updated_at": "2026-05-15T00:00:00+00:00",
+                "metadata": {"elapsed_started_at": "2026-05-15T00:00:00+00:00"},
+            },
+        )
+    ]
+    now = datetime(2026, 5, 20, 12, 5, 7, tzinfo=UTC)
+
+    for max_width in (None, 50):
+        lines = rendering.queue_table_lines(rows, now=now, max_width=max_width)
+        widths = [terminal_table.display_width(line) for line in lines]
+
+        assert lines[2].endswith("132:05:07")
+        assert len(set(widths)) == 1
+
+
 def test_terminal_max_width_returns_none_without_terminal(monkeypatch) -> None:
     monkeypatch.delenv("COLUMNS", raising=False)
     monkeypatch.setattr(

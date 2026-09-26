@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from orca_auto.activity.model import ActivityCancelRequest, ActivityRecord, ResolvedActivitySources
+from orca_auto.activity.model import (
+    ActivityCancelRequest,
+    ActivityRecord,
+    ResolvedActivitySources,
+    path_aliases,
+    sort_key,
+)
+from orca_auto.core.statuses import is_queue_active_status
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca.direct_cancel import cancel_target as cancel_orca_target
 
@@ -25,14 +32,30 @@ def match_activity_record(records: list[ActivityRecord], target: str) -> Activit
             + ", ".join(sorted(record.activity_id for record in exact_matches))
         )
 
+    # Every generation of a directory shares its path aliases. As in the queue
+    # adapter's find_entry_by_target, the active generation takes precedence and
+    # a retry with none observes the newest terminal row. Matches spanning
+    # several or unknown directories stay ambiguous.
     alias_matches = [record for record in records if normalized_target in set(record.aliases)]
-    if len(alias_matches) == 1:
-        return alias_matches[0]
-    if len(alias_matches) > 1:
+    directories = {
+        path_aliases(normalize_text(record.metadata.get("reaction_dir")))[:1]
+        for record in alias_matches
+    }
+    if len(alias_matches) > 1 and (len(directories) > 1 or () in directories):
         raise ValueError(
             f"Ambiguous activity target: {normalized_target}. Matches: "
             + ", ".join(sorted(record.activity_id for record in alias_matches))
         )
+    active_matches = [record for record in alias_matches if is_queue_active_status(record.status)]
+    if len(active_matches) > 1:
+        raise ValueError(
+            f"Ambiguous activity target: {normalized_target}. Matches: "
+            + ", ".join(sorted(record.activity_id for record in active_matches))
+        )
+    if active_matches:
+        return active_matches[0]
+    if alias_matches:
+        return max(alias_matches, key=sort_key)
     raise LookupError(f"Activity target not found: {normalized_target}")
 
 

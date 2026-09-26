@@ -59,7 +59,7 @@ def _artifact_record_identity(
     report: dict[str, Any],
     existing: JobLocationRecord | None,
     fallback_job_id: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     sources = (report, state)
     job_id = (
         _artifact_records.first_artifact_text(sources, "job_id")
@@ -82,19 +82,19 @@ def _artifact_record_identity(
     selected_input_xyz = (
         selected_input_xyz or selected_inp or (existing.selected_input_xyz if existing else "")
     )
-    return job_id, status, selected_input_xyz
+    return job_id, status, selected_inp, selected_input_xyz
 
 
 def _artifact_job_metadata(
     *,
     job_dir: Path,
-    selected_input_xyz: str,
+    selected_inp: str,
     state: dict[str, Any],
     report: dict[str, Any],
     existing: JobLocationRecord | None,
     default_job_type: str,
 ) -> tuple[str, str]:
-    derived_job_type, derived_molecule_key = resolve_job_metadata(selected_input_xyz, job_dir)
+    derived_job_type, derived_molecule_key = resolve_job_metadata(selected_inp, job_dir)
     sources = (report, state)
     job_type = (
         normalize_text(
@@ -149,7 +149,7 @@ def _artifact_record_parts(
     fallback_job_id: str,
     default_job_type: str,
 ) -> _ArtifactRecordParts | None:
-    job_id, status, selected_input_xyz = _artifact_record_identity(
+    job_id, status, selected_inp, selected_input_xyz = _artifact_record_identity(
         state=payloads.state,
         report=payloads.report,
         existing=existing,
@@ -160,7 +160,7 @@ def _artifact_record_parts(
 
     job_type, molecule_key = _artifact_job_metadata(
         job_dir=job_dir,
-        selected_input_xyz=selected_input_xyz,
+        selected_inp=selected_inp,
         state=payloads.state,
         report=payloads.report,
         existing=existing,

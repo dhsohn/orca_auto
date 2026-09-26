@@ -71,12 +71,18 @@ _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     ("scfgrad_abort", ("ORCA FINISHED BY ERROR TERMINATION IN SCF GRADIENT",)),
     ("disk_io_error", ("COULD NOT WRITE TO DISK", "NO SPACE LEFT ON DEVICE")),
     ("ts_failure_marker", ("NO ACCEPTABLE TS", "FAILED TO FIND TS")),
-    ("memory_error", ("OUT OF MEMORY", "INSUFFICIENT MEMORY", "CANNOT ALLOCATE MEMORY")),
     (
         "geometry_zero_distance",
         ("ZERO DISTANCE ENCOUNTERED", "ZERO DISTANCE BETWEEN ATOMS"),
     ),
 )
+
+
+_MEMORY_ERROR_NEEDLES = ("OUT OF MEMORY", "INSUFFICIENT MEMORY", "CANNOT ALLOCATE MEMORY")
+# ORCA 6 memory advisories after which the run continues: "WARNING [...]: Out of
+# memory according to MaxCore limit!" and the LOW MEMORY block's closing line
+# "INSUFFICIENT MEMORY MAY LEAD TO SLOW PERFORMANCE OR CRASHES.".
+_MEMORY_ADVISORY_NEEDLES = ("WARNING", "MAY LEAD TO")
 
 
 @dataclass
@@ -129,6 +135,10 @@ def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
     markers["generic_error_termination"] |= error
     if "MULTIPLICITY" in upper and "IMPOSSIBLE" in upper:
         markers["multiplicity_impossible"] = True
+    if any(needle in upper for needle in _MEMORY_ERROR_NEEDLES) and not any(
+        needle in upper for needle in _MEMORY_ADVISORY_NEEDLES
+    ):
+        markers["memory_error"] = True
     verdict = optimization_convergence_line(line)
     if verdict is not None:
         markers["last_opt_converged"] = verdict

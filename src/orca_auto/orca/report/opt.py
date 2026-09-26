@@ -1,4 +1,4 @@
-"""Opt / OptTS job report: convergence trace, execution history, vibrational summary."""
+"""Opt / OptTS / partial-Opt report: convergence trace, execution history, vibrational summary."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ class OptReportData:
     last_out_name: str
 
     def kind_label(self) -> str:
-        return "TS" if self.kind == "ts" else "Opt"
+        return {"ts": "TS", "partial": "Partial Opt"}.get(self.kind, "Opt")
 
 
 def collect_opt_report_data(
@@ -172,17 +172,21 @@ def _resolved_or_self(path: Path) -> Path:
 def _imaginary_note(data: OptReportData) -> str:
     if data.imaginary_count is None:
         return ""
-    expected = 1 if data.kind == "ts" else 0
-    kind_text = "TS" if data.kind == "ts" else "minimum"
-    if data.imaginary_count == expected:
-        note = f"as expected for a {kind_text}"
-    else:
-        note = f"expected {expected} for a {kind_text}"
+    notes: list[str] = []
+    # A partial optimization ends on no stationary point of the full surface,
+    # so its count carries no expectation.
+    if data.kind != "partial":
+        expected = 1 if data.kind == "ts" else 0
+        kind_text = "TS" if data.kind == "ts" else "minimum"
+        if data.imaginary_count == expected:
+            notes.append(f"as expected for a {kind_text}")
+        else:
+            notes.append(f"expected {expected} for a {kind_text}")
     if data.frequency_from_earlier_attempt and data.frequency_attempt_index is not None:
         # The final output has no frequency section; the SI block will not
         # carry this count, so the card says where it came from.
-        note += f"; from attempt {data.frequency_attempt_index}, not the final output"
-    return note
+        notes.append(f"from attempt {data.frequency_attempt_index}, not the final output")
+    return "; ".join(notes)
 
 
 def opt_report_badges(data: OptReportData) -> tuple[tuple[str, str], ...]:

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
-from collections.abc import Callable, MutableMapping
+from collections.abc import Callable, Iterator, MutableMapping
 from typing import Any, TypeVar
 
 from ..processes import (
@@ -86,7 +87,7 @@ class QueueWorkerLoop:
     Subclasses reserve and start work (``_reserve_next_entry``,
     ``_start_reserved``), finalize exited children and stop running ones. The
     loop owns the iteration order (reap, cancel pass, admit, sleep), the
-    shutdown sweep and the signal handlers.
+    isolation of a failed pass, the shutdown sweep and the signal handlers.
     """
 
     def __init__(
@@ -111,7 +112,8 @@ class QueueWorkerLoop:
                 LOGGER.error("Queue worker startup failed: %s", exc)
                 return 1
             while not self._shutdown_requested:
-                self._run_iteration()
+                with self._poll_pass():
+                    self._run_iteration()
         except KeyboardInterrupt:
             self._shutdown_requested = True
         finally:
@@ -143,10 +145,11 @@ class QueueWorkerLoop:
                 return 0
 
             while self._running and not self._shutdown_requested:
-                self._check_completed_jobs()
-                self._check_cancel_requests()
-                if self._running:
-                    self._sleep()
+                with self._poll_pass():
+                    self._check_completed_jobs()
+                    self._check_cancel_requests()
+                    if self._running:
+                        self._sleep()
         except KeyboardInterrupt:
             self._shutdown_requested = True
         finally:
@@ -159,6 +162,19 @@ class QueueWorkerLoop:
 
     def _after_run(self) -> None:
         return None
+
+    @contextlib.contextmanager
+    def _poll_pass(self) -> Iterator[None]:
+        try:
+            yield
+        except Exception:
+            # Leaving the loop would run the shutdown sweep and restart every
+            # running child. The retry waits on the plain sleep because the
+            # subclass poll sleep may be the pass that failed; a requested
+            # shutdown skips it, as in _run_iteration.
+            LOGGER.exception("Queue worker poll pass failed; retrying after the poll interval")
+            if not self._shutdown_requested:
+                self._sleep_fn(self.poll_interval_seconds)
 
     def _run_iteration(self) -> None:
         self._check_completed_jobs()

@@ -32,15 +32,32 @@ _NEB_FILE_REFERENCE_KEYS = frozenset({"product", "ts"})
 _SIMPLE_FILE_REFERENCE_KEYS = frozenset({"%moinp", "%pointcharges"})
 _BLOCK_FILE_REFERENCE_KEYS = frozenset(
     {
+        "eshess",
+        "eshessian",
+        "gshess",
+        "gshessian",
         "hessfile",
         "hess_filename",
+        "icfshess",
+        "icfshessian",
+        "icishess",
+        "icishessian",
         "inhessname",
         "ircinithess",
+        "iscfshess",
+        "iscfshessian",
+        "iscishess",
+        "iscishessian",
         "moinp",
         "neb_end_xyzfile",
         "neb_restart_xyzfile",
         "neb_ts_xyzfile",
+        "product_xyzfile",
         "restart_allxyzfile",
+        "rrhessianname",
+        "rrhessname",
+        "tshess",
+        "tshessian",
     }
 )
 _UNSUPPORTED_FILE_REFERENCE_KEYS = frozenset(
@@ -48,6 +65,7 @@ _UNSUPPORTED_FILE_REFERENCE_KEYS = frozenset(
         "%cclib",
         "%ljcoefficients",
         "neb_end_pdbfile",
+        "neb_ts_pdbfile",
         "orcafffilename",
         "product_pdbfile",
         "ts_pdbfile",
@@ -102,6 +120,11 @@ _UNSUPPORTED_EXTERNAL_HOOK_KEYS = frozenset(
         "xtbparamfile",
     }
 )
+# A quoted value that is absolute, explicitly relative, or ends in a filename
+# extension names a file; basis names such as "def2/J" and solvents do not.
+_FILE_PATH_VALUE_RE = re.compile(r"^(?:[/\\~]|\.\.?[/\\])|\.[A-Za-z][A-Za-z0-9_]*$")
+# A quoted name inside an unquoted token, as in the compact ``MO("orb.cube",1,0);``.
+_EMBEDDED_QUOTED_RE = re.compile(r"([\"'])(.*?)\1")
 
 
 @dataclass(frozen=True)
@@ -316,6 +339,54 @@ def neb_file_reference_context(
     return keyword_indices, end_index == len(tokens)
 
 
+def _require_output_basename(value: str, line: str) -> None:
+    name = value.strip()
+    if not name or name in {".", ".."} or name.startswith("~") or any(c in name for c in "/\\"):
+        raise ValueError(f"ORCA output file name must be a plain basename: {line.strip()}")
+
+
+def _output_file_name_spans(lines: list[str]) -> set[tuple[int, int, int]]:
+    """``(line, start, end)`` of quoted names ORCA writes into its working directory.
+
+    Every quoted ``%plots`` value is a file argument (``MO("orb.cube",1,0);``,
+    ``ElDens("dens.cube");``); in ``%md`` a quoted value after a ``Filename``
+    key is (``Dump ... Filename "traj.xyz"``). Each must be a plain basename so
+    ORCA cannot write outside the generation directory.
+    """
+
+    spans: set[tuple[int, int, int]] = set()
+    for block in _input_blocks.iter_blocks(lines, "plots"):
+        for row in block.rows:
+            line = lines[row.line_index]
+            for token in row.tokens:
+                if token.quoted:
+                    _require_output_basename(token.value, line)
+                    spans.add((row.line_index, token.start, token.end))
+                    continue
+                for match in _EMBEDDED_QUOTED_RE.finditer(token.value):
+                    _require_output_basename(match.group(2), line)
+                if any(quote in _EMBEDDED_QUOTED_RE.sub("", token.value) for quote in "\"'"):
+                    raise ValueError(
+                        f"ORCA output file name must be a plain basename: {line.strip()}"
+                    )
+    for block in _input_blocks.iter_blocks(lines, "md"):
+        for row in block.rows:
+            tokens = row.tokens
+            for index, token in enumerate(tokens):
+                key_index = (
+                    index - 2 if index >= 2 and tokens[index - 1].value == "=" else index - 1
+                )
+                if (
+                    token.quoted
+                    and key_index >= 0
+                    and not tokens[key_index].quoted
+                    and tokens[key_index].value.lower() == "filename"
+                ):
+                    _require_output_basename(token.value, lines[row.line_index])
+                    spans.add((row.line_index, token.start, token.end))
+    return spans
+
+
 def scan_orca_file_references(
     lines: list[str],
     *,
@@ -333,10 +404,13 @@ def scan_orca_file_references(
     it out of the returned set must not loosen the cap.
 
     Raises ``ValueError`` for unsupported auxiliary/external-program
-    directives, malformed references, and more than
+    directives, quoted file-path values of keywords it does not bind,
+    ``%plots``/``%md`` output names that are not plain basenames,
+    malformed references, and more than
     ``MAX_ORCA_INPUT_REFERENCES`` references.
     """
     moinp_references = orca_moinp_references(lines)
+    output_name_spans = _output_file_name_spans(lines)
     moinp_by_line: dict[int, list[OrcaFileReference]] = {}
     for reference in moinp_references:
         moinp_by_line.setdefault(reference.line_index, []).append(reference)
@@ -403,6 +477,12 @@ def scan_orca_file_references(
                 reference_value_indices.add(value_index)
         for token_index, token in enumerate(tokens):
             if token.quoted:
+                if (
+                    token_index not in reference_value_indices
+                    and (line_index, token.start, token.end) not in output_name_spans
+                    and _FILE_PATH_VALUE_RE.search(token.value.strip())
+                ):
+                    raise ValueError(f"Unsupported ORCA file reference: {line.strip()}")
                 continue
             keyword = token.value.lower()
             spaced_percent_keyword = (
