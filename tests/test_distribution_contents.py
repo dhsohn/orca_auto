@@ -7,6 +7,7 @@ import io
 import subprocess
 import sys
 import tarfile
+import venv
 from importlib import metadata, util
 from pathlib import Path
 from types import ModuleType
@@ -18,10 +19,12 @@ import pytest
 from scripts.check_distributions import (
     _assert_core_sdist,
     _assert_distribution,
+    _assert_runtime_writes_no_bytecode,
     _probe,
     _unpack_sdist,
 )
 from scripts.check_wheel_contents import check_wheel_contents
+from tests.test_runtime_bundle import _unseal
 
 
 def _wheel(
@@ -287,3 +290,43 @@ def test_core_sdist_manifest_cannot_bundle_workflows(
     else:
         with pytest.raises(AssertionError, match="core sdist includes workflows source"):
             _assert_core_sdist(archive)
+
+
+@pytest.mark.parametrize(
+    ("invalidation", "accepted"),
+    [("checked-hash", True), ("timestamp", False), (None, False)],
+)
+def test_bytecode_check_rejects_runtimes_an_interpreter_writes_into(
+    tmp_path: Path, invalidation: str | None, accepted: bool
+) -> None:
+    root = tmp_path / "runtime"
+    venv.EnvBuilder(symlinks=True).create(root / ".venv")
+    python = root / ".venv/bin/python"
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    site = root / ".venv/lib" / version / "site-packages"
+    for name, text in (
+        ("orca_auto/__init__.py", ""),
+        ("orca_auto/cli.py", "print('fixture')\n"),
+        ("yaml/__init__.py", ""),
+        ("pip/__init__.py", ""),
+        ("pip/__main__.py", "print('fixture')\n"),
+    ):
+        (site / name).parent.mkdir(exist_ok=True)
+        (site / name).write_text(text)
+    if invalidation is not None:
+        subprocess.run(
+            [str(python), "-I", "-m", "compileall", "-q", "--invalidation-mode", invalidation]
+            + [str(site)],
+            check=True,
+        )
+    for path in (root, *root.rglob("*")):
+        if not path.is_symlink():
+            path.chmod(path.stat().st_mode & ~0o222)
+    try:
+        if accepted:
+            _assert_runtime_writes_no_bytecode(root, work=tmp_path)
+        else:
+            with pytest.raises(AssertionError, match="interpreter wrote"):
+                _assert_runtime_writes_no_bytecode(root, work=tmp_path)
+    finally:
+        _unseal(root)

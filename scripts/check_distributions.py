@@ -305,10 +305,62 @@ def _prepared_runtime_smoke(core: Path, wheelhouse: Path, *, work: Path) -> None
     assert build_id in worker and f"ReadOnlyPaths={root}" in worker
     """
     _run([str(python), "-I", "-B", "-c", textwrap.dedent(code), str(root), str(config)], cwd=work)
+    _assert_runtime_writes_no_bytecode(root, work=work)
     print(
-        "[distributions] prepared read-only runtime, idempotency, fake worker and service plan passed",
+        "[distributions] prepared read-only runtime, idempotency, fake worker, service plan"
+        " and bytecode passed",
         flush=True,
     )
+
+
+def _tree_state(root: Path) -> dict[str, tuple[int, int, int, int]]:
+    # Bytecode is replaced by rename, so the inode also changes when coarse
+    # timestamps do not.
+    state = {}
+    for path in root.rglob("*"):
+        info = path.lstat()
+        state[path.relative_to(root).as_posix()] = (
+            info.st_ino,
+            info.st_mode,
+            info.st_size,
+            info.st_mtime_ns,
+        )
+    return state
+
+
+def _assert_runtime_writes_no_bytecode(root: Path, *, work: Path) -> None:
+    # Root ignores the runtime's read-only modes, and -I ignores the
+    # PYTHONDONTWRITEBYTECODE that _run exports. Running without -B in a writable
+    # copy shows what such an interpreter would write into the prepared runtime.
+    # Moving every source mtime forward rejects timestamp-validated bytecode,
+    # which an interpreter rewrites after such a change.
+    copy = work / "writable-runtime"
+    shutil.copytree(root, copy, symlinks=True)
+    for path in (copy, *copy.rglob("*")):
+        if path.is_symlink():
+            continue
+        path.chmod(path.stat().st_mode | 0o200)
+        if path.suffix == ".py":
+            info = path.stat()
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+    before = _tree_state(copy)
+    python = copy / ".venv/bin/python"
+    code = """\
+    import importlib, pkgutil, orca_auto, yaml
+    for package in (orca_auto, yaml):
+        for module in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
+            if not module.name.endswith(".__main__"):
+                importlib.import_module(module.name)
+    """
+    _run([str(python), "-I", "-c", textwrap.dedent(code)], cwd=work)
+    _run([str(python), "-I", "-m", "orca_auto.cli", "--version"], cwd=work)
+    # ensurepip leaves timestamp bytecode for pip unless preparation recompiles it.
+    _run([str(python), "-I", "-m", "pip", "--version"], cwd=work)
+    after = _tree_state(copy)
+    written = sorted(
+        name for name in before.keys() | after.keys() if before.get(name) != after.get(name)
+    )
+    assert not written, f"prepared runtime interpreter wrote {len(written)} paths: {written[:5]}"
 
 
 def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:

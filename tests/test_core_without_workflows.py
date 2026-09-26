@@ -186,6 +186,21 @@ def core_only(tmp_path: Path, core_only_python: Path) -> _CoreOnlyInstallation:
         ),
         encoding="utf-8",
     )
+    # Observe the executed gate directly, independently of startup hooks.
+    gate = imports / "orca_auto" / "orca" / "launch_gate.py"
+    entrypoint = 'if __name__ == "__main__":\n'
+    source = gate.read_text(encoding="utf-8")
+    assert source.count(entrypoint) == 1
+    prefix_record = runtime / "launch-python-prefix"
+    gate.write_text(
+        source.replace(
+            entrypoint,
+            entrypoint
+            + f"    with open({str(prefix_record)!r}, 'w') as prefix_probe:\n"
+            + "        prefix_probe.write(sys.prefix)\n",
+        ),
+        encoding="utf-8",
+    )
     return _CoreOnlyInstallation(
         core_only_python, imports, runtime, runs, admission, config, counter
     )
@@ -230,6 +245,9 @@ def test_core_worker_runs_fake_orca_child_without_workflow_files(
     )
     _assert_success(result)
     assert core_only.engine_counter.read_text(encoding="utf-8") == "1"
+    assert (core_only.runtime / "launch-python-prefix").read_text() == str(
+        core_only.python.parent.parent
+    )
     machines = list(input_dir.rglob("machine.json"))
     assert len(machines) == 1
     machine = json.loads(machines[0].read_text(encoding="utf-8"))

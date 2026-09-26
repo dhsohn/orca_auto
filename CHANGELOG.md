@@ -8,6 +8,28 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+## [8.0.1] - 2026-09-26
+
+### Fixed
+
+- The engine launch gate preserves the running interpreter's virtual-environment
+  path as `argv[0]` while executing the pinned `/proc/self/exe` binary. A copied
+  interpreter from a relocatable Python installation previously lost its prefix
+  and failed to import `encodings` before starting ORCA. A real worker test now
+  checks the launch gate's Python prefix as well as the engine result.
+- Prepared runtimes include checked-hash bytecode for every installed module at
+  the default optimization level. Previously a root interpreter started without
+  `-B` wrote `__pycache__` into the read-only runtime, because the removed write
+  bits do not stop root; the worker's startup check then refused the runtime
+  with `runtime path is writable`, and systemd gave up after its start limit.
+  The build identity records the bytecode mode, so preparing the same wheels
+  again creates a new runtime directory instead of reusing one without bytecode.
+  Runtimes prepared earlier remain valid; as root, run their interpreter with
+  `-B` as [RUNTIME](docs/RUNTIME.md) shows. `make check-packages` now imports
+  every `orca_auto` and PyYAML module and runs the CLI and pip without `-B` in a
+  writable copy of the runtime with moved source timestamps, and fails if any
+  of them writes a file.
+
 ## [8.0.0] - 2026-09-26
 
 This is a major release: the removals marked *public contract*
