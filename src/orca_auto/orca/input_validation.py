@@ -14,10 +14,10 @@ import re
 from .input_blocks import GEOM_HEADER_RE, iter_blocks
 from .input_references import orca_moinp_references
 from .input_syntax import active_orca_directive_text, orca_line_tokens, orca_route_tokens
+from .resource_directives import NPROCS_RE
 
 COORDS_BLOCK_RE = re.compile(r"^\s*%\s*coords\b", re.IGNORECASE)
 MAXCORE_DIRECTIVE_RE = re.compile(r"^\s*%maxcore\b", re.IGNORECASE)
-NPROCS_DIRECTIVE_RE = re.compile(r"\bnprocs\s+\d+\b", re.IGNORECASE)
 PAL_ROUTE_TOKEN_RE = re.compile(r"\APAL\d+\Z", re.IGNORECASE)
 
 
@@ -102,7 +102,7 @@ def validate_unambiguous_orca_directives(lines: list[str], *, label: str) -> Non
     pal_blocks = list(iter_blocks(lines, "pal"))
     pal_block_count = len(pal_blocks)
     pal_nprocs_count = sum(
-        len(NPROCS_DIRECTIVE_RE.findall(row.text)) for block in pal_blocks for row in block.rows
+        len(NPROCS_RE.findall(row.text)) for block in pal_blocks for row in block.rows
     )
     pal_route_count = 0
     for line in lines:

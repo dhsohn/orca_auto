@@ -10,13 +10,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from .completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
+from .completion_rules import (
+    IRC_ROUTE_RE,
+    TS_ROUTE_RE,
+    is_full_optimization_route,
+    is_optimization_route,
+)
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis_text
 from .input_syntax import file_route_lines
 from .orca_opt_progress import OptProgress, parse_opt_progress_text
 from .parser import OrcaResult, parse_orca_output_text
 from .parser.io import read_orca_text
-from .relaxed_scan import first_scan_coordinate_spec
+from .relaxed_scan import input_uses_relaxed_scan
 from .statuses import RunStatus
 
 # Route families whose final geometry is not a stationary point: path methods
@@ -75,12 +80,12 @@ def final_out_name(state: Mapping[str, Any]) -> str:
 def structure_kind(selected_inp: Path) -> str | None:
     """``"ts"`` / ``"min"`` / ``"sp"``; ``None`` for non-stationary jobs.
 
-    A plain relaxed scan (Opt route + scan coordinate), IRC, plain NEB paths,
-    and MD end on non-stationary geometries that must never enter the
-    stationary-structure SI path; IRC has a separate summary-only writer. TS
-    routes (OptTS/NEB-TS) and plain Opt end on stationary points.
-    Everything else (single points, bare Freq) is reported without a minimum/TS
-    claim.
+    A plain relaxed scan (any optimization route + scan coordinate), IRC,
+    plain NEB paths, and MD end on non-stationary geometries that must never
+    enter the stationary-structure SI path; IRC has a separate summary-only
+    writer. TS routes (OptTS/NEB-TS) and full optimizations end on stationary
+    points. Everything else (single points, bare Freq, partial optimizations
+    such as OptH or MECP-Opt) is reported without a minimum/TS claim.
     """
     routes = " ".join(file_route_lines(selected_inp))
     if not routes:
@@ -91,9 +96,9 @@ def structure_kind(selected_inp: Path) -> str | None:
         return "ts"
     if _NON_STATIONARY_ROUTE_RE.search(routes):
         return None
-    if OPT_ROUTE_RE.search(routes):
-        if first_scan_coordinate_spec(selected_inp) is not None:
-            return None
+    if is_optimization_route(routes) and input_uses_relaxed_scan(selected_inp):
+        return None
+    if is_full_optimization_route(routes):
         return "min"
     return "sp"
 

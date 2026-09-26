@@ -291,6 +291,68 @@ def test_relaxed_scan_gets_profile_report_not_opt_report(tmp_path: Path) -> None
     assert "85%" in text
 
 
+def _scan_report_text(tmp_path: Path, geom_block: str) -> str:
+    (tmp_path / "rxn.inp").write_text(
+        "! Opt B3LYP def2-SVP Freq\n" + geom_block + "* xyzfile 0 1 input.xyz\n",
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "rxn.out"
+    _write_ts_out(out_path)
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
+    assert path is not None
+    return path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "geom_block",
+    [
+        "%geom Scan\n  B 0 1 = 1.86, 1.96, 3\n  end\nend\n",
+        "%geom\n  MaxIter 80\n  Scan B 0 1 = 1.86, 1.96, 3 end\nend\n",
+        "%geom\n  Scan\n    B 0 1 [1.86 1.91 1.96]\n  end\nend\n",
+    ],
+    ids=["header", "single-line", "value-list"],
+)
+def test_every_relaxed_scan_form_gets_the_profile_report(tmp_path: Path, geom_block: str) -> None:
+    text = _scan_report_text(tmp_path, geom_block)
+
+    assert "Relaxed scan report" in text
+    assert "Scan energy profile" in text
+    assert "Optimization convergence" not in text
+    assert "B(0,1) = 1.86 &#8594; 1.96 Å, 3 pt" in text
+    assert "B(0,1) / Å" in text
+
+
+def test_unreadable_scan_coordinate_still_gets_the_profile_report(tmp_path: Path) -> None:
+    text = _scan_report_text(tmp_path, "%geom\n  Scan\n    B 0 1 = 1.86 to 1.96\n  end\nend\n")
+
+    assert "Relaxed scan report" in text
+    assert "Optimization convergence" not in text
+    assert "for a minimum" not in text
+    assert "scan coordinate</text>" in text
+
+
+@pytest.mark.parametrize(
+    ("geom_block", "label"),
+    [
+        (
+            "%geom\n  Scan\n    D 3 0 1 2 = 122.779, 61.1088, 13\n  end\nend\n",
+            "D(3,0,1,2)",
+        ),
+        ("%geom\n  Scan\n    A 0 1 2 = 122.779, 61.1088, 13\n  end\nend\n", "A(0,1,2)"),
+    ],
+    ids=["dihedral", "angle"],
+)
+def test_angular_scan_is_labelled_in_degrees(tmp_path: Path, geom_block: str, label: str) -> None:
+    text = _scan_report_text(tmp_path, geom_block)
+
+    assert f"{label} = 122.779 &#8594; 61.1088 °, 13 pt" in text
+    assert f"{label} / °" in text
+    assert "&#8491;" not in text
+    assert f"{label} / Å" not in text
+
+
 def test_write_report_files_includes_html_for_scan(tmp_path: Path) -> None:
     _write_scan_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"

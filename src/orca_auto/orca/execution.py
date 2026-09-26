@@ -311,20 +311,21 @@ def execute_locked_run(
             admission_app_name=context.admission_app_name,
             admission_task_id=context.admission_task_id,
         ):
-            if not context.force:
-                existing_exit = existing_completed_exit(
-                    reaction_dir=context.reaction_dir,
-                    selected_inp=context.selected_inp,
-                    admission_root=context.admission_root,
-                    reservation_token=context.reservation_token,
-                    admission_task_id=context.admission_task_id,
-                    execution_provenance=context.execution_provenance,
-                    queue_id=context.queue_id or "",
-                    queue_generation=context.queue_generation or "",
-                    emit=_emit,
-                )
-                if existing_exit is not None:
-                    return existing_exit
+            # The probe reads only the bound input's own generation directory:
+            # a crashed generation adopts its own output, a fresh one runs.
+            existing_exit = existing_completed_exit(
+                reaction_dir=context.reaction_dir,
+                selected_inp=context.selected_inp,
+                admission_root=context.admission_root,
+                reservation_token=context.reservation_token,
+                admission_task_id=context.admission_task_id,
+                execution_provenance=context.execution_provenance,
+                queue_id=context.queue_id or "",
+                queue_generation=context.queue_generation or "",
+                emit=_emit,
+            )
+            if existing_exit is not None:
+                return existing_exit
 
             with _prepared_scratch_runner(context, runner_cls=runner_cls) as runner:
                 return _load_state_and_run(context, runner_cls=runner_cls, runner=runner)

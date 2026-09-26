@@ -8,6 +8,107 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- The queue worker no longer stops every running calculation when one poll pass
+  fails. A queue-lock timeout or an unreadable queue or admission file during
+  admission, cancellation or the periodic reconcile used to end the worker
+  loop, and its shutdown sweep sent SIGTERM to every ORCA child and requeued it
+  to start over. The failed pass is now logged with its traceback and retried
+  after the poll interval while the children stay supervised. An admission slot
+  that such a pass reserved but could not attach or release is released at the
+  next periodic reconcile.
+- The periodic reconcile no longer replays a finished job over a newer job in
+  the same directory. When a job was finalized and a resubmission of its
+  directory ran and finished before the next 60-second reconcile, the reconcile
+  still treated the older job as the directory owner. A completed older job then
+  failed on every pass and withheld admission for the directory until the worker
+  restarted; a failed or cancelled one had a new failure state written over the
+  newer `job_state.json`, its row's run ID replaced and its notification sent
+  again.
+- Relaxed scans written as `%geom Scan`, as a one-line `Scan … end`, with a
+  value list, or after another `%geom` sub-block are recognized. They were
+  classified as optimizations, so `si_block.md` published the last constrained
+  scan point as an optimized minimum and the HTML report showed an optimization
+  instead of the scan profile. A scan whose coordinate cannot be parsed is no
+  longer claimed as a minimum either. Reports published earlier are not
+  regenerated.
+- Scan reports label angle, dihedral and improper coordinates in degrees
+  instead of Å.
+- IRC reports parse the path summary and iteration tables when
+  `%irc Monitor_Internals` adds one column per monitored coordinate; they used
+  to report that no path-summary points were parsed. NEB parsing is unchanged.
+- A normally terminated run that printed an ORCA 6 non-fatal memory warning
+  (`INSUFFICIENT MEMORY MAY LEAD TO SLOW PERFORMANCE OR CRASHES.` or
+  `Out of memory according to MaxCore limit!`) is no longer published as failed
+  with `error_memory`. Fatal memory aborts are still `error_memory`.
+- A `--force` job whose ORCA run finished just before a host or worker crash is
+  settled from its own completed output when it is claimed again. It used to
+  rerun in the kept generation and could publish a completed optimization as
+  failed (`runner_exception`). A fresh `--force` generation still runs.
+- `job_locations.json` no longer records `* xyzfile` inputs as `orca_other` on
+  terminal upsert or index rebuild; the job type and molecule key come from the
+  selected `.inp`.
+- `%pal` `nprocs` written with ORCA's optional `=` (`nprocs = 16`,
+  `nprocs=16`) is honored instead of being replaced by the configured default
+  core count. Mixed-form duplicate `nprocs` entries in one block are rejected.
+- `SloppyOpt`, `CrudeOpt`, `OptH`, `L-OptH` and the other ORCA 6.1 optimization
+  keywords get a mutable inlined copy of a same-basename `* xyzfile` geometry,
+  so ORCA's geometry update no longer fails post-run snapshot verification.
+  These routes get job type `opt`. `SloppyOpt` and `CrudeOpt` results are
+  claimed as minima. Hydrogen-only, QM/MM and crossing-seam optimizations
+  (`OptH`, `L-OptH`, `QMMMOpt`, `MECP-Opt`, `SurfCrossOpt`, `CI-Opt`,
+  `ConicalIntersect-Opt`) get a "Partial Opt" optimization report and an `sp`
+  SI block, with no minimum or imaginary-mode expectation. `MECP-Opt` and
+  conical-intersection jobs were previously published as minima, and `OptH`,
+  `L-OptH`, `QMMMOpt` and `SurfCrossOpt` jobs as single-point pages. GOAT
+  routes also get the same-basename geometry protection, and GOAT and
+  `OptTS(GMF)` routes refuse a referenced `<stem>.engrad` because ORCA writes
+  that file; their job types are unchanged.
+- ESD Hessian inputs (`GSHessian`, `ESHessian` and related keywords) and the
+  NEB `Product_XYZFile` are bound into the execution generation;
+  `NEB_TS_PDBFile` is refused like the other PDB end-point keys. Any other
+  quoted keyword value that looks like
+  a file path is rejected at submission with `Unsupported ORCA file reference`;
+  such inputs used to run without the file in the generation or to read an
+  unsnapshotted source file. File names ORCA writes (`%plots` file arguments,
+  a `%md` `Filename`) are accepted as plain basenames; a path there is
+  rejected.
+- On NEB-family routes, a referenced file named like a file ORCA writes for the
+  input stem (for example a `Restart_ALLXYZFile` copy of `<stem>_MEP.allxyz`)
+  is rejected at submission. Its read-only copy used to make the finished job
+  fail. `<stem>_reactant*` and `<stem>_product*` are reserved only when the
+  `%neb` block enables end-point preoptimization or contains a
+  `Monitor_Internals` sub-block.
+- A concurrent status probe (`queue list`, orphan reconciliation, the
+  direct-run check) can no longer make run-lock acquisition fail with
+  `Another orca_auto instance is already running`, which permanently failed the
+  job. Acquisition waits up to about one second, and probes take a shared lock.
+- `scratch list` and `scratch clear` no longer fail with "scratch root is
+  unreadable or unsafe" when a peer's cleanup removes a workspace during the
+  listing, and `scratch clear` on a busy root reports that it stayed busy
+  instead of a raw lock timeout.
+- `queue cancel <path|name>` resolves to the directory's active generation when
+  older finished rows of the same directory remain; a name shared by different
+  directories is still ambiguous. `queue cancel <run_id>` finds a running job.
+- `systemd install` exits 1 with an `error:` line naming the failed command
+  instead of passing through raw `sudo`/`systemctl` exit codes.
+- The queue table no longer truncates elapsed times of 100 hours or more.
+
+### Changed
+
+- A job queued under 8.0.1 is verified against the new binding rules when it
+  is claimed. Its input fails verification before ORCA starts, and must be
+  resubmitted, when it has a file reference the new rules bind or refuse (ESD
+  Hessian inputs, `Product_XYZFile`, an unrecognized quoted file path, a
+  `%plots` or `%md` output name given as a path), an NEB output-name collision,
+  a same-basename `* xyzfile` geometry or a referenced `<stem>.engrad` on a
+  newly recognized optimization route (`SloppyOpt`, `CrudeOpt`, `OptH`,
+  `L-OptH`, `QMMMOpt`, `SurfCrossOpt`, GOAT, `OptTS(GMF)` and similar), or
+  mixed-form duplicate `nprocs`. An input queued with `nprocs = N` was already
+  rewritten to the configured default at submission and runs with that core
+  count; resubmit it to use `N`.
+
 ## [8.0.1] - 2026-09-26
 
 ### Fixed

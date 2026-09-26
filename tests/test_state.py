@@ -1,6 +1,9 @@
+import fcntl
 import json
 import os
 import re
+import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -9,6 +12,7 @@ from typing import cast
 import pytest
 
 from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
+from orca_auto.core.utils.process_tracking import run_lock_is_held
 from orca_auto.orca import run_lock
 from orca_auto.orca import state as state_module
 from orca_auto.orca import state_reading as state_reading_module
@@ -133,6 +137,43 @@ def test_recover_stale_lock_with_dead_pid(tmp_path: Path) -> None:
 def test_active_lock_blocks_second_runner(tmp_path: Path) -> None:
     with acquire_run_lock(tmp_path), pytest.raises(RuntimeError), acquire_run_lock(tmp_path):
         pass
+
+
+def test_active_lock_error_names_the_real_owner(tmp_path: Path) -> None:
+    with acquire_run_lock(tmp_path):
+        with pytest.raises(RuntimeError, match="Another orca_auto instance") as excinfo:
+            with acquire_run_lock(tmp_path):
+                pass
+    assert f"pid={os.getpid()}," in str(excinfo.value)
+
+
+def test_run_lock_acquisition_waits_out_a_concurrent_status_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / run_lock.RUN_LOCK_FILE_NAME).touch()
+    real_flock = fcntl.flock
+    in_probe_window = threading.Event()
+    probe_results: list[bool] = []
+
+    def flock_with_slow_probe(descriptor: int, operation: int) -> None:
+        real_flock(descriptor, operation)
+        # Stretch the probe's brief free-lock check so the acquisition lands inside it.
+        if threading.current_thread() is probe and not operation & fcntl.LOCK_UN:
+            in_probe_window.set()
+            time.sleep(0.3)
+
+    probe = threading.Thread(target=lambda: probe_results.append(run_lock_is_held(tmp_path)))
+    monkeypatch.setattr(fcntl, "flock", flock_with_slow_probe)
+    probe.start()
+    try:
+        assert in_probe_window.wait(5)
+        with acquire_run_lock(tmp_path):
+            payload = json.loads((tmp_path / run_lock.RUN_LOCK_FILE_NAME).read_text("utf-8"))
+    finally:
+        probe.join(5)
+
+    assert payload["pid"] == os.getpid()
+    assert probe_results == [False]
 
 
 def test_unlocked_stale_metadata_is_reused_without_pid_probe(

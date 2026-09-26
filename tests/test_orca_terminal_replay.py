@@ -18,6 +18,7 @@ from typing import Any, cast
 
 import pytest
 
+from orca_auto.core.admission import release_slot, reserve_slot
 from orca_auto.core.messaging.channel import SendResult
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -39,7 +40,7 @@ from orca_auto.orca.queue.adapter import (
     mark_failed,
     requeue_running_entry,
 )
-from orca_auto.orca.queue.models import OrcaWorkerReplayState
+from orca_auto.orca.queue.models import OrcaRunningJob, OrcaWorkerReplayState
 from orca_auto.orca.queue.run_state_replay import (
     record_cancelled_run_state as _record_cancelled_run_state,
 )
@@ -52,6 +53,7 @@ from orca_auto.orca.queue.terminal_replay import (
     StateGenerationFingerprint,
     terminal_replay_marker,
 )
+from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.queue.worker_tracking import (
     get_run_id_from_state as _get_run_id_from_state,
 )
@@ -62,6 +64,7 @@ from orca_auto.orca.state_reading import load_state, report_json_path, state_pat
 from orca_auto.orca.statuses import RunStatus
 from tests.conftest import RecordingChannel, claim_next_entry, make_queue_entry, write_run_state
 from tests.engine_artifact_helpers import orca_artifact_payload
+from tests.process_helpers import FakeManagedProcess
 from tests.queue_worker_helpers import reconcile_statuses as _reconcile_statuses
 
 _NOTIFICATION_THREAD_NAME = "orca-terminal-notification"
@@ -83,6 +86,47 @@ def _reconcile(worker: Any) -> None:
     replay_mod.reconcile_worker_state(
         worker.cfg, admission_root=worker.admission_root, replay_state=worker.replay_state
     )
+    _wait_for_notifications()
+
+
+def _poll(worker: OrcaQueueWorker) -> None:
+    """One periodic reconcile pass of a real worker."""
+    worker._reconcile_worker_state_now()
+    _wait_for_notifications()
+
+
+def _start_generation(
+    worker: OrcaQueueWorker, queue_root: Path, reaction_dir: Path, task_id: str
+) -> OrcaRunningJob:
+    """Enqueue and claim a generation and hold its admission slot, as the worker does."""
+    entry = enqueue(queue_root, str(reaction_dir), force=True, task_id=task_id)
+    claimed = claim_next_entry(queue_root)
+    assert claimed is not None and claimed.queue_id == entry.queue_id
+    token = reserve_slot(
+        worker.admission_root,
+        worker.max_concurrent,
+        work_dir=str(reaction_dir),
+        queue_id=entry.queue_id,
+        source="queue_worker",
+        state="reserved",
+    )
+    assert token
+    return OrcaRunningJob(
+        queue_root=queue_root,
+        queue_id=entry.queue_id,
+        reaction_dir=str(reaction_dir),
+        process=FakeManagedProcess(),
+        admission_token=token,
+        task_id=task_id,
+    )
+
+
+def _finish_generation(worker: OrcaQueueWorker, job: OrcaRunningJob, status: RunStatus) -> None:
+    """The child leaves its terminal state and exits; the live finalizer publishes it."""
+    write_run_state(Path(job.reaction_dir), status=status, job_id=job.task_id)
+    rc = 0 if status is RunStatus.COMPLETED else 1
+    job.process = FakeManagedProcess(poll_result=rc)
+    worker._finalize_completed_job(job.queue_id, job, rc)
     _wait_for_notifications()
 
 
@@ -960,6 +1004,87 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     [record] = list_job_location_records(queue_root)
     assert record.job_id == cancelled_b.task_id
     assert len(recording_channel.sends) == 1
+
+
+@pytest.mark.parametrize("old_status", [RunStatus.COMPLETED, RunStatus.FAILED])
+def test_live_finalized_owner_is_not_replayed_over_newer_generation_state(
+    queue_root: Path,
+    reaction_dir: Path,
+    replay_cfg: AppConfig,
+    recording_channel: RecordingChannel,
+    old_status: RunStatus,
+) -> None:
+    worker = OrcaQueueWorker(replay_cfg, "config.yaml")
+    old = _start_generation(worker, queue_root, reaction_dir, "task-a")
+    _poll(worker)
+    reaction_key = str(reaction_dir.resolve())
+    assert worker.replay_state.generation_owner_active[reaction_key] is True
+
+    # Between two polls task-a is published by the live finalizer, and task-b
+    # is resubmitted in the same directory, runs and is published too.
+    _finish_generation(worker, old, old_status)
+    new = _start_generation(worker, queue_root, reaction_dir, "task-b")
+    _finish_generation(worker, new, RunStatus.COMPLETED)
+    assert len(recording_channel.sends) == 2
+    state_bytes = state_path(reaction_dir).read_bytes()
+    old_row = _row(queue_root, old.queue_id)
+
+    _poll(worker)
+
+    # task-b's state is newer, not stale: task-a is neither replayed over it
+    # nor left pending, and its cursor moves past the closed transition.
+    assert state_path(reaction_dir).read_bytes() == state_bytes
+    assert _row(queue_root, old.queue_id) == old_row
+    assert len(recording_channel.sends) == 2
+    assert worker.replay_state.pending_replays == {}
+    assert worker._unresolved_terminal_reaction_keys() == frozenset()
+    assert worker.replay_state.generation_owners[reaction_key] == (
+        str(queue_root.resolve()),
+        new.queue_id,
+    )
+    assert _reconcile_statuses(worker)[(str(queue_root.resolve()), old.queue_id)] == (
+        old_status.value
+    )
+
+    _poll(worker)
+    assert state_path(reaction_dir).read_bytes() == state_bytes
+    assert len(recording_channel.sends) == 2
+    assert worker.replay_state.pending_replays == {}
+
+
+def test_observed_transition_replays_over_preceding_generation_state(
+    queue_root: Path,
+    reaction_dir: Path,
+    replay_cfg: AppConfig,
+    recording_channel: RecordingChannel,
+) -> None:
+    worker = OrcaQueueWorker(replay_cfg, "config.yaml")
+    preceding = _start_generation(worker, queue_root, reaction_dir, "task-p")
+    _finish_generation(worker, preceding, RunStatus.COMPLETED)
+    current = _start_generation(worker, queue_root, reaction_dir, "task-a")
+    _poll(worker)
+    assert len(recording_channel.sends) == 1
+
+    # task-a's row fails before its child wrote any state, so the root state
+    # is still task-p's: the queue row the previous poll already saw.
+    running = _row(queue_root, current.queue_id)
+    assert mark_failed(queue_root, current.queue_id, error="exit_code=1", expected_entry=running)
+    release_slot(worker.admission_root, current.admission_token)
+    _poll(worker)
+
+    written = load_state(reaction_dir)
+    assert written is not None
+    assert written["job_id"] == "task-a"
+    assert written["status"] == STATUS_FAILED
+    closed = _row(queue_root, current.queue_id)
+    assert closed.metadata["run_id"] == written["run_id"]
+    assert replay_mod.terminal_replay_marker_from_entry(closed) is None
+    [record] = [
+        record for record in list_job_location_records(queue_root) if record.job_id == "task-a"
+    ]
+    assert record.status == STATUS_FAILED
+    assert len(recording_channel.sends) == 2
+    assert worker.replay_state.pending_replays == {}
 
 
 # ---------------------------------------------------------------------------

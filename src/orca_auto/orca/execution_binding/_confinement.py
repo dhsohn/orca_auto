@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,17 @@ _GENERATION_RUNTIME_FILE_NAMES = frozenset(
         RUN_STATE_FILE,
     }
 )
+
+# Names ORCA 6.1 NEB-family routes (NEB, NEB-CI, NEB-TS, NEB-MMFTS, NEB-IDPP and
+# their ZOOM-/FAST-/LOOSE-/TIGHT- variants) write after the input stem.
+_NEB_OUTPUT_STEM_SUFFIX_RE = re.compile(
+    r"\.(?:NEB\.log|interp|final\.interp|lastneb|opt|hess)"
+    r"|_(?:MEP|NEB-|MMF|XTB|initial_path|zoom|TSOpt|optimization|geom|spline).*"
+    r"|_trj\.xyz"
+    r"|_im\d+(?:\..*)?"
+)
+# Reactant/product sub-jobs written only when %neb preoptimizes the end points.
+_NEB_PREOPT_STEM_SUFFIX_RE = re.compile(r"_(?:reactant|product)(?:[._].*)?")
 
 
 def _reference_source(job_dir: Path, selected_inp: Path, reference: str) -> Path:
@@ -128,6 +140,8 @@ def _validate_dependency_basename(
     *,
     engrad_is_output: bool,
     hessian_requested: bool,
+    neb_requested: bool,
+    neb_preopt_ends: bool,
     same_stem_xyz_is_output: bool,
     inline_same_stem_xyz: bool,
 ) -> None:
@@ -145,10 +159,19 @@ def _validate_dependency_basename(
             runtime_owned_names.add(runtime_input.with_suffix(".hess").name)
         if same_stem_xyz_is_output and not inline_same_stem_xyz:
             runtime_owned_names.add(runtime_input.with_suffix(".xyz").name)
-    if name in runtime_owned_names:
+    neb_patterns = [_NEB_OUTPUT_STEM_SUFFIX_RE]
+    if neb_preopt_ends:
+        neb_patterns.append(_NEB_PREOPT_STEM_SUFFIX_RE)
+    neb_output = neb_requested and any(
+        name.startswith(runtime_input.stem)
+        and pattern.fullmatch(name, len(runtime_input.stem)) is not None
+        for runtime_input in runtime_input_variants
+        for pattern in neb_patterns
+    )
+    if neb_output or name in runtime_owned_names:
         raise ValueError(
             "ORCA referenced input basename conflicts with a generation runtime/output file: "
-            f"{name}"
+            f"{name}; rename the referenced file so this job cannot overwrite it"
         )
 
 

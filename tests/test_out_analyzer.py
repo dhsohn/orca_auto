@@ -281,6 +281,74 @@ def test_zero_distance_geometry_error(tmp_path: Path) -> None:
     assert result.markers["generic_error_termination"]
 
 
+# Non-fatal memory advisories printed verbatim by ORCA 6.1.1
+# (liborca_tools ``WARNING - LOW MEMORY`` block, orca_autoci batching warnings).
+_ORCA_MEMORY_WARNINGS = (
+    "WARNING - LOW MEMORY !!!\n"
+    "    CURRENTLY USED: 3900.0 MB\n"
+    "    MAXCORE:        4000.0 MB\n"
+    "    USING 97.5% OF MAXCORE.\n"
+    "INSUFFICIENT MEMORY MAY LEAD TO SLOW PERFORMANCE OR CRASHES.\n",
+    "WARNING [Contract_2_4_4_CalcBatching]: Out of memory according to MaxCore limit!\n"
+    "   ... Will continue with maximum number of batches anyways.\n",
+    "WARNING [Contract_4_4_4_2A_2B_2A_2x_2B_2x_CalcBatching]: Out of memory according to"
+    " MaxCore limit!\n",
+    "WARNING: Contract_4_6_4__2 Out of memory according to MaxCore limit! \n",
+)
+_ORCA_MEMORY_WARNING_IDS = ("low_memory", "calc_batching", "calc_batching_2a2b", "contract_4_6_4")
+
+
+@pytest.mark.parametrize("large", [False, True])
+@pytest.mark.parametrize("warning", _ORCA_MEMORY_WARNINGS, ids=_ORCA_MEMORY_WARNING_IDS)
+def test_memory_warning_does_not_fail_a_normally_terminated_run(
+    tmp_path: Path, large: bool, warning: str
+) -> None:
+    filler = "ordinary output\n" * (22000 if large else 1)
+    payload = filler + warning + "THE OPTIMIZATION HAS CONVERGED\n" + filler + NORMAL + "\n"
+
+    result = analyze_output(_write_out(tmp_path, payload), _OPT_MODE)
+
+    assert result.status is AnalyzerStatus.COMPLETED
+    assert result.reason == "normal_termination"
+    assert result.markers["memory_error"] is False
+
+
+@pytest.mark.parametrize("warning", _ORCA_MEMORY_WARNINGS, ids=_ORCA_MEMORY_WARNING_IDS)
+def test_memory_warning_before_an_abort_is_not_a_memory_verdict(
+    tmp_path: Path, warning: str
+) -> None:
+    payload = warning + "ORCA finished by error termination in MDCI\n"
+
+    result = analyze_output(_write_out(tmp_path, payload), _OPT_MODE)
+
+    assert result.status is AnalyzerStatus.UNKNOWN_FAILURE
+    assert result.markers["memory_error"] is False
+
+
+@pytest.mark.parametrize(
+    "fatal",
+    [
+        "ERROR - OUT OF MEMORY !!!\n    MINIMUM REQUIRED:  5000.0 MB\n",
+        " OUT OF MEMORY ERROR! \n",
+        "!!!                          OUT OF MEMORY                       !!!\n",
+        "ERROR (SHARK/DRIVER/SYM): Out of memory!\n",
+        "Out of memory! Please increase maxcore!\n",
+        "Error (ORCA_MDCI): out of memory in KCcor_MO2\n",
+        "Error (DLPNO-MP2): Insufficient memory available!\n",
+        "Error (RI-MP2-RESPONSE): insufficient memory (need 1200.0 MB more)\n",
+        "cannot allocate memory for cache, abort\n",
+    ],
+)
+def test_orca_memory_abort_is_a_memory_error(tmp_path: Path, fatal: str) -> None:
+    payload = fatal + "ORCA finished by error termination in MDCI\n"
+
+    result = analyze_output(_write_out(tmp_path, payload), _OPT_MODE)
+
+    assert result.status is AnalyzerStatus.ERROR_MEMORY
+    assert result.reason == "out_of_memory"
+    assert result.markers["memory_error"] is True
+
+
 def test_missing_output_file(tmp_path: Path) -> None:
     result = analyze_output(tmp_path / "nonexistent.out", _OPT_MODE)
     assert result.status == "incomplete"

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from orca_auto.core.engine_scratch import (
 )
 from orca_auto.core.engine_scratch import _constants as constants_mod
 from orca_auto.core.engine_scratch import _fs as fs_mod
+from orca_auto.core.engine_scratch import _inspect as inspect_mod
 from orca_auto.core.engine_scratch import _manifest as manifest_mod
 from orca_auto.core.engine_scratch import _policy as policy_mod
 from orca_auto.core.engine_scratch import _publication as publication_mod
@@ -1041,6 +1044,84 @@ def test_inspect_scratch_root_bounds_the_size_walk(
         < report.size_bytes
         < 1000 + (workspace / constants_mod.SCRATCH_MANIFEST_FILE_NAME).stat().st_size
     )
+
+
+def test_inspect_scratch_root_skips_entries_a_peer_cleanup_removes_mid_listing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = policy_mod._prepare_scratch_root(policy)
+    durable = _durable_input(tmp_path).parent
+    stale_manifest = _manifest_payload(durable, owner_pid=999999, owner_boot_id="old-boot")
+    _write_workspace(root, "attempt-kept", stale_manifest)
+    _write_workspace(root, "attempt-gone-before-stat", stale_manifest)
+    _write_workspace(root, "attempt-gone-before-open", stale_manifest)
+    (root / (".orca_auto_cleanup." + "c" * 32)).mkdir()
+    real_listdir = os.listdir
+    real_open_pinned = manifest_mod._open_pinned_directory_at
+
+    def listdir_then_peer_cleanup(path: int | str) -> list[str]:
+        names = real_listdir(path)
+        if "attempt-gone-before-stat" in names:
+            shutil.rmtree(root / "attempt-gone-before-stat")
+            shutil.rmtree(root / (".orca_auto_cleanup." + "c" * 32))
+        return names
+
+    def open_after_peer_cleanup(root_fd: int, name: str, *, display_path: Path, label: str):
+        if name == "attempt-gone-before-open":
+            shutil.rmtree(root / name)
+        return real_open_pinned(root_fd, name, display_path=display_path, label=label)
+
+    monkeypatch.setattr(os, "listdir", listdir_then_peer_cleanup)
+    monkeypatch.setattr(manifest_mod, "_open_pinned_directory_at", open_after_peer_cleanup)
+
+    reports = inspect_scratch_root(policy.root)
+
+    assert [(report.name, report.state) for report in reports] == [
+        ("attempt-kept", constants_mod.SCRATCH_STATE_STALE)
+    ]
+
+
+def test_inspect_scratch_root_still_fails_on_an_entry_that_remains_unsafe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = policy_mod._prepare_scratch_root(policy)
+    _write_workspace(root, "attempt-swapped", "not json\n")
+
+    def identity_changed(_root_fd: int, name: str, *, display_path: Path, label: str):
+        raise EngineScratchError(f"{label} identity changed: {display_path}")
+
+    monkeypatch.setattr(manifest_mod, "_open_pinned_directory_at", identity_changed)
+
+    with pytest.raises(EngineScratchError, match="identity changed"):
+        inspect_scratch_root(policy.root)
+
+
+def test_remove_scratch_workspace_reports_a_busy_root_as_a_scratch_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy = _policy(monkeypatch, tmp_path)
+    root = policy_mod._prepare_scratch_root(policy)
+    stale = _write_workspace(
+        root,
+        "attempt-stale",
+        _manifest_payload(tmp_path, owner_pid=999999, owner_boot_id="old-boot"),
+    )
+    monkeypatch.setattr(inspect_mod, "_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS", 0.2)
+    peer_fd = os.open(
+        root / constants_mod._SCRATCH_ROOT_LOCK_FILE_NAME, os.O_RDWR | os.O_CREAT, 0o600
+    )
+    try:
+        fcntl.flock(peer_fd, fcntl.LOCK_EX)
+        with pytest.raises(EngineScratchError, match="stayed busy"):
+            remove_scratch_workspace(policy.root, "attempt-stale")
+    finally:
+        os.close(peer_fd)
+    assert stale.is_dir()
 
 
 def test_remove_scratch_workspace_refuses_live_and_unblocks_after_stale_removal(

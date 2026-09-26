@@ -36,7 +36,9 @@ from ._confinement import (
 from ._constants import ORCA_EXECUTION_SNAPSHOT_VERSION
 from ._inputs import (
     _inline_geometry_atom_count,
+    _neb_preoptimizes_end_points,
     _route_requests_hessian,
+    _route_requests_neb,
     _route_writes_engrad,
     _route_writes_same_stem_xyz,
     _validated_xyz_atom_count,
@@ -200,6 +202,8 @@ def _plan_bound_dependencies(
             estimated_source_bytes=estimated_source_bytes,
         )
 
+    neb_requested = _route_requests_neb(selected.lines)
+    neb_preopt_ends = _neb_preoptimizes_end_points(selected.lines)
     bound_dependencies: list[_BoundDependency] = []
     for dependency in dependencies:
         inline_same_stem_xyz = (
@@ -212,6 +216,8 @@ def _plan_bound_dependencies(
             source_selected,
             engrad_is_output=selected.engrad_is_output,
             hessian_requested=selected.hessian_requested,
+            neb_requested=neb_requested,
+            neb_preopt_ends=neb_preopt_ends,
             same_stem_xyz_is_output=selected.same_stem_xyz_is_output,
             inline_same_stem_xyz=inline_same_stem_xyz,
         )

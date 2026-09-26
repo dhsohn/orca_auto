@@ -20,6 +20,7 @@ from orca_auto.activity import model as _activity_model
 from orca_auto.core.activity_index import DB_NAME as ACTIVITY_INDEX_DB_NAME
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.queue import store as queue_store
+from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import run_status
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE
@@ -28,6 +29,7 @@ from orca_auto.orca.job_locations import upsert_job_record
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.run_snapshot import RunSnapshot
+from orca_auto.orca.state import write_state
 from orca_auto.orca.statuses import RunStatus
 from tests.conftest import make_queue_entry, write_run_state
 
@@ -429,6 +431,176 @@ def test_cancel_activity_routes_orca_targets(allowed: Path, orca_config: str) ->
     assert orca_payload["result"]["job_id"] == "task-cancel"
     [cancelled] = list_queue(allowed)
     assert cancelled.status is QueueStatus.CANCELLED
+
+
+@pytest.mark.parametrize("alias", ["absolute", "relative", "basename"])
+def test_cancel_activity_path_alias_prefers_active_generation(
+    allowed: Path, orca_config: str, alias: str
+) -> None:
+    reaction_dir = allowed / "batch" / "water"
+    reaction_dir.mkdir(parents=True)
+    finished = make_queue_entry(
+        queue_id="q-finished",
+        reaction_dir=reaction_dir,
+        status=QueueStatus.FAILED,
+        enqueued_at="2026-09-01T00:00:00+00:00",
+        started_at="2026-09-01T00:01:00+00:00",
+        finished_at="2026-09-01T01:00:00+00:00",
+    )
+    resubmitted = make_queue_entry(
+        queue_id="q-resubmitted",
+        reaction_dir=reaction_dir,
+        enqueued_at="2026-09-26T00:00:00+00:00",
+    )
+    queue_store.save_entries(allowed, [finished, resubmitted])
+    target = {
+        "absolute": str(reaction_dir),
+        "relative": "batch/water",
+        "basename": "water",
+    }[alias]
+
+    payload = activity.cancel_activity(target=target, orca_config=orca_config)
+
+    # Older terminal generations keep the directory aliases; the one active
+    # generation is the cancellable target.
+    assert payload["activity_id"] == "q-resubmitted"
+    assert payload["status"] == "cancelled"
+    assert {entry.queue_id: entry.status for entry in list_queue(allowed)} == {
+        "q-finished": QueueStatus.FAILED,
+        "q-resubmitted": QueueStatus.CANCELLED,
+    }
+
+    # A retry with no active generation observes the newest terminal outcome.
+    retry = activity.cancel_activity(target=target, orca_config=orca_config)
+    assert retry["activity_id"] == "q-resubmitted"
+    assert retry["status"] == "cancelled"
+
+
+def test_match_activity_record_alias_selects_active_then_newest_terminal(tmp_path: Path) -> None:
+    def record(
+        activity_id: str, status: str, updated_at: str, *, directory: str = "a/water"
+    ) -> activity.ActivityRecord:
+        return activity.ActivityRecord(
+            activity_id,
+            "job",
+            "orca",
+            status,
+            "water",
+            ORCA_AUTO_ORCA_SOURCE,
+            updated_at,
+            updated_at,
+            activity_id,
+            aliases=("water",),
+            metadata={"reaction_dir": str(tmp_path / directory)},
+        )
+
+    old = record("q-old", "failed", "2026-09-01T00:00:00+00:00")
+    newer = record("q-newer", "cancelled", "2026-09-02T00:00:00+00:00")
+    pending = record("q-pending", "pending", "2026-08-01T00:00:00+00:00")
+    running = record("q-running", "running", "2026-08-02T00:00:00+00:00")
+    elsewhere = record("q-elsewhere", "failed", "2026-09-03T00:00:00+00:00", directory="b/water")
+    unlocated = activity.ActivityRecord(
+        "q-unlocated",
+        "job",
+        "orca",
+        "failed",
+        "water",
+        ORCA_AUTO_ORCA_SOURCE,
+        "",
+        "",
+        "q-unlocated",
+        aliases=("water",),
+    )
+
+    assert _activity_cancel.match_activity_record([old, pending, newer], "water") is pending
+    assert _activity_cancel.match_activity_record([newer, old], "water") is newer
+    with pytest.raises(ValueError, match="Matches: q-pending, q-running$"):
+        _activity_cancel.match_activity_record([old, pending, running, newer], "water")
+    # A shared alias across directories, or an unverifiable directory, does not
+    # identify one directory.
+    with pytest.raises(ValueError, match="Matches: q-elsewhere, q-old, q-pending$"):
+        _activity_cancel.match_activity_record([old, pending, elsewhere], "water")
+    with pytest.raises(ValueError, match="Matches: q-elsewhere, q-newer$"):
+        _activity_cancel.match_activity_record([newer, elsewhere], "water")
+    with pytest.raises(ValueError, match="Matches: q-old, q-unlocated$"):
+        _activity_cancel.match_activity_record([old, unlocated], "water")
+
+
+@pytest.mark.parametrize("finished_status", [QueueStatus.FAILED, QueueStatus.CANCELLED])
+def test_cancel_activity_basename_across_directories_stays_ambiguous(
+    allowed: Path, orca_config: str, finished_status: QueueStatus
+) -> None:
+    project_a = allowed / "projA" / "water"
+    project_b = allowed / "projB" / "water"
+    project_a.mkdir(parents=True)
+    project_b.mkdir(parents=True)
+    finished = make_queue_entry(
+        queue_id="q-b",
+        reaction_dir=project_b,
+        status=finished_status,
+        enqueued_at="2026-09-26T00:00:00+00:00",
+        started_at="2026-09-26T00:01:00+00:00",
+        finished_at="2026-09-26T01:00:00+00:00",
+    )
+    other = make_queue_entry(
+        queue_id="q-a",
+        reaction_dir=project_a,
+        enqueued_at="2026-09-01T00:00:00+00:00",
+    )
+    queue_store.save_entries(allowed, [finished, other])
+
+    with pytest.raises(ValueError, match="Ambiguous activity target: water. Matches: q-a, q-b$"):
+        activity.cancel_activity(target="water", orca_config=orca_config)
+
+    assert {entry.queue_id: entry.status for entry in list_queue(allowed)} == {
+        "q-b": finished_status,
+        "q-a": QueueStatus.PENDING,
+    }
+    assert not any(entry.cancel_requested for entry in list_queue(allowed))
+
+
+@pytest.mark.parametrize(
+    "current_generation", [True, False], ids=["current-generation", "prior-generation"]
+)
+def test_cancel_activity_by_state_run_id_of_running_job(
+    allowed: Path, orca_config: str, current_generation: bool
+) -> None:
+    reaction_dir = allowed / "water"
+    entry = make_queue_entry(
+        queue_id="q-running",
+        task_id="task-running",
+        reaction_dir=reaction_dir,
+        status=QueueStatus.RUNNING,
+        enqueued_at="2026-09-26T00:00:00+00:00",
+        started_at="2026-09-26T00:01:00+00:00",
+    )
+    state = write_run_state(
+        reaction_dir, status=RunStatus.RUNNING, run_id="run-live", job_id=entry.task_id
+    )
+    state["queue_id"] = entry.queue_id
+    state["queue_generation"] = (
+        queue_entry_generation_token(entry) if current_generation else "q-previous"
+    )
+    write_state(reaction_dir, state)
+    queue_store.save_entries(allowed, [entry])
+
+    with acquire_run_lock(reaction_dir):
+        [row] = [
+            row
+            for row in _activity_orca.orca_records(config_path=orca_config)
+            if row.activity_id == entry.queue_id
+        ]
+        # Only the state of this queue generation lends its run ID as an alias.
+        assert ("run-live" in row.aliases) is current_generation
+        if not current_generation:
+            return
+        payload = activity.cancel_activity(target="run-live", orca_config=orca_config)
+
+    assert payload["activity_id"] == entry.queue_id
+    assert payload["cancel_target"] == entry.queue_id
+    assert payload["result"]["queue_id"] == entry.queue_id
+    [persisted] = list_queue(allowed)
+    assert persisted.cancel_requested
 
 
 def test_list_activities_autodiscovers_defaults_when_no_args(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -435,9 +434,7 @@ def test_capacity_refusal_before_launch_writes_no_state_and_sends_no_notificatio
     listing_before = _generation_listing(reaction_dir)
 
     with pytest.raises(EngineScratchCapacityError, match="RAM headroom"):
-        run_inp_execution.execute_locked_run(
-            replace(context, force=False), runner_cls=_ManagedRunner
-        )
+        run_inp_execution.execute_locked_run(context, runner_cls=_ManagedRunner)
 
     assert _generation_listing(reaction_dir) == listing_before
     assert not state_path(reaction_dir).exists()
@@ -474,9 +471,7 @@ def test_admitted_run_launches_in_the_workspace_it_reserved_before_writing_state
 
     monkeypatch.setattr(EngineScratchWorkspace, "create", classmethod(counting_create))
 
-    exit_code = run_inp_execution.execute_locked_run(
-        replace(context, force=False), runner_cls=_ManagedRunner
-    )
+    exit_code = run_inp_execution.execute_locked_run(context, runner_cls=_ManagedRunner)
 
     assert exit_code == 0
     assert created == [False]  # one workspace, reserved before the first state write
@@ -503,9 +498,7 @@ def test_reserved_workspace_is_removed_when_the_run_fails_before_launch(
     monkeypatch.setattr(run_inp_execution, "load_or_create_state", unreadable_state)
 
     with pytest.raises(OSError, match="unreadable"):
-        run_inp_execution.execute_locked_run(
-            replace(context, force=False), runner_cls=_ManagedRunner
-        )
+        run_inp_execution.execute_locked_run(context, runner_cls=_ManagedRunner)
 
     assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
     assert _ManagedRunner.launches == []
@@ -552,9 +545,7 @@ def test_capacity_refusal_after_the_run_started_is_a_failed_attempt_not_a_deferr
         def run(self, inp_path: Path) -> RunResult:
             raise EngineScratchCapacityError(_REFUSAL)
 
-    exit_code = run_inp_execution.execute_locked_run(
-        replace(context, force=False), runner_cls=RefusedAtLaunch
-    )
+    exit_code = run_inp_execution.execute_locked_run(context, runner_cls=RefusedAtLaunch)
 
     assert exit_code == 1
     state = load_state(reaction_dir)
@@ -574,9 +565,7 @@ def test_unsafe_scratch_root_still_fails_the_attempt_with_its_state_and_notifica
     scratch_root.mkdir()
     (scratch_root / "attempt-unknown").mkdir()  # no manifest: ownership cannot be verified
 
-    exit_code = run_inp_execution.execute_locked_run(
-        replace(context, force=False), runner_cls=_ManagedRunner
-    )
+    exit_code = run_inp_execution.execute_locked_run(context, runner_cls=_ManagedRunner)
 
     assert exit_code == 1
     state = load_state(reaction_dir)

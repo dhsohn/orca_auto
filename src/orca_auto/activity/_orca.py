@@ -107,6 +107,12 @@ def queue_record(
     snapshot_name = snapshot.name if snapshot is not None else ""
     snapshot_completed_at = snapshot.completed_at if snapshot is not None else ""
     snapshot_updated_at = snapshot.updated_at if snapshot is not None else ""
+    # A running row carries its run ID only in the state of its own generation.
+    snapshot_run_id = (
+        normalize_text(snapshot.run_id)
+        if snapshot is not None and queue_represents_snapshot(queue_adapter, entry, snapshot)
+        else ""
+    )
     status = queue_entry_status(queue_adapter, entry, snapshot)
     blocker = entry_metadata.get(QUEUE_RECORD_SYNC_BLOCKED_KEY)
     if not isinstance(blocker, dict) or status != STATUS_PENDING or entry.cancel_requested:
@@ -154,7 +160,13 @@ def queue_record(
         cancel_target=queue_id or run_id or reaction_dir,
         worker_log=normalize_text(entry_metadata.get("worker_log")),
         aliases=unique_texts(
-            [queue_id, task_id, run_id, *list(path_aliases(reaction_dir, root=allowed_root))]
+            [
+                queue_id,
+                task_id,
+                run_id,
+                snapshot_run_id,
+                *list(path_aliases(reaction_dir, root=allowed_root)),
+            ]
         ),
         metadata={
             "queue_id": queue_id,

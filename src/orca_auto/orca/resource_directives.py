@@ -14,7 +14,8 @@ from .input_blocks import iter_blocks, set_block_key_value
 from .input_syntax import active_orca_directive_text, find_route_idx, orca_route_line
 
 MAXCORE_RE = re.compile(r"^\s*%maxcore\s+(\d+)", re.IGNORECASE)
-NPROCS_RE = re.compile(r"\bnprocs\s+(\d+)\b", re.IGNORECASE)
+# ORCA block syntax accepts an optional "=" between key and value ("nprocs = 16").
+NPROCS_RE = re.compile(r"\bnprocs(?:\s*=\s*|\s+)(\d+)\b", re.IGNORECASE)
 # ORCA route-line shorthand "! PALn" (PAL2..PAL8) requests n parallel processes.
 PAL_ROUTE_RE = re.compile(r"\bPAL(\d+)\b", re.IGNORECASE)
 

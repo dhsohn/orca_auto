@@ -9,27 +9,35 @@ from pathlib import Path
 
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS
 
-from ..completion_rules import IRC_ROUTE_RE, OPT_ROUTE_RE, TS_ROUTE_RE
-from ..input_blocks import find_geometry_block
+from ..completion_rules import (
+    IRC_ROUTE_RE,
+    OPT_ROUTE_RE,
+    PARTIAL_OPT_ROUTE_RE,
+    TS_ROUTE_RE,
+    is_optimization_route,
+)
+from ..input_blocks import find_geometry_block, iter_blocks
 from ..input_syntax import orca_route_line, orca_route_tokens
 from ..job_type import FREQ_RE
 
 _NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
+# ORCA 6.1 %neb spellings of the end-point preoptimization switch (default off)
+# and the boolean values it reads as off.
+_NEB_PREOPT_KEYS = frozenset({"preopt", "preopt_ends", "preopt_endpoints", "preopt_minima"})
+_ORCA_FALSE_VALUES = frozenset({"false", "no", "off", "0"})
+# GOAT global optimizations rewrite <basename>.xyz and <basename>.engrad.
+_GOAT_ROUTE_RE = re.compile(
+    r"\bGOAT(?:-(?:ENTROPY|EXPLORE|REACT|DIVERSITY|TS|COARSE))?\b", re.IGNORECASE
+)
 
 
 _ENGRAD_EXACT_ROUTE_KEYWORDS = frozenset(
     {
-        "ci-opt",
-        "crudeopt",
         "engrad",
         "energygrad",
-        "l-opt",
-        "l-opth",
         "numgrad",
-        "opth",
         "optts",
-        "qmmmopt",
-        "sloppyopt",
+        "optts(gmf)",
     }
 )
 
@@ -63,16 +71,49 @@ def _route_requests_hessian(lines: list[str]) -> bool:
     return bool(FREQ_RE.search(route_text))
 
 
+def _route_requests_neb(lines: list[str]) -> bool:
+    route_text = " ".join(route for line in lines if (route := orca_route_line(line)) is not None)
+    return bool(_NEB_ROUTE_RE.search(route_text))
+
+
+def _neb_preoptimizes_end_points(lines: list[str]) -> bool:
+    """Whether ``%neb`` enables end-point preoptimization; an unreadable value counts as on."""
+
+    for block in iter_blocks(lines, "neb"):
+        tokens = [token for row in block.rows for token in row.tokens]
+        for index, token in enumerate(tokens):
+            if token.quoted:
+                continue
+            word = token.value.lower()
+            # iter_blocks closes %neb at the Monitor_Internals sub-block's end
+            # (the brace may be attached to the keyword), so switches after it
+            # are unreadable.
+            if word.startswith("monitor_internals"):
+                return True
+            if word not in _NEB_PREOPT_KEYS:
+                continue
+            value_index = index + 1
+            if value_index < len(tokens) and tokens[value_index].value == "=":
+                value_index += 1
+            if (
+                value_index >= len(tokens)
+                or tokens[value_index].quoted
+                or tokens[value_index].value.lower() not in _ORCA_FALSE_VALUES
+            ):
+                return True
+    return False
+
+
 def _route_writes_engrad(lines: list[str]) -> bool:
     for line in lines:
         for token in orca_route_tokens(line):
             if token.quoted:
                 continue
-            # ORCA's keywords ending in "Opt" do not uniformly emit this
-            # file, so keep the nonstandard optimization spellings exact.
+            # Whole keywords only: InterpOpt, RigidBodyOpt and the MD-driven
+            # MD-L-Opt/MD-L-OptH emit no engrad file.
             if token.value.casefold() in _ENGRAD_EXACT_ROUTE_KEYWORDS or any(
                 pattern.fullmatch(token.value) is not None
-                for pattern in (OPT_ROUTE_RE, IRC_ROUTE_RE)
+                for pattern in (OPT_ROUTE_RE, PARTIAL_OPT_ROUTE_RE, IRC_ROUTE_RE, _GOAT_ROUTE_RE)
             ):
                 return True
     return False
@@ -80,9 +121,9 @@ def _route_writes_engrad(lines: list[str]) -> bool:
 
 def _route_writes_same_stem_xyz(lines: list[str]) -> bool:
     route_text = " ".join(route for line in lines if (route := orca_route_line(line)) is not None)
-    return any(
+    return is_optimization_route(route_text) or any(
         pattern.search(route_text) is not None
-        for pattern in (OPT_ROUTE_RE, TS_ROUTE_RE, IRC_ROUTE_RE, _NEB_ROUTE_RE)
+        for pattern in (TS_ROUTE_RE, IRC_ROUTE_RE, _NEB_ROUTE_RE, _GOAT_ROUTE_RE)
     )
 
 

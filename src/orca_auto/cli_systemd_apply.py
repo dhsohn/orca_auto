@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,28 +24,48 @@ from orca_auto.systemd_plan import (
 from orca_auto.terminal import emit_error
 
 
+def _run_install_step(
+    command: Sequence[str],
+    *,
+    use_sudo: bool,
+    run: Callable[..., subprocess.CompletedProcess[Any]],
+    stage: str,
+) -> bool:
+    # Map any sudo/systemctl failure to exit 1; raw exit codes never pass through.
+    rc = run_command(command, use_sudo=use_sudo, run=run)
+    if rc == 0:
+        return True
+    emit_error(
+        f"`{' '.join(command)}` (exit status {rc}) failed {stage}; "
+        "fix the failure and rerun `orca_auto systemd install`"
+    )
+    return False
+
+
 def _write_unit_files(
     plan: SystemdInstallPlan,
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]],
 ) -> int:
     if plan.use_sudo:
-        rc = run_command(("mkdir", "-p", str(plan.unit_dir)), use_sudo=True, run=run)
-        if rc != 0:
-            return rc
+        stage = "while writing systemd units"
+        if not _run_install_step(
+            ("mkdir", "-p", str(plan.unit_dir)), use_sudo=True, run=run, stage=stage
+        ):
+            return 1
         with tempfile.TemporaryDirectory(prefix="orca_auto-systemd-") as staging_text:
             staging = Path(staging_text)
             for unit in plan.units:
                 staged = staging / unit.name
                 staged.write_text(unit.content, encoding="utf-8")
                 staged.chmod(0o644)
-                rc = run_command(
+                if not _run_install_step(
                     ("install", "-m", "0644", str(staged), str(unit.destination)),
                     use_sudo=True,
                     run=run,
-                )
-                if rc != 0:
-                    return rc
+                    stage=stage,
+                ):
+                    return 1
                 print(f"installed: {unit.destination}")
         return 0
     plan.unit_dir.mkdir(parents=True, exist_ok=True)
@@ -79,23 +99,24 @@ def apply_systemd_install_plan(
         emit_error(f"failed to write systemd units: {exc}")
         return 1
     if rc != 0:
-        return rc
+        return 1
 
     for command in plan.commands:
         try:
-            rc = run_command(command, use_sudo=plan.use_sudo, run=run)
+            succeeded = _run_install_step(
+                command,
+                use_sudo=plan.use_sudo,
+                run=run,
+                stage="after unit files were updated",
+            )
         except OSError as exc:
             emit_error(
                 "systemd install command failed after unit files were updated: "
                 f"{exc}; fix the failure and rerun `orca_auto systemd install`"
             )
             return 1
-        if rc != 0:
-            emit_error(
-                "systemd install command failed after unit files were updated; "
-                "fix the failure and rerun `orca_auto systemd install`"
-            )
-            return rc
+        if not succeeded:
+            return 1
 
     if plan.enabled_unit:
         print(f"enabled: {plan.enabled_unit}")

@@ -15,10 +15,10 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 | `run-dir PATH` | 지정된 작업 디렉터리의 입력을 검증하고 큐에 등록한 뒤 즉시 반환합니다. (실제 계산 완료를 대기하지 않음) 설정 파일을 읽을 수 없거나(`invalid_config`) `queue.json`이 손상된 경우(`queue_store_corrupt`) `error:` 한 줄과 종료 코드 1로 보고합니다. |
 | `queue list` | 현재 큐의 작업 목록과 전체 활성 시뮬레이션 수를 조회합니다. 스크립트 연동을 위한 `--json` 출력을 지원합니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 아무것도 만들지 않고 종료 코드 1을 반환합니다. `admission_slots.json`이 손상되면 `admission_blockers` 항목(scope `admission_store`)으로 보고하고 `active_simulations`는 목록 자체의 집계로 대체하며, 각 행은 `worker_log`를 포함합니다. |
 | `queue list clear` | 계산 산출물 파일은 그대로 보존하면서, 큐 목록 및 작업 루트의 terminal job_state.json 기록(중복 방지 배리어)을 정리합니다. 정리된 행의 워커 로그와 publication lock 파일도 함께 제거합니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 종료 코드 1을 반환합니다. |
-| `queue cancel TARGET` | 큐 ID, Run ID, 또는 대상 작업 디렉터리 경로를 지정하여 작업을 취소합니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 종료 코드 1을 반환합니다. |
+| `queue cancel TARGET` | 큐 ID, Run ID, 또는 모호하지 않은 작업 디렉터리 경로를 지정하여 작업을 취소합니다. 디렉터리 경로나 이름은 그 디렉터리의 활성 generation으로, 활성 generation이 없으면 가장 최근에 끝난 행으로 해석합니다. 서로 다른 디렉터리가 같은 이름을 쓰거나 활성 generation이 둘이면 모호한 대상으로 거부합니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 종료 코드 1을 반환합니다. |
 | `index prune` | 디스크에서 실제 경로가 삭제된 인덱스 항목을 확인합니다. `--apply` 플래그를 넘길 때만 실제 정리가 수행됩니다. |
 | `index rebuild` | `runs_root` 아래의 모든 `job_state.json`에서 `job_locations.json` 항목을 다시 유도합니다. 작업 ID 기준으로 추가·갱신만 하며 삭제하지 않습니다. `--dry-run`은 기록 없이 결과만 출력합니다. |
-| `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. 설정 파일이 존재하지만 읽을 수 없으면 유닛을 쓰지 않고 종료 코드 1을 반환하며, `TimeoutStopSec`은 `scheduler.max_active_simulations`에서 계산해 렌더링합니다. |
+| `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. 설정 파일이 존재하지만 읽을 수 없으면 유닛을 쓰지 않고 종료 코드 1을 반환하며, `TimeoutStopSec`은 `scheduler.max_active_simulations`에서 계산해 렌더링합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
 | `service status` | 등록된 유닛의 상태와 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지(freshness) 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 종료 코드 1(`--json`에서는 `ok: false`)을 반환합니다. |
 | `service restart` | 활성 계산이나 예약된 작업이 진행 중일 때는 중단을 방지하기 위해 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 사용합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
 | `scratch list` | `orca.runtime.scratch_root` 아래의 RAM scratch 워크스페이스 목록과, 비활성(non-live) 워크스페이스가 새 scratch 실행을 막고 있는지 표시합니다. 차단 항목이 있어도 종료 코드는 0이며 `--json`을 지원합니다. |
@@ -31,6 +31,8 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 ### `run-dir` 세부 동작 규격
 - 디렉터리 내에서 가장 최근에 수정된 적합한 `.inp` 파일을 자동 선택하며, 수정 시각이 동일한 경우 파일명 알파벳 순으로 결정합니다.
 - 입력 파일, 참조 좌표 파일(`.xyz`), ORCA 실행 바이너리 정보를 새로운 독립 실행 디렉터리(`generation`)에 격리하여 바인딩합니다.
+- 인식된 ORCA 파일 키워드(좌표 파일, `%moinp`, `%pointcharges`, ESD `GSHessian`/`ESHessian`을 포함한 Hessian 입력, NEB 끝점·재시작 경로)가 가리키는 파일은 generation에 함께 바인딩합니다. 그 밖의 키워드 값 중 따옴표로 감싼 파일 경로(절대 경로, `~`로 시작하는 경로, 슬래시 종류와 무관한 `./`·`../` 상대 경로, 파일 확장자가 있는 이름)는 접수 단계에서 `Unsupported ORCA file reference`로 거부합니다. ORCA가 쓰는 출력 파일 이름(`%plots` 파일 인자, `%md`의 `Filename`)은 경로 없는 파일 이름이어야 합니다.
+- NEB 계열 경로에서 참조 파일의 이름이 ORCA가 입력 stem으로 쓰는 파일(예: `<stem>_MEP.allxyz`, `%neb`가 끝점 사전 최적화를 켜거나 `Monitor_Internals`를 포함하면 `<stem>_reactant*`/`<stem>_product*`)과 같으면 접수 단계에서 거부합니다. 재시작·끝점 파일의 이름을 바꾼 뒤 다시 제출합니다.
 - 이미 계산이 진행 중인 활성 디렉터리에 대한 중복 제출은 자동으로 차단됩니다.
 - `--force` 플래그를 지정하면 이전에 성공한 완료 기록이 있더라도 새로운 실행 디렉터리(`generation`)를 생성하여 재계산합니다.
 - 계산 자원은 ORCA 입력 파일의 `%pal`(코어 수)과 `%maxcore`(코어당 메모리) 지시어를 최우선으로 따르며, 설정 파일은 누락된 값에 대한 기본값을 보완합니다.

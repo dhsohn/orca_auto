@@ -12,6 +12,7 @@ import dataclasses
 import os
 import stat
 from collections.abc import Sequence
+from contextlib import ExitStack
 from pathlib import Path
 
 from orca_auto.core.utils.lock import FileLockTimeoutError, file_lock_at
@@ -119,39 +120,46 @@ def inspect_scratch_root(
     reports: list[ScratchWorkspaceReport] = []
     try:
         for name in sorted(os.listdir(root_fd)):
-            if _CLEANUP_TOMBSTONE_NAME_RE.fullmatch(name):
-                info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
-                reports.append(
-                    ScratchWorkspaceReport(
-                        path=root / name,
-                        name=name,
-                        state=SCRATCH_STATE_TOMBSTONE,
-                        manifest_valid=False,
-                        owner_pid=None,
-                        owner_process_start_ticks=None,
-                        owner_boot_id=None,
-                        durable_dir=None,
-                        max_task_memory_bytes=None,
-                        size_bytes=0,
-                        size_walk_truncated=True,
-                        blocks_launch=not stat.S_ISDIR(info.st_mode),
-                        detail=(
-                            None
-                            if stat.S_ISDIR(info.st_mode)
-                            else f"engine scratch root contains an unsafe entry: {root / name}"
-                        ),
+            try:
+                if _CLEANUP_TOMBSTONE_NAME_RE.fullmatch(name):
+                    info = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                    reports.append(
+                        ScratchWorkspaceReport(
+                            path=root / name,
+                            name=name,
+                            state=SCRATCH_STATE_TOMBSTONE,
+                            manifest_valid=False,
+                            owner_pid=None,
+                            owner_process_start_ticks=None,
+                            owner_boot_id=None,
+                            durable_dir=None,
+                            max_task_memory_bytes=None,
+                            size_bytes=0,
+                            size_walk_truncated=True,
+                            blocks_launch=not stat.S_ISDIR(info.st_mode),
+                            detail=(
+                                None
+                                if stat.S_ISDIR(info.st_mode)
+                                else f"engine scratch root contains an unsafe entry: {root / name}"
+                            ),
+                        )
                     )
+                    continue
+                if not name.startswith(SCRATCH_WORKSPACE_PREFIX):
+                    continue
+                report, _workspace_identity = _inspect_workspace_entry(
+                    root,
+                    root_fd,
+                    name,
+                    measure_size=True,
+                    max_size_entries=max_size_entries,
                 )
+            except (FileNotFoundError, EngineScratchError):
+                # A peer's cleanup may remove an entry after the listing; one
+                # still present failed a real safety check.
+                if _entry_exists_at(root_fd, name):
+                    raise
                 continue
-            if not name.startswith(SCRATCH_WORKSPACE_PREFIX):
-                continue
-            report, _workspace_identity = _inspect_workspace_entry(
-                root,
-                root_fd,
-                name,
-                measure_size=True,
-                max_size_entries=max_size_entries,
-            )
             if report.durable_dir is not None:
                 report = dataclasses.replace(
                     report,
@@ -198,19 +206,21 @@ def remove_scratch_workspace(
         raise EngineScratchError(f"engine scratch root is a symlink: {root}")
     root_fd, _root_identity = _open_pinned_directory(root, label="engine scratch root")
     try:
-        try:
-            lock = file_lock_at(
-                root_fd,
-                _SCRATCH_ROOT_LOCK_FILE_NAME,
-                display_path=root / _SCRATCH_ROOT_LOCK_FILE_NAME,
-                timeout_seconds=_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS,
-            )
-        except FileLockTimeoutError as exc:
-            raise EngineScratchError(
-                "engine scratch root stayed busy with a peer workspace for "
-                f"{_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS:.0f} s"
-            ) from exc
-        with lock:
+        with ExitStack() as root_lock:
+            try:
+                root_lock.enter_context(
+                    file_lock_at(
+                        root_fd,
+                        _SCRATCH_ROOT_LOCK_FILE_NAME,
+                        display_path=root / _SCRATCH_ROOT_LOCK_FILE_NAME,
+                        timeout_seconds=_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS,
+                    )
+                )
+            except FileLockTimeoutError as exc:
+                raise EngineScratchError(
+                    "engine scratch root stayed busy with a peer workspace for "
+                    f"{_SCRATCH_ROOT_LOCK_TIMEOUT_SECONDS:.0f} s"
+                ) from exc
             try:
                 report, identity = _inspect_workspace_entry(
                     root,

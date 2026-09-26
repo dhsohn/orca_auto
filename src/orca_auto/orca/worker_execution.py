@@ -64,7 +64,6 @@ from .queue.adapter import (
     list_queue,
     mark_failed,
     queue_entry_app_name,
-    queue_entry_force,
     queue_entry_id,
     queue_entry_reaction_dir,
     queue_entry_task_id,
@@ -103,7 +102,6 @@ WORKER_JOB_MODULE = "orca_auto.orca.commands.worker_child"
 class OrcaWorkerExecutionContext:
     entry: QueueEntry
     reaction_dir: str
-    force: bool
     admission_token: str | None
     admission_app_name: str | None
     admission_task_id: str | None
@@ -241,7 +239,6 @@ def _build_execution_context(
     return OrcaWorkerExecutionContext(
         entry=entry,
         reaction_dir=str(reaction_dir),
-        force=queue_entry_force(entry),
         admission_token=admission_token,
         admission_app_name=queue_entry_app_name(entry) or None,
         admission_task_id=queue_entry_task_id(entry) or None,
@@ -342,7 +339,6 @@ def _run_orca_job_for_entry(
             reaction_dir=Path(context.reaction_dir).expanduser().resolve(),
             selected_inp=Path(context.selected_inp).expanduser().resolve(),
             admission_root=configured_admission_root(bound_cfg),
-            force=context.force,
             reservation_token=_explicit_or_env(context.admission_token, ADMISSION_TOKEN_ENV_VAR),
             admission_app_name=_explicit_or_env(
                 context.admission_app_name, ADMISSION_APP_NAME_ENV_VAR
@@ -367,10 +363,10 @@ def _finalize_cancelled_run_state(reaction_dir: Path) -> None:
     """Record the cancelled outcome the interrupted run never wrote.
 
     ``execute_orca_run`` released ``run.lock`` when the interrupt propagated,
-    so this load -> finalize takes the same non-blocking lock every other
+    so this load -> finalize takes the same bounded-wait lock every other
     ``job_state.json`` finalizer takes (``replay._record_terminal_run_state``,
-    ``worker_tracking``) and cannot interleave with them.  When the lock is
-    already held, fail closed by skipping: the shutdown path still marks the
+    ``worker_tracking``) and cannot interleave with them.  When the lock stays
+    held, fail closed by skipping: the shutdown path still marks the
     queue row cancelled with its replay marker, and the parent's terminal
     replay then calls ``record_cancelled_run_state`` under this lock, which
     writes the cancelled result or keeps a terminal one written meanwhile.

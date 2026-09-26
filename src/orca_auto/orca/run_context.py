@@ -42,7 +42,6 @@ class RunExecutionContext:
     reservation_token: str | None = None
     admission_app_name: str | None = None
     admission_task_id: str | None = None
-    force: bool = False
     execution_provenance: dict[str, Any] | None = None
     queue_id: str | None = None
     queue_generation: str | None = None

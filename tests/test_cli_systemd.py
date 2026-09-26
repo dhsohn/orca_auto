@@ -1524,6 +1524,7 @@ def test_apply_systemd_install_plan_requires_sudo_when_plan_uses_sudo(
 def test_apply_systemd_install_plan_stops_when_sudo_write_command_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     commands: list[tuple[str, ...]] = []
     monkeypatch.setattr(
@@ -1541,8 +1542,40 @@ def test_apply_systemd_install_plan_stops_when_sudo_write_command_fails(
         run=fake_run,
     )
 
-    assert result == 7
+    # The raw sudo exit status is never passed through (PUBLIC_CONTRACTS).
+    assert result == 1
     assert commands == [("sudo", "mkdir", "-p", str(tmp_path / "units"))]
+    assert f"error: `mkdir -p {tmp_path / 'units'}` (exit status 7) failed" in (
+        capsys.readouterr().err
+    )
+
+
+def test_apply_systemd_install_plan_reports_failed_sudo_unit_install(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        "orca_auto.cli_systemd_apply.shutil.which",
+        lambda name: "/usr/bin/sudo" if name == "sudo" else None,
+    )
+    plan = _single_unit_plan(tmp_path, use_sudo=True, commands=(("systemctl", "daemon-reload"),))
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(argv: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+        del check
+        commands.append(tuple(argv))
+        return subprocess.CompletedProcess(argv, 2 if argv[1] == "install" else 0)
+
+    # Exit status 2 from sudo must not masquerade as an argparse usage error.
+    assert cli_systemd_apply.apply_systemd_install_plan(plan, run=fake_run) == 1
+
+    assert [command[1] for command in commands] == ["mkdir", "install"]
+    captured = capsys.readouterr()
+    assert "error: `install -m 0644 " in captured.err
+    assert "(exit status 2) failed" in captured.err
+    assert "rerun `orca_auto systemd install`" in captured.err
+    assert "installed:" not in captured.out
 
 
 def test_apply_systemd_install_plan_sudo_installs_units_then_runs_commands(
@@ -1601,14 +1634,34 @@ def test_apply_systemd_install_plan_keeps_new_units_when_command_fails(
         failures={("systemctl", "restart", "orca_auto-runtime@alice.target"): [5]},
     )
 
-    assert cli_systemd_apply.apply_systemd_install_plan(plan, run=runner) == 5
+    assert cli_systemd_apply.apply_systemd_install_plan(plan, run=runner) == 1
 
     # There is deliberately no rollback: the new unit files stay in place and
     # the operator is told to rerun the installer after fixing the failure.
     assert destination.read_text(encoding="utf-8") == plan.units[0].content
     assert not destination.with_name(destination.name + ".tmp").exists()
     captured = capsys.readouterr()
+    assert "`systemctl restart orca_auto-runtime@alice.target` (exit status 5)" in captured.err
     assert "rerun `orca_auto systemd install`" in captured.err
+    assert "enabled:" not in captured.out
+
+
+def test_apply_systemd_install_plan_maps_failed_readiness_check_to_exit_one(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    unit = "orca_auto-runtime@alice.target"
+    plan = _single_unit_plan(
+        tmp_path,
+        commands=(("systemctl", "daemon-reload"), ("systemctl", "is-active", "--quiet", unit)),
+        enabled_unit=unit,
+    )
+    runner = _FakeSudoSystemd(plan.unit_dir)
+
+    assert cli_systemd_apply.apply_systemd_install_plan(plan, run=runner) == 1
+
+    captured = capsys.readouterr()
+    assert f"error: `systemctl is-active --quiet {unit}` (exit status 3) failed" in captured.err
     assert "enabled:" not in captured.out
 
 

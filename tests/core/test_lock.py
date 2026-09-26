@@ -62,6 +62,27 @@ def test_held_file_lock_payload_ignores_unlocked_stale_file(tmp_path: Path) -> N
     assert held_file_lock_payload(lock_path) is None
 
 
+def test_concurrent_probes_of_a_free_lock_both_report_it_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = tmp_path / "resource.lock"
+    lock_path.write_text('{"pid":999999}', encoding="utf-8")
+    real_flock = fcntl.flock
+    nested: list[str | None] = []
+
+    def flock_then_probe_again(descriptor: int, operation: int) -> None:
+        real_flock(descriptor, operation)
+        # A second status reader arrives while the first probe holds its check.
+        if not operation & fcntl.LOCK_UN and not nested:
+            nested.append("pending")
+            nested[0] = held_file_lock_payload(lock_path)
+
+    monkeypatch.setattr(fcntl, "flock", flock_then_probe_again)
+
+    assert held_file_lock_payload(lock_path) is None
+    assert nested == [None]
+
+
 def test_file_lock_times_out_when_lock_is_held(tmp_path: Path) -> None:
     ctx = get_context("fork")
     lock_path = tmp_path / "held.lock"

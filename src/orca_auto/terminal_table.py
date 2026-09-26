@@ -138,7 +138,6 @@ def queue_table_widths(
     widths = {key: queue_table_header_width(key, prepared) for key in columns}
     widths["detail"] = max(display_width(QUEUE_HEADERS["detail"]), min(36, widths["detail"]))
     widths["name"] = max(display_width(QUEUE_HEADERS["name"]), min(32, widths["name"]))
-    widths["elapsed"] = max(display_width(QUEUE_HEADERS["elapsed"]), 8)
 
     # ``status`` and ``elapsed`` are intrinsically narrow and fixed, so the
     # flexible text columns absorb any terminal-width shortfall.

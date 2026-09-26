@@ -101,6 +101,34 @@ def test_ensure_submission_resource_request_honors_pal_route_shorthand(tmp_path:
     assert "%pal" not in text
 
 
+@pytest.mark.parametrize(
+    "pal",
+    [
+        "%pal nprocs = 16 end",
+        "%pal nprocs=16 end",
+        "%pal\n  nprocs = 16\nend",
+        "%pal\n  nprocs =16\nend",
+        "%pal\n  nprocs 16;\nend",
+    ],
+)
+def test_prepare_submission_resource_request_honors_nprocs_with_optional_equals(
+    tmp_path: Path, pal: str
+) -> None:
+    # ORCA accepts an optional "=" between a block key and its value; the
+    # directive must be honored, not overwritten with the configured default.
+    source = f"! Opt\n{pal}\n%maxcore 2000\n* xyzfile 0 1 g.xyz\n"
+    inp = _write_inp(tmp_path, source)
+
+    prepared = prepare_submission_resource_request(
+        inp, default_max_cores=4, default_max_memory_gb=8
+    )
+
+    assert read_nprocs(source.splitlines()) == 16
+    assert prepared.actions == ()
+    assert prepared.resource_request == {"max_cores": 16, "max_memory_gb": 32}
+    assert prepared.normalized_payload.decode("utf-8") == source
+
+
 def test_read_resource_request_from_input_uses_inp_values(tmp_path: Path) -> None:
     inp = _write_inp(
         tmp_path,
@@ -341,6 +369,31 @@ def test_geom_keys_are_inserted_outside_nested_scan_block() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "geom",
+    [
+        ["%geom Constraints", "  {B 2 3 C}", "  end"],
+        ["%geom", "  Constraints {B 2 3 C} end"],
+        ["%geom Constraints {B 2 3 C} end"],
+    ],
+    ids=["header", "one-line", "header-one-line"],
+)
+def test_nested_sub_block_on_a_shared_row_does_not_close_the_block(geom: list[str]) -> None:
+    lines = [
+        *geom,
+        "  Scan B 0 1 = 1.0, 2.0, 5 end",
+        "  MaxIter 50",
+        "end",
+        "* xyz 0 1",
+        "H 0 0 0",
+        "*",
+    ]
+
+    assert find_block_range(lines, "geom") == (0, len(geom) + 2, False)
+    block = next(iter_blocks(lines, "geom"))
+    assert [row.text for row in block.rows][-2:] == ["Scan B 0 1 = 1.0, 2.0, 5 end", "MaxIter 50"]
+
+
 def test_block_scanner_owns_termination_and_comment_rules() -> None:
     # Inline ``end`` closes the block on its header line; the following
     # %scf body must not leak into the %pal rows.
@@ -411,6 +464,9 @@ def test_validate_unambiguous_directives_counts_pal_nprocs_via_the_shared_block_
     rejects(["%pal", "  nprocs 4", "  nprocs 8", "end"], "%pal nprocs")
     rejects(["%pal", "  # end #", "  nprocs 4 # cores", "  nprocs 8", "end"], "%pal nprocs")
     rejects(["! SP PAL4", "%pal nprocs 4 end"], "mixed %pal and PAL route shorthands")
+    rejects(["%pal nprocs 8 nprocs = 16 end"], "%pal nprocs")
+    rejects(["%pal", "  nprocs 8", "  nprocs=16", "end"], "%pal nprocs")
+    rejects(["%pal", "  nprocs = 8", "  nprocs = 16", "end"], "%pal nprocs")
     # An unterminated block is cut by the geometry section; a later %pal is a duplicate.
     rejects(["%pal", "  nprocs 4", "* xyz 0 1", "H 0 0 0", "*", "%pal nprocs 8 end"], "%pal blocks")
 

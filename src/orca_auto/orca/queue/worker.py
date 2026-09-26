@@ -20,6 +20,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from orca_auto.core.admission import (
+    list_all_slots,
     recover_slot_engine_process,
     release_slot,
     reserve_slot,
@@ -79,6 +80,8 @@ DEFAULT_MAX_CONCURRENT = 4
 POLL_INTERVAL_SECONDS = 5
 _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
 _WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
+# Slot state from reservation until the child is attached.
+_RESERVED_SLOT_STATE = "reserved"
 
 
 def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
@@ -88,7 +91,7 @@ def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
         cfg.runtime.resolved_admission_limit,
         source=catalog_entry.admission_source,
         app_name=catalog_entry.app_id,
-        state="reserved",
+        state=_RESERVED_SLOT_STATE,
         engine_process_state="idle",
         engine_launch_gated=catalog_entry.engine_launch_gated,
     )
@@ -281,11 +284,33 @@ class OrcaQueueWorker(QueueWorkerLoop):
 
     def _reconcile_worker_state(self) -> None:
         self._reconcile_snapshot_intents_if_due()
+        self._release_unattached_admission_slots()
         replay.reconcile_worker_state(
             self.cfg,
             admission_root=self.admission_root,
             replay_state=self.replay_state,
         )
+
+    def _release_unattached_admission_slots(self) -> None:
+        """Release slots this worker reserved but never attached to a job.
+
+        A pass that fails after reserving a slot releases it, and that release
+        can fail on the same held admission lock. The slot's owner is this live
+        process, so the dead-owner reconcile keeps it and the shared pool loses
+        that capacity until the worker exits. Attach gives a slot its queue id
+        and hands it to the child, and this runs between passes, when no
+        reservation of this process is in flight.
+        """
+        worker_pid = os.getpid()
+        for slot in list_all_slots(self.admission_root):
+            if slot.owner_pid != worker_pid or slot.state != _RESERVED_SLOT_STATE or slot.queue_id:
+                continue
+            if self._release_admission_slot(slot.token):
+                logger.warning(
+                    "Released admission slot %s that this worker reserved but never "
+                    "attached to a job",
+                    slot.token,
+                )
 
     def _reconcile_snapshot_intents_if_due(self) -> None:
         now = time.monotonic()

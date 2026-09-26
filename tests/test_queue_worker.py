@@ -53,6 +53,7 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
     queue_record_sync_state,
 )
+from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.models import ReservedQueueEntry
@@ -691,6 +692,193 @@ def test_run_shutdown_flag(make_worker: Callable[..., OrcaQueueWorker]) -> None:
     assert workers[0].run() == 0
 
     assert all(signal.getsignal(sig) is not before[sig] for sig in before)
+
+
+def test_run_keeps_supervising_a_running_child_after_a_failed_periodic_reconcile(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    fake_children: FakeChildren,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The periodic reconcile in the poll sleep meets a queue lock held past its
+    # deadline. Ending the loop would run the shutdown sweep, which stops the
+    # running child and restarts its calculation from scratch.
+    monkeypatch.setattr(queue_worker_mod, "_WORKER_STATE_RECONCILE_INTERVAL_SECONDS", 0.0)
+    workers: list[OrcaQueueWorker] = []
+    reconciles: list[str] = []
+    sleeps: list[float] = []
+    while_retrying: list[tuple[list[str], dict[str, QueueStatus], list[tuple[int, int]]]] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 1:
+            running = workers[0]._running
+            while_retrying.append(
+                (list(running), queue_statuses(queue_root), list(fake_children.signals))
+            )
+        else:
+            workers[0]._shutdown_requested = True
+
+    worker = make_worker(start=child_starter, sleep=sleep)
+    workers.append(worker)
+    real_reconcile = worker._reconcile_worker_state
+
+    def reconcile() -> None:
+        reconciles.append("reconcile")
+        if len(reconciles) == 2:
+            raise QueueLockTimeoutError("queue lock held past its deadline")
+        real_reconcile()
+
+    monkeypatch.setattr(worker, "_reconcile_worker_state", reconcile)
+    rxn = queue_root / "mol_long_run"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), metadata=current_orca_queue_metadata(rxn))
+
+    with caplog.at_level(logging.ERROR):
+        assert worker.run() == 0
+
+    # Startup, the failed poll-sleep reconcile, then the next pass's reconcile:
+    # the retry sleep does not re-enter the failing reconcile.
+    assert reconciles == ["reconcile"] * 3
+    assert sleeps == [queue_worker_mod.POLL_INTERVAL_SECONDS] * 2
+    assert while_retrying == [([entry.queue_id], {entry.queue_id: QueueStatus.RUNNING}, [])]
+    [error] = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert error.exc_info is not None
+    assert isinstance(error.exc_info[1], QueueLockTimeoutError)
+    # Only the requested shutdown stops the child and requeues its row.
+    [started] = child_starter.started
+    assert fake_children.stopped(started.process)
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+
+
+def _fail_first_call(call: Callable[..., Any], error: Exception) -> Callable[..., Any]:
+    calls: list[None] = []
+
+    def fail_first(*args: Any, **kwargs: Any) -> Any:
+        calls.append(None)
+        if len(calls) == 1:
+            raise error
+        return call(*args, **kwargs)
+
+    return fail_first
+
+
+@pytest.mark.parametrize("failing_step", ["attach", "dequeue"])
+def test_run_reclaims_the_slot_a_failed_admission_pass_could_not_release(
+    failing_step: str,
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The pass fails after reserving a slot, and releasing that slot times out
+    # on the admission lock as well. The slot's owner is this live worker, so
+    # the dead-owner reconcile keeps it; with one admission slot no job would
+    # start again until the worker exits.
+    monkeypatch.setattr(queue_worker_mod, "_WORKER_STATE_RECONCILE_INTERVAL_SECONDS", 0.0)
+    workers: list[OrcaQueueWorker] = []
+    leaked_tokens: list[str] = []
+    seen: list[tuple[list[tuple[str, int, str]], dict[str, QueueStatus], list[str]]] = []
+
+    def sleep(_seconds: float) -> None:
+        slots = admission_store.list_all_slots(workers[0].admission_root)
+        if not seen:
+            leaked_tokens.extend(slot.token for slot in slots)
+        seen.append(
+            (
+                [(slot.state, slot.owner_pid, slot.queue_id) for slot in slots],
+                queue_statuses(queue_root),
+                list(workers[0]._running),
+            )
+        )
+        if len(seen) == 3:
+            workers[0]._shutdown_requested = True
+
+    worker = make_worker(max_concurrent=1, start=child_starter, sleep=sleep)
+    workers.append(worker)
+    assert worker.admission_limit == 1
+    admission_lock_held = TimeoutError("admission lock held past its deadline")
+    if failing_step == "attach":
+        monkeypatch.setattr(
+            queue_worker_mod,
+            "update_slot_metadata",
+            _fail_first_call(queue_worker_mod.update_slot_metadata, admission_lock_held),
+        )
+    else:
+        monkeypatch.setattr(
+            worker,
+            "_dequeue_next_entry",
+            _fail_first_call(
+                worker._dequeue_next_entry,
+                QueueLockTimeoutError("queue lock held past its deadline"),
+            ),
+        )
+    monkeypatch.setattr(
+        worker,
+        "_release_admission_slot",
+        _fail_first_call(worker._release_admission_slot, admission_lock_held),
+    )
+    entries: list[QueueEntry] = []
+    for name in ("mol_first", "mol_second"):
+        rxn = queue_root / name
+        rxn.mkdir()
+        entries.append(enqueue(queue_root, str(rxn), metadata=current_orca_queue_metadata(rxn)))
+    first, second = entries
+
+    with caplog.at_level(logging.WARNING, logger=WORKER_LOGGER):
+        assert worker.run() == 0
+
+    # A failed start fails its row; a failed dequeue leaves it pending.
+    failed_start = failing_step == "attach"
+    after_failure = {
+        first.queue_id: QueueStatus.FAILED if failed_start else QueueStatus.PENDING,
+        second.queue_id: QueueStatus.PENDING,
+    }
+    assert seen[:2] == [
+        ([("reserved", os.getpid(), "")], after_failure, []),
+        # The next periodic reconcile releases the slot the worker never attached.
+        ([], after_failure, []),
+    ]
+    admitted = second if failed_start else first
+    started = child_starter.started[-1]
+    assert started.entry.queue_id == admitted.queue_id
+    assert seen[2] == (
+        [("active", started.process.pid, admitted.queue_id)],
+        {**after_failure, admitted.queue_id: QueueStatus.RUNNING},
+        [admitted.queue_id],
+    )
+    released = [
+        record for record in caplog.records if record.getMessage().startswith("Released admission")
+    ]
+    assert [(record.levelno, record.getMessage()) for record in released] == [
+        (
+            logging.WARNING,
+            f"Released admission slot {leaked_tokens[0]} that this worker reserved "
+            "but never attached to a job",
+        )
+    ]
+
+
+def test_reconcile_releases_only_this_workers_unattached_reservations(
+    worker: OrcaQueueWorker,
+    sleeping_child: Callable[[], subprocess.Popen[bytes]],
+) -> None:
+    # Another live owner's reservation keeps its capacity, and a slot tied to a
+    # queue row keeps protecting that row.
+    root = worker.admission_root
+    leaked = reserve_slot(root, 3, source="queue_worker", state="reserved")
+    foreign = reserve_slot(
+        root, 3, source="queue_worker", state="reserved", owner_pid=sleeping_child().pid
+    )
+    tied = reserve_slot(root, 3, source="queue_worker", state="reserved", queue_id="q-tied")
+    assert leaked and foreign and tied
+
+    worker._reconcile_worker_state()
+
+    assert [slot.token for slot in admission_store.list_all_slots(root)] == [foreign, tied]
 
 
 # ---------------------------------------------------------------------------

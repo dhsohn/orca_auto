@@ -125,6 +125,55 @@ Step        E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G)
 """
 
 
+# Trimmed from a real ORCA 6.1 IRC run with %irc Monitor_Internals: every
+# iteration and path-summary row carries one trailing column per monitored
+# internal coordinate, after RMS(G) and before the "<= TS" marker.
+_IRC_MONITOR_BLOCK = """
+--------------------------------------------------------------------------------
+                   Intrinsic Reaction Coordinate Calculation
+--------------------------------------------------------------------------------
+
+         *************************************************************
+         *                          FORWARD IRC                      *
+         *************************************************************
+
+Iteration    E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G)  B(O 58,P 20)
+Convergence thresholds                0.002000  0.000500
+    0     -1613.778811    0.014614    0.008381  0.001008      3.51
+    1     -1613.778906   -0.044911    0.001173  0.000128      3.51
+
+                      ***********************HURRAY********************
+                      ***            THE IRC HAS CONVERGED          ***
+                      *************************************************
+
+         *************************************************************
+         *                          BACKWARD IRC                     *
+         *************************************************************
+
+Iteration    E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G)  B(O 58,P 20)
+Convergence thresholds                0.002000  0.000500
+    0     -1613.778832    0.001343    0.007482  0.001045      3.21
+    1     -1613.778931   -0.061075    0.001248  0.000141      3.21
+
+                      ***********************HURRAY********************
+                      ***            THE IRC HAS CONVERGED          ***
+                      *************************************************
+
+---------------------------------------------------------------
+                       IRC PATH SUMMARY
+---------------------------------------------------------------
+All gradients are in Eh/Bohr.
+
+Step        E(Eh)      dE(kcal/mol)  max(|G|)   RMS(G)  B(O 58,P 20)
+   1     -1613.778931   -0.061075    0.001248  0.000141      3.21
+   2     -1613.778832    0.001343    0.007482  0.001045      3.21
+   3     -1613.778834    0.000000    0.000003  0.000001      3.36    <= TS
+   4     -1613.778811    0.014614    0.008381  0.001008      3.51
+   5     -1613.778906   -0.044911    0.001173  0.000128      3.51
+
+"""
+
+
 def _write_inp(path: Path, route: str) -> None:
     path.write_text(f"{route}\n* xyz 0 1\nC 0 0 0\nH 0 0 1\n*\n", encoding="utf-8")
 
@@ -221,6 +270,44 @@ def test_parse_irc_output_reads_settings_iterations_and_path_summary(tmp_path: P
     ts = next(point for point in parsed.path_points if point.marker == "TS")
     assert ts.step == 3
     assert ts.energy_hartree == pytest.approx(-343.99728)
+
+
+def test_parse_irc_output_accepts_monitored_internal_columns(tmp_path: Path) -> None:
+    out_path = tmp_path / "rxn.out"
+    _write_out(out_path, route="! B3LYP def2-SVP IRC", irc_block=_IRC_MONITOR_BLOCK)
+
+    parsed = parse_irc_output(out_path)
+
+    assert [(point.direction, point.iteration) for point in parsed.iterations] == [
+        ("FORWARD", 0),
+        ("FORWARD", 1),
+        ("BACKWARD", 0),
+        ("BACKWARD", 1),
+    ]
+    assert parsed.iterations[1].delta_e_kcal == pytest.approx(-0.044911)
+    assert parsed.iterations[3].rms_gradient == pytest.approx(0.000141)
+    assert [point.step for point in parsed.path_points] == [1, 2, 3, 4, 5]
+    assert [point.marker for point in parsed.path_points] == ["", "", "TS", "", ""]
+    assert parsed.path_points[2].energy_hartree == pytest.approx(-1613.778834)
+    assert parsed.path_points[0].relative_kcal == pytest.approx(-0.061075)
+    assert parsed.path_points[4].rms_gradient == pytest.approx(0.000128)
+
+
+def test_irc_report_with_monitored_internals_renders_path_profile(tmp_path: Path) -> None:
+    _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP IRC")
+    out_path = tmp_path / "rxn.out"
+    _write_out(out_path, route="! B3LYP def2-SVP IRC", irc_block=_IRC_MONITOR_BLOCK)
+
+    path = write_job_html_report(
+        tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
+    )
+
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "No IRC path-summary points were parsed" not in text
+    assert "IRC path profile" in text
+    assert "TS marker" in text
+    assert "5 path pts, 4 IRC iter" in text
 
 
 def test_collect_irc_report_data_summarizes_path(tmp_path: Path) -> None:

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import contextmanager
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -65,6 +64,8 @@ def _execute(
     reaction_dir: Path,
     inp: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    runner_cls: type[Any] = _RunnerMustNotLaunch,
 ) -> int:
     @contextmanager
     def passthrough(*_args: object, **_kwargs: object):
@@ -82,9 +83,7 @@ def _execute(
         admission_task_id="",
         cfg=AppConfig(paths=PathsConfig(orca_executable="/bin/true"), scratch=ScratchConfig()),
     )
-    return run_inp_execution.execute_locked_run(
-        replace(context, force=False), runner_cls=_RunnerMustNotLaunch
-    )
+    return run_inp_execution.execute_locked_run(context, runner_cls=runner_cls)
 
 
 def test_recorded_nonzero_exit_outranks_completed_looking_output(
@@ -241,3 +240,37 @@ def test_output_without_a_recorded_attempt_is_still_adopted(
     assert final_result["reason"] == "existing_out_completed"
     assert final_result["skipped_execution"] is True
     assert state["attempts"] == []
+
+
+def test_fresh_generation_runs_despite_an_older_completed_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_dir = tmp_path / "job"
+    _write_generation(
+        job_dir / "gen_old",
+        status="completed",
+        attempt={
+            "return_code": 0,
+            "analyzer_status": "completed",
+            "analyzer_reason": "normal_termination",
+        },
+    )
+    fresh_dir = job_dir / "gen_new"
+    fresh_dir.mkdir()
+    fresh_inp = fresh_dir / "rxn.inp"
+    fresh_inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
+    launched: list[Path] = []
+
+    class _RecordingRunner:
+        def __init__(self, _orca_executable: str) -> None:
+            pass
+
+        def run(self, inp_path: Path) -> Any:
+            launched.append(inp_path)
+            raise RuntimeError("launched")
+
+    exit_code = _execute(job_dir, fresh_inp, monkeypatch, runner_cls=_RecordingRunner)
+
+    assert exit_code != 0
+    assert [path.parent for path in launched] == [fresh_dir]

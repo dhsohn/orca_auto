@@ -8,8 +8,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import find_block
-from .input_syntax import active_orca_line_text
+from .input_blocks import percent_directive_header
+from .input_syntax import OrcaLineToken, orca_line_tokens
 from .parser import KCAL_PER_HARTREE
 from .parser.io import open_orca_text
 
@@ -20,6 +20,12 @@ _SIMPLE_SCAN_COORD_LINE_RE = re.compile(
     rf"(?P<end>{_FLOAT_RE.pattern})(?P<sep2>\s*,\s*)"
     r"(?P<points>\d+)(?P<suffix>.*)$"
 )
+_SCAN_COORD_VALUE_LIST_RE = re.compile(
+    rf"^(?P<prefix>\s*\S+(?:\s+\d+)+\s*)"
+    rf"\[\s*(?P<values>{_FLOAT_RE.pattern}(?:\s+{_FLOAT_RE.pattern})*)\s*\]\s*$"
+)
+# ORCA reads bond scans in Angstrom and angle/dihedral/improper scans in degrees.
+_SCAN_COORD_UNITS = {"B": "Å", "A": "°", "D": "°", "I": "°"}
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,10 @@ class ScanCoordinateSpec:
     def label(self) -> str:
         atom_text = ",".join(str(atom) for atom in self.atoms)
         return f"{self.kind}({atom_text})"
+
+    def unit(self) -> str:
+        """Unit of the scanned values; empty for a coordinate kind ORCA does not scan."""
+        return _SCAN_COORD_UNITS.get(self.kind, "")
 
 
 # Lines that end the relaxed-surface tables when the SCF-energy table is
@@ -195,9 +205,19 @@ def scan_profile_interior_barrier_kcal(energies: Sequence[float]) -> float | Non
 
 
 def parse_scan_coordinate(text: str) -> ScanCoordinateSpec | None:
-    """Spec from a bare scan-coordinate string like ``B 0 1 = 1.20, 3.00, 10``."""
-    match = _SIMPLE_SCAN_COORD_LINE_RE.match(text.strip())
-    if match is None:
+    """Spec from ``B 0 1 = 1.20, 3.00, 10`` or the value-list form ``B 0 1 [1.2 1.5 3.0]``.
+
+    A value list maps to its first and last value and one point per value.
+    """
+    text = text.strip()
+    if (match := _SIMPLE_SCAN_COORD_LINE_RE.match(text)) is not None:
+        start = float(match.group("start"))
+        end = float(match.group("end"))
+        points = int(match.group("points"))
+    elif (match := _SCAN_COORD_VALUE_LIST_RE.match(text)) is not None:
+        values = [float(value) for value in match.group("values").split()]
+        start, end, points = values[0], values[-1], len(values)
+    else:
         return None
     prefix_tokens = match.group("prefix").split("=")[0].split()
     if len(prefix_tokens) < 2:
@@ -209,47 +229,79 @@ def parse_scan_coordinate(text: str) -> ScanCoordinateSpec | None:
     return ScanCoordinateSpec(
         kind=prefix_tokens[0].upper(),
         atoms=atoms,
-        start=float(match.group("start")),
-        end=float(match.group("end")),
-        points=int(match.group("points")),
+        start=start,
+        end=end,
+        points=points,
     )
 
 
+def input_uses_relaxed_scan(inp_path: Path) -> bool:
+    """True when ``%geom`` opens a ``Scan`` sub-block, readable coordinate or not."""
+    return _scan_coordinate_rows(inp_path) is not None
+
+
 def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
-    """Kind, atom indices, and range of the first simple scan coordinate line."""
+    """Kind, atom indices, and range of the first scan coordinate.
+
+    ``None`` when there is no scan or its first coordinate cannot be read; the
+    surface table's first column is that coordinate, so a later one never
+    stands in for it.
+    """
+    rows = _scan_coordinate_rows(inp_path)
+    if not rows:
+        return None
+    return parse_scan_coordinate(rows[0])
+
+
+def _scan_coordinate_rows(inp_path: Path) -> list[str] | None:
+    """Coordinate texts of the ``%geom`` ``Scan`` sub-blocks; ``None`` when there is none.
+
+    Walks each ``%geom`` header up to the next ``%`` directive, route line, or
+    geometry section, past the block's own closing ``end``: the shared block
+    rule nests only ``scan``/``constraints``, so another end-terminated
+    sub-block (``modify_internal ... end``) closes ``%geom`` there before a
+    later ``Scan``. ``Scan`` may share its row with a coordinate or its ``end``.
+    """
     try:
         lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
         return None
-    for idx in _simple_scan_coord_line_indices(lines):
-        spec = parse_scan_coordinate(active_orca_line_text(lines[idx]))
-        if spec is not None:
-            return spec
-    return None
-
-
-def _simple_scan_coord_line_indices(lines: list[str]) -> list[int]:
-    """Line indices of simple scan coordinates inside ``%geom`` ``scan ... end`` sub-blocks.
-
-    Uses the package's shared block rule: :func:`find_block` already keeps the
-    nested ``scan`` rows and their closing ``end`` row as body rows of the
-    ``%geom`` block, so no separate end-of-sub-block rule is needed here.
-    """
-    block = find_block(lines, "geom")
-    if block is None:
-        return []
-    indices: list[int] = []
-    in_scan = False
-    for row in block.rows:
-        if row.line_index == block.start:
+    rows: list[str] = []
+    found = in_geom = in_scan = False
+    for line in lines:
+        tokens = orca_line_tokens(line)
+        if not tokens:
             continue
-        single = row.tokens[0].value.lower() if len(row.tokens) == 1 else ""
-        if not in_scan:
-            in_scan = single == "scan"
-            continue
-        if single == "end":
+        header = percent_directive_header(tokens)
+        if header is not None:
+            in_geom = header[0] == "geom"
             in_scan = False
+            tokens = tokens[header[1] :]
+        elif not tokens[0].quoted and tokens[0].value.startswith(("*", "!")):
+            in_geom = in_scan = False
+        if not in_geom:
             continue
-        if _SIMPLE_SCAN_COORD_LINE_RE.match(active_orca_line_text(lines[row.line_index])):
-            indices.append(row.line_index)
-    return indices
+        if not in_scan:
+            scan_index = _unquoted_word_index(tokens, "scan")
+            if scan_index is None:
+                continue
+            found = in_scan = True
+            tokens = tokens[scan_index + 1 :]
+        end_index = _unquoted_word_index(tokens, "end")
+        if end_index is not None:
+            in_scan = False
+            tokens = tokens[:end_index]
+        if tokens:
+            rows.append(" ".join(token.value for token in tokens))
+    return rows if found else None
+
+
+def _unquoted_word_index(tokens: Sequence[OrcaLineToken], word: str) -> int | None:
+    return next(
+        (
+            index
+            for index, token in enumerate(tokens)
+            if not token.quoted and token.value.lower() == word
+        ),
+        None,
+    )

@@ -53,7 +53,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 ```bash
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
-- `<TARGET>`: 큐 ID (`q_...`), 실행 ID (`run_...`), 또는 작업 디렉터리 경로
+- `<TARGET>`: 큐 ID (`q_...`), 실행 ID (`run_...`, 실행 중인 작업 포함), 또는 작업 디렉터리 경로나 이름. 디렉터리는 예전에 끝난 행이 남아 있어도 활성 generation으로 해석합니다.
 
 ---
 
@@ -146,4 +146,5 @@ journalctl -u "orca_auto-queue-worker@$(id -un)" -f
 ```
 - 저널에는 워커의 INFO 수명주기 줄(`Queue worker started`/`stopped`, 고아 행 정리, intent 정리)과 경고·오류가 기록됩니다. 각 자식의 INFO 줄은 자체 `worker_log` 파일(`<runs_root>/logs/<queue_id>.log`, `queue list`에 표시)로 갑니다.
 - 시작 시 정리(reconciliation)가 실패하면 `Queue worker startup failed: <reason>` 한 줄을 남기고 pid 파일을 제거한 뒤 종료 코드 1로 끝나며, 감독 프로세스가 상한까지 재시작합니다.
+- 폴링 패스가 실패하면(예: 수용이나 주기적 정리 중 큐 잠금 시간 초과) `Queue worker poll pass failed; retrying after the poll interval` 줄을 traceback과 함께 남깁니다. 실행 중인 계산은 계속되며, 원인이 계속되면 폴링 간격마다 같은 줄이 반복됩니다. 이런 패스가 예약 상태로 남긴 실행 슬롯은 다음 주기적 정리에서 `Released admission slot … never attached to a job` WARNING과 함께 해제됩니다.
 - `max_concurrent` × `resources.max_cores_per_task`가 워커가 사용할 수 있는 CPU 수(`sched_getaffinity`)를 넘으면 시작 시 두 숫자를 명시한 WARNING 한 줄을 기록합니다. 시작을 거부하지 않으며 끌 수 있는 옵션도 없습니다.

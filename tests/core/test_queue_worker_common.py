@@ -24,6 +24,8 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_PREPARING,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
 )
+from orca_auto.core.queue.store import QueueLockTimeoutError, QueueStoreCorruptError
+from orca_auto.core.queue.worker import loop as loop_mod
 from orca_auto.core.queue.worker import pid_file
 from orca_auto.core.queue.worker.models import ReserveStatus
 from tests.process_helpers import FakeManagedProcess, recording_killpg
@@ -480,6 +482,126 @@ def test_queue_worker_loop_survives_finalize_error_and_logs(
 
     assert list(loop._running) == ["q-1"]
     assert any("finalize failed" in record.getMessage() for record in caplog.records)
+
+
+class _FailingPassLoop(worker_common.QueueWorkerLoop):
+    """Admits one job, fails the first cancel pass that sees it running, then lets it exit."""
+
+    def __init__(self, cancel_error: BaseException) -> None:
+        super().__init__(
+            max_concurrent=1,
+            poll_interval_seconds=5.0,
+            sleep_fn=lambda seconds: self.events.append(f"plain sleep {seconds}"),
+        )
+        self.cancel_error = cancel_error
+        self.events: list[str] = []
+        self.job = SimpleNamespace(rc=None)
+
+    def _fill_slots(self, *, max_new_jobs: int | None = None) -> str:
+        if self.events:
+            return "idle"
+        self.events.append("admit q-1")
+        self._running["q-1"] = self.job
+        return "processed"
+
+    def _poll_job(self, job: Any) -> int | None:
+        return job.rc
+
+    def _check_cancel_requests(self) -> None:
+        if self._running and "cancel pass failed" not in self.events:
+            self.events.append("cancel pass failed")
+            raise self.cancel_error
+
+    def _sleep(self) -> None:
+        self.events.append("poll sleep")
+        if "cancel pass failed" in self.events:
+            self.job.rc = 0
+
+    def _finalize_completed_job(self, queue_id: str, job: Any, rc: int) -> None:
+        self.events.append(f"finalize {queue_id} rc={rc}")
+        self._shutdown_requested = True
+
+    def _shutdown_running_job(self, queue_id: str, job: Any) -> None:
+        self.events.append(f"shutdown sweep {queue_id}")
+
+
+@pytest.mark.parametrize(
+    ("entry_point", "expected_events"),
+    [
+        (
+            "run",
+            [
+                "admit q-1",
+                "poll sleep",
+                "cancel pass failed",
+                "plain sleep 5.0",
+                "poll sleep",
+                "finalize q-1 rc=0",
+            ],
+        ),
+        (
+            "run_once",
+            [
+                "admit q-1",
+                "cancel pass failed",
+                "plain sleep 5.0",
+                "poll sleep",
+                "finalize q-1 rc=0",
+            ],
+        ),
+    ],
+)
+def test_queue_worker_loop_keeps_supervising_after_a_failed_poll_pass(
+    entry_point: str,
+    expected_events: list[str],
+    preserved_signals: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # An unreadable queue fails one pass. Ending the loop would run the shutdown
+    # sweep, which stops the running child and restarts its calculation.
+    del preserved_signals
+    loop = _FailingPassLoop(QueueStoreCorruptError("Queue file is not valid JSON"))
+
+    with caplog.at_level(logging.ERROR, logger=loop_mod.LOGGER.name):
+        assert getattr(loop, entry_point)() == 0
+
+    # The retry waits on the plain sleep: the subclass poll sleep may be the failing pass.
+    assert loop.events == expected_events
+    [record] = caplog.records
+    assert record.levelno == logging.ERROR
+    assert record.exc_info is not None
+    assert isinstance(record.exc_info[1], QueueStoreCorruptError)
+    assert loop._running == {}
+
+
+def test_queue_worker_loop_system_exit_still_ends_supervision(preserved_signals: None) -> None:
+    del preserved_signals
+    loop = _FailingPassLoop(SystemExit(3))
+
+    with pytest.raises(SystemExit):
+        loop.run()
+
+    assert loop.events == ["admit q-1", "poll sleep", "cancel pass failed", "shutdown sweep q-1"]
+
+
+def test_queue_worker_loop_failed_pass_skips_the_retry_sleep_after_a_stop_request(
+    preserved_signals: None,
+) -> None:
+    # The stop budget allows one poll sleep; a SIGTERM that lands while the
+    # pass waits on the queue lock goes straight to the shutdown sweep.
+    del preserved_signals
+
+    class _StopDuringFailedPass(_FailingPassLoop):
+        def _check_cancel_requests(self) -> None:
+            if self._running:
+                self._shutdown_requested = True
+            super()._check_cancel_requests()
+
+    loop = _StopDuringFailedPass(QueueLockTimeoutError("queue lock held past its deadline"))
+
+    assert loop.run() == 0
+
+    assert loop.events == ["admit q-1", "poll sleep", "cancel pass failed", "shutdown sweep q-1"]
 
 
 def test_terminate_process_group_handles_finished_process() -> None:

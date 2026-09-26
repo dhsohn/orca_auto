@@ -63,11 +63,16 @@ class NebPathPoint(PathPoint):
 P = TypeVar("P", bound=PathPoint)
 
 
-def path_summary_row_re(label_pattern: str) -> re.Pattern[str]:
-    """Row regex: label, E, ΔE, max gradient, RMS gradient, optional ``<= MARKER``."""
+def path_summary_row_re(label_pattern: str, *, trailing_columns: bool = False) -> re.Pattern[str]:
+    """Row regex: label, E, ΔE, max gradient, RMS gradient, optional ``<= MARKER``.
+
+    ``trailing_columns`` also admits uncaptured numeric columns before the
+    marker (IRC ``Monitor_Internals`` prints one per monitored coordinate).
+    """
+    trailing = rf"(?:\s+{_NUMBER})*" if trailing_columns else ""
     return re.compile(
         rf"^\s*({label_pattern})\s+({_NUMBER})\s+({_NUMBER})\s+({_NUMBER})\s+({_NUMBER})"
-        r"(?:\s+<=\s*([A-Za-z-]+))?\s*$",
+        rf"{trailing}(?:\s+<=\s*([A-Za-z-]+))?\s*$",
         re.IGNORECASE,
     )
 
