@@ -122,7 +122,7 @@ _UNSUPPORTED_EXTERNAL_HOOK_KEYS = frozenset(
 )
 # A quoted value that is absolute, explicitly relative, or ends in a filename
 # extension names a file; basis names such as "def2/J" and solvents do not.
-_FILE_PATH_VALUE_RE = re.compile(r"^(?:[/\\~]|\.\.?[/\\])|\.[A-Za-z][A-Za-z0-9_]*$")
+_FILE_PATH_VALUE_RE = re.compile(r"(?:^(?:[/\\~]|\.\.?[/\\]))|(?:\.[A-Za-z][A-Za-z0-9_]*$)")
 # A quoted name inside an unquoted token, as in the compact ``MO("orb.cube",1,0);``.
 _EMBEDDED_QUOTED_RE = re.compile(r"([\"'])(.*?)\1")
 
