@@ -5,6 +5,7 @@ import os
 import signal
 import stat
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -441,7 +442,7 @@ class OrcaRunner:
                     try:
                         launch_gate_fd = self._open_pinned_launch_gate()
                         launch_command = [
-                            "/proc/self/exe",
+                            sys.executable,
                             f"/proc/self/fd/{launch_gate_fd}",
                             str(launch_gate_fd),
                             self.orca_executable,
@@ -449,6 +450,9 @@ class OrcaRunner:
                             inp.name,
                         ]
                         popen_kwargs: dict[str, Any] = {
+                            # Pin the running binary while keeping argv[0] at its
+                            # venv path so Python can locate pyvenv.cfg and stdlib.
+                            "executable": "/proc/self/exe",
                             "cwd": cwd,
                             "stdin": subprocess.PIPE,
                             "stdout": handle,

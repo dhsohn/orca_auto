@@ -4,8 +4,10 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import textwrap
 import venv
+from collections.abc import Iterator
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
@@ -113,7 +115,7 @@ def core_only_python(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 @pytest.fixture
-def core_only(tmp_path: Path, core_only_python: Path) -> _CoreOnlyInstallation:
+def core_only(tmp_path: Path, core_only_python: Path) -> Iterator[_CoreOnlyInstallation]:
     imports = tmp_path / "imports"
     imports.mkdir()
     shutil.copytree(
@@ -186,9 +188,21 @@ def core_only(tmp_path: Path, core_only_python: Path) -> _CoreOnlyInstallation:
         ),
         encoding="utf-8",
     )
-    return _CoreOnlyInstallation(
-        core_only_python, imports, runtime, runs, admission, config, counter
+    version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    site = core_only_python.parent.parent / "lib" / version / "site-packages"
+    startup_probe = site / "sitecustomize.py"
+    prefix_record = runtime / "launch-python-prefix"
+    startup_probe.write_text(
+        "import sys\nfrom pathlib import Path\n"
+        "if sys.argv[0].startswith('/proc/self/fd/'):\n"
+        f"    Path({str(prefix_record)!r}).write_text(sys.prefix)\n"
     )
+    try:
+        yield _CoreOnlyInstallation(
+            core_only_python, imports, runtime, runs, admission, config, counter
+        )
+    finally:
+        startup_probe.unlink()
 
 
 def _assert_success(result: subprocess.CompletedProcess[str]) -> None:
@@ -230,6 +244,9 @@ def test_core_worker_runs_fake_orca_child_without_workflow_files(
     )
     _assert_success(result)
     assert core_only.engine_counter.read_text(encoding="utf-8") == "1"
+    assert (core_only.runtime / "launch-python-prefix").read_text() == str(
+        core_only.python.parent.parent
+    )
     machines = list(input_dir.rglob("machine.json"))
     assert len(machines) == 1
     machine = json.loads(machines[0].read_text(encoding="utf-8"))

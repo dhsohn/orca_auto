@@ -2,6 +2,7 @@ import errno
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -152,7 +153,8 @@ def test_command_uses_linux_binary(mock_popen: MagicMock, inp: Path) -> None:
 
     args, kwargs = mock_popen.call_args
     command = args[0]
-    assert command[0] == "/proc/self/exe"
+    assert command[0] == sys.executable
+    assert kwargs["executable"] == "/proc/self/exe"
     assert command[1].startswith("/proc/self/fd/")
     launch_gate_fd = int(command[1].removeprefix("/proc/self/fd/"))
     assert int(command[2]) == launch_gate_fd

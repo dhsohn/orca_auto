@@ -32,7 +32,7 @@ def _run_launch_gate(
                 "EXPECTED_EXECUTABLE_INODE": str(executable_details.st_ino),
             }
         )
-        command = ["/proc/self/exe"]
+        command = [sys.executable]
         if clean_startup:
             command.append("-S")
         command.extend(
@@ -46,6 +46,7 @@ def _run_launch_gate(
         )
         return subprocess.run(
             command,
+            executable="/proc/self/exe",
             cwd=cwd,
             input=release,
             env=environment,

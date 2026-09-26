@@ -4,6 +4,29 @@ Prepare each production version in its own directory, using wheels rather than
 an editable checkout. Development and verification remain in an isolated source
 worktree. Preparation does not install units, restart workers, or access queues.
 
+## Keep a dedicated production Python
+
+The preparer uses the Python that runs it. Create its development or preparation
+virtual environment from a dedicated, versioned Python installation whose
+executable, standard library and bundled libraries will stay at that exact path.
+A virtual environment created from a shared Conda base or an automatically
+upgraded Python still reads that installation's standard library.
+
+Use a separate installation directory outside the package manager's upgrade and
+cleanup paths. If copying a relocatable Python distribution, copy the whole
+prefix, without hardlinks or symlinks back to the original. Confirm that
+`sys.base_prefix`, imported standard-library files and loaded libraries resolve
+to the dedicated prefix or the intended operating-system libraries. Compile its
+standard-library bytecode before making the prefix read-only. Keep it read-only
+for the service account, and retain it while any current or rollback runtime
+uses it. Python updates use a new prefix and a new prepared runtime, followed by
+the same idle cutover below.
+
+The receipt records `base_python_sha256` when preparing the runtime; runtime
+verification does not rehash that external interpreter or its standard library.
+Protecting and retaining the dedicated Python prefix is an operator responsibility.
+Operating-system shared libraries remain host dependencies.
+
 ## Prepare an offline installation
 
 From the matching, validated source worktree and its development environment,
@@ -39,6 +62,17 @@ bits removed. The installer, worker startup, and status checks reject changed
 bytes, writable paths, external symlinks, moved installations, and incomplete
 preparations. Identical preparation inputs reuse a verified existing directory.
 
+The removed write bits do not stop root, so preparation also compiles
+checked-hash bytecode for every installed module at the default optimization
+level. It stays valid while the sources match the receipt, and an interpreter
+started without `-B`, even as root, writes no `__pycache__` into the runtime.
+An optimization level from `-O`, `-OO` or, without `-I`, `PYTHONOPTIMIZE` would
+still write optimized bytecode. The build identity records the bytecode mode, so
+preparing the same wheels again creates a new directory instead of reusing one
+prepared without bytecode. Such older runtimes have no `bytecode` identity field.
+As root, run their interpreter with `-B` as the commands below do, not their
+`.venv/bin/orca_auto` script, which passes neither `-I` nor `-B`.
+
 Preparation never replaces an existing directory. An interrupted attempt remains
 marked incomplete and cannot be used or automatically retried in place. Inspect
 the failure and prepare under another releases root. Remove an abandoned partial
@@ -56,7 +90,7 @@ the switch. Configure the chemical engine executables separately.
 2. Install units pinned to the returned runtime path, without starting services:
 
    ```bash
-   "$RUNTIME_ROOT/.venv/bin/python" -I -m orca_auto.cli systemd install \
+   "$RUNTIME_ROOT/.venv/bin/python" -I -B -m orca_auto.cli systemd install \
      --user "$(id -un)" --repo "$RUNTIME_ROOT" \
      --config "$EXISTING_CONFIG" --no-start
    ```
@@ -68,8 +102,8 @@ the switch. Configure the chemical engine executables separately.
 3. Restart through the existing admission guard:
 
    ```bash
-   "$RUNTIME_ROOT/.venv/bin/python" -I -m orca_auto.cli service restart
-   "$RUNTIME_ROOT/.venv/bin/python" -I -m orca_auto.cli service status --json
+   "$RUNTIME_ROOT/.venv/bin/python" -I -B -m orca_auto.cli service restart
+   "$RUNTIME_ROOT/.venv/bin/python" -I -B -m orca_auto.cli service status --json
    ```
 
    The restart holds the shared admission lock and refuses active or unresolved
@@ -100,6 +134,9 @@ container or a guarantee against host updates. Configuration and calculation dat
 are intentionally mutable and are not part of the build receipt.
 
 `make check-packages` verifies real wheel preparation, idempotent reuse, a fake
-ORCA worker using the installed interpreter, and rendering the pinned service
-plan. The unit tests cover byte/permission rejection, idle/busy restart, and
-old-process/new-unit mismatch. These checks do not deploy production services.
+ORCA worker using the installed interpreter, rendering the pinned service plan,
+and that an interpreter started without `-B` writes nothing into a writable copy
+of the runtime whose source timestamps were moved. The unit tests cover
+byte/permission rejection, idle/busy restart, old-process/new-unit mismatch, and
+that the bytecode check rejects missing or timestamp-validated bytecode. These
+checks do not deploy production services.

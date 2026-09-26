@@ -28,6 +28,8 @@ from orca_auto.core.runtime_bundle import (
 )
 from orca_auto.systemd_plan import SYSTEMD_UNIT_NAMES
 
+_BYTECODE_INVALIDATION = "checked-hash"
+
 
 def _wheel_identity(path: Path) -> dict[str, str]:
     with ZipFile(path) as archive:
@@ -86,6 +88,7 @@ def prepare_runtime(*, wheels: list[Path], releases_root: Path, templates: Path)
         "platform": platform.platform(),
         "base_python": str(base_python),
         "base_python_sha256": content_sha256(base_python),
+        "bytecode": _BYTECODE_INVALIDATION,
     }
     build_id = runtime_build_id(identity)
     releases_root = releases_root.expanduser().resolve()
@@ -126,6 +129,21 @@ def prepare_runtime(*, wheels: list[Path], releases_root: Path, templates: Path)
         "--no-compile",
         "--disable-pip-version-check",
         *(str(root / "wheels" / item["filename"]) for item in identities),
+        cwd=root,
+    )
+    # Root ignores the removed write bits, so any module without valid bytecode
+    # gets a writable __pycache__ that the worker's startup check then rejects.
+    # pip would compile timestamp-validated files, which go stale on any mtime
+    # change; checked-hash files stay valid while the sources match the receipt.
+    _run(
+        python,
+        "-m",
+        "compileall",
+        "-q",
+        "-f",
+        "--invalidation-mode",
+        _BYTECODE_INVALIDATION,
+        str(environment / "lib"),
         cwd=root,
     )
     _run(python, "-m", "pip", "--isolated", "check", cwd=root)
