@@ -87,6 +87,7 @@ def test_prelaunch_rejection_does_not_overwrite_a_changed_claim(
             cfg,
             running,
             queue_root=runs_root,
+            admission_token="",
         )
 
     current = adapter.get_entry_by_id(runs_root, running.queue_id)
@@ -136,14 +137,14 @@ def test_child_cancellation_probe_skips_contended_queue_lock(
     monkeypatch.setattr(queue_store, "file_lock", recording_file_lock)
     monkeypatch.setattr(lock_utils.fcntl, "flock", contended_flock)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=tmp_path,
+        admission_token="",
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.entry is entry
+    assert exit_code == 4
     assert captured["should_cancel"]() is False
     assert lock_calls == [(tmp_path.resolve() / queue_store.QUEUE_LOCK_NAME, 0.0)]
     assert flock_calls == [fcntl.LOCK_EX | fcntl.LOCK_NB]
@@ -170,14 +171,14 @@ def test_child_cancellation_probe_propagates_non_lock_timeout(
     )
     monkeypatch.setattr(queue_store, "load_entries", timed_out_loader)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=tmp_path,
+        admission_token="",
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.entry is entry
+    assert exit_code == 4
     with pytest.raises(TimeoutError, match="simulated queue payload timeout"):
         captured["should_cancel"]()
 
@@ -205,14 +206,14 @@ def test_child_cancellation_probe_propagates_post_acquire_payload_timeout(
     )
     monkeypatch.setattr(lock_utils, "now_utc_iso", timed_out_payload_clock)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=tmp_path,
+        admission_token="",
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.entry is entry
+    assert exit_code == 4
     with pytest.raises(TimeoutError, match="simulated lock payload timeout"):
         captured["should_cancel"]()
 
@@ -239,14 +240,14 @@ def test_child_cancellation_probe_propagates_post_acquire_timeout_with_lock_mess
     )
     monkeypatch.setattr(lock_utils, "now_utc_iso", timed_out_payload_clock)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=tmp_path,
+        admission_token="",
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.entry is entry
+    assert exit_code == 4
     with pytest.raises(TimeoutError, match="Timed out acquiring lock"):
         captured["should_cancel"]()
 

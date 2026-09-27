@@ -97,7 +97,7 @@ def test_worker_child_main_dispatches_the_parsed_queue_identity(
     }
 
 
-def test_worker_child_main_treats_a_blank_admission_token_as_absent(
+def test_worker_child_main_passes_a_blank_admission_token_as_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
@@ -120,7 +120,7 @@ def test_worker_child_main_treats_a_blank_admission_token_as_absent(
         ]
     )
 
-    assert captured["admission_token"] is None
+    assert captured["admission_token"] == ""
 
 
 def test_worker_child_main_configures_logging_so_info_reaches_stderr(

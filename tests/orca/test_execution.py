@@ -6,15 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.admission import admission_dir, reserve_slot
+from orca_auto.core.admission import reserve_slot
 from orca_auto.orca import execution, output_adoption
 from orca_auto.orca.config import AppConfig, load_config
 from orca_auto.orca.execution import execute_orca_run
 from orca_auto.orca.orca_runner import OrcaRunner
-from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import save_state
 from orca_auto.orca.state_reading import load_state
-from tests.conftest import write_run_state
+from tests.conftest import make_run_context, write_run_state
 
 
 def _write_running_state(reaction_dir: Path) -> None:
@@ -40,8 +39,6 @@ def test_run_with_state_rejects_admitted_runner_without_process_registrar(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from types import SimpleNamespace
-
     class RunnerWithoutRegistrar:
         def __init__(self, _orca_executable: str) -> None:
             pass
@@ -52,10 +49,8 @@ def test_run_with_state_rejects_admitted_runner_without_process_registrar(
         lambda _cfg: None,
     )
     monkeypatch.setattr(execution, "run_attempts", lambda *_args, **_kwargs: 0)
-    cfg = SimpleNamespace(
-        paths=SimpleNamespace(orca_executable="/bin/true"),
-        scratch=SimpleNamespace(enabled=False),
-        resources=SimpleNamespace(max_memory_gb_per_task=1),
+    context = make_run_context(
+        AppConfig(), tmp_path / "rxn", tmp_path / "rxn.inp", admission_token="slot-1"
     )
 
     with pytest.raises(
@@ -63,14 +58,11 @@ def test_run_with_state_rejects_admitted_runner_without_process_registrar(
         match="Admitted ORCA runner does not support engine-process registration",
     ):
         execution.run_with_state(
-            cfg=cfg,
-            reaction_dir=tmp_path / "rxn",
-            selected_inp=tmp_path / "rxn.inp",
+            context,
             runner_cls=RunnerWithoutRegistrar,
             resumed=False,
             state={},
-            admission_root=tmp_path / "admission",
-            reservation_token="slot-1",
+            runner=None,
         )
 
 
@@ -117,7 +109,7 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
             events.append("lock_exit")
 
     @contextmanager
-    def fake_admission(**_kwargs: object):
+    def fake_admission(_context: object):
         events.append("admission_enter")
         try:
             yield
@@ -129,13 +121,13 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
         events.append("recover")
         return False
 
-    def fake_run_with_state(**_kwargs: object) -> int:
+    def fake_run_with_state(*_args: object, **_kwargs: object) -> int:
         events.append("run")
         return 0
 
     monkeypatch.setattr(execution, "acquire_run_lock", fake_run_lock)
     monkeypatch.setattr(execution, "recover_crashed_state", fake_recover)
-    monkeypatch.setattr(execution, "_admission_context", fake_admission)
+    monkeypatch.setattr(execution, "_child_admission_slot", fake_admission)
     monkeypatch.setattr(
         execution,
         "load_or_create_state",
@@ -143,15 +135,7 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
     )
     monkeypatch.setattr(execution, "save_state", lambda *_a, **_k: None)
     monkeypatch.setattr(execution, "run_with_state", fake_run_with_state)
-    context = RunExecutionContext(
-        reaction_dir=tmp_path / "rxn",
-        selected_inp=tmp_path / "rxn.inp",
-        admission_root=(tmp_path / "rxn").parent / ".admission",
-        reservation_token=None,
-        admission_app_name=None,
-        admission_task_id="",
-        cfg=AppConfig(),
-    )
+    context = make_run_context(AppConfig(), tmp_path / "rxn", tmp_path / "rxn.inp")
 
     exit_code = execution.execute_locked_run(context, runner_cls=object)
 
@@ -184,7 +168,7 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
         yield
 
     @contextmanager
-    def fake_admission(**_kwargs: object):
+    def fake_admission(_context: object):
         yield
 
     def exit_with_result(
@@ -202,7 +186,7 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
         "recover_crashed_state",
         lambda _reaction_dir, *, logger: False,
     )
-    monkeypatch.setattr(execution, "_admission_context", fake_admission)
+    monkeypatch.setattr(execution, "_child_admission_slot", fake_admission)
     monkeypatch.setattr(
         output_adoption,
         "existing_completed_out",
@@ -219,14 +203,8 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
         lambda _reaction_dir, current_state: saved_states.append(dict(current_state)),
     )
     monkeypatch.setattr(output_adoption, "exit_with_result", exit_with_result)
-    context = RunExecutionContext(
-        reaction_dir=reaction_dir,
-        selected_inp=selected_inp,
-        admission_root=tmp_path,
-        reservation_token=None,
-        admission_app_name=None,
-        admission_task_id="queue-task-id",
-        cfg=AppConfig(),
+    context = make_run_context(
+        AppConfig(), reaction_dir, selected_inp, admission_task_id="queue-task-id"
     )
 
     exit_code = execution.execute_locked_run(context, runner_cls=object)
@@ -282,16 +260,9 @@ def test_crash_recovery_finalizes_recorded_failure_without_rerunning(
         source="queue_worker",
         state="reserved",
     )
+    assert token is not None
     cfg = load_config(str(config))
-    rc = execute_orca_run(
-        RunExecutionContext(
-            cfg=cfg,
-            reaction_dir=reaction,
-            selected_inp=inp,
-            admission_root=admission_dir(cfg.runtime.allowed_root),
-            reservation_token=token,
-        ),
-    )
+    rc = execute_orca_run(make_run_context(cfg, reaction, inp, admission_token=token))
     saved = load_state(reaction)
 
     assert rc == 1

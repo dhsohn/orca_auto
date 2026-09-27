@@ -176,11 +176,28 @@ reconciliation is worker-owned: a submission never sweeps the queue and recovers
 only its own directory's dead row when no worker pid is live.
 
 The ORCA child directly resolves its queue entry, recovers a crashed generation,
-waits for parent admission handoff, and runs that generation. The parent retains
-final admission-release ownership on success, shutdown and exceptions. Validated
-inputs, resources and queue identity form one `RunExecutionContext`, which is
-passed directly into execution without reconstructing CLI arguments or installing
-empty lifecycle callbacks.
+waits for parent admission handoff, and runs that generation. Its validated
+inputs, submitted resource request, execution snapshot and queue identity form
+one `RunExecutionContext`, built once from the claimed row and passed directly
+into execution; RAM scratch is sized from that request. Every admission slot
+mutation of the child goes through one rule, `execution._child_admission_slot`:
+the child activates the slot, completes its engine process when the run returns
+and leaves the slot as it is when the run raises. It releases only a slot that
+activation no longer finds live. The parent releases the slot after the child
+exits, on success, shutdown and exceptions alike.
+`tests/core/queue/test_ownership_guards.py` limits `release_slot` and
+`complete_slot_engine_process` to these owners. One slot's lifecycle:
+
+| Step | Writer | `state` | `engine_process_state` |
+|---|---|---|---|
+| Reserve before the claim | parent | `reserved` | `idle` |
+| Attach the child (owner pid, queue id) | parent | `active` | `idle` |
+| Activate for the run directory | child | `active` | `idle` |
+| Fence one engine launch | child's runner | `active` | `pending` |
+| Record the launched process group | child's runner | `active` | `active` |
+| Clear the exited group | child's runner | `active` | `idle` |
+| Complete after the run returns | child | `active` | `idle` |
+| Recover any engine record and release | parent | removed | removed |
 
 `recover_crashed_state` closes a root `job_state.json` left `running` by a
 crashed run, and it runs in two places, each under `run.lock`. The crash

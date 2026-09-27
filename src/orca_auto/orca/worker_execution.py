@@ -14,13 +14,10 @@ when cancellation was requested; the parent writes the cancelled result.
 
 from __future__ import annotations
 
-import copy
 import logging
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
 
 from orca_auto.core.admission import admission_dir
 from orca_auto.core.confined_io import require_confined_regular_file
@@ -66,39 +63,6 @@ ADMISSION_DEFERRED_EXIT_CODE = 75
 WORKER_JOB_MODULE = "orca_auto.orca.commands.worker_child"
 
 
-@dataclass(frozen=True)
-class OrcaWorkerExecutionContext:
-    entry: QueueEntry
-    reaction_dir: str
-    admission_token: str | None
-    admission_app_name: str | None
-    admission_task_id: str | None
-    selected_inp: str
-    source_selected_inp: str
-    selected_input_xyz: str
-    resource_request: dict[str, int]
-    execution_snapshot: dict[str, Any]
-    orca_executable: str
-
-    def verify_snapshot(self, *, allow_runtime_outputs: bool) -> tuple[Path, str]:
-        return verify_orca_execution_snapshot(
-            self.reaction_dir,
-            self.execution_snapshot,
-            expected_selected_inp=self.selected_inp,
-            expected_source_selected_inp=self.source_selected_inp,
-            expected_selected_input_xyz=self.selected_input_xyz,
-            expected_resource_request=self.resource_request,
-            allow_runtime_outputs=allow_runtime_outputs,
-        )
-
-
-@dataclass(frozen=True)
-class OrcaWorkerExecutionOutcome:
-    exit_code: int
-    reaction_dir: str
-    entry: QueueEntry
-
-
 def build_worker_child_command(
     *,
     config_path: str,
@@ -124,17 +88,16 @@ def build_worker_child_command(
 
 
 class WorkerShutdownRequested(RuntimeError):
-    def __init__(self, context: OrcaWorkerExecutionContext) -> None:
+    def __init__(self) -> None:
         super().__init__("worker_shutdown")
-        self.context = context
 
 
 def _build_execution_context(
     cfg: AppConfig,
     entry: QueueEntry,
     *,
-    admission_token: str | None,
-) -> OrcaWorkerExecutionContext:
+    admission_token: str,
+) -> RunExecutionContext:
     metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
     raw_reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser()
     reaction_dir = raw_reaction_dir.resolve()
@@ -177,33 +140,33 @@ def _build_execution_context(
         expected_resource_request=resource_request,
         allow_runtime_outputs=completed_adoption,
     )
-    return OrcaWorkerExecutionContext(
-        entry=entry,
-        reaction_dir=str(reaction_dir),
-        admission_token=admission_token,
-        admission_app_name=queue_entry_app_name(entry) or None,
-        admission_task_id=queue_entry_task_id(entry) or None,
-        selected_inp=str(verified_selected),
+    return RunExecutionContext(
+        cfg=cfg,
+        reaction_dir=reaction_dir,
+        selected_inp=verified_selected.expanduser().resolve(),
         source_selected_inp=source_selected_inp,
         selected_input_xyz=selected_input_xyz,
         resource_request=dict(resource_request),
         execution_snapshot=snapshot,
+        execution_provenance=orca_execution_provenance(snapshot),
         orca_executable=orca_executable,
+        admission_root=admission_dir(cfg.runtime.allowed_root),
+        admission_token=admission_token,
+        admission_app_name=queue_entry_app_name(entry) or None,
+        admission_task_id=queue_entry_task_id(entry) or None,
+        queue_id=queue_entry_id(entry) or None,
+        queue_generation=queue_entry_generation_token(entry) or None,
     )
 
 
 def _run_orca_job_for_entry(
-    cfg: AppConfig,
-    context: OrcaWorkerExecutionContext,
+    context: RunExecutionContext,
+    entry: QueueEntry,
     queue_root: Path,
     *,
     should_cancel: Callable[[], bool],
     shutdown_requested: Callable[[], bool] | None,
 ) -> int:
-    if shutdown_requested is not None and shutdown_requested():
-        raise WorkerShutdownRequested(context)
-    execution_provenance = orca_execution_provenance(context.execution_snapshot)
-
     def stop_requested() -> bool:
         return should_cancel() or (shutdown_requested is not None and shutdown_requested())
 
@@ -263,43 +226,23 @@ def _run_orca_job_for_entry(
                         result_provenance,
                     )
                 raise
-            result.execution_provenance = dict(execution_provenance)
+            result.execution_provenance = dict(context.execution_provenance)
             return result
 
-    bound_cfg = copy.copy(cfg)
-    bound_cfg.runtime = copy.copy(cfg.runtime)
-    bound_cfg.resources = replace(
-        cfg.resources,
-        max_cores_per_task=context.resource_request["max_cores"],
-        max_memory_gb_per_task=context.resource_request["max_memory_gb"],
-    )
-
     try:
-        execution = RunExecutionContext(
-            cfg=bound_cfg,
-            reaction_dir=Path(context.reaction_dir).expanduser().resolve(),
-            selected_inp=Path(context.selected_inp).expanduser().resolve(),
-            admission_root=admission_dir(bound_cfg.runtime.allowed_root),
-            reservation_token=context.admission_token,
-            admission_app_name=context.admission_app_name,
-            admission_task_id=context.admission_task_id,
-            execution_provenance=dict(execution_provenance),
-            queue_id=queue_entry_id(context.entry) or None,
-            queue_generation=queue_entry_generation_token(context.entry) or None,
-        )
-        return execute_orca_run(execution, runner_cls=ShutdownAwareOrcaRunner)
+        return execute_orca_run(context, runner_cls=ShutdownAwareOrcaRunner)
     except EngineScratchCapacityError as exc:
-        return _defer_admission(context, queue_root, reason=str(exc))
+        return _defer_admission(entry, queue_root, reason=str(exc))
     except WorkerShutdownInterrupt as exc:
         # The child leaves only attempt and scratch evidence. The parent's
         # settlement (terminal_state.record_cancelled_run_state) is the one
         # writer of a cancelled final_result, also for a child killed before
         # it could write anything (ADR 0008).
-        raise WorkerShutdownRequested(context) from exc
+        raise WorkerShutdownRequested from exc
 
 
 def _defer_admission(
-    context: OrcaWorkerExecutionContext,
+    entry: QueueEntry,
     queue_root: Path,
     *,
     reason: str,
@@ -310,11 +253,11 @@ def _defer_admission(
     still pristine and the next claim reuses it without a recovery rebind. This
     re-asks for a resource; it never reruns a calculation.
     """
-    queue_id = queue_entry_id(context.entry)
+    queue_id = queue_entry_id(entry)
     requeued = requeue_running_entry(
         queue_root,
         queue_id,
-        expected_entry=context.entry,
+        expected_entry=entry,
         admission_deferral_reason=reason,
     )
     if requeued:
@@ -381,9 +324,9 @@ def process_dequeued_entry(
     entry: QueueEntry,
     *,
     queue_root: Path,
-    admission_token: str | None = None,
+    admission_token: str,
     shutdown_requested: Callable[[], bool] | None = None,
-) -> OrcaWorkerExecutionOutcome:
+) -> int:
     probe = cancellation_probe(queue_root, entry)
     try:
         context = _build_execution_context(cfg, entry, admission_token=admission_token)
@@ -396,18 +339,13 @@ def process_dequeued_entry(
         )
         raise
     if shutdown_requested is not None and shutdown_requested():
-        raise WorkerShutdownRequested(context)
-    result = _run_orca_job_for_entry(
-        cfg,
+        raise WorkerShutdownRequested
+    return _run_orca_job_for_entry(
         context,
+        entry,
         queue_root,
         should_cancel=lambda: _cancellation_requested(probe),
         shutdown_requested=shutdown_requested,
-    )
-    return OrcaWorkerExecutionOutcome(
-        exit_code=int(result),
-        reaction_dir=context.reaction_dir,
-        entry=entry,
     )
 
 
@@ -416,7 +354,7 @@ def run_worker_child_job(
     config_path: str,
     queue_root: str | Path,
     queue_id: str,
-    admission_token: str | None = None,
+    admission_token: str,
     await_parent_admission_handoff_fn: Callable[
         [str | Path, str], bool
     ] = await_parent_admission_handoff,
@@ -443,10 +381,10 @@ def run_worker_child_job(
     ):
         return 1
     install_shutdown_signal_handlers(controller.request)
-    # The parent owns final admission release, including shutdown and exceptions
-    # between engine launch and publication of its durable process identity.
+    # The child's slot mutations follow execution._child_admission_slot; the
+    # parent releases the slot after this process exits, however it exits.
     try:
-        outcome = process_dequeued_entry(
+        return process_dequeued_entry(
             cfg,
             entry,
             queue_root=resolved_queue_root,
@@ -461,12 +399,9 @@ def run_worker_child_job(
             expected_task_id=queue_entry_task_id(entry) or None,
         )
         return 0
-    return int(outcome.exit_code)
 
 
 __all__ = [
-    "OrcaWorkerExecutionContext",
-    "OrcaWorkerExecutionOutcome",
     "WORKER_JOB_MODULE",
     "build_worker_child_command",
     "process_dequeued_entry",

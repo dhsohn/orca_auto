@@ -35,7 +35,6 @@ from orca_auto.orca.orca_runner import OrcaRunner, RunResult
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_generation_token, same_generation
 from orca_auto.orca.recovery_rebind import RECOVERY_REBIND_COUNT_METADATA_KEY
-from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state_reading import load_state, state_path
 from tests.conftest import (
@@ -43,6 +42,7 @@ from tests.conftest import (
     claim_next_entry,
     make_app_cfg,
     make_queue_entry,
+    make_run_context,
     write_config_file,
     write_fake_orca,
 )
@@ -391,25 +391,22 @@ def _scratch_run(
         yield
 
     monkeypatch.setattr(execution, "acquire_run_lock", passthrough)
-    monkeypatch.setattr(execution, "_admission_context", passthrough)
+    monkeypatch.setattr(execution, "_child_admission_slot", passthrough)
     monkeypatch.setattr(
         execution,
         "started_notification_callback",
         lambda _cfg: notifications.append,
     )
     _ManagedRunner.launches = []
-    context = RunExecutionContext(
-        reaction_dir=reaction_dir,
-        selected_inp=inp,
-        admission_root=reaction_dir.parent / ".admission",
-        reservation_token=None,
-        admission_app_name=None,
-        admission_task_id="",
-        cfg=AppConfig(
+    context = make_run_context(
+        AppConfig(
             paths=PathsConfig(orca_executable="/bin/true"),
             scratch=ScratchConfig(root=str(shm / "orca_auto"), min_free_gb=1),
             resources=CommonResourceConfig(max_memory_gb_per_task=1),
         ),
+        reaction_dir,
+        inp,
+        admission_root=reaction_dir.parent / ".admission",
     )
     return reaction_dir, shm / "orca_auto", notifications, context
 

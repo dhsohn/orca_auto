@@ -10,7 +10,7 @@ import pytest
 
 from orca_auto.core.engine_scratch import scratch_provenance_from_exception
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.orca import worker_execution
+from orca_auto.orca import run_context, worker_execution
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.execution_binding import (
     orca_execution_provenance,
@@ -138,11 +138,9 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     assert isinstance(execution, RunExecutionContext)
     assert execution.reaction_dir == reaction_dir.resolve()
     runner_cls = calls["kwargs"].pop("runner_cls")
-    bound_cfg = execution.cfg
     execution_provenance = execution.execution_provenance
     assert issubclass(runner_cls, OrcaRunner)
-    assert bound_cfg.resources.max_cores_per_task == 1
-    assert bound_cfg.resources.max_memory_gb_per_task == 1
+    assert execution.resource_request == {"max_cores": 1, "max_memory_gb": 1}
     runner = runner_cls("/changed/orca")
     assert runner.orca_executable == str((tmp_path / "fake-orca").resolve())
     assert (
@@ -151,7 +149,7 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     )
     assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
     assert calls["kwargs"] == {}
-    assert execution.reservation_token == "slot-1"
+    assert execution.admission_token == "slot-1"
     assert execution.admission_app_name == "orca_auto_orca"
     assert execution.admission_task_id == "task-1"
     assert execution.queue_id == entry.queue_id
@@ -191,7 +189,7 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
             ),
         ),
         patch.object(
-            worker_execution,
+            run_context,
             "verify_orca_execution_snapshot",
             side_effect=[None, RuntimeError("post-run verification failed")],
         ),
@@ -228,7 +226,7 @@ def test_orca_worker_rejects_snapshotless_persisted_generation(tmp_path: Path) -
         )
 
 
-def test_process_dequeued_entry_returns_orca_worker_outcome(
+def test_process_dequeued_entry_returns_the_run_exit_code(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -253,7 +251,7 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
 
     monkeypatch.setattr(worker_execution, "execute_orca_run", fake_execute_orca_run)
 
-    outcome = worker_execution.process_dequeued_entry(
+    exit_code = worker_execution.process_dequeued_entry(
         cfg,
         entry,
         queue_root=queue_root,
@@ -261,21 +259,18 @@ def test_process_dequeued_entry_returns_orca_worker_outcome(
         shutdown_requested=lambda: False,
     )
 
-    assert outcome.exit_code == 4
-    assert outcome.reaction_dir == str(reaction_dir)
-    assert outcome.entry is entry
+    assert exit_code == 4
     (execution,) = calls["args"]
     assert isinstance(execution, RunExecutionContext)
     assert execution.reaction_dir == reaction_dir.resolve()
     runner_cls = calls["kwargs"].pop("runner_cls")
-    bound_cfg = execution.cfg
     execution_provenance = execution.execution_provenance
     assert issubclass(runner_cls, OrcaRunner)
-    assert bound_cfg.resources.max_cores_per_task == 1
-    assert bound_cfg.resources.max_memory_gb_per_task == 1
+    assert execution.cfg is cfg
+    assert execution.resource_request == {"max_cores": 1, "max_memory_gb": 1}
     assert execution_provenance == orca_execution_provenance(entry.metadata["execution_snapshot"])
     assert calls["kwargs"] == {}
-    assert execution.reservation_token == "slot-1"
+    assert execution.admission_token == "slot-1"
     assert execution.admission_app_name == "orca_auto_orca"
     assert execution.admission_task_id == "task-1"
     assert execution.queue_id == entry.queue_id
@@ -324,7 +319,7 @@ def test_run_worker_child_job_finds_real_queue_entry_and_preserves_exit_code(
     assert rc == 8
     (execution,) = calls["args"]
     assert execution.reaction_dir == rxn.resolve()
-    assert execution.reservation_token == "slot-real"
+    assert execution.admission_token == "slot-real"
     assert execution.admission_app_name == "orca_auto_orca"
     assert execution.admission_task_id == "task-real"
     assert str(execution.selected_inp) == entry.metadata["selected_inp"]

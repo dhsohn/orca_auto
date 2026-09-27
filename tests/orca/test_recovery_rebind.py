@@ -937,7 +937,7 @@ def test_worker_child_runs_the_replacement_generation(
         config_path=str(config),
         queue_root=queue_root,
         queue_id=str(running.queue_id),
-        admission_token=None,
+        admission_token="",
         await_parent_admission_handoff_fn=lambda *_args: True,
     )
 
@@ -1231,7 +1231,10 @@ def test_child_recovery_records_the_rejection_on_the_failed_queue_row(
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
         worker_execution.run_worker_child_job(
-            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config),
+            queue_root=queue_root,
+            queue_id=running.queue_id,
+            admission_token="",
         )
 
     (row,) = list_queue(queue_root)
@@ -1266,7 +1269,10 @@ def test_child_recovery_records_a_rejection_raised_after_the_claim_reservation(
 
     with pytest.raises(ValueError, match="submission source input path"):
         worker_execution.run_worker_child_job(
-            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config),
+            queue_root=queue_root,
+            queue_id=running.queue_id,
+            admission_token="",
         )
 
     (row,) = list_queue(queue_root)
@@ -1306,7 +1312,10 @@ def test_child_recovery_leaves_a_requeued_row_alone(
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
         worker_execution.run_worker_child_job(
-            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config),
+            queue_root=queue_root,
+            queue_id=running.queue_id,
+            admission_token="",
         )
 
     (row,) = list_queue(queue_root)
@@ -1345,7 +1354,10 @@ def test_child_recovery_fences_the_failure_write_to_its_own_dequeue(
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
         worker_execution.run_worker_child_job(
-            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config),
+            queue_root=queue_root,
+            queue_id=running.queue_id,
+            admission_token="",
         )
 
     assert lookups == 2
@@ -1372,7 +1384,10 @@ def test_child_recovery_does_not_overwrite_a_racing_cancellation(
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
         worker_execution.run_worker_child_job(
-            config_path=str(config), queue_root=queue_root, queue_id=running.queue_id
+            config_path=str(config),
+            queue_root=queue_root,
+            queue_id=running.queue_id,
+            admission_token="",
         )
 
     (row,) = list_queue(queue_root)
@@ -1834,24 +1849,24 @@ def test_rebind_keeps_a_completed_generation_for_adoption(
     context = worker_execution._build_execution_context(
         cfg,
         result,
-        admission_token=None,
+        admission_token="",
     )
     assert context.execution_snapshot["generation_name"] == snapshot["generation_name"]
 
     @contextmanager
-    def no_admission(**_kwargs: object) -> Iterator[str]:
-        yield ""
+    def no_admission(_context: object) -> Iterator[None]:
+        yield
 
     def must_not_launch(_runner: OrcaRunner, inp_path: Path) -> Any:
         raise AssertionError(f"ORCA must not be launched for {inp_path}")
 
-    monkeypatch.setattr(execution, "_admission_context", no_admission)
+    monkeypatch.setattr(execution, "_child_admission_slot", no_admission)
     monkeypatch.setattr(OrcaRunner, "run", must_not_launch)
     # The forced row's claim settles the kept generation by adoption instead
     # of rerunning it.
     exit_code = worker_execution._run_orca_job_for_entry(
-        cfg,
         context,
+        result,
         queue_root,
         should_cancel=lambda: False,
         shutdown_requested=None,

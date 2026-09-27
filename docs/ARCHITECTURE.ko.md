@@ -168,10 +168,26 @@ fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 �
 죽은 행만 복구한다.
 
 ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행권 인계 대기,
-해당 generation 실행을 직접 수행한다. 성공·중단·예외 모두 최종 슬롯 해제는
-부모가 소유한다. 검증한 입력·자원·큐 식별자는 `RunExecutionContext` 한 개로
-구성해 실행 단계로 전달하며, CLI 인자를 다시 만들거나 빈 생명주기 콜백을
-등록하지 않는다.
+해당 generation 실행을 직접 수행한다. 검증한 입력, 제출된 자원 요청, 실행 스냅샷,
+큐 식별자는 인수한 행에서 한 번 만든 `RunExecutionContext` 하나로 실행 단계에 바로
+전달되며, RAM scratch 크기도 그 요청으로 정한다. 자식이 실행권 슬롯을 바꾸는 일은
+모두 `execution._child_admission_slot` 규칙 하나를 거친다. 자식은 슬롯을 활성화하고,
+실행이 정상 반환하면 엔진 프로세스를 완료 처리하며, 예외가 나면 슬롯을 그대로 둔다.
+자식이 해제하는 슬롯은 활성화 시점에 살아 있지 않은 슬롯뿐이다. 성공·중단·예외
+모두 슬롯 해제는 자식이 끝난 뒤 부모가 한다.
+`tests/core/queue/test_ownership_guards.py`는 `release_slot`과
+`complete_slot_engine_process`를 이 소유자만 호출하도록 제한한다. 슬롯 하나의 생명주기:
+
+| 단계 | 기록 주체 | `state` | `engine_process_state` |
+|---|---|---|---|
+| 인수 전에 예약 | 부모 | `reserved` | `idle` |
+| 자식 연결(소유 pid, 큐 ID) | 부모 | `active` | `idle` |
+| 실행 디렉터리로 활성화 | 자식 | `active` | `idle` |
+| 엔진 실행 한 번을 fence | 자식의 runner | `active` | `pending` |
+| 실행한 프로세스 그룹 기록 | 자식의 runner | `active` | `active` |
+| 종료된 그룹 기록 정리 | 자식의 runner | `active` | `idle` |
+| 실행 반환 뒤 완료 처리 | 자식 | `active` | `idle` |
+| 엔진 기록 복구 후 해제 | 부모 | 삭제 | 삭제 |
 
 `recover_crashed_state`는 중단된 실행이 `running`으로 남긴 루트 `job_state.json`을
 닫으며, 두 곳에서 각각 `run.lock` 아래에서 실행된다. 중단 복구 재바인딩

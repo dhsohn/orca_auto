@@ -6,6 +6,10 @@
 * A row is created only by ``adapter.enqueue`` and loaded only by
   ``persistence.entry_from_dict``; no rewrite sets ``enqueued_at``, which is
   part of every writer fence's generation identity.
+* An admission slot is released and its engine process completed only by the
+  listed owners: the worker parent's release, the child's one slot rule
+  (``execution._child_admission_slot``) and the engine-process registrar and
+  dead-owner recovery.
 """
 
 from __future__ import annotations
@@ -109,5 +113,33 @@ def test_rows_are_created_once_and_no_rewrite_sets_enqueued_at() -> None:
             offenders.append(f"{path}:{node.lineno} ({scope}) builds a QueueEntry")
         if name == "replace" and any(keyword.arg == "enqueued_at" for keyword in node.keywords):
             offenders.append(f"{path}:{node.lineno} ({scope}) rewrites enqueued_at")
+
+    assert offenders == [], offenders
+
+
+_SLOT_MUTATION_OWNERS = {
+    "release_slot": {
+        ("orca/queue/worker.py", "OrcaQueueWorker._release_admission_slot"),
+        ("orca/execution.py", "_child_admission_slot"),
+    },
+    "complete_slot_engine_process": {
+        ("core/admission/engine_process.py", "register_slot_engine_process"),
+        ("core/admission/engine_process.py", "_clear_dead_owner_pending_launch"),
+        ("orca/execution.py", "_child_admission_slot"),
+    },
+}
+
+
+def test_admission_slots_are_released_and_completed_only_by_their_owners() -> None:
+    offenders = [
+        f"{path}:{node.lineno} ({scope}) uses {name}"
+        for path, scope, node in _nodes()
+        for name, owners in _SLOT_MUTATION_OWNERS.items()
+        if (
+            (isinstance(node, ast.Name) and node.id == name)
+            or (isinstance(node, ast.Attribute) and node.attr == name)
+        )
+        and (path, scope) not in owners
+    ]
 
     assert offenders == [], offenders

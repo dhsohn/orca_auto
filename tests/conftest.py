@@ -3,9 +3,9 @@
 Tests take the fixtures. Where a fixture does not fit (a helper module, a
 builder called with test-specific arguments, a second root in one test) they
 import the plain builders (``make_app_cfg``, ``write_fake_orca``,
-``build_submitted_snapshot``, ``write_config_file``, ``make_queue_entry``,
-``enqueue_entry``, ``claim_next_entry``, ``write_run_state``) directly from
-this module.
+``build_submitted_snapshot``, ``write_config_file``, ``make_run_context``,
+``make_queue_entry``, ``enqueue_entry``, ``claim_next_entry``,
+``write_run_state``) directly from this module.
 
 Two fixtures are autouse: ``no_fsync`` (``@pytest.mark.real_fsync`` opts out)
 and ``isolated_config_discovery``, which keeps every test off the live shared
@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 import yaml
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import CommonResourceConfig, MessengerConfig
 from orca_auto.core.config.schema import DiscordConfig
@@ -48,6 +49,7 @@ from orca_auto.orca.queue.adapter import worker_log_path
 from orca_auto.orca.queue.entries import entry_metadata
 from orca_auto.orca.queue.roots import dequeue_next_entry
 from orca_auto.orca.resource_directives import prepare_submission_resource_request
+from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state import finalize_state, new_state, write_state
 from orca_auto.orca.statuses import (
@@ -288,6 +290,58 @@ def config_path(tmp_path: Path, app_cfg: Callable[..., AppConfig]) -> Callable[.
         return write_config_file(tmp_path / "orca_auto.yaml", cfg or app_cfg(**kwargs))
 
     return factory
+
+
+# ---------------------------------------------------------------------------
+# Run execution context
+# ---------------------------------------------------------------------------
+
+
+def make_run_context(
+    cfg: AppConfig,
+    reaction_dir: Path,
+    selected_inp: Path,
+    **fields: Any,
+) -> RunExecutionContext:
+    """A ``RunExecutionContext`` for ``selected_inp`` without a submitted snapshot.
+
+    The snapshot names the input's directory as the generation and nothing
+    else, so snapshot verification fails; use it where the test replaces the
+    runner, its ``run`` or its launch. The request is ``cfg``'s resources and
+    the admission token is empty unless ``fields`` sets them.
+    """
+
+    execution_dir = Path(selected_inp).parent
+    details = execution_dir.stat() if execution_dir.is_dir() else None
+    values: dict[str, Any] = {
+        "cfg": cfg,
+        "reaction_dir": reaction_dir,
+        "selected_inp": selected_inp,
+        "source_selected_inp": str(selected_inp),
+        "selected_input_xyz": "",
+        "resource_request": {
+            "max_cores": cfg.resources.max_cores_per_task,
+            "max_memory_gb": cfg.resources.max_memory_gb_per_task,
+        },
+        "execution_snapshot": {
+            "execution_dir": str(execution_dir),
+            "execution_dir_identity": {
+                "device": details.st_dev if details else 0,
+                "inode": details.st_ino if details else 1,
+            },
+            "executable_identities": {"orca": {}},
+        },
+        "execution_provenance": {},
+        "orca_executable": cfg.paths.orca_executable,
+        "admission_root": admission_dir(cfg.runtime.allowed_root),
+        "admission_token": "",
+        "admission_app_name": None,
+        "admission_task_id": None,
+        "queue_id": None,
+        "queue_generation": None,
+    }
+    values.update(fields)
+    return RunExecutionContext(**values)
 
 
 # ---------------------------------------------------------------------------

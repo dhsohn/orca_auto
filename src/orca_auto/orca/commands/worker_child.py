@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
         config_path=args.config,
         queue_root=args.queue_root,
         queue_id=args.queue_id,
-        admission_token=str(args.admission_token).strip() or None,
+        admission_token=str(args.admission_token).strip(),
     )
 
 

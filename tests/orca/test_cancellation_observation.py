@@ -186,5 +186,7 @@ def test_child_execution_reuses_one_probe_for_all_runner_callbacks(
         "_build_execution_context",
         lambda *_a, **_k: SimpleNamespace(reaction_dir=str(tmp_path)),
     )
-    worker_execution.process_dequeued_entry(AppConfig(), target, queue_root=tmp_path)
+    worker_execution.process_dequeued_entry(
+        AppConfig(), target, queue_root=tmp_path, admission_token=""
+    )
     assert len(reads) == 2

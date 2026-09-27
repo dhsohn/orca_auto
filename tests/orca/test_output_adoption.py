@@ -12,11 +12,11 @@ import pytest
 
 from orca_auto.orca import execution
 from orca_auto.orca.config import AppConfig, PathsConfig
-from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.types import AttemptRecord
+from tests.conftest import make_run_context
 
 _COMPLETED_OUT = "****ORCA TERMINATED NORMALLY****\n"
 
@@ -72,16 +72,13 @@ def _execute(
         yield
 
     monkeypatch.setattr(execution, "acquire_run_lock", passthrough)
-    monkeypatch.setattr(execution, "_admission_context", passthrough)
+    monkeypatch.setattr(execution, "_child_admission_slot", passthrough)
     monkeypatch.setattr(execution, "started_notification_callback", lambda _cfg: None)
-    context = RunExecutionContext(
-        reaction_dir=reaction_dir,
-        selected_inp=inp,
+    context = make_run_context(
+        AppConfig(paths=PathsConfig(orca_executable="/bin/true"), scratch=ScratchConfig()),
+        reaction_dir,
+        inp,
         admission_root=reaction_dir.parent / ".admission",
-        reservation_token=None,
-        admission_app_name=None,
-        admission_task_id="",
-        cfg=AppConfig(paths=PathsConfig(orca_executable="/bin/true"), scratch=ScratchConfig()),
     )
     return execution.execute_locked_run(context, runner_cls=runner_cls)
 

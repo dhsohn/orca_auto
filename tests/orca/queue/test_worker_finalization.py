@@ -37,6 +37,7 @@ from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_F
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca import execution as execution_mod
 from orca_auto.orca import notifications as lifecycle_notifications
+from orca_auto.orca.attempt.engine import run_attempts
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.queue import job_records, publication_repair, settlement
 from orca_auto.orca.queue import worker as queue_worker_mod
@@ -1224,14 +1225,14 @@ def test_child_publishes_and_parent_releases_slot_while_terminal_sender_is_block
     with ThreadPoolExecutor(max_workers=1) as pool:
         try:
             child = pool.submit(
-                execution_mod.run_with_state,
-                cfg=worker.cfg,
-                reaction_dir=rxn,
-                selected_inp=selected,
-                runner_cls=Runner,
-                runner=Runner(),
+                run_attempts,
+                rxn,
+                selected,
+                state,
                 resumed=False,
-                state=state,
+                runner=Runner(),
+                emit=execution_mod._emit,
+                notify_started=execution_mod.started_notification_callback(worker.cfg),
             )
             assert child.result(timeout=2) == return_code
             assert not started.is_set(), "completion delivery must belong to the parent"

@@ -14,7 +14,7 @@ crash-recovery rebind (``recovery_rebind``) and the locked run in
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,7 @@ from .attempt.reporting import exit_with_result, last_out_path_from_state
 from .attempt.resume import resume_terminal_decision
 from .completion_rules import detect_completion_mode
 from .out_analyzer import analyze_output
+from .run_context import RunExecutionContext, bind_queue_identity
 from .state import (
     is_resumable_state,
     load_or_create_state,
@@ -114,19 +115,13 @@ def _recorded_attempt_failed(state: RunState) -> bool:
 
 
 def existing_completed_exit(
+    context: RunExecutionContext,
     *,
-    reaction_dir: Path,
-    selected_inp: Path,
-    admission_root: Path,
-    reservation_token: str | None,
-    admission_task_id: str | None,
-    execution_provenance: Mapping[str, Any] | None = None,
-    queue_id: str | None = None,
-    queue_generation: str | None = None,
     emit: Callable[[dict[str, Any]], None],
 ) -> int | None:
     """Settle the run from an already completed output, or ``None`` to run ORCA."""
-    del admission_root, reservation_token
+    reaction_dir = context.reaction_dir
+    selected_inp = context.selected_inp
     done = existing_completed_out(selected_inp)
     if done is None:
         return None
@@ -163,27 +158,7 @@ def existing_completed_exit(
         selected_inp,
         to_resolved_local=to_resolved_local,
     )
-    state_changed = False
-    if execution_provenance and state.get("execution_provenance") != dict(execution_provenance):
-        state["execution_provenance"] = dict(execution_provenance)
-        state_changed = True
-    task_id = str(admission_task_id or "").strip()
-    if task_id and state.get("job_id") != task_id:
-        # A queued child may discover an already-completed output before the
-        # ordinary state-loading path below runs. Stamp the queue task ID
-        # first so the terminal replay can bind the resulting artifacts to
-        # this queue generation.
-        state["job_id"] = task_id
-        state_changed = True
-    resolved_queue_id = str(queue_id or "").strip()
-    if resolved_queue_id and state.get("queue_id") != resolved_queue_id:
-        state["queue_id"] = resolved_queue_id
-        state_changed = True
-    resolved_queue_generation = str(queue_generation or "").strip()
-    if resolved_queue_generation and state.get("queue_generation") != resolved_queue_generation:
-        state["queue_generation"] = resolved_queue_generation
-        state_changed = True
-    if state_changed:
+    if bind_queue_identity(state, context):
         save_state(reaction_dir, state)
     return exit_with_result(
         reaction_dir,
