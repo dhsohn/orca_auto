@@ -14,31 +14,25 @@ crash-recovery rebind (``recovery_rebind``) and the locked run in
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .attempt.reporting import exit_with_result, last_out_path_from_state
-from .attempt.resume import resume_terminal_decision
+from .attempt.reporting import exit_with_result, parse_analyzer_status
+from .attempt.resume import (
+    is_resumable_state,
+    load_or_create_state,
+    resume_terminal_decision,
+    state_matches_selected,
+)
 from .completion_rules import detect_completion_mode
 from .out_analyzer import analyze_output
 from .run_context import RunExecutionContext, bind_queue_identity
-from .state import (
-    is_resumable_state,
-    load_or_create_state,
-    parse_analyzer_status,
-    save_state,
-    state_matches_selected,
-)
+from .state import save_state
 from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
 from .types import RunState
 
 logger = logging.getLogger(__name__)
-
-
-def to_resolved_local(path_text: str) -> Path:
-    return Path(path_text).expanduser().resolve()
 
 
 def existing_completed_out(selected_inp: Path) -> dict[str, Any] | None:
@@ -97,9 +91,7 @@ def _state_with_recorded_attempt(reaction_dir: Path, selected_inp: Path) -> RunS
     # Read-only: load_or_create_state clears the resumable final result as it
     # loads, so a second load would no longer recognize the state as resumable.
     state = load_state(reaction_dir)
-    if not state or not state_matches_selected(
-        state, selected_inp, to_resolved_local=to_resolved_local
-    ):
+    if not state or not state_matches_selected(state, selected_inp):
         return None
     attempts = state.get("attempts")
     if not isinstance(attempts, list) or not attempts or not isinstance(attempts[-1], dict):
@@ -114,11 +106,7 @@ def _recorded_attempt_failed(state: RunState) -> bool:
     return recorded != AnalyzerStatus.COMPLETED
 
 
-def existing_completed_exit(
-    context: RunExecutionContext,
-    *,
-    emit: Callable[[dict[str, Any]], None],
-) -> int | None:
+def existing_completed_exit(context: RunExecutionContext) -> int | None:
     """Settle the run from an already completed output, or ``None`` to run ORCA."""
     reaction_dir = context.reaction_dir
     selected_inp = context.selected_inp
@@ -143,21 +131,9 @@ def existing_completed_exit(
                     reaction_dir,
                 )
                 return 1
-            return resume_terminal_decision(
-                reaction_dir=reaction_dir,
-                selected_inp=selected_inp,
-                state=recorded,
-                resumed=True,
-                last_out_path_from_state=last_out_path_from_state,
-                exit_with_result=exit_with_result,
-                emit=emit,
-            )
+            return resume_terminal_decision(reaction_dir, selected_inp, recorded)
 
-    state, resumed = load_or_create_state(
-        reaction_dir,
-        selected_inp,
-        to_resolved_local=to_resolved_local,
-    )
+    state, resumed = load_or_create_state(reaction_dir, selected_inp)
     if bind_queue_identity(state, context):
         save_state(reaction_dir, state)
     return exit_with_result(
@@ -170,7 +146,6 @@ def existing_completed_exit(
         last_out_path=done["out_path"],
         resumed=True if resumed else None,
         exit_code=0,
-        emit=emit,
         extra={"skipped_execution": True},
     )
 
@@ -179,5 +154,4 @@ __all__ = [
     "completed_out_or_none",
     "existing_completed_exit",
     "existing_completed_out",
-    "to_resolved_local",
 ]

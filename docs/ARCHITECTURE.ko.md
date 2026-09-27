@@ -16,7 +16,7 @@ ORCA_auto를 변경할 때 아래 책임 표를 기준으로 동작을 따라갑
 | :--- | :--- | :--- | :--- |
 | 제출 | 선택한 `.inp`, 참조 파일, 자원 지시어 | `submission.py`와 입력 스냅샷 바인딩 | generation에 연결된 입력과 디스크 큐 항목 |
 | 실행권 할당 | 큐 항목과 실행권 기록 | 부모 큐 워커가 admission 저장소를 통해 변경 | 예약된 슬롯과 해당 작업에 연결된 자식 프로세스 |
-| 계산 | generation에 고정된 입력과 ORCA 실행 파일 | 자식 워커의 attempt 엔진 | 출력 파일과 기록된 실행 근거 |
+| 계산 | generation에 고정된 입력과 ORCA 실행 파일 | 자식 워커의 단일 시도(`attempt/run.py`) | 출력 파일과 기록된 실행 근거 |
 | 결과 발행 | 실행 근거와 종료 판정 | 정상 종료는 attempt 보고 계층, 중단·취소 뒤에는 실시간이든 재시작 재처리든 부모의 종료 정리(`queue/settlement.py`) | 종료 상태와 `machine.json`을 포함한 generation 보고서 |
 | 완료 알림 | 작업·실행 ID가 일치하는 루트의 종료 `job_state.json`과 최종 결과 | 부모 큐 워커가 실행 잠금 안에서 상태 저장 계층을 통해 한 번 전송권을 기록하고, 전송기는 확보한 메시지만 전달 | 루트의 알림 처리 기록; generation 실행 상태와 보고서는 변경하지 않음 |
 | 조회 | 큐·상태 파일과 작업 위치 기록 | 인덱스 발행자가 조회용 파생 데이터를 갱신 | CLI 목록과 activity 화면 |
@@ -175,7 +175,16 @@ ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행�
 완료 출력 채택 또는 실행마다 하나뿐인 `OrcaRunner`. 그 생성자가 실행에 쓰는 것을 모두
 밝힌다: 스냅샷의 실행 파일과 그 식별자, generation 디렉터리와 그 식별자, 중지 요청,
 RAM scratch 정책, 슬롯의 엔진 프로세스 준비·등록 함수, 그리고 실행 전후마다 부르는
-스냅샷 검증 함수. runner는 첫 상태 기록 전에 RAM scratch를 예약하고 시도를 실행한다.
+스냅샷 검증 함수. runner는 첫 상태 기록 전에 RAM scratch를 예약하고, 실행은 시도를
+한 번만 한다([ADR 0002](adr/0002-no-automatic-retry-of-failed-calculations.md)).
+`attempt/run.run_attempt`는 재개한 상태를 기록된 시도로 마무리하거나, 그렇지 않으면
+실행 시작을 기록하고 시작 알림을 보낸 뒤 고정된 입력으로 ORCA를 한 번 실행하고, 종료
+코드와 맞춘 분석 판정(`out_analyzer.apply_exit_code`)과 함께 시도를 기록한 다음 종료
+결과, 보고서, 실행 요약을 발행한다(`attempt/reporting.exit_with_result`). 재개는 새
+generation으로의 재바인딩으로만 일어난다: 실행 시작 근거가 있는 generation의 인수는
+완료 출력으로 마무리되지 않는 한 실행 전에 재바인딩되므로, 한 generation에서 ORCA가 두
+번 실행되지 않는다. Ctrl-C를 포함한 워커 종료나 취소는 시도를
+`WorkerShutdownInterrupt`로 멈춘다.
 
 자식이 실행권 슬롯을 바꾸는 일은 모두 `execution._child_admission_slot` 규칙 하나를
 거친다. 자식은 슬롯을 활성화하고, 실행이 정상 반환하면 엔진 프로세스를 완료 처리하며,

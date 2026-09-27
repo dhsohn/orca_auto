@@ -7,7 +7,12 @@ import pytest
 from orca_auto.orca import out_analyzer
 from orca_auto.orca.completion_rules import CompletionMode
 from orca_auto.orca.frequencies import parse_frequency_analysis
-from orca_auto.orca.out_analyzer import analyze_output, scan_ts_lines_for_imag_count
+from orca_auto.orca.out_analyzer import (
+    OutAnalysis,
+    analyze_output,
+    apply_exit_code,
+    scan_ts_lines_for_imag_count,
+)
 from orca_auto.orca.output_status import iter_output_lines, termination_line
 from orca_auto.orca.parser.io import open_orca_text
 from orca_auto.orca.statuses import AnalyzerStatus
@@ -667,3 +672,27 @@ def test_memory_error_detection(tmp_path: Path, text: str) -> None:
 )
 def test_geom_not_converged_detection(tmp_path: Path, text: str) -> None:
     assert _analyze(tmp_path, text) == AnalyzerStatus.GEOM_NOT_CONVERGED
+
+
+def test_apply_exit_code_never_publishes_success_over_a_failed_process(tmp_path: Path) -> None:
+    out = _write_out(
+        tmp_path,
+        "VIBRATIONAL FREQUENCIES\n  1   -420.00 cm**-1\n  2    120.00 cm**-1\n"
+        "****ORCA TERMINATED NORMALLY****\n",
+    )
+    completed = analyze_output(out, _TS_MODE)
+    assert completed.status == AnalyzerStatus.COMPLETED
+    assert completed.markers["final_frequency_section"] is True
+
+    assert apply_exit_code(completed, 0) is completed
+    rejected = apply_exit_code(completed, 1)
+    assert (rejected.status, rejected.reason) == (
+        AnalyzerStatus.UNKNOWN_FAILURE,
+        "nonzero_exit_code",
+    )
+    assert rejected.markers["final_frequency_section"] is False
+    assert rejected.markers["imaginary_frequency_count"] == 1
+    assert completed.markers["final_frequency_section"] is True
+
+    failed = OutAnalysis(AnalyzerStatus.ERROR_SCF, "scf_not_converged", completed.markers)
+    assert apply_exit_code(failed, 42) is failed

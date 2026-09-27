@@ -54,7 +54,7 @@ from orca_auto.orca.queue.roots import dequeue_next_entry
 from orca_auto.orca.resource_directives import prepare_submission_resource_request
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
-from orca_auto.orca.state import finalize_state, new_state, write_state
+from orca_auto.orca.state import finalize_state, new_state, save_state
 from orca_auto.orca.statuses import (
     TERMINAL_RUN_STATUSES,
     AnalyzerStatus,
@@ -394,8 +394,8 @@ def make_orca_runner(
     """An ``OrcaRunner`` for inputs in ``execution_dir`` outside a queued snapshot.
 
     Snapshot verification and the admission callbacks do nothing, the
-    executable identity is unpinned, and there is no stop request and no RAM
-    scratch policy unless ``fields`` sets them.
+    executable identity is unpinned, stop is never requested and there is no
+    RAM scratch policy unless ``fields`` sets them.
     """
 
     details = execution_dir.stat()
@@ -405,7 +405,7 @@ def make_orca_runner(
         "execution_dir_identity": {"device": details.st_dev, "inode": details.st_ino},
         "execution_provenance": {},
         "verify_snapshot": lambda **_kwargs: None,
-        "stop_requested": None,
+        "stop_requested": lambda: False,
         "scratch_policy": None,
         "prepare_running_job": lambda: None,
         "register_running_job": lambda _running: None,
@@ -533,7 +533,7 @@ def write_run_state(
     """Persist a ``job_state.json`` for ``reaction_dir`` through the real state writers.
 
     Terminal statuses go through ``finalize_state`` (with a matching
-    ``build_final_result`` default); other statuses through ``write_state``.
+    ``build_final_result`` default); other statuses through ``save_state``.
     The selected input file is created when missing.
     """
 
@@ -568,7 +568,7 @@ def write_run_state(
         state["status"] = run_status.value
         if final_result is not None:
             state["final_result"] = final_result
-        write_state(reaction_dir, state)
+        save_state(reaction_dir, state)
     return state
 
 

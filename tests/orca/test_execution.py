@@ -97,7 +97,7 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
         events.append("recover")
         return False
 
-    def fake_run_attempts(*_args: object, **_kwargs: object) -> int:
+    def fake_run_attempt(*_args: object, **_kwargs: object) -> int:
         events.append("run")
         return 0
 
@@ -110,7 +110,7 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
         lambda *_a, **_k: ({"status": "created"}, False),
     )
     monkeypatch.setattr(execution, "save_state", lambda *_a, **_k: None)
-    monkeypatch.setattr(execution, "run_attempts", fake_run_attempts)
+    monkeypatch.setattr(execution, "run_attempt", fake_run_attempt)
     context = make_run_context(AppConfig(), tmp_path / "rxn", tmp_path / "rxn.inp")
 
     exit_code = execution.execute_locked_run(context, stop_requested=lambda: False)

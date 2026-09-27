@@ -44,6 +44,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `ORCA_AUTO_ORCA_ADMISSION_TASK_ID` environment variables. Nothing set them:
   the worker passes the slot token as `--admission-token`, and the app name and
   task ID come from the claimed queue row.
+- Attempt-level checkpoint resume is removed
+  ([ADR 0002](docs/adr/0002-no-automatic-retry-of-failed-calculations.md)). A
+  queued job whose generation had started is always rebound into a fresh
+  generation before it runs again, so its `<stem>.resume.inp` restart input
+  (`MORead` from the generation's own `.gbw`) was never written. Ctrl-C in a
+  worker child still stops ORCA as a worker shutdown and requeues the job; the
+  unreachable `interrupted_by_user` result with exit code 130 is gone. A
+  `job_state.json` whose final reason is `interrupted_by_user` or
+  `worker_shutdown` stays readable but is no longer resumed; only
+  `crashed_recovery` is.
 - `orca_auto.orca.state_reading.load_report_json` and
   `load_report_json_with_output_receipt` leave the package for the repository
   test tree (`tests/contracts/report_verifier.py`). ORCA_auto never reads

@@ -60,8 +60,7 @@ class ShutdownSignalGuard:
     until all process and bookkeeping cleanup has finished.
 
     Capturing SIGINT too prevents a second Ctrl-C from unwinding the cleanup that
-    the first one started. The runner preserves standalone Ctrl-C as
-    ``KeyboardInterrupt`` while worker-managed signals become
+    the first one started. The runner turns either signal into
     ``WorkerShutdownInterrupt``.
     """
 
@@ -142,10 +141,9 @@ class OrcaRunner:
 
     The constructor fixes everything a launch uses: the executable and its
     queued identity, the generation directory and its identity, the snapshot
-    verifier, the stop request, the RAM scratch policy (``None`` runs in place)
-    and the admission slot's engine-process preparer and registrar. With
-    ``stop_requested`` ``None``, Ctrl-C stays a plain ``KeyboardInterrupt``;
-    the worker child always passes its cancel-or-shutdown check.
+    verifier, the worker child's cancel-or-shutdown check, the RAM scratch
+    policy (``None`` runs in place) and the admission slot's engine-process
+    preparer and registrar.
     """
 
     def __init__(
@@ -157,7 +155,7 @@ class OrcaRunner:
         execution_dir_identity: dict[str, Any],
         execution_provenance: dict[str, Any],
         verify_snapshot: Callable[..., object],
-        stop_requested: Callable[[], bool] | None,
+        stop_requested: Callable[[], bool],
         scratch_policy: OrcaScratchPolicy | None,
         prepare_running_job: Callable[[], None],
         register_running_job: Callable[[Any | None], None],
@@ -315,7 +313,7 @@ class OrcaRunner:
         if workspace is None:
             return None
         if workspace.durable_input != durable_input:
-            # A resumed run executes a derived input instead of the prepared one.
+            # The workspace stages only the input prepare() was given.
             self.release_prepared()
             return None
         self._prepared_workspace = None
@@ -455,12 +453,7 @@ class OrcaRunner:
             with ShutdownSignalGuard() as shutdown_guard:
 
                 def _raise_if_shutdown_requested() -> None:
-                    received_signal = shutdown_guard.received_signal
-                    if received_signal == signal.SIGINT and self._shutdown_requested is None:
-                        raise KeyboardInterrupt
-                    if received_signal is not None:
-                        raise WorkerShutdownInterrupt
-                    if self._shutdown_requested is not None and self._shutdown_requested():
+                    if shutdown_guard.received_signal is not None or self._shutdown_requested():
                         raise WorkerShutdownInterrupt
 
                 proc: subprocess.Popen[str] | None = None
@@ -573,13 +566,6 @@ class OrcaRunner:
                         handle,
                         "\n[orca_auto] interrupted by worker shutdown; "
                         "terminated ORCA process tree\n",
-                    )
-                    raise
-                except KeyboardInterrupt:
-                    self._retain_until_subprocess_tree_exits(proc)
-                    self._write_interrupt_notice(
-                        handle,
-                        "\n[orca_auto] interrupted by user; terminated ORCA process tree\n",
                     )
                     raise
                 except BaseException:

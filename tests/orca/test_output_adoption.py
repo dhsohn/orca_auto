@@ -71,7 +71,6 @@ def _execute(
 
     monkeypatch.setattr(execution, "acquire_run_lock", passthrough)
     monkeypatch.setattr(execution, "_child_admission_slot", passthrough)
-    monkeypatch.setattr(execution, "started_notification_callback", lambda _cfg: None)
     monkeypatch.setattr(OrcaRunner, "run", run)
     context = make_run_context(
         AppConfig(paths=PathsConfig(orca_executable="/bin/true"), scratch=ScratchConfig()),

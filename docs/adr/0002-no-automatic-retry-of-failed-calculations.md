@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-05
 - Recorded: 2026-09-26
+- Amended: 2026-09-28 (resume only by rebind; see [Amendment](#amendment-2026-09-28-resume-only-by-rebind))
 
 ## Problem
 
@@ -95,3 +96,58 @@ coverage. A changed input after a failure is a new submission by the user.
 Queued work from before 4.0.0 must be resubmitted by hand. The rule covers
 calculation failures only: crash recovery still seeds geometry and `MORead`
 from the crashed generation (CHANGELOG 0.3.0, `execution_binding/_recovery.py`).
+
+## Amendment (2026-09-28): resume only by rebind
+
+The decision above still lists `interrupted_by_user` and `worker_shutdown` as
+resumable reasons. Attempt-level checkpoint resume is now removed: a resumed
+run no longer rewrites its input to `<stem>.resume.inp` with `MORead` from the
+generation's own `.gbw` (`attempt/resume.prepare_resumed_checkpoint_input` and
+`inp_rewriter.prepare_checkpoint_restart_input`), and the `interrupted_by_user`
+result with exit code 130 is gone. A run resumes only by rebinding into a fresh
+generation.
+
+Why the removed paths could not run in production, traced through the code at
+the change:
+
+- The worker child is the only caller of `execute_orca_run`. Before it runs a
+  claim, `recovery_rebind.maybe_rebind_recovery_generation` rebinds every
+  running claim whose generation shows started-execution evidence, meaning any
+  directory entry beyond the snapshot's files. It keeps the generation only
+  when its output already verifies as completed, and then the claim settles
+  from its recorded attempt or adopts that output without launching ORCA, or
+  when cancellation was requested, and then the row is cancelled.
+- A run writes the generation's `job_state.json` before ORCA launches, and a
+  `<stem>.gbw` beside the bound input is itself started-execution evidence
+  (binding forbids a dependency with that name). So a requeued interrupted
+  row, whether requeued by a worker shutdown or by orphan reconciliation after
+  a lost worker, never executes again in its generation, and the checkpoint
+  resume could never find a checkpoint to seed from.
+- The child installs its SIGINT and SIGTERM handlers before the run, and the
+  run always passes its cancel-or-shutdown check to `OrcaRunner`, so Ctrl-C
+  stops ORCA as `WorkerShutdownInterrupt` and the row is requeued. Nothing
+  produced `interrupted_by_user`.
+
+The 1124 `job_state.json` files under the production runs root on
+2026-09-28 agree: no final result is `resumed`, no attempt ran a
+`.resume.inp`, no attempt carries patch actions, no final reason is
+`interrupted_by_user` or `worker_shutdown`, and 2 are `crashed_recovery`.
+
+Now `crashed_recovery` is the only resumable failed reason
+(`attempt/resume.CRASHED_RECOVERY_REASON`). A resumed state is settled from
+its recorded attempt or from its generation's completed output. States that
+carry the removed reasons stay readable and are replaced like any other
+settled state. Binding still reserves the `<stem>.resume.*` names, and crash
+recovery still seeds from a `<stem>.resume.gbw`, for generations written
+before the removal.
+
+Verification: `tests/orca/attempt/test_run.py` runs a resumed state without a
+recorded attempt on the unchanged input; `tests/orca/attempt/test_resume.py`
+resumes only active and `crashed_recovery` states;
+`tests/orca/test_orca_runner.py` turns repeated SIGINT into one worker
+shutdown; `tests/orca/test_recovery_rebind.py` rebinds a started generation.
+Limit: the generation's `job_state.json` is written only while its owner
+marker (an extended attribute set at submission) verifies. If the marker was
+removed by hand, a run killed while ORCA worked in RAM scratch leaves no
+started-execution evidence and its next claim starts the unchanged input again
+in that generation, as it did before this change.

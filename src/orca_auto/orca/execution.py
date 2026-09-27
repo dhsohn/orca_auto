@@ -6,7 +6,7 @@ lock, recover a crashed resumable state, activate the admission slot
 (``_child_admission_slot``, the child's one slot rule), settle from an already
 completed output when ``output_adoption`` says one exists, and otherwise build
 the one ``OrcaRunner``, reserve RAM scratch, load (or create) and bind
-``job_state.json`` and drive ``attempt.engine.run_attempts``.
+``job_state.json`` and make the run's one attempt (``attempt.run.run_attempt``).
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 from orca_auto.core.admission import (
     AdmissionLimitReachedError,
@@ -28,41 +27,18 @@ from orca_auto.core.admission import (
 from orca_auto.core.admission.records import ADMISSION_SOURCE_QUEUE_RUN, SLOT_STATE_ACTIVE
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
 
-from .attempt.engine import run_attempts
-from .notifications import (
-    notification_channel,
-    notify_run_started_event,
-)
+from .attempt.resume import CRASHED_RECOVERY_REASON, RESUMABLE_RUN_STATUSES, load_or_create_state
+from .attempt.run import run_attempt
 from .orca_runner import OrcaRunner
-from .output_adoption import existing_completed_exit, to_resolved_local
+from .output_adoption import existing_completed_exit
 from .run_context import RunExecutionContext, bind_queue_identity
 from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy
-from .state import RESUMABLE_RUN_STATUSES, load_or_create_state, save_state
+from .state import save_state
 from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
-from .types import RunStartedNotification
 
 logger = logging.getLogger(__name__)
-
-
-def _emit(payload: dict[str, Any]) -> None:
-    fields = [
-        ("status", "status"),
-        ("job_dir", "job_dir"),
-        ("reaction_dir", "job_dir"),
-        ("selected_inp", "selected_inp"),
-        ("attempt_count", "attempt_count"),
-        ("reason", "reason"),
-        ("run_state", "run_state"),
-        ("report_json", "report_json"),
-    ]
-    emitted_labels: set[str] = set()
-    for key, label in fields:
-        if key not in payload or label in emitted_labels:
-            continue
-        print(f"{label}: {payload[key]}")
-        emitted_labels.add(label)
 
 
 @contextmanager
@@ -120,22 +96,11 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
     state["status"] = RunStatus.FAILED.value
     state["final_result"] = {
         "status": RunStatus.FAILED.value,
-        "reason": "crashed_recovery",
+        "reason": CRASHED_RECOVERY_REASON,
         "analyzer_status": AnalyzerStatus.INCOMPLETE.value,
     }
     save_state(reaction_dir, state)
     return True
-
-
-def started_notification_callback(cfg: Any) -> Callable[[RunStartedNotification], bool] | None:
-    channel = notification_channel(cfg)
-    if not channel.enabled:
-        return None
-
-    def notify_started(event: RunStartedNotification) -> bool:
-        return notify_run_started_event(channel, event)
-
-    return notify_started
 
 
 def execute_locked_run(
@@ -148,7 +113,7 @@ def execute_locked_run(
         with _child_admission_slot(context):
             # The probe reads only the bound input's own generation directory:
             # a crashed generation adopts its own output, a fresh one runs.
-            existing_exit = existing_completed_exit(context, emit=_emit)
+            existing_exit = existing_completed_exit(context)
             if existing_exit is not None:
                 return existing_exit
 
@@ -186,22 +151,10 @@ def execute_locked_run(
                 # and may wait for admission again. Once state exists the same
                 # refusal is a failed attempt, which is never rerun.
                 runner.prepare(context.selected_inp)
-                state, resumed = load_or_create_state(
-                    context.reaction_dir,
-                    context.selected_inp,
-                    to_resolved_local=to_resolved_local,
-                )
+                state, resumed = load_or_create_state(context.reaction_dir, context.selected_inp)
                 if bind_queue_identity(state, context):
                     save_state(context.reaction_dir, state)
-                return run_attempts(
-                    context.reaction_dir,
-                    context.selected_inp,
-                    state,
-                    resumed=resumed,
-                    runner=runner,
-                    emit=_emit,
-                    notify_started=started_notification_callback(cfg),
-                )
+                return run_attempt(context, state, runner, resumed=resumed)
             finally:
                 runner.release_prepared()
 

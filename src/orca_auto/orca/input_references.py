@@ -7,8 +7,8 @@ occurrences (top-level ``%moinp`` and ``%scf MOInp``) that
 whether a referenced ``.gbw`` checkpoint is intact enough to seed from, and
 the fail-closed :func:`scan_orca_file_references` scanner that execution
 binding and restart rematerialization share. Consumers above it
-(``execution_binding``, ``scratch``, ``inp_rewriter``) never re-derive a
-reference set themselves.
+(``execution_binding``, ``scratch``) never re-derive a reference set
+themselves.
 
 The syntax and block helpers are looked up through their owning modules at
 call time (``_input_syntax.orca_line_tokens``), which keeps the reference

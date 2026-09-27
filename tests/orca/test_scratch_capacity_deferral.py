@@ -27,6 +27,7 @@ from orca_auto.core.queue.deferral import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.orca import execution, worker_execution
+from orca_auto.orca.attempt import run as attempt_run
 from orca_auto.orca.config import load_config
 from orca_auto.orca.execution_binding import (
     orca_execution_started_evidence,
@@ -40,6 +41,7 @@ from orca_auto.orca.scratch import OrcaScratchPolicy
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state_reading import load_state, state_path
 from tests.conftest import (
+    RecordingChannel,
     bound_run_context,
     build_submitted_snapshot,
     claim_next_entry,
@@ -402,10 +404,9 @@ def _scratch_run(
 
     monkeypatch.setattr(execution, "acquire_run_lock", passthrough)
     monkeypatch.setattr(execution, "_child_admission_slot", passthrough)
+    monkeypatch.setattr(attempt_run, "notification_channel", lambda _cfg: RecordingChannel())
     monkeypatch.setattr(
-        execution,
-        "started_notification_callback",
-        lambda _cfg: notifications.append,
+        attempt_run, "notify_run_started_event", lambda _channel, event: notifications.append(event)
     )
     monkeypatch.setattr(OrcaRunner, "_run_in_place", run_in_place)
     cfg = make_app_cfg(
@@ -501,7 +502,7 @@ def test_workspace_reserved_for_another_input_is_never_used_to_launch(
 ) -> None:
     run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63)
     generation = run.context.selected_inp.parent
-    derived = generation / "rxn_resume.inp"
+    derived = generation / "rxn_other.inp"
     derived.write_text("! SP\n* xyz 0 1\nHe 0 0 0\n*\n", encoding="utf-8")
     runner = make_orca_runner(
         "/bin/true",
@@ -514,7 +515,7 @@ def test_workspace_reserved_for_another_input_is_never_used_to_launch(
     runner.prepare(run.context.selected_inp)
     result = runner.run(derived)
 
-    assert [path.name for path in run.launches] == ["rxn_resume.inp"]
+    assert [path.name for path in run.launches] == ["rxn_other.inp"]
     assert Path(result.out_path) == derived.with_suffix(".out")
     assert [path for path in run.scratch_root.iterdir() if path.name.startswith("attempt-")] == []
 
@@ -579,10 +580,9 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     available = {"bytes": 1}
     monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", lambda: available["bytes"])
     notifications: list[Any] = []
+    monkeypatch.setattr(attempt_run, "notification_channel", lambda _cfg: RecordingChannel())
     monkeypatch.setattr(
-        execution,
-        "started_notification_callback",
-        lambda _cfg: notifications.append,
+        attempt_run, "notify_run_started_event", lambda _channel, event: notifications.append(event)
     )
 
     queue_root = tmp_path / "queue"

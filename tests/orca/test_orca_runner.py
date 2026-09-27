@@ -666,7 +666,7 @@ def test_polled_shutdown_keeps_signals_state_only_during_cleanup(
     assert cleanup_completed == [True]
 
 
-def test_repeated_sigint_during_cleanup_preserves_keyboard_interrupt(
+def test_repeated_sigint_during_cleanup_is_one_worker_shutdown(
     mock_popen: MagicMock, mock_signal: MagicMock, inp: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mock_proc = _mock_process()
@@ -685,10 +685,9 @@ def test_repeated_sigint_during_cleanup_preserves_keyboard_interrupt(
 
     runner = make_orca_runner(_TEST_EXECUTABLE, inp.parent)
     monkeypatch.setattr(runner, "_retain_until_subprocess_tree_exits", _cleanup)
-    with pytest.raises(KeyboardInterrupt) as caught:
+    with pytest.raises(WorkerShutdownInterrupt):
         runner.run(inp)
 
-    assert type(caught.value) is KeyboardInterrupt
     assert cleanup_completed == [True]
 
 

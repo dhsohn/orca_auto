@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,9 +38,7 @@ from . import state_reading as _state_reading
 from .app_ids import ORCA_AUTO_ORCA_APP_NAME
 from .generation_validation import is_retired_generation_marker
 from .statuses import (
-    ACTIVE_RUN_STATUS_VALUES,
     TERMINAL_RUN_STATUSES,
-    AnalyzerStatus,
     RunStatus,
     coerce_run_status,
 )
@@ -136,7 +133,7 @@ def new_state(reaction_dir: Path, selected_inp: Path) -> RunState:
     }
 
 
-def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
+def save_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
     """Save changed generation evidence before refreshing the current root view.
 
     Both writes share the root mutation lock. A failed root refresh leaves the
@@ -190,10 +187,6 @@ def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
     return path
 
 
-def save_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
-    return write_state(reaction_dir, state)
-
-
 def finalize_state(
     reaction_dir: Path,
     state: RunState,
@@ -212,7 +205,7 @@ def finalize_state(
         raise ValueError(f"finalize_state requires a terminal run status, got {status!r}")
     state["status"] = terminal_status.value
     state["final_result"] = final_result
-    write_state(reaction_dir, state)
+    save_state(reaction_dir, state)
 
 
 def normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -287,95 +280,3 @@ def retired_generation(generation_dir: Path) -> bool:
     return payload is not None and is_retired_generation_marker(
         _dict(payload.get("engine_payload"))
     )
-
-
-# --- attempt decisions and resumability ------------------------------------
-
-RESUMABLE_RUN_STATUSES = ACTIVE_RUN_STATUS_VALUES
-RESUMABLE_FAILED_REASONS = frozenset({"interrupted_by_user", "worker_shutdown", "crashed_recovery"})
-
-
-@dataclass(frozen=True)
-class AttemptDecision:
-    run_status: RunStatus
-    reason: str
-    exit_code: int
-
-
-def parse_analyzer_status(status_text: AnalyzerStatus | str) -> AnalyzerStatus | None:
-    if isinstance(status_text, AnalyzerStatus):
-        return status_text
-    try:
-        return AnalyzerStatus(str(status_text))
-    except ValueError:
-        return None
-
-
-def decide_attempt_outcome(
-    *,
-    analyzer_status: AnalyzerStatus | str,
-    analyzer_reason: str,
-) -> AttemptDecision:
-    parsed = parse_analyzer_status(analyzer_status)
-    if parsed == AnalyzerStatus.COMPLETED:
-        return AttemptDecision(run_status=RunStatus.COMPLETED, reason=analyzer_reason, exit_code=0)
-    return AttemptDecision(run_status=RunStatus.FAILED, reason=analyzer_reason, exit_code=1)
-
-
-def state_matches_selected(
-    state: RunState,
-    selected_inp: Path,
-    *,
-    to_resolved_local: Callable[[str], Path],
-) -> bool:
-    selected = state.get("selected_inp")
-    if not isinstance(selected, str) or not selected.strip():
-        return False
-    try:
-        return to_resolved_local(selected) == selected_inp.resolve()
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _final_reason(state: RunState) -> str:
-    final_result = state.get("final_result")
-    if not isinstance(final_result, dict):
-        return ""
-    reason = final_result.get("reason")
-    if not isinstance(reason, str):
-        return ""
-    return reason.strip()
-
-
-def is_resumable_state(state: RunState) -> bool:
-    status = str(state.get("status", "")).strip()
-    if status in RESUMABLE_RUN_STATUSES:
-        return True
-    if status == RunStatus.FAILED.value:
-        return _final_reason(state) in RESUMABLE_FAILED_REASONS
-    return False
-
-
-def load_or_create_state(
-    reaction_dir: Path,
-    selected_inp: Path,
-    *,
-    to_resolved_local: Callable[[str], Path],
-) -> tuple[RunState, bool]:
-    state = _state_reading.load_state(reaction_dir)
-    resumed = False
-    if not state or not state_matches_selected(
-        state, selected_inp, to_resolved_local=to_resolved_local
-    ):
-        state = new_state(reaction_dir, selected_inp)
-    elif is_resumable_state(state):
-        resumed = True
-        if state.get("final_result") is not None:
-            state["final_result"] = None
-    else:
-        state = new_state(reaction_dir, selected_inp)
-
-    if not isinstance(state.get("attempts"), list):
-        state["attempts"] = []
-    save_state(reaction_dir, state)
-    return state, resumed

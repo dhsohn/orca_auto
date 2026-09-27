@@ -1,6 +1,9 @@
+"""The terminal decision of a run's one attempt and its publication."""
+
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,33 @@ def run_status_text(status: RunStatus | str) -> str:
 
 def analyzer_status_text(status: AnalyzerStatus | str) -> str:
     return status.value if isinstance(status, AnalyzerStatus) else str(status)
+
+
+def parse_analyzer_status(status_text: AnalyzerStatus | str) -> AnalyzerStatus | None:
+    if isinstance(status_text, AnalyzerStatus):
+        return status_text
+    try:
+        return AnalyzerStatus(str(status_text))
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class AttemptDecision:
+    run_status: RunStatus
+    reason: str
+    exit_code: int
+
+
+def decide_attempt_outcome(
+    *,
+    analyzer_status: AnalyzerStatus | str,
+    analyzer_reason: str,
+) -> AttemptDecision:
+    """The run's terminal status and exit code from its one attempt's verdict."""
+    if parse_analyzer_status(analyzer_status) == AnalyzerStatus.COMPLETED:
+        return AttemptDecision(run_status=RunStatus.COMPLETED, reason=analyzer_reason, exit_code=0)
+    return AttemptDecision(run_status=RunStatus.FAILED, reason=analyzer_reason, exit_code=1)
 
 
 def last_out_path_from_state(state: Mapping[str, Any]) -> str | None:
@@ -108,18 +138,50 @@ def build_run_started_notification(
     }
 
 
-def finalize_and_emit(
+def _print_run_summary(payload: Mapping[str, Any]) -> None:
+    fields = [
+        ("status", "status"),
+        ("job_dir", "job_dir"),
+        ("reaction_dir", "job_dir"),
+        ("selected_inp", "selected_inp"),
+        ("attempt_count", "attempt_count"),
+        ("reason", "reason"),
+        ("run_state", "run_state"),
+        ("report_json", "report_json"),
+    ]
+    printed_labels: set[str] = set()
+    for key, label in fields:
+        if key not in payload or label in printed_labels:
+            continue
+        print(f"{label}: {payload[key]}")
+        printed_labels.add(label)
+
+
+def exit_with_result(
     reaction_dir: Path,
     state: RunState,
     selected_inp: Path,
     *,
     status: RunStatus | str,
+    analyzer_status: AnalyzerStatus | str,
     reason: str,
-    final_result: RunFinalResult,
+    last_out_path: str | None,
+    resumed: bool | None,
     exit_code: int,
-    emit: Callable[[dict[str, Any]], None],
+    extra: Mapping[str, object] | None = None,
 ) -> int:
-    """Publish the terminal result; the parent worker owns completion delivery."""
+    """Publish the terminal result and reports, print the run summary, return ``exit_code``.
+
+    The parent worker owns completion delivery.
+    """
+    final_result = build_final_result(
+        status=status,
+        analyzer_status=analyzer_status,
+        reason=reason,
+        last_out_path=last_out_path,
+        resumed=resumed,
+        extra=extra,
+    )
     finalize_state(
         reaction_dir,
         state,
@@ -141,39 +203,5 @@ def finalize_and_emit(
             **reports,
         }
     )
-    emit(payload)
+    _print_run_summary(payload)
     return exit_code
-
-
-def exit_with_result(
-    reaction_dir: Path,
-    state: RunState,
-    selected_inp: Path,
-    *,
-    status: RunStatus | str,
-    analyzer_status: AnalyzerStatus | str,
-    reason: str,
-    last_out_path: str | None,
-    resumed: bool | None,
-    exit_code: int,
-    emit: Callable[[dict[str, Any]], None],
-    extra: Mapping[str, object] | None = None,
-) -> int:
-    final = build_final_result(
-        status=status,
-        analyzer_status=analyzer_status,
-        reason=reason,
-        last_out_path=last_out_path,
-        resumed=resumed,
-        extra=extra,
-    )
-    return finalize_and_emit(
-        reaction_dir,
-        state,
-        selected_inp,
-        status=status,
-        reason=reason,
-        final_result=final,
-        exit_code=exit_code,
-        emit=emit,
-    )

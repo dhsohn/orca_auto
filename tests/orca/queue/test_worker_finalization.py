@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from pathlib import Path
 from threading import BoundedSemaphore, Event
-from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -35,10 +34,11 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED, STATUS_QUEUED
 from orca_auto.core.utils.lock import file_lock
-from orca_auto.orca import execution as execution_mod
 from orca_auto.orca import notifications as lifecycle_notifications
-from orca_auto.orca.attempt.engine import run_attempts
+from orca_auto.orca.attempt import run as attempt_run
+from orca_auto.orca.attempt.run import run_attempt
 from orca_auto.orca.config import AppConfig
+from orca_auto.orca.orca_runner import RunResult
 from orca_auto.orca.queue import job_records, publication_repair, settlement
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import (
@@ -61,7 +61,9 @@ from tests.conftest import (
     RecordingChannel,
     claim_next_entry,
     enqueue_entry,
+    make_orca_runner,
     make_queue_entry,
+    make_run_context,
     write_run_state,
 )
 from tests.engine_artifact_helpers import bind_report_generation
@@ -1207,7 +1209,7 @@ def test_child_publishes_and_parent_releases_slot_while_terminal_sender_is_block
     started, release = Event(), Event()
     slots = BoundedSemaphore(1)
     monkeypatch.setattr(lifecycle_notifications, "_NOTIFICATION_SLOTS", slots)
-    monkeypatch.setattr(execution_mod, "notification_channel", lambda _cfg: recording_channel)
+    monkeypatch.setattr(attempt_run, "notification_channel", lambda _cfg: recording_channel)
 
     def on_send(message: object) -> None:
         if getattr(message, "title", "") in {"ORCA completed", "ORCA failed"}:
@@ -1216,23 +1218,22 @@ def test_child_publishes_and_parent_releases_slot_while_terminal_sender_is_block
 
     recording_channel.on_send = on_send
 
-    class Runner:
-        def run(self, inp: Path) -> SimpleNamespace:
-            out = inp.with_suffix(".out")
-            out.write_text("FINAL SINGLE POINT ENERGY -1.1\n****ORCA TERMINATED NORMALLY****\n")
-            return SimpleNamespace(out_path=str(out), return_code=return_code)
+    def run(inp: Path) -> RunResult:
+        out = inp.with_suffix(".out")
+        out.write_text("FINAL SINGLE POINT ENERGY -1.1\n****ORCA TERMINATED NORMALLY****\n")
+        return RunResult(out_path=str(out), return_code=return_code)
+
+    runner = make_orca_runner(worker.cfg.paths.orca_executable, selected.parent)
+    monkeypatch.setattr(runner, "run", run)
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         try:
             child = pool.submit(
-                run_attempts,
-                rxn,
-                selected,
+                run_attempt,
+                make_run_context(worker.cfg, rxn, selected),
                 state,
+                runner,
                 resumed=False,
-                runner=Runner(),
-                emit=execution_mod._emit,
-                notify_started=execution_mod.started_notification_callback(worker.cfg),
             )
             assert child.result(timeout=2) == return_code
             assert not started.is_set(), "completion delivery must belong to the parent"

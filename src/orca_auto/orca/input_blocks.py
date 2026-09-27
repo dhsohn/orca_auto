@@ -3,10 +3,9 @@
 Sits on :mod:`.input_syntax` (tokens, comments, route lines) and provides the
 two primitives every input rewriter and scanner shares: locating the single
 ``* xyz`` / ``* xyzfile`` geometry block, and walking ``%name ... end`` blocks
-under the package-wide block-termination rule of :class:`OrcaBlock`. Editing
-helpers here (``set_block_key_value``, ``replace_geometry_with_xyzfile``)
-change one block at a time and never look at external file references; that
-is :mod:`.input_references`.
+under the package-wide block-termination rule of :class:`OrcaBlock`. The
+editing helper here (``set_block_key_value``) changes one block at a time and
+never looks at external file references; that is :mod:`.input_references`.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 from .input_syntax import (
     OrcaLineToken,
@@ -93,39 +91,6 @@ def find_geometry_block(lines: Sequence[str]) -> OrcaGeometryBlock | None:
 def find_geometry_start(lines: list[str]) -> int | None:
     block = find_geometry_block(lines)
     return None if block is None else block.header_index
-
-
-def geometry_range(lines: list[str]) -> tuple[int, int, int, int] | None:
-    """Return ``(start, end, charge, multiplicity)`` of the first geometry block."""
-
-    block = find_geometry_block(lines)
-    if block is None:
-        return None
-    if block.kind == "xyzfile":
-        end = block.header_index + 1
-    elif block.terminator_index is not None:
-        end = block.terminator_index + 1
-    else:
-        end = len(lines)
-    return block.header_index, end, block.charge, block.multiplicity
-
-
-def replace_geometry_with_xyzfile(lines: list[str], geom_file: Path, base_dir: Path) -> bool:
-    geo = geometry_range(lines)
-    if geo is None:
-        return False
-    start, end, charge, mult = geo
-    geom_resolved = geom_file.resolve()
-    base_resolved = base_dir.resolve()
-    try:
-        rel = geom_resolved.relative_to(base_resolved)
-    except ValueError:
-        rel = geom_resolved
-    ref = str(rel).replace("\\", "/")
-    if " " in ref:
-        ref = f'"{ref}"'
-    lines[start:end] = [f"* xyzfile {charge} {mult} {ref}"]
-    return True
 
 
 @dataclass(frozen=True)

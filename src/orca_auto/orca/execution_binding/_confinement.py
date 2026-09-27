@@ -20,8 +20,7 @@ from orca_auto.core.confined_io import (
 )
 from orca_auto.core.utils.persistence import durable_mkdir
 
-from ..inp_rewriter import resume_checkpoint_input_path
-from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
+from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES, resume_checkpoint_input_path
 from ._models import _RouteOutputs
 
 _GENERATION_RUNTIME_FILE_NAMES = frozenset(

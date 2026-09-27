@@ -35,7 +35,7 @@ def test_internal_run_rejects_without_queue_reservation(
         attempts.append(args)
         return 0
 
-    monkeypatch.setattr(execution, "run_attempts", record_attempts)
+    monkeypatch.setattr(execution, "run_attempt", record_attempts)
     cfg = app_cfg(max_concurrent=1)
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()

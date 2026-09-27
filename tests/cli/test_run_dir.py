@@ -22,7 +22,7 @@ from orca_auto.orca.cli_logging import (
 from orca_auto.orca.commands import init as init_command
 from orca_auto.orca.commands import run_inp as run_inp_command
 from orca_auto.orca.config import load_config
-from orca_auto.orca.execution import _emit, execute_orca_run
+from orca_auto.orca.execution import execute_orca_run
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
 from orca_auto.orca.output_adoption import existing_completed_out
 from orca_auto.orca.run_lock import acquire_run_lock
@@ -297,46 +297,6 @@ def test_other_public_wrappers_dispatch_to_orca_command_modules(
     assert seen[0][1].config is resolved_config
 
 
-def test_emit_plain_text_filters_known_keys(capsys: pytest.CaptureFixture[str]) -> None:
-    payload = {
-        "status": "completed",
-        "reaction_dir": "/tmp/rxn",
-        "selected_inp": "/tmp/rxn/rxn.inp",
-        "attempt_count": 1,
-        "reason": "normal_termination",
-        "run_state": "/tmp/rxn/job_state.json",
-        "extra_unknown_key": "ignored",
-    }
-    _emit(payload)
-    output = capsys.readouterr().out
-    assert "status: completed" in output
-    assert "attempt_count: 1" in output
-    assert "extra_unknown_key" not in output
-
-
-def test_emit_prints_only_known_keys(capsys: pytest.CaptureFixture[str]) -> None:
-    payload = {
-        "status": "completed",
-        "reaction_dir": "/tmp/rxn",
-        "selected_inp": "rxn.inp",
-        "attempt_count": 2,
-        "reason": "normal_termination",
-        "report_json": "/tmp/report.json",
-        "ignored": "value",
-    }
-
-    _emit(payload)
-
-    output = capsys.readouterr().out
-    assert "status: completed" in output
-    assert "job_dir: /tmp/rxn" in output
-    assert "report_json: /tmp/report.json" in output
-    assert "ignored" not in output
-
-
-# -- logging ----------------------------------------------------------------
-
-
 def test_configure_logging_replaces_previous_orca_auto_handler(
     restored_root_logger: logging.Logger,
 ) -> None:
@@ -571,19 +531,19 @@ def test_resume_preserves_recorded_analyzer_reason(
     assert final_result["last_out_path"] == str(retry_out)
 
 
-def test_resume_interrupted_failure_keeps_run_id_and_continues(
+def test_resume_crash_recovered_failure_keeps_run_id_and_continues(
     queue_root: Path, config: Path, fake_run: Callable[[_FakeRun], None]
 ) -> None:
-    reaction, inp = _reaction(queue_root, "rxn_resume_interrupt")
+    reaction, inp = _reaction(queue_root, "rxn_resume_crashed")
     write_run_state(
         reaction,
         status="failed",
-        run_id="run_resume_interrupted",
+        run_id="run_resume_crashed",
         selected_inp=inp,
         final_result={
             "status": "failed",
             "analyzer_status": "incomplete",
-            "reason": "interrupted_by_user",
+            "reason": "crashed_recovery",
             "completed_at": "2026-01-01T00:00:02+00:00",
             "last_out_path": str(reaction / "rxn.out"),
         },
@@ -601,7 +561,7 @@ def test_resume_interrupted_failure_keeps_run_id_and_continues(
 
     saved = _loaded_state(reaction)
     assert rc == 0
-    assert saved["run_id"] == "run_resume_interrupted"
+    assert saved["run_id"] == "run_resume_crashed"
     assert seen == ["rxn.inp"]
     assert not (reaction / "rxn.retry01.inp").exists()
     assert saved["status"] == "completed"
@@ -641,26 +601,6 @@ def test_resume_completed_attempt_finalizes_without_extra_run(
     final_result = _final_result(saved)
     assert final_result["reason"] == "normal_termination"
     assert final_result["resumed"]
-
-
-def test_keyboard_interrupt_stops_run_and_finalizes_state(
-    queue_root: Path, config: Path, fake_run: Callable[[_FakeRun], None]
-) -> None:
-    reaction, _inp = _reaction(queue_root, "rxn5")
-
-    def _fake_run(_self: OrcaRunner, inp_path: Path) -> RunResult:
-        raise KeyboardInterrupt
-
-    fake_run(_fake_run)
-    rc = _run_internal_execute(config, reaction)
-
-    saved = _loaded_state(reaction)
-    assert rc == 130
-    assert saved["status"] == "failed"
-    final_result = _final_result(saved)
-    assert final_result["reason"] == "interrupted_by_user"
-    assert final_result["analyzer_status"] == "incomplete"
-    assert len(saved["attempts"]) == 0
 
 
 def test_runner_exception_finalizes_state_with_failure(

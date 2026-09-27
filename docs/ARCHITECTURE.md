@@ -16,7 +16,7 @@ Use the following ownership map when changing ORCA_auto. Keep the job ID and run
 | :--- | :--- | :--- | :--- |
 | Submit | Selected `.inp`, referenced files and resource directives | `submission.py` and input snapshot binding | Generation-bound inputs and a durable queue entry |
 | Admit | Queue entry and admission records | Parent queue worker through the admission store | Reserved slot and a child bound to that job |
-| Execute | Bound generation inputs and ORCA executable | Worker child through the attempt engine | Output files and recorded attempt evidence |
+| Execute | Bound generation inputs and ORCA executable | Worker child through its one attempt (`attempt/run.py`) | Output files and recorded attempt evidence |
 | Publish | Attempt evidence and terminal decision | Attempt reporting on normal exit; the parent's settlement (`queue/settlement.py`) after an interruption or a cancellation, live or on restart replay | Terminal state and generation reports, including `machine.json` |
 | Notify completion | Matching terminal root `job_state.json` and final result | Parent queue worker claims once through the state writer under the run lock; sender only delivers the captured message | Root notification bookkeeping; generation execution state and reports remain unchanged |
 | Query | Queue/state files and job location records | Index publisher updates derived query data | CLI rows and activity views |
@@ -186,7 +186,18 @@ then either adoption of the generation's completed output or the run's one
 executable and identity, the generation directory and its identity, the stop
 request, the RAM scratch policy, the slot's engine-process preparer and
 registrar, and the snapshot verifier it calls around each launch. The runner
-reserves RAM scratch before the first state write, and the attempts run.
+reserves RAM scratch before the first state write, and then the run makes its
+one attempt ([ADR 0002](adr/0002-no-automatic-retry-of-failed-calculations.md)).
+`attempt/run.run_attempt` settles a resumed state from its recorded attempt;
+otherwise it marks the run started, sends the started notification, runs ORCA
+once on the bound input, records the attempt with the analyzer verdict
+reconciled with the exit code (`out_analyzer.apply_exit_code`) and publishes the
+terminal result, reports and run summary (`attempt/reporting.exit_with_result`).
+A run resumes only by rebinding into a fresh generation: a claim whose
+generation shows started execution is rebound before it runs, unless its
+completed output settles it, so ORCA never runs twice in one generation. A
+worker shutdown or cancel, Ctrl-C included, stops the attempt as
+`WorkerShutdownInterrupt`.
 
 Every admission slot mutation of the child goes through one rule,
 `execution._child_admission_slot`: the child activates the slot, completes its
