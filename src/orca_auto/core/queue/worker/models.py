@@ -18,12 +18,6 @@ class ProcessBackedJob(Protocol):
 
 
 @dataclass(frozen=True)
-class SlotFillResult:
-    status: ReserveStatus
-    started: int
-
-
-@dataclass(frozen=True)
 class ReservedQueueEntry:
     """A claimed queue row together with the admission slot reserved before the claim."""
 
@@ -36,5 +30,4 @@ __all__ = [
     "ProcessBackedJob",
     "ReserveStatus",
     "ReservedQueueEntry",
-    "SlotFillResult",
 ]

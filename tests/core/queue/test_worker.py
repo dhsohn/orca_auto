@@ -5,11 +5,11 @@ import logging
 import os
 import signal
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -28,13 +28,8 @@ from orca_auto.core.queue.store import QueueLockTimeoutError, QueueStoreCorruptE
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker import loop as loop_mod
 from orca_auto.core.queue.worker import pid_file
-from orca_auto.core.queue.worker.models import ReserveStatus
+from orca_auto.core.queue.worker.models import ReservedQueueEntry, ReserveStatus
 from tests.process_helpers import FakeManagedProcess, recording_killpg
-
-
-def _append_and_return(items: Any, value: Any, result: Any) -> Any:
-    items.append(value)
-    return result
 
 
 def _entry(
@@ -148,96 +143,6 @@ def test_select_next_claimable_entry_returns_none_when_only_ineligible_rows_rema
     assert _select([foreign, unpublished, cancelled, running], accept) is None
 
 
-def test_reserve_dequeued_entry_releases_slot_when_dequeue_raises() -> None:
-    released: list[str] = []
-
-    with pytest.raises(RuntimeError, match="queue corrupt"):
-        worker_common.reserve_dequeued_entry(
-            has_capacity_fn=lambda: True,
-            peek_next_fn=lambda: (Path("/allowed"), _entry("q-1")),
-            reserve_slot_fn=lambda: "slot-1",
-            dequeue_next_fn=lambda: (_ for _ in ()).throw(RuntimeError("queue corrupt")),
-            release_slot_fn=released.append,
-        )
-
-    assert released == ["slot-1"]
-
-
-def test_reserve_dequeued_entry_writes_nothing_to_admission_when_nothing_is_claimable() -> None:
-    def reserve_slot() -> str:
-        raise AssertionError("an idle poll must not reserve an admission slot")
-
-    def release_slot(_token: str) -> None:
-        raise AssertionError("an idle poll has no slot to release")
-
-    def dequeue_next() -> None:
-        raise AssertionError("an idle poll must not attempt a dequeue")
-
-    assert worker_common.reserve_dequeued_entry(
-        has_capacity_fn=lambda: True,
-        peek_next_fn=lambda: None,
-        reserve_slot_fn=reserve_slot,
-        dequeue_next_fn=dequeue_next,
-        release_slot_fn=release_slot,
-    ) == ("idle", None)
-
-
-def test_reserve_dequeued_entry_is_blocked_before_any_queue_read_when_the_pool_is_full() -> None:
-    def peek_next() -> None:
-        raise AssertionError("a full pool must not list any queue root")
-
-    def reserve_slot() -> str:
-        raise AssertionError("a full pool must not attempt a reservation")
-
-    assert worker_common.reserve_dequeued_entry(
-        has_capacity_fn=lambda: False,
-        peek_next_fn=peek_next,
-        reserve_slot_fn=reserve_slot,
-        dequeue_next_fn=lambda: None,
-        release_slot_fn=lambda _token: None,
-    ) == ("blocked", None)
-
-
-def test_reserve_dequeued_entry_reserves_only_after_a_claimable_preview() -> None:
-    calls: list[str] = []
-    entry = _entry("q-1")
-
-    def reserve_slot() -> str:
-        calls.append("reserve")
-        return "slot-1"
-
-    def dequeue_next() -> tuple[Path, Any]:
-        calls.append("dequeue")
-        return Path("/allowed"), entry
-
-    status, reserved = worker_common.reserve_dequeued_entry(
-        has_capacity_fn=lambda: _append_and_return(calls, "capacity", True),
-        peek_next_fn=lambda: _append_and_return(calls, "peek", (Path("/allowed"), entry)),
-        reserve_slot_fn=reserve_slot,
-        dequeue_next_fn=dequeue_next,
-        release_slot_fn=lambda _token: calls.append("release"),
-    )
-
-    assert status == "processed"
-    assert reserved is not None
-    assert reserved.entry is entry
-    assert reserved.admission_token == "slot-1"
-    assert calls == ["capacity", "peek", "reserve", "dequeue"]
-
-
-def test_reserve_dequeued_entry_releases_slot_when_previewed_row_is_lost() -> None:
-    released: list[str] = []
-
-    assert worker_common.reserve_dequeued_entry(
-        has_capacity_fn=lambda: True,
-        peek_next_fn=lambda: (Path("/allowed"), _entry("q-1")),
-        reserve_slot_fn=lambda: "slot-1",
-        dequeue_next_fn=lambda: None,
-        release_slot_fn=released.append,
-    ) == ("idle", None)
-    assert released == ["slot-1"]
-
-
 def test_start_background_process_uses_detached_devnull_popen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -293,167 +198,127 @@ def test_start_background_process_redirects_output_to_log_file(
     assert calls[0]["text"] is True
 
 
-def test_fill_worker_slots_starts_until_capacity_and_reports_processed() -> None:
-    running: list[str] = []
-    reservations: Iterator[tuple[ReserveStatus, str | None]] = iter(
-        [
-            ("processed", "slot-1"),
-            ("processed", "slot-2"),
-            ("idle", None),
-        ]
+def _reserved(token: str) -> ReservedQueueEntry:
+    return ReservedQueueEntry(queue_root=Path("/runs"), entry=_entry(token), admission_token=token)
+
+
+class _ScriptedLoop(worker_common.QueueWorkerLoop):
+    """Admits from a script; a started job joins ``_running`` until its rc is set."""
+
+    def __init__(
+        self,
+        admissions: Iterable[tuple[ReserveStatus, ReservedQueueEntry | None]],
+        *,
+        max_concurrent: int = 2,
+        start_succeeds: bool = True,
+    ) -> None:
+        super().__init__(max_concurrent=max_concurrent, poll_interval_seconds=0.0)
+        self.admissions = iter(admissions)
+        self.admit_calls = 0
+        self.start_succeeds = start_succeeds
+        self.finalized: list[tuple[str, int]] = []
+        self.failing_finalize: set[str] = set()
+
+    def _admit_next(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
+        self.admit_calls += 1
+        return next(self.admissions)
+
+    def _start_reserved(self, reserved: ReservedQueueEntry) -> bool:
+        if self.start_succeeds:
+            self._running[reserved.admission_token] = SimpleNamespace(rc=None)
+        return self.start_succeeds
+
+    def _poll_job(self, job: Any) -> int | None:
+        return cast(int | None, job.rc)
+
+    def _finalize_completed_job(self, queue_id: str, job: Any, rc: int) -> None:
+        if queue_id in self.failing_finalize:
+            raise RuntimeError("boom")
+        self.finalized.append((queue_id, rc))
+
+
+def test_fill_slots_starts_until_capacity_and_reports_processed() -> None:
+    loop = _ScriptedLoop(
+        [("processed", _reserved("slot-1")), ("processed", _reserved("slot-2")), ("idle", None)]
     )
 
-    result = worker_common.fill_worker_slots(
-        running_count=lambda: len(running),
-        max_concurrent=2,
-        reserve_next=lambda: next(reservations),
-        start_reserved=lambda reserved: running.append(reserved),
-    )
-
-    assert result.status == "processed"
-    assert result.started == 2
-    assert running == ["slot-1", "slot-2"]
+    assert loop._fill_slots() == "processed"
+    assert list(loop._running) == ["slot-1", "slot-2"]
+    assert loop.admit_calls == 2
 
 
-def test_fill_worker_slots_preserves_blocked_status_before_starting() -> None:
-    result = worker_common.fill_worker_slots(
-        running_count=lambda: 0,
-        max_concurrent=2,
-        reserve_next=lambda: ("blocked", None),
-        start_reserved=lambda _reserved: pytest.fail("start should not run"),
-    )
+def test_fill_slots_preserves_blocked_status_before_starting() -> None:
+    loop = _ScriptedLoop([("blocked", None)])
 
-    assert result.status == "blocked"
-    assert result.started == 0
+    assert loop._fill_slots() == "blocked"
+    assert loop._running == {}
 
 
-def test_fill_worker_slots_respects_max_new_jobs() -> None:
-    running: list[str] = []
-
-    result = worker_common.fill_worker_slots(
-        running_count=lambda: len(running),
+def test_fill_slots_respects_max_new_jobs() -> None:
+    loop = _ScriptedLoop(
+        [("processed", _reserved("slot-1")), ("processed", _reserved("slot-2"))],
         max_concurrent=5,
-        reserve_next=lambda: ("processed", "slot"),
-        start_reserved=lambda reserved: running.append(reserved),
-        max_new_jobs=1,
     )
 
-    assert result.status == "processed"
-    assert result.started == 1
-    assert running == ["slot"]
+    assert loop._fill_slots(max_new_jobs=1) == "processed"
+    assert list(loop._running) == ["slot-1"]
+    assert loop.admit_calls == 1
 
 
-def test_fill_worker_slots_does_not_count_handled_start_failure() -> None:
-    reservations: Iterator[tuple[ReserveStatus, str | None]] = iter(
-        [
-            ("processed", "slot-1"),
-            ("processed", "slot-2"),
-        ]
-    )
-    reserve_calls = 0
-
-    def reserve_next() -> tuple[ReserveStatus, str | None]:
-        nonlocal reserve_calls
-        reserve_calls += 1
-        return next(reservations)
-
-    result = worker_common.fill_worker_slots(
-        running_count=lambda: 0,
-        max_concurrent=2,
-        reserve_next=reserve_next,
-        start_reserved=lambda _reserved: False,
+def test_fill_slots_does_not_count_a_failed_start() -> None:
+    loop = _ScriptedLoop(
+        [("processed", _reserved("slot-1")), ("processed", _reserved("slot-2"))],
+        start_succeeds=False,
     )
 
-    assert result.status == "processed"
-    assert result.started == 0
-    assert reserve_calls == 1
+    assert loop._fill_slots() == "processed"
+    assert loop._running == {}
+    assert loop.admit_calls == 1
 
 
-def test_pop_completed_worker_jobs_finalizes_and_removes_finished_jobs() -> None:
-    running = {
-        "q-running": SimpleNamespace(rc=None),
-        "q-done": SimpleNamespace(rc=0),
-        "q-failed": SimpleNamespace(rc=2),
-    }
-    finalized: list[tuple[str, int]] = []
-
-    count = worker_common.pop_completed_worker_jobs(
-        running,
-        poll_job=lambda job: job.rc,
-        finalize_finished=lambda queue_id, _job, rc: finalized.append((queue_id, rc)),
+def test_check_completed_jobs_finalizes_and_removes_finished_jobs() -> None:
+    loop = _ScriptedLoop([])
+    loop._running.update(
+        {
+            "q-running": SimpleNamespace(rc=None),
+            "q-done": SimpleNamespace(rc=0),
+            "q-failed": SimpleNamespace(rc=2),
+        }
     )
 
-    assert count == 2
-    assert finalized == [("q-done", 0), ("q-failed", 2)]
-    assert list(running) == ["q-running"]
+    loop._check_completed_jobs()
+
+    assert loop.finalized == [("q-done", 0), ("q-failed", 2)]
+    assert list(loop._running) == ["q-running"]
 
 
-def test_pop_completed_worker_jobs_keeps_finished_job_when_finalizer_raises() -> None:
-    running = {"q-done": SimpleNamespace(rc=0)}
+def test_check_completed_jobs_keeps_a_job_whose_finalize_failed() -> None:
+    loop = _ScriptedLoop([])
+    loop.failing_finalize = {"q-bad"}
+    loop._running.update({"q-bad": SimpleNamespace(rc=1), "q-good": SimpleNamespace(rc=0)})
+    retained: set[str] = set()
 
-    with pytest.raises(RuntimeError, match="finalizer failed"):
-        worker_common.pop_completed_worker_jobs(
-            running,
-            poll_job=lambda job: job.rc,
-            finalize_finished=lambda *_args: (_ for _ in ()).throw(
-                RuntimeError("finalizer failed")
-            ),
-        )
+    loop._check_completed_jobs(retained_completed_ids=retained)
 
-    assert list(running) == ["q-done"]
+    assert loop.finalized == [("q-good", 0)]
+    assert list(loop._running) == ["q-bad"]
+    assert retained == {"q-bad"}
 
 
-def test_pop_completed_worker_jobs_isolates_finalize_error_when_handler_supplied() -> None:
-    running = {
-        "q-bad": SimpleNamespace(rc=1),
-        "q-good": SimpleNamespace(rc=0),
-    }
-    finalized: list[str] = []
-    errors: list[tuple[str, int, str]] = []
+def test_check_completed_jobs_drops_a_failed_finalize_the_handler_recovered() -> None:
+    class _RecoveringLoop(_ScriptedLoop):
+        def _on_finalize_error(self, queue_id: str, job: Any, rc: int, exc: Exception) -> bool:
+            self.finalized.append((f"recovered {queue_id}", rc))
+            return True
 
-    def finalize(queue_id: str, _job: object, rc: int) -> None:
-        if queue_id == "q-bad":
-            raise RuntimeError("boom")
-        finalized.append(queue_id)
+    loop = _RecoveringLoop([])
+    loop.failing_finalize = {"q-bad"}
+    loop._running.update({"q-bad": SimpleNamespace(rc=1), "q-good": SimpleNamespace(rc=0)})
 
-    count = worker_common.pop_completed_worker_jobs(
-        running,
-        poll_job=lambda job: job.rc,
-        finalize_finished=finalize,
-        on_finalize_error=lambda queue_id, _job, rc, exc: errors.append((queue_id, rc, str(exc))),
-    )
+    loop._check_completed_jobs()
 
-    assert count == 2
-    assert finalized == ["q-good"]
-    assert errors == [("q-bad", 1, "boom")]
-    assert list(running) == ["q-bad"]
-
-
-def test_pop_completed_worker_jobs_removes_failed_finalize_when_handler_recovers() -> None:
-    running = {
-        "q-bad": SimpleNamespace(rc=1),
-        "q-good": SimpleNamespace(rc=0),
-    }
-    recovered: list[str] = []
-
-    def finalize(queue_id: str, _job: object, _rc: int) -> None:
-        if queue_id == "q-bad":
-            raise RuntimeError("boom")
-
-    def recover(queue_id: str, _job: object, _rc: int, _exc: Exception) -> bool:
-        recovered.append(queue_id)
-        return True
-
-    count = worker_common.pop_completed_worker_jobs(
-        running,
-        poll_job=lambda job: job.rc,
-        finalize_finished=finalize,
-        on_finalize_error=recover,
-    )
-
-    assert count == 2
-    assert recovered == ["q-bad"]
-    assert running == {}
+    assert loop.finalized == [("recovered q-bad", 1), ("q-good", 0)]
+    assert loop._running == {}
 
 
 def test_queue_worker_loop_survives_finalize_error_and_logs(

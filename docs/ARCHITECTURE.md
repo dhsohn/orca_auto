@@ -107,7 +107,9 @@ The worker separates supervision from execution.
 PID-file and singleton-lock lifecycle, admission (a slot is reserved before the
 row is claimed by id, with the previewed row as `expected_entry`), child start
 and attach, terminal finalization, cancellation, shutdown and orphan
-reconciliation. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
+reconciliation. `_admit_next` spells out one admission in order: withheld
+directories, publication repair, queued notification, capacity, preview, slot
+reservation, claim by id, and slot release when the claim is lost. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
 (reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
 and knows a job only as a process-backed record. An ordinary exception from one
 pass is logged and the pass is retried after the poll interval while running

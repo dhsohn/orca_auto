@@ -3,89 +3,24 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from collections.abc import Callable, Iterator, MutableMapping
-from typing import Any, TypeVar
+from collections.abc import Callable, Iterator
+from typing import Any
 
 from ..processes import (
     install_shutdown_signal_handlers,
     request_process_group_stop,
     terminate_process_group,
 )
-from .models import ProcessBackedJob, ReservedQueueEntry, ReserveStatus, SlotFillResult
+from .models import ProcessBackedJob, ReservedQueueEntry, ReserveStatus
 
 LOGGER = logging.getLogger(__name__)
-
-T = TypeVar("T")
-
-
-def fill_worker_slots(
-    *,
-    running_count: Callable[[], int],
-    max_concurrent: int,
-    reserve_next: Callable[[], tuple[ReserveStatus, T | None]],
-    start_reserved: Callable[[T], bool | None],
-    max_new_jobs: int | None = None,
-) -> SlotFillResult:
-    started = 0
-    while running_count() < max_concurrent:
-        if max_new_jobs is not None and started >= max_new_jobs:
-            break
-        status, reserved = reserve_next()
-        if status != "processed" or reserved is None:
-            return SlotFillResult(status="processed" if started else status, started=started)
-        before_start = running_count()
-        start_result = start_reserved(reserved)
-        after_start = running_count()
-        if start_result is False or (start_result is None and after_start <= before_start):
-            return SlotFillResult(status="processed", started=started)
-        started += 1
-    return SlotFillResult(status="processed" if started else "idle", started=started)
-
-
-def pop_completed_worker_jobs(
-    running: MutableMapping[str, T],
-    *,
-    poll_job: Callable[[T], int | None],
-    finalize_finished: Callable[[str, T, int], None],
-    on_finalize_error: Callable[[str, T, int, Exception], bool | None] | None = None,
-    retained_completed_ids: set[str] | None = None,
-) -> int:
-    completed: list[tuple[str, T, int]] = []
-    for queue_id, job in list(running.items()):
-        rc = poll_job(job)
-        if rc is None:
-            continue
-        completed.append((queue_id, job, rc))
-
-    for queue_id, job, rc in completed:
-        remove_running_job = False
-        try:
-            finalize_finished(queue_id, job, rc)
-        except Exception as exc:
-            # Without a handler the caller keeps the default re-raise behavior.
-            # With one (the supervised loop), a single job's finalize failure is
-            # isolated so the long-running worker survives. The handler must opt
-            # in to dropping the job after it has made queue state safe.
-            # KeyboardInterrupt and SystemExit are BaseException and intentionally
-            # still propagate.
-            if on_finalize_error is None:
-                raise
-            remove_running_job = bool(on_finalize_error(queue_id, job, rc, exc))
-        else:
-            remove_running_job = True
-
-        if remove_running_job:
-            running.pop(queue_id, None)
-        elif retained_completed_ids is not None:
-            retained_completed_ids.add(queue_id)
-    return len(completed)
 
 
 class QueueWorkerLoop:
     """The poll loop of a queue worker that supervises one child process per job.
 
-    Subclasses reserve and start work (``_reserve_next_entry``,
-    ``_start_reserved``), finalize exited children and stop running ones. The
+    Subclasses admit and start work (``_admit_next``, ``_start_reserved``),
+    finalize exited children and stop running ones. The
     loop owns the iteration order (reap, cancel pass, admit, sleep), the
     isolation of a failed pass, the shutdown sweep and the signal handlers.
     """
@@ -198,23 +133,40 @@ class QueueWorkerLoop:
         self._sleep_fn(self.poll_interval_seconds)
 
     def _fill_slots(self, *, max_new_jobs: int | None = None) -> str:
-        result = fill_worker_slots(
-            running_count=lambda: len(self._running),
-            max_concurrent=self.max_concurrent,
-            reserve_next=self._reserve_next_entry,
-            start_reserved=self._start_reserved,
-            max_new_jobs=max_new_jobs,
-        )
-        return result.status
+        """Admit and start jobs until capacity; ``processed`` once any job started."""
+        started = 0
+        while len(self._running) < self.max_concurrent:
+            if max_new_jobs is not None and started >= max_new_jobs:
+                break
+            status, reserved = self._admit_next()
+            if status != "processed" or reserved is None:
+                return "processed" if started else status
+            if not self._start_reserved(reserved):
+                return "processed"
+            started += 1
+        return "processed" if started else "idle"
 
     def _check_completed_jobs(self, *, retained_completed_ids: set[str] | None = None) -> None:
-        pop_completed_worker_jobs(
-            self._running,
-            poll_job=self._poll_job,
-            finalize_finished=self._finalize_completed_job,
-            on_finalize_error=self._on_finalize_error,
-            retained_completed_ids=retained_completed_ids,
-        )
+        completed = [
+            (queue_id, job, rc)
+            for queue_id, job in list(self._running.items())
+            if (rc := self._poll_job(job)) is not None
+        ]
+        for queue_id, job, rc in completed:
+            try:
+                self._finalize_completed_job(queue_id, job, rc)
+            except Exception as exc:  # noqa: BLE001 - the handler logs it
+                # One job's finalize failure is isolated so the long-running
+                # worker survives; the handler opts in to dropping the job only
+                # after it has made queue state safe. KeyboardInterrupt and
+                # SystemExit are BaseException and still propagate.
+                remove_running_job = bool(self._on_finalize_error(queue_id, job, rc, exc))
+            else:
+                remove_running_job = True
+            if remove_running_job:
+                self._running.pop(queue_id, None)
+            elif retained_completed_ids is not None:
+                retained_completed_ids.add(queue_id)
 
     def _on_finalize_error(self, queue_id: str, job: Any, rc: int, exc: Exception) -> bool:
         del job
@@ -241,10 +193,10 @@ class QueueWorkerLoop:
 
         install_shutdown_signal_handlers(request_shutdown)
 
-    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
+    def _admit_next(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
         raise NotImplementedError
 
-    def _start_reserved(self, reserved: ReservedQueueEntry) -> bool | None:
+    def _start_reserved(self, reserved: ReservedQueueEntry) -> bool:
         raise NotImplementedError
 
     def _poll_job(self, job: ProcessBackedJob) -> int | None:
@@ -321,8 +273,4 @@ class QueueWorkerLoop:
         raise NotImplementedError
 
 
-__all__ = [
-    "QueueWorkerLoop",
-    "fill_worker_slots",
-    "pop_completed_worker_jobs",
-]
+__all__ = ["QueueWorkerLoop"]

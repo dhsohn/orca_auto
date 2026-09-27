@@ -56,7 +56,7 @@ def test_slow_queued_delivery_does_not_delay_submission_or_reservation(tmp_path,
     reserved = None
     with ThreadPoolExecutor(max_workers=1) as pool:
         try:
-            future = pool.submit(worker._reserve_next_entry)
+            future = pool.submit(worker._admit_next)
             assert entered.wait(5)
             status, reserved = future.result(timeout=5)
             assert status == "processed" and reserved is not None

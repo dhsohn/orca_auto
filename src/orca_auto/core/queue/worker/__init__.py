@@ -9,21 +9,12 @@ from ..processes import (
     install_shutdown_signal_handlers,
     terminate_process_group,
 )
-from .admission import (
-    admission_has_capacity,
-    reserve_dequeued_entry,
-    select_next_claimable_entry,
-)
-from .loop import (
-    QueueWorkerLoop,
-    fill_worker_slots,
-    pop_completed_worker_jobs,
-)
+from .admission import admission_has_capacity, select_next_claimable_entry
+from .loop import QueueWorkerLoop
 from .models import (
     ProcessBackedJob,
     ReservedQueueEntry,
     ReserveStatus,
-    SlotFillResult,
 )
 from .pid_file import (
     WORKER_PID_FILE_NAME,
@@ -40,15 +31,11 @@ __all__ = [
     "QueueWorkerLoop",
     "ReserveStatus",
     "ReservedQueueEntry",
-    "SlotFillResult",
     "admission_has_capacity",
-    "fill_worker_slots",
     "install_shutdown_signal_handlers",
     "live_queue_slot_keys_for_slots",
-    "pop_completed_worker_jobs",
     "read_worker_pid_file",
     "remove_worker_pid_file",
-    "reserve_dequeued_entry",
     "select_next_claimable_entry",
     "start_background_process",
     "terminate_process_group",

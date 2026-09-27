@@ -505,7 +505,7 @@ def test_repaired_and_claimed_row_gets_its_queued_notification(harness: Harness)
     )
     sends_before = len(harness.channel.sends)
     worker = OrcaQueueWorker(load_config(str(harness.config)), str(harness.config))
-    status, reserved = worker._reserve_next_entry()
+    status, reserved = worker._admit_next()
     try:
         _join_notification_senders()
         after = adapter.get_entry_by_id(harness.runs, queue_id)

@@ -836,8 +836,7 @@ def test_withheld_directory_is_matched_through_a_symlinked_spelling(
     withheld_dir.mkdir()
     alias = queue_root / "mol_symlink_alias"
     alias.symlink_to(withheld_dir, target_is_directory=True)
-    state = worker.replay_state
-    state.admission_withheld_keys = frozenset({str(withheld_dir.resolve())})
+    worker._admission_withheld_keys = frozenset({str(withheld_dir.resolve())})
 
     def row(reaction_dir: str) -> QueueEntry:
         return QueueEntry(
@@ -852,15 +851,14 @@ def test_withheld_directory_is_matched_through_a_symlinked_spelling(
     assert worker._entry_waits_for_terminal_replay(row(str(alias)))
     assert worker._entry_waits_for_terminal_replay(row(""))
     assert not worker._entry_waits_for_terminal_replay(row(str(queue_root / "other")))
-    state.admission_withheld_keys = frozenset()
+    worker._admission_withheld_keys = frozenset()
     assert not worker._entry_waits_for_terminal_replay(row(""))
 
 
 def test_row_whose_directory_cannot_be_resolved_is_withheld_while_any_is(
     worker: OrcaQueueWorker, queue_root: Path
 ) -> None:
-    state = worker.replay_state
-    state.admission_withheld_keys = frozenset({str(queue_root / "mol_withheld")})
+    worker._admission_withheld_keys = frozenset({str(queue_root / "mol_withheld")})
     # The row's directory is spelled through a user that does not exist:
     # it has no resolvable identity.
     candidate = QueueEntry(
@@ -873,7 +871,7 @@ def test_row_whose_directory_cannot_be_resolved_is_withheld_while_any_is(
     )
 
     assert worker._entry_waits_for_terminal_replay(candidate)
-    state.admission_withheld_keys = frozenset()
+    worker._admission_withheld_keys = frozenset()
     assert not worker._entry_waits_for_terminal_replay(candidate)
 
 

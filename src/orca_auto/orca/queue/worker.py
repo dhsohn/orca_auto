@@ -46,7 +46,6 @@ from orca_auto.core.queue.worker import (
     ReserveStatus,
     admission_has_capacity,
     remove_worker_pid_file,
-    reserve_dequeued_entry,
     start_background_process,
     terminate_process_group,
     worker_pid_file_path,
@@ -138,6 +137,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
         self.replay_state = OrcaWorkerReplayState()
         self._worker_state_last_reconcile: float | None = None
         self._snapshot_intent_last_reconcile: float | None = None
+        # Both kept current by ``_admit_next`` before every claim; ``_skip_entry``
+        # reads them inside that claim.
+        self._admission_withheld_keys: frozenset[str] = frozenset()
         self._publication_withheld_ids: frozenset[str] = frozenset()
 
     # -- pid file and singleton lock ----------------------------------------
@@ -311,23 +313,17 @@ class OrcaQueueWorker(QueueWorkerLoop):
 
     # -- admission ----------------------------------------------------------
 
-    def _admission_has_capacity(self) -> bool:
-        return admission_has_capacity(self.admission_root, self.max_concurrent)
-
-    def _peek_next_entry(self) -> tuple[Path, QueueEntry] | None:
-        return roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
-
-    def _dequeue_next_entry(self) -> tuple[Path, QueueEntry] | None:
-        return roots.dequeue_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
-
-    def _reserve_admission_slot(self) -> str | None:
-        return _try_reserve_admission_slot(self.admission_root, self.max_concurrent)
-
     def _release_admission_slot(self, admission_token: str) -> object:
         released: object = release_slot(self.admission_root, admission_token)
         return released
 
-    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
+    def _admit_next(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
+        """Admit one row: the whole reserve-before-claim sequence, in order.
+
+        Withheld directories, publication repair, queued notification, capacity,
+        preview, slot reservation, claim by id, and slot release when the claim
+        is lost.
+        """
         # Pending publication retains its replay snapshot and durable queue marker.
         # Until it is replayed, no new generation may start in that reaction
         # directory: max_concurrent > 1 could otherwise start a forced successor in
@@ -341,8 +337,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 "cannot be tied to a reaction directory"
             )
             return "blocked", None
-        replay_state = self.replay_state
-        if withheld != replay_state.admission_withheld_keys:
+        if withheld != self._admission_withheld_keys:
             if withheld:
                 logger.warning(
                     "ORCA admission withheld for reaction dir(s) until terminal replay completes: %s",
@@ -350,19 +345,40 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 )
             else:
                 logger.info("ORCA admission is no longer withheld for any reaction dir")
-            replay_state.admission_withheld_keys = withheld
+            self._admission_withheld_keys = withheld
         publication_withheld_ids = publication_repair.repair_queue_publications(self.cfg)
         if publication_withheld_ids is None:
             logger.warning("Queue admission paused: ORCA queue could not be inspected")
             return "blocked", None
         self._publication_withheld_ids = publication_withheld_ids
+        # Load-bearing, not a duplicate of the poll-sleep call: a row the repair
+        # above just published and the claim below takes in this same pass is
+        # never pending at a later sleep, so it would never be notified.
         notify_queued_jobs(self.cfg)
-        return reserve_dequeued_entry(
-            has_capacity_fn=self._admission_has_capacity,
-            peek_next_fn=self._peek_next_entry,
-            reserve_slot_fn=self._reserve_admission_slot,
-            dequeue_next_fn=self._dequeue_next_entry,
-            release_slot_fn=self._release_admission_slot,
+        # Read before writing, and read the cheap thing first: a full pool is one
+        # lock-free admission read, and an empty queue is a queue listing, while
+        # an admission reservation is a durable write to the shared slot file that
+        # an idle worker must not pay (twice, with the release) on every poll. The
+        # slot still comes before the dequeue so a claimed row always holds
+        # capacity; a preview that loses the race simply releases the slot again.
+        if not admission_has_capacity(self.admission_root, self.max_concurrent):
+            return "blocked", None
+        if roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry) is None:
+            return "idle", None
+        admission_token = _try_reserve_admission_slot(self.admission_root, self.max_concurrent)
+        if admission_token is None:
+            return "blocked", None
+        try:
+            dequeued = roots.dequeue_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
+        except Exception:
+            self._release_admission_slot(admission_token)
+            raise
+        if dequeued is None:
+            self._release_admission_slot(admission_token)
+            return "idle", None
+        queue_root, entry = dequeued
+        return "processed", ReservedQueueEntry(
+            queue_root=queue_root, entry=entry, admission_token=admission_token
         )
 
     def _unresolved_terminal_reaction_keys(self) -> frozenset[str] | None:
@@ -399,7 +415,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
 
     def _entry_waits_for_terminal_replay(self, entry: QueueEntry) -> bool:
         """Whether claiming *entry* would start a generation in a withheld directory."""
-        withheld = self.replay_state.admission_withheld_keys
+        withheld = self._admission_withheld_keys
         if not withheld:
             return False
         try:

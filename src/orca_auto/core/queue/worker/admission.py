@@ -8,7 +8,6 @@ from orca_auto.core.admission import read_active_slot_count
 from ..priority import normalize_queue_priority
 from ..store import claimable_pending
 from ..types import QueueEntry
-from .models import ReservedQueueEntry, ReserveStatus
 
 
 def admission_has_capacity(admission_root: Path, limit: int) -> bool:
@@ -50,56 +49,7 @@ def select_next_claimable_entry(
     return champion
 
 
-def reserve_dequeued_entry(
-    *,
-    has_capacity_fn: Callable[[], bool],
-    peek_next_fn: Callable[[], tuple[Path, QueueEntry] | None],
-    reserve_slot_fn: Callable[[], str | None],
-    dequeue_next_fn: Callable[[], tuple[Path, QueueEntry] | None],
-    release_slot_fn: Callable[[str], object],
-) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
-    """Reserve an admission slot, then claim the previewed row under it.
-
-    The slot is reserved before the dequeue so a claimed row always holds
-    capacity; a claim that is lost or raises releases the slot again.
-    """
-    # Read before writing, and read the cheap thing first: a full pool is one
-    # lock-free admission read, and an empty queue is a queue listing, while
-    # an admission reservation is a durable write to the shared slot file that
-    # an idle worker must not pay (twice, with the release) on every poll. The
-    # slot still comes before the dequeue so a claimed row always holds
-    # capacity; a preview that loses the race simply releases the slot again.
-    if not has_capacity_fn():
-        return "blocked", None
-    if peek_next_fn() is None:
-        return "idle", None
-
-    admission_token = reserve_slot_fn()
-    if admission_token is None:
-        return "blocked", None
-
-    try:
-        dequeued = dequeue_next_fn()
-    except Exception:
-        release_slot_fn(admission_token)
-        raise
-    if dequeued is None:
-        release_slot_fn(admission_token)
-        return "idle", None
-
-    queue_root, entry = dequeued
-    return (
-        "processed",
-        ReservedQueueEntry(
-            queue_root=queue_root,
-            entry=entry,
-            admission_token=admission_token,
-        ),
-    )
-
-
 __all__ = [
     "admission_has_capacity",
-    "reserve_dequeued_entry",
     "select_next_claimable_entry",
 ]

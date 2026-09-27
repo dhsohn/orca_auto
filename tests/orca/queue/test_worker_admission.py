@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from orca_auto.core.admission import admission_dir, list_slots, release_slot, reserve_slot
+from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import worker as queue_worker_mod
@@ -85,6 +88,123 @@ def test_admission_reservation_moves_the_admission_file_to_a_new_inode(
     # the idle-poll test relies on is the (inode, mtime_ns) pair.
     assert admission_file_identity(admission_dir(queue_root)) != before
     assert len(list_slots(worker.admission_root)) == 2
+
+
+def _admission_pass(worker: OrcaQueueWorker) -> None:
+    """One ``run_pass`` with the periodic reconcile not yet due."""
+    worker._worker_state_last_reconcile = time.monotonic()
+    worker.run_pass()
+
+
+def _slots(queue_root: Path) -> list[dict[str, object]]:
+    path = admission_dir(queue_root) / "admission_slots.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def _enqueue_ready(queue_root: Path, name: str) -> QueueEntry:
+    rxn = queue_root / name
+    return enqueue(queue_root, str(rxn), metadata=current_orca_queue_metadata(rxn))
+
+
+def test_admission_pass_reserves_the_slot_before_it_claims_the_row(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = make_worker(start=child_starter, sleep=lambda _seconds: None)
+    entry = _enqueue_ready(queue_root, "mol_A")
+    calls: list[str] = []
+
+    def recorded(name: str, call: Callable[..., Any]) -> Callable[..., Any]:
+        def record(*args: Any, **kwargs: Any) -> Any:
+            calls.append(name)
+            return call(*args, **kwargs)
+
+        return record
+
+    roots = queue_worker_mod.roots
+    monkeypatch.setattr(
+        queue_worker_mod,
+        "admission_has_capacity",
+        recorded("capacity", queue_worker_mod.admission_has_capacity),
+    )
+    monkeypatch.setattr(roots, "peek_next_entry", recorded("preview", roots.peek_next_entry))
+    monkeypatch.setattr(
+        queue_worker_mod,
+        "_try_reserve_admission_slot",
+        recorded("reserve", queue_worker_mod._try_reserve_admission_slot),
+    )
+    monkeypatch.setattr(roots, "dequeue_next_entry", recorded("claim", roots.dequeue_next_entry))
+
+    _admission_pass(worker)
+
+    # The claim previews again to fence on the row it takes; the second
+    # admission finds nothing claimable and writes nothing.
+    assert calls == [
+        "capacity",
+        "preview",
+        "reserve",
+        "claim",
+        "preview",
+        "capacity",
+        "preview",
+    ]
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.RUNNING}
+    [slot] = _slots(queue_root)
+    assert (slot["state"], slot["queue_id"]) == ("active", entry.queue_id)
+
+
+def test_admission_pass_with_a_full_store_does_not_preview_the_queue(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker = make_worker(max_concurrent=1, start=child_starter, sleep=lambda _seconds: None)
+    assert reserve_slot(worker.admission_root, 1, source="queue_worker", state="reserved")
+    entry = _enqueue_ready(queue_root, "mol_A")
+    before = admission_file_identity(worker.admission_root)
+    monkeypatch.setattr(
+        queue_worker_mod.roots,
+        "peek_next_entry",
+        lambda *_args, **_kwargs: pytest.fail("a full store must not preview the queue"),
+    )
+
+    _admission_pass(worker)
+
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+    assert admission_file_identity(worker.admission_root) == before
+    assert child_starter.started == []
+
+
+@pytest.mark.parametrize("claim", ["lost", "raises"])
+def test_admission_pass_releases_the_slot_when_the_claim_fails(
+    make_worker: Callable[..., OrcaQueueWorker],
+    child_starter: ChildStarter,
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    claim: str,
+) -> None:
+    worker = make_worker(start=child_starter, sleep=lambda _seconds: None)
+    entry = _enqueue_ready(queue_root, "mol_A")
+
+    def failed_claim(*_args: Any, **_kwargs: Any) -> None:
+        if claim == "raises":
+            raise QueueLockTimeoutError("queue lock held past its deadline")
+        return None
+
+    monkeypatch.setattr(queue_worker_mod.roots, "dequeue_next_entry", failed_claim)
+
+    if claim == "raises":
+        with pytest.raises(QueueLockTimeoutError):
+            _admission_pass(worker)
+    else:
+        _admission_pass(worker)
+
+    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
+    assert _slots(queue_root) == []
+    assert child_starter.started == []
 
 
 def test_start_job(worker: OrcaQueueWorker, fake_popen: list[SpawnCall], queue_root: Path) -> None:

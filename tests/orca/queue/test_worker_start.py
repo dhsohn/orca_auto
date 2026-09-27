@@ -265,10 +265,10 @@ def test_run_reclaims_the_slot_a_failed_admission_pass_could_not_release(
         )
     else:
         monkeypatch.setattr(
-            worker,
-            "_dequeue_next_entry",
+            queue_worker_mod.roots,
+            "dequeue_next_entry",
             _fail_first_call(
-                worker._dequeue_next_entry,
+                queue_worker_mod.roots.dequeue_next_entry,
                 QueueLockTimeoutError("queue lock held past its deadline"),
             ),
         )

@@ -73,7 +73,7 @@ def test_worker_body_timeout_is_not_duplicate_worker(
         def _shutdown_all(self) -> None:
             pass
 
-        def _reserve_next_entry(self) -> NoReturn:
+        def _admit_next(self) -> NoReturn:
             raise QueueLockTimeoutError("actual queue lock timed out")
 
     worker = Worker(make_app_cfg(tmp_path, max_concurrent=1), "unused", sleep_fn=stop)

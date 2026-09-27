@@ -59,9 +59,6 @@ class OrcaWorkerReplayState:
     blocked_marker_keys: set[str] = field(default_factory=set)
     generation_owners: dict[str, str] = field(default_factory=dict)
     generation_owner_active: dict[str, bool] = field(default_factory=dict)
-    # Kept current by the reserve gate, which runs before every reservation;
-    # read by the row filter inside that reservation.
-    admission_withheld_keys: frozenset[str] = frozenset()
 
 
 __all__ = ["OrcaRunningJob", "OrcaWorkerReplayState", "TerminalReplayWorkItem"]

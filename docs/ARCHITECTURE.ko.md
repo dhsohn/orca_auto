@@ -106,7 +106,9 @@ graph TD
 `OrcaQueueWorker`(`orca/queue/worker.py`)가 유일한 큐 워커다. PID 파일과 단일
 실행 잠금의 생명주기, 실행 슬롯 예약(행을 ID로 인수하기 전에 슬롯을 먼저 예약하며,
 미리 읽은 행을 `expected_entry`로 사용), 자식 시작과 슬롯 연결, 종료 확정, 취소,
-셧다운, 고아 행 정리를 모두 소유한다. 기반 클래스 `core.queue.worker.QueueWorkerLoop`는
+셧다운, 고아 행 정리를 모두 소유한다. `_admit_next`가 한 번의 수용을 순서대로
+적는다. 보류 디렉터리, 발행 복구, 제출 알림, 여유 확인, 미리 보기, 슬롯 예약,
+ID 기준 인수, 인수를 놓치면 슬롯 해제 순이다. 기반 클래스 `core.queue.worker.QueueWorkerLoop`는
 패스 순서(회수, 취소, 수용, 대기), 셧다운 sweep, 시그널 핸들러만 담당하며 작업을
 프로세스가 딸린 레코드로만 안다. 한 패스에서 일반 예외가 나면 기록한 뒤 폴링 간격
 후 그 패스를 다시 시도하며, 실행 중인 자식은 계속 감독한다. KeyboardInterrupt,
