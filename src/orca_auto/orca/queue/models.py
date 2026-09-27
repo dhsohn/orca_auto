@@ -56,7 +56,9 @@ class OrcaWorkerReplayState:
     still observed. A key leaves the set when its row settles or drops.
     """
 
-    # Every map is keyed by queue_id; ``generation_owners`` maps a reaction key to one.
+    # ``generation_owners`` and ``generation_owner_active`` are keyed by reaction
+    # directory (``generation_owners`` maps it to its owning queue_id); every other
+    # map and set is keyed by queue_id.
     pending_replays: dict[str, TerminalReplayWorkItem] = field(default_factory=dict)
     reconcile_statuses: dict[str, str] | None = None
     retry_keys: set[str] = field(default_factory=set)

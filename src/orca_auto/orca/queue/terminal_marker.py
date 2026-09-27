@@ -98,6 +98,12 @@ class TerminalGenerationVerdict(str, Enum):
     (``terminal_state``) writes for OWNED, ABSENT and both PREVIOUS_TERMINAL
     verdicts and raises for every other. The ``_UNVERIFIED`` and
     ``UNOBSERVED_`` verdicts are where the two readers answer differently.
+
+    The fourteen members keep both readers' answers as
+    ``tests/contracts/pins/replay_supersession.json`` pins them, not a minimal
+    classification. ``is_superseded`` adds rules of its own before it asks for
+    a verdict: an item with an empty reaction directory or task id is
+    superseded.
     """
 
     UNREADABLE = "unreadable"  # the state file exists but does not load

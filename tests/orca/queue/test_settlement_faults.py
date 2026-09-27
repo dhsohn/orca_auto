@@ -13,12 +13,13 @@ Faults act below settlement (a held ``run.lock``, an unreadable location
 index, one refused queue or slot save), so the matrix does not depend on how
 settlement is split into functions. The paths are a child that exited
 non-zero without a terminal state (``exit``), a cancelled running child
-(``cancel``), a cancelled child that ignored SIGTERM and was SIGKILLed
-(``cancel_killed``), a fresh worker replaying a row whose parent died after the
-terminal mark (``restart``), and a fresh worker replaying a row the cancelled
-child marked before its parent died (``cancel_restart``). No child writes a
-terminal state: the parent's settlement is the one writer of the cancelled
-result (ADR 0008).
+(``cancel``), a cancelled child that marked its own row while it handled the
+stop (``cancel_marked``), a cancelled child that ignored SIGTERM and was
+SIGKILLed (``cancel_killed``), a fresh worker replaying a row whose parent died
+after the terminal mark (``restart``), and a fresh worker replaying a row the
+cancelled child marked before its parent died (``cancel_restart``). No child
+writes a terminal state: the parent's settlement is the one writer of the
+cancelled result (ADR 0008).
 """
 
 from __future__ import annotations
@@ -95,6 +96,7 @@ _RESTART = {
 _EXPECTED = {
     "exit": _LIVE,
     "cancel": _LIVE,
+    "cancel_marked": _LIVE,
     "cancel_killed": _LIVE,
     "restart": _RESTART,
     "cancel_restart": _RESTART,
@@ -240,7 +242,9 @@ def _fault(name: str, entry: QueueEntry, root: Path, token: str | None) -> Itera
 
 
 @pytest.mark.parametrize("fault", ["none", "prepare", "bind", "release", "finish", "clear"])
-@pytest.mark.parametrize("path", ["exit", "cancel", "cancel_killed", "restart", "cancel_restart"])
+@pytest.mark.parametrize(
+    "path", ["exit", "cancel", "cancel_marked", "cancel_killed", "restart", "cancel_restart"]
+)
 def test_settlement_fault_matrix(
     make_worker: Callable[..., OrcaQueueWorker],
     fake_children: FakeChildren,
@@ -273,8 +277,15 @@ def test_settlement_fault_matrix(
         assert release_slot(admission_dir(queue_root), token)
         token = None
     else:
+
+        def mark_own_row_cancelled() -> None:
+            assert requeue_running_entry(queue_root, entry.queue_id, expected_entry=running)
+
         child = fake_children.spawn(
-            exited=1 if path == "exit" else None, ignores_sigterm=path == "cancel_killed"
+            exited=1 if path == "exit" else None,
+            exit_code=0 if path == "cancel_marked" else -signal.SIGTERM,
+            on_stop=mark_own_row_cancelled if path == "cancel_marked" else None,
+            ignores_sigterm=path == "cancel_killed",
         )
         worker._running[entry.queue_id] = running_job(worker, entry, rxn, child, token)
         if path != "exit":
@@ -283,7 +294,7 @@ def test_settlement_fault_matrix(
     with _fault(fault, entry, queue_root, token):
         if path == "exit":
             worker._check_completed_jobs()
-        elif path in ("cancel", "cancel_killed"):
+        elif path in ("cancel", "cancel_marked", "cancel_killed"):
             worker._check_cancel_requests()
         else:
             worker._reconcile_worker_state()

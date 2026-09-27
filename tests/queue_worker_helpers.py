@@ -143,14 +143,28 @@ WORKER_LOGGER = "orca_auto.orca.queue.worker"
 
 
 @dataclass
+class SlowStoppingProcess(FakeManagedProcess):
+    """A fake child still handling its SIGTERM until its parent waits on it."""
+
+    finish_stop: Callable[[], None] | None = None
+
+    def wait(self, timeout: float | None = None) -> int:
+        finish, self.finish_stop = self.finish_stop, None
+        if finish is not None:
+            finish()
+        return super().wait(timeout)
+
+
+@dataclass
 class FakeChildren:
     """Children with fake pids behind the two OS seams a stop reaches them through.
 
     ``terminate_process_group`` runs for real: it polls, signals the group via
     ``os.killpg``, waits and escalates. Only the kernel's answers are faked: a
     SIGTERM makes the child exit with its configured code (after its own stop
-    handling, when given), a SIGKILL ends it regardless, a stubborn child
-    ignores both, and the pid probe reports what the registry says.
+    handling, when given; a slow child finishes that only while its parent
+    waits on it), a SIGKILL ends it regardless, a stubborn child ignores both,
+    and the pid probe reports what the registry says.
     """
 
     by_pid: dict[int, FakeManagedProcess] = field(default_factory=dict)
@@ -169,10 +183,12 @@ class FakeChildren:
         on_stop: Callable[[], None] | None = None,
         stubborn: bool = False,
         ignores_sigterm: bool = False,
+        slow_stop: bool = False,
     ) -> FakeManagedProcess:
         pid = self.next_pid
         self.next_pid += 1
-        process = FakeManagedProcess(pid=pid, poll_result=exited)
+        process_type = SlowStoppingProcess if slow_stop else FakeManagedProcess
+        process = process_type(pid=pid, poll_result=exited)
         if stubborn:
             self.stubborn.add(pid)
             process.wait_side_effects = [
@@ -198,12 +214,18 @@ class FakeChildren:
         if pgid in self.stubborn or (pgid in self.sigterm_ignorers and signum == signal.SIGTERM):
             return
         if signum == signal.SIGTERM:
-            hook = self.stop_hooks.get(pgid)
-            if hook is not None:
-                hook()
-            child.poll_result = self.exit_codes[pgid]
+            if isinstance(child, SlowStoppingProcess):
+                child.finish_stop = lambda: self._stop(pgid, child)
+            else:
+                self._stop(pgid, child)
         elif signum == signal.SIGKILL:
             child.poll_result = -signal.SIGKILL
+
+    def _stop(self, pgid: int, child: FakeManagedProcess) -> None:
+        hook = self.stop_hooks.get(pgid)
+        if hook is not None:
+            hook()
+        child.poll_result = self.exit_codes[pgid]
 
     def pid_exists(self, pid: int) -> bool:
         child = self.by_pid.get(pid)

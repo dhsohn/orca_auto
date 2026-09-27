@@ -147,8 +147,30 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `Skipping cancel finalization of …; run lock is held` warning is gone. Until
   the parent settles the row, normally right after the child exits and after a
   parent crash on the next worker start, the state still says `running` behind
-  a cancelled row whose result publication is pending. States that already
+  a cancelled row whose result publication is pending. The result's
+  `completed_at` is the time the parent settled the row. States that already
   record a cancelled result are not rewritten.
+- Worker log lines about terminal settlement moved or changed. The logger
+  `orca_auto.orca.queue.run_state_replay` is now
+  `orca_auto.orca.queue.terminal_state`
+  (`Ignoring previous-generation terminal ORCA state: …`).
+  `Job completed: … (rc=…)`, `Job failed: … (rc=…)`, `Job cancelled: … (rc=…)`,
+  `Skipping terminal mark …`, `Skipping terminal finalization …`,
+  `Queue entry disappeared after terminal state preparation …` and
+  `Terminal notification raised …` keep their text but come from
+  `orca_auto.orca.queue.settlement` instead of `orca_auto.orca.queue.replay`.
+  The two warnings for an unreadable `job_state.json` during replay
+  (`Failed to read ORCA state generation for …` and
+  `Failing closed on unreadable ORCA state generation: <state file>`) are one
+  warning, `Failing closed on unreadable ORCA state generation: <reaction dir>`,
+  which names the job directory instead of the state file and no longer includes
+  the read error. The worker's
+  `Durable cancellation marker has no reaction identity` error is removed; that
+  case is now logged as `Failed to settle or release cancelled job …` with a
+  `terminal replay marker has no durable reaction identity` traceback, and the
+  job is still retained. `Failed to prepare or release cancelled job …` reads
+  `Failed to settle or release cancelled job …`. The crash rebind's debug line
+  `completed-output probe failed …` comes from `orca_auto.orca.output_adoption`.
 - Public contract: one generation identity now decides whether a queue row is
   still the generation a writer read
   ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),

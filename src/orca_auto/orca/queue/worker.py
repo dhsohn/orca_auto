@@ -59,13 +59,7 @@ from orca_auto.core.queue.worker import (
     worker_pid_file_path,
     write_worker_pid_file,
 )
-from orca_auto.core.statuses import (
-    STATUS_CANCELLED,
-    STATUS_COMPLETED,
-    STATUS_FAILED,
-    STATUS_PENDING,
-    STATUS_RUNNING,
-)
+from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING, TERMINAL_STATUSES
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca.worker_execution import build_worker_child_command
 
@@ -136,11 +130,7 @@ def _child_run_concluded(job: OrcaRunningJob) -> bool:
     expected_job_id = (job.task_id or "").strip() or queue_entry_task_id(current) or None
     if not state or not payload_matches_expected_job_id(state, expected_job_id):
         return False
-    return str(state.get("status") or "").strip().lower() in (
-        STATUS_COMPLETED,
-        STATUS_FAILED,
-        STATUS_CANCELLED,
-    )
+    return str(state.get("status") or "").strip().lower() in TERMINAL_STATUSES
 
 
 def _host_core_count() -> int | None:
@@ -803,7 +793,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         return terminated is True
 
     def _cancel_running_job(self, queue_id: str, job: OrcaRunningJob) -> bool:
-        """Stop *job*, mark its row cancelled and settle the cancelled generation.
+        """Stop *job*, mark its row cancelled unless its child did, then settle the generation.
 
         Returns ``True`` only when the job's queue and admission ownership has
         been transferred to durable replay and its slot released; otherwise retry.
@@ -830,13 +820,14 @@ class OrcaQueueWorker(QueueWorkerLoop):
             return False
         try:
             current = get_entry_by_id(self.queue_root, queue_id)
-            if current is None or not mark_cancelled(
+            if current is None:
+                return False
+            marked = mark_cancelled(
                 self.queue_root,
                 queue_id,
                 expected_entry=current,
                 expected_task_id=job.task_id or None,
-            ):
-                return False
+            )
         except Exception:
             logger.exception(
                 "Failed to durably mark cancelled ORCA job %s; retaining retry ownership",
@@ -844,6 +835,13 @@ class OrcaQueueWorker(QueueWorkerLoop):
             )
             return False
         terminal_entry = get_entry_by_id(self.queue_root, queue_id)
+        # mark_cancelled accepts only a running row. A child that handled the
+        # stop with the cancel pending already marked its own row cancelled with
+        # the replay marker (requeue_running_entry), so a refusal of a row that
+        # has left running settles what the row owes, as the completion path
+        # does. Any other refusal keeps the job for retry.
+        if not marked and (terminal_entry is None or entry_status_is_running(terminal_entry)):
+            return False
         if entry_status_is_running(terminal_entry):
             logger.error(
                 "Cancellation returned without a durable terminal queue transition: %s",
@@ -887,11 +885,11 @@ class OrcaQueueWorker(QueueWorkerLoop):
             cancel_requested = False
         if cancel_requested:
             # A cancel landed before the worker loop could process it proactively. The
-            # shared requeue chokepoint would still honor it (mark the entry cancelled
-            # instead of requeuing for resume) but skip the terminal side effects --
-            # the cancelled run state and the notification. Route it through the same
-            # finalize path as a proactive cancel so the user is told it stopped and no
-            # stale "running" run state lingers.
+            # row is marked cancelled with its replay marker by the child, which handles
+            # the stop through requeue_running_entry, or by mark_cancelled when the
+            # child was killed first. The cancel path then settles it before the worker
+            # exits (the cancelled run state, the location record and the notification)
+            # instead of leaving a "running" run state to the next start's replay.
             self._cancel_running_job(queue_id, job)
             return
 

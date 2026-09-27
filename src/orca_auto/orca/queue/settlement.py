@@ -1,13 +1,19 @@
 """Terminal settlement of one ORCA queue generation, step by step.
 
 A generation that became terminal is settled in this order: mark the row
-terminal with its replay marker (``mark_terminal_row``), prepare the terminal
-``job_state.json`` and reports (``prepare``), bind the row's outcome and run id
-to that state (``bind_row``), release the execution slot (the worker's step),
-then ``finish``: the location record, the one notification claim and the
-marker clear. The worker's live completion and cancellation call these steps
-around its slot release; the restart pipeline in ``replay.py`` calls
-``settle``. Every function takes one generation and its state explicitly.
+terminal with its replay marker, prepare the terminal ``job_state.json`` and
+reports (``prepare``), bind the row's outcome and run id to that state
+(``bind_row``), release the execution slot (the worker's step), then
+``finish``: the location record, the one notification claim and the marker
+clear. The worker marks a completed or failed child's row with
+``mark_terminal_row``. A cancelled row is marked by the child, whose
+``requeue_running_entry`` on SIGTERM marks a row with a pending cancel
+cancelled instead of requeueing it, or by the worker's ``mark_cancelled`` when
+the child exited without doing so, for example because it was killed first.
+Either way the worker then calls prepare, bind and finish around its slot
+release; the restart pipeline in ``replay.py`` calls ``settle`` for a row
+marked before its worker died. Every function takes one generation and its
+state explicitly.
 """
 
 from __future__ import annotations

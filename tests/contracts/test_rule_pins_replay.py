@@ -1,13 +1,14 @@
 """Rule pin: terminal replay supersession, before and under ``run.lock``.
 
-Two functions decide whether a pending terminal replay still owns the state
-file of its reaction directory: ``settlement.is_superseded`` (the pre-check)
-and ``terminal_state._load_state_for_terminal_generation``
-(under ``run.lock``). They read different run ids today: the pre-check prefers
-``item.run_id``, then ``item.recorded_run_id``, then the observed fingerprint's
-run id; the under-lock check reads only the observed fingerprint. The table
-crosses the current ``job_state.json`` with replay items whose three run ids
-disagree and pins both answers in ``pins/replay_supersession.json``.
+Whether a pending terminal replay still owns the state file of its reaction
+directory is decided once, by ``terminal_marker.terminal_generation_verdict``,
+and answered by two readers: ``settlement.is_superseded`` (the pre-check) and
+``terminal_state._load_state_for_terminal_generation`` (under ``run.lock``).
+They pass it different run ids: the pre-check prefers ``item.run_id``, then
+``item.recorded_run_id``, then the observed fingerprint's run id; the
+under-lock check reads only the observed fingerprint. The table crosses the
+current ``job_state.json`` with replay items whose three run ids disagree and
+pins both readers' answers in ``pins/replay_supersession.json``.
 """
 
 from __future__ import annotations

@@ -226,9 +226,10 @@ def reconcile_dead_running_rows_for_dir(
     """Submitter-side fallback: recover *reaction_dir*'s running rows left by a dead worker.
 
     The worker is the owner of RUNNING-row reconciliation (its recovery pass,
-    ``OrcaQueueWorker._reconcile_worker_state``); a submission does not sweep the queue. It is allowed to touch only the rows
-    of the directory being submitted, and only when every protection the worker
-    applies also holds here:
+    ``OrcaQueueWorker._reconcile_worker_state``); a submission does not sweep the
+    queue. It is allowed to touch only the rows of the directory being
+    submitted, and only when every protection the worker applies also holds
+    here:
 
     * no queue worker is alive (``queue_worker.pid``) -- a live worker is already
       responsible for these rows and its child may hold a slot it has not yet

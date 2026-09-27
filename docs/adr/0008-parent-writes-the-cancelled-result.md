@@ -49,9 +49,15 @@ finalization` warning.
   report, `job_locations.json` and notification goldens are unchanged, so the
   settled files are the same.
 - `tests/orca/queue/test_settlement_faults.py` settles a cancelled child that
-  ignored SIGTERM and was SIGKILLed (`cancel_killed`) and a cancelled row
-  whose parent died before it wrote the state, replayed by a fresh worker
-  (`cancel_restart`), under a fault at each settlement step.
+  ignored SIGTERM and was SIGKILLed (`cancel_killed`), a cancelled child that
+  marked its own row while it handled SIGTERM (`cancel_marked`) and a
+  cancelled row whose parent died before it wrote the state, replayed by a
+  fresh worker (`cancel_restart`), under a fault at each settlement step.
+- `tests/orca/queue/test_worker_shutdown.py::test_shutdown_settles_a_cancelled_child_that_marked_its_own_row`
+  stops a cancelled child during a graceful worker shutdown. The child marks
+  its row while the parent waits on it, the parent's own `mark_cancelled`
+  refuses the row that is no longer running, and the parent still settles it
+  before it exits.
 - `tests/orca/test_worker_execution.py::test_cancelled_child_leaves_the_cancelled_result_to_the_parent`
   runs a real child through a cancellation: the state stays `running`, the
   row is cancelled with a marker that observed that state, and the parent's
@@ -63,8 +69,15 @@ finalization` warning.
   row for their job, an active row or a replay marker, so no settlement path
   can select them; the hashes were unchanged.
 
-Limits: between the child's exit and the parent's settlement, `job_state.json`
-still says `running` behind a cancelled queue row that shows `result
-publication pending`. After a parent crash that lasts until the next worker
-start replays the row. States that already record a cancelled result are not
-rewritten.
+Limits: from the child's cancelled mark until the parent's settlement,
+`job_state.json` still says `running` behind a cancelled queue row that shows
+`result publication pending`. The parent settles the row right after the child
+exits, in the same cancel pass, also for a cancel that a graceful worker
+shutdown stops; the child's mark makes the parent's own `mark_cancelled`
+refuse, and the parent settles the row the child marked. A settlement step
+that fails is retried on the next poll, or at the next worker start when the
+worker was shutting down. After a parent crash the window lasts until the next
+worker start replays the row. The result's `completed_at` is stamped when the
+parent settles, not when the child stopped: moments after the child's exit on
+the live and shutdown paths, and at the next worker start after a parent
+crash. States that already record a cancelled result are not rewritten.
