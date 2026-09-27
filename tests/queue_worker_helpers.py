@@ -1,18 +1,52 @@
+"""Shared pieces of the ORCA queue worker tests (``tests/orca/queue/test_worker_*.py``).
+
+The worker tests drive the worker against real queue, admission and run-state
+files and read the outcome back from them. Children are fakes reached only
+through the two OS seams a stop goes through (``os.killpg`` and the pid probe),
+or real ``sleep`` processes when the exit path itself is under test. Faults are
+injected as states the worker can meet in production: a held ``run.lock`` (an
+ORCA instance still owns the directory), a read-only queue root, an unreadable
+job index, an engine launch pending under a live owner. Their fixtures live in
+``tests/orca/queue/conftest.py``.
+"""
+
 from __future__ import annotations
 
+import json
+import signal
+import subprocess
 from argparse import Namespace
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Protocol
+from threading import Event
+from typing import Any, Protocol
 from unittest.mock import patch
 
-from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.admission import reserve_slot
+from orca_auto.core.messaging.channel import SendResult
+from orca_auto.core.queue.processes import ManagedProcess
+from orca_auto.core.queue.store import save_entries as save_entries_core
+from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.utils.lock import file_lock
+from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, load_config
 from orca_auto.orca.queue import replay as replay_mod
-from orca_auto.orca.queue.models import OrcaWorkerReplayState
+from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
+from orca_auto.orca.queue.models import OrcaRunningJob, OrcaWorkerReplayState
+from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 from orca_auto.orca.submission import create_queued_submission
-from tests.conftest import make_app_cfg, write_config_file, write_fake_orca, write_run_state
+from tests.conftest import (
+    RecordingChannel,
+    make_app_cfg,
+    write_config_file,
+    write_fake_orca,
+    write_run_state,
+)
+from tests.process_helpers import FakeManagedProcess
 
 
 class ReplayStateOwner(Protocol):
@@ -138,11 +172,247 @@ def run_terminal_replay(
         )
 
 
+WORKER_LOGGER = "orca_auto.orca.queue.worker"
+
+
+# ---------------------------------------------------------------------------
+# Fakes: children behind the OS seams, a recording child starter
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FakeChildren:
+    """Children with fake pids behind the two OS seams a stop reaches them through.
+
+    ``terminate_process_group`` runs for real: it polls, signals the group via
+    ``os.killpg``, waits and escalates. Only the kernel's answers are faked: a
+    SIGTERM makes the child exit with its configured code (after its own stop
+    handling, when given), a SIGKILL ends it regardless, a stubborn child
+    ignores both, and the pid probe reports what the registry says.
+    """
+
+    by_pid: dict[int, FakeManagedProcess] = field(default_factory=dict)
+    exit_codes: dict[int, int] = field(default_factory=dict)
+    stop_hooks: dict[int, Callable[[], None]] = field(default_factory=dict)
+    stubborn: set[int] = field(default_factory=set)
+    sigterm_ignorers: set[int] = field(default_factory=set)
+    signals: list[tuple[int, int]] = field(default_factory=list)
+    next_pid: int = 40001
+
+    def spawn(
+        self,
+        *,
+        exited: int | None = None,
+        exit_code: int = -signal.SIGTERM,
+        on_stop: Callable[[], None] | None = None,
+        stubborn: bool = False,
+        ignores_sigterm: bool = False,
+    ) -> FakeManagedProcess:
+        pid = self.next_pid
+        self.next_pid += 1
+        process = FakeManagedProcess(pid=pid, poll_result=exited)
+        if stubborn:
+            self.stubborn.add(pid)
+            process.wait_side_effects = [
+                subprocess.TimeoutExpired(cmd="child", timeout=1),
+                subprocess.TimeoutExpired(cmd="child", timeout=1),
+            ]
+        elif ignores_sigterm:
+            self.sigterm_ignorers.add(pid)
+            process.wait_side_effects = [subprocess.TimeoutExpired(cmd="child", timeout=1)]
+        self.by_pid[pid] = process
+        self.exit_codes[pid] = exit_code
+        if on_stop is not None:
+            self.stop_hooks[pid] = on_stop
+        return process
+
+    def killpg(self, pgid: int, signum: int) -> None:
+        child = self.by_pid.get(pgid)
+        if child is None or child.poll_result is not None:
+            raise ProcessLookupError(f"no process group {pgid}")
+        if signum == 0:
+            return
+        self.signals.append((pgid, signum))
+        if pgid in self.stubborn or (pgid in self.sigterm_ignorers and signum == signal.SIGTERM):
+            return
+        if signum == signal.SIGTERM:
+            hook = self.stop_hooks.get(pgid)
+            if hook is not None:
+                hook()
+            child.poll_result = self.exit_codes[pgid]
+        elif signum == signal.SIGKILL:
+            child.poll_result = -signal.SIGKILL
+
+    def pid_exists(self, pid: int) -> bool:
+        child = self.by_pid.get(pid)
+        return child is not None and child.poll_result is None
+
+    def stopped(self, process: FakeManagedProcess) -> bool:
+        return process.poll_result is not None and (process.pid, signal.SIGTERM) in self.signals
+
+
+@dataclass
+class StartedChild:
+    queue_root: Path
+    entry: QueueEntry
+    admission_token: str
+    process: FakeManagedProcess
+
+
+@dataclass
+class ChildStarter:
+    """The worker's ``_start_background_process`` seam, spawning fake children."""
+
+    children: FakeChildren
+    started: list[StartedChild] = field(default_factory=list)
+    error: Exception | None = None
+
+    def __call__(
+        self,
+        *,
+        queue_root: Path,
+        entry: QueueEntry,
+        admission_token: str,
+    ) -> ManagedProcess:
+        if self.error is not None:
+            raise self.error
+        process = self.children.spawn()
+        self.started.append(StartedChild(queue_root, entry, admission_token, process))
+        return process
+
+
+@dataclass
+class SpawnCall:
+    args: list[str]
+    log_path: Path | None
+    process: FakeManagedProcess
+
+
+# ---------------------------------------------------------------------------
+# Queue, admission and run-state helpers
+# ---------------------------------------------------------------------------
+
+
+def reserve_job_slot(
+    root: Path, limit: int, entry: QueueEntry, reaction_dir: Path, **extra: Any
+) -> str:
+    token = reserve_slot(
+        root,
+        limit,
+        work_dir=str(reaction_dir),
+        queue_id=entry.queue_id,
+        source="queue_worker",
+        state="reserved",
+        **extra,
+    )
+    assert token is not None
+    return token
+
+
+def running_job(
+    worker: OrcaQueueWorker,
+    entry: QueueEntry,
+    reaction_dir: Path | str,
+    process: ManagedProcess,
+    admission_token: str,
+    *,
+    task_id: str | None = None,
+) -> OrcaRunningJob:
+    return OrcaRunningJob(
+        queue_root=worker.allowed_root,
+        queue_id=entry.queue_id,
+        reaction_dir=str(reaction_dir),
+        process=process,
+        admission_token=admission_token,
+        task_id=entry.task_id if task_id is None else task_id,
+    )
+
+
+def queue_statuses(root: Path) -> dict[str, QueueStatus]:
+    return {row.queue_id: row.status for row in list_queue(root)}
+
+
+def queue_row(root: Path, queue_id: str) -> QueueEntry:
+    return next(row for row in list_queue(root) if row.queue_id == queue_id)
+
+
+def admission_file_identity(root: Path) -> tuple[int, int]:
+    status = (root / "admission_slots.json").stat()
+    return (status.st_ino, status.st_mtime_ns)
+
+
+def job_record(root: Path, job_id: str) -> dict[str, Any] | None:
+    path = root / "job_locations.json"
+    if not path.exists():
+        return None
+    records = json.loads(path.read_text(encoding="utf-8"))
+    return next((record for record in records if record.get("job_id") == job_id), None)
+
+
+def awaited_send(channel: RecordingChannel, *, sent: bool = True) -> Event:
+    """Deliveries happen on a background thread; the event fires when one lands."""
+
+    delivered = Event()
+
+    def on_send(_message: object) -> SendResult | None:
+        delivered.set()
+        return None if sent else SendResult(sent=False)
+
+    channel.on_send = on_send
+    return delivered
+
+
+@contextmanager
+def held_run_lock(reaction_dir: Path) -> Iterator[None]:
+    """Hold ``run.lock`` so the terminal run-state writers refuse (an ORCA instance owns the dir)."""
+
+    with file_lock(reaction_dir / RUN_LOCK_FILE_NAME, timeout_seconds=0.0):
+        yield
+
+
+def insert_pending_successor(root: Path, reaction_dir: Path, *, queue_id: str) -> QueueEntry:
+    # The enqueue fence refuses a same-directory successor while the prior
+    # generation is unpublished; the worker gate is the second barrier for
+    # the windows that fence does not cover, so the row is written directly.
+    rows = list_queue(root)
+    template = next(row for row in rows if queue_entry_reaction_dir(row) == str(reaction_dir))
+    successor = replace(
+        template,
+        queue_id=queue_id,
+        task_id=f"task-{queue_id}",
+        status=QueueStatus.PENDING,
+        started_at="",
+        finished_at="",
+        error="",
+        cancel_requested=False,
+        metadata={
+            **{k: v for k, v in template.metadata.items() if k != "orca_terminal_replay"},
+            **current_orca_queue_metadata(reaction_dir),
+        },
+    )
+    save_entries_core(root, [*rows, successor])
+    return successor
+
+
 __all__ = [
+    "ChildStarter",
+    "FakeChildren",
     "ReplayStateOwner",
+    "SpawnCall",
+    "StartedChild",
+    "WORKER_LOGGER",
+    "admission_file_identity",
+    "awaited_send",
     "current_orca_queue_metadata",
+    "held_run_lock",
+    "insert_pending_successor",
+    "job_record",
+    "queue_row",
+    "queue_statuses",
     "queued_submission",
     "reconcile_statuses",
+    "reserve_job_slot",
     "run_terminal_replay",
+    "running_job",
     "write_completed_run_state",
 ]

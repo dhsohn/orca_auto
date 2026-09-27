@@ -66,7 +66,7 @@ A good verification section looks like:
 ```text
 ## Verification
 
-- `bash scripts/check.sh tests/test_single_attempt_contract.py -q` — passed
+- `bash scripts/check.sh tests/orca/attempt/test_single_attempt_contract.py -q` — passed
 - `bash examples/fake_orca_smoke/run.sh` — passed; fake ORCA queue lifecycle completed
 - Manual ORCA acceptance: not run; docs-only change
 ```
@@ -103,8 +103,8 @@ the development dependencies. Fetch the clone when advancing the CI pin.
 For a narrower loop:
 
 ```bash
-bash scripts/check.sh tests/test_single_attempt_contract.py -q
-bash scripts/check.sh tests/test_orca_worker_execution.py -q
+bash scripts/check.sh tests/orca/attempt/test_single_attempt_contract.py -q
+bash scripts/check.sh tests/orca/test_worker_execution.py -q
 ```
 
 The fake ORCA example smoke is intentionally runnable without a licensed ORCA
