@@ -819,13 +819,10 @@ def _claimed_mutable_entry(tmp_path: Path) -> tuple[Path, Any, dict[str, Any], P
 def test_rebind_passes_through_a_pristine_claim(tmp_path: Path) -> None:
     queue_root, running, _snapshot, _executable = _claimed_mutable_entry(tmp_path)
 
-    def unexpected_cfg() -> Any:
-        raise AssertionError("a pristine claim must not load worker configuration")
-
     result = _rebind.maybe_rebind_recovery_generation(
         running,
         queue_root=queue_root,
-        cfg_factory=unexpected_cfg,
+        cfg=_worker_cfg(queue_root, _executable),
     )
 
     assert result is running
@@ -841,7 +838,7 @@ def test_rebind_moves_crashed_claim_into_new_generation(tmp_path: Path) -> None:
     result = _rebind.maybe_rebind_recovery_generation(
         running,
         queue_root=queue_root,
-        cfg_factory=lambda: cfg,
+        cfg=cfg,
     )
 
     replacement = result.metadata["execution_snapshot"]
@@ -871,13 +868,10 @@ def test_rebind_honors_a_pending_cancellation(tmp_path: Path) -> None:
     cancelled = cancel(queue_root, str(running.queue_id))
     assert cancelled is not None and cancelled.cancel_requested
 
-    def unexpected_cfg() -> Any:
-        raise AssertionError("a cancelled claim must not load worker configuration")
-
     result = _rebind.maybe_rebind_recovery_generation(
         running,
         queue_root=queue_root,
-        cfg_factory=unexpected_cfg,
+        cfg=_worker_cfg(queue_root, _executable),
     )
 
     assert result.status is QueueStatus.CANCELLED
@@ -905,7 +899,7 @@ def test_rebind_fails_closed_at_the_recovery_limit(tmp_path: Path) -> None:
         _rebind.maybe_rebind_recovery_generation(
             claimed,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
 
     (row,) = list_queue(queue_root)
@@ -963,7 +957,7 @@ def test_rebind_consumes_budget_before_building(
         _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
 
     (row,) = list_queue(queue_root)
@@ -994,7 +988,7 @@ def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
         _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
 
     (claimed,) = list_queue(queue_root)
@@ -1010,7 +1004,7 @@ def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
     result = _rebind.maybe_rebind_recovery_generation(
         claimed,
         queue_root=queue_root,
-        cfg_factory=lambda: cfg,
+        cfg=cfg,
     )
 
     assert build_count == 2
@@ -1059,7 +1053,7 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
         _rebind.maybe_rebind_recovery_generation(
             penultimate,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
 
     (claimed,) = list_queue(queue_root)
@@ -1075,7 +1069,7 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
     result = _rebind.maybe_rebind_recovery_generation(
         claimed,
         queue_root=queue_root,
-        cfg_factory=lambda: cfg,
+        cfg=cfg,
     )
 
     assert build_count == 2
@@ -1139,9 +1133,6 @@ def test_rebind_rejects_each_invalid_durable_recovery_identity_without_mutation(
     queue_path = queue_root / "queue.json"
     before = queue_path.read_bytes()
 
-    def unexpected_cfg() -> Any:
-        raise AssertionError("an invalid durable recovery identity must not load configuration")
-
     expected_error = (
         "invalid durable rebind count"
         if recovery_defect == "ordinal-over-limit"
@@ -1151,7 +1142,7 @@ def test_rebind_rejects_each_invalid_durable_recovery_identity_without_mutation(
         _rebind.maybe_rebind_recovery_generation(
             claimed,
             queue_root=queue_root,
-            cfg_factory=unexpected_cfg,
+            cfg=_worker_cfg(queue_root, _executable),
         )
 
     assert queue_path.read_bytes() == before
@@ -1195,7 +1186,7 @@ def test_rebind_rejects_boolean_count_with_pending_claim_without_mutation(
         _rebind.maybe_rebind_recovery_generation(
             claimed,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
 
     (row,) = list_queue(queue_root)
@@ -1218,7 +1209,7 @@ def test_child_recovery_records_the_rejection_on_the_failed_queue_row(
     queue_root, running, snapshot, _executable = _claimed_mutable_entry(tmp_path)
     old_generation = _crash_generation(snapshot)
     from orca_auto.orca.queue.adapter import update_metadata
-    from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+    from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 
     assert update_metadata(
         queue_root,
@@ -1290,7 +1281,7 @@ def test_child_recovery_leaves_a_requeued_row_alone(
     queue_root, running, _snapshot, _executable = _claimed_mutable_entry(tmp_path)
     from orca_auto.orca.queue.adapter import requeue_running_entry
 
-    def requeue_then_reject(entry: Any, *, queue_root: Path, cfg_factory: Any) -> Any:
+    def requeue_then_reject(entry: Any, *, queue_root: Path, cfg: Any) -> Any:
         assert requeue_running_entry(queue_root, str(entry.queue_id), expected_entry=entry)
         if redequeued:
             # Another worker picked the row up again: same identity, new dequeue.
@@ -1323,7 +1314,7 @@ def test_child_recovery_fences_the_failure_write_to_its_own_dequeue(
     real_lookup = worker_execution.get_entry_by_id
     lookups = 0
 
-    def reject(entry: Any, *, queue_root: Path, cfg_factory: Any) -> Any:
+    def reject(entry: Any, *, queue_root: Path, cfg: Any) -> Any:
         raise ValueError("ORCA crash recovery found an invalid durable rebind count")
 
     def lookup_then_lose_the_row(queue_root: Path, queue_id: str) -> Any:
@@ -1361,7 +1352,7 @@ def test_child_recovery_does_not_overwrite_a_racing_cancellation(
     queue_root, running, _snapshot, _executable = _claimed_mutable_entry(tmp_path)
     from orca_auto.orca.queue.adapter import cancel
 
-    def cancel_then_reject(entry: Any, *, queue_root: Path, cfg_factory: Any) -> Any:
+    def cancel_then_reject(entry: Any, *, queue_root: Path, cfg: Any) -> Any:
         cancelled = cancel(queue_root, str(entry.queue_id), expected_entry=entry)
         assert cancelled is not None and cancelled.cancel_requested
         raise ValueError("ORCA crash recovery found an invalid durable rebind count")
@@ -1456,7 +1447,7 @@ def test_rebind_rejects_noncanonical_intent_token_without_mutation(
         _rebind.maybe_rebind_recovery_generation(
             claimed,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
 
     assert queue_path.read_bytes() == before
@@ -1514,13 +1505,10 @@ def test_rebind_committed_cancellation_precedes_malformed_recovery_metadata(
         else {}
     )
 
-    def unexpected_cfg() -> Any:
-        raise AssertionError("a cancelled claim must not load worker configuration")
-
     result = _rebind.maybe_rebind_recovery_generation(
         claimed,
         queue_root=queue_root,
-        cfg_factory=unexpected_cfg,
+        cfg=_worker_cfg(queue_root, _executable),
     )
 
     assert result.status is QueueStatus.CANCELLED
@@ -1576,7 +1564,7 @@ def test_rebind_does_not_publish_after_cancellation_commits(
         _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
 
     assert cancellation_committed
@@ -1619,7 +1607,7 @@ def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growt
                 _rebind.maybe_rebind_recovery_generation(
                     current,
                     queue_root=queue_root,
-                    cfg_factory=lambda: cfg,
+                    cfg=cfg,
                 )
             except FileExistsError:
                 os._exit(74)
@@ -1673,7 +1661,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
         _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
         os._exit(74)
 
@@ -1711,7 +1699,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
     result = _rebind.maybe_rebind_recovery_generation(
         claimed,
         queue_root=queue_root,
-        cfg_factory=lambda: cfg,
+        cfg=cfg,
     )
 
     assert result.metadata[_rebind.RECOVERY_REBIND_COUNT_METADATA_KEY] == 1
@@ -1747,7 +1735,7 @@ def test_rebind_rejects_executable_mismatch_before_consuming_budget(
         _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
-            cfg_factory=lambda: cfg,
+            cfg=cfg,
         )
 
     (row,) = list_queue(queue_root)
@@ -1818,15 +1806,9 @@ def test_rebind_keeps_a_completed_generation_for_adoption(
     output_mtime = Path(snapshot["selected_inp"]).stat().st_mtime_ns + 1
     os.utime(output, ns=(output_mtime, output_mtime))
     (generation / "h2.gbw").write_bytes(b"final-orbitals")
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(queue_root)))
 
-    def unexpected_cfg() -> Any:
-        raise AssertionError("a completed claim must not rebind")
-
-    result = _rebind.maybe_rebind_recovery_generation(
-        running,
-        queue_root=queue_root,
-        cfg_factory=unexpected_cfg,
-    )
+    result = _rebind.maybe_rebind_recovery_generation(running, queue_root=queue_root, cfg=cfg)
 
     assert result is running
     (row,) = list_queue(queue_root)
@@ -1834,7 +1816,6 @@ def test_rebind_keeps_a_completed_generation_for_adoption(
     assert row.metadata["execution_snapshot"]["generation_name"] == snapshot["generation_name"]
     # The ordinary context build accepts the finished generation so the
     # completed-adoption path can claim the result.
-    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(queue_root)))
     context = worker_execution._build_execution_context(
         cfg,
         result,

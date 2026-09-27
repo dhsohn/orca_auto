@@ -19,13 +19,13 @@ from orca_auto.orca.job_locations import (
     JobLocationRebuildConflict,
     index_root_for_cfg,
     list_job_location_records,
+    payload_matches_queue_generation,
     rebuild_job_location_records,
     record_from_artifacts,
     resolve_job_metadata,
     resolve_record_job_dir,
     upsert_job_record,
 )
-from orca_auto.orca.job_locations._generation import payload_matches_queue_generation
 from orca_auto.orca.machine_observation import machine_json_bytes
 from orca_auto.orca.report import publication as orca_publication
 from orca_auto.orca.state_reading import (

@@ -18,18 +18,19 @@ from orca_auto.core.admission import admission_dir, get_slot, list_slots
 from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.processes import ManagedProcess, terminate_process_group
 from orca_auto.core.queue.types import QueueStatus
-from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
-from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue
-from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue, mark_failed
+from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.types import RunFinalResult
-from tests.conftest import claim_next_entry
+from tests.conftest import RecordingChannel, claim_next_entry
 from tests.queue_worker_helpers import (
     WORKER_LOGGER,
     FakeChildren,
+    awaited_send,
+    job_record,
     queue_row,
     queue_statuses,
     reserve_job_slot,
@@ -208,6 +209,65 @@ def test_shutdown_finalizes_cancel_requested_job(
     assert written is not None
     assert written["final_result"] is not None
     assert written["final_result"]["status"] == "cancelled"
+
+
+def test_shutdown_settles_a_cancelled_child_that_marked_its_own_row(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    recording_channel: RecordingChannel,
+    queue_root: Path,
+) -> None:
+    # The child is still handling the shutdown's stop when the worker reads
+    # the pending cancel. While the worker waits on it, the child marks its
+    # own row cancelled with the replay marker and exits 0, so the worker's
+    # own mark refuses. The worker still settles the row before it exits: no
+    # "running" run state is left for the next start's replay.
+    delivered = awaited_send(recording_channel)
+    rxn = queue_root / "mol_shut_cancel_self_marked"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    running = claim_next_entry(queue_root)
+    assert running is not None
+    cancel(queue_root, entry.queue_id)
+    save_child_state(rxn, entry.task_id, "running")
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
+
+    def mark_own_row_cancelled() -> None:
+        # The child's stop handling: the shared requeue marks a row with a
+        # pending cancel cancelled instead of returning it to the queue.
+        assert queue_worker_mod.requeue_running_entry(
+            queue_root, entry.queue_id, expected_entry=running, expected_task_id=entry.task_id
+        )
+
+    child = fake_children.spawn(exit_code=0, on_stop=mark_own_row_cancelled, slow_stop=True)
+    worker._running[entry.queue_id] = running_job(worker, entry, rxn, child, token)
+    real_mark_cancelled = queue_worker_mod.mark_cancelled
+    worker_marks: list[bool] = []
+
+    def mark_cancelled(*args: Any, **kwargs: Any) -> bool:
+        worker_marks.append(real_mark_cancelled(*args, **kwargs))
+        return worker_marks[-1]
+
+    with patch.object(queue_worker_mod, "mark_cancelled", side_effect=mark_cancelled):
+        worker._shutdown_all()
+
+    assert fake_children.stopped(child) and child.poll_result == 0
+    assert worker_marks == [False]
+    assert entry.queue_id not in worker._running
+    assert len(list_slots(admission_dir(queue_root))) == 0
+    row = queue_row(queue_root, entry.queue_id)
+    assert (row.status, row.cancel_requested) == (QueueStatus.CANCELLED, False)
+    assert terminal_replay_marker_from_entry(row) is None
+    written = load_state(rxn)
+    assert written is not None
+    assert (written["job_id"], written["status"]) == (entry.task_id, "cancelled")
+    assert written["final_result"] is not None
+    assert written["final_result"]["status"] == "cancelled"
+    assert row.metadata["run_id"] == written["run_id"]
+    record = job_record(queue_root, entry.task_id)
+    assert record is not None and record["status"] == "cancelled"
+    assert delivered.wait(1)
+    assert len(recording_channel.sends) == 1
 
 
 def test_shutdown_finalizes_a_child_that_finished_instead_of_requeueing(
@@ -453,7 +513,7 @@ def test_shutdown_finalizes_a_child_whose_row_is_already_terminal(
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
     claim_next_entry(queue_root)
-    assert replay_mod.mark_failed(
+    assert mark_failed(
         queue_root,
         entry.queue_id,
         error="crash recovery rejected: simulated",

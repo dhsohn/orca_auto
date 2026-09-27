@@ -28,7 +28,6 @@ from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.models import ReservedQueueEntry
 from orca_auto.orca.config import AppConfig, load_config
-from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import enqueue
 from orca_auto.orca.queue.models import OrcaRunningJob
@@ -391,7 +390,6 @@ def test_start_reserved_finalizes_snapshot_intent_before_start(
         queue_worker_mod, "finalize_queued_snapshot_intent", lambda *_args: events.append("intent")
     )
     monkeypatch.setattr(worker, "_start_job", start_job)
-    monkeypatch.setattr(replay_mod, "reconcile_worker_state", lambda *_args, **_kwargs: None)
 
     assert worker._start_reserved(ReservedQueueEntry(queue_root, _plain_entry("q-1"), "slot"))
     assert events == ["intent", "start"]

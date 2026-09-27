@@ -8,7 +8,8 @@ under a shutdown-aware runner that re-verifies the immutable snapshot around
 the engine launch. Pre-launch rejections are recorded on the queue row,
 RAM-scratch capacity refusals return the row to the queue (exit
 ``ADMISSION_DEFERRED_EXIT_CODE``), and a shutdown or cancel during the run
-finalizes ``job_state.json`` before the row is requeued.
+returns the row to the queue, or marks it cancelled with its replay marker
+when cancellation was requested; the parent writes the cancelled result.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import copy
 import logging
 import sys
 from collections.abc import Callable
-from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -36,7 +36,6 @@ from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker import install_shutdown_signal_handlers
 
-from .attempt.reporting import build_final_result, last_out_path_from_state
 from .config import AppConfig, load_config
 from .execution import execute_orca_run
 from .execution_binding import (
@@ -60,10 +59,6 @@ from .queue.entries import (
 )
 from .recovery_rebind import maybe_rebind_recovery_generation
 from .run_context import RunExecutionContext
-from .run_lock import acquire_run_lock
-from .state import finalize_state
-from .state_reading import load_state
-from .statuses import AnalyzerStatus, RunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -304,49 +299,11 @@ def _run_orca_job_for_entry(
     except EngineScratchCapacityError as exc:
         return _defer_admission(context, queue_root, reason=str(exc))
     except WorkerShutdownInterrupt as exc:
-        if should_cancel():
-            _finalize_cancelled_run_state(Path(context.reaction_dir))
+        # The child leaves only attempt and scratch evidence. The parent's
+        # settlement (terminal_state.record_cancelled_run_state) is the one
+        # writer of a cancelled final_result, also for a child killed before
+        # it could write anything (ADR 0008).
         raise WorkerShutdownRequested(context) from exc
-
-
-def _finalize_cancelled_run_state(reaction_dir: Path) -> None:
-    """Record the cancelled outcome the interrupted run never wrote.
-
-    ``execute_orca_run`` released ``run.lock`` when the interrupt propagated,
-    so this load -> finalize takes the same bounded-wait lock every other
-    ``job_state.json`` finalizer takes (``replay._record_terminal_run_state``,
-    ``worker_tracking``) and cannot interleave with them.  When the lock stays
-    held, fail closed by skipping: the shutdown path still marks the
-    queue row cancelled with its replay marker, and the parent's terminal
-    replay then calls ``record_cancelled_run_state`` under this lock, which
-    writes the cancelled result or keeps a terminal one written meanwhile.
-    """
-    with ExitStack() as stack:
-        try:
-            stack.enter_context(acquire_run_lock(reaction_dir))
-        except RuntimeError as exc:
-            logger.warning(
-                "Skipping cancel finalization of %s; run lock is held and terminal "
-                "replay settles the state: %s",
-                reaction_dir,
-                exc,
-            )
-            return
-        state = load_state(reaction_dir)
-        if state is None or isinstance(state.get("final_result"), dict):
-            return
-        cancelled_result = build_final_result(
-            status=RunStatus.CANCELLED,
-            analyzer_status=AnalyzerStatus.INCOMPLETE,
-            reason="cancel_requested",
-            last_out_path=last_out_path_from_state(state),
-        )
-        finalize_state(
-            reaction_dir,
-            state,
-            status=RunStatus.CANCELLED,
-            final_result=cancelled_result,
-        )
 
 
 def _defer_admission(
@@ -478,11 +435,7 @@ def run_worker_child_job(
     entry = get_entry_by_id(resolved_queue_root, queue_id)
     if entry is not None:
         try:
-            entry = maybe_rebind_recovery_generation(
-                entry,
-                queue_root=resolved_queue_root,
-                cfg_factory=lambda: load_config(config_path),
-            )
+            entry = maybe_rebind_recovery_generation(entry, queue_root=resolved_queue_root, cfg=cfg)
         except (ValueError, FileExistsError) as exc:
             _record_worker_rejection(
                 resolved_queue_root,

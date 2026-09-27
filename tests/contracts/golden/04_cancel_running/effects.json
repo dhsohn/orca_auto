@@ -206,20 +206,15 @@
   },
   {
     "role": "child",
-    "file": "generation/job_state.json",
-    "status": "cancelled"
-  },
-  {
-    "role": "child",
-    "file": "root/job_state.json",
-    "status": "cancelled"
-  },
-  {
-    "role": "child",
     "file": "queue.json",
     "rows": [
       "cancelled+replay"
     ]
+  },
+  {
+    "role": "parent",
+    "file": "generation/job_state.json",
+    "status": "cancelled"
   },
   {
     "role": "parent",

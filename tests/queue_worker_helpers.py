@@ -21,8 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event
-from typing import Any, Protocol
-from unittest.mock import patch
+from typing import Any
 
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.messaging.channel import SendResult
@@ -33,10 +32,9 @@ from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, load_config
-from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue.adapter import list_queue
 from orca_auto.orca.queue.entries import queue_entry_reaction_dir
-from orca_auto.orca.queue.models import OrcaRunningJob, OrcaWorkerReplayState
+from orca_auto.orca.queue.models import OrcaRunningJob
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 from orca_auto.orca.submission import create_queued_submission
@@ -48,19 +46,6 @@ from tests.conftest import (
     write_run_state,
 )
 from tests.process_helpers import FakeManagedProcess
-
-
-class ReplayStateOwner(Protocol):
-    """What ``replay.reconcile_worker_state`` needs: an ``OrcaQueueWorker`` or a stand-in."""
-
-    @property
-    def cfg(self) -> AppConfig: ...
-
-    @property
-    def admission_root(self) -> str | Path: ...
-
-    @property
-    def replay_state(self) -> OrcaWorkerReplayState: ...
 
 
 def queued_submission(tmp_path: Path) -> tuple[AppConfig, Path, QueueEntry, Path]:
@@ -133,39 +118,20 @@ def write_completed_run_state(reaction_dir: Path) -> None:
     )
 
 
-def reconcile_statuses(worker: ReplayStateOwner) -> dict[str, str]:
+def reconcile_statuses(worker: OrcaQueueWorker) -> dict[str, str]:
     statuses = worker.replay_state.reconcile_statuses
     assert statuses is not None
     return statuses
 
 
-def run_terminal_replay(
-    worker: ReplayStateOwner,
-    entry: QueueEntry,
-    *,
-    previous_status: str | None = None,
-) -> None:
-    if previous_status is not None:
-        state = worker.replay_state
-        statuses = dict(state.reconcile_statuses or {})
-        statuses[entry.queue_id] = previous_status
-        state.reconcile_statuses = statuses
-    with (
-        patch.object(replay_mod, "recover_orphaned_engine_slots"),
-        patch.object(replay_mod.roots, "list_orca_rows", return_value=[entry]),
-        patch.object(
-            replay_mod,
-            "live_queue_slot_keys_for_slots",
-            return_value=(set(), set()),
-        ),
-        patch.object(replay_mod, "reconcile_stale_slots"),
-        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
-    ):
-        replay_mod.reconcile_worker_state(
-            worker.cfg,
-            admission_root=worker.admission_root,
-            replay_state=worker.replay_state,
-        )
+def run_terminal_replay(worker: OrcaQueueWorker, entry: QueueEntry) -> None:
+    """One real recovery pass of ``worker`` over its queue, whose only row is *entry*.
+
+    Nothing is patched: the pass also runs the slot and orphan steps, so the
+    test's queue and admission files must hold exactly what it set up.
+    """
+    assert [row.queue_id for row in list_queue(worker.queue_root)] == [entry.queue_id]
+    worker._reconcile_worker_state()
 
 
 WORKER_LOGGER = "orca_auto.orca.queue.worker"
@@ -177,14 +143,28 @@ WORKER_LOGGER = "orca_auto.orca.queue.worker"
 
 
 @dataclass
+class SlowStoppingProcess(FakeManagedProcess):
+    """A fake child still handling its SIGTERM until its parent waits on it."""
+
+    finish_stop: Callable[[], None] | None = None
+
+    def wait(self, timeout: float | None = None) -> int:
+        finish, self.finish_stop = self.finish_stop, None
+        if finish is not None:
+            finish()
+        return super().wait(timeout)
+
+
+@dataclass
 class FakeChildren:
     """Children with fake pids behind the two OS seams a stop reaches them through.
 
     ``terminate_process_group`` runs for real: it polls, signals the group via
     ``os.killpg``, waits and escalates. Only the kernel's answers are faked: a
     SIGTERM makes the child exit with its configured code (after its own stop
-    handling, when given), a SIGKILL ends it regardless, a stubborn child
-    ignores both, and the pid probe reports what the registry says.
+    handling, when given; a slow child finishes that only while its parent
+    waits on it), a SIGKILL ends it regardless, a stubborn child ignores both,
+    and the pid probe reports what the registry says.
     """
 
     by_pid: dict[int, FakeManagedProcess] = field(default_factory=dict)
@@ -203,10 +183,12 @@ class FakeChildren:
         on_stop: Callable[[], None] | None = None,
         stubborn: bool = False,
         ignores_sigterm: bool = False,
+        slow_stop: bool = False,
     ) -> FakeManagedProcess:
         pid = self.next_pid
         self.next_pid += 1
-        process = FakeManagedProcess(pid=pid, poll_result=exited)
+        process_type = SlowStoppingProcess if slow_stop else FakeManagedProcess
+        process = process_type(pid=pid, poll_result=exited)
         if stubborn:
             self.stubborn.add(pid)
             process.wait_side_effects = [
@@ -232,12 +214,18 @@ class FakeChildren:
         if pgid in self.stubborn or (pgid in self.sigterm_ignorers and signum == signal.SIGTERM):
             return
         if signum == signal.SIGTERM:
-            hook = self.stop_hooks.get(pgid)
-            if hook is not None:
-                hook()
-            child.poll_result = self.exit_codes[pgid]
+            if isinstance(child, SlowStoppingProcess):
+                child.finish_stop = lambda: self._stop(pgid, child)
+            else:
+                self._stop(pgid, child)
         elif signum == signal.SIGKILL:
             child.poll_result = -signal.SIGKILL
+
+    def _stop(self, pgid: int, child: FakeManagedProcess) -> None:
+        hook = self.stop_hooks.get(pgid)
+        if hook is not None:
+            hook()
+        child.poll_result = self.exit_codes[pgid]
 
     def pid_exists(self, pid: int) -> bool:
         child = self.by_pid.get(pid)
@@ -393,7 +381,6 @@ def insert_pending_successor(root: Path, reaction_dir: Path, *, queue_id: str) -
 __all__ = [
     "ChildStarter",
     "FakeChildren",
-    "ReplayStateOwner",
     "SpawnCall",
     "StartedChild",
     "WORKER_LOGGER",

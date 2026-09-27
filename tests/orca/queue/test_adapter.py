@@ -46,7 +46,7 @@ from orca_auto.orca.queue.entries import (
     queue_entry_run_id,
 )
 from orca_auto.orca.queue.orphans import reconcile_orphaned_running_entries
-from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.run_cleanup import clear_terminal_queue_entries
 from orca_auto.orca.state_reading import load_state, report_json_path
 from orca_auto.orca.statuses import RunStatus

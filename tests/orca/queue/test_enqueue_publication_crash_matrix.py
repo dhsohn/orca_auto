@@ -111,7 +111,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     )
     notifications: list[str] = []
     publish_failing = {"value": False}
-    original_upsert = orca_submission.upsert_queued_job_record
+    original_upsert = orca_submission.upsert_row_job_record
 
     def controllable_upsert(*args: Any, **kwargs: Any) -> None:
         if publish_failing["value"]:
@@ -125,7 +125,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     write_config_file(root / "orca_auto.yaml", cfg)
     monkeypatch.setattr(queue_notifications, "notify_queue_enqueued_event", count_notification)
     monkeypatch.setattr(orca_submission, "read_worker_pid_file", lambda _root: None)
-    monkeypatch.setattr(orca_submission, "upsert_queued_job_record", controllable_upsert)
+    monkeypatch.setattr(orca_submission, "upsert_row_job_record", controllable_upsert)
     args = SimpleNamespace(
         config=str(root / "orca_auto.yaml"),
         reaction_dir=str(reaction_dir),

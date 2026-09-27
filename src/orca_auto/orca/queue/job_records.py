@@ -1,7 +1,9 @@
-"""Project queued/running location records from captured queue metadata.
+"""Project the location record of an ORCA queue row, and of its terminal state.
 
-Submission and publication repair consume the same durable row. Projection never
-reopens a mutable source input to reconstruct submission-time facts.
+Submission, publication repair and the worker's attach project a queued or
+running record from the captured metadata of the durable row; projection never
+reopens a mutable source input to reconstruct submission-time facts. A terminal
+record is projected from the generation's own terminal ``job_state.json``.
 """
 
 from __future__ import annotations
@@ -10,20 +12,31 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config.schema import positive_int_mapping
-from orca_auto.core.statuses import STATUS_QUEUED
+from orca_auto.core.statuses import TERMINAL_STATUSES, normalize_status
 
 from ..config import AppConfig
-from ..job_locations import resource_dict, upsert_job_record
+from ..job_locations import record_from_artifacts, resource_dict, upsert_job_record
+from ..state_reading import load_state, payload_matches_expected_job_id
 from .entries import queue_entry_metadata, queue_entry_reaction_dir, queue_entry_task_id
 
 
-def upsert_queued_job_record(
+def upsert_row_job_record(
     cfg: AppConfig,
     entry: Any,
+    status: str,
+    *,
+    require_task_id: bool,
 ) -> None:
+    """Upsert the row's location record with ``status`` from its captured metadata.
+
+    A row without a task id raises when ``require_task_id`` (publication) and
+    is skipped otherwise (the worker's advisory running record).
+    """
     task_id = queue_entry_task_id(entry)
     if not task_id:
-        raise ValueError("ORCA publication repair requires a queue task_id")
+        if require_task_id:
+            raise ValueError("ORCA publication repair requires a queue task_id")
+        return
     reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser().resolve()
     selected_input, job_type, molecule_key, requested, actual = tracking_metadata_from_queue_entry(
         cfg,
@@ -32,7 +45,7 @@ def upsert_queued_job_record(
     upsert_job_record(
         cfg,
         job_id=task_id,
-        status=STATUS_QUEUED,
+        status=status,
         job_dir=reaction_dir,
         job_type=job_type,
         selected_input_xyz=selected_input,
@@ -40,6 +53,40 @@ def upsert_queued_job_record(
         resource_request=requested,
         resource_actual=actual,
     )
+
+
+def upsert_terminal_job_record(
+    cfg: AppConfig,
+    reaction_dir: str,
+    *,
+    fallback_job_id: str | None = None,
+    expected_job_id: str | None = None,
+) -> bool:
+    job_dir = Path(reaction_dir).expanduser().resolve()
+    expected = str(expected_job_id or fallback_job_id or "").strip()
+    state = load_state(job_dir)
+    if expected and not payload_matches_expected_job_id(state, expected):
+        state = None
+    record = record_from_artifacts(
+        job_dir=job_dir,
+        state=dict(state) if state is not None else None,
+        report=None,
+        fallback_job_id=fallback_job_id or "",
+    )
+    if record is None or normalize_status(record.status) not in TERMINAL_STATUSES:
+        return False
+    upsert_job_record(
+        cfg,
+        job_id=record.job_id,
+        status=record.status,
+        job_dir=Path(record.original_run_dir).expanduser().resolve(),
+        job_type=record.job_type,
+        selected_input_xyz=record.selected_input_xyz,
+        molecule_key=record.molecule_key,
+        resource_request=dict(record.resource_request),
+        resource_actual=dict(record.resource_actual),
+    )
+    return True
 
 
 def tracking_metadata_from_queue_entry(

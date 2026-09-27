@@ -1,8 +1,9 @@
-"""``orca_auto.orca.queue.worker``: reconciliation of orphaned running rows."""
+"""``orca_auto.orca.queue.worker``: the recovery pass, driven through one poll pass."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 from orca_auto.orca.queue.adapter import enqueue
@@ -17,8 +18,9 @@ from tests.engine_artifact_helpers import orca_artifact_payload
 
 
 def test_reconcile_orphaned_running_ignores_root_report_even_with_worker_pid_file(
-    worker: OrcaQueueWorker, queue_root: Path
+    make_worker: Callable[..., OrcaQueueWorker], queue_root: Path
 ) -> None:
+    worker = make_worker(sleep=lambda _seconds: None)
     rxn = queue_root / "mol_done"
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
@@ -40,7 +42,9 @@ def test_reconcile_orphaned_running_ignores_root_report_even_with_worker_pid_fil
         encoding="utf-8",
     )
 
-    worker._reconcile_worker_state()
+    # The first poll pass admits nothing (the row is running), then its upkeep
+    # runs the due recovery pass, which requeues the row its dead child left.
+    worker.run_pass()
 
     queue_data = json.loads((queue_root / "queue.json").read_text(encoding="utf-8"))
     found = next(item for item in queue_data if item["queue_id"] == entry.queue_id)

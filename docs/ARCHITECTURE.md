@@ -17,7 +17,7 @@ Use the following ownership map when changing ORCA_auto. Keep the job ID and run
 | Submit | Selected `.inp`, referenced files and resource directives | `submission.py` and input snapshot binding | Generation-bound inputs and a durable queue entry |
 | Admit | Queue entry and admission records | Parent queue worker through the admission store | Reserved slot and a child bound to that job |
 | Execute | Bound generation inputs and ORCA executable | Worker child through the attempt engine | Output files and recorded attempt evidence |
-| Publish | Attempt evidence and terminal decision | Attempt reporting on normal exit; parent terminal replay on interruption/recovery | Terminal state and generation reports, including `machine.json` |
+| Publish | Attempt evidence and terminal decision | Attempt reporting on normal exit; the parent's settlement (`queue/settlement.py`) after an interruption or a cancellation, live or on restart replay | Terminal state and generation reports, including `machine.json` |
 | Notify completion | Matching terminal root `job_state.json` and final result | Parent queue worker claims once through the state writer under the run lock; sender only delivers the captured message | Root notification bookkeeping; generation execution state and reports remain unchanged |
 | Query | Queue/state files and job location records | Index publisher updates derived query data | CLI rows and activity views |
 
@@ -63,7 +63,7 @@ graph TD
 
 The submission snapshot records the original paths, SHA-256 hashes and byte counts in `source_inputs`. Submission owns resource normalization and generation-local reference rewriting; `resource_request` records the resolved resources, while `bound_selected_identity` identifies the actual `.inp` given to ORCA. Referenced files retain the same role keys across `source_inputs` and `materialized_inputs`. These are submission-time identities: `runtime_mutable_input_roles` identifies copies the engine may overwrite, and `recovery` preserves the previous generation and seed identities when recovering a crash. Execution carries detached copies of this evidence in `job_state.json`'s `engine_payload.execution_provenance`; it never reconstructs the original identity from later source files.
 
-Normal submission and publication repair both call `queue/job_records.py` with the durable row. Selected-input identity and resources come from captured metadata, with snapshot resources and then configuration defaults used when older rows lack a request. Empty actual resources use that request. Missing captured job labels remain `other`/`unknown`. Neither path rereads the mutable input to rebuild a queued location record.
+Normal submission and publication repair both call `queue/job_records.py` with the durable row, and the worker records a claimed row as running through the same projection (`upsert_row_job_record`); the module also projects the terminal record from the generation's terminal state. Selected-input identity and resources come from captured metadata, with snapshot resources and then configuration defaults used when older rows lack a request. Empty actual resources use that request. Missing captured job labels remain `other`/`unknown`. Neither path rereads the mutable input to rebuild a queued location record.
 
 ### 2. Dequeue & Admission
 - The background resident worker polls the queue for pending jobs.
@@ -83,9 +83,9 @@ A result with captured source evidence publishes `execution_provenance.json` bef
 
 ### Terminal publication and queue completion
 
-The child publishes execution state and generation reports. After the child exits, the parent confirms engine recovery, durably marks the queue generation for replay, prepares missing failure/cancellation evidence, and corrects the queue outcome and run identity from that evidence. A zero exit code also requires a matching terminal run state; it cannot substitute for the recorded result.
+The child publishes execution state and generation reports. After the child exits, the parent confirms engine recovery and settles the queue generation from its durable replay marker. The parent marks a completed or failed child's row itself (`mark_terminal_row`). A cancelled row is marked by the child when it handles SIGTERM: `requeue_running_entry` marks a row with a pending cancel cancelled, with its replay marker, instead of returning it to the queue. The parent marks it with `mark_cancelled` when the child exited without doing so, for example because it was killed first. Either way the parent then settles the row: it prepares missing failure/cancellation evidence, binds the queue outcome and run identity to that evidence, returns the slot and finishes publication. A cancelled child writes no terminal result: the parent's preparation (`terminal_state.record_cancelled_run_state`) is the one writer of a cancelled result, also for a child killed before it could write ([ADR 0008](adr/0008-parent-writes-the-cancelled-result.md)). A zero exit code also requires a matching terminal run state; it cannot substitute for the recorded result.
 
-The parent then transfers the prepared work item to replay bookkeeping and returns its execution slot. Index publication, the one-shot notification claim and verified replay-marker removal follow through one shared finish function for live completion and restart recovery. An index or marker-clear failure retains the replay and fences the next submission in that directory, while unrelated ready jobs can use the returned capacity. The durable queue marker lets a fresh worker resume; this does not rerun the calculation. Engine recovery, state preparation or slot-release failures retain the supervised job for retry. Publication retry remains periodic, and notification delivery remains best effort.
+The parent then transfers the prepared work item to replay bookkeeping and returns its execution slot. Index publication, the one-shot notification claim and verified replay-marker removal follow. `orca/queue/settlement.py` holds each step as one flat function for one generation, in the order mark (`mark_terminal_row`, or the cancel mark above), prepare, bind (`bind_row`), release slot and finish; the worker's live completion and cancellation, including a cancel that a graceful shutdown stops, call them around its slot release before the worker lets the job go, and the restart pipeline in `replay.py` calls prepare, bind and finish through `settle` for a row marked before its worker died, so the durable write order is the same on both paths. An index or marker-clear failure retains the replay and fences the next submission in that directory, while unrelated ready jobs can use the returned capacity. The durable queue marker lets a fresh worker resume; this does not rerun the calculation. Engine recovery, state preparation or slot-release failures retain the supervised job for retry. Publication retry remains periodic, and notification delivery remains best effort.
 
 A terminal replay marker also appears in the activity projection: the terminal execution status is preserved, while detail says `result publication pending`. `publication_blocked_scope=orca_terminal_publication`, the reason, next action and `publication_owner=orca_queue_worker` explain the unfinished publication. These per-directory blockers remain in `admission_blockers` even when the row is filtered off the page. Invalid markers require inspection rather than promising automatic recovery; clearing a valid marker removes the indication.
 
@@ -95,6 +95,7 @@ A terminal replay marker also appears in the activity projection: the terminal e
 | :--- | :--- | :--- |
 | Job-root `job_state.json` | Current job/run identity and execution state, plus notification bookkeeping used by the parent | `orca/state.py`, called by child execution or parent recovery/notification handling |
 | Generation `job_state.json` | Execution evidence for that generation, consumed when verifying its result | The same state writer, after generation ownership validation and only when execution facts change |
+| Cancelled `final_result` in `job_state.json` | The terminal outcome of a cancelled running generation | The worker parent only: `queue/terminal_state.record_cancelled_run_state` under `run.lock`, when it settles the cancelled row live or on restart replay; the child writes only attempt and scratch evidence ([ADR 0008](adr/0008-parent-writes-the-cancelled-result.md)) |
 
 The state writer saves changed generation evidence first, then refreshes the current root under one root mutation lock. Notification claim/sent markers are root bookkeeping and are omitted from newly written generation state. An identical execution keeps its generation bytes and `updated_at`; the root timestamp may advance. Repeated terminal reconciliation therefore does not rewrite execution history. Existing historical notification fields remain readable and are left in place when execution facts are unchanged.
 
@@ -111,18 +112,31 @@ reconciliation. `_admit_next` spells out one admission in order: withheld
 directories, publication repair, queued notification, capacity, preview, slot
 reservation, claim by id, and slot release when the claim is lost. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
 (reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
-and knows a job only as a process-backed record. An ordinary exception from one
+and knows a job only as a process-backed record. Before each sleep the ORCA
+worker runs `_periodic_upkeep`: the queued notification, then the recovery pass
+when it is due and no reaped job is waiting to retry its finalization. One poll
+pass is therefore reap, cancel, admit, upkeep, sleep. An ordinary exception from one
 pass is logged and the pass is retried after the poll interval while running
 children stay supervised; KeyboardInterrupt, SystemExit and startup failures
-still end the worker. The periodic worker-state reconcile also releases an
-admission slot this worker reserved but never attached to a job, which a failed
-admission pass can leave behind. Tests substitute
+still end the worker. Tests substitute
 `_start_background_process` and `sleep_fn`; there is no injected dependency
 bag. The parent entry point is `python -m orca_auto.orca.commands.queue
 --config …`; the child is `python -m orca_auto.orca.commands.worker_child
 --config … --queue-root … --queue-id … [--admission-token …]`.
 
-Cancellation observations reuse unchanged queue snapshots. The child publishes its terminal state and reports before exiting. The parent settles the queue entry and claims a completion notification from the matching job/run state. A bounded background sender delivers that captured message without holding the execution slot or writing state afterward. Replayed completion skips an already claimed notification (and recognizes historical sent markers). Delivery is best effort: a crash, a failed send or exhausted sender capacity after the claim can lose the message, without retrying or changing the calculation result. Submission records `orca_queued_notification_pending` on the durable row. After its location record is published, the parent worker claims that intent under the queue lock before dispatching a queued message; CLI exit does not discard the intent. Historical rows without the intent are not notified retroactively. The child captures its started event after recording the attempt and dispatches it before proceeding with the runner. All three lifecycle sends use the same bounded sender (four concurrent sends per process). Transport failure, saturation or process exit can lose advisory delivery, and no send writes execution state. A queued delivery claim failure skips delivery without withholding admission.
+The worker owns recovery after a lost parent or child. Its recovery pass,
+`_reconcile_worker_state`, runs at startup and then at most once a minute, and
+lists its steps in order: the sweep of abandoned snapshot intents (when due),
+release of slots this worker reserved but never attached to a job (a failed
+admission pass can leave one), engine records of dead slot owners, one read of
+the queue, stale slots (after collecting the queue ids live slots still hold),
+orphaned RUNNING rows, and last `replay.reconcile_terminal_replays`, which
+replays every terminal transition observed since that queue read or an earlier
+pass. A transition the pass could not replay (an ambiguous generation owner or
+failed side effects) stays in the replay state's `retry_keys` and is retried
+on the next pass; a terminal row first seen already terminal is never replayed.
+
+Cancellation observations reuse unchanged queue snapshots. A child whose run finished publishes its terminal state and reports before exiting; a cancelled child leaves its result to the parent. The parent settles the queue entry and claims a completion notification from the matching job/run state. Both parent claims, the queued one on the durable row and the terminal one in `job_state.json`, live in `orca/queue/notifications.py`. A bounded background sender delivers that captured message without holding the execution slot or writing state afterward. Replayed completion skips an already claimed notification (and recognizes historical sent markers). Delivery is best effort: a crash, a failed send or exhausted sender capacity after the claim can lose the message, without retrying or changing the calculation result. Submission records `orca_queued_notification_pending` on the durable row. After its location record is published, the parent worker claims that intent under the queue lock before dispatching a queued message; CLI exit does not discard the intent. Historical rows without the intent are not notified retroactively. The child captures its started event after recording the attempt and dispatches it before proceeding with the runner. All three lifecycle sends use the same bounded sender (four concurrent sends per process). Transport failure, saturation or process exit can lose advisory delivery, and no send writes execution state. A queued delivery claim failure skips delivery without withholding admission.
 
 The worker CLI loads config, checks the PID file (`read_worker_pid_file` in
 `core/queue/worker/pid_file.py`), then constructs and runs the ORCA worker directly.
@@ -136,10 +150,16 @@ publication lease) is outside it; `queue_generation` in `job_state.json` is its 
 `mutate_entries` in `core/queue/store.py` is the only writer of `queue.json`, and
 `core/queue/transitions.py` builds every requeued and terminal row (`requeued_entry`,
 `terminal_entry`); `tests/core/queue/test_ownership_guards.py` enforces both.
-`queue/replay.py` is only the replay engine (work items, preparation and publication, the
-reconcile pipeline and generation owners) and takes its state explicitly, and
-`queue/run_state_replay.py` synthesizes terminal `job_state.json` under
-`run.lock`. These paths call concrete adapters with the selected entry and task
+`queue/settlement.py` holds the terminal settlement steps (work items, mark,
+preparation, binding, publication and marker retirement), `queue/replay.py` only the
+restart replay pipeline (which terminal rows to settle, and one owner generation per
+directory); both take their state explicitly. `queue/terminal_marker.py` holds the
+durable replay marker format, the state fingerprint it records and
+`terminal_generation_verdict`, the one fail-closed rule that decides whether a
+terminal generation still owns its directory's state: the replay pre-check
+(`settlement.is_superseded`) maps the verdict to whether to drop the generation,
+and `queue/terminal_state.py`, which synthesizes terminal `job_state.json` under
+`run.lock`, maps it to write or refuse. These paths call concrete adapters with the selected entry and task
 identity. Durable execution preparation precedes admission release; derived publication
 can retry afterward while its marker fences the same directory. RUNNING-row
 reconciliation is worker-owned: a submission never sweeps the queue and recovers
@@ -151,6 +171,17 @@ final admission-release ownership on success, shutdown and exceptions. Validated
 inputs, resources and queue identity form one `RunExecutionContext`, which is
 passed directly into execution without reconstructing CLI arguments or installing
 empty lifecycle callbacks.
+
+`recover_crashed_state` closes a root `job_state.json` left `running` by a
+crashed run, and it runs in two places, each under `run.lock`. The crash
+rebind (`recovery_rebind.py`, with the config the child already loaded) calls
+it before it builds the replacement generation, so the frozen attempt is
+recorded as crashed before a new generation exists. `execute_locked_run` calls
+it again right before the launch, for claims that did not rebind (no
+started-execution evidence, or a completed output to adopt); after a rebind it
+finds nothing to recover and writes nothing. Both read, modify and write the
+root state, so each holds `run.lock` against a live ORCA instance and the
+parent's terminal state writers.
 
 ---
 
@@ -173,3 +204,4 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0005: Remove retired workflow support](adr/0005-remove-retired-workflow-support.md)
 - [ADR 0006: One generation identity for the persisted token and every queue-row fence](adr/0006-one-generation-identity-for-token-and-fences.md)
 - [ADR 0007: One admission store per installation under `<runs_root>/.admission`](adr/0007-one-admission-store-under-runs-root.md)
+- [ADR 0008: The worker parent is the one writer of a cancelled result](adr/0008-parent-writes-the-cancelled-result.md)

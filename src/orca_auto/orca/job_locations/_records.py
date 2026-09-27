@@ -1,11 +1,11 @@
 """Build and upsert ORCA rows of the job-location index.
 
-``build_job_location_record`` applies the ORCA conventions (app name,
-``orca_``-prefixed job type, molecule key derived from the selected input)
-on top of the engine-neutral assembly in ``_artifact_records``, and
-``upsert_job_record`` writes such a row for one job id under the index root.
-``resolve_job_metadata`` derives the job type and molecule key from a
-selected input; submission and the artifact projection share it.
+``build_job_location_record`` assembles one row with the ORCA conventions (app
+name, ``orca_``-prefixed job type, molecule key derived from the selected
+input) on top of an existing row, and ``upsert_job_record`` writes such a row
+for one job id under the index root. ``resolve_job_metadata`` derives the job
+type and molecule key from a selected input; submission and the artifact
+projection share it.
 """
 
 from __future__ import annotations
@@ -19,13 +19,14 @@ from orca_auto.core.indexing import (
     list_job_locations,
     upsert_job_location,
 )
+from orca_auto.core.indexing.store import normalize_index_text
+from orca_auto.core.utils import normalize_text
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME
 
 from ..config import AppConfig
 from ..job_type import detect_job_type
 from ..molecule_key import resolve_molecule_key
-from . import _artifact_records
-from ._utils import normalize_path_text, normalize_text
+from ._utils import normalize_path_text
 
 _MOLECULE_KEY_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -78,7 +79,23 @@ def resolve_job_metadata(selected_inp: str, job_dir: Path) -> tuple[str, str]:
 
 
 def resource_dict(max_cores: int, max_memory_gb: int) -> dict[str, int]:
-    return _artifact_records.resource_dict(max_cores, max_memory_gb)
+    return {
+        "max_cores": max(1, int(max_cores)),
+        "max_memory_gb": max(1, int(max_memory_gb)),
+    }
+
+
+def _existing_text(existing: JobLocationRecord | None, attr: str) -> str:
+    return normalize_index_text(getattr(existing, attr)) if existing is not None else ""
+
+
+def _existing_resources(
+    provided: dict[str, int] | None,
+    existing: JobLocationRecord | None,
+    attr: str,
+) -> dict[str, int]:
+    existing_payload = dict(getattr(existing, attr)) if existing is not None else {}
+    return dict(provided or existing_payload)
 
 
 def build_job_location_record(
@@ -93,22 +110,43 @@ def build_job_location_record(
     resource_request: dict[str, int] | None = None,
     resource_actual: dict[str, int] | None = None,
 ) -> JobLocationRecord:
-    selected_input_text = normalize_path_text(selected_input_xyz)
-    return _artifact_records.build_job_location_record(
-        existing=existing,
-        job_id=job_id,
+    """One ORCA row, keeping what ``existing`` already knows where no value is given.
+
+    The original run directory is the existing row's, else ``job_dir``;
+    ``latest_known_path`` is always ``job_dir``. An empty molecule key falls
+    back to the existing row's, then to the one the selected input implies.
+    """
+    resolved_job_dir = job_dir.expanduser().resolve()
+    existing_run_dir = _existing_text(existing, "original_run_dir")
+    original_run_dir = (
+        Path(existing_run_dir).expanduser().resolve() if existing_run_dir else resolved_job_dir
+    )
+    selected_input_xyz_text = normalize_index_text(
+        normalize_path_text(selected_input_xyz)
+    ) or _existing_text(existing, "selected_input_xyz")
+    molecule_key_text = normalize_index_text(molecule_key) or _existing_text(
+        existing, "molecule_key"
+    )
+    if not molecule_key_text:
+        molecule_key_text = molecule_key_from_selected_inp(
+            selected_input_xyz_text, original_run_dir
+        )
+    resource_request_payload = _existing_resources(resource_request, existing, "resource_request")
+    resource_actual_payload = (
+        _existing_resources(resource_actual, existing, "resource_actual")
+        or resource_request_payload
+    )
+    return JobLocationRecord(
+        job_id=normalize_index_text(job_id),
         app_name=ORCA_AUTO_ORCA_APP_NAME,
         job_type=job_type_identifier(job_type),
-        status=status or "unknown",
-        job_dir=job_dir,
-        selected_input_xyz=selected_input_text,
-        molecule_key=molecule_key,
-        resource_request=resource_request,
-        resource_actual=resource_actual,
-        default_molecule_key_fn=lambda original_run_dir, selected: molecule_key_from_selected_inp(
-            selected,
-            original_run_dir,
-        ),
+        status=normalize_index_text(status or "unknown"),
+        original_run_dir=str(original_run_dir),
+        molecule_key=molecule_key_text,
+        selected_input_xyz=selected_input_xyz_text,
+        latest_known_path=str(resolved_job_dir),
+        resource_request=resource_request_payload,
+        resource_actual=resource_actual_payload,
     )
 
 

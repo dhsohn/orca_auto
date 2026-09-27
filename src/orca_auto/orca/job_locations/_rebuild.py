@@ -19,13 +19,12 @@ from orca_auto.core.paths import (
     should_exclude_from_production_runs_scan,
 )
 from orca_auto.core.statuses import TERMINAL_STATUSES
+from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from ..state_reading import STATE_FILE_NAME, report_json_path, state_from_normalized_payload
-from . import _artifact_records
-from ._artifacts_to_records import record_from_artifacts
+from ._artifacts_to_records import first_artifact_text, record_from_artifacts
 from ._records import build_job_location_record
-from ._utils import normalize_text
 
 
 @dataclass(frozen=True)
@@ -53,13 +52,11 @@ class JobLocationRebuildResult:
 def _artifact_job_id(state: dict[str, Any], report: dict[str, Any]) -> str:
     """The identity ``record_from_artifacts`` would settle on without a fallback."""
     sources = (report, state)
-    return _artifact_records.first_artifact_text(
-        sources, "job_id"
-    ) or _artifact_records.first_artifact_text(sources, "run_id")
+    return first_artifact_text(sources, "job_id") or first_artifact_text(sources, "run_id")
 
 
 def _artifact_status(state: dict[str, Any], report: dict[str, Any]) -> str:
-    return _artifact_records.first_artifact_text((report, state), "status").lower()
+    return first_artifact_text((report, state), "status").lower()
 
 
 def _record_found_at(

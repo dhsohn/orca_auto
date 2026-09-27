@@ -40,7 +40,7 @@ def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: P
     entry = _pending_entry(tmp_path)
     generation = queue_entry_generation_token(entry)
     with patch.object(
-        publication_repair, "upsert_queued_job_record", side_effect=OSError("index unavailable")
+        publication_repair, "upsert_row_job_record", side_effect=OSError("index unavailable")
     ):
         assert not publication_repair.repair_queue_publication(cfg, tmp_path, entry)
     [blocked] = adapter.list_queue(tmp_path)
@@ -52,7 +52,7 @@ def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: P
     assert entry.queue_id in metadata["publication_blocked_action"]
     assert claim_next_entry(tmp_path) is None
 
-    with patch.object(publication_repair, "upsert_queued_job_record"):
+    with patch.object(publication_repair, "upsert_row_job_record"):
         assert publication_repair.repair_queue_publication(cfg, tmp_path, blocked)
     [repaired] = adapter.list_queue(tmp_path)
     metadata = queue_record(repaired, None, allowed_root=tmp_path).metadata
@@ -148,7 +148,7 @@ def test_terminal_publication_is_visible_until_marker_clears(
     from orca_auto.activity_labels import queue_detail_text
     from orca_auto.core.queue.persistence import save_entries
     from orca_auto.orca.queue.entries import TERMINAL_REPLAY_METADATA_KEY
-    from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_for_entry
+    from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_for_entry
     from tests.conftest import make_queue_entry
 
     config = str(config_path(runs_root=tmp_path))

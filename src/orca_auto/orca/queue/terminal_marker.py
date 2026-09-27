@@ -4,7 +4,8 @@ Terminal queue state and the side effects derived from it live in different
 stores.  Writers therefore persist this marker in the same queue mutation as
 the terminal transition.  A fresh worker can then finish state/report/index
 and notification publication without treating arbitrary historical terminal
-rows as new work.
+rows as new work. ``terminal_generation_verdict`` is the one rule that decides
+whether a terminal generation still owns its directory's ``job_state.json``.
 """
 
 from __future__ import annotations
@@ -59,16 +60,12 @@ def terminal_status_from_run_state(state: RunState | None) -> str | None:
     return status if status in TERMINAL_RUN_STATUS_VALUES else None
 
 
-def load_state_generation_fingerprint(
-    reaction_dir: Path,
+def state_generation_fingerprint(
+    state: RunState | None,
+    *,
+    present: bool,
 ) -> StateGenerationFingerprint:
-    state_file = state_path(reaction_dir)
-    present = state_file.exists()
-    try:
-        state = load_state(reaction_dir)
-    except Exception:  # noqa: BLE001 - unreadability is part of the fingerprint
-        return StateGenerationFingerprint(present=True, readable=False)
-    present = present or state_file.exists()
+    """The fingerprint of a loaded state; a present file that did not load is unreadable."""
     if state is None:
         return StateGenerationFingerprint(present=present, readable=not present)
     return StateGenerationFingerprint(
@@ -78,6 +75,109 @@ def load_state_generation_fingerprint(
         run_id=str(state.get("run_id") or "").strip(),
         terminal_status=terminal_status_from_run_state(state) or "",
     )
+
+
+def load_state_generation_fingerprint(
+    reaction_dir: Path,
+) -> StateGenerationFingerprint:
+    state_file = state_path(reaction_dir)
+    present = state_file.exists()
+    try:
+        state = load_state(reaction_dir)
+    except Exception:  # noqa: BLE001 - unreadability is part of the fingerprint
+        return StateGenerationFingerprint(present=True, readable=False)
+    return state_generation_fingerprint(state, present=present or state_file.exists())
+
+
+class TerminalGenerationVerdict(str, Enum):
+    """How a directory's current state relates to one terminal generation.
+
+    ``terminal_generation_verdict`` decides it for both readers. The replay
+    pre-check (``settlement.is_superseded``) drops the generation only on a
+    verdict that proves a newer one; the writer under ``run.lock``
+    (``terminal_state``) writes for OWNED, ABSENT and both PREVIOUS_TERMINAL
+    verdicts and raises for every other. The ``_UNVERIFIED`` and
+    ``UNOBSERVED_`` verdicts are where the two readers answer differently.
+
+    The fourteen members keep both readers' answers as
+    ``tests/contracts/pins/replay_supersession.json`` pins them, not a minimal
+    classification. ``is_superseded`` adds rules of its own before it asks for
+    a verdict: an item with an empty reaction directory or task id is
+    superseded.
+    """
+
+    UNREADABLE = "unreadable"  # the state file exists but does not load
+    ABSENT = "absent"  # no state, and the mark observed none (or nothing)
+    DISAPPEARED = "disappeared"  # the state the mark observed is gone
+    DISAPPEARED_UNVERIFIED = "disappeared_unverified"  # gone; the mark could not read it
+    OWNED = "owned"  # this generation's state
+    RESTARTED = "restarted"  # this task runs again after the mark observed another job
+    NEWER_RUN = "newer_run"  # this task's state carries another run id
+    REPLACED = "replaced"  # another job's state, unlike the one the mark observed
+    REPLACED_UNVERIFIED = "replaced_unverified"  # another job's state; the mark could not read
+    OTHER_ACTIVE = "other_active"  # another job's active state, as the mark observed it
+    PREVIOUS_TERMINAL = "previous_terminal"  # a finished state as observed, or without a job id
+    UNIDENTIFIED_ACTIVE = "unidentified_active"  # an active state without a job id
+    UNOBSERVED_PREVIOUS_TERMINAL = "unobserved_previous_terminal"  # no mark; another job finished
+    UNOBSERVED_OTHER_ACTIVE = "unobserved_other_active"  # no mark; another job's active state
+
+
+def terminal_generation_verdict(
+    current: StateGenerationFingerprint,
+    *,
+    task_id: str,
+    observed: StateGenerationFingerprint | None,
+    expected_run_id: str,
+) -> TerminalGenerationVerdict:
+    """Relate the directory's ``current`` state to the terminal generation of ``task_id``.
+
+    ``observed`` is the state the terminal mark recorded (``None`` when none
+    was recorded) and ``expected_run_id`` the run the caller expects this
+    task's state to carry (empty skips the run check). The rule fails closed:
+    a state that may belong to a newer generation is never OWNED.
+    """
+    verdict = TerminalGenerationVerdict
+    if not current.readable:
+        return verdict.UNREADABLE
+    if not current.present:
+        if observed is None or observed == current:
+            return verdict.ABSENT
+        return verdict.DISAPPEARED if observed.readable else verdict.DISAPPEARED_UNVERIFIED
+    if not task_id:
+        return verdict.OWNED
+    if current.job_id == task_id:
+        if (
+            observed is not None
+            and observed.readable
+            and observed.job_id
+            and observed.job_id != task_id
+            and not current.terminal_status
+        ):
+            return verdict.RESTARTED
+        if expected_run_id and current.run_id and current.run_id != expected_run_id:
+            return verdict.NEWER_RUN
+        return verdict.OWNED
+    if observed is None:
+        if current.job_id:
+            return (
+                verdict.UNOBSERVED_PREVIOUS_TERMINAL
+                if current.terminal_status
+                else verdict.UNOBSERVED_OTHER_ACTIVE
+            )
+    elif not observed.readable:
+        return verdict.REPLACED_UNVERIFIED
+    elif current != observed:
+        return verdict.REPLACED
+    elif current.job_id and not current.terminal_status:
+        return verdict.OTHER_ACTIVE
+    if current.terminal_status:
+        # A forced submission can reuse a reaction directory before the new
+        # child writes state. A complete terminal result is durable evidence
+        # that this is the previous generation.
+        return verdict.PREVIOUS_TERMINAL
+    # A nonterminal mismatch can be the current active generation; an old
+    # finalizer must not publish a terminal result over it.
+    return verdict.UNIDENTIFIED_ACTIVE
 
 
 def state_fingerprint_payload(

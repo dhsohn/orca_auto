@@ -19,13 +19,13 @@ from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.orca.config import AppConfig
-from orca_auto.orca.queue import replay as replay_mod
+from orca_auto.orca.queue import settlement
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue
 from orca_auto.orca.queue.models import TerminalReplayWorkItem
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_state
-from tests.conftest import RecordingChannel, claim_next_entry
+from tests.conftest import RecordingChannel, claim_next_entry, write_run_state
 from tests.queue_worker_helpers import (
     FakeChildren,
     awaited_send,
@@ -73,11 +73,12 @@ def read_only(directory: Path) -> Iterator[None]:
 # ---------------------------------------------------------------------------
 
 
-def test_check_cancel_requests(
-    worker: OrcaQueueWorker,
+def test_poll_pass_stops_and_settles_a_cancelled_child(
+    make_worker: Callable[..., OrcaQueueWorker],
     sleeping_child: Callable[[], subprocess.Popen[bytes]],
     queue_root: Path,
 ) -> None:
+    worker = make_worker(sleep=lambda _seconds: None)
     rxn = queue_root / "mol_cancel"
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
@@ -88,7 +89,7 @@ def test_check_cancel_requests(
         worker, entry, rxn, child, "slot_cancel", task_id=None
     )
 
-    worker._check_cancel_requests()
+    worker.run_pass()
 
     assert child.poll() == -signal.SIGTERM
     assert entry.queue_id not in worker._running
@@ -98,7 +99,64 @@ def test_check_cancel_requests(
     assert cancelled.metadata.get("orca_terminal_replay") is None
     written = load_state(rxn)
     assert written is not None
-    assert written["status"] == STATUS_CANCELLED
+    assert (written["job_id"], written["status"]) == (entry.task_id, STATUS_CANCELLED)
+    assert cancelled.metadata["run_id"] == written["run_id"]
+    record = job_record(queue_root, str(entry.task_id))
+    assert record is not None and record["status"] == STATUS_CANCELLED
+
+
+def test_cancel_pass_settles_a_child_that_marked_its_own_row(
+    worker: OrcaQueueWorker,
+    fake_children: FakeChildren,
+    recording_channel: RecordingChannel,
+    queue_root: Path,
+) -> None:
+    # The child handles the stop with the cancel pending: it marks its own
+    # row cancelled with the replay marker and exits 0, so the worker's own
+    # mark refuses. The same cancel pass settles the row; it does not wait
+    # for the next poll's completion pass.
+    delivered = awaited_send(recording_channel)
+    rxn = queue_root / "mol_cancel_self_marked"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn), task_id="task-cancel-self-marked")
+    running = claim_next_entry(queue_root)
+    assert running is not None
+    cancel(queue_root, entry.queue_id)
+    write_run_state(rxn, status="running", job_id=entry.task_id)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
+
+    def mark_own_row_cancelled() -> None:
+        assert queue_worker_mod.requeue_running_entry(
+            queue_root, entry.queue_id, expected_entry=running, expected_task_id=entry.task_id
+        )
+
+    child = fake_children.spawn(exit_code=0, on_stop=mark_own_row_cancelled)
+    worker._running[entry.queue_id] = running_job(worker, entry, rxn, child, token)
+    real_mark_cancelled = queue_worker_mod.mark_cancelled
+    worker_marks: list[bool] = []
+
+    def mark_cancelled(*args: Any, **kwargs: Any) -> bool:
+        worker_marks.append(real_mark_cancelled(*args, **kwargs))
+        return worker_marks[-1]
+
+    with patch.object(queue_worker_mod, "mark_cancelled", side_effect=mark_cancelled):
+        worker._check_cancel_requests()
+
+    assert fake_children.stopped(child) and child.poll_result == 0
+    assert worker_marks == [False]
+    assert entry.queue_id not in worker._running
+    assert len(list_slots(admission_dir(queue_root))) == 0
+    [cancelled] = list_queue(queue_root)
+    assert (cancelled.status, cancelled.cancel_requested) == (QueueStatus.CANCELLED, False)
+    assert cancelled.metadata.get("orca_terminal_replay") is None
+    written = load_state(rxn)
+    assert written is not None
+    assert (written["job_id"], written["status"]) == (entry.task_id, STATUS_CANCELLED)
+    assert cancelled.metadata["run_id"] == written["run_id"]
+    record = job_record(queue_root, entry.task_id)
+    assert record is not None and record["status"] == STATUS_CANCELLED
+    assert delivered.wait(1)
+    assert len(recording_channel.sends) == 1
 
 
 def test_check_cancel_requests_retains_live_job_when_termination_fails(
@@ -163,18 +221,16 @@ def test_cancel_releases_prepared_execution_before_terminal_side_effects(
     child = fake_children.spawn(exit_code=0)
     job = running_job(worker, entry, rxn, child, token)
     seen_at_finalize: list[tuple[int | None, QueueStatus, int]] = []
-    real_side_effects = replay_mod._run_terminal_replay_side_effects
+    real_finish = settlement.finish
 
-    def side_effects(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
+    def finish(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
         [row] = list_queue(queue_root)
         seen_at_finalize.append(
             (child.poll_result, row.status, len(list_slots(admission_dir(queue_root))))
         )
-        real_side_effects(cfg, item)
+        real_finish(cfg, item)
 
-    with patch.object(
-        replay_mod, "_run_terminal_replay_side_effects", side_effect=side_effects
-    ) as finalize_cancelled:
+    with patch.object(settlement, "finish", side_effect=finish) as finalize_cancelled:
         assert worker._cancel_running_job(entry.queue_id, job) is True
 
     # By the time the terminal side effects ran, the child had been stopped,
@@ -225,10 +281,10 @@ def test_cancel_mark_false_completion_retry_keeps_running_entry_slot(
     )
 
     with (
-        # Cancel marks from the worker; the completion retry marks through the
-        # replay engine's terminal mark. Both refuse here.
+        # Cancel marks from the worker; the completion retry marks through
+        # settlement's terminal mark. Both refuse here.
         patch.object(queue_worker_mod, "mark_cancelled", return_value=False),
-        patch.object(replay_mod, "mark_cancelled", return_value=False),
+        patch.object(settlement, "mark_cancelled", return_value=False),
     ):
         worker._check_cancel_requests()
         assert entry.queue_id in worker._running
@@ -254,15 +310,15 @@ def test_cancel_mark_false_releases_after_concurrent_terminal_transition(
     worker._running[entry.queue_id] = running_job(
         worker, entry, rxn, fake_children.spawn(exited=0), token
     )
-    real_mark_cancelled = replay_mod.mark_cancelled
+    real_mark_cancelled = settlement.mark_cancelled
 
     def terminalize_then_report_false(*args: Any, **kwargs: Any) -> bool:
         assert real_mark_cancelled(*args, **kwargs)
         return False
 
-    # The completion path marks through the replay engine's terminal mark;
-    # here the row turns terminal but the caller is told nothing changed.
-    with patch.object(replay_mod, "mark_cancelled", side_effect=terminalize_then_report_false):
+    # The completion path marks through settlement's terminal mark; here the
+    # row turns terminal but the caller is told nothing changed.
+    with patch.object(settlement, "mark_cancelled", side_effect=terminalize_then_report_false):
         worker._check_completed_jobs()
 
     written = load_state(rxn)

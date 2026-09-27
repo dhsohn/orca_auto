@@ -5,8 +5,6 @@ from typing import Any
 
 from orca_auto.core.utils import normalize_text
 
-from ..input_artifacts import derive_selected_input_xyz as _derive_selected_input_xyz
-
 
 def normalize_path_text(value: Any) -> str:
     raw = normalize_text(value)
@@ -37,13 +35,7 @@ def resource_dict_from_any(value: Any) -> dict[str, int]:
     return result
 
 
-def derive_selected_input_xyz(selected_inp: str) -> str:
-    return _derive_selected_input_xyz(selected_inp)
-
-
 __all__ = [
-    "derive_selected_input_xyz",
     "normalize_path_text",
-    "normalize_text",
     "resource_dict_from_any",
 ]
