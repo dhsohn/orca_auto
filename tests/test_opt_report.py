@@ -10,92 +10,11 @@ from orca_auto.orca.report.composer import collect_html_report_parts
 from orca_auto.orca.report.opt import collect_opt_report_data
 from orca_auto.orca.statuses import AnalyzerStatus
 from tests.engine_artifact_helpers import report_generation_target
-
-_OPT_CYCLES_BLOCK = """
-                *** Geometry Optimization Cycle   1 ***
-
-FINAL SINGLE POINT ENERGY      -100.00000000
-
-                *** Geometry Optimization Cycle   2 ***
-
-FINAL SINGLE POINT ENERGY      -100.00500000
-
-                *** Geometry Optimization Cycle   3 ***
-
-FINAL SINGLE POINT ENERGY      -100.00520000
-
-                    ***********************HURRAY********************
-                    ***        THE OPTIMIZATION HAS CONVERGED     ***
-                    *************************************************
-"""
-
-_COORDS_BLOCK = """
----------------------------------
-CARTESIAN COORDINATES (ANGSTROEM)
----------------------------------
-  H      0.000000    0.000000    0.000000
-  O      1.200000    0.000000    0.000000
-  O      3.000000    0.000000    0.000000
-
-"""
-
-_FREQ_TS_BLOCK = """
------------------------
-VIBRATIONAL FREQUENCIES
------------------------
-
-     0:       0.00 cm**-1
-     1:       0.00 cm**-1
-     2:       0.00 cm**-1
-     3:       0.00 cm**-1
-     4:       0.00 cm**-1
-     5:       0.00 cm**-1
-     6:    -410.20 cm**-1 ***imaginary mode***
-     7:     120.00 cm**-1
-     8:     300.00 cm**-1
-
-------------
-NORMAL MODES
-------------
-
-                  0          1          2          3          4          5
-      0       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      1       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      2       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      3       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      4       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      5       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      6       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      7       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      8       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-                  6          7          8
-      0       0.800000   0.100000   0.000000
-      1       0.000000   0.000000   0.100000
-      2       0.000000   0.000000   0.000000
-      3      -0.400000   0.200000   0.000000
-      4       0.000000   0.000000   0.300000
-      5       0.000000   0.000000   0.000000
-      6       0.000000   0.500000   0.000000
-      7       0.000000   0.000000   0.700000
-      8       0.000000   0.000000   0.000000
-
-IR SPECTRUM
-"""
-
-
-def _write_inp(path: Path, route: str) -> None:
-    path.write_text(f"{route}\n\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
-
-
-def _write_opt_out(path: Path, *, freq_block: str = "") -> None:
-    path.write_text(
-        "! Opt B3LYP def2-SVP\n"
-        + _COORDS_BLOCK
-        + _OPT_CYCLES_BLOCK
-        + freq_block
-        + "\n****ORCA TERMINATED NORMALLY****\n",
-        encoding="utf-8",
-    )
+from tests.orca_output_helpers import (
+    FREQ_TS_BLOCK,
+    write_opt_inp,
+    write_opt_out,
+)
 
 
 def _state(reaction_dir: Path, out_path: Path, *, reason: str) -> dict[str, Any]:
@@ -132,9 +51,9 @@ def _state(reaction_dir: Path, out_path: Path, *, reason: str) -> dict[str, Any]
 
 
 def test_collect_opt_report_parses_cycles_and_convergence(tmp_path: Path) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    write_opt_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path)
+    write_opt_out(out_path)
 
     data = collect_opt_report_data(
         tmp_path, _state(tmp_path, out_path, reason="normal_termination"), kind="opt"
@@ -150,9 +69,9 @@ def test_collect_opt_report_parses_cycles_and_convergence(tmp_path: Path) -> Non
 
 
 def test_collect_opt_report_skips_contentless_final_attempt(tmp_path: Path) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    write_opt_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path)
+    write_opt_out(out_path)
     dead_out = tmp_path / "rxn_retry.out"
     dead_out.write_text("ORCA crashed before the first cycle\n", encoding="utf-8")
 
@@ -180,9 +99,9 @@ def test_collect_opt_report_skips_contentless_final_attempt(tmp_path: Path) -> N
 
 
 def test_opt_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    write_opt_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path)
+    write_opt_out(out_path)
     missing_out = tmp_path / "rxn_retry.out"
     state = _state(tmp_path, out_path, reason="normal_termination")
     state["attempts"].append({"index": 2, "out_path": str(missing_out)})
@@ -221,9 +140,9 @@ def test_opt_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
     ],
 )
 def test_every_optimization_gets_the_opt_report(tmp_path: Path, route: str, kind: str) -> None:
-    _write_inp(tmp_path / "rxn.inp", route)
+    write_opt_inp(tmp_path / "rxn.inp", route)
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path)
+    write_opt_out(out_path)
 
     parts = collect_html_report_parts(
         tmp_path, _state(tmp_path, out_path, reason="normal_termination")
@@ -236,9 +155,9 @@ def test_every_optimization_gets_the_opt_report(tmp_path: Path, route: str, kind
 
 
 def test_partial_opt_report_makes_no_minimum_claim(tmp_path: Path) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! MECP-Opt Freq B3LYP def2-SVP")
+    write_opt_inp(tmp_path / "rxn.inp", "! MECP-Opt Freq B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+    write_opt_out(out_path, freq_block=FREQ_TS_BLOCK)
 
     path = write_job_html_report(
         tmp_path,
@@ -272,7 +191,7 @@ def test_relaxed_scan_of_any_optimization_gets_the_scan_report(tmp_path: Path, r
         encoding="utf-8",
     )
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path)
+    write_opt_out(out_path)
 
     parts = collect_html_report_parts(
         tmp_path, _state(tmp_path, out_path, reason="normal_termination")
@@ -285,9 +204,9 @@ def test_relaxed_scan_of_any_optimization_gets_the_scan_report(tmp_path: Path, r
 
 
 def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    write_opt_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path)
+    write_opt_out(out_path)
 
     path = write_job_html_report(
         tmp_path,
@@ -306,9 +225,9 @@ def test_opt_report_html_renders_convergence_chart(tmp_path: Path) -> None:
 
 
 def test_attempt_table_normalizes_live_analyzer_status_enum(tmp_path: Path) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
+    write_opt_inp(tmp_path / "rxn.inp", "! Opt B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path)
+    write_opt_out(out_path)
     state = _state(tmp_path, out_path, reason="normal_termination")
     state["attempts"][0]["analyzer_status"] = AnalyzerStatus.COMPLETED
 
@@ -325,10 +244,10 @@ def test_attempt_table_normalizes_live_analyzer_status_enum(tmp_path: Path) -> N
 def test_frequency_without_mode_vectors_is_not_reported_as_missing_calculation(
     tmp_path: Path,
 ) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! OptTS B3LYP def2-SVP Freq")
+    write_opt_inp(tmp_path / "rxn.inp", "! OptTS B3LYP def2-SVP Freq")
     out_path = tmp_path / "rxn.out"
-    frequency_only = _FREQ_TS_BLOCK.split("------------\nNORMAL MODES", maxsplit=1)[0]
-    _write_opt_out(out_path, freq_block=frequency_only)
+    frequency_only = FREQ_TS_BLOCK.split("------------\nNORMAL MODES", maxsplit=1)[0]
+    write_opt_out(out_path, freq_block=frequency_only)
 
     path = write_job_html_report(
         tmp_path,
@@ -344,9 +263,9 @@ def test_frequency_without_mode_vectors_is_not_reported_as_missing_calculation(
 
 
 def test_optts_report_summarizes_imaginary_mode(tmp_path: Path) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! OptTS B3LYP def2-SVP Freq")
+    write_opt_inp(tmp_path / "rxn.inp", "! OptTS B3LYP def2-SVP Freq")
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+    write_opt_out(out_path, freq_block=FREQ_TS_BLOCK)
 
     path = write_job_html_report(
         tmp_path,
@@ -365,9 +284,9 @@ def test_optts_report_summarizes_imaginary_mode(tmp_path: Path) -> None:
 
 
 def test_opt_report_flags_unexpected_imaginary_mode(tmp_path: Path) -> None:
-    _write_inp(tmp_path / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
+    write_opt_inp(tmp_path / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
     out_path = tmp_path / "rxn.out"
-    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+    write_opt_out(out_path, freq_block=FREQ_TS_BLOCK)
 
     path = write_job_html_report(
         tmp_path,
@@ -390,11 +309,11 @@ def test_opt_card_prefers_the_final_output_and_labels_an_earlier_frequency(
     # calculation"; the card now says where the count came from.
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
-    _write_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
+    write_opt_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
     first_out = reaction_dir / "rxn.out"
     final_out = reaction_dir / "rxn.retry01.out"
-    _write_opt_out(first_out, freq_block=_FREQ_TS_BLOCK)
-    _write_opt_out(final_out)
+    write_opt_out(first_out, freq_block=FREQ_TS_BLOCK)
+    write_opt_out(final_out)
     state = _state(reaction_dir, final_out, reason="completed")
     state["attempts"].insert(
         0,
@@ -419,9 +338,9 @@ def test_opt_card_prefers_the_final_output_and_labels_an_earlier_frequency(
 def test_opt_card_final_output_frequency_is_not_labeled(tmp_path: Path) -> None:
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
-    _write_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
+    write_opt_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
     out_path = reaction_dir / "rxn.out"
-    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+    write_opt_out(out_path, freq_block=FREQ_TS_BLOCK)
     state = _state(reaction_dir, out_path, reason="completed")
 
     data = collect_opt_report_data(reaction_dir, state, kind="opt")
@@ -436,9 +355,9 @@ def test_opt_card_final_output_frequency_is_not_labeled(tmp_path: Path) -> None:
 def test_opt_card_matches_the_final_attempt_through_a_symlinked_path(tmp_path: Path) -> None:
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
-    _write_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
+    write_opt_inp(reaction_dir / "rxn.inp", "! Opt Freq B3LYP def2-SVP")
     out_path = reaction_dir / "rxn.out"
-    _write_opt_out(out_path, freq_block=_FREQ_TS_BLOCK)
+    write_opt_out(out_path, freq_block=FREQ_TS_BLOCK)
     alias = tmp_path / "alias"
     alias.symlink_to(reaction_dir, target_is_directory=True)
     state = _state(reaction_dir, out_path, reason="completed")

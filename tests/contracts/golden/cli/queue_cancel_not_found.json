@@ -1,0 +1,8 @@
+{
+  "exit_code": 1,
+  "stdout": {
+    "ok": false,
+    "error": "Activity target not found: no-such-job"
+  },
+  "stderr": "error: Activity target not found: no-such-job\nhint: Check the configured runtime state, then run `orca_auto queue list` to see valid targets.\n"
+}

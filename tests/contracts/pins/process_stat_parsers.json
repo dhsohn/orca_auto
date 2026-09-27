@@ -1,0 +1,82 @@
+{
+  "plain": {
+    "utils.process_start_ticks": 98765,
+    "publication.process_start_token": "boot-a:98765",
+    "cli_systemd_evidence.parse_process_start_ticks": 98765
+  },
+  "comm_with_spaces": {
+    "utils.process_start_ticks": 98765,
+    "publication.process_start_token": "boot-a:98765",
+    "cli_systemd_evidence.parse_process_start_ticks": 98765
+  },
+  "comm_with_close_paren_and_fields": {
+    "utils.process_start_ticks": 98765,
+    "publication.process_start_token": "boot-a:98765",
+    "cli_systemd_evidence.parse_process_start_ticks": 98765
+  },
+  "comm_with_nested_parens": {
+    "utils.process_start_ticks": 98765,
+    "publication.process_start_token": "boot-a:98765",
+    "cli_systemd_evidence.parse_process_start_ticks": 98765
+  },
+  "comm_invalid_utf8": {
+    "utils.process_start_ticks": 98765,
+    "publication.process_start_token": "raise UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 9: invalid start byte",
+    "cli_systemd_evidence.parse_process_start_ticks": 98765
+  },
+  "exactly_twenty_fields_after_comm": {
+    "utils.process_start_ticks": 98765,
+    "publication.process_start_token": "boot-a:98765",
+    "cli_systemd_evidence.parse_process_start_ticks": 98765
+  },
+  "nineteen_fields_after_comm": {
+    "utils.process_start_ticks": null,
+    "publication.process_start_token": "",
+    "cli_systemd_evidence.parse_process_start_ticks": "raise ValueError: invalid /proc/1234/stat process identity"
+  },
+  "short_line": {
+    "utils.process_start_ticks": null,
+    "publication.process_start_token": "",
+    "cli_systemd_evidence.parse_process_start_ticks": "raise ValueError: invalid /proc/1234/stat process identity"
+  },
+  "non_numeric_starttime": {
+    "utils.process_start_ticks": null,
+    "publication.process_start_token": "boot-a:abc",
+    "cli_systemd_evidence.parse_process_start_ticks": "raise ValueError: invalid /proc/1234/stat process identity"
+  },
+  "plus_signed_starttime": {
+    "utils.process_start_ticks": 5,
+    "publication.process_start_token": "boot-a:+5",
+    "cli_systemd_evidence.parse_process_start_ticks": 5
+  },
+  "negative_starttime": {
+    "utils.process_start_ticks": null,
+    "publication.process_start_token": "boot-a:-5",
+    "cli_systemd_evidence.parse_process_start_ticks": "raise ValueError: invalid /proc/1234/stat process identity"
+  },
+  "zero_starttime": {
+    "utils.process_start_ticks": null,
+    "publication.process_start_token": "boot-a:0",
+    "cli_systemd_evidence.parse_process_start_ticks": "raise ValueError: invalid /proc/1234/stat process identity"
+  },
+  "huge_starttime": {
+    "utils.process_start_ticks": 18446744073709551615,
+    "publication.process_start_token": "boot-a:18446744073709551615",
+    "cli_systemd_evidence.parse_process_start_ticks": 18446744073709551615
+  },
+  "no_parentheses": {
+    "utils.process_start_ticks": null,
+    "publication.process_start_token": "",
+    "cli_systemd_evidence.parse_process_start_ticks": "raise ValueError: invalid /proc/1234/stat process identity"
+  },
+  "empty": {
+    "utils.process_start_ticks": null,
+    "publication.process_start_token": "",
+    "cli_systemd_evidence.parse_process_start_ticks": "raise ValueError: invalid /proc/1234/stat process identity"
+  },
+  "whitespace_only": {
+    "utils.process_start_ticks": null,
+    "publication.process_start_token": "",
+    "cli_systemd_evidence.parse_process_start_ticks": "raise ValueError: invalid /proc/1234/stat process identity"
+  }
+}

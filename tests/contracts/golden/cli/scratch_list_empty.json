@@ -1,0 +1,12 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "root": "<scratch>",
+    "root_exists": true,
+    "workspace_count": 0,
+    "blocking_count": 0,
+    "workspaces": []
+  },
+  "stderr": ""
+}

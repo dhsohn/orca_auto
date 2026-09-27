@@ -1,0 +1,38 @@
+                                 *****************
+                                 * O   R   C   A *
+                                 *****************
+
+                         Program Version 6.0.1 -  RELEASE  -
+
+================================================================================
+                                       INPUT FILE
+================================================================================
+NAME = job.inp
+|  1> ! Opt
+|  2> %pal nprocs 4 end
+|  3> * xyz 0 1
+|  4> O 0.0 0.0 0.0
+|  5> H 0.0 0.76 -0.47
+|  6> H 0.0 -0.76 -0.47
+|  7> *
+|  8> # ORCA finished by error termination; SCF NOT CONVERGED
+|  9>                          ****END OF INPUT****
+================================================================================
+# FATAL ERROR mentioned in a comment line
+
+                         *************************************************
+                         * Geometry Optimization Cycle   1 *
+                         *************************************************
+FINAL SINGLE POINT ENERGY       -76.100
+
+                         *************************************************
+                         * Geometry Optimization Cycle   2 *
+                         *************************************************
+FINAL SINGLE POINT ENERGY       -76.200
+
+                    ***********************HURRAY********************
+                    ***        THE OPTIMIZATION HAS CONVERGED     ***
+                    *************************************************
+
+TOTAL RUN TIME: 0 days 0 hours 1 minutes 2 seconds 345 msec
+                             ****ORCA TERMINATED NORMALLY****

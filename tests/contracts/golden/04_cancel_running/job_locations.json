@@ -1,0 +1,20 @@
+[
+  {
+    "job_id": "<orca:1>",
+    "app_name": "orca_auto_orca",
+    "job_type": "orca_opt",
+    "status": "cancelled",
+    "original_run_dir": "<tmp>/runs/cancel_running",
+    "molecule_key": "H2O",
+    "selected_input_xyz": "<tmp>/runs/cancel_running/<generation:1>/h2o.inp",
+    "latest_known_path": "<tmp>/runs/cancel_running",
+    "resource_request": {
+      "max_cores": 1,
+      "max_memory_gb": 1
+    },
+    "resource_actual": {
+      "max_cores": 1,
+      "max_memory_gb": 1
+    }
+  }
+]

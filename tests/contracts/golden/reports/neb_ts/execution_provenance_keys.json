@@ -1,0 +1,57 @@
+{
+  "bound_selected_identity": {
+    "path": "str",
+    "sha256": "str",
+    "size_bytes": "int"
+  },
+  "executable_identity": {
+    "path": "str",
+    "sha256": "str",
+    "size_bytes": "int"
+  },
+  "execution_dir": "str",
+  "execution_dir_identity": {
+    "device": "int",
+    "inode": "int"
+  },
+  "generation_owner_token": "str",
+  "materialized_inputs": {
+    "dependency_000000": {
+      "path": "str",
+      "sha256": "str",
+      "size_bytes": "int"
+    },
+    "dependency_000001": {
+      "path": "str",
+      "sha256": "str",
+      "size_bytes": "int"
+    }
+  },
+  "recovery": {},
+  "resource_request": {
+    "max_cores": "int",
+    "max_memory_gb": "int"
+  },
+  "runtime_mutable_input_roles": [],
+  "source_inputs": {
+    "dependency_000000": {
+      "role": "str",
+      "sha256": "str",
+      "size_bytes": "int",
+      "source_path": "str"
+    },
+    "dependency_000001": {
+      "role": "str",
+      "sha256": "str",
+      "size_bytes": "int",
+      "source_path": "str"
+    },
+    "selected_source": {
+      "role": "str",
+      "sha256": "str",
+      "size_bytes": "int",
+      "source_path": "str"
+    }
+  },
+  "source_selected_inp": "str"
+}

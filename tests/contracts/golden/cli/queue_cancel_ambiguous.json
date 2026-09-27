@@ -1,0 +1,8 @@
+{
+  "exit_code": 1,
+  "stdout": {
+    "ok": false,
+    "error": "Ambiguous activity target: same_name. Matches: same-a, same-b"
+  },
+  "stderr": "error: Ambiguous activity target: same_name. Matches: same-a, same-b\nhint: Check the configured runtime state, then run `orca_auto queue list` to see valid targets.\n"
+}

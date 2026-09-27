@@ -1,0 +1,33 @@
+{
+  "exit_code": 1,
+  "stdout": {
+    "ok": false,
+    "activity_id": "<q:1>",
+    "kind": "job",
+    "engine": "orca",
+    "source": "orca_auto_orca",
+    "label": "done",
+    "status": "failed",
+    "cancel_target": "<q:1>",
+    "result": {
+      "status": "failed",
+      "reason": "already_terminal",
+      "returncode": 1,
+      "command_argv": [
+        "orca_auto.orca.direct_cancel",
+        "config=<tmp>/orca_auto.yaml",
+        "target=<q:1>"
+      ],
+      "stdout": "",
+      "stderr": "queue target already terminal: <q:1>\n",
+      "parsed_stdout": {},
+      "job_id": "",
+      "queue_id": "",
+      "reaction_dir": "",
+      "priority": 0,
+      "force": false
+    },
+    "error": "queue target already terminal: <q:1>"
+  },
+  "stderr": "error: queue target already terminal: <q:1>\nhint: Run `orca_auto queue list` to inspect the current target state.\n"
+}

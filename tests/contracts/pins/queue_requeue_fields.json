@@ -1,0 +1,187 @@
+{
+  "orphan_requeue": {
+    "returned": 1,
+    "row_change": "status=pending started_at=''",
+    "row": {
+      "queue_id": "q-pin",
+      "app_name": "orca_auto_orca",
+      "task_id": "orca-pin",
+      "task_kind": "orca_run_inp",
+      "engine": "orca",
+      "status": "pending",
+      "priority": 10,
+      "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "started_at": "",
+      "finished_at": "",
+      "cancel_requested": false,
+      "error": "stale error",
+      "metadata": {
+        "reaction_dir": "<tmp>/runs/job",
+        "force": false,
+        "selected_inp": "<tmp>/runs/job/job.inp",
+        "worker_log": "<tmp>/runs/job/logs/q-pin.log",
+        "_orca_auto_queued_record_sync": "complete",
+        "_orca_auto_queued_record_sync_updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "_orca_auto_queued_record_sync_owner_pid": "<pid:int>",
+        "_orca_auto_queued_record_sync_owner_start": "",
+        "_orca_auto_queued_record_sync_token": "q-pin",
+        "orca_queued_notification_pending": false
+      }
+    }
+  },
+  "core_requeue": {
+    "returned": true,
+    "row_change": "status=pending started_at='' error=''",
+    "row": {
+      "queue_id": "q-pin",
+      "app_name": "orca_auto_orca",
+      "task_id": "orca-pin",
+      "task_kind": "orca_run_inp",
+      "engine": "orca",
+      "status": "pending",
+      "priority": 10,
+      "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "started_at": "",
+      "finished_at": "",
+      "cancel_requested": false,
+      "error": "",
+      "metadata": {
+        "reaction_dir": "<tmp>/runs/job",
+        "force": false,
+        "selected_inp": "<tmp>/runs/job/job.inp",
+        "worker_log": "<tmp>/runs/job/logs/q-pin.log",
+        "_orca_auto_queued_record_sync": "complete",
+        "_orca_auto_queued_record_sync_updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "_orca_auto_queued_record_sync_owner_pid": "<pid:int>",
+        "_orca_auto_queued_record_sync_owner_start": "",
+        "_orca_auto_queued_record_sync_token": "q-pin",
+        "orca_queued_notification_pending": false
+      }
+    }
+  },
+  "core_requeue_admission_deferral": {
+    "returned": true,
+    "row_change": "status=pending started_at='' error='' +admission_deferral",
+    "row": {
+      "queue_id": "q-pin",
+      "app_name": "orca_auto_orca",
+      "task_id": "orca-pin",
+      "task_kind": "orca_run_inp",
+      "engine": "orca",
+      "status": "pending",
+      "priority": 10,
+      "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "started_at": "",
+      "finished_at": "",
+      "cancel_requested": false,
+      "error": "",
+      "metadata": {
+        "reaction_dir": "<tmp>/runs/job",
+        "force": false,
+        "selected_inp": "<tmp>/runs/job/job.inp",
+        "worker_log": "<tmp>/runs/job/logs/q-pin.log",
+        "_orca_auto_queued_record_sync": "complete",
+        "_orca_auto_queued_record_sync_updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "_orca_auto_queued_record_sync_owner_pid": "<pid:int>",
+        "_orca_auto_queued_record_sync_owner_start": "",
+        "_orca_auto_queued_record_sync_token": "q-pin",
+        "orca_queued_notification_pending": false,
+        "admission_deferral": {
+          "reason": "scratch full",
+          "not_before": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>"
+        }
+      }
+    }
+  },
+  "orphan_cancel_requested": {
+    "returned": 1,
+    "row_change": "status=cancelled finished_at=<timestamp> cancel_requested=False +orca_terminal_replay",
+    "row": {
+      "queue_id": "q-pin",
+      "app_name": "orca_auto_orca",
+      "task_id": "orca-pin",
+      "task_kind": "orca_run_inp",
+      "engine": "orca",
+      "status": "cancelled",
+      "priority": 10,
+      "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "finished_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "cancel_requested": false,
+      "error": "stale error",
+      "metadata": {
+        "reaction_dir": "<tmp>/runs/job",
+        "force": false,
+        "selected_inp": "<tmp>/runs/job/job.inp",
+        "worker_log": "<tmp>/runs/job/logs/q-pin.log",
+        "_orca_auto_queued_record_sync": "complete",
+        "_orca_auto_queued_record_sync_updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "_orca_auto_queued_record_sync_owner_pid": "<pid:int>",
+        "_orca_auto_queued_record_sync_owner_start": "",
+        "_orca_auto_queued_record_sync_token": "q-pin",
+        "orca_queued_notification_pending": false,
+        "orca_terminal_replay": {
+          "version": 1,
+          "task_id": "orca-pin",
+          "selected_inp": "<tmp>/runs/job/job.inp",
+          "status": "cancelled",
+          "error": "stale error",
+          "observed_state": {
+            "present": false,
+            "readable": true,
+            "job_id": "",
+            "run_id": "",
+            "terminal_status": ""
+          }
+        }
+      }
+    }
+  },
+  "core_cancel_while_running": {
+    "returned": [
+      "entry(running)",
+      true
+    ],
+    "row_change": "status=cancelled finished_at=<timestamp> +orca_terminal_replay",
+    "row": {
+      "queue_id": "q-pin",
+      "app_name": "orca_auto_orca",
+      "task_id": "orca-pin",
+      "task_kind": "orca_run_inp",
+      "engine": "orca",
+      "status": "cancelled",
+      "priority": 10,
+      "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "finished_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "cancel_requested": false,
+      "error": "stale error",
+      "metadata": {
+        "reaction_dir": "<tmp>/runs/job",
+        "force": false,
+        "selected_inp": "<tmp>/runs/job/job.inp",
+        "worker_log": "<tmp>/runs/job/logs/q-pin.log",
+        "_orca_auto_queued_record_sync": "complete",
+        "_orca_auto_queued_record_sync_updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "_orca_auto_queued_record_sync_owner_pid": "<pid:int>",
+        "_orca_auto_queued_record_sync_owner_start": "",
+        "_orca_auto_queued_record_sync_token": "q-pin",
+        "orca_queued_notification_pending": false,
+        "orca_terminal_replay": {
+          "version": 1,
+          "task_id": "orca-pin",
+          "selected_inp": "<tmp>/runs/job/job.inp",
+          "status": "cancelled",
+          "error": "cancel_requested",
+          "observed_state": {
+            "present": false,
+            "readable": true,
+            "job_id": "",
+            "run_id": "",
+            "terminal_status": ""
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,214 @@
+{
+  "no_scheduler": {
+    "load_config": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 4,
+      "max_concurrent": 4
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 4,
+      "max_concurrent": 4,
+      "reservation_limit": 4
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/runs/.admission"
+    },
+    "systemd_plan": {
+      "read_write_paths": [
+        "<tmp>/runs"
+      ],
+      "stop_timeout_seconds": 87
+    }
+  },
+  "scheduler_empty": {
+    "load_config": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 4,
+      "max_concurrent": 4
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 4,
+      "max_concurrent": 4,
+      "reservation_limit": 4
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/runs/.admission"
+    },
+    "systemd_plan": {
+      "read_write_paths": [
+        "<tmp>/runs"
+      ],
+      "stop_timeout_seconds": 87
+    }
+  },
+  "max_active_1": {
+    "load_config": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 1,
+      "max_concurrent": 1
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 1,
+      "max_concurrent": 1,
+      "reservation_limit": 1
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/runs/.admission"
+    },
+    "systemd_plan": {
+      "read_write_paths": [
+        "<tmp>/runs"
+      ],
+      "stop_timeout_seconds": 42
+    }
+  },
+  "max_active_2": {
+    "load_config": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 2,
+      "max_concurrent": 2
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 2,
+      "max_concurrent": 2,
+      "reservation_limit": 2
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/runs/.admission"
+    },
+    "systemd_plan": {
+      "read_write_paths": [
+        "<tmp>/runs"
+      ],
+      "stop_timeout_seconds": 57
+    }
+  },
+  "explicit_root": {
+    "load_config": {
+      "admission_root": "<tmp>/admission",
+      "admission_limit": 4,
+      "max_concurrent": 4
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/admission",
+      "admission_limit": 4,
+      "max_concurrent": 4,
+      "reservation_limit": 4
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/admission"
+    },
+    "systemd_plan": {
+      "read_write_paths": [
+        "<tmp>/admission",
+        "<tmp>/runs"
+      ],
+      "stop_timeout_seconds": 87
+    }
+  },
+  "explicit_root_max_active_3": {
+    "load_config": {
+      "admission_root": "<tmp>/admission",
+      "admission_limit": 3,
+      "max_concurrent": 3
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/admission",
+      "admission_limit": 3,
+      "max_concurrent": 3,
+      "reservation_limit": 3
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/admission"
+    },
+    "systemd_plan": {
+      "read_write_paths": [
+        "<tmp>/admission",
+        "<tmp>/runs"
+      ],
+      "stop_timeout_seconds": 72
+    }
+  },
+  "explicit_root_equals_default": {
+    "load_config": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 4,
+      "max_concurrent": 4
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/runs/.admission",
+      "admission_limit": 4,
+      "max_concurrent": 4,
+      "reservation_limit": 4
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/runs/.admission"
+    },
+    "systemd_plan": "raise ValueError: scheduler.admission_root must exist as a directory before systemd installation: <tmp>/runs/.admission. Create it with ownership for the service user or update the config."
+  },
+  "explicit_root_unnormalized": {
+    "load_config": {
+      "admission_root": "<tmp>/admission",
+      "admission_limit": 4,
+      "max_concurrent": 4
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/admission",
+      "admission_limit": 4,
+      "max_concurrent": 4,
+      "reservation_limit": 4
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/admission"
+    },
+    "systemd_plan": {
+      "read_write_paths": [
+        "<tmp>/admission",
+        "<tmp>/runs"
+      ],
+      "stop_timeout_seconds": 87
+    }
+  },
+  "explicit_root_missing_directory": {
+    "load_config": {
+      "admission_root": "<tmp>/missing",
+      "admission_limit": 4,
+      "max_concurrent": 4
+    },
+    "queue_worker": {
+      "admission_root": "<tmp>/missing",
+      "admission_limit": 4,
+      "max_concurrent": 4,
+      "reservation_limit": 4
+    },
+    "engine_runtime_paths": {
+      "allowed_root": "<tmp>/runs",
+      "admission_root": "<tmp>/missing"
+    },
+    "systemd_plan": "raise ValueError: scheduler.admission_root must exist as a directory before systemd installation: <tmp>/missing. Create it with ownership for the service user or update the config."
+  },
+  "explicit_root_relative": {
+    "load_config": "raise ValueError: scheduler.admission_root must be an absolute Linux path.",
+    "queue_worker": "raise ValueError: scheduler.admission_root must be an absolute Linux path.",
+    "engine_runtime_paths": "raise ValueError: scheduler.admission_root must be an absolute Linux path.",
+    "systemd_plan": "raise ValueError: scheduler.admission_root must be an absolute Linux path."
+  },
+  "explicit_root_empty": {
+    "load_config": "raise ValueError: scheduler.admission_root must be an absolute Linux path.",
+    "queue_worker": "raise ValueError: scheduler.admission_root must be an absolute Linux path.",
+    "engine_runtime_paths": "raise ValueError: scheduler.admission_root must be an absolute Linux path.",
+    "systemd_plan": "raise ValueError: scheduler.admission_root must be an absolute Linux path."
+  }
+}

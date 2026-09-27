@@ -1,0 +1,21 @@
+[
+  {
+    "token": "<slot:1>",
+    "owner_pid": "<pid:int>",
+    "process_start_ticks": "<start_ticks:int>",
+    "owner_boot_id": "<boot_id:str>",
+    "source": "queue_run",
+    "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+    "app_name": "orca_auto_orca",
+    "task_id": "<orca:1>",
+    "state": "active",
+    "work_dir": "<tmp>/runs/cancel_running",
+    "queue_id": "<q:1>",
+    "engine_process_state": "active",
+    "engine_launch_gated": true,
+    "engine_pid": "<pid:int>",
+    "engine_pgid": "<pgid:int>",
+    "engine_process_start_ticks": "<start_ticks:int>",
+    "engine_process_boot_id": "<boot_id:str>"
+  }
+]

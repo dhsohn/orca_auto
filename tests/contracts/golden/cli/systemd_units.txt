@@ -1,0 +1,54 @@
+### orca_auto-engine-workers@.target
+[Unit]
+Description=orca_auto default engine workers for %i
+Wants=orca_auto-queue-worker@%i.service
+After=local-fs.target
+PartOf=orca_auto-runtime@%i.target
+
+[Install]
+WantedBy=multi-user.target
+### orca_auto-queue-worker@.service
+[Unit]
+Description=orca_auto ORCA queue worker for %i
+After=local-fs.target
+PartOf=orca_auto-engine-workers@%i.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=<tmp>/orca_auto
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=ORCA_AUTO_CONFIG=<tmp>/orca_auto/config/orca_auto.yaml
+ExecStart=<tmp>/orca_auto/.venv/bin/python -m orca_auto.cli queue worker
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=<tmp>/orca_auto/admission <tmp>/orca_auto/orca_runs
+UMask=0077
+# Stop only the supervisor with SIGTERM: it forwards the stop to the queue
+# worker, which stops each ORCA child, waits for it and requeues its row.
+# control-group would SIGTERM the children directly and race that requeue.
+# mixed still SIGKILLs the whole group once TimeoutStopSec expires.
+KillMode=mixed
+# The worker's worst case: 4 jobs x (10 s SIGTERM + 5 s SIGKILL) + 15 s
+# requeue margin + the supervisor's 5 s kill wait. Installation re-renders
+# this line for the configured scheduler.max_active_simulations.
+TimeoutStopSec=57
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+### orca_auto-runtime@.target
+[Unit]
+Description=orca_auto runtime stack for %i
+Wants=orca_auto-engine-workers@%i.target
+After=local-fs.target
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

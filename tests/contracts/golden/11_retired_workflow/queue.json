@@ -1,0 +1,28 @@
+[
+  {
+    "queue_id": "legacy-row",
+    "app_name": "orca_auto_orca",
+    "task_id": "legacy-task",
+    "task_kind": "orca_run_inp",
+    "engine": "orca",
+    "status": "pending",
+    "priority": 10,
+    "enqueued_at": "",
+    "started_at": "",
+    "finished_at": "",
+    "cancel_requested": false,
+    "error": "",
+    "metadata": {
+      "workflow_id": "legacy-flow",
+      "reaction_dir": "<tmp>/runs/legacy_owned",
+      "force": false,
+      "_orca_auto_queued_record_sync": "complete",
+      "_orca_auto_queued_record_sync_updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "_orca_auto_queued_record_sync_owner_pid": "<pid:int>",
+      "_orca_auto_queued_record_sync_owner_start": "",
+      "_orca_auto_queued_record_sync_token": "legacy-row",
+      "_orca_auto_queued_record_sync_blocked": null,
+      "worker_log": "<tmp>/runs/logs/legacy-row.log"
+    }
+  }
+]

@@ -1,0 +1,20 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "index_path": "<tmp>/runs/job_locations.json",
+    "total": 2,
+    "pruned_count": 1,
+    "applied": false,
+    "pruned": [
+      {
+        "job_id": "<orca:1>",
+        "app_name": "orca_auto_orca",
+        "status": "completed",
+        "original_run_dir": "<tmp>/runs/gone",
+        "latest_known_path": "<tmp>/runs/gone"
+      }
+    ]
+  },
+  "stderr": ""
+}

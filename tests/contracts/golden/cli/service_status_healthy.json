@@ -1,0 +1,33 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "target_user": "alice",
+    "mode": "full",
+    "worker_staleness": null,
+    "services": [
+      {
+        "label": "runtime",
+        "unit": "orca_auto-runtime@alice.target",
+        "active": "active",
+        "enabled": "enabled",
+        "required": true
+      },
+      {
+        "label": "engines",
+        "unit": "orca_auto-engine-workers@alice.target",
+        "active": "active",
+        "enabled": "disabled",
+        "required": true
+      },
+      {
+        "label": "worker",
+        "unit": "orca_auto-queue-worker@alice.service",
+        "active": "active",
+        "enabled": "disabled",
+        "required": true
+      }
+    ]
+  },
+  "stderr": ""
+}

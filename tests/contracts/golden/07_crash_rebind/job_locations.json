@@ -1,0 +1,20 @@
+[
+  {
+    "job_id": "<orca:1>",
+    "app_name": "orca_auto_orca",
+    "job_type": "orca_opt",
+    "status": "completed",
+    "original_run_dir": "<tmp>/runs/crash_rebind",
+    "molecule_key": "H2O",
+    "selected_input_xyz": "<tmp>/runs/crash_rebind/<generation:2>/h2o.inp",
+    "latest_known_path": "<tmp>/runs/crash_rebind",
+    "resource_request": {
+      "max_cores": 1,
+      "max_memory_gb": 1
+    },
+    "resource_actual": {
+      "max_cores": 1,
+      "max_memory_gb": 1
+    }
+  }
+]

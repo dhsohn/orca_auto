@@ -1,0 +1,271 @@
+[
+  {
+    "role": "parent",
+    "file": "snapshot_intent",
+    "state": "creating",
+    "keys": [
+      "version",
+      "token",
+      "kind",
+      "state",
+      "queue_root",
+      "generation_paths",
+      "generation_identities",
+      "owner_pid",
+      "owner_process_start_ticks",
+      "owner_boot_id",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "snapshot_intent",
+    "state": "creating",
+    "keys": [
+      "version",
+      "token",
+      "kind",
+      "state",
+      "queue_root",
+      "generation_paths",
+      "generation_identities",
+      "owner_pid",
+      "owner_process_start_ticks",
+      "owner_boot_id",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "snapshot_intent",
+    "state": "enqueueing",
+    "keys": [
+      "version",
+      "token",
+      "kind",
+      "state",
+      "queue_root",
+      "generation_paths",
+      "generation_identities",
+      "owner_pid",
+      "owner_process_start_ticks",
+      "owner_boot_id",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "queue.json",
+    "rows": [
+      "pending"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "job_locations.json",
+    "rows": [
+      "queued"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "queue.json",
+    "rows": [
+      "pending"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "snapshot_intent",
+    "state": "owned",
+    "keys": [
+      "version",
+      "token",
+      "kind",
+      "state",
+      "queue_root",
+      "generation_paths",
+      "generation_identities",
+      "owner_pid",
+      "owner_process_start_ticks",
+      "owner_boot_id",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "snapshot_intent",
+    "state": "removed"
+  },
+  {
+    "role": "parent",
+    "file": "queue.json",
+    "rows": [
+      "pending"
+    ]
+  },
+  {
+    "role": "parent",
+    "notify": "queued"
+  },
+  {
+    "role": "parent",
+    "file": "admission_slots.json",
+    "slots": [
+      "reserved/idle"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "queue.json",
+    "rows": [
+      "running"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "admission_slots.json",
+    "slots": [
+      "active/idle"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "job_locations.json",
+    "rows": [
+      "running"
+    ]
+  },
+  {
+    "role": "child",
+    "file": "admission_slots.json",
+    "slots": [
+      "active/idle"
+    ]
+  },
+  {
+    "role": "child",
+    "file": "root/job_state.json",
+    "status": "created"
+  },
+  {
+    "role": "child",
+    "file": "generation/job_state.json",
+    "status": "created"
+  },
+  {
+    "role": "child",
+    "file": "root/job_state.json",
+    "status": "created"
+  },
+  {
+    "role": "child",
+    "file": "generation/job_state.json",
+    "status": "running"
+  },
+  {
+    "role": "child",
+    "file": "root/job_state.json",
+    "status": "running"
+  },
+  {
+    "role": "child",
+    "notify": "started"
+  },
+  {
+    "role": "child",
+    "file": "admission_slots.json",
+    "slots": [
+      "active/pending"
+    ]
+  },
+  {
+    "role": "child",
+    "file": "admission_slots.json",
+    "slots": [
+      "active/active"
+    ]
+  },
+  {
+    "role": "child",
+    "file": "admission_slots.json",
+    "slots": [
+      "active/idle"
+    ]
+  },
+  {
+    "role": "child",
+    "file": "generation/job_state.json",
+    "status": "running"
+  },
+  {
+    "role": "child",
+    "file": "root/job_state.json",
+    "status": "running"
+  },
+  {
+    "role": "child",
+    "file": "generation/job_state.json",
+    "status": "completed"
+  },
+  {
+    "role": "child",
+    "file": "root/job_state.json",
+    "status": "completed"
+  },
+  {
+    "role": "child",
+    "file": "generation/job_report.html"
+  },
+  {
+    "role": "child",
+    "file": "generation/si_block.md"
+  },
+  {
+    "role": "child",
+    "file": "generation/execution_provenance.json"
+  },
+  {
+    "role": "child",
+    "file": "generation/machine.json"
+  },
+  {
+    "role": "parent",
+    "file": "queue.json",
+    "rows": [
+      "completed+replay"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "admission_slots.json",
+    "slots": []
+  },
+  {
+    "role": "parent",
+    "file": "job_locations.json",
+    "rows": [
+      "completed"
+    ]
+  },
+  {
+    "role": "parent",
+    "file": "root/job_state.json",
+    "status": "completed"
+  },
+  {
+    "role": "parent",
+    "notify": "terminal"
+  },
+  {
+    "role": "parent",
+    "file": "queue.json",
+    "rows": [
+      "completed"
+    ]
+  }
+]

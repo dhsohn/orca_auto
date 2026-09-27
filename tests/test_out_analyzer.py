@@ -9,14 +9,13 @@ from orca_auto.orca.out_analyzer import analyze_output, scan_ts_lines_for_imag_c
 from orca_auto.orca.output_status import has_error_termination, has_normal_termination
 from orca_auto.orca.parser.io import open_orca_text
 from orca_auto.orca.statuses import AnalyzerStatus
+from tests.orca_output_helpers import FREQ_TS_BLOCK, si_out_text
 from tests.test_integration_parser_realistic import (
     _B3LYP_OPT_FREQ_COMPLETED,
     _TS_OPT_WITH_IMAGINARY,
     _TS_REAL_VIB_FORMAT,
 )
-from tests.test_opt_report import _FREQ_TS_BLOCK
 from tests.test_orca_evidence import _FREQUENCIES as _EVIDENCE_FREQUENCIES
-from tests.test_si_report import _out_text as _si_out_text
 
 NORMAL = "****ORCA TERMINATED NORMALLY****"
 _OPT_MODE = CompletionMode(kind="opt", require_irc=False, route_line="! Opt")
@@ -460,17 +459,17 @@ _FREQUENCY_FIXTURES: tuple[tuple[str, str, AnalyzerStatus, int, bool], ...] = (
     ("realistic_opt_freq", _B3LYP_OPT_FREQ_COMPLETED, AnalyzerStatus.TS_NOT_FOUND, 0, True),
     ("realistic_ts_imaginary", _TS_OPT_WITH_IMAGINARY, AnalyzerStatus.COMPLETED, 1, True),
     ("realistic_ts_scaling_factor", _TS_REAL_VIB_FORMAT, AnalyzerStatus.COMPLETED, 1, True),
-    ("report_ts_block_unterminated", _FREQ_TS_BLOCK, AnalyzerStatus.INCOMPLETE, 0, False),
+    ("report_ts_block_unterminated", FREQ_TS_BLOCK, AnalyzerStatus.INCOMPLETE, 0, False),
     ("evidence_freqs", _EVIDENCE_FREQUENCIES + NORMAL, AnalyzerStatus.COMPLETED, 1, True),
     (
         "si_ts_with_thermo",
-        _si_out_text(freqs=(-512.3, 120.0), thermo=True),
+        si_out_text(freqs=(-512.3, 120.0), thermo=True),
         AnalyzerStatus.COMPLETED,
         1,
         True,
     ),
-    ("si_noise_mode", _si_out_text(freqs=(-5.0, -512.3, 120.0)), AnalyzerStatus.COMPLETED, 1, True),
-    ("si_minimum", _si_out_text(freqs=(120.0, 300.0)), AnalyzerStatus.TS_NOT_FOUND, 0, True),
+    ("si_noise_mode", si_out_text(freqs=(-5.0, -512.3, 120.0)), AnalyzerStatus.COMPLETED, 1, True),
+    ("si_minimum", si_out_text(freqs=(120.0, 300.0)), AnalyzerStatus.TS_NOT_FOUND, 0, True),
     (
         "headerless_legacy_count",
         "some line -123.45 cm**-1\nIRC PATH SUMMARY\n" + NORMAL,

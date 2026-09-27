@@ -10,110 +10,14 @@ from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.publication import write_report_files
 from orca_auto.orca.report.scan import collect_scan_report_data
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
-
-_FREQ_BLOCK = """
------------------------
-VIBRATIONAL FREQUENCIES
------------------------
-
-Scaling factor for frequencies =  1.000000000  (already applied!)
-
-     0:       0.00 cm**-1
-     1:       0.00 cm**-1
-     2:       0.00 cm**-1
-     3:       0.00 cm**-1
-     4:       0.00 cm**-1
-     5:       0.00 cm**-1
-     6:    -155.30 cm**-1 ***imaginary mode***
-     7:     120.00 cm**-1
-     8:     300.00 cm**-1
-"""
-
-_MODES_BLOCK = """
-------------
-NORMAL MODES
-------------
-
-These modes are the Cartesian displacements weighted by the diagonal matrix
-M(i,i)=1/sqrt(m[i]) where m[i] is the mass of the displaced atom
-Thus, these vectors are normalized but *not* orthogonal
-
-                  0          1          2          3          4          5
-      0       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      1       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      2       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      3       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      4       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      5       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      6       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      7       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      8       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-                  6          7          8
-      0       0.900000   0.100000   0.000000
-      1       0.000000   0.000000   0.100000
-      2       0.000000   0.000000   0.000000
-      3      -0.300000   0.200000   0.000000
-      4       0.000000   0.000000   0.300000
-      5       0.000000   0.000000   0.000000
-      6       0.000000   0.500000   0.000000
-      7       0.000000   0.000000   0.700000
-      8       0.000000   0.000000   0.000000
-
-IR SPECTRUM
-"""
-
-_COORDS_BLOCK = """
----------------------------------
-CARTESIAN COORDINATES (ANGSTROEM)
----------------------------------
-  H      0.000000    0.000000    0.000000
-  O      1.200000    0.000000    0.000000
-  O      3.000000    0.000000    0.000000
-
-"""
-
-_SURFACE_BLOCK = """
-RELAXED SURFACE SCAN RESULTS
-
-The Calculated Surface using the 'Actual Energy'
-   1.86000000 -100.00000000
-   1.91000000 -99.99000000
-   1.96000000 -100.02000000
-
-The Calculated Surface using the SCF energy
-   1.86000000 -101.00000000
-"""
-
-
-def _write_ts_out(path: Path) -> None:
-    path.write_text(
-        _COORDS_BLOCK
-        + _SURFACE_BLOCK
-        + _FREQ_BLOCK
-        + _MODES_BLOCK
-        + "\n****ORCA TERMINATED NORMALLY****\n",
-        encoding="utf-8",
-    )
-
-
-def _write_scan_inp(path: Path) -> None:
-    path.write_text(
-        "\n".join(
-            [
-                "! Opt B3LYP def2-SVP Freq",
-                "",
-                "%geom",
-                "  Scan",
-                "    B 0 1 = 1.86, 1.96, 3",
-                "  end",
-                "end",
-                "",
-                "* xyzfile 0 1 input.xyz",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+from tests.orca_output_helpers import (
+    COORDS_BLOCK,
+    SCAN_FREQ_BLOCK,
+    SCAN_MODES_BLOCK,
+    SCAN_SURFACE_BLOCK,
+    write_scan_inp,
+    write_scan_out,
+)
 
 
 def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
@@ -151,9 +55,9 @@ def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
 
 def test_parse_frequency_analysis_reads_last_blocks(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
-    stale = _FREQ_BLOCK.replace("-155.30", "-999.00")
+    stale = SCAN_FREQ_BLOCK.replace("-155.30", "-999.00")
     out_path.write_text(
-        _COORDS_BLOCK + stale + _COORDS_BLOCK + _FREQ_BLOCK + _MODES_BLOCK,
+        COORDS_BLOCK + stale + COORDS_BLOCK + SCAN_FREQ_BLOCK + SCAN_MODES_BLOCK,
         encoding="utf-8",
     )
 
@@ -171,14 +75,14 @@ def test_parse_frequency_analysis_reads_last_blocks(tmp_path: Path) -> None:
 
 def test_parse_frequency_analysis_without_freq_block(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
-    out_path.write_text(_COORDS_BLOCK + _SURFACE_BLOCK, encoding="utf-8")
+    out_path.write_text(COORDS_BLOCK + SCAN_SURFACE_BLOCK, encoding="utf-8")
     assert parse_frequency_analysis(out_path) is None
 
 
 def test_collect_summarizes_imaginary_mode_and_alignment(tmp_path: Path) -> None:
-    _write_scan_inp(tmp_path / "rxn.inp")
+    write_scan_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_ts_out(out_path)
+    write_scan_out(out_path)
 
     data = collect_scan_report_data(tmp_path, _state(tmp_path, out_path))
 
@@ -202,15 +106,15 @@ def test_collect_returns_none_for_non_scan_input(tmp_path: Path) -> None:
     inp = tmp_path / "rxn.inp"
     inp.write_text("! Opt B3LYP def2-SVP\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     out_path = tmp_path / "rxn.out"
-    _write_ts_out(out_path)
+    write_scan_out(out_path)
 
     assert collect_scan_report_data(tmp_path, _state(tmp_path, out_path)) is None
 
 
 def test_write_job_html_report_renders_scan_sections(tmp_path: Path) -> None:
-    _write_scan_inp(tmp_path / "rxn.inp")
+    write_scan_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_ts_out(out_path)
+    write_scan_out(out_path)
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
@@ -229,9 +133,9 @@ def test_write_job_html_report_renders_scan_sections(tmp_path: Path) -> None:
 
 
 def test_scan_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
-    _write_scan_inp(tmp_path / "rxn.inp")
+    write_scan_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_ts_out(out_path)
+    write_scan_out(out_path)
     missing_out = tmp_path / "rxn_retry.out"
     state = _state(tmp_path, out_path)
     state["attempts"].append({"index": 2, "out_path": str(missing_out)})
@@ -269,7 +173,7 @@ def test_relaxed_scan_gets_profile_report_not_opt_report(tmp_path: Path) -> None
         encoding="utf-8",
     )
     out_path = tmp_path / "rxn.out"
-    _write_ts_out(out_path)
+    write_scan_out(out_path)
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
@@ -297,7 +201,7 @@ def _scan_report_text(tmp_path: Path, geom_block: str) -> str:
         encoding="utf-8",
     )
     out_path = tmp_path / "rxn.out"
-    _write_ts_out(out_path)
+    write_scan_out(out_path)
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
     )
@@ -354,9 +258,9 @@ def test_angular_scan_is_labelled_in_degrees(tmp_path: Path, geom_block: str, la
 
 
 def test_write_report_files_includes_html_for_scan(tmp_path: Path) -> None:
-    _write_scan_inp(tmp_path / "rxn.inp")
+    write_scan_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_ts_out(out_path)
+    write_scan_out(out_path)
 
     state = _state(tmp_path, out_path)
     generation = bind_report_generation(tmp_path, state)
@@ -374,7 +278,7 @@ def test_write_report_files_skips_html_and_removes_stale_for_md(
     inp = tmp_path / "rxn.inp"
     inp.write_text("! B3LYP def2-SVP MD\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     out_path = tmp_path / "rxn.out"
-    _write_ts_out(out_path)
+    write_scan_out(out_path)
     state = _state(tmp_path, out_path)
     generation = bind_report_generation(tmp_path, state)
     # Leftover report from a previous Opt job in this reused generation

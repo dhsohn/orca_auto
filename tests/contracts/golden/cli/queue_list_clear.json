@@ -1,0 +1,16 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "total_cleared": 2,
+    "cleared": {
+      "orca_queue_entries": 1,
+      "orca_run_states": 1
+    },
+    "removed_worker_logs": 1,
+    "sources": {
+      "orca_config": "<tmp>/orca_auto.yaml"
+    }
+  },
+  "stderr": ""
+}

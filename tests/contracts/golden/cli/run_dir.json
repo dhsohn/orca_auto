@@ -1,0 +1,14 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "status": "queued",
+    "job_dir": "<tmp>/runs/submitted",
+    "queue_id": "<q:1>",
+    "job_id": "<orca:1>",
+    "priority": 10,
+    "worker": "inactive",
+    "worker_log": "<tmp>/runs/logs/<q:1>.log"
+  },
+  "stderr": "<timestamp:YYYY-MM-DD hh:mm:ss,fff> [INFO] orca_auto.orca.config: Config loaded: allowed_root=<tmp>/runs, admission_root=<tmp>/admission, orca_executable=<tmp>/bin/fake_orca, max_concurrent=1, admission_limit=1\n<timestamp:YYYY-MM-DD hh:mm:ss,fff> [INFO] orca_auto.orca.queue.adapter: Enqueued: <tmp>/runs/submitted (queue_id=<q:1>, force=False)\n"
+}
