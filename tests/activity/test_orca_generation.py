@@ -5,9 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.activity._orca import orca_records
-from orca_auto.activity._orca_index import query_listing
-from orca_auto.activity.model import ActivityListRequest
+from orca_auto.activity._orca import catalog
 from orca_auto.orca.config import load_config
 from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.queue import adapter
@@ -21,7 +19,6 @@ from tests.conftest import claim_next_entry
 
 
 @pytest.mark.parametrize("claimed", [False, True], ids=["pending", "running"])
-@pytest.mark.parametrize("indexed", [False, True], ids=["discovery", "indexed-query"])
 @pytest.mark.parametrize(
     "matching_state", [False, True], ids=["prior-generation", "current-generation"]
 )
@@ -29,7 +26,6 @@ def test_activity_borrows_state_only_from_its_queue_generation(
     tmp_path: Path,
     claimed: bool,
     matching_state: bool,
-    indexed: bool,
 ) -> None:
     runs_root = tmp_path / "runs"
     job_dir = runs_root / "job"
@@ -83,11 +79,7 @@ def test_activity_borrows_state_only_from_its_queue_generation(
         )
         save_state(job_dir, state)
 
-    rows = (
-        list(query_listing(runs_root, ActivityListRequest(indexed=True)).records)
-        if indexed
-        else orca_records(runs_root)
-    )
+    rows = [record for _entry, record in catalog(runs_root)]
     current_activity = next(row for row in rows if row.activity_id == current.queue_id)
 
     # A completed state can precede its parent's queue transition, but only for

@@ -5,7 +5,6 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.activity_index import published_source
 from orca_auto.core.artifacts import QUEUE_FILE
 
 from ..utils.persistence import (
@@ -157,4 +156,3 @@ def save_entries(root: str | Path, entries: Sequence[QueueEntry]) -> None:
         ensure_ascii=True,
         indent=2,
     )
-    published_source(resolved_root, "queue", QUEUE_FILE, records)

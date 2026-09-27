@@ -10,7 +10,6 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core import activity_invalidation as _activity_invalidation
 from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.confined_io import (
     atomic_write_confined_bytes,
@@ -159,7 +158,6 @@ def save_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:
             STATE_MUTATION_LOCK_FILE_NAME,
             display_path=reaction_dir / STATE_MUTATION_LOCK_FILE_NAME,
         ):
-            _activity_invalidation.invalidate_state(reaction_dir)
             generation_target = _state_reading.verified_generation_artifact_target(
                 reaction_dir, state_payload
             )

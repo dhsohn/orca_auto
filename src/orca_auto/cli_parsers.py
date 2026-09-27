@@ -147,11 +147,6 @@ def _add_queue_list_parser(
         help="Optional non-negative maximum number of activities to print",
     )
     list_parser.add_argument(
-        "--refresh",
-        action="store_true",
-        help="Discover unindexed ORCA runs",
-    )
-    list_parser.add_argument(
         "--status", action="append", help="Filter by status; may be passed more than once"
     )
     add_json_argument(list_parser)

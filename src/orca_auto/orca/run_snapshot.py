@@ -3,18 +3,15 @@ from __future__ import annotations
 import os
 import stat
 from collections.abc import Iterable, Mapping
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
     should_exclude_from_production_runs_scan,
 )
-from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.persistence import load_json_mapping_file
 from orca_auto.core.utils.stable_fs import StableFsError, open_pinned_directory
 
@@ -191,16 +188,12 @@ def _snapshot_name(
 def _candidate_snapshot_dirs(
     allowed_root: Path,
     *,
-    discover_unindexed: bool,
-    known_dirs: Iterable[Path],
-    location_records: Iterable[JobLocationRecord] | None = None,
+    known_dirs: Iterable[Path] | None,
 ) -> list[tuple[Path, Path | None, tuple[int, int]]]:
     candidates: list[tuple[Path, Path | None, tuple[int, int]]] = []
     seen: set[str] = set()
 
-    records = (
-        list_job_location_records(allowed_root) if location_records is None else location_records
-    )
+    records = list_job_location_records(allowed_root) if known_dirs is None else ()
     for record in records:
         if _record_has_excluded_path(record, allowed_root):
             continue
@@ -229,9 +222,11 @@ def _candidate_snapshot_dirs(
         seen.add(key)
         candidates.append((reaction_dir, original_run_dir, identity))
 
-    state_paths = [directory / STATE_FILE_NAME for directory in known_dirs]
-    if discover_unindexed:
-        state_paths.extend(iter_production_runs_artifacts(allowed_root, STATE_FILE_NAME))
+    state_paths = (
+        iter_production_runs_artifacts(allowed_root, STATE_FILE_NAME)
+        if known_dirs is None
+        else (directory / STATE_FILE_NAME for directory in known_dirs)
+    )
     for state_path in state_paths:
         if should_exclude_from_production_runs_scan(state_path, allowed_root):
             continue
@@ -251,20 +246,16 @@ def _candidate_snapshot_dirs(
 def collect_run_snapshots(
     allowed_root: Path,
     *,
-    discover_unindexed: bool = True,
-    known_dirs: Iterable[Path] = (),
-    location_records: Iterable[JobLocationRecord] | None = None,
-    synchronize: bool = False,
+    known_dirs: Iterable[Path] | None = None,
 ) -> list[RunSnapshot]:
+    """Root states of ``known_dirs`` only, or of every indexed and discovered run directory."""
     snapshots: list[RunSnapshot] = []
     if not allowed_root.is_dir():
         return snapshots
 
     for reaction_dir, original_run_dir, reaction_dir_identity in _candidate_snapshot_dirs(
         allowed_root,
-        discover_unindexed=discover_unindexed,
         known_dirs=known_dirs,
-        location_records=location_records,
     ):
         directory_fd = _open_snapshot_directory(
             reaction_dir,
@@ -273,14 +264,7 @@ def collect_run_snapshots(
         if directory_fd is None:
             continue
         try:
-            # The query index consumes pre-write invalidations only after this
-            # lock proves it observed the corresponding state publication.
-            with (
-                file_lock_at(directory_fd, STATE_MUTATION_LOCK_FILE_NAME)
-                if synchronize
-                else nullcontext()
-            ):
-                loaded_state = load_pinned_state(directory_fd)
+            loaded_state = load_pinned_state(directory_fd)
             if loaded_state is None:
                 continue
             state_payload, state_file_identity = loaded_state

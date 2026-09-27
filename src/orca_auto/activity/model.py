@@ -1,4 +1,4 @@
-"""Activity catalog models: the list request, the ``ActivityRecord`` row and one page of it."""
+"""Activity catalog models: the ``ActivityRecord`` row and one page of it."""
 
 from __future__ import annotations
 
@@ -10,14 +10,6 @@ from typing import Any
 
 from orca_auto.core.statuses import ACTIVE_SIMULATION_STATUSES, normalize_status
 from orca_auto.core.utils import normalize_text, parse_iso_utc
-
-
-@dataclass(frozen=True)
-class ActivityListRequest:
-    refresh: bool = False
-    limit: int = 0
-    indexed: bool = False
-    statuses: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -33,8 +25,8 @@ class ActivityRecord:
     cancel_target: str
     aliases: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
-    #: The per-job worker log (``<runs_root>/logs/<queue_id>.log``) for a
-    #: queue-backed row; empty for a row known only through its state file.
+    #: The per-job worker log (``<runs_root>/logs/<queue_id>.log``) the queue
+    #: row names; empty when it names none.
     worker_log: str = ""
 
     def to_dict(self) -> dict[str, Any]:

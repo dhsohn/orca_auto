@@ -10,20 +10,8 @@
   "result": {
     "status": "cancelled",
     "reason": "",
-    "returncode": 0,
-    "command_argv": [
-      "orca_auto.orca.direct_cancel",
-      "config=<tmp>/orca_auto.yaml",
-      "target=<q:1>"
-    ],
-    "stdout": "status: cancelled\nqueue_id: <q:1>\njob_id: <orca:1>",
-    "stderr": "",
-    "parsed_stdout": {
-      "status": "cancelled",
-      "queue_id": "<q:1>",
-      "job_id": "<orca:1>"
-    },
+    "queue_id": "<q:1>",
     "job_id": "<orca:1>",
-    "queue_id": "<q:1>"
+    "reaction_dir": "<tmp>/runs/cancel_pending"
   }
 }

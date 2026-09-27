@@ -2,6 +2,20 @@
   "exit_code": 1,
   "stdout": {
     "ok": false,
+    "activity_id": "",
+    "kind": "",
+    "engine": "",
+    "source": "",
+    "label": "",
+    "status": "failed",
+    "cancel_target": "",
+    "result": {
+      "status": "failed",
+      "reason": "ambiguous",
+      "queue_id": "",
+      "job_id": "",
+      "reaction_dir": ""
+    },
     "error": "Ambiguous activity target: same_name. Matches: same-a, same-b"
   },
   "stderr": "error: Ambiguous activity target: same_name. Matches: same-a, same-b\nhint: Check the configured runtime state, then run `orca_auto queue list` to see valid targets.\n"

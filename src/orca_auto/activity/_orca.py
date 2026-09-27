@@ -1,16 +1,15 @@
-"""ORCA rows for the activity catalog: queue entries merged with run snapshots."""
+"""The queue catalog: each ORCA queue row joined with its own root state."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from orca_auto.activity.model import ActivityRecord, path_aliases, timestamp_metadata, unique_texts
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
 from orca_auto.core.queue.publication import QUEUE_RECORD_SYNC_BLOCKED_KEY
+from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.statuses import ACTIVE_STATUSES, STATUS_PENDING
 from orca_auto.core.utils import normalize_text
-from orca_auto.orca import run_snapshot
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE, ORCA_ENGINE
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
@@ -24,78 +23,37 @@ from orca_auto.orca.queue.terminal_marker import (
     TerminalReplayMarkerKind,
     terminal_replay_marker_kind,
 )
-from orca_auto.orca.run_snapshot import RunSnapshot
-from orca_auto.orca.run_status import (
-    observed_queue_status,
-    observed_snapshot_status,
-    snapshot_is_superseded,
-    snapshot_reaction_dir,
-    superseded_snapshot_dirs,
-)
+from orca_auto.orca.run_snapshot import RunSnapshot, collect_run_snapshots
+from orca_auto.orca.run_status import observed_queue_status
 
 
-def snapshot_matches_entry(
-    entry: Any,
-    snapshot_by_run_id: dict[str, RunSnapshot],
-    snapshot_by_dir: dict[str, RunSnapshot],
-) -> RunSnapshot | None:
+def _resolved_dir(path_text: str) -> str:
+    try:
+        return str(Path(path_text).expanduser().resolve())
+    except OSError:
+        return path_text
+
+
+def _row_snapshot(entry: QueueEntry, snapshot_by_dir: dict[str, RunSnapshot]) -> RunSnapshot | None:
+    """The row's own root state, when it belongs to this row's run or generation."""
+    reaction_dir = queue_entries.queue_entry_reaction_dir(entry)
+    snapshot = snapshot_by_dir.get(_resolved_dir(reaction_dir)) if reaction_dir else None
+    if snapshot is None:
+        return None
     run_id = normalize_text(queue_entries.queue_entry_run_id(entry))
     if run_id:
-        return snapshot_by_run_id.get(run_id)
+        return snapshot if normalize_text(snapshot.run_id) == run_id else None
     if normalize_text(queue_entries.queue_entry_status(entry)) not in ACTIVE_STATUSES:
         return None
-    reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
-    if not reaction_dir:
-        return None
-    try:
-        resolved = str(Path(reaction_dir).expanduser().resolve())
-    except OSError:
-        resolved = reaction_dir
-    snapshot = snapshot_by_dir.get(resolved)
     # The reusable root can still carry the preceding run's terminal state
     # while this queue generation waits for its child to publish new state.
-    if snapshot is None or snapshot.state_generation_identity != (
-        queue_entries.queue_entry_generation_token(entry)
-    ):
+    if snapshot.state_generation_identity != queue_entries.queue_entry_generation_token(entry):
         return None
     return snapshot
 
 
-def queue_represents_snapshot(entry: Any, snapshot: RunSnapshot | None) -> bool:
-    if snapshot is None:
-        return False
-    run_id = normalize_text(queue_entries.queue_entry_run_id(entry))
-    if run_id and run_id == normalize_text(snapshot.run_id):
-        return True
-    if normalize_text(queue_entries.queue_entry_status(entry)) not in ACTIVE_STATUSES:
-        return False
-    reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
-    try:
-        resolved = str(Path(reaction_dir).expanduser().resolve())
-    except OSError:
-        resolved = reaction_dir
-    return resolved == normalize_text(snapshot.reaction_dir.resolve())
-
-
-def snapshot_indexes(
-    snapshots: list[RunSnapshot],
-) -> tuple[dict[str, RunSnapshot], dict[str, RunSnapshot]]:
-    snapshot_by_run_id = {
-        normalize_text(snapshot.run_id): snapshot
-        for snapshot in snapshots
-        if normalize_text(snapshot.run_id)
-    }
-    snapshot_by_dir: dict[str, RunSnapshot] = {}
-    for snapshot in snapshots:
-        try:
-            snapshot_by_dir[str(Path(snapshot.reaction_dir).expanduser().resolve())] = snapshot
-        except OSError:
-            continue
-    return snapshot_by_run_id, snapshot_by_dir
-
-
 def queue_record(
-    entry: Any,
+    entry: QueueEntry,
     snapshot: RunSnapshot | None,
     *,
     allowed_root: Path,
@@ -109,11 +67,7 @@ def queue_record(
     snapshot_completed_at = snapshot.completed_at if snapshot is not None else ""
     snapshot_updated_at = snapshot.updated_at if snapshot is not None else ""
     # A running row carries its run ID only in the state of its own generation.
-    snapshot_run_id = (
-        normalize_text(snapshot.run_id)
-        if snapshot is not None and queue_represents_snapshot(entry, snapshot)
-        else ""
-    )
+    snapshot_run_id = normalize_text(snapshot.run_id) if snapshot is not None else ""
     status = observed_queue_status(entry, snapshot)
     blocker = entry_metadata.get(QUEUE_RECORD_SYNC_BLOCKED_KEY)
     if not isinstance(blocker, dict) or status != STATUS_PENDING or entry.cancel_requested:
@@ -192,99 +146,26 @@ def queue_record(
     )
 
 
-def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path) -> ActivityRecord:
-    reaction_dir = snapshot_reaction_dir(snapshot)
-    run_id = normalize_text(snapshot.run_id)
-    label = (
-        normalize_text(snapshot.name)
-        or normalize_text(Path(reaction_dir).name if reaction_dir else "")
-        or run_id
-    )
-    started_at = normalize_text(snapshot.started_at)
-    completed_at = normalize_text(snapshot.completed_at)
-    return ActivityRecord(
-        activity_id=run_id or label,
-        kind="job",
-        engine=ORCA_ENGINE,
-        status=observed_snapshot_status(snapshot),
-        label=label,
-        source=ORCA_AUTO_ORCA_SOURCE,
-        submitted_at=started_at,
-        updated_at=completed_at or normalize_text(snapshot.updated_at) or started_at,
-        cancel_target=run_id or reaction_dir,
-        aliases=unique_texts(
-            [
-                run_id,
-                *list(path_aliases(reaction_dir, root=allowed_root)),
-                normalize_text(snapshot.name),
-            ]
-        ),
-        metadata={
-            "run_id": run_id,
-            "reaction_dir": reaction_dir,
-            "allowed_root": str(allowed_root),
-            "attempts": snapshot.attempts,
-            "selected_inp_name": normalize_text(snapshot.selected_inp_name),
-            # RunSnapshot carries no job_type; orphan-snapshot rows have always had
-            # this empty. Kept for metadata-shape parity with queue_record.
-            "job_type": "",
-            **timestamp_metadata(started_at=started_at, finished_at=completed_at),
-        },
-    )
+def catalog(allowed_root: Path) -> list[tuple[QueueEntry, ActivityRecord]]:
+    """Every ORCA queue row with the record ``queue list`` shows for it.
 
-
-def orca_records(allowed_root: Path) -> list[ActivityRecord]:
-    """Every ORCA activity from the canonical queue, index and state files."""
+    A row reads only its own directory's root ``job_state.json``; neither the
+    location index nor any other directory under ``allowed_root`` is read.
+    """
     entries = queue_adapter.list_queue(allowed_root)
-    snapshots = run_snapshot.collect_run_snapshots(
-        allowed_root,
-        discover_unindexed=False,
-        known_dirs=(
-            Path(reaction_dir)
-            for entry in entries
-            if (reaction_dir := queue_entries.queue_entry_reaction_dir(entry))
-        ),
-    )
-    return [
-        record for _kind, _key, record in materialized_records(entries, snapshots, allowed_root)
+    known_dirs = [
+        Path(reaction_dir)
+        for entry in entries
+        if (reaction_dir := queue_entries.queue_entry_reaction_dir(entry))
     ]
-
-
-def materialized_records(
-    entries: list[Any],
-    snapshots: list[RunSnapshot],
-    allowed_root: Path,
-) -> list[tuple[str, str, ActivityRecord]]:
-    """One generation-aware merge shared by discovery and the query projection."""
-    snapshot_by_run_id, snapshot_by_dir = snapshot_indexes(snapshots)
-    represented_snapshot_keys: set[str] = set()
-    superseded_dirs = superseded_snapshot_dirs(entries)
-    rows: list[tuple[str, str, ActivityRecord]] = []
-
-    for entry in entries:
-        snapshot = snapshot_matches_entry(entry, snapshot_by_run_id, snapshot_by_dir)
-        rows.append(
-            (
-                "queue",
-                entry.queue_id,
-                queue_record(entry, snapshot, allowed_root=allowed_root),
-            )
+    snapshot_by_dir = {
+        _resolved_dir(str(snapshot.reaction_dir)): snapshot
+        for snapshot in collect_run_snapshots(allowed_root, known_dirs=known_dirs)
+    }
+    return [
+        (
+            entry,
+            queue_record(entry, _row_snapshot(entry, snapshot_by_dir), allowed_root=allowed_root),
         )
-        if snapshot is not None and queue_represents_snapshot(entry, snapshot):
-            represented_snapshot_keys.add(normalize_text(snapshot.key))
-
-    for snapshot in snapshots:
-        snapshot_key = normalize_text(snapshot.key)
-        if snapshot_key and snapshot_key in represented_snapshot_keys:
-            continue
-        if snapshot_is_superseded(snapshot, superseded_dirs):
-            continue
-        rows.append(
-            (
-                "snapshot",
-                str(snapshot.reaction_dir.resolve()),
-                snapshot_record(snapshot, allowed_root=allowed_root),
-            )
-        )
-
-    return rows
+        for entry in entries
+    ]

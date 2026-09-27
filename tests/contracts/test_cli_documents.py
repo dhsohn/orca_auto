@@ -25,7 +25,7 @@ from orca_auto import activity_labels, cli_systemd_status, systemd_plan, termina
 from orca_auto._version import package_version
 from orca_auto.cli import build_parser
 from orca_auto.cli import main as cli_main
-from orca_auto.orca import direct_cancel
+from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.scratch_config import ScratchConfig
 from tests.conftest import enqueue_entry, make_queue_entry
 from tests.contracts.conftest import Harness
@@ -121,13 +121,13 @@ def test_queue_cancel_outcomes(harness: Harness, monkeypatch: pytest.MonkeyPatch
         "--json",
     )
 
-    real_cancel = direct_cancel.queue_adapter.cancel
+    real_cancel = queue_adapter.cancel
 
     def cancel_then_fail(*args: Any, **kwargs: Any) -> Any:
         real_cancel(*args, **kwargs)
         raise OSError("lost the reply after the cancel was written")
 
-    monkeypatch.setattr(direct_cancel.queue_adapter, "cancel", cancel_then_fail)
+    monkeypatch.setattr(queue_adapter, "cancel", cancel_then_fail)
     _json_document(
         harness,
         "queue_cancel_exception_after_commit",

@@ -31,7 +31,6 @@ from .entries import (
     is_orca_queue_entry,
     normalize_text,
     queue_entry_id,
-    queue_entry_matches_target,
     queue_entry_reaction_dir,
     queue_entry_status,
     same_generation,
@@ -46,14 +45,12 @@ from .terminal_marker import (
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "AmbiguousQueueTargetError",
     "DuplicateEntryError",
     "cancel",
     "cancel_requested_ids",
     "cancellation_probe",
     "dequeue_entry_if_pending",
     "enqueue",
-    "find_entry_by_target",
     "get_active_entry_for_reaction_dir",
     "get_cancel_requested",
     "get_entry_by_id",
@@ -111,10 +108,6 @@ class DuplicateEntryError(ValueError):
             f"(queue_id={qid}, status={status}). "
             "Wait for the active generation or its terminal publication to finish first."
         )
-
-
-class AmbiguousQueueTargetError(ValueError):
-    """Raised when a cancel alias names multiple active ORCA generations."""
 
 
 def _reject_duplicate_reaction_dir(
@@ -251,40 +244,6 @@ def dequeue_entry_if_pending(
         queue_entry_id(entry),
     )
     return entry
-
-
-def find_entry_by_target(entries: Sequence[QueueEntry], target: str) -> QueueEntry | None:
-    """Return the unique active ORCA generation for a cancel target.
-
-    Path and run aliases may remain on older terminal generations.  An active
-    generation takes precedence; multiple active matches are ambiguous and
-    must not be changed.  With no active match, return the newest terminal row
-    so cancellation retries can observe an already-cancelled outcome.
-    """
-
-    matches = [
-        entry
-        for entry in entries
-        if is_orca_queue_entry(entry) and queue_entry_matches_target(entry, target)
-    ]
-    active = [entry for entry in matches if queue_entry_status(entry) in ACTIVE_STATUSES]
-    if len(active) > 1:
-        raise AmbiguousQueueTargetError(
-            f"queue target matches multiple active ORCA generations: {target}"
-        )
-    if active:
-        return active[0]
-    if not matches:
-        return None
-    return max(
-        matches,
-        key=lambda entry: (
-            normalize_text(entry.finished_at),
-            normalize_text(entry.started_at),
-            normalize_text(entry.enqueued_at),
-            queue_entry_id(entry),
-        ),
-    )
 
 
 def mark_completed(

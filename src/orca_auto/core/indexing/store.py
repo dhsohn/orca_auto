@@ -5,7 +5,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-from ..activity_index import published_source
 from ..utils.coercion import normalize_text, safe_int
 from ..utils.lock import file_lock
 from ..utils.persistence import (
@@ -94,7 +93,6 @@ def _save_records(root: Path, records: list[JobLocationRecord]) -> None:
         ensure_ascii=True,
         indent=2,
     )
-    published_source(root, "location", JOB_LOCATION_INDEX_FILE_NAME, payload)
 
 
 def _resolve_candidate_path(path_text: str) -> Path | None:
@@ -308,9 +306,9 @@ def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocat
 
     A row whose job id is already indexed is replaced in place; a new job id is
     appended, so submission order is preserved. A replacement equal to the
-    loaded row leaves the file bytes exactly as they were (no atomic rewrite,
-    no projection publication). A caller that must compare against the row as
-    it is at write time uses ``merge_job_locations`` instead.
+    loaded row leaves the file bytes exactly as they were (no atomic rewrite).
+    A caller that must compare against the row as it is at write time uses
+    ``merge_job_locations`` instead.
     """
     replacement = _normalized_record(record)
     _merge_locked(

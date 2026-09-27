@@ -11,6 +11,7 @@ import pytest
 
 from orca_auto.cli import main
 from orca_auto.core.admission import activate_reserved_slot, reserve_slot
+from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.machine_observation import report_json_path
 from orca_auto.orca.queue.adapter import (
     enqueue,
@@ -19,7 +20,7 @@ from orca_auto.orca.queue.adapter import (
 )
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state_reading import state_path
-from tests.conftest import claim_next_entry, write_run_state
+from tests.conftest import claim_next_entry, enqueue_entry, make_queue_entry, write_run_state
 from tests.engine_artifact_helpers import orca_artifact_payload
 
 MakeRun = Callable[..., None]
@@ -36,8 +37,11 @@ def config(allowed: Path, config_path: Callable[..., Path]) -> Path:
 
 
 @pytest.fixture
-def make_run() -> Iterator[MakeRun]:
-    """Persist a ``job_state.json``; in-progress runs also hold their run lock."""
+def make_run(allowed: Path) -> Iterator[MakeRun]:
+    """Persist a ``job_state.json`` and, unless ``queued=False``, its queue row.
+
+    In-progress runs also hold their run lock.
+    """
 
     with ExitStack() as stack:
 
@@ -47,14 +51,26 @@ def make_run() -> Iterator[MakeRun]:
             status: str = "completed",
             inp_name: str = "rxn.inp",
             run_id: str | None = None,
+            queued: bool = True,
         ) -> None:
+            run_id = run_id or f"run_{reaction_dir.name}"
             write_run_state(
                 reaction_dir,
                 status=status,
-                run_id=run_id or f"run_{reaction_dir.name}",
+                run_id=run_id,
                 selected_inp=reaction_dir / inp_name,
                 attempts=[{"index": 1}],
             )
+            if queued:
+                running = status in {"running", "retrying"}
+                enqueue_entry(
+                    allowed,
+                    make_queue_entry(
+                        reaction_dir=reaction_dir,
+                        status=QueueStatus.RUNNING if running else QueueStatus(status),
+                        metadata={} if running else {"run_id": run_id},
+                    ),
+                )
             if status in {"running", "retrying"}:
                 # A genuinely in-progress run holds a live run lock; without it the
                 # activity list now treats the run as a stale/failed leftover.
@@ -93,7 +109,7 @@ def test_list_empty(config: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert "- " not in output
 
 
-# --- standalone runs: unindexed runs are discovered explicitly, indexed ones listed normally
+# --- queued runs: each row borrows its own directory's run state ---------------------------
 
 
 def test_shows_runs(
@@ -103,7 +119,7 @@ def test_shows_runs(
     make_run(allowed / "rxn2", status="running")
     _activate_admission_slot(allowed, allowed / "rxn2")
 
-    rc, output = _list(config, "--refresh", capsys=capsys)
+    rc, output = _list(config, capsys=capsys)
 
     assert rc == 0
     assert "rxn1" in output
@@ -120,7 +136,7 @@ def test_filter(
     make_run(allowed / "rxn2", status="running")
     _activate_admission_slot(allowed, allowed / "rxn2")
 
-    rc, output = _list(config, "--status", "running", "--refresh", capsys=capsys)
+    rc, output = _list(config, "--status", "running", capsys=capsys)
 
     assert rc == 0
     assert "rxn2" in output
@@ -134,7 +150,7 @@ def test_nested_dirs(
     make_run(allowed / "project" / "rxn1", status="completed")
     make_run(allowed / "project" / "rxn2", status="failed")
 
-    rc, output = _list(config, "--refresh", capsys=capsys)
+    rc, output = _list(config, capsys=capsys)
 
     assert rc == 0
     assert "rxn1" in output
@@ -142,7 +158,7 @@ def test_nested_dirs(
     assert "active_simulations: 0" in output
 
 
-def test_tracked_organized_run_is_listed_via_job_locations_index(
+def test_run_known_only_to_the_location_index_is_not_listed(
     tmp_path: Path,
     allowed: Path,
     config: Path,
@@ -150,7 +166,9 @@ def test_tracked_organized_run_is_listed_via_job_locations_index(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     organized = tmp_path / "organized" / "project" / "rxn_tracked"
-    make_run(organized, status="completed", inp_name="tracked.inp", run_id="run_tracked")
+    make_run(
+        organized, status="completed", inp_name="tracked.inp", run_id="run_tracked", queued=False
+    )
     (allowed / "job_locations.json").write_text(
         json.dumps(
             [
@@ -176,8 +194,8 @@ def test_tracked_organized_run_is_listed_via_job_locations_index(
     rc, output = _list(config, capsys=capsys)
 
     assert rc == 0
-    assert "run_tracked" in output
-    assert "✅" in output
+    assert "run_tracked" not in output
+    assert "✅" not in output
     assert "active_simulations: 0" in output
 
 
@@ -209,7 +227,7 @@ def test_filter_pending(
     # Also add a standalone completed run
     make_run(allowed / "rxn_done", status="completed")
 
-    rc, output = _list(config, "--status", "pending", "--refresh", capsys=capsys)
+    rc, output = _list(config, "--status", "pending", capsys=capsys)
 
     assert rc == 0
     assert entry.queue_id in output
@@ -225,7 +243,7 @@ def test_queue_with_run_state(
     rxn_dir.mkdir()
     entry = enqueue(allowed, str(rxn_dir))
     # Create a run_state for the same directory
-    make_run(rxn_dir, status="running", inp_name="opt.inp")
+    make_run(rxn_dir, status="running", inp_name="opt.inp", queued=False)
 
     rc, output = _list(config, capsys=capsys)
 
@@ -290,8 +308,8 @@ def test_clear_queue_terminal(
 def test_clear_standalone_terminal(
     allowed: Path, config: Path, make_run: MakeRun, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    make_run(allowed / "rxn1", status="completed")
-    make_run(allowed / "rxn2", status="running")
+    make_run(allowed / "rxn1", status="completed", queued=False)
+    make_run(allowed / "rxn2", status="running", queued=False)
 
     rc, _output = _list(config, "clear", capsys=capsys)
 

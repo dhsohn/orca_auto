@@ -37,13 +37,13 @@ orca_auto run-dir <PATH> [--config PATH] [--force] [--priority N] [--json]
 ### `orca_auto queue list`
 현재 작업 큐와 전역 활성 시뮬레이션 상태를 조회합니다.
 ```bash
-orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [--json]
+orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--json]
 ```
 - `--status STATUS`: 특정 상태의 작업만 필터링 (`pending`, `running`, `completed`, `failed`, `cancelled`)
 - `--limit N`: 출력할 최대 작업 개수 지정
-- `--refresh`: 인덱스에 등록되지 않은 계산 디렉터리를 파일시스템에서 스캔하여 `job_locations.json`에 기록 (`index rebuild`와 같은 재구성)
 - `--json`: 자동화 및 스크립팅을 위한 구조화된 JSON 출력
 - 각 행은 `worker_log`(`<runs_root>/logs/<queue_id>.log`)를 포함하며, 텍스트 출력에서는 running·failed 행의 로그 경로를 표 아래에 나열합니다.
+- 행은 `queue.json`의 작업이며, 각 행은 자기 디렉터리의 루트 `job_state.json`과 함께 읽습니다. 큐 행이 없는 실행 상태는 나열하지 않으며, 그런 실행은 `index rebuild`가 `job_locations.json`에 기록합니다.
 - 설정 파일을 찾지 못하거나 `runs_root`가 없으면 아무것도 만들지 않고 종료 코드 1을 반환합니다. `admission_slots.json`이 손상되면 `admission_blockers` 항목(scope `admission_store`, 큐 ID `*`)으로 보고하고 `active_simulations`는 목록 자체의 집계로 대체합니다.
 
 ---
@@ -56,6 +56,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
 - `<TARGET>`: 큐 ID (`q_...`), 실행 ID (`run_...`, 실행 중인 작업 포함), 또는 작업 디렉터리 경로나 이름. 디렉터리는 예전에 끝난 행이 남아 있어도 활성 generation으로 해석합니다.
+- `--json`: 해석한 행의 `activity_id`, `kind`, `engine`, `source`, `label`, `status`, `cancel_target`과 `result`(`status`, `reason`, `queue_id`, `job_id`, `reaction_dir`)를 출력합니다. 실패하면 `reason`이 `target_not_found`, `ambiguous`, `already_terminal`, `cancel_failed` 중 하나이고 `error` 메시지와 함께 종료 코드 1을 반환하며, 대상이 한 행을 특정하지 못하면 행 필드는 비워 둡니다.
 - 설정 파일을 찾지 못하거나 `runs_root`가 없으면 `queue list`와 같은 `error:` 줄과 함께 종료 코드 1을 반환합니다.
 
 ---

@@ -18,7 +18,6 @@ from orca_auto.activity import cancel_activity, clear_activities, list_activitie
 from orca_auto.activity_rendering import EMPTY_QUEUE_MESSAGE, queue_clear_lines, queue_list_table
 from orca_auto.cli_handlers import CommandConfigError, resolve_command_config
 from orca_auto.core import statuses as _s
-from orca_auto.core.activity_index import ActivityIndexError
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
@@ -26,12 +25,13 @@ from orca_auto.core.utils import normalize_text
 from orca_auto.terminal import emit_error, emit_json
 
 _QUEUE_STATE_ERRORS: tuple[type[Exception], ...] = (
-    ActivityIndexError,
     *YAML_CONFIG_LOAD_EXCEPTIONS,
     QueueStoreCorruptError,
     JobLocationIndexError,
 )
-_QUEUE_CANCEL_ERRORS: tuple[type[Exception], ...] = (LookupError, *_QUEUE_STATE_ERRORS)
+_CANCEL_TARGET_HINT = (
+    "Check the configured runtime state, then run `orca_auto queue list` to see valid targets."
+)
 
 
 def _stdout_isatty() -> bool:
@@ -246,7 +246,6 @@ def cmd_queue_list(args: Any) -> int:
             runs_root=config.runs_root,
             limit=limit,
             statuses=getattr(args, "status", None) or (),
-            refresh=bool(getattr(args, "refresh", False)),
         )
     except _QUEUE_STATE_ERRORS as exc:
         emit_error(
@@ -258,19 +257,17 @@ def cmd_queue_list(args: Any) -> int:
     return _emit_queue_list_once(payload, json_output=json_output)
 
 
-def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
-    result = payload.get("result", {})
-    if result.get("returncode", 0) != 0 or payload.get("status") == _s.STATUS_FAILED:
-        message = (
-            normalize_text(result.get("stderr"))
-            or normalize_text(result.get("reason"))
-            or "Cancellation failed."
-        )
+def _emit_queue_cancel(payload: dict[str, Any], error: str, *, json_output: bool) -> int:
+    if error:
         if json_output:
-            # The target's payload still describes what was found; keep it
-            # beside the verdict rather than replacing it with a bare error.
-            emit_json(payload, ok=False, error=message)
-        emit_error(message, hint="Run `orca_auto queue list` to inspect the current target state.")
+            # The resolved row, if any, stays beside the verdict.
+            emit_json(payload, ok=False, error=error)
+        hint = (
+            _CANCEL_TARGET_HINT
+            if payload["result"]["reason"] in {"target_not_found", "ambiguous"}
+            else "Run `orca_auto queue list` to inspect the current target state."
+        )
+        emit_error(error, hint=hint)
         return 1
     if json_output:
         emit_json(payload)
@@ -294,18 +291,9 @@ def cmd_queue_cancel(args: Any) -> int:
         emit_error(exc, hint=exc.hint, json_output=json_output)
         return 1
     try:
-        payload = cancel_activity(
-            target=args.target, config_path=config.path, runs_root=config.runs_root
-        )
-    except _QUEUE_CANCEL_ERRORS as exc:
-        emit_error(
-            exc,
-            hint=(
-                "Check the configured runtime state, then run `orca_auto queue list` "
-                "to see valid targets."
-            ),
-            json_output=json_output,
-        )
+        payload, error = cancel_activity(target=args.target, runs_root=config.runs_root)
+    except _QUEUE_STATE_ERRORS as exc:
+        emit_error(exc, hint=_CANCEL_TARGET_HINT, json_output=json_output)
         return 1
 
-    return _emit_queue_cancel(payload, json_output=json_output)
+    return _emit_queue_cancel(payload, error, json_output=json_output)

@@ -33,6 +33,22 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   the worker it restarts. Delete the key in an idle window before installing
   the new units; see
   [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
+- Public contract: `queue list --refresh` is removed
+  ([ADR 0010](docs/adr/0010-queue-commands-read-queue-rows.md)). It ran the
+  same rebuild as `index rebuild` before listing; run
+  `orca_auto index rebuild` and then `queue list`.
+- Public contract: `queue list` no longer lists a run state that has no queue
+  row. Rows are the jobs in `queue.json`, each read with its own directory's
+  root `job_state.json`; `job_locations.json` and other directories are no
+  longer read. `index rebuild` still records such runs in `job_locations.json`.
+- The SQLite activity projection is removed. `queue list` and `queue cancel`
+  read `queue.json` and the queue rows' states directly, so
+  `<runs_root>/.activity.sqlite3`, `.activity-query.lock` and `.activity-dirty/`
+  are no longer read or written, queue and index saves no longer mirror their
+  rows into it, and a state save no longer writes an invalidation ticket inside
+  its lock, where a failed ticket write failed the save. The files may be
+  deleted after the upgrade; see
+  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
 - The worker and recovery rebind no longer check queue-row metadata for the
   pre-4.0 `max_retries` setting. Such rows carry a version-2 execution snapshot
   and are still refused before execution, now with the execution-snapshot error
@@ -158,6 +174,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Public contract: `queue cancel --json` reports its outcome in
+  `result.status` and `result.reason`
+  ([ADR 0010](docs/adr/0010-queue-commands-read-queue-rows.md)). `result` is
+  `{status, reason, queue_id, job_id, reaction_dir}`; the emulated command
+  fields `returncode`, `command_argv`, `stdout`, `stderr`, `parsed_stdout`,
+  `priority` and `force` are gone. A failure's `reason` is `target_not_found`,
+  `ambiguous`, `already_terminal` or `cancel_failed`. A target that names no
+  row or several rows now prints the whole document with empty row fields
+  instead of only `ok` and `error`. The top-level keys, the exit codes and the
+  text output are unchanged.
+- `queue cancel` resolves its target once, over the same rows `queue list`
+  shows, instead of matching a second time in the queue. A directory given
+  relative to the working directory or with a trailing slash now names the job
+  too; it used to be reported as not found.
 - `queue cancel` without an existing `runs_root` now prints
   `runs_root does not exist: PATH`, as `queue list` does, instead of the raw
   `No such file or directory` error. It still exits 1.
@@ -262,9 +292,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   nearly every row 8.x wrote, get a different `queue_generation`, and nothing
   is rewritten. Only the queue listing compares it, for a running row that has
   no run ID yet: until a job still running across an upgrade outside an idle
-  window finishes, it is listed twice (its queue row and a run-state row),
-  `queue cancel <run ID>` cannot find it and `queue cancel <job directory>`
-  fails as ambiguous; cancel it by queue ID. Upgrade and roll back only in an
+  window finishes, it is listed without its run ID and
+  `queue cancel <run ID>` cannot find it; cancel it by queue ID or directory. Upgrade and roll back only in an
   idle window (`active_simulations: 0`), where neither sees a difference; see
   [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
 - A job queued under 8.0.1 is verified against the new binding rules when it

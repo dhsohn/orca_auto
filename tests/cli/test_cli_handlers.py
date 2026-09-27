@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from argparse import Namespace
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -152,7 +153,6 @@ def test_each_command_loads_its_config_once(
     monkeypatch.setattr(config_files, "load_yaml_mapping", counting_load_yaml_mapping)
     commands = {
         ("queue", "list", "--json"): 0,
-        ("queue", "list", "--refresh", "--json"): 0,
         ("queue", "list", "clear", "--json"): 0,
         ("queue", "cancel", "no-such-job", "--json"): 1,
         ("index", "prune", "--json"): 0,
@@ -227,18 +227,16 @@ def test_queue_list_and_cancel_use_the_same_discovered_config(
     assert target == f"{selected}-job"
     calls = []
 
-    def cancel_stub(**kwargs):
-        calls.append(kwargs)
-        return {"status": "cancelled"}
+    def cancel_stub(allowed_root: Path, queue_id: str, *, expected_entry: QueueEntry) -> QueueEntry:
+        calls.append((allowed_root, queue_id))
+        return replace(expected_entry, status=QueueStatus.CANCELLED)
 
     # Verify discovery and target selection without cancelling or signalling a job.
-    monkeypatch.setattr(_cancel.direct_cancel, "cancel_target", cancel_stub)
+    monkeypatch.setattr(_cancel.queue_adapter, "cancel", cancel_stub)
     assert cli_main(["queue", "cancel", target, "--json", *options]) == 0
     cancelled = json.loads(capsys.readouterr().out)
     assert cancelled["activity_id"] == target
-    assert len(calls) == 1
-    assert calls[0]["config_path"] == str(configs[selected])
-    assert calls[0]["allowed_root"] == (tmp_path / f"{selected}-runs").resolve()
+    assert calls == [((tmp_path / f"{selected}-runs").resolve(), target)]
 
 
 def test_cmd_run_dir_dispatches_to_orca_for_inp_directories(

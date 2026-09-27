@@ -128,7 +128,6 @@ def test_queue_list_stays_plain_under_force_color_pipe(
             SimpleNamespace(
                 config=None,
                 limit=0,
-                refresh=False,
                 status=None,
                 json=False,
             )
@@ -260,7 +259,6 @@ def test_cmd_queue_list_filters_text_output(
         SimpleNamespace(
             config=None,
             limit=0,
-            refresh=False,
             status=["running"],
             json=False,
         )
@@ -342,7 +340,6 @@ def test_cmd_queue_list_tty_renders_styled_view(
             SimpleNamespace(
                 config=None,
                 limit=0,
-                refresh=False,
                 status=None,
                 json=False,
             )
@@ -420,7 +417,6 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
     args = SimpleNamespace(
         config=None,
         limit=0,
-        refresh=False,
         status=None,
         json=False,
     )
@@ -477,7 +473,6 @@ def test_cmd_queue_list_reports_empty_filtered_results(
         SimpleNamespace(
             config=None,
             limit=0,
-            refresh=False,
             status=["failed"],
             json=False,
         )
@@ -520,7 +515,6 @@ def test_cmd_queue_list_json_emits_the_listing_payload_unchanged(
         SimpleNamespace(
             config=None,
             limit=0,
-            refresh=False,
             status=["running"],
             json=True,
         )
@@ -563,7 +557,6 @@ def test_cmd_queue_list_reports_the_listing_active_count_not_the_page(
         SimpleNamespace(
             config=None,
             limit=1,
-            refresh=False,
             status=["running"],
             json=True,
         )
@@ -589,7 +582,6 @@ def test_cmd_queue_list_forwards_limit_and_statuses_to_the_listing(
         SimpleNamespace(
             config=None,
             limit=1,
-            refresh=True,
             status=["Running", "running", " FAILED "],
             json=True,
         )
@@ -600,7 +592,6 @@ def test_cmd_queue_list_forwards_limit_and_statuses_to_the_listing(
     assert captured == {
         "limit": 1,
         "statuses": ["Running", "running", " FAILED "],
-        "refresh": True,
         "config_path": "/tmp/orca_auto.yaml",
         "runs_root": Path("/tmp/runs"),
     }
@@ -631,7 +622,6 @@ def test_cmd_queue_list_clear_text_output(
             action="clear",
             config="/tmp/orca_auto.yaml",
             limit=0,
-            refresh=False,
             status=None,
             json=False,
         )
@@ -666,7 +656,6 @@ def test_cmd_queue_list_clear_json_output(
             action="clear",
             config="/tmp/orca_auto.yaml",
             limit=0,
-            refresh=False,
             status=None,
             json=True,
         )
@@ -707,7 +696,7 @@ def test_cmd_queue_list_text_names_the_worker_log_of_running_and_failed_rows_onl
     )
 
     result = cli_queue.cmd_queue_list(
-        SimpleNamespace(config=None, limit=0, refresh=False, status=None, json=False)
+        SimpleNamespace(config=None, limit=0, status=None, json=False)
     )
 
     assert result == 0
@@ -742,7 +731,6 @@ def test_cmd_queue_list_clear_rejects_each_listing_filter_before_clearing(
         "action": "clear",
         "config": "/tmp/orca_auto.yaml",
         "limit": 0,
-        "refresh": False,
         "status": None,
         "json": False,
         **listing_filter,
@@ -785,7 +773,6 @@ def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceba
             action=action,
             config="/tmp/missing-or-corrupt.yaml",
             limit=0,
-            refresh=False,
             status=None,
             json=True,
         )
@@ -829,29 +816,47 @@ def test_queue_list_treats_a_closed_output_pipe_as_success(
     assert capsys.readouterr().err == ""
 
 
-def test_cmd_queue_cancel_reports_lookup_error(
+@pytest.mark.parametrize(
+    ("reason", "hint"),
+    [
+        (
+            "target_not_found",
+            "Check the configured runtime state, then run `orca_auto queue list` "
+            "to see valid targets.",
+        ),
+        (
+            "ambiguous",
+            "Check the configured runtime state, then run `orca_auto queue list` "
+            "to see valid targets.",
+        ),
+        ("already_terminal", "Run `orca_auto queue list` to inspect the current target state."),
+        ("cancel_failed", "Run `orca_auto queue list` to inspect the current target state."),
+    ],
+)
+@pytest.mark.parametrize("json_output", [False, True])
+def test_cmd_queue_cancel_reports_each_failure_reason(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    reason: str,
+    hint: str,
+    json_output: bool,
 ) -> None:
-    def fake_cancel_activity(**kwargs: Any) -> dict[str, Any]:
-        raise LookupError("Activity target not found: missing")
-
-    monkeypatch.setattr(cli_queue, "cancel_activity", fake_cancel_activity)
+    payload = {"activity_id": "", "status": "failed", "result": {"reason": reason}}
+    monkeypatch.setattr(
+        cli_queue, "cancel_activity", lambda **kwargs: (payload, f"{reason}: missing")
+    )
 
     result = cli_queue.cmd_queue_cancel(
-        SimpleNamespace(
-            target="missing",
-            config=None,
-            json=False,
-        )
+        SimpleNamespace(target="missing", config=None, json=json_output)
     )
 
     assert result == 1
-    assert capsys.readouterr().err == (
-        "error: Activity target not found: missing\n"
-        "hint: Check the configured runtime state, then run `orca_auto queue list` "
-        "to see valid targets.\n"
-    )
+    captured = capsys.readouterr()
+    assert captured.err == f"error: {reason}: missing\nhint: {hint}\n"
+    if json_output:
+        assert json.loads(captured.out) == {"ok": False, **payload, "error": f"{reason}: missing"}
+    else:
+        assert captured.out == ""
 
 
 def test_queue_cancel_treats_a_closed_pipe_as_success_after_a_durable_cancel(
@@ -860,9 +865,9 @@ def test_queue_cancel_treats_a_closed_pipe_as_success_after_a_durable_cancel(
 ) -> None:
     cancel_calls: list[dict[str, Any]] = []
 
-    def fake_cancel_activity(**kwargs: Any) -> dict[str, str]:
+    def fake_cancel_activity(**kwargs: Any) -> tuple[dict[str, str], str]:
         cancel_calls.append(kwargs)
-        return {"activity_id": "job-1"}
+        return {"activity_id": "job-1"}, ""
 
     monkeypatch.setattr(cli_queue, "cancel_activity", fake_cancel_activity)
     monkeypatch.setattr(sys, "stdout", _ClosedPipe())
@@ -986,15 +991,18 @@ def test_cmd_queue_cancel_json_output(
     monkeypatch.setattr(
         cli_queue,
         "cancel_activity",
-        lambda **kwargs: {
-            "activity_id": "orca-pending-q-1",
-            "kind": "job",
-            "engine": "orca",
-            "source": "orca_auto_orca",
-            "label": "mol-a",
-            "status": "cancel_requested",
-            "cancel_target": "orca-pending-q-1",
-        },
+        lambda **kwargs: (
+            {
+                "activity_id": "orca-pending-q-1",
+                "kind": "job",
+                "engine": "orca",
+                "source": "orca_auto_orca",
+                "label": "mol-a",
+                "status": "cancel_requested",
+                "cancel_target": "orca-pending-q-1",
+            },
+            "",
+        ),
     )
 
     result = cli_queue.cmd_queue_cancel(
@@ -1030,7 +1038,6 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
             action=None,
             config=str(config),
             limit=0,
-            refresh=False,
             status=None,
             json=True,
         )
@@ -1061,7 +1068,6 @@ def test_cmd_queue_list_clear_rejects_a_missing_runs_root_without_creating_it(
             action="clear",
             config=str(config),
             limit=0,
-            refresh=False,
             status=None,
             json=False,
         )
@@ -1116,7 +1122,6 @@ def test_cmd_queue_list_fails_when_no_config_is_discoverable(
             action=action,
             config=None,
             limit=0,
-            refresh=False,
             status=None,
             json=False,
         )
@@ -1165,7 +1170,6 @@ def test_cmd_queue_list_reports_a_corrupt_admission_store_as_a_blocker(
             action=None,
             config=str(config),
             limit=0,
-            refresh=False,
             status=None,
             json=False,
         )
@@ -1181,7 +1185,6 @@ def test_cmd_queue_list_reports_a_corrupt_admission_store_as_a_blocker(
             action=None,
             config=str(config),
             limit=0,
-            refresh=False,
             status=None,
             json=True,
         )

@@ -106,16 +106,6 @@
             },
             {
               "options": [
-                "--refresh"
-              ],
-              "action": "_StoreTrueAction",
-              "nargs": 0,
-              "choices": null,
-              "default": false,
-              "required": false
-            },
-            {
-              "options": [
                 "--status"
               ],
               "action": "_AppendAction",

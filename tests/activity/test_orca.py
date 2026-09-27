@@ -1,7 +1,8 @@
-"""ORCA activity records read from real queue, state and index files.
+"""ORCA activity records read from real queue and state files.
 
-``orca_records`` reads the runs root of a real ``orca_auto.yaml``, real queue rows, ``job_state.json`` files and ``job_locations.json``; a live
-run is one that holds ``run.lock`` for real.
+``catalog`` reads the runs root of a real ``orca_auto.yaml``: real queue rows
+joined with each row's own ``job_state.json``. A live run is one that holds
+``run.lock`` for real.
 """
 
 from __future__ import annotations
@@ -17,19 +18,16 @@ from orca_auto.activity import _cancel as _activity_cancel
 from orca_auto.activity import _orca as _activity_orca
 from orca_auto.activity import model as _activity_model
 from orca_auto.cli import main as cli_main
-from orca_auto.core.activity_index import DB_NAME as ACTIVITY_INDEX_DB_NAME
 from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.queue import persistence as queue_persistence
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.orca import run_status
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.job_locations import upsert_job_record
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_generation_token
 from orca_auto.orca.run_lock import acquire_run_lock
-from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import save_state
 from orca_auto.orca.statuses import RunStatus
 from tests.conftest import make_queue_entry, write_run_state
@@ -45,8 +43,12 @@ def orca_config(allowed: Path, config_path: Callable[..., Path]) -> str:
     return str(config_path(runs_root=allowed))
 
 
+def _records(root: Path) -> list[_activity_model.ActivityRecord]:
+    return [record for _entry, record in _activity_orca.catalog(root)]
+
+
 def _records_by_id(root: Path) -> dict[str, _activity_model.ActivityRecord]:
-    return {row.activity_id: row for row in _activity_orca.orca_records(root)}
+    return {row.activity_id: row for row in _records(root)}
 
 
 def test_activity_helper_edges_and_discovery_paths(tmp_path: Path) -> None:
@@ -89,7 +91,7 @@ def test_activity_helper_edges_and_discovery_paths(tmp_path: Path) -> None:
     ("run_lock_held", "expected_status"),
     [(False, "pending"), (True, "running")],
 )
-def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
+def test_catalog_does_not_reconcile_or_mutate_orphaned_running_entries(
     allowed: Path,
     orca_config: str,
     run_lock_held: bool,
@@ -112,9 +114,9 @@ def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
 
     if run_lock_held:
         with acquire_run_lock(reaction_dir):
-            rows = _activity_orca.orca_records(allowed)
+            rows = _records(allowed)
     else:
-        rows = _activity_orca.orca_records(allowed)
+        rows = _records(allowed)
 
     # The listing reports the dead running row as pending (or running while a
     # child holds run.lock) without rewriting it: recovery belongs to the worker.
@@ -126,7 +128,7 @@ def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
     assert rows[0].status == expected_status
 
 
-def test_orca_records_merge_queue_entries_and_snapshots(
+def test_catalog_joins_queue_rows_with_their_own_state_only(
     allowed: Path,
     orca_config: str,
     app_cfg: Callable[..., AppConfig],
@@ -147,7 +149,8 @@ def test_orca_records_merge_queue_entries_and_snapshots(
         run_id="run-2",
         selected_inp=orphan_dir / "orphan.inp",
     )
-    # The orphan directory is known only through the job-location index.
+    # The orphan directory is known only through the job-location index, so it
+    # is no row of the catalog.
     upsert_job_record(
         app_cfg(runs_root=allowed),
         job_id="task-orphan",
@@ -201,14 +204,10 @@ def test_orca_records_merge_queue_entries_and_snapshots(
     assert by_id["q-1"].metadata["elapsed_started_at"] == "2026-04-26T00:01:00+00:00"
     assert by_id["q-2"].status == "cancel_requested"
     assert by_id["q-2"].metadata["elapsed_started_at"] == "2026-04-26T00:02:00+00:00"
-    assert by_id["run-2"].status == "failed"
-    assert by_id["run-2"].metadata["elapsed_started_at"] == orphan["started_at"]
-    assert by_id["run-2"].metadata["selected_inp_name"] == "orphan.inp"
-    assert set(by_id) == {"q-1", "q-2", "run-2"}
-    # The per-job worker log is a top-level row key taken from queue metadata;
-    # a row known only through its state file has none.
+    assert set(by_id) == {"q-1", "q-2"}
+    assert orphan["run_id"] not in {alias for row in by_id.values() for alias in row.aliases}
+    # The per-job worker log is a top-level row key taken from queue metadata.
     assert by_id["q-1"].worker_log == ""
-    assert by_id["run-2"].worker_log == ""
     assert by_id["q-1"].to_dict()["worker_log"] == ""
 
 
@@ -249,51 +248,17 @@ def test_queue_record_lifts_worker_log_to_the_row(allowed: Path, orca_config: st
     assert "worker_log" not in payload["metadata"]
 
 
-def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
+@pytest.mark.parametrize("run_lock_held", [False, True], ids=["stale", "live"])
+def test_catalog_lists_no_run_state_without_its_queue_row(
     allowed: Path,
     orca_config: str,
+    run_lock_held: bool,
 ) -> None:
-    # A cancelled queue entry whose run state still reads "running" must not keep
-    # showing the job as in progress: the stale snapshot is superseded by the
-    # terminal queue outcome and should not be listed as a separate active row.
-    reaction_dir = allowed / "ts3"
-    write_run_state(
-        reaction_dir,
-        status=RunStatus.RUNNING,
-        job_id="task-ts3",
-        selected_inp=reaction_dir / "ts3.inp",
-    )
-    queue_persistence.save_entries(
-        allowed,
-        [
-            make_queue_entry(
-                queue_id="q-cancel",
-                task_id="task-ts3",
-                reaction_dir=reaction_dir,
-                status=QueueStatus.CANCELLED,
-                priority=3,
-                enqueued_at="2026-04-26T00:00:00+00:00",
-                started_at="2026-04-26T00:01:00+00:00",
-                finished_at="2026-04-26T00:05:00+00:00",
-            )
-        ],
-    )
-
-    rows = _activity_orca.orca_records(allowed)
-
-    # Only the cancelled queue record remains; the stale running snapshot is gone.
-    assert {row.activity_id: row.status for row in rows} == {"q-cancel": "cancelled"}
-
-
-def test_orca_records_keep_live_snapshot_despite_terminal_entry(
-    allowed: Path,
-    orca_config: str,
-) -> None:
-    # A genuinely live re-run that shares a reaction dir with an older terminal
-    # queue entry must NOT be suppressed: the live run lock means it is in progress,
-    # so the snapshot row is kept alongside the terminal queue row.
+    # The root state belongs to another run than the finished queue row, so it
+    # lends the row nothing and is no row of its own, whether or not a process
+    # still holds its run lock.
     reaction_dir = allowed / "ts4"
-    live = write_run_state(
+    write_run_state(
         reaction_dir,
         status=RunStatus.RUNNING,
         job_id="task-ts4-rerun",
@@ -315,82 +280,45 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
         ],
     )
 
-    with acquire_run_lock(reaction_dir):
-        rows = _activity_orca.orca_records(allowed)
+    if run_lock_held:
+        with acquire_run_lock(reaction_dir):
+            rows = _records(allowed)
+    else:
+        rows = _records(allowed)
 
-    # Both the terminal queue row and the live running snapshot row are present.
-    assert {row.activity_id: row.status for row in rows} == {
-        "q-done": "completed",
-        live["run_id"]: "running",
-    }
-
-
-def test_observed_snapshot_status_marks_dead_running_as_failed(tmp_path: Path) -> None:
-    reaction_dir = tmp_path / "rxn"
-    reaction_dir.mkdir()
-
-    def _snap(status: str) -> RunSnapshot:
-        return RunSnapshot(
-            key="k",
-            name="rxn",
-            reaction_dir=reaction_dir,
-            run_id="r",
-            status=status,
-            started_at="",
-            updated_at="",
-            completed_at="",
-            selected_inp_name="",
-            attempts=0,
-        )
-
-    running = _snap("running")
-
-    # No live run lock -> the run is gone; show it as failed, not in progress.
-    assert run_status.observed_snapshot_status(running) == "failed"
-
-    # A live run lock -> genuinely running, leave it as running.
-    with acquire_run_lock(reaction_dir):
-        assert run_status.observed_snapshot_status(running) == "running"
-
-    # Terminal statuses are never reinterpreted, regardless of the lock.
-    assert run_status.observed_snapshot_status(_snap("completed")) == "completed"
+    assert {row.activity_id: row.status for row in rows} == {"q-done": "completed"}
+    assert rows[0].updated_at == "2026-04-26T00:05:00+00:00"
 
 
-def test_match_activity_record_error_edges() -> None:
-    records = [
-        activity.ActivityRecord(
-            "a",
-            "job",
-            "orca",
-            "running",
-            "A",
-            "orca_auto_orca",
-            "",
-            "",
-            "target",
-            aliases=("same",),
-        ),
-        activity.ActivityRecord(
-            "b",
-            "job",
-            "orca",
-            "running",
-            "B",
-            "orca_auto_orca",
-            "",
-            "",
-            "target",
-            aliases=("same",),
-        ),
-    ]
-    with pytest.raises(ValueError, match="empty"):
-        _activity_cancel.match_activity_record(records, "")
-    with pytest.raises(ValueError, match="Ambiguous activity target"):
-        _activity_cancel.match_activity_record(records, "target")
-    with pytest.raises(ValueError, match="Ambiguous activity target"):
-        _activity_cancel.match_activity_record(records, "same")
-    with pytest.raises(LookupError, match="not found"):
-        _activity_cancel.match_activity_record(records, "missing")
+def _row(record: activity.ActivityRecord) -> tuple[QueueEntry, activity.ActivityRecord]:
+    return make_queue_entry(queue_id=record.activity_id), record
+
+
+def test_cancel_activity_reports_an_empty_or_unknown_target(
+    allowed: Path, orca_config: str
+) -> None:
+    for target, error in (
+        (" ", "Cancel target is empty."),
+        ("missing", "Activity target not found: missing"),
+    ):
+        payload, message = activity.cancel_activity(target=target, runs_root=allowed)
+        assert message == error
+        assert payload == {
+            "activity_id": "",
+            "kind": "",
+            "engine": "",
+            "source": "",
+            "label": "",
+            "status": "failed",
+            "cancel_target": "",
+            "result": {
+                "status": "failed",
+                "reason": "target_not_found",
+                "queue_id": "",
+                "job_id": "",
+                "reaction_dir": "",
+            },
+        }
 
 
 def test_cancel_activity_routes_orca_targets(allowed: Path, orca_config: str) -> None:
@@ -398,22 +326,47 @@ def test_cancel_activity_routes_orca_targets(allowed: Path, orca_config: str) ->
     reaction_dir.mkdir()
     entry = enqueue(allowed, str(reaction_dir), task_id="task-cancel")
 
-    orca_payload = activity.cancel_activity(
-        target=entry.queue_id, config_path=orca_config, runs_root=allowed
-    )
+    orca_payload, error = activity.cancel_activity(target=entry.queue_id, runs_root=allowed)
 
+    assert error == ""
     assert orca_payload["status"] == "cancelled"
     assert orca_payload["activity_id"] == entry.queue_id
     assert orca_payload["source"] == ORCA_AUTO_ORCA_SOURCE
-    assert orca_payload["result"]["queue_id"] == entry.queue_id
-    assert orca_payload["result"]["job_id"] == "task-cancel"
+    assert orca_payload["result"] == {
+        "status": "cancelled",
+        "reason": "",
+        "queue_id": entry.queue_id,
+        "job_id": "task-cancel",
+        "reaction_dir": str(reaction_dir),
+    }
     [cancelled] = list_queue(allowed)
     assert cancelled.status is QueueStatus.CANCELLED
 
+    # A finished row, here named by the run ID its queue row records, is
+    # reported, not cancelled again.
+    queue_persistence.save_entries(
+        allowed,
+        [
+            make_queue_entry(
+                queue_id="q-done",
+                reaction_dir=reaction_dir,
+                status=QueueStatus.COMPLETED,
+                metadata={"run_id": "run-done"},
+            )
+        ],
+    )
+    payload, error = activity.cancel_activity(target="run-done", runs_root=allowed)
+    assert error == "queue target already terminal: q-done"
+    assert payload["activity_id"] == "q-done"
+    assert payload["result"]["reason"] == "already_terminal"
+    assert payload["result"]["queue_id"] == "q-done"
 
-@pytest.mark.parametrize("alias", ["absolute", "relative", "basename"])
+
+@pytest.mark.parametrize(
+    "alias", ["absolute", "relative", "basename", "working-directory", "trailing-slash"]
+)
 def test_cancel_activity_path_alias_prefers_active_generation(
-    allowed: Path, orca_config: str, alias: str
+    allowed: Path, orca_config: str, alias: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     reaction_dir = allowed / "batch" / "water"
     reaction_dir.mkdir(parents=True)
@@ -431,13 +384,16 @@ def test_cancel_activity_path_alias_prefers_active_generation(
         enqueued_at="2026-09-26T00:00:00+00:00",
     )
     queue_persistence.save_entries(allowed, [finished, resubmitted])
+    monkeypatch.chdir(allowed / "batch")
     target = {
         "absolute": str(reaction_dir),
         "relative": "batch/water",
         "basename": "water",
+        "working-directory": "./water",
+        "trailing-slash": f"{reaction_dir}/",
     }[alias]
 
-    payload = activity.cancel_activity(target=target, config_path=orca_config, runs_root=allowed)
+    payload, _error = activity.cancel_activity(target=target, runs_root=allowed)
 
     # Older terminal generations keep the directory aliases; the one active
     # generation is the cancellable target.
@@ -449,12 +405,13 @@ def test_cancel_activity_path_alias_prefers_active_generation(
     }
 
     # A retry with no active generation observes the newest terminal outcome.
-    retry = activity.cancel_activity(target=target, config_path=orca_config, runs_root=allowed)
+    retry, error = activity.cancel_activity(target=target, runs_root=allowed)
+    assert error == ""
     assert retry["activity_id"] == "q-resubmitted"
     assert retry["status"] == "cancelled"
 
 
-def test_match_activity_record_alias_selects_active_then_newest_terminal(tmp_path: Path) -> None:
+def test_target_rows_select_active_then_newest_terminal(tmp_path: Path) -> None:
     def record(
         activity_id: str, status: str, updated_at: str, *, directory: str = "a/water"
     ) -> activity.ActivityRecord:
@@ -490,18 +447,20 @@ def test_match_activity_record_alias_selects_active_then_newest_terminal(tmp_pat
         aliases=("water",),
     )
 
-    assert _activity_cancel.match_activity_record([old, pending, newer], "water") is pending
-    assert _activity_cancel.match_activity_record([newer, old], "water") is newer
-    with pytest.raises(ValueError, match="Matches: q-pending, q-running$"):
-        _activity_cancel.match_activity_record([old, pending, running, newer], "water")
-    # A shared alias across directories, or an unverifiable directory, does not
-    # identify one directory.
-    with pytest.raises(ValueError, match="Matches: q-elsewhere, q-old, q-pending$"):
-        _activity_cancel.match_activity_record([old, pending, elsewhere], "water")
-    with pytest.raises(ValueError, match="Matches: q-elsewhere, q-newer$"):
-        _activity_cancel.match_activity_record([newer, elsewhere], "water")
-    with pytest.raises(ValueError, match="Matches: q-old, q-unlocated$"):
-        _activity_cancel.match_activity_record([old, unlocated], "water")
+    def named(records: list[activity.ActivityRecord]) -> list[str]:
+        rows = _activity_cancel.target_rows([_row(record) for record in records], "water")
+        return sorted(record.activity_id for _entry, record in rows)
+
+    assert named([old, pending, newer]) == ["q-pending"]
+    assert named([newer, old]) == ["q-newer"]
+    assert named([old]) == ["q-old"]
+    assert named([unlocated]) == ["q-unlocated"]
+    # Several results are an ambiguity: two active generations, a shared alias
+    # across directories, or a directory that cannot be verified.
+    assert named([old, pending, running, newer]) == ["q-pending", "q-running"]
+    assert named([old, pending, elsewhere]) == ["q-elsewhere", "q-old", "q-pending"]
+    assert named([newer, elsewhere]) == ["q-elsewhere", "q-newer"]
+    assert named([old, unlocated]) == ["q-old", "q-unlocated"]
 
 
 @pytest.mark.parametrize("finished_status", [QueueStatus.FAILED, QueueStatus.CANCELLED])
@@ -527,8 +486,11 @@ def test_cancel_activity_basename_across_directories_stays_ambiguous(
     )
     queue_persistence.save_entries(allowed, [finished, other])
 
-    with pytest.raises(ValueError, match="Ambiguous activity target: water. Matches: q-a, q-b$"):
-        activity.cancel_activity(target="water", config_path=orca_config, runs_root=allowed)
+    payload, error = activity.cancel_activity(target="water", runs_root=allowed)
+
+    assert error == "Ambiguous activity target: water. Matches: q-a, q-b"
+    assert payload["activity_id"] == ""
+    assert payload["result"]["reason"] == "ambiguous"
 
     assert {entry.queue_id: entry.status for entry in list_queue(allowed)} == {
         "q-b": finished_status,
@@ -563,20 +525,18 @@ def test_cancel_activity_by_state_run_id_of_running_job(
     queue_persistence.save_entries(allowed, [entry])
 
     with acquire_run_lock(reaction_dir):
-        [row] = [
-            row for row in _activity_orca.orca_records(allowed) if row.activity_id == entry.queue_id
-        ]
+        [row] = [row for row in _records(allowed) if row.activity_id == entry.queue_id]
         # Only the state of this queue generation lends its run ID as an alias.
         assert ("run-live" in row.aliases) is current_generation
         if not current_generation:
             return
-        payload = activity.cancel_activity(
-            target="run-live", config_path=orca_config, runs_root=allowed
-        )
+        payload, error = activity.cancel_activity(target="run-live", runs_root=allowed)
 
+    assert error == ""
     assert payload["activity_id"] == entry.queue_id
     assert payload["cancel_target"] == entry.queue_id
     assert payload["result"]["queue_id"] == entry.queue_id
+    assert payload["result"]["status"] == "cancel_requested"
     [persisted] = list_queue(allowed)
     assert persisted.cancel_requested
 
@@ -595,6 +555,90 @@ def test_queue_list_autodiscovers_the_config_when_no_args(
     assert payload["count"] == 0
     assert payload["activities"] == []
     assert payload["sources"] == {"orca_config": str(Path(orca_config).resolve())}
-    # The default listing is the indexed projection, which materializes under
-    # the runs root.
-    assert (allowed / ACTIVITY_INDEX_DB_NAME).exists()
+    # Listing reads the queue and states in place; it keeps no projection.
+    assert sorted(path.name for path in allowed.iterdir()) == ["queue.lock"]
+
+
+def test_list_orders_mixed_timezones_and_pages_several_statuses(
+    allowed: Path, orca_config: str
+) -> None:
+    def finished(number: int, status: QueueStatus, finished_at: str) -> QueueEntry:
+        return make_queue_entry(
+            queue_id=f"q-{number}",
+            reaction_dir=allowed / f"job-{number}",
+            status=status,
+            enqueued_at="2026-01-01T00:00:00Z",
+            finished_at=finished_at,
+        )
+
+    queue_persistence.save_entries(
+        allowed,
+        [
+            finished(0, QueueStatus.COMPLETED, "2026-01-01T11:00:00+09:00"),
+            finished(1, QueueStatus.FAILED, "2026-01-01T00:00:00-04:00"),
+            finished(2, QueueStatus.COMPLETED, "bad-timestamp"),
+            finished(3, QueueStatus.CANCELLED, "2026-01-01T03:00:00Z"),
+            finished(4, QueueStatus.COMPLETED, "2026-01-01T01:00:00Z"),
+        ],
+    )
+
+    payload = activity.list_activities(
+        config_path=orca_config, runs_root=allowed, limit=3, statuses=[" Failed", "completed"]
+    )
+
+    # 04:00Z, 02:00Z, 01:00Z; the unparsable time sorts last and falls off the page.
+    assert [row["activity_id"] for row in payload["activities"]] == ["q-1", "q-0", "q-4"]
+    assert payload["count"] == 3
+
+
+def test_filtered_page_keeps_catalog_wide_blockers_and_active_count(
+    allowed: Path, orca_config: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from orca_auto.activity import _list
+    from orca_auto.core.queue.publication import (
+        QUEUE_RECORD_SYNC_BLOCKED_KEY,
+        QUEUE_RECORD_SYNC_KEY,
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+    )
+
+    blocked = make_queue_entry(
+        queue_id="q-blocked",
+        reaction_dir=allowed / "blocked",
+        metadata={
+            QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_REPAIR_PENDING,
+            QUEUE_RECORD_SYNC_BLOCKED_KEY: {
+                "reason": "index unavailable",
+                "scope": "orca_queue",
+                "next_action": "Restore index access.",
+            },
+        },
+    )
+    live = make_queue_entry(
+        queue_id="q-live", reaction_dir=allowed / "live", status=QueueStatus.RUNNING
+    )
+    done = make_queue_entry(
+        queue_id="q-done", reaction_dir=allowed / "done", status=QueueStatus.COMPLETED
+    )
+    queue_persistence.save_entries(allowed, [blocked, live, done])
+    (allowed / "live").mkdir()
+    # Without a readable admission store the listing's own count is reported.
+    monkeypatch.setattr(
+        _list, "global_active_simulations", lambda runs_root, *, fallback: (fallback, None)
+    )
+
+    with acquire_run_lock(allowed / "live"):
+        payload = activity.list_activities(
+            config_path=orca_config, runs_root=allowed, statuses=["completed"], limit=1
+        )
+
+    assert [row["activity_id"] for row in payload["activities"]] == ["q-done"]
+    assert payload["active_simulations"] == 1
+    assert payload["admission_blockers"] == [
+        {
+            "queue_id": "q-blocked",
+            "allowed_root": str(allowed),
+            "scope": "orca_queue",
+            "reason": "index unavailable",
+            "next_action": "Restore index access.",
+        }
+    ]
