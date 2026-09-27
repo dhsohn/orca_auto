@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
@@ -275,7 +276,7 @@ def collect_run_snapshots(
             # The query index consumes pre-write invalidations only after this
             # lock proves it observed the corresponding state publication.
             with (
-                file_lock_at(directory_fd, ".job_state.mutation.lock")
+                file_lock_at(directory_fd, STATE_MUTATION_LOCK_FILE_NAME)
                 if synchronize
                 else nullcontext()
             ):

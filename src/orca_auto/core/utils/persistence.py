@@ -10,8 +10,6 @@ from pathlib import Path
 from secrets import token_hex
 from typing import Any
 
-from .coercion import safe_int as _safe_int
-
 JSON_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, json.JSONDecodeError)
 
 
@@ -42,10 +40,6 @@ def timestamped_token(prefix: str, *, token_bytes: int = 16) -> str:
 def timestamped_token_pattern(prefix: str, *, token_bytes: int = 16) -> re.Pattern[str]:
     """Pattern whose ``fullmatch`` accepts exactly what ``timestamped_token`` mints."""
     return re.compile(rf"{re.escape(prefix)}_[0-9]{{8}}_[0-9]{{6}}_[0-9a-f]{{{2 * token_bytes}}}")
-
-
-def coerce_int(value: Any, *, default: int = 0) -> int:
-    return _safe_int(value, default=default)
 
 
 def resolve_root_path(root: str | Path) -> Path:
@@ -87,13 +81,6 @@ def load_json_file(path: Path) -> Any | None:
 def load_json_mapping_file(path: Path) -> dict[str, Any] | None:
     raw = load_json_file(path)
     return raw if isinstance(raw, dict) else None
-
-
-def load_json_mapping_list_file(path: Path) -> list[dict[str, Any]]:
-    raw = load_json_file(path)
-    if not isinstance(raw, list):
-        return []
-    return [item for item in raw if isinstance(item, dict)]
 
 
 def open_pinned_readonly(path: str | Path, *, dir_fd: int | None = None) -> int:

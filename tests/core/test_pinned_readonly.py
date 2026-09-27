@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 from orca_auto.core import engine_scratch
+from orca_auto.core.engine_scratch import _fs, _publication
 
 reader, root_text = sys.argv[1:]
 root = Path(root_text)
@@ -24,15 +25,15 @@ before_fds = len(list(Path("/proc/self/fd").iterdir()))
 try:
     try:
         if reader == "scratch_input":
-            engine_scratch._read_stable_regular_file_at(
+            _fs._read_stable_regular_file_at(
                 directory_fd, path.name, display_path=path
             )
         elif reader == "scratch_hash":
-            engine_scratch._regular_file_sha256_at(
+            _fs._regular_file_sha256_at(
                 directory_fd, path.name, display_path=path
             )
         elif reader == "scratch_copy":
-            engine_scratch._copy_artifact_to_staging(
+            _publication._prepare_publication_temp(
                 path.name, root, directory_fd, root / "durable", durable_fd
             )
         else:

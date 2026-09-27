@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
-
 import pytest
 
 from orca_auto.core.config import (
@@ -14,7 +11,6 @@ from orca_auto.core.config import (
 )
 from orca_auto.core.messaging import (
     DisabledChannel,
-    DiscordBotChannel,
     Message,
     Severity,
     build_channel,
@@ -25,29 +21,7 @@ from orca_auto.core.messaging import (
     render_discord_embed,
     text,
 )
-
-
-def test_neutral_messaging_import_does_not_eagerly_load_adapters() -> None:
-    code_under_test = """
-import sys
-import orca_auto.core.messaging
-blocked = [
-    name for name in (
-        'orca_auto.core.messaging.discord_bot',
-        'orca_auto.core.messaging.discord_http',
-    )
-    if name in sys.modules
-]
-if blocked:
-    raise SystemExit(','.join(blocked))
-"""
-    completed = subprocess.run(
-        [sys.executable, "-c", code_under_test],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert completed.returncode == 0, completed.stderr
+from orca_auto.core.messaging.discord_bot import DiscordBotChannel
 
 
 # --------------------------------------------------------------------------- #

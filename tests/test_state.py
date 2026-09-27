@@ -21,7 +21,6 @@ from orca_auto.orca.report import publication as publication_module
 from orca_auto.orca.report.publication import write_report_files, write_report_json
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import (
-    atomic_write_text,
     new_state,
     save_state,
     write_state,
@@ -354,15 +353,6 @@ def test_replaced_visible_generation_never_receives_state_or_report(tmp_path: Pa
     assert {path.name for path in generation.iterdir()} == {"sentinel"}
     assert not (moved / "job_state.json").exists()
     assert not (moved / "job_report.json").exists()
-
-
-def test_atomic_write_text_remains_available(tmp_path: Path) -> None:
-    target = tmp_path / "sample.txt"
-
-    atomic_write_text(target, "hello")
-
-    assert target.read_text(encoding="utf-8") == "hello"
-    assert list(tmp_path.glob("*.tmp.*")) == []
 
 
 def test_state_module_keeps_write_helpers_available(tmp_path: Path) -> None:

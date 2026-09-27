@@ -6,11 +6,10 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from ..activity_index import published_source
-from ..utils.coercion import normalize_text
+from ..utils.coercion import normalize_text, safe_int
 from ..utils.lock import file_lock
 from ..utils.persistence import (
     atomic_write_json,
-    coerce_int,
     load_json_list_file,
     resolve_root_path,
 )
@@ -53,7 +52,7 @@ def _normalize_resource_payload(raw: Any) -> dict[str, int]:
         normalized_key = str(key).strip()
         if not normalized_key:
             continue
-        normalized[normalized_key] = coerce_int(value, default=0) if value is not None else 0
+        normalized[normalized_key] = safe_int(value, default=0) if value is not None else 0
     return normalized
 
 
@@ -106,19 +105,6 @@ def _resolve_candidate_path(path_text: str) -> Path | None:
         return Path(raw).expanduser().resolve()
     except OSError:
         return None
-
-
-def _record_paths(record: JobLocationRecord) -> list[Path]:
-    paths: list[Path] = []
-    for value in (
-        record.original_run_dir,
-        record.selected_input_xyz,
-        record.latest_known_path,
-    ):
-        candidate = _resolve_candidate_path(value)
-        if candidate is not None and candidate not in paths:
-            paths.append(candidate)
-    return paths
 
 
 @dataclass(frozen=True)
@@ -291,29 +277,6 @@ def _merge_locked(
     )
 
 
-def upsert_job_locations(
-    root: str | Path, records: Iterable[JobLocationRecord], *, apply: bool = True
-) -> JobLocationUpsertResult:
-    """Merge ``records`` into the index by job id under one lock and one write.
-
-    A row whose job id is already indexed is replaced in place; a new job id is
-    appended, so submission order is preserved for path-alias resolution. A
-    replacement equal to the loaded row is counted as unchanged and, when no
-    row changes at all, the file bytes are left exactly as they were (no
-    atomic rewrite, no projection publication). Without ``apply`` nothing is
-    written and the result only reports what would change. A caller that must
-    compare against the row as it is at write time uses
-    ``merge_job_locations`` instead.
-    """
-    normalized = [_normalized_record(record) for record in records]
-    return _merge_locked(
-        resolve_root_path(root),
-        ((record.job_id, record) for record in normalized),
-        decide=lambda _existing, record: record,
-        apply=apply,
-    )
-
-
 def merge_job_locations(
     root: str | Path,
     candidates: Mapping[str, _CandidateT],
@@ -328,8 +291,9 @@ def merge_job_locations(
     with the currently indexed row (``None`` when the id is unindexed) and
     returns the row to store, or ``None`` to leave the index alone for that
     id. A row that lands between the caller's plan and this merge is therefore
-    seen by ``decide`` rather than overwritten. Counting and writing follow
-    ``upsert_job_locations``.
+    seen by ``decide`` rather than overwritten. A row equal to the loaded one
+    counts as unchanged; when nothing changes, or without ``apply``, nothing is
+    written and the result only reports what would change.
     """
     return _merge_locked(
         resolve_root_path(root),
@@ -340,33 +304,19 @@ def merge_job_locations(
 
 
 def upsert_job_location(root: str | Path, record: JobLocationRecord) -> JobLocationRecord:
+    """Merge ``record`` into the index by job id under the index lock.
+
+    A row whose job id is already indexed is replaced in place; a new job id is
+    appended, so submission order is preserved. A replacement equal to the
+    loaded row leaves the file bytes exactly as they were (no atomic rewrite,
+    no projection publication). A caller that must compare against the row as
+    it is at write time uses ``merge_job_locations`` instead.
+    """
     replacement = _normalized_record(record)
-    upsert_job_locations(root, (replacement,))
+    _merge_locked(
+        resolve_root_path(root),
+        ((replacement.job_id, replacement),),
+        decide=lambda _existing, candidate: candidate,
+        apply=True,
+    )
     return replacement
-
-
-def resolve_job_location(root: str | Path, lookup_target: str) -> JobLocationRecord | None:
-    target = normalize_index_text(lookup_target)
-    if not target:
-        return None
-
-    resolved_root = resolve_root_path(root)
-    candidate_path = _resolve_candidate_path(target)
-
-    with file_lock(_lock_path(resolved_root)):
-        records = load_job_locations(resolved_root)
-
-    for record in records:
-        if record.job_id == target:
-            return record
-
-    if candidate_path is None:
-        return None
-
-    # Multiple immutable generations may share one submitted job directory.
-    # Records are appended in submission order, so a path alias must select the
-    # newest matching job while an exact job id above remains historical.
-    for record in reversed(records):
-        if candidate_path in _record_paths(record):
-            return record
-    return None

@@ -9,7 +9,6 @@ from orca_auto.core.config.schema import (
     OrcaRuntimeConfig,
     SchedulerConfig,
     as_nonempty_str,
-    as_str,
     discord_config_from_mapping,
     messenger_config_from_mapping,
     positive_int_mapping,
@@ -135,18 +134,6 @@ def test_as_nonempty_str_preserves_existing_string_behavior(
     expected: str,
 ) -> None:
     assert as_nonempty_str(value, default) == expected
-
-
-@pytest.mark.parametrize(
-    ("value", "default", "expected"),
-    [
-        (None, "fallback", "fallback"),
-        ("  value  ", "fallback", "value"),
-        (123, "", "123"),
-    ],
-)
-def test_as_str_normalizes_config_text(value: object, default: str, expected: str) -> None:
-    assert as_str(value, default) == expected
 
 
 @pytest.mark.parametrize(

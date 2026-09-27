@@ -25,11 +25,6 @@ from ._errors import (
     EngineScratchCapacityError,
     EngineScratchError,
 )
-
-# Private fd-pinned readers re-exported for ``tests/core/test_pinned_readonly.py``,
-# which drives them through the package name.
-from ._fs import _read_stable_regular_file_at as _read_stable_regular_file_at
-from ._fs import _regular_file_sha256_at as _regular_file_sha256_at
 from ._inspect import (
     durable_publication_journal_status,
     inspect_scratch_root,
@@ -44,7 +39,6 @@ from ._publication import (
     scratch_provenance_from_exception,
     scratch_publication_provenance,
 )
-from ._publication import _copy_artifact_to_staging as _copy_artifact_to_staging
 from ._reports import (
     PublicationJournalStatus,
     ScratchWorkspaceRemoval,

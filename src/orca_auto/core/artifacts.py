@@ -7,6 +7,7 @@ EXECUTION_PROVENANCE_FILE = "execution_provenance.json"
 MAX_RUN_ARTIFACT_JSON_BYTES = 64 * 1024 * 1024
 SI_BLOCK_MD_FILE = "si_block.md"
 QUEUE_FILE = "queue.json"
+STATE_MUTATION_LOCK_FILE_NAME = ".job_state.mutation.lock"
 
 __all__ = [
     "EXECUTION_PROVENANCE_FILE",
@@ -16,4 +17,5 @@ __all__ = [
     "RUN_REPORT_JSON_FILE",
     "RUN_STATE_FILE",
     "SI_BLOCK_MD_FILE",
+    "STATE_MUTATION_LOCK_FILE_NAME",
 ]

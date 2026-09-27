@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from orca_auto.core.utils import persistence
+from orca_auto.core.utils.coercion import safe_int
 
 FIXED_NOW = datetime(2026, 4, 19, 12, 34, 56, tzinfo=UTC)
 
@@ -111,8 +112,8 @@ def test_timestamped_token_pattern_matches_only_tokens_the_producer_mints() -> N
         (None, -1, -1),
     ],
 )
-def test_coerce_int(value: Any, default: int, expected: int) -> None:
-    assert persistence.coerce_int(value, default=default) == expected
+def test_safe_int(value: Any, default: int, expected: int) -> None:
+    assert safe_int(value, default=default) == expected
 
 
 def test_resolve_root_path_expands_user_and_resolves(

@@ -15,6 +15,7 @@ from orca_auto.core.artifacts import (
     RUN_REPORT_JSON_FILE,
     RUN_STATE_FILE,
     SI_BLOCK_MD_FILE,
+    STATE_MUTATION_LOCK_FILE_NAME,
 )
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 
@@ -54,7 +55,7 @@ _DURABLE_RESERVED_FILE_NAMES = frozenset(
         RUN_REPORT_HTML_FILE,
         SI_BLOCK_MD_FILE,
         RUN_LOCK_FILE_NAME,
-        ".job_state.mutation.lock",
+        STATE_MUTATION_LOCK_FILE_NAME,
         _PUBLICATION_JOURNAL_FILE_NAME,
     }
 )

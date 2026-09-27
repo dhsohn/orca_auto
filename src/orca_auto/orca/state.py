@@ -12,14 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core import activity_invalidation as _activity_invalidation
+from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.confined_io import (
     atomic_write_confined_bytes,
 )
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils.lock import file_lock_at
-from orca_auto.core.utils.persistence import (
-    atomic_write_text as _atomic_write_text,
-)
 from orca_auto.core.utils.persistence import (
     durable_mkdir,
     timestamped_token,
@@ -48,9 +46,6 @@ from .statuses import (
 from .types import RunFinalResult, RunState
 
 logger = logging.getLogger(__name__)
-
-
-STATE_MUTATION_LOCK_FILE_NAME = ".job_state.mutation.lock"
 
 
 def now_utc_iso() -> str:
@@ -137,9 +132,6 @@ def new_state(reaction_dir: Path, selected_inp: Path) -> RunState:
         "scratch_publications": [],
         "final_result": None,
     }
-
-
-atomic_write_text = _atomic_write_text
 
 
 def write_state(reaction_dir: Path, state: Mapping[str, Any]) -> Path:

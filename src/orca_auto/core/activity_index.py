@@ -22,6 +22,7 @@ DB_NAME = ".activity.sqlite3"
 # Bump whenever the mirrored layout changes; an older projection is dropped and
 # rebuilt from the canonical sources instead of being read with new rules.
 # 2: location rows are keyed by job_id (position is only an ordering column).
+# 3: queue rows carry the terminal-publication blocker and publication_owner.
 SCHEMA_VERSION = "3"
 LOGGER = logging.getLogger(__name__)
 _TABLES = ("meta", "sources", "watches", "links", "dirty", "activities")

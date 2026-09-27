@@ -7,14 +7,11 @@ own error type and wording at its boundary; ``OSError`` raised by the underlying
 system calls (missing paths, ``ENOTDIR``, permission errors) propagates
 unchanged so consumers keep their existing handling of those.
 
-Directory opens keep the strictest check of the two former copies. The
-``input_snapshot`` copy was stricter on identity: the inode observed by
+Every directory open enforces two rules. Identity: the inode observed by
 ``lstat`` before the open, the opened descriptor and the pathname re-checked
 after the open must all agree, and must equal ``expected_identity`` when one is
-given (the ``engine_scratch`` copy compared only the descriptor with the
-pathname after the open). The ``engine_scratch`` copy was stricter on entry
-names: a child opened relative to a parent descriptor must be a plain basename
-(no separators, not ``.`` or ``..``). Both rules apply to every open here.
+given. Names: a child opened relative to a parent descriptor must be a plain
+basename (no separators, not ``.`` or ``..``).
 """
 
 from __future__ import annotations

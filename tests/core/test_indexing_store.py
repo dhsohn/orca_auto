@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -14,8 +15,8 @@ from orca_auto.core.indexing.store import (
     _resolve_candidate_path,
     get_job_location,
     list_job_locations,
+    merge_job_locations,
     prune_job_locations,
-    resolve_job_location,
     upsert_job_location,
 )
 
@@ -61,8 +62,6 @@ def test_list_job_locations_invalid_json_raises_corrupt_error(tmp_path: Path) ->
     assert str(failure.value) == f"Job location index is not valid JSON: {_index_path(tmp_path)}"
     assert isinstance(failure.value.__cause__, json.JSONDecodeError)
     with pytest.raises(JobLocationIndexCorruptError):
-        resolve_job_location(tmp_path, "anything")
-    with pytest.raises(JobLocationIndexCorruptError):
         upsert_job_location(tmp_path, _record("job-1"))
     assert _index_path(tmp_path).read_text(encoding="utf-8") == corrupt_text
 
@@ -78,8 +77,6 @@ def test_list_job_locations_non_list_json_raises_corrupt_error(tmp_path: Path) -
         == f"Job location index must contain a JSON list: {_index_path(tmp_path)}"
     )
     assert failure.value.__cause__ is None
-    with pytest.raises(JobLocationIndexCorruptError):
-        resolve_job_location(tmp_path, "job-1")
     with pytest.raises(JobLocationIndexCorruptError):
         upsert_job_location(tmp_path, _record("job-1"))
     assert _index_path(tmp_path).read_text(encoding="utf-8") == corrupt_text
@@ -157,33 +154,6 @@ def test_get_job_location_blank_id_returns_none(tmp_path: Path) -> None:
     assert get_job_location(tmp_path, "   ") is None
 
 
-def test_resolve_job_location_blank_lookup_returns_none(tmp_path: Path) -> None:
-    assert resolve_job_location(tmp_path, " \t ") is None
-
-
-def test_resolve_job_location_non_path_miss_returns_none(tmp_path: Path) -> None:
-    record = _record("job-789", original_run_dir=str(tmp_path / "runs" / "job-789"))
-    upsert_job_location(tmp_path, record)
-
-    assert resolve_job_location(tmp_path, "missing-job-or-path") is None
-
-
-def test_resolve_job_location_returns_none_when_candidate_path_is_none(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    record = _record("job-789", original_run_dir=str(tmp_path / "runs" / "job-789"))
-    upsert_job_location(tmp_path, record)
-
-    def fake_resolve_candidate_path(path_text: str) -> Path | None:
-        assert path_text == "nonblank-lookup"
-        return None
-
-    monkeypatch.setattr(indexing_store, "_resolve_candidate_path", fake_resolve_candidate_path)
-
-    assert resolve_job_location(tmp_path, "nonblank-lookup") is None
-
-
 def test_normalize_resource_payload_handles_non_dict_and_edge_values() -> None:
     assert _normalize_resource_payload(None) == {}
     assert _normalize_resource_payload([]) == {}
@@ -250,69 +220,6 @@ def test_upsert_replaces_existing_record_by_job_id(tmp_path: Path) -> None:
     assert len(stored) == 1
     assert stored[0]["job_id"] == "job-123"
     assert stored[0]["app_name"] == "beta"
-
-
-def test_resolve_job_location_prefers_job_id_over_path_match(tmp_path: Path) -> None:
-    shared_path = tmp_path / "shared"
-    shared_path.mkdir()
-
-    job_id_match = _record(
-        str(shared_path),
-        app_name="job-id-match",
-        original_run_dir=str(tmp_path / "job-id-run"),
-    )
-    path_match = _record(
-        "other-job",
-        app_name="path-match",
-        original_run_dir=str(shared_path),
-    )
-
-    upsert_job_location(tmp_path, job_id_match)
-    upsert_job_location(tmp_path, path_match)
-
-    assert resolve_job_location(tmp_path, str(shared_path)) == job_id_match
-
-
-def test_resolve_job_location_matches_canonicalized_path(tmp_path: Path) -> None:
-    real_dir = tmp_path / "real" / "run"
-    real_dir.mkdir(parents=True)
-    alias_parent = tmp_path / "aliases"
-    alias_parent.mkdir()
-    alias_dir = alias_parent / "run"
-    alias_dir.symlink_to(real_dir, target_is_directory=True)
-
-    record = _record(
-        "job-456",
-        app_name="path-match",
-        latest_known_path=str(real_dir),
-    )
-
-    upsert_job_location(tmp_path, record)
-
-    assert resolve_job_location(tmp_path, str(real_dir)) == record
-
-
-def test_resolve_job_location_path_alias_selects_newest_generation(tmp_path: Path) -> None:
-    job_dir = tmp_path / "runs" / "water-md"
-    first_generation = job_dir / "20260720-113000-11111111"
-    second_generation = job_dir / "20260720-113100-22222222"
-    second_generation.mkdir(parents=True)
-    first_generation.mkdir()
-    first = _record(
-        "md-first",
-        original_run_dir=str(job_dir),
-        latest_known_path=str(first_generation),
-    )
-    second = _record(
-        "md-second",
-        original_run_dir=str(job_dir),
-        latest_known_path=str(second_generation),
-    )
-    upsert_job_location(tmp_path, first)
-    upsert_job_location(tmp_path, second)
-
-    assert resolve_job_location(tmp_path, str(job_dir)) == second
-    assert resolve_job_location(tmp_path, first.job_id) == first
 
 
 def test_prune_job_locations_dry_run_reports_without_writing(tmp_path: Path) -> None:
@@ -435,54 +342,49 @@ def test_prune_job_locations_corrupt_index_fails_closed(tmp_path: Path) -> None:
     assert _index_path(tmp_path).read_text(encoding="utf-8") == corrupt_text
 
 
-def test_upsert_job_locations_merges_by_job_id_under_one_write(tmp_path: Path) -> None:
-    from orca_auto.core.indexing.store import upsert_job_locations
-
+def test_upsert_job_location_leaves_an_unchanged_index_untouched(tmp_path: Path) -> None:
     first = JobLocationRecord(
         job_id="a", app_name="orca", job_type="orca_sp", status="queued", original_run_dir="/a"
     )
     second = JobLocationRecord(
         job_id="b", app_name="orca", job_type="orca_sp", status="queued", original_run_dir="/b"
     )
-    upsert_job_locations(tmp_path, [first, second])
+    upsert_job_location(tmp_path, first)
+    upsert_job_location(tmp_path, second)
     index_path = tmp_path / "job_locations.json"
     before = index_path.read_bytes()
 
-    preview = upsert_job_locations(
-        tmp_path,
-        [
-            JobLocationRecord(
-                job_id=" a ",
-                app_name="orca",
-                job_type="orca_sp",
-                status="completed",
-                original_run_dir="/a",
-            ),
-            second,
-            JobLocationRecord(
-                job_id="c",
-                app_name="orca",
-                job_type="orca_sp",
-                status="queued",
-                original_run_dir="/c",
-            ),
-        ],
-        apply=False,
-    )
-    assert preview.applied is False
-    assert [row.job_id for row in preview.updated] == ["a"]
-    assert [row.job_id for row in preview.added] == ["c"]
-    assert preview.unchanged == 1
-    assert preview.total == 3
+    assert upsert_job_location(tmp_path, replace(second, job_id=" b ")) == second
     assert index_path.read_bytes() == before
 
-    applied = upsert_job_locations(tmp_path, [second, second], apply=True)
-    assert (applied.added, applied.updated, applied.unchanged, applied.applied) == (
-        (),
-        (),
-        2,
-        False,
+
+def test_merge_job_locations_preview_reports_without_writing(tmp_path: Path) -> None:
+    def row(job_id: str, status: str) -> JobLocationRecord:
+        return JobLocationRecord(
+            job_id=job_id,
+            app_name="orca",
+            job_type="orca_sp",
+            status=status,
+            original_run_dir=f"/{job_id}",
+        )
+
+    upsert_job_location(tmp_path, row("a", "queued"))
+    upsert_job_location(tmp_path, row("b", "queued"))
+    index_path = tmp_path / "job_locations.json"
+    before = index_path.read_bytes()
+
+    preview = merge_job_locations(
+        tmp_path,
+        {"a": row("a", "completed"), "b": row("b", "queued"), "c": row("c", "queued")},
+        decide=lambda _existing, candidate: candidate,
+        apply=False,
     )
+
+    assert preview.applied is False
+    assert [record.job_id for record in preview.updated] == ["a"]
+    assert [record.job_id for record in preview.added] == ["c"]
+    assert preview.unchanged == 1
+    assert preview.total == 3
     assert index_path.read_bytes() == before
 
 
@@ -491,7 +393,7 @@ def test_merge_job_locations_decides_under_the_lock_against_the_current_row(
 ) -> None:
     from unittest.mock import patch
 
-    from orca_auto.core.indexing.store import JobLocationIndexError, merge_job_locations
+    from orca_auto.core.indexing.store import JobLocationIndexError
 
     def row(job_id: str, status: str) -> JobLocationRecord:
         return JobLocationRecord(

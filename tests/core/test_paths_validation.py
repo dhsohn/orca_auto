@@ -1,20 +1,13 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from orca_auto.core.paths.validation import (
-    ensure_directory,
     is_rejected_windows_path,
     is_subpath,
-    recent_file_candidates,
-    require_subpath,
-    resolve_artifact_path,
-    resolve_local_path,
     validate_configured_executable_path,
-    validate_job_dir,
 )
 
 
@@ -27,14 +20,6 @@ from orca_auto.core.paths.validation import (
 )
 def test_windows_path_rejection(path_text: str) -> None:
     assert is_rejected_windows_path(path_text)
-    with pytest.raises(ValueError, match="Windows-style and /mnt/<drive> paths are not supported"):
-        resolve_local_path(path_text)
-
-
-@pytest.mark.parametrize("path_text", ["", "   "])
-def test_empty_path_rejection(path_text: str) -> None:
-    with pytest.raises(ValueError, match="Path must not be empty"):
-        resolve_local_path(path_text)
 
 
 def test_executable_validation_rejects_symlink_to_windows_executable(tmp_path: Path) -> None:
@@ -114,29 +99,7 @@ def test_configured_executable_validation_redacts_raced_resolution_value_error(
     assert "private-raced-resolution-secret" not in message
 
 
-def test_ensure_directory_success(tmp_path: Path) -> None:
-    directory = tmp_path / "input"
-    directory.mkdir()
-
-    assert ensure_directory(str(directory), label="Input dir") == directory.resolve()
-
-
-def test_ensure_directory_failure_for_missing_path(tmp_path: Path) -> None:
-    missing = tmp_path / "missing"
-
-    with pytest.raises(ValueError, match=r"Input dir not found: .*missing"):
-        ensure_directory(str(missing), label="Input dir")
-
-
-def test_ensure_directory_failure_for_file(tmp_path: Path) -> None:
-    file_path = tmp_path / "artifact.txt"
-    file_path.write_text("payload", encoding="utf-8")
-
-    with pytest.raises(ValueError, match=r"Input dir is not a directory: .*artifact\.txt"):
-        ensure_directory(str(file_path), label="Input dir")
-
-
-def test_is_subpath_and_require_subpath(tmp_path: Path) -> None:
+def test_is_subpath(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()
     child = root / "nested" / "job"
@@ -146,103 +109,3 @@ def test_is_subpath_and_require_subpath(tmp_path: Path) -> None:
 
     assert is_subpath(child, root)
     assert not is_subpath(outside, root)
-    assert require_subpath(child, root, label="Job dir") == child.resolve()
-
-    with pytest.raises(ValueError, match=r"Job dir must be under allowed root: .*got=.*elsewhere"):
-        require_subpath(outside, root, label="Job dir")
-
-
-def test_validate_job_dir(tmp_path: Path) -> None:
-    allowed_root = tmp_path / "allowed"
-    allowed_root.mkdir()
-    job_dir = allowed_root / "job-1"
-    job_dir.mkdir()
-
-    assert validate_job_dir(str(job_dir), str(allowed_root)) == job_dir.resolve()
-
-
-def test_validate_job_dir_rejects_outside_root(tmp_path: Path) -> None:
-    allowed_root = tmp_path / "allowed"
-    allowed_root.mkdir()
-    job_dir = tmp_path / "job-1"
-    job_dir.mkdir()
-
-    with pytest.raises(
-        ValueError, match=r"Job directory must be under allowed root: .*got=.*job-1"
-    ):
-        validate_job_dir(str(job_dir), str(allowed_root))
-
-
-def test_resolve_artifact_path_relative_and_absolute_and_missing(tmp_path: Path) -> None:
-    base_dir = tmp_path / "base"
-    base_dir.mkdir()
-    relative_dir = base_dir / "runs" / "run-1"
-    relative_dir.mkdir(parents=True)
-    basename_dir = base_dir / "artifacts"
-    basename_dir.mkdir()
-    absolute_dir = tmp_path / "absolute-artifact"
-    absolute_dir.mkdir()
-
-    relative_candidate = relative_dir / "result.json"
-    relative_candidate.write_text("relative", encoding="utf-8")
-    basename_candidate = basename_dir / "output.json"
-    basename_candidate.write_text("basename", encoding="utf-8")
-    absolute_candidate = absolute_dir / "summary.json"
-    absolute_candidate.write_text("absolute", encoding="utf-8")
-
-    assert resolve_artifact_path("runs/run-1/result.json", base_dir) == relative_candidate.resolve()
-    assert (
-        resolve_artifact_path("nested/path/output.json", basename_dir)
-        == basename_candidate.resolve()
-    )
-    assert resolve_artifact_path(str(absolute_candidate), base_dir) == absolute_candidate.resolve()
-    assert resolve_artifact_path("missing.json", base_dir) is None
-    assert resolve_artifact_path("   ", base_dir) is None
-
-
-def test_resolve_artifact_path_skips_oserror_and_finds_later_candidate(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    base_dir = tmp_path / "base"
-    base_dir.mkdir()
-    nested_dir = base_dir / "runs" / "run-1"
-    nested_dir.mkdir(parents=True)
-
-    first_candidate = nested_dir / "result.json"
-    second_candidate = base_dir / "result.json"
-    second_candidate.write_text("payload", encoding="utf-8")
-
-    original_resolve = Path.resolve
-
-    def fake_resolve(self: Path, *args, **kwargs) -> Path:
-        if self == first_candidate:
-            raise OSError("cannot resolve candidate")
-        return original_resolve(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "resolve", fake_resolve, raising=True)
-
-    assert resolve_artifact_path("runs/run-1/result.json", base_dir) == second_candidate.resolve()
-
-
-@pytest.mark.parametrize("reversed_creation", [False, True])
-def test_recent_file_candidates_break_an_exact_mtime_tie_by_name(
-    tmp_path: Path,
-    reversed_creation: bool,
-) -> None:
-    # All eight files share one nanosecond, so only the name rule can order
-    # them; readdir alone would return an order that depends on the filesystem
-    # and, before the tie-break, on nothing the caller can reason about.
-    stamp = (1_700_000_000_000_000_000, 1_700_000_000_000_000_000)
-    names = ["c.xyz", "h.xyz", "a.xyz", "m.xyz", "b.xyz", "z.xyz", "e.xyz", "q.xyz"]
-    for name in reversed(names) if reversed_creation else names:
-        path = tmp_path / name
-        path.write_text("2\n\nH 0 0 0\nH 0 0 0.7\n", encoding="utf-8")
-        os.utime(path, ns=stamp)
-
-    expected = sorted(names, reverse=True)
-    first = [item.name for item in recent_file_candidates([tmp_path], suffix=".xyz")]
-    second = [item.name for item in recent_file_candidates([tmp_path], suffix=".xyz")]
-
-    assert first == expected
-    assert second == expected

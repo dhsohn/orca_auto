@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from orca_auto.core import activity_invalidation as _activity_invalidation
+from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.utils.lock import file_lock_at
@@ -40,7 +41,6 @@ from .run_snapshot import (
     load_pinned_state,
     state_publication_identity,
 )
-from .state import STATE_MUTATION_LOCK_FILE_NAME
 from .state_reading import STATE_FILE_NAME
 from .statuses import ACTIVE_RUN_STATUS_VALUES, TERMINAL_RUN_STATUS_VALUES
 

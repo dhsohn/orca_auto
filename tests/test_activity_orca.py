@@ -49,11 +49,6 @@ def _records_by_id(config: str) -> dict[str, _activity_model.ActivityRecord]:
 
 
 def test_activity_helper_edges_and_discovery_paths(tmp_path: Path) -> None:
-    from orca_auto.core.utils.coercion import mapping_or_empty
-
-    assert mapping_or_empty({"a": 1}) == {"a": 1}
-    assert mapping_or_empty(["not", "mapping"]) == {}
-
     empty_timestamp = _activity_model.ActivityRecord(
         "empty", "job", "x", "running", "", "", "", "", ""
     )

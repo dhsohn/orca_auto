@@ -41,32 +41,18 @@ QUEUE_ACTIVE_STATUSES = frozenset(
         STATUS_CANCEL_REQUESTED,
     }
 )
-CANCEL_ACK_STATUSES = frozenset({STATUS_CANCELLED, STATUS_CANCEL_REQUESTED})
 
 
 def normalize_status(value: object) -> str:
     return str(value or "").strip().lower()
 
 
-def status_in(value: object, statuses: frozenset[str] | set[str] | tuple[str, ...]) -> bool:
-    return normalize_status(value) in statuses
-
-
-def is_failed_status(value: object) -> bool:
-    return status_in(value, FAILED_STATUSES)
-
-
 def is_queue_active_status(value: object) -> bool:
-    return status_in(value, QUEUE_ACTIVE_STATUSES)
-
-
-def is_cancel_ack_status(value: object) -> bool:
-    return status_in(value, CANCEL_ACK_STATUSES)
+    return normalize_status(value) in QUEUE_ACTIVE_STATUSES
 
 
 __all__ = [
     "ACTIVE_STATUSES",
-    "CANCEL_ACK_STATUSES",
     "FAILED_STATUSES",
     "QUEUE_ACTIVE_STATUSES",
     "STATUS_CANCEL_REQUESTED",
@@ -82,9 +68,6 @@ __all__ = [
     "STATUS_RUNNING",
     "STATUS_UNKNOWN",
     "TERMINAL_STATUSES",
-    "is_cancel_ack_status",
-    "is_failed_status",
     "is_queue_active_status",
     "normalize_status",
-    "status_in",
 ]
