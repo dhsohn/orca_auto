@@ -1,17 +1,26 @@
-"""Reserving one visible generation directory under a durable snapshot intent."""
+"""Reserving one visible generation under a durable snapshot intent, and retiring it.
+
+The intent is created before the generation directory and retired when the
+worker starts the queue row that owns the generation.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from orca_auto.core.queue.engine.input_snapshot import (
     cleanup_unowned_direct_generation_directory,
 )
 from orca_auto.core.queue.engine.snapshot_intent import (
+    SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
+    SNAPSHOT_INTENT_TOKEN_KEY,
     bind_snapshot_intent_generation_identities,
     create_snapshot_intent,
     discard_snapshot_intent,
     discard_snapshot_intent_if_generations_absent,
+    retire_snapshot_intent,
 )
 from orca_auto.core.queue.generation import (
     is_visible_generation_name,
@@ -91,3 +100,35 @@ def _reserve_execution_generation(
             "resubmitting the job"
         )
     raise FileExistsError("Could not reserve a unique visible ORCA generation directory")
+
+
+def retire_snapshot_intent_for_row(queue_root: str | Path, entry: Any) -> None:
+    """Retire a reserved row's snapshot intent before its child starts.
+
+    A row whose snapshot names no intent has nothing to retire. The generation
+    identity is read only from v2 and v3 snapshots; the core refuses a missing
+    one after it has read the intent, so an already retired intent never
+    fails a row.
+    """
+
+    metadata = getattr(entry, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        return
+    snapshot = metadata.get("execution_snapshot")
+    if not isinstance(snapshot, Mapping):
+        return
+    token = str(snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
+    intent_root = str(snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or "").strip()
+    if not token and not intent_root:
+        return
+    retire_snapshot_intent(
+        queue_root,
+        token,
+        intent_queue_root=intent_root,
+        execution_dir=str(snapshot.get("execution_dir") or "").strip(),
+        # Directory ownership is shared by historical v2 and current v3;
+        # engine admission separately rejects retired execution contracts.
+        execution_dir_identity=(
+            snapshot.get("execution_dir_identity") if snapshot.get("version") in (2, 3) else None
+        ),
+    )

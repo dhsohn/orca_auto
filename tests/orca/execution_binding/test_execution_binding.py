@@ -4,6 +4,7 @@ import re
 import shutil
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca import input_blocks, input_references, input_syntax
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
+    retire_snapshot_intent_for_row,
     verify_orca_execution_snapshot,
 )
 from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count
@@ -1080,6 +1082,123 @@ def test_orca_execution_snapshot_limits_neb_file_keys_to_end_boundary(
         input_references.scan_orca_file_references(
             ['%NEB Product "product.xyz" end Product "missing-product.xyz"']
         )
+
+
+def _intent_file(job_dir: Path, snapshot: dict[str, Any]) -> Path:
+    return job_dir / ".orca_auto_snapshot_intents" / f"{snapshot['snapshot_intent_token']}.json"
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_retire_snapshot_intent_for_row_retires_a_matching_generation(
+    tmp_path: Path, version: int
+) -> None:
+    job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
+    assert _intent_file(job_dir, snapshot).is_file()
+
+    retire_snapshot_intent_for_row(
+        job_dir, SimpleNamespace(metadata={"execution_snapshot": {**snapshot, "version": version}})
+    )
+
+    assert not _intent_file(job_dir, snapshot).exists()
+    assert Path(snapshot["execution_dir"]).is_dir()
+
+
+def _another_generation(job_dir: Path, snapshot: dict[str, Any]) -> dict[str, Any]:
+    other = job_dir / "20000101-000000-deadbeef"
+    other.mkdir()
+    return {"execution_dir": str(other)}
+
+
+# Check order: queue root, then (under the mutation lock, after the intent is
+# read and its bound directory checked) the row's generation fields.
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (
+            lambda job_dir, snapshot: {"snapshot_intent_queue_root": str(job_dir.parent)},
+            "Queued snapshot intent does not match its queue root",
+        ),
+        (
+            lambda job_dir, snapshot: {"snapshot_intent_token": ""},
+            "Queued snapshot intent does not match its queue root",
+        ),
+        (
+            lambda job_dir, snapshot: {"version": 1},
+            "Queued snapshot has no visible generation identity",
+        ),
+        (
+            lambda job_dir, snapshot: {"execution_dir": ""},
+            "Queued snapshot has no visible generation identity",
+        ),
+        (
+            lambda job_dir, snapshot: {"execution_dir_identity": "missing"},
+            "Queued snapshot has no visible generation identity",
+        ),
+        (
+            lambda job_dir, snapshot: {"execution_dir": Path(snapshot["execution_dir"]).name},
+            "Queued snapshot has an invalid visible generation path",
+        ),
+        (
+            lambda job_dir, snapshot: {
+                "execution_dir": f"{snapshot['execution_dir']}/../{snapshot['generation_name']}"
+            },
+            "Queued snapshot has an invalid visible generation path",
+        ),
+        (_another_generation, "Queued snapshot intent names another generation"),
+        (
+            lambda job_dir, snapshot: {
+                "execution_dir_identity": {
+                    **snapshot["execution_dir_identity"],
+                    "inode": snapshot["execution_dir_identity"]["inode"] + 1,
+                }
+            },
+            "Queued snapshot intent identity does not match metadata",
+        ),
+    ],
+)
+def test_retire_snapshot_intent_for_row_refusal_texts(
+    tmp_path: Path, change: Any, message: str
+) -> None:
+    job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
+    row = SimpleNamespace(
+        metadata={"execution_snapshot": {**snapshot, **change(job_dir, snapshot)}}
+    )
+
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        retire_snapshot_intent_for_row(job_dir, row)
+
+    assert _intent_file(job_dir, snapshot).is_file()
+
+
+def test_retire_snapshot_intent_for_row_checks_the_intent_before_the_row(
+    tmp_path: Path,
+) -> None:
+    job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
+    row = SimpleNamespace(metadata={"execution_snapshot": {**snapshot, "version": 1}})
+    generation = Path(snapshot["execution_dir"])
+    shutil.rmtree(generation)
+    generation.mkdir()
+
+    with pytest.raises(ValueError, match="^Visible generation directory identity changed$"):
+        retire_snapshot_intent_for_row(job_dir, row)
+
+    _intent_file(job_dir, snapshot).unlink()
+    retire_snapshot_intent_for_row(job_dir, row)
+
+
+def test_retire_snapshot_intent_for_row_ignores_rows_without_an_intent(tmp_path: Path) -> None:
+    job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
+    bare = {
+        key: value
+        for key, value in snapshot.items()
+        if key not in {"snapshot_intent_token", "snapshot_intent_queue_root"}
+    }
+
+    for metadata in ({}, {"execution_snapshot": "legacy"}, {"execution_snapshot": bare}):
+        retire_snapshot_intent_for_row(job_dir, SimpleNamespace(metadata=metadata))
+    retire_snapshot_intent_for_row(job_dir, SimpleNamespace(metadata=None))
+
+    assert _intent_file(job_dir, snapshot).is_file()
 
 
 def test_orca_cleanup_rejects_a_mismatched_visible_generation(tmp_path: Path) -> None:

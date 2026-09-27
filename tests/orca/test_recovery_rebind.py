@@ -1622,7 +1622,7 @@ def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growt
         assert waited_pid == child_pid
         exit_code = os.waitstatus_to_exitcode(wait_status)
         assert exit_code == (73 if iteration == 0 else 74)
-        reconcile_orphaned_snapshot_generations([queue_root])
+        reconcile_orphaned_snapshot_generations(queue_root)
         visible_generations = sorted(
             child.name
             for child in reaction_dir.iterdir()
@@ -1693,7 +1693,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
         == 2
     )
 
-    assert reconcile_orphaned_snapshot_generations([queue_root]) == 1
+    assert reconcile_orphaned_snapshot_generations(queue_root) == 1
     assert not intent_dir.exists() or not any(intent_dir.glob("*.json"))
     assert [
         child

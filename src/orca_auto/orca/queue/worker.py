@@ -39,10 +39,7 @@ from orca_auto.core.admission.records import (
 )
 from orca_auto.core.queue.child.process import entry_status_is_running
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
-from orca_auto.core.queue.engine.snapshot_intent import (
-    finalize_queued_snapshot_intent,
-    reconcile_orphaned_snapshot_generations,
-)
+from orca_auto.core.queue.engine.snapshot_intent import reconcile_orphaned_snapshot_generations
 from orca_auto.core.queue.processes import ManagedProcess
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry
@@ -61,6 +58,7 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING, TERMINAL_STATUSES
 from orca_auto.core.utils.lock import file_lock
+from orca_auto.orca.execution_binding import retire_snapshot_intent_for_row
 from orca_auto.orca.worker_execution import build_worker_child_command
 
 from ..app_ids import ORCA_ADMISSION_SOURCE, ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE_LAUNCH_GATED
@@ -357,7 +355,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             return
         self._snapshot_intent_last_reconcile = now
         try:
-            removed = reconcile_orphaned_snapshot_generations((self.queue_root,))
+            removed = reconcile_orphaned_snapshot_generations(self.queue_root)
         except Exception:
             logger.exception("Snapshot orphan reconciliation failed; retaining all candidates")
         else:
@@ -495,7 +493,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         try:
             # Retire the journal before execution so even a very fast terminal
             # job cannot lose its queue row while an ENQUEUEING intent remains.
-            finalize_queued_snapshot_intent(reserved.queue_root, reserved.entry)
+            retire_snapshot_intent_for_row(reserved.queue_root, reserved.entry)
         except Exception as exc:  # noqa: BLE001
             self._handle_worker_start_error(
                 reserved.queue_root,

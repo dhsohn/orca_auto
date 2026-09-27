@@ -5,8 +5,8 @@ import logging
 import os
 import re
 import stat
-from collections.abc import Iterable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +33,6 @@ SNAPSHOT_INTENT_QUEUE_ROOT_KEY = "snapshot_intent_queue_root"
 SNAPSHOT_INTENT_STATE_CREATING = "creating"
 SNAPSHOT_INTENT_STATE_ENQUEUEING = "enqueueing"
 SNAPSHOT_INTENT_STATE_OWNED = "owned"
-INPUT_SNAPSHOT_NAMESPACE_INTENT_KIND = "input_snapshot_namespace"
 
 SNAPSHOT_OWNERSHIP_REPAIR_PENDING_WARNING = "queued snapshot ownership marker repair is pending"
 
@@ -46,7 +45,7 @@ _DIRECT_VISIBLE_GENERATION_KINDS = frozenset({"orca_visible_generation"})
 # Retired values remain readable; only direct visible ORCA generations are produced.
 _KINDS = frozenset(
     {
-        INPUT_SNAPSHOT_NAMESPACE_INTENT_KIND,
+        "input_snapshot_namespace",
         "orca_execution_pair",
         *_DIRECT_VISIBLE_GENERATION_KINDS,
     }
@@ -231,6 +230,31 @@ def _read_intent(path: Path, *, expected_root: Path) -> dict[str, Any]:
     return raw
 
 
+@contextmanager
+def _locked_intent(
+    root: Path,
+    token: str,
+    *,
+    missing_ok: bool = False,
+) -> Iterator[tuple[Path, dict[str, Any]] | None]:
+    """Hold the mutation lock over one intent and yield its path and marker.
+
+    With ``missing_ok`` an absent intent directory or file yields None;
+    otherwise they raise ValueError and FileNotFoundError.
+    """
+    with file_lock(root / _MUTATION_LOCK_NAME):
+        raw_intent_dir = root / _INTENT_DIR_NAME
+        held: tuple[Path, dict[str, Any]] | None = None
+        if not missing_ok or raw_intent_dir.exists() or raw_intent_dir.is_symlink():
+            try:
+                intent_path = _intent_path(root, token, create_dir=False)
+                held = (intent_path, _read_intent(intent_path, expected_root=root))
+            except FileNotFoundError:
+                if not missing_ok:
+                    raise
+        yield held
+
+
 def create_snapshot_intent(
     queue_root: str | Path,
     *,
@@ -289,9 +313,9 @@ def bind_snapshot_intent_generation_identities(
     """Pin newly-created direct visible generations to their exact directory inodes."""
 
     resolved_root = _resolved_queue_root(queue_root)
-    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
-        intent_path = _intent_path(resolved_root, token, create_dir=False)
-        marker = _read_intent(intent_path, expected_root=resolved_root)
+    with _locked_intent(resolved_root, token) as held:
+        assert held is not None
+        intent_path, marker = held
         if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
             raise ValueError("Only direct visible generations require directory identity binding")
         if marker["state"] != SNAPSHOT_INTENT_STATE_CREATING:
@@ -335,9 +359,9 @@ def transition_snapshot_intent(
     expected_states: Iterable[str],
 ) -> None:
     resolved_root = _resolved_queue_root(queue_root)
-    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
-        intent_path = _intent_path(resolved_root, token, create_dir=False)
-        marker = _read_intent(intent_path, expected_root=resolved_root)
+    with _locked_intent(resolved_root, token) as held:
+        assert held is not None
+        intent_path, marker = held
         target = str(target_state).strip().lower()
         allowed = {str(state).strip().lower() for state in expected_states}
         current = str(marker["state"])
@@ -362,6 +386,7 @@ def _unlink_intent(intent_path: Path) -> None:
 
 
 def discard_snapshot_intent(queue_root: str | Path, token: str) -> None:
+    """Unlink one intent without reading it, so an unreadable marker is still retired."""
     resolved_root = _resolved_queue_root(queue_root)
     with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         raw_intent_dir = resolved_root / _INTENT_DIR_NAME
@@ -419,15 +444,10 @@ def discard_snapshot_intent_if_generations_absent(
     """Discard an intent only after every declared generation is certainly absent."""
 
     resolved_root = _resolved_queue_root(queue_root)
-    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
-        raw_intent_dir = resolved_root / _INTENT_DIR_NAME
-        if not raw_intent_dir.exists() and not raw_intent_dir.is_symlink():
+    with _locked_intent(resolved_root, token, missing_ok=True) as held:
+        if held is None:
             return True
-        try:
-            intent_path = _intent_path(resolved_root, token, create_dir=False)
-            marker = _read_intent(intent_path, expected_root=resolved_root)
-        except FileNotFoundError:
-            return True
+        intent_path, marker = held
         for generation_path in marker["generation_paths"]:
             try:
                 os.lstat(generation_path)
@@ -438,35 +458,32 @@ def discard_snapshot_intent_if_generations_absent(
         return True
 
 
-def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
-    """Durably retire an intent before a reserved queue entry starts execution."""
+def retire_snapshot_intent(
+    queue_root: str | Path,
+    token: str,
+    *,
+    intent_queue_root: str,
+    execution_dir: str,
+    execution_dir_identity: Any,
+) -> None:
+    """Durably retire the intent of a queued generation before that generation runs.
 
-    metadata = getattr(entry, "metadata", {})
-    if not isinstance(metadata, Mapping):
-        return
-    snapshot = metadata.get("execution_snapshot")
-    if not isinstance(snapshot, Mapping):
-        return
-    token = str(snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
-    intent_root_text = str(snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or "").strip()
-    if not token and not intent_root_text:
-        return
+    ``execution_dir`` and ``execution_dir_identity`` are the generation the
+    queue row records; an identity of None means the row records none. The
+    intent must still own exactly that directory inode.
+    """
+
     resolved_root = _resolved_queue_root(queue_root)
     if (
         not token
-        or not intent_root_text
-        or Path(intent_root_text).expanduser().resolve() != resolved_root
+        or not intent_queue_root
+        or Path(intent_queue_root).expanduser().resolve() != resolved_root
     ):
         raise ValueError("Queued snapshot intent does not match its queue root")
-    with file_lock(resolved_root / _MUTATION_LOCK_NAME):
-        raw_intent_dir = resolved_root / _INTENT_DIR_NAME
-        if not raw_intent_dir.exists() and not raw_intent_dir.is_symlink():
+    with _locked_intent(resolved_root, token, missing_ok=True) as held:
+        if held is None:
             return
-        try:
-            intent_path = _intent_path(resolved_root, token, create_dir=False)
-            marker = _read_intent(intent_path, expected_root=resolved_root)
-        except FileNotFoundError:
-            return
+        intent_path, marker = held
         if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
             return
         _validated_generation_paths(
@@ -475,46 +492,37 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
             require_existing=True,
             kind=str(marker["kind"]),
         )
-        if marker["kind"] in _DIRECT_VISIBLE_GENERATION_KINDS:
-            identities = marker.get("generation_identities")
-            if not isinstance(identities, Mapping) or set(identities) != set(
-                marker["generation_paths"]
+        identities = marker.get("generation_identities")
+        if not isinstance(identities, Mapping) or set(identities) != set(
+            marker["generation_paths"]
+        ):
+            raise ValueError("Visible snapshot intent has no bound directory identity")
+        for generation_path in marker["generation_paths"]:
+            details = Path(generation_path).stat()
+            identity = identities[generation_path]
+            if (int(details.st_dev), int(details.st_ino)) != (
+                int(identity["device"]),
+                int(identity["inode"]),
             ):
-                raise ValueError("Visible snapshot intent has no bound directory identity")
-            for generation_path in marker["generation_paths"]:
-                details = Path(generation_path).stat()
-                identity = identities[generation_path]
-                if (int(details.st_dev), int(details.st_ino)) != (
-                    int(identity["device"]),
-                    int(identity["inode"]),
-                ):
-                    raise ValueError("Visible generation directory identity changed")
-            execution_dir_text = str(snapshot.get("execution_dir") or "").strip()
-            snapshot_identity = snapshot.get("execution_dir_identity")
-            if (
-                # Directory ownership is shared by historical v2 and current v3;
-                # engine admission separately rejects retired execution contracts.
-                snapshot.get("version") not in {2, 3}
-                or not execution_dir_text
-                or not isinstance(snapshot_identity, Mapping)
-            ):
-                raise ValueError("Queued snapshot has no visible generation identity")
-            raw_execution_dir = Path(execution_dir_text).expanduser()
-            execution_dir = raw_execution_dir.resolve()
-            if (
-                not raw_execution_dir.is_absolute()
-                or raw_execution_dir.is_symlink()
-                or raw_execution_dir != execution_dir
-            ):
-                raise ValueError("Queued snapshot has an invalid visible generation path")
-            if marker["generation_paths"] != [str(execution_dir)]:
-                raise ValueError("Queued snapshot intent names another generation")
-            marker_identity = identities[str(execution_dir)]
-            if (
-                int(snapshot_identity.get("device", -1)),
-                int(snapshot_identity.get("inode", -1)),
-            ) != (int(marker_identity["device"]), int(marker_identity["inode"])):
-                raise ValueError("Queued snapshot intent identity does not match metadata")
+                raise ValueError("Visible generation directory identity changed")
+        if not execution_dir or not isinstance(execution_dir_identity, Mapping):
+            raise ValueError("Queued snapshot has no visible generation identity")
+        raw_execution_dir = Path(execution_dir).expanduser()
+        resolved_execution_dir = raw_execution_dir.resolve()
+        if (
+            not raw_execution_dir.is_absolute()
+            or raw_execution_dir.is_symlink()
+            or raw_execution_dir != resolved_execution_dir
+        ):
+            raise ValueError("Queued snapshot has an invalid visible generation path")
+        if marker["generation_paths"] != [str(resolved_execution_dir)]:
+            raise ValueError("Queued snapshot intent names another generation")
+        marker_identity = identities[str(resolved_execution_dir)]
+        if (
+            int(execution_dir_identity.get("device", -1)),
+            int(execution_dir_identity.get("inode", -1)),
+        ) != (int(marker_identity["device"]), int(marker_identity["inode"])):
+            raise ValueError("Queued snapshot intent identity does not match metadata")
         _unlink_intent(intent_path)
 
 
@@ -583,9 +591,10 @@ def _remove_generation(
     *,
     queue_root: Path,
     kind: str,
-    expected_identity: Mapping[str, Any] | None = None,
-    owner_token: str = "",
+    expected_identity: Mapping[str, Any],
+    owner_token: str,
 ) -> None:
+    """Remove one bound generation, refusing any other directory at its path."""
     if not path.exists():
         return
     validated = _validated_generation_paths(
@@ -594,116 +603,105 @@ def _remove_generation(
         require_existing=True,
         kind=kind,
     )[0]
-    if kind in _DIRECT_VISIBLE_GENERATION_KINDS:
-        if not isinstance(expected_identity, Mapping):
-            raise ValueError("Visible generation has no bound directory identity")
-        details = validated.stat()
-        generation_identity = (
-            int(expected_identity.get("device", -1)),
-            int(expected_identity.get("inode", -1)),
-        )
-        if (int(details.st_dev), int(details.st_ino)) != generation_identity:
-            raise ValueError("Visible generation directory identity changed")
-        parent_details = validated.parent.stat()
-        cleanup_unowned_direct_generation_directory(
-            validated.parent,
-            namespace=validated.name,
-            label="Visible execution snapshot",
-            expected_job_identity=(int(parent_details.st_dev), int(parent_details.st_ino)),
-            expected_generation_identity=generation_identity,
-            expected_owner_token=owner_token,
-        )
-        return
-    raise ValueError("Retired snapshot generations are read-only")
+    details = validated.stat()
+    generation_identity = (
+        int(expected_identity.get("device", -1)),
+        int(expected_identity.get("inode", -1)),
+    )
+    if (int(details.st_dev), int(details.st_ino)) != generation_identity:
+        raise ValueError("Visible generation directory identity changed")
+    parent_details = validated.parent.stat()
+    cleanup_unowned_direct_generation_directory(
+        validated.parent,
+        namespace=validated.name,
+        label="Visible execution snapshot",
+        expected_job_identity=(int(parent_details.st_dev), int(parent_details.st_ino)),
+        expected_generation_identity=generation_identity,
+        expected_owner_token=owner_token,
+    )
 
 
-def reconcile_orphaned_snapshot_generations(
-    queue_roots: Iterable[str | Path],
-    *,
-    list_queue_fn: Any | None = None,
-    owner_is_alive_fn: Any = _owner_is_alive,
-) -> int:
+def _reconcile_intent(root: Path, intent_path: Path, entries: Sequence[Any]) -> bool:
+    """Settle one intent; True only when a dead owner's generations were removed.
+
+    Unreadable and retired-format intents stay. An OWNED or queue-referenced
+    intent is retired and its generation kept. A dead owner's generations are
+    removed only while they are the exact bound directories; any refusal keeps
+    the intent for the next pass.
+    """
+    try:
+        marker = _read_intent(intent_path, expected_root=root)
+    except (OSError, ValueError):
+        return False
+    if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
+        # Retired intent formats are read-only.
+        return False
+    if marker["state"] == SNAPSHOT_INTENT_STATE_OWNED or any(
+        _entry_references_intent(entry, marker) for entry in entries
+    ):
+        try:
+            _unlink_intent(intent_path)
+        except OSError:
+            pass
+        return False
+    if _owner_is_alive(marker):
+        return False
+    identities = marker.get("generation_identities")
+    try:
+        if not isinstance(identities, Mapping) or set(identities) != set(
+            marker["generation_paths"]
+        ):
+            # The creator died in the tiny mkdir-to-bind window. Retire the
+            # intent but retain the unproven directory; deleting a same-named
+            # user replacement would be worse than leaving a plainly visible
+            # partial generation.
+            _unlink_intent(intent_path)
+            return False
+        for generation_path in marker["generation_paths"]:
+            _remove_generation(
+                Path(generation_path),
+                queue_root=root,
+                kind=str(marker["kind"]),
+                expected_identity=identities[generation_path],
+                owner_token=str(marker["token"]),
+            )
+        _unlink_intent(intent_path)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def reconcile_orphaned_snapshot_generations(queue_root: str | Path) -> int:
     """Resolve durable pre-enqueue intents without scanning active job trees.
 
     Every production worker retires a referenced intent before starting its
     child process. Therefore a dead ENQUEUEING owner with no raw queue row
     cannot have reached execution; completed jobs cannot lose their last
     ownership evidence before the intent has already been durably retired.
+    A busy maintenance lock or an over-limit intent backlog skips the pass.
     """
 
+    root = _resolved_queue_root(queue_root)
+    if not (root / _INTENT_DIR_NAME).exists():
+        return 0
+    intent_dir = _intent_dir(root, create=False)
     removed = 0
-    roots = tuple(dict.fromkeys(_resolved_queue_root(root) for root in queue_roots))
-    for root in roots:
-        intent_dir = root / _INTENT_DIR_NAME
-        if not intent_dir.exists():
-            continue
-        resolved_intent_dir = _intent_dir(root, create=False)
-        try:
-            with file_lock(root / _MAINTENANCE_LOCK_NAME, timeout_seconds=0.0):
-                if list_queue_fn is None:
-                    queue_context: AbstractContextManager[Any] = _queue_store.queue_lock(root)
-                else:
-                    queue_context = nullcontext()
-                with queue_context:
-                    entries = (
-                        _queue_store.load_entries(root)
-                        if list_queue_fn is None
-                        else list_queue_fn(root)
-                    )
-                    with file_lock(root / _MUTATION_LOCK_NAME):
-                        for intent_path in _bounded_intent_paths(resolved_intent_dir):
-                            try:
-                                marker = _read_intent(intent_path, expected_root=root)
-                            except (OSError, ValueError):
-                                continue
-                            if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
-                                # Retired intent formats are read-only.
-                                continue
-                            if marker["state"] == SNAPSHOT_INTENT_STATE_OWNED or any(
-                                _entry_references_intent(entry, marker) for entry in entries
-                            ):
-                                try:
-                                    _unlink_intent(intent_path)
-                                except OSError:
-                                    pass
-                                continue
-                            if owner_is_alive_fn(marker):
-                                continue
-                            try:
-                                identities = marker.get("generation_identities")
-                                if marker["kind"] in _DIRECT_VISIBLE_GENERATION_KINDS and (
-                                    not isinstance(identities, Mapping)
-                                    or set(identities) != set(marker["generation_paths"])
-                                ):
-                                    # The creator died in the tiny mkdir-to-bind window.
-                                    # Retire the intent but retain the unproven directory;
-                                    # deleting a same-named user replacement would be worse
-                                    # than leaving a plainly visible partial generation.
-                                    _unlink_intent(intent_path)
-                                    continue
-                                for generation_path in marker["generation_paths"]:
-                                    _remove_generation(
-                                        Path(generation_path),
-                                        queue_root=root,
-                                        kind=str(marker["kind"]),
-                                        expected_identity=(
-                                            identities.get(generation_path)
-                                            if isinstance(identities, Mapping)
-                                            else None
-                                        ),
-                                        owner_token=str(marker["token"]),
-                                    )
-                                _unlink_intent(intent_path)
-                            except (OSError, ValueError):
-                                continue
-                            removed += 1
-        except (TimeoutError, _IntentDirectoryLimitError):
-            continue
+    try:
+        with (
+            file_lock(root / _MAINTENANCE_LOCK_NAME, timeout_seconds=0.0),
+            _queue_store.queue_lock(root),
+        ):
+            entries = _queue_store.load_entries(root)
+            with file_lock(root / _MUTATION_LOCK_NAME):
+                for intent_path in _bounded_intent_paths(intent_dir):
+                    if _reconcile_intent(root, intent_path, entries):
+                        removed += 1
+    except (TimeoutError, _IntentDirectoryLimitError):
+        pass
     return removed
 
 
 __all__ = [
-    "INPUT_SNAPSHOT_NAMESPACE_INTENT_KIND",
     "SNAPSHOT_INTENT_QUEUE_ROOT_KEY",
     "SNAPSHOT_INTENT_STATE_CREATING",
     "SNAPSHOT_INTENT_STATE_ENQUEUEING",
@@ -713,7 +711,8 @@ __all__ = [
     "create_snapshot_intent",
     "discard_snapshot_intent",
     "discard_snapshot_intent_if_generations_absent",
-    "finalize_queued_snapshot_intent",
+    "mark_snapshot_intent_owned",
     "reconcile_orphaned_snapshot_generations",
+    "retire_snapshot_intent",
     "transition_snapshot_intent",
 ]
