@@ -86,7 +86,7 @@ def test_activity_borrows_state_only_from_its_queue_generation(
     rows = (
         list(query_listing(runs_root, ActivityListRequest(indexed=True)).records)
         if indexed
-        else orca_records(config_path=str(config_path))
+        else orca_records(runs_root)
     )
     current_activity = next(row for row in rows if row.activity_id == current.queue_id)
 

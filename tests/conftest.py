@@ -27,8 +27,8 @@ import pytest
 import yaml
 
 from orca_auto.core.admission import admission_dir
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import CommonResourceConfig, MessengerConfig
+from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config.schema import DiscordConfig
 from orca_auto.core.engine_scratch import _policy as _scratch_policy
 from orca_auto.core.messaging.channel import SendResult

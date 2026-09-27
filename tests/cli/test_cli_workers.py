@@ -10,7 +10,9 @@ import pytest
 
 from orca_auto import cli_handlers, cli_workers
 from orca_auto import cli_worker_supervision as worker_supervision
-from orca_auto.core.config import discovery
+from orca_auto.core.config.schema import SchedulerConfig
+from orca_auto.core.queue.processes import worker_shutdown_budget_seconds
+from tests.conftest import make_app_cfg
 
 
 @pytest.mark.parametrize(
@@ -55,7 +57,7 @@ def test_worker_module_command_uses_the_supervisor_interpreter_without_pythonpat
 
 
 def test_orca_worker_spec_inherits_the_supervisor_environment() -> None:
-    spec = cli_workers._orca_worker_spec(config_path="/tmp/orca_auto.yaml")
+    spec = cli_workers._orca_worker_spec(config_path="/tmp/orca_auto.yaml", cfg=None)
 
     assert spec.app == "orca"
     assert spec.cwd is None
@@ -63,71 +65,61 @@ def test_orca_worker_spec_inherits_the_supervisor_environment() -> None:
     assert spec.to_dict()["env"] is None
 
 
-def test_build_worker_specs_defaults_to_orca_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        cli_workers, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+def _write_worker_config(tmp_path: Path, fake_orca: Path, max_active: int = 1) -> Path:
+    runs = tmp_path / "runs"
+    runs.mkdir(exist_ok=True)
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(
+        f"runs_root: {runs}\n"
+        f"scheduler:\n  max_active_simulations: {max_active}\n"
+        f"orca:\n  paths:\n    orca_executable: {fake_orca}\n",
+        encoding="utf-8",
     )
+    return config
 
-    def fake_worker_module_command(*, config_path: str, module_name: str) -> list[str]:
-        return ["python", "-m", module_name, "--config", config_path]
 
-    monkeypatch.setattr(cli_workers, "worker_module_command", fake_worker_module_command)
+def test_cmd_queue_worker_json_runs_the_orca_queue_module_with_the_config_budget(
+    tmp_path: Path, fake_orca: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = _write_worker_config(tmp_path, fake_orca, max_active=2)
 
-    specs = cli_workers._build_worker_specs(SimpleNamespace(orca_auto_config=None))
+    assert cli_workers.cmd_queue_worker(SimpleNamespace(config=str(config), json=True)) == 0
 
-    assert [spec.app for spec in specs] == ["orca"]
-    assert specs[0].argv == (
-        "python",
+    [worker] = json.loads(capsys.readouterr().out)["workers"]
+    assert worker["app"] == "orca"
+    assert worker["argv"] == [
+        sys.executable,
         "-m",
         "orca_auto.orca.commands.queue",
         "--config",
-        "/tmp/orca_auto.yaml",
-    )
-    assert specs[0].env is None
+        str(config.resolve()),
+    ]
+    assert worker["stop_timeout_seconds"] == worker_shutdown_budget_seconds(2)
 
 
-def test_build_worker_specs_ignores_a_stale_app_selection(
-    monkeypatch: pytest.MonkeyPatch,
+def test_cmd_queue_worker_keeps_the_default_budget_for_a_config_that_does_not_load(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(
-        cli_workers, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
+    # The worker itself then fails at startup on the same config.
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text("runs_root: [unclosed\n", encoding="utf-8")
+
+    assert cli_workers.cmd_queue_worker(SimpleNamespace(config=str(config), json=True)) == 0
+
+    [worker] = json.loads(capsys.readouterr().out)["workers"]
+    assert worker["stop_timeout_seconds"] == worker_shutdown_budget_seconds(
+        SchedulerConfig.max_active_simulations
     )
-    monkeypatch.setattr(
-        cli_workers,
-        "worker_module_command",
-        lambda **kwargs: ["python", "-m", kwargs["module_name"]],
-    )
-
-    specs = cli_workers._build_worker_specs(SimpleNamespace(app=["orca"], orca_auto_config=None))
-
-    assert [spec.app for spec in specs] == ["orca"]
-    assert specs[0].argv == ("python", "-m", "orca_auto.orca.commands.queue")
 
 
-def test_build_worker_specs_requires_a_discoverable_config(
-    monkeypatch: pytest.MonkeyPatch,
+def test_cmd_queue_worker_requires_a_discoverable_config(
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(cli_workers, "resolve_shared_config_path", lambda explicit: None)
+    assert cli_workers.cmd_queue_worker(SimpleNamespace(config=None, json=False)) == 1
 
-    with pytest.raises(ValueError, match="Could not discover orca_auto.yaml"):
-        cli_workers._build_worker_specs(SimpleNamespace(orca_auto_config=None))
-
-
-def test_engine_config_for_args_uses_discovered_shared_config(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        discovery, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
-    )
-
-    discovered = discovery.engine_config_for_args(
-        argparse.Namespace(
-            orca_auto_config=None,
-            config=None,
-        )
-    )
-
-    assert discovered == str(Path("/tmp/orca_auto.yaml").resolve())
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error: No orca_auto.yaml found")
 
 
 def test_cmd_run_dir_uses_discovered_shared_config(
@@ -141,7 +133,9 @@ def test_cmd_run_dir_uses_discovered_shared_config(
 
     monkeypatch.setattr(cli_handlers, "_configure_orca_logging", lambda args: None)
     discovered = tmp_path / "orca_auto.yaml"
-    monkeypatch.setattr(discovery, "resolve_shared_config_path", lambda explicit: str(discovered))
+    monkeypatch.setattr(
+        cli_handlers, "discover_shared_config_path", lambda explicit: str(discovered)
+    )
 
     import orca_auto.orca.commands.run_inp as run_inp_cmd
 
@@ -158,7 +152,6 @@ def test_cmd_run_dir_uses_discovered_shared_config(
     result = cli_handlers.cmd_run_dir(
         argparse.Namespace(
             path=str(target),
-            orca_auto_config=None,
             config=None,
             verbose=False,
             log_file=None,
@@ -166,87 +159,56 @@ def test_cmd_run_dir_uses_discovered_shared_config(
     )
 
     assert result == 31
-    assert captured == [(str(discovered.resolve()), str(target))]
+    assert captured == [(str(discovered), str(target))]
 
 
-def test_cmd_queue_worker_returns_supervisor_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    specs = [
-        worker_supervision.WorkerSpec(
-            app="orca",
-            argv=("python", "-m", "orca_auto.orca.commands.queue"),
-        )
-    ]
-    monkeypatch.setattr(cli_workers, "_build_worker_specs", lambda args: specs)
+def test_cmd_queue_worker_returns_supervisor_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_orca: Path
+) -> None:
+    config = _write_worker_config(tmp_path, fake_orca)
+    started: list[list[worker_supervision.WorkerSpec]] = []
+
+    def fake_supervisor(specs: list[worker_supervision.WorkerSpec]) -> int:
+        started.append(list(specs))
+        return 0
+
+    monkeypatch.setattr(worker_supervision, "run_worker_supervisor", fake_supervisor)
+
+    assert cli_workers.cmd_queue_worker(SimpleNamespace(config=str(config), json=False)) == 0
+    [[spec]] = started
+    assert spec.argv[-2:] == ("--config", str(config.resolve()))
+
+
+def test_cmd_queue_worker_refuses_a_live_worker_for_the_same_runs_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_orca: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _write_worker_config(tmp_path, fake_orca)
+    monkeypatch.setattr(cli_workers, "read_worker_pid_file", lambda root: 3589996)
+    monkeypatch.setattr(
+        cli_workers,
+        "_read_process_command",
+        lambda pid: ("/venv/bin/python", "-m", "orca_auto.orca.commands.queue"),
+    )
     monkeypatch.setattr(
         worker_supervision,
         "run_worker_supervisor",
-        lambda built_specs: 0 if built_specs == specs else 1,
+        lambda specs: pytest.fail("a second worker must not start"),
     )
 
-    result = cli_workers.cmd_queue_worker(SimpleNamespace(orca_auto_config=None, json=False))
-
-    assert result == 0
-
-
-def test_cmd_queue_worker_reports_existing_orca_auto_orca_worker_conflict(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    specs = [
-        worker_supervision.WorkerSpec(
-            app="orca",
-            argv=("python", "-m", "orca_auto.orca.commands.queue"),
-        )
-    ]
-    monkeypatch.setattr(cli_workers, "_build_worker_specs", lambda args: specs)
-    monkeypatch.setattr(
-        cli_workers,
-        "_detect_existing_orca_worker_conflict",
-        lambda built_specs, args: cli_workers._ExistingWorkerConflict(
-            pid=3589996,
-            allowed_root="/home/user/orca_runs",
-            command="/home/user/orca_auto/.venv/bin/python -m orca_auto.orca.commands.queue --config /tmp/orca_auto.yaml",
-        ),
-    )
-    monkeypatch.setattr(worker_supervision, "run_worker_supervisor", lambda built_specs: 99)
-
-    result = cli_workers.cmd_queue_worker(
-        SimpleNamespace(orca_auto_config="/tmp/orca_auto.yaml", json=False)
-    )
+    result = cli_workers.cmd_queue_worker(SimpleNamespace(config=str(config), json=False))
 
     assert result == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "error: existing ORCA queue worker detected" in captured.err
+    assert (
+        f"error: existing ORCA queue worker detected for allowed_root {(tmp_path / 'runs').resolve()}"
+        " (pid=3589996)" in captured.err
+    )
     assert "-m orca_auto.orca.commands.queue" in captured.err
     assert "hint: Stop the existing worker before starting another worker." in captured.err
-
-
-def test_cmd_queue_worker_json_outputs_commands(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    specs = [
-        worker_supervision.WorkerSpec(
-            app="orca",
-            argv=(
-                "python",
-                "-m",
-                "orca_auto.orca.commands.queue",
-                "--config",
-                "/tmp/orca_auto.yaml",
-            ),
-        )
-    ]
-    monkeypatch.setattr(cli_workers, "_build_worker_specs", lambda args: specs)
-
-    result = cli_workers.cmd_queue_worker(SimpleNamespace(orca_auto_config=None, json=True))
-
-    assert result == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["ok"] is True
-    assert payload["workers"][0]["app"] == "orca"
-    assert payload["workers"][0]["argv"][2] == "orca_auto.orca.commands.queue"
 
 
 def test_worker_command_and_selection_helpers_cover_edges() -> None:
@@ -257,72 +219,21 @@ def test_worker_command_and_selection_helpers_cover_edges() -> None:
     )
 
 
-def test_cmd_queue_worker_reports_spec_build_errors(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setattr(
-        cli_workers,
-        "_build_worker_specs",
-        lambda args: (_ for _ in ()).throw(ValueError("bad worker flags")),
-    )
-
-    result = cli_workers.cmd_queue_worker(SimpleNamespace(json=False))
-
-    assert result == 1
-    assert capsys.readouterr().err == "error: bad worker flags\n"
-
-
 def test_detect_existing_orca_worker_conflict_edges(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import orca_auto.core.queue.worker.pid_file as pid_file_mod
-    import orca_auto.orca.config as orca_config
-
-    args = argparse.Namespace(orca_auto_config="/tmp/orca_auto.yaml")
-
-    assert (
-        cli_workers._detect_existing_orca_worker_conflict(
-            [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
-            args=args,
-        )
-        is None
-    )
-
-    monkeypatch.setattr(
-        orca_config, "load_config", lambda path: (_ for _ in ()).throw(RuntimeError("boom"))
-    )
-    assert (
-        cli_workers._detect_existing_orca_worker_conflict(
-            [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
-            args=args,
-        )
-        is None
-    )
+    assert cli_workers._detect_existing_orca_worker_conflict(None) is None
 
     allowed_root = tmp_path / "orca_runs"
     allowed_root.mkdir()
-    monkeypatch.setattr(
-        orca_config,
-        "load_config",
-        lambda path: SimpleNamespace(runtime=SimpleNamespace(allowed_root=str(allowed_root))),
-    )
-    monkeypatch.setattr(pid_file_mod, "read_worker_pid_file", lambda root: None)
-    assert (
-        cli_workers._detect_existing_orca_worker_conflict(
-            [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
-            args=args,
-        )
-        is None
-    )
+    cfg = make_app_cfg(allowed_root)
+    monkeypatch.setattr(cli_workers, "read_worker_pid_file", lambda root: None)
+    assert cli_workers._detect_existing_orca_worker_conflict(cfg) is None
 
-    monkeypatch.setattr(pid_file_mod, "read_worker_pid_file", lambda root: 43210)
+    monkeypatch.setattr(cli_workers, "read_worker_pid_file", lambda root: 43210)
     monkeypatch.setattr(cli_workers, "_read_process_command", lambda pid: ("python", "worker.py"))
-    conflict = cli_workers._detect_existing_orca_worker_conflict(
-        [worker_supervision.WorkerSpec(app="orca", argv=("orca", "worker"))],
-        args=args,
-    )
+    conflict = cli_workers._detect_existing_orca_worker_conflict(cfg)
 
     assert conflict == cli_workers._ExistingWorkerConflict(
         pid=43210,

@@ -47,7 +47,7 @@ graph TD
 
 | Component | Responsibility |
 | :--- | :--- |
-| **`cli*.py`, `activity/`, `terminal.py`** | Command parsing, terminal formatting and ANSI styling, activity record models, queue/service status queries, and job cancellation interfaces |
+| **`cli*.py`, `activity/`, `terminal.py`** | Command parsing, terminal formatting and ANSI styling, activity record models, queue/service status queries, and job cancellation interfaces. `cli_handlers.resolve_command_config` is the one place a command finds, loads (once) and checks its config and `runs_root`, and names what is missing; the activity functions take the resolved config path and `runs_root` |
 | **`orca/`** | ORCA-specific domain logic: input parsing, resource extraction, execution setup, queue worker and runner execution, output log analysis, convergence verification, and result reporting (`machine.json`) |
 | **`core/`** | Shared infrastructure: disk queue store, concurrency admission slots, process supervision and PID management, confined file I/O, configuration loader, index store, and filesystem locks |
 

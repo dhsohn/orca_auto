@@ -12,7 +12,6 @@ from orca_auto.core.statuses import ACTIVE_STATUSES, STATUS_PENDING
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca import run_snapshot
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE, ORCA_ENGINE
-from orca_auto.orca.engine_runtime import engine_runtime_paths
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue.terminal_marker import (
@@ -231,11 +230,8 @@ def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path) -> ActivityRec
     )
 
 
-def orca_records(*, config_path: str) -> list[ActivityRecord]:
+def orca_records(allowed_root: Path) -> list[ActivityRecord]:
     """Every ORCA activity from the canonical queue, index and state files."""
-    runtime_paths = engine_runtime_paths(config_path)
-    allowed_root = runtime_paths["allowed_root"]
-
     entries = queue_adapter.list_queue(allowed_root)
     snapshots = run_snapshot.collect_run_snapshots(
         allowed_root,

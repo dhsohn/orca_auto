@@ -11,22 +11,16 @@ from __future__ import annotations
 import sys
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from orca_auto import activity_labels, terminal, terminal_table
 from orca_auto import activity_rendering as _activity_rendering
 from orca_auto.activity import cancel_activity, clear_activities, list_activities
 from orca_auto.activity_labels import activity_status_icon
-from orca_auto.activity_view import normalize_activity_filter_values
+from orca_auto.cli_handlers import CommandConfigError, resolve_command_config
 from orca_auto.core import statuses as _s
 from orca_auto.core.activity_index import ActivityIndexError
-from orca_auto.core.config import discovery
-from orca_auto.core.config.discovery import (
-    shared_config_text_from_args,
-)
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS, shared_runs_root_from_config
+from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
 from orca_auto.core.utils import normalize_text
@@ -39,14 +33,6 @@ _QUEUE_STATE_ERRORS: tuple[type[Exception], ...] = (
     JobLocationIndexError,
 )
 _QUEUE_CANCEL_ERRORS: tuple[type[Exception], ...] = (LookupError, *_QUEUE_STATE_ERRORS)
-
-
-@dataclass(frozen=True)
-class _QueueListRequest:
-    config_path: str | None
-    limit: int
-    status_values: tuple[str, ...]
-    json_output: bool
 
 
 def _stdout_isatty() -> bool:
@@ -219,18 +205,6 @@ def _queue_list_text_lines(
     )
 
 
-def _queue_list_request(args: Any) -> _QueueListRequest:
-    explicit_config = shared_config_text_from_args(args) or None
-    return _QueueListRequest(
-        # Resolve one effective config up front so activity rows and the global
-        # active count use the same checkout and runtime roots.
-        config_path=discovery.resolve_shared_config_path(explicit_config),
-        limit=int(getattr(args, "limit", 0) or 0),
-        status_values=normalize_activity_filter_values(getattr(args, "status", None)),
-        json_output=bool(getattr(args, "json", False)),
-    )
-
-
 def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int:
     if json_output:
         emit_json(payload)
@@ -238,14 +212,6 @@ def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int
     for line in _activity_rendering.queue_clear_lines(payload):
         print(line)
     return 0
-
-
-def _missing_runs_root(request: _QueueListRequest) -> str | None:
-    """The configured runs root when it is not a directory, else None."""
-    root = shared_runs_root_from_config(request.config_path)
-    if not root:
-        return None
-    return None if Path(root).is_dir() else str(root)
 
 
 def _print_queue_list_text(*, payload: dict[str, Any]) -> int:
@@ -329,8 +295,8 @@ def _print_queue_list_text(*, payload: dict[str, Any]) -> int:
     return 0
 
 
-def _emit_queue_list_once(payload: dict[str, Any], request: _QueueListRequest) -> int:
-    if request.json_output:
+def _emit_queue_list_once(payload: dict[str, Any], *, json_output: bool) -> int:
+    if json_output:
         emit_json(payload)
         return 0
     return _print_queue_list_text(payload=payload)
@@ -339,33 +305,22 @@ def _emit_queue_list_once(payload: dict[str, Any], request: _QueueListRequest) -
 def cmd_queue_list(args: Any) -> int:
     json_output = bool(getattr(args, "json", False))
     try:
-        request = _queue_list_request(args)
-    except _QUEUE_STATE_ERRORS as exc:
-        emit_error(
-            exc,
-            hint="Check the config path and repair the reported state file before retrying.",
-            json_output=json_output,
-        )
+        # One config for the rows and the global active count.
+        config = resolve_command_config(args)
+    except CommandConfigError as exc:
+        emit_error(exc, hint=exc.hint, json_output=json_output)
         return 1
 
-    missing_root = _missing_runs_root(request)
-    if missing_root is not None:
-        emit_error(
-            f"runs_root does not exist: {missing_root}",
-            hint="Check runs_root in the config; a typo here would otherwise list as an empty queue.",
-            json_output=json_output,
-        )
-        return 1
-
+    limit = int(getattr(args, "limit", 0) or 0)
     if normalize_text(getattr(args, "action", None)).lower() == "clear":
-        if getattr(args, "status", None) or request.limit != 0:
+        if getattr(args, "status", None) or limit != 0:
             emit_error(
                 "`orca_auto queue list clear` does not support --status/--limit filters.",
                 json_output=json_output,
             )
             return 1
         try:
-            clear_payload = clear_activities(config_path=request.config_path)
+            clear_payload = clear_activities(config_path=config.path, runs_root=config.runs_root)
         except _QUEUE_STATE_ERRORS as exc:
             emit_error(
                 exc,
@@ -374,7 +329,7 @@ def cmd_queue_list(args: Any) -> int:
             )
             return 1
         try:
-            return _emit_queue_list_clear(clear_payload, json_output=request.json_output)
+            return _emit_queue_list_clear(clear_payload, json_output=json_output)
         except BrokenPipeError:
             return 0
 
@@ -382,10 +337,11 @@ def cmd_queue_list(args: Any) -> int:
         # ``list_activities`` owns the status filter and the page; its payload is
         # rendered as is, so the count, rows and summaries can never disagree.
         payload = list_activities(
-            limit=request.limit,
-            statuses=request.status_values,
+            config_path=config.path,
+            runs_root=config.runs_root,
+            limit=limit,
+            statuses=getattr(args, "status", None) or (),
             refresh=bool(getattr(args, "refresh", False)),
-            config_path=request.config_path,
         )
     except _QUEUE_STATE_ERRORS as exc:
         emit_error(
@@ -395,7 +351,7 @@ def cmd_queue_list(args: Any) -> int:
         )
         return 1
     try:
-        return _emit_queue_list_once(payload, request)
+        return _emit_queue_list_once(payload, json_output=json_output)
     except BrokenPipeError:
         return 0
 
@@ -429,10 +385,16 @@ def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
 
 
 def cmd_queue_cancel(args: Any) -> int:
-    config_path = shared_config_text_from_args(args) or None
     json_output = bool(getattr(args, "json", False))
     try:
-        payload = cancel_activity(target=args.target, config_path=config_path)
+        config = resolve_command_config(args)
+    except CommandConfigError as exc:
+        emit_error(exc, hint=exc.hint, json_output=json_output)
+        return 1
+    try:
+        payload = cancel_activity(
+            target=args.target, config_path=config.path, runs_root=config.runs_root
+        )
     except _QUEUE_CANCEL_ERRORS as exc:
         emit_error(
             exc,

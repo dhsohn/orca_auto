@@ -141,7 +141,7 @@ def test_build_parser_parses_index_prune() -> None:
     )
     assert args.command == "index"
     assert args.index_command == "prune"
-    assert args.orca_auto_config == "/tmp/orca_auto.yaml"
+    assert args.config == "/tmp/orca_auto.yaml"
     assert args.apply is True
     assert args.json is True
     assert args.func is cli_handlers.cmd_index_prune
@@ -281,7 +281,7 @@ def test_build_parser_parses_index_rebuild() -> None:
     )
     assert args.command == "index"
     assert args.index_command == "rebuild"
-    assert args.orca_auto_config == "/tmp/orca_auto.yaml"
+    assert args.config == "/tmp/orca_auto.yaml"
     assert args.dry_run is True
     assert args.json is True
     assert args.func is cli_handlers.cmd_index_rebuild

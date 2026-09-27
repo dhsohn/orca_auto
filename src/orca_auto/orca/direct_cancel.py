@@ -12,7 +12,6 @@ from orca_auto.core.queue.types import QueueEntry, QueueStatus, effective_queue_
 from orca_auto.core.statuses import STATUS_FAILED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
-from .engine_runtime import engine_runtime_paths
 from .queue import adapter as queue_adapter
 from .queue import entries as queue_entries
 
@@ -58,8 +57,8 @@ def _success_payload(command_argv: list[str], updated: QueueEntry) -> dict[str, 
     }
 
 
-def cancel_target(*, target: str, config_path: str) -> dict[str, Any]:
-    """Cancel the ORCA queue generation ``target`` names.
+def cancel_target(*, target: str, config_path: str, allowed_root: Path) -> dict[str, Any]:
+    """Cancel the ORCA queue generation ``target`` names in ``allowed_root``.
 
     Target precedence is :func:`.queue.adapter.find_entry_by_target`'s. When the
     cancel call returns nothing or raises, a re-read decides whether this
@@ -71,10 +70,8 @@ def cancel_target(*, target: str, config_path: str) -> dict[str, Any]:
     if not target:
         return _failure_payload(command_argv, "queue cancel requires a target")
 
-    allowed_root: Path | None = None
     matched: QueueEntry | None = None
     try:
-        allowed_root = engine_runtime_paths(config_path)["allowed_root"]
         matched = queue_adapter.find_entry_by_target(queue_adapter.list_queue(allowed_root), target)
         if matched is None:
             return _failure_payload(
@@ -98,7 +95,7 @@ def cancel_target(*, target: str, config_path: str) -> dict[str, Any]:
                 )
             updated = current
     except Exception as exc:  # noqa: BLE001
-        if allowed_root is not None and matched is not None:
+        if matched is not None:
             try:
                 current = queue_adapter.get_entry_by_id(
                     allowed_root, queue_entries.queue_entry_id(matched)

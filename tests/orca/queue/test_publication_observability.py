@@ -160,7 +160,7 @@ def test_terminal_publication_is_visible_until_marker_clears(
     save_entries(tmp_path, [entry])
     before = (tmp_path / "queue.json").read_bytes()
 
-    payload = list_activities(config_path=config)
+    payload = list_activities(config_path=config, runs_root=tmp_path)
     [row] = payload["activities"]
     assert row["status"] == status.value
     assert row["metadata"]["publication_owner"] == "orca_queue_worker"
@@ -170,11 +170,11 @@ def test_terminal_publication_is_visible_until_marker_clears(
     assert ("invalid" in blocker["reason"]) == invalid
     assert payload["active_simulations"] == 0
     assert (tmp_path / "queue.json").read_bytes() == before
-    filtered = list_activities(config_path=config, statuses=["running"])
+    filtered = list_activities(config_path=config, runs_root=tmp_path, statuses=["running"])
     assert filtered["activities"] == []
     assert filtered["admission_blockers"] == [blocker]
 
     assert adapter.update_metadata(tmp_path, entry.queue_id, {TERMINAL_REPLAY_METADATA_KEY: None})
-    cleared = list_activities(config_path=config)
+    cleared = list_activities(config_path=config, runs_root=tmp_path)
     assert "admission_blockers" not in cleared
     assert "publication pending" not in queue_detail_text(cleared["activities"][0])

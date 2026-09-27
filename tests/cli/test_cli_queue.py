@@ -12,11 +12,30 @@ from typing import Any
 import pytest
 import yaml
 
-from orca_auto import activity_labels, cli_queue, terminal, terminal_table
+from orca_auto import activity_labels, cli_handlers, cli_queue, terminal, terminal_table
+from orca_auto.cli_handlers import CommandConfig
+from orca_auto.core.config.files import SharedConfig
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
+from orca_auto.orca.config import OrcaConfigSections
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_STUB_CONFIG = CommandConfig(
+    path="/tmp/orca_auto.yaml",
+    runs_root=Path("/tmp/runs"),
+    shared=SharedConfig(),
+    orca_sections=OrcaConfigSections(),
+)
+
+
+@pytest.fixture(autouse=True)
+def _stub_command_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Commands here read a fixed config; ``_use_real_config`` restores resolution."""
+    monkeypatch.setattr(cli_queue, "resolve_command_config", lambda args: _STUB_CONFIG)
+
+
+def _use_real_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli_queue, "resolve_command_config", cli_handlers.resolve_command_config)
 
 
 def _strip_ansi(text: str) -> str:
@@ -106,7 +125,7 @@ def test_queue_list_stays_plain_under_force_color_pipe(
     try:
         result = cli_queue.cmd_queue_list(
             SimpleNamespace(
-                orca_auto_config=None,
+                config=None,
                 limit=0,
                 refresh=False,
                 status=None,
@@ -242,7 +261,7 @@ def test_cmd_queue_list_filters_text_output(
 
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
-            orca_auto_config=None,
+            config=None,
             limit=0,
             refresh=False,
             status=["running"],
@@ -251,7 +270,7 @@ def test_cmd_queue_list_filters_text_output(
     )
 
     assert result == 0
-    assert captured["statuses"] == ("running",)
+    assert captured["statuses"] == ["running"]
     assert captured["limit"] == 0
     stdout = capsys.readouterr().out
     assert "active_simulations: 1" in stdout
@@ -324,7 +343,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
     try:
         result = cli_queue.cmd_queue_list(
             SimpleNamespace(
-                orca_auto_config=None,
+                config=None,
                 limit=0,
                 refresh=False,
                 status=None,
@@ -402,7 +421,7 @@ def test_cmd_queue_list_tty_rail_never_overflows_terminal(
     )
 
     args = SimpleNamespace(
-        orca_auto_config=None,
+        config=None,
         limit=0,
         refresh=False,
         status=None,
@@ -459,7 +478,7 @@ def test_cmd_queue_list_reports_empty_filtered_results(
 
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
-            orca_auto_config=None,
+            config=None,
             limit=0,
             refresh=False,
             status=["failed"],
@@ -468,7 +487,7 @@ def test_cmd_queue_list_reports_empty_filtered_results(
     )
 
     assert result == 0
-    assert captured["statuses"] == ("failed",)
+    assert captured["statuses"] == ["failed"]
     stdout = capsys.readouterr().out
     assert "active_simulations: 1" in stdout
     assert "No matching activities." in stdout
@@ -502,7 +521,7 @@ def test_cmd_queue_list_json_emits_the_listing_payload_unchanged(
 
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
-            orca_auto_config=None,
+            config=None,
             limit=0,
             refresh=False,
             status=["running"],
@@ -511,7 +530,7 @@ def test_cmd_queue_list_json_emits_the_listing_payload_unchanged(
     )
 
     assert result == 0
-    assert captured["statuses"] == ("running",)
+    assert captured["statuses"] == ["running"]
     payload = json.loads(capsys.readouterr().out)
     assert payload == {
         "ok": True,
@@ -545,7 +564,7 @@ def test_cmd_queue_list_reports_the_listing_active_count_not_the_page(
 
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
-            orca_auto_config=None,
+            config=None,
             limit=1,
             refresh=False,
             status=["running"],
@@ -559,7 +578,8 @@ def test_cmd_queue_list_reports_the_listing_active_count_not_the_page(
     assert payload["active_simulations"] == 7
     assert payload["activities"][0]["activity_id"] == "orca-opt-q-1"
     assert captured["limit"] == 1
-    assert captured["config_path"] is None
+    assert captured["config_path"] == "/tmp/orca_auto.yaml"
+    assert captured["runs_root"] == Path("/tmp/runs")
 
 
 def test_cmd_queue_list_forwards_limit_and_statuses_to_the_listing(
@@ -570,7 +590,7 @@ def test_cmd_queue_list_forwards_limit_and_statuses_to_the_listing(
 
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
-            orca_auto_config=None,
+            config=None,
             limit=1,
             refresh=True,
             status=["Running", "running", " FAILED "],
@@ -579,11 +599,13 @@ def test_cmd_queue_list_forwards_limit_and_statuses_to_the_listing(
     )
 
     assert result == 0
+    # The listing normalizes the status values; the CLI forwards them as given.
     assert captured == {
         "limit": 1,
-        "statuses": ("running", "failed"),
+        "statuses": ["Running", "running", " FAILED "],
         "refresh": True,
-        "config_path": None,
+        "config_path": "/tmp/orca_auto.yaml",
+        "runs_root": Path("/tmp/runs"),
     }
     payload = json.loads(capsys.readouterr().out)
     assert payload["count"] == 0
@@ -610,7 +632,7 @@ def test_cmd_queue_list_clear_text_output(
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action="clear",
-            orca_auto_config="/tmp/orca_auto.yaml",
+            config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
             status=None,
@@ -645,7 +667,7 @@ def test_cmd_queue_list_clear_json_output(
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action="clear",
-            orca_auto_config="/tmp/orca_auto.yaml",
+            config="/tmp/orca_auto.yaml",
             limit=0,
             refresh=False,
             status=None,
@@ -688,7 +710,7 @@ def test_cmd_queue_list_text_names_the_worker_log_of_running_and_failed_rows_onl
     )
 
     result = cli_queue.cmd_queue_list(
-        SimpleNamespace(orca_auto_config=None, limit=0, refresh=False, status=None, json=False)
+        SimpleNamespace(config=None, limit=0, refresh=False, status=None, json=False)
     )
 
     assert result == 0
@@ -721,7 +743,7 @@ def test_cmd_queue_list_clear_rejects_each_listing_filter_before_clearing(
     )
     args = {
         "action": "clear",
-        "orca_auto_config": "/tmp/orca_auto.yaml",
+        "config": "/tmp/orca_auto.yaml",
         "limit": 0,
         "refresh": False,
         "status": None,
@@ -764,7 +786,7 @@ def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceba
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action=action,
-            orca_auto_config="/tmp/missing-or-corrupt.yaml",
+            config="/tmp/missing-or-corrupt.yaml",
             limit=0,
             refresh=False,
             status=None,
@@ -799,7 +821,7 @@ def test_cmd_queue_list_treats_closed_output_pipe_separately_from_state_errors(
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action=None,
-            orca_auto_config=None,
+            config=None,
             limit=0,
             refresh=False,
             status=None,
@@ -825,7 +847,7 @@ def test_cmd_queue_cancel_reports_lookup_error(
     result = cli_queue.cmd_queue_cancel(
         SimpleNamespace(
             target="missing",
-            orca_auto_config=None,
+            config=None,
             json=False,
         )
     )
@@ -858,7 +880,7 @@ def test_cmd_queue_cancel_treats_closed_pipe_as_success_after_durable_cancel(
     result = cli_queue.cmd_queue_cancel(
         SimpleNamespace(
             target="job-1",
-            orca_auto_config=None,
+            config=None,
             json=True,
         )
     )
@@ -929,7 +951,7 @@ def test_cmd_queue_cancel_reports_timeout_error(
     result = cli_queue.cmd_queue_cancel(
         SimpleNamespace(
             target="wf_busy",
-            orca_auto_config=None,
+            config=None,
             json=False,
         )
     )
@@ -964,7 +986,7 @@ def test_cmd_queue_cancel_reports_expected_state_errors_without_traceback(
     result = cli_queue.cmd_queue_cancel(
         SimpleNamespace(
             target="anything",
-            orca_auto_config="/tmp/missing-or-corrupt.yaml",
+            config="/tmp/missing-or-corrupt.yaml",
             json=True,
         )
     )
@@ -998,7 +1020,7 @@ def test_cmd_queue_cancel_json_output(
     result = cli_queue.cmd_queue_cancel(
         SimpleNamespace(
             target="orca-pending-q-1",
-            orca_auto_config="/tmp/orca_auto.yaml",
+            config="/tmp/orca_auto.yaml",
             json=True,
         )
     )
@@ -1014,11 +1036,9 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(
-        cli_queue,
-        "shared_runs_root_from_config",
-        lambda config_path: str(tmp_path / "does_not_exist_root"),
-    )
+    _use_real_config(monkeypatch)
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(f"runs_root: {tmp_path / 'does_not_exist_root'}\n", encoding="utf-8")
     monkeypatch.setattr(
         cli_queue,
         "list_activities",
@@ -1028,7 +1048,7 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action=None,
-            orca_auto_config="/tmp/orca_auto.yaml",
+            config=str(config),
             limit=0,
             refresh=False,
             status=None,
@@ -1047,9 +1067,11 @@ def test_cmd_queue_list_reports_a_missing_runs_root_instead_of_an_empty_queue(
 
 
 def test_cmd_queue_list_clear_rejects_a_missing_runs_root_without_creating_it(
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
+    _use_real_config(monkeypatch)
     missing_root = tmp_path / "typo_runs"
     config = tmp_path / "orca_auto.yaml"
     config.write_text(f"runs_root: {missing_root}\n", encoding="utf-8")
@@ -1057,7 +1079,7 @@ def test_cmd_queue_list_clear_rejects_a_missing_runs_root_without_creating_it(
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action="clear",
-            orca_auto_config=str(config),
+            config=str(config),
             limit=0,
             refresh=False,
             status=None,
@@ -1072,6 +1094,35 @@ def test_cmd_queue_list_clear_rejects_a_missing_runs_root_without_creating_it(
     assert not missing_root.exists()
 
 
+def test_cmd_queue_cancel_rejects_a_missing_runs_root_with_the_listing_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    _use_real_config(monkeypatch)
+    missing_root = tmp_path / "typo_runs"
+    config = tmp_path / "orca_auto.yaml"
+    config.write_text(f"runs_root: {missing_root}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        cli_queue,
+        "cancel_activity",
+        lambda **kwargs: pytest.fail("a missing runs_root must not be searched"),
+    )
+
+    result = cli_queue.cmd_queue_cancel(
+        SimpleNamespace(target="orca-q-1", config=str(config), json=True)
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "ok": False,
+        "error": f"runs_root does not exist: {missing_root}",
+    }
+    assert captured.err.startswith(f"error: runs_root does not exist: {missing_root}\n")
+    assert not missing_root.exists()
+
+
 @pytest.mark.parametrize("action", [None, "clear"])
 def test_cmd_queue_list_fails_when_no_config_is_discoverable(
     monkeypatch: pytest.MonkeyPatch,
@@ -1079,10 +1130,11 @@ def test_cmd_queue_list_fails_when_no_config_is_discoverable(
     tmp_path: Path,
     action: str | None,
 ) -> None:
+    _use_real_config(monkeypatch)
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action=action,
-            orca_auto_config=None,
+            config=None,
             limit=0,
             refresh=False,
             status=None,
@@ -1103,9 +1155,8 @@ def test_cmd_queue_cancel_fails_when_no_config_is_discoverable(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    result = cli_queue.cmd_queue_cancel(
-        SimpleNamespace(target="orca-q-1", orca_auto_config=None, json=False)
-    )
+    _use_real_config(monkeypatch)
+    result = cli_queue.cmd_queue_cancel(SimpleNamespace(target="orca-q-1", config=None, json=False))
 
     assert result == 1
     captured = capsys.readouterr()
@@ -1119,6 +1170,7 @@ def test_cmd_queue_list_reports_a_corrupt_admission_store_as_a_blocker(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
+    _use_real_config(monkeypatch)
     root = tmp_path / "runs"
     admission_root = root / ".admission"
     admission_root.mkdir(parents=True)
@@ -1131,7 +1183,7 @@ def test_cmd_queue_list_reports_a_corrupt_admission_store_as_a_blocker(
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action=None,
-            orca_auto_config=str(config),
+            config=str(config),
             limit=0,
             refresh=False,
             status=None,
@@ -1147,7 +1199,7 @@ def test_cmd_queue_list_reports_a_corrupt_admission_store_as_a_blocker(
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action=None,
-            orca_auto_config=str(config),
+            config=str(config),
             limit=0,
             refresh=False,
             status=None,
@@ -1190,7 +1242,7 @@ def test_cmd_queue_list_clear_treats_closed_output_pipe_after_clearing_as_succes
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action="clear",
-            orca_auto_config=None,
+            config=None,
             limit=0,
             refresh=False,
             status=None,

@@ -158,6 +158,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- `queue cancel` without an existing `runs_root` now prints
+  `runs_root does not exist: PATH`, as `queue list` does, instead of the raw
+  `No such file or directory` error. It still exits 1.
+- `queue list`, `queue list clear`, `queue cancel`, `index prune`/`rebuild`,
+  `scratch list`/`clear` and `queue worker` find the config the same way and
+  load it once, and they print the same error for the same problem. A missing
+  config is always `No orca_auto.yaml found: pass --config, set
+  ORCA_AUTO_CONFIG, or create ~/orca_auto/config/orca_auto.yaml.`; a missing or
+  invalid `runs_root` is `runs_root is missing or invalid in CONFIG`; a
+  `runs_root` that is not a directory is `runs_root does not exist: PATH`; a
+  config that does not load names the loader's own error. Exit codes are
+  unchanged. `index` used to say `runs_root is not configured`, `scratch` said
+  `shared config is not configured` or the worker's config error, and
+  `queue worker` said `Could not discover orca_auto.yaml`.
 - A cancelled running job's `job_state.json` gets its `cancelled` result only
   from the worker parent, when it settles the cancelled queue row
   ([ADR 0008](docs/adr/0008-parent-writes-the-cancelled-result.md)). The

@@ -11,8 +11,8 @@ import pytest
 
 from orca_auto import cli, cli_handlers, cli_queue
 from orca_auto.core.admission import reserve_slot
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as CONFIG_ENV_VAR
-from orca_auto.core.config.discovery import default_shared_config_path as default_config_path
+from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR as CONFIG_ENV_VAR
+from orca_auto.core.config.files import default_config_path
 from orca_auto.orca.cli_logging import (
     configure_logging as _configure_logging,
 )
@@ -254,7 +254,9 @@ def test_cmd_run_dir_dispatches_to_orca_command_module(
         return 41
 
     monkeypatch.setattr(run_inp_command, "cmd_run_inp", _fake_run_inp)
-    monkeypatch.setattr(cli_handlers, "engine_config_for_args", lambda _args: resolved_config)
+    monkeypatch.setattr(
+        cli_handlers, "discover_shared_config_path", lambda _explicit: resolved_config
+    )
     args = Namespace(
         config="/tmp/orca_auto.yaml",
         verbose=True,
@@ -286,7 +288,9 @@ def test_other_public_wrappers_dispatch_to_orca_command_modules(
 
     resolved_config = object()
     monkeypatch.setattr(init_command, "cmd_init", _record("init", 42))
-    monkeypatch.setattr(cli_handlers, "engine_config_for_args", lambda _args: resolved_config)
+    monkeypatch.setattr(
+        cli_handlers, "discover_shared_config_path", lambda _explicit: resolved_config
+    )
     init_args = Namespace(config="/tmp/orca_auto.yaml", verbose=False, log_file=None, force=True)
     init_rc = cli_handlers.cmd_init(init_args)
 

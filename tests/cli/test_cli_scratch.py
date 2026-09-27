@@ -91,7 +91,7 @@ def test_build_parser_parses_scratch_commands() -> None:
     list_args = parser.parse_args(["scratch", "list", "--config", "/tmp/orca_auto.yaml", "--json"])
     assert list_args.command == "scratch"
     assert list_args.scratch_command == "list"
-    assert list_args.orca_auto_config == "/tmp/orca_auto.yaml"
+    assert list_args.config == "/tmp/orca_auto.yaml"
     assert list_args.json is True
     assert list_args.func is cli_scratch.cmd_scratch_list
 
@@ -219,7 +219,7 @@ def test_scratch_commands_require_a_configured_scratch_root(
 
     assert _main("scratch", "clear", "--all-stale") == 1
     captured = capsys.readouterr()
-    assert "shared config is not configured" in captured.err
+    assert "No orca_auto.yaml found" in captured.err
 
     assert _main("scratch", "list", "--config", str(tmp_path / "absent.yaml")) == 1
     captured = capsys.readouterr()

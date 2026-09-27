@@ -21,8 +21,7 @@ from orca_auto.core.admission import (
     read_active_slot_count,
 )
 from orca_auto.core.admission.persistence import ADMISSION_LOCK_NAME
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR, YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.orca.config import load_config
 
 

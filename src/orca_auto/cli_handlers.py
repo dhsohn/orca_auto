@@ -1,5 +1,8 @@
 """Top-level command handlers: ``init``, ``run-dir`` and ``index prune|rebuild``.
 
+``resolve_command_config`` is the one answer to which config and runs_root a
+command reads and what it says when either is missing.
+
 Each handler composes the domain packages and owns the operator-facing
 surface: ``error:`` lines on stderr, the shared ``emit_json`` document under
 ``--json``, and the exit-code rule (0 success or nothing to do, 1 refused or
@@ -18,13 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from orca_auto.core.config.discovery import (
-    engine_config_for_args,
-    resolve_shared_config_path,
-    shared_config_text_from_args,
-)
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
+    SharedConfig,
+    discover_shared_config_path,
     shared_runs_root_from_config,
     usable_runs_root_text,
 )
@@ -35,6 +35,7 @@ from orca_auto.core.indexing import (
     prune_job_locations,
 )
 from orca_auto.core.utils import normalize_text
+from orca_auto.orca.config import OrcaConfigSections, load_orca_shared_config
 from orca_auto.orca.run_dir_guard import (
     use_run_dir_publication_guard,
     validate_production_run_dir_target,
@@ -43,6 +44,71 @@ from orca_auto.terminal import emit_error, emit_json, label, status_text
 
 if TYPE_CHECKING:
     from orca_auto.orca.job_locations import JobLocationRebuildResult
+
+
+class CommandConfigError(Exception):
+    """The config or runs_root a command reads is missing or unusable."""
+
+    def __init__(self, message: str, *, hint: str) -> None:
+        super().__init__(message)
+        self.hint = hint
+
+
+@dataclass(frozen=True)
+class CommandConfig:
+    """The one config a command reads, loaded once, and its existing runs_root."""
+
+    path: str
+    runs_root: Path
+    shared: SharedConfig
+    orca_sections: OrcaConfigSections
+
+
+def command_config_path(args: argparse.Namespace) -> str:
+    """The config a command reads: ``--config``, ``ORCA_AUTO_CONFIG``, then the home default."""
+    config_path = discover_shared_config_path(getattr(args, "config", None))
+    if not config_path:
+        raise CommandConfigError(
+            "No orca_auto.yaml found: pass --config, set ORCA_AUTO_CONFIG, "
+            "or create ~/orca_auto/config/orca_auto.yaml.",
+            hint="Run `orca_auto init` to create it.",
+        )
+    return config_path
+
+
+def resolve_command_config(args: argparse.Namespace) -> CommandConfig:
+    """Discover, load and check the config every runs_root command reads.
+
+    A missing config, a config that does not load, a missing or invalid
+    runs_root and a runs_root that is not a directory each raise one message;
+    nothing is created for a missing root.
+    """
+    config_path = command_config_path(args)
+    try:
+        _path, shared, orca_sections = load_orca_shared_config(config_path)
+    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
+        # A missing or damaged config names its own failure instead of reading
+        # as "not configured".
+        raise CommandConfigError(
+            str(exc),
+            hint="Check the config path and repair the reported state file before retrying.",
+        ) from exc
+    root_text = usable_runs_root_text(shared.runs_root)
+    if not root_text:
+        raise CommandConfigError(
+            f"runs_root is missing or invalid in {config_path}",
+            hint="Set runs_root to an absolute directory path in the config.",
+        )
+    runs_root = Path(root_text).expanduser().resolve()
+    if not runs_root.is_dir():
+        # A typo here would otherwise read as an empty queue or index.
+        raise CommandConfigError(
+            f"runs_root does not exist: {runs_root}",
+            hint="Check runs_root in the config; a missing root is never created.",
+        )
+    return CommandConfig(
+        path=config_path, runs_root=runs_root, shared=shared, orca_sections=orca_sections
+    )
 
 
 def _configure_orca_logging(args: argparse.Namespace) -> None:
@@ -60,7 +126,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     from orca_auto.orca.commands.init import cmd_init as _cmd_orca_init
 
     _configure_orca_logging(args)
-    args.config = engine_config_for_args(args)
+    args.config = discover_shared_config_path(getattr(args, "config", None))
     # The domain package cannot import the terminal layer; hand it the shared
     # stderr error line so its refusals render like every other command's.
     return int(_cmd_orca_init(args, report_error=emit_error))
@@ -69,11 +135,6 @@ def cmd_init(args: argparse.Namespace) -> int:
 def _require_orca_input(target: Path) -> None:
     if not any(candidate.is_file() for candidate in target.glob("*.inp")):
         raise ValueError("Could not infer run-dir target type: expected an ORCA *.inp file.")
-
-
-def _configured_runs_root_for_run_dir(args: Any) -> str:
-    config_path = engine_config_for_args(args)
-    return shared_runs_root_from_config(config_path) or ""
 
 
 class _RunDirTargetChangedError(ValueError):
@@ -168,7 +229,8 @@ def cmd_run_dir(args: Any) -> int:
         # Resolving it would erase the namespace identity that must remain bound
         # to the fd-backed inode for the whole synchronous publication.
         namespace_target = Path(raw_target).expanduser().absolute()
-        runs_root = _configured_runs_root_for_run_dir(args)
+        config_path = discover_shared_config_path(getattr(args, "config", None))
+        runs_root = shared_runs_root_from_config(config_path) or ""
     except ValueError as exc:
         emit_error(exc, json_output=json_output)
         return 1
@@ -202,7 +264,7 @@ def cmd_run_dir(args: Any) -> int:
                 from orca_auto.orca.commands.run_inp import cmd_run_inp
 
                 _configure_orca_logging(args)
-                args.config = engine_config_for_args(args)
+                args.config = config_path
                 # With --log-file the submission logger writes nowhere the operator
                 # looks; the terminal error line (and the JSON error document) must
                 # not depend on how logging was configured.
@@ -254,55 +316,11 @@ def _emit_index_prune(result: JobLocationPruneResult, *, json_output: bool) -> i
     return 0
 
 
-def _index_root_from_args(args: argparse.Namespace) -> Path | None:
-    """The configured runs root that holds the index, or None after an error."""
-    json_output = bool(getattr(args, "json", False))
-    config_path = resolve_shared_config_path(shared_config_text_from_args(args) or None)
-    if not config_path:
-        emit_error(
-            "runs_root is not configured",
-            hint=(
-                "Pass --config pointing at an orca_auto.yaml with runs_root, "
-                "or run `orca_auto init`."
-            ),
-            json_output=json_output,
-        )
-        return None
-    from orca_auto.orca.config import load_orca_shared_config
-
-    try:
-        # Load through the shared validator so a missing or damaged config
-        # names its own failure instead of reading as "not configured".
-        _config, shared, _orca_sections = load_orca_shared_config(config_path)
-    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
-        emit_error(
-            exc,
-            hint="Check the config path and repair the reported state file before retrying.",
-            json_output=json_output,
-        )
-        return None
-    root_text = usable_runs_root_text(shared.runs_root)
-    if not root_text:
-        emit_error(
-            f"runs_root is missing or invalid in {config_path}",
-            hint="Set runs_root to an absolute directory path in the config.",
-            json_output=json_output,
-        )
-        return None
-    root = Path(root_text).expanduser().resolve()
-    if not root.is_dir():
-        emit_error(
-            f"runs_root does not exist: {root}",
-            hint="Check runs_root in the config; the index lives in that directory.",
-            json_output=json_output,
-        )
-        return None
-    return root
-
-
 def cmd_index_prune(args: argparse.Namespace) -> int:
-    root = _index_root_from_args(args)
-    if root is None:
+    try:
+        root = resolve_command_config(args).runs_root
+    except CommandConfigError as exc:
+        emit_error(exc, hint=exc.hint, json_output=bool(getattr(args, "json", False)))
         return 1
     try:
         result = prune_job_locations(root, apply=bool(getattr(args, "apply", False)))
@@ -391,8 +409,10 @@ def _emit_index_rebuild(result: JobLocationRebuildResult, *, json_output: bool) 
 def cmd_index_rebuild(args: argparse.Namespace) -> int:
     from orca_auto.orca.job_locations import rebuild_job_location_records
 
-    root = _index_root_from_args(args)
-    if root is None:
+    try:
+        root = resolve_command_config(args).runs_root
+    except CommandConfigError as exc:
+        emit_error(exc, hint=exc.hint, json_output=bool(getattr(args, "json", False)))
         return 1
     try:
         result = rebuild_job_location_records(root, apply=not bool(getattr(args, "dry_run", False)))

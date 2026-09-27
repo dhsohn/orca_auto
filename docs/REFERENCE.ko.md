@@ -9,6 +9,8 @@ ORCA_auto의 CLI 명령어, 옵션 플래그, 큐 상태 전이 모델 및 산�
 
 ## 1. CLI 명령어 상세
 
+`queue list`, `queue list clear`, `queue cancel`, `index prune`/`rebuild`, `scratch list`/`clear`는 설정 파일 하나(`--config`, `ORCA_AUTO_CONFIG`, `~/orca_auto/config/orca_auto.yaml` 순)를 한 번만 읽고, 존재하는 `runs_root`가 필요합니다. 설정 파일이 없거나 읽히지 않거나 `runs_root`가 없거나 잘못되었거나 디렉터리가 아니면 모든 명령이 같은 `error:` 줄(예: `runs_root does not exist: PATH`)을 출력하고 아무것도 만들지 않은 채 종료 코드 1을 반환합니다. `queue worker`도 같은 순서로 설정 파일을 찾습니다.
+
 ### `orca_auto init`
 공통 설정 파일(`orca_auto.yaml`)을 생성하거나 수정합니다.
 ```bash
@@ -54,6 +56,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
 - `<TARGET>`: 큐 ID (`q_...`), 실행 ID (`run_...`, 실행 중인 작업 포함), 또는 작업 디렉터리 경로나 이름. 디렉터리는 예전에 끝난 행이 남아 있어도 활성 generation으로 해석합니다.
+- 설정 파일을 찾지 못하거나 `runs_root`가 없으면 `queue list`와 같은 `error:` 줄과 함께 종료 코드 1을 반환합니다.
 
 ---
 

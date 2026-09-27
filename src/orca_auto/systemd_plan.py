@@ -9,14 +9,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.files import usable_runs_root_text
+from orca_auto.core.config.files import (
+    ORCA_AUTO_CONFIG_ENV_VAR,
+    SharedConfig,
+    usable_runs_root_text,
+)
 from orca_auto.core.runtime_bundle import (
     PROCESS_RUNTIME_BUILD_ENV,
     RUNTIME_MANIFEST_NAME,
     verify_runtime_bundle,
 )
 from orca_auto.core.utils.coercion import normalize_text
+from orca_auto.orca.config import (
+    OrcaConfigSections,
+    load_config,
+    load_orca_shared_config,
+    worker_config,
+)
 
 SYSTEMD_UNIT_NAMES = (
     "orca_auto-engine-workers@.target",
@@ -131,15 +140,9 @@ def _append_absolute_path(paths: list[Path], value: Any) -> None:
     paths.append(candidate.resolve(strict=False))
 
 
-def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
-    if not config.exists():
+def _configured_read_write_paths(shared: SharedConfig | None) -> tuple[Path, ...]:
+    if shared is None:
         return ()
-    # A config that exists but cannot be loaded fails the install: units
-    # rendered without ReadWritePaths would start a worker that cannot write.
-    from orca_auto.orca.config import load_orca_shared_config
-
-    _, shared, _orca_sections = load_orca_shared_config(config)
-
     # The worker writes only under runs_root, including the admission store it
     # creates at <runs_root>/.admission. Naming that not-yet-created child as a
     # mandatory systemd path would keep the service namespace from starting.
@@ -148,34 +151,37 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     return tuple(paths)
 
 
-def _render_read_write_paths(config: Path) -> str:
-    paths = _configured_read_write_paths(config)
+def _render_read_write_paths(shared: SharedConfig | None) -> str:
+    paths = _configured_read_write_paths(shared)
     if not paths:
         return "# ReadWritePaths omitted: config runtime paths unavailable at render time"
     joined = " ".join(_systemd_path_text(path, label="ReadWritePaths path") for path in paths)
     return f"ReadWritePaths={joined}"
 
 
-def _configured_stop_timeout_seconds(config: Path) -> int | None:
+def _configured_stop_timeout_seconds(shared: SharedConfig | None) -> int | None:
     """The worker's shutdown budget for the configured concurrency, or None without a config."""
-    if not config.exists():
+    if shared is None:
         return None
     from orca_auto.core.queue.processes import KILL_TIMEOUT_SECONDS, worker_shutdown_budget_seconds
-    from orca_auto.orca.config import load_orca_shared_config
 
-    _, shared, _orca_sections = load_orca_shared_config(config)
     budget = worker_shutdown_budget_seconds(shared.scheduler.max_active_simulations)
     # One extra second so systemd's SIGKILL can never precede the supervisor's own kill wait.
     return math.ceil(budget + KILL_TIMEOUT_SECONDS) + 1
 
 
 def _render_unit_template(
-    template: str, *, repo: Path, config: Path, runtime_build: str = ""
+    template: str,
+    *,
+    repo: Path,
+    config: Path,
+    shared: SharedConfig | None,
+    runtime_build: str = "",
 ) -> str:
     repo_text = _systemd_path_text(repo, label="--repo")
     config_text = _systemd_path_text(config, label="--config")
-    read_write_paths = _render_read_write_paths(config)
-    stop_timeout_seconds = _configured_stop_timeout_seconds(config)
+    read_write_paths = _render_read_write_paths(shared)
+    stop_timeout_seconds = _configured_stop_timeout_seconds(shared)
     rendered = template.replace("/home/%i/orca_auto", repo_text)
     lines = []
     config_environment_prefix = f"Environment={ORCA_AUTO_CONFIG_ENV_VAR}="
@@ -289,13 +295,17 @@ def _systemctl_transition_commands(
     return tuple(commands)
 
 
-def _validate_worker_config(config: Path) -> None:
-    """Run the same config loader used by the supervised ORCA worker."""
+def _validate_worker_config(
+    config: Path, loaded: tuple[Path, SharedConfig, OrcaConfigSections] | None
+) -> None:
+    """Apply the supervised ORCA worker's config checks to the loaded config."""
 
     try:
-        from orca_auto.orca.config import load_config
-
-        load_config(str(config))
+        if loaded is None:
+            # Raises the worker's own missing-config error.
+            load_config(str(config))
+        else:
+            worker_config(*loaded)
     except Exception as exc:
         raise ValueError(f"runtime config preflight failed: {exc}") from exc
 
@@ -349,6 +359,10 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
             "--repo must name a checkout that contains a systemd/ template directory: "
             f"{options.repo}"
         )
+    # A config that exists but cannot be loaded fails the install: units
+    # rendered without ReadWritePaths would start a worker that cannot write.
+    loaded = load_orca_shared_config(options.config) if options.config.exists() else None
+    shared = loaded[1] if loaded is not None else None
     units = tuple(
         RenderedUnit(
             name=name,
@@ -357,6 +371,7 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
                 _read_unit_template(template_root, name),
                 repo=options.repo,
                 config=options.config,
+                shared=shared,
                 runtime_build=runtime_build,
             ),
         )
@@ -370,7 +385,7 @@ def _build_systemd_install_plan(options: SystemdInstallOptions) -> SystemdInstal
         no_enable=options.no_enable,
     )
     if enabled_unit is not None:
-        _validate_worker_config(options.config)
+        _validate_worker_config(options.config, loaded)
     commands = _systemctl_transition_commands(
         target_user=options.target_user,
         worker_only=effective_worker_only,

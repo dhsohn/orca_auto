@@ -6,7 +6,6 @@ from typing import Any, cast
 import pytest
 
 from orca_auto import cli_worker_supervision as worker_supervision
-from orca_auto import cli_workers
 from orca_auto.core.queue.processes import (
     GRACEFUL_TIMEOUT_SECONDS,
     KILL_TIMEOUT_SECONDS,
@@ -512,26 +511,3 @@ def test_run_worker_supervisor_gives_the_worker_its_shutdown_budget(
     assert result == 0
     assert process.terminate_calls == 1
     assert process.kill_calls == 0
-
-
-def test_orca_worker_spec_stop_timeout_follows_configured_concurrency(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from tests.conftest import make_app_cfg, write_config_file, write_fake_orca
-
-    runs_root = tmp_path / "runs"
-    runs_root.mkdir()
-    cfg = make_app_cfg(
-        runs_root=runs_root,
-        orca_executable=write_fake_orca(tmp_path / "fake_orca.py"),
-        max_concurrent=3,
-    )
-    config_path = write_config_file(tmp_path / "orca_auto.yaml", cfg)
-
-    spec = cli_workers._orca_worker_spec(config_path=str(config_path))
-
-    assert spec.stop_timeout_seconds == worker_shutdown_budget_seconds(3)
-    assert spec.to_dict()["stop_timeout_seconds"] == worker_shutdown_budget_seconds(3)
-    # An unreadable config keeps the default budget; the worker fails on it anyway.
-    missing = cli_workers._orca_worker_spec(config_path=str(tmp_path / "missing.yaml"))
-    assert missing.stop_timeout_seconds == worker_shutdown_budget_seconds(4)

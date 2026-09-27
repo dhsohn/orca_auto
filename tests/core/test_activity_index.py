@@ -101,7 +101,9 @@ def test_warm_limited_query_does_not_read_history(
         return connection
 
     monkeypatch.setattr(index, "connect", measured_connect)
-    result = list_activities(config_path=config, limit=20, statuses=("completed", "failed"))
+    result = list_activities(
+        config_path=config, runs_root=root, limit=20, statuses=("completed", "failed")
+    )
     assert [row["activity_id"] for row in result["activities"]] == expected
     assert len(steps) < 100, f"SQLite scanned history: {len(steps) * 100} VM steps"
 
@@ -129,8 +131,7 @@ def test_terminal_state_changes_update_only_changed_job(
     assert _query(root, limit=1, statuses=("failed",))[0]["activity_id"] == "run"
     assert len(reads) == 1
     assert _query(root) == [
-        row.to_dict()
-        for row in sorted(_orca.orca_records(config_path=config), key=sort_key, reverse=True)
+        row.to_dict() for row in sorted(_orca.orca_records(root), key=sort_key, reverse=True)
     ]
 
 
@@ -166,8 +167,7 @@ def test_timezones_and_multiple_statuses_match_canonical_order(tmp_path: Path) -
     entries[2] = replace(entries[2], finished_at="bad-timestamp")
     queue.save_entries(root, entries)
     expected = [
-        row.to_dict()
-        for row in sorted(_orca.orca_records(config_path=config), key=sort_key, reverse=True)
+        row.to_dict() for row in sorted(_orca.orca_records(root), key=sort_key, reverse=True)
     ]
     assert _query(root, limit=3, statuses=("completed", "failed")) == expected[:3]
 
@@ -233,7 +233,7 @@ def test_refresh_persists_discoveries_and_missing_database_rebuilds(tmp_path: Pa
     assert [row["activity_id"] for row in _query(root)] == ["run"]
     assert {
         row["activity_id"]
-        for row in list_activities(config_path=config, refresh=True)["activities"]
+        for row in list_activities(config_path=config, runs_root=root, refresh=True)["activities"]
     } == {"run", "untracked"}
     # The discovery went through the index store, so it is a durable row that
     # every plain query (and a rebuilt projection) sees from now on.
@@ -250,7 +250,7 @@ def test_refresh_never_downgrades_a_finished_row_to_a_stale_copy(tmp_path: Path)
     # A copy taken mid-run, sorting before the finished directory.
     state.save_state(root / "a_copy", {"run_id": "moved", "status": "running", "attempts": []})
 
-    listing = list_activities(config_path=config, refresh=True)["activities"]
+    listing = list_activities(config_path=config, runs_root=root, refresh=True)["activities"]
 
     [row] = [row for row in listing if row["activity_id"] == "moved"]
     assert row["status"] == "completed"
@@ -335,18 +335,16 @@ def test_filtered_page_keeps_catalog_wide_blockers_and_active_count(
     # The admission slot count is the global truth when it is readable; here
     # the listing's own count is what reaches the payload as its fallback.
     monkeypatch.setattr(
-        _list, "global_active_simulations", lambda *, config_path, fallback: (fallback, None)
+        _list, "global_active_simulations", lambda runs_root, *, fallback: (fallback, None)
     )
-    payload = list_activities(config_path=config, statuses=("completed",), limit=1)
+    payload = list_activities(config_path=config, runs_root=root, statuses=("completed",), limit=1)
     assert payload["count"] == 1
     assert payload["active_simulations"] == 1
     assert payload["admission_blockers"] == list(listing.blockers)
     # The disk catalog pages through the same shared pass.
     from orca_auto.activity.model import listing_from_records
 
-    direct = listing_from_records(
-        _orca.orca_records(config_path=config), statuses=("completed",), limit=1
-    )
+    direct = listing_from_records(_orca.orca_records(root), statuses=("completed",), limit=1)
     assert [row.to_dict() for row in direct.records] == payload["activities"]
     assert direct.blockers == listing.blockers
     assert direct.active_count == 1
@@ -475,11 +473,12 @@ def test_refresh_repairs_out_of_band_state_edit(tmp_path: Path) -> None:
     payload["status"]["state"] = "failed"
     path.write_text(json.dumps(payload))
     expected = [
-        row.to_dict()
-        for row in sorted(_orca.orca_records(config_path=config), key=sort_key, reverse=True)
+        row.to_dict() for row in sorted(_orca.orca_records(root), key=sort_key, reverse=True)
     ]
     assert expected[0]["status"] == "failed"
-    assert list_activities(config_path=config, refresh=True)["activities"] == expected
+    assert (
+        list_activities(config_path=config, runs_root=root, refresh=True)["activities"] == expected
+    )
 
 
 def test_normalized_metadata_links_follow_state_updates(tmp_path: Path) -> None:
@@ -497,8 +496,7 @@ def test_normalized_metadata_links_follow_state_updates(tmp_path: Path) -> None:
     state.save_state(job, payload)
     actual = _query(root)
     expected = [
-        row.to_dict()
-        for row in sorted(_orca.orca_records(config_path=config), key=sort_key, reverse=True)
+        row.to_dict() for row in sorted(_orca.orca_records(root), key=sort_key, reverse=True)
     ]
     assert actual == expected
     assert actual[0]["status"] == "failed"

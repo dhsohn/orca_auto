@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from orca_auto.activity.model import ActivityListRequest, ActivityRecord, path_aliases, sort_key
@@ -10,7 +11,7 @@ from orca_auto.core.statuses import is_queue_active_status
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca import direct_cancel
 
-from ._list import collect_activity_listing, resolve_activity_config
+from ._list import collect_activity_listing
 
 
 def match_activity_record(records: Sequence[ActivityRecord], target: str) -> ActivityRecord:
@@ -58,12 +59,13 @@ def match_activity_record(records: Sequence[ActivityRecord], target: str) -> Act
     raise LookupError(f"Activity target not found: {normalized_target}")
 
 
-def cancel_activity(*, target: str, config_path: str | None = None) -> dict[str, Any]:
-    resolved = resolve_activity_config(config_path)
+def cancel_activity(*, target: str, config_path: str, runs_root: Path) -> dict[str, Any]:
     record = match_activity_record(
-        collect_activity_listing(resolved, ActivityListRequest()).records, target
+        collect_activity_listing(runs_root, ActivityListRequest()).records, target
     )
-    result = direct_cancel.cancel_target(target=record.cancel_target, config_path=resolved)
+    result = direct_cancel.cancel_target(
+        target=record.cancel_target, config_path=config_path, allowed_root=runs_root
+    )
     return {
         "activity_id": record.activity_id,
         "kind": record.kind,

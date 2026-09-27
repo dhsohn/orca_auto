@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
+from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config.schema import SchedulerConfig
 from orca_auto.core.queue.processes import KILL_TIMEOUT_SECONDS, worker_shutdown_budget_seconds
 from orca_auto.core.utils import normalize_text

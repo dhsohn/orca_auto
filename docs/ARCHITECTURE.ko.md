@@ -47,7 +47,7 @@ graph TD
 
 | 패키지/모듈 | 주요 역할 및 책임 |
 | :--- | :--- |
-| **`cli*.py`, `activity/`, `terminal.py`** | 사용자 명령어 파싱, 텍스트/JSON 포맷팅 및 ANSI 스타일링, activity 레코드 모델, 큐 및 서비스 상태 조회, 작업 취소 인터페이스 |
+| **`cli*.py`, `activity/`, `terminal.py`** | 사용자 명령어 파싱, 텍스트/JSON 포맷팅 및 ANSI 스타일링, activity 레코드 모델, 큐 및 서비스 상태 조회, 작업 취소 인터페이스. 명령이 설정 파일과 `runs_root`를 찾고 (한 번) 읽고 확인하며 빠진 것을 알리는 곳은 `cli_handlers.resolve_command_config` 하나이고, activity 함수는 확인된 설정 경로와 `runs_root`를 받습니다 |
 | **`orca/`** | ORCA 전용 로직: 입력 파일(`.inp`) 파싱 및 자원 판별, 실행 준비, 큐 워커 및 프로세스 구동, 출력 로그 분석 및 수렴 판정, 결과 보고서(`machine.json`) 생성 |
 | **`core/`** | 공용 인프라: 디스크 큐 저장소, 동시 실행 슬롯(Admission) 관리, 프로세스 감독 및 PID 파일 관리, 파일 I/O 및 설정 로더, SQLite 인덱스, 파일시스템 잠금 |
 

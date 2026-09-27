@@ -55,7 +55,7 @@ def test_ordinary_activity_uses_index_without_recursive_discovery(
         raise AssertionError("ordinary queue list traversed the run tree")
 
     monkeypatch.setattr(run_snapshot, "iter_production_runs_artifacts", forbidden_scan)
-    result = list_activities(config_path=str(config), limit=1)
+    result = list_activities(config_path=str(config), runs_root=root, limit=1)
     assert [item["activity_id"] for item in result["activities"]] == ["tracked"]
 
 
@@ -67,7 +67,7 @@ def test_explicit_refresh_discovers_and_indexes_unindexed_runs(
     config.write_text(f"runs_root: {root}\n")
     _write_run(root, "tracked", indexed=True)
     _write_run(root, "untracked", indexed=False)
-    result = list_activities(config_path=str(config), refresh=True)
+    result = list_activities(config_path=str(config), runs_root=root, refresh=True)
     assert {item["activity_id"] for item in result["activities"]} == {"tracked", "untracked"}
     # The discovery is now an index row, so the next ordinary list needs no walk.
     assert {row.job_id for row in list_job_locations(root)} == {"tracked", "untracked"}
@@ -76,16 +76,31 @@ def test_explicit_refresh_discovers_and_indexes_unindexed_runs(
         "iter_production_runs_artifacts",
         lambda *args, **kwargs: pytest.fail("ordinary queue list traversed the run tree"),
     )
-    plain = list_activities(config_path=str(config))
+    plain = list_activities(config_path=str(config), runs_root=root)
     assert {item["activity_id"] for item in plain["activities"]} == {"tracked", "untracked"}
 
 
-def test_refresh_request_has_no_status_or_engine_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli_queue.discovery, "resolve_shared_config_path", lambda path: path)
+def test_refresh_request_has_no_status_or_engine_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "runs"
+    root.mkdir()
+    config = tmp_path / "config.yaml"
+    config.write_text(f"runs_root: {root}\n")
+    requests: list[dict[str, object]] = []
 
-    request = cli_queue._queue_list_request(Namespace(refresh=True))
-    assert request.status_values == ()
-    assert not hasattr(request, "engine_values")
+    def fake_list_activities(**kwargs: object) -> dict[str, object]:
+        requests.append(kwargs)
+        return {"count": 0, "active_simulations": 0, "activities": [], "sources": {}}
+
+    monkeypatch.setattr(cli_queue, "list_activities", fake_list_activities)
+
+    assert cli_queue.cmd_queue_list(Namespace(config=str(config), refresh=True, json=True)) == 0
+    [request] = requests
+    assert request["statuses"] == ()
+    assert request["refresh"] is True
+    assert "engines" not in request
+    capsys.readouterr()
 
 
 def test_queue_known_run_does_not_require_an_index_entry(
@@ -105,7 +120,7 @@ def test_queue_known_run_does_not_require_an_index_entry(
         metadata={"run_id": "untracked", "reaction_dir": str(root / "untracked")},
     )
     save_entries(root, [entry])
-    result = list_activities(config_path=str(config))
+    result = list_activities(config_path=str(config), runs_root=root)
     assert len(result["activities"]) == 1
     assert result["activities"][0]["status"] == "completed"
     assert result["activities"][0]["updated_at"] == "2026-01-01T01:00:00+00:00"

@@ -233,6 +233,21 @@ def load_config(config_path: str) -> AppConfig:
         missing_error=_missing_config_error,
         invalid_message="Config file is invalid: {path}",
     )
+    cfg = worker_config(path, shared, orca_sections)
+    logger.info(
+        "Config loaded: allowed_root=%s, admission_root=%s, orca_executable=%s, max_concurrent=%d, admission_limit=%d",
+        cfg.runtime.allowed_root,
+        admission_dir(cfg.runtime.allowed_root),
+        cfg.paths.orca_executable,
+        cfg.runtime.max_concurrent,
+        cfg.runtime.max_concurrent,
+    )
+    return cfg
+
+
+def worker_config(path: Path, shared: SharedConfig, orca_sections: OrcaConfigSections) -> AppConfig:
+    """The worker's required-setting and path checks over one loaded config."""
+
     runs_root = validated_runs_root_text(shared.runs_root) if shared.runs_root else ""
     _require_configured_paths(path, shared, orca_sections)
 
@@ -251,13 +266,4 @@ def load_config(config_path: str) -> AppConfig:
         raise _placeholder_settings_error(path, placeholder_keys)
 
     _validate_config(cfg)
-
-    logger.info(
-        "Config loaded: allowed_root=%s, admission_root=%s, orca_executable=%s, max_concurrent=%d, admission_limit=%d",
-        cfg.runtime.allowed_root,
-        admission_dir(cfg.runtime.allowed_root),
-        cfg.paths.orca_executable,
-        cfg.runtime.max_concurrent,
-        cfg.runtime.max_concurrent,
-    )
     return cfg

@@ -9,6 +9,8 @@ For formal runtime guarantees, refer to [Public Contracts (PUBLIC_CONTRACTS.md)]
 
 ## 1. CLI Commands
 
+`queue list`, `queue list clear`, `queue cancel`, `index prune`/`rebuild` and `scratch list`/`clear` read one config (`--config`, then `ORCA_AUTO_CONFIG`, then `~/orca_auto/config/orca_auto.yaml`), load it once and need an existing `runs_root`. A missing config, a config that does not load, a missing or invalid `runs_root` and a `runs_root` that is not a directory print the same `error:` line in each of them (for example `runs_root does not exist: PATH`) and exit 1 without creating anything. `queue worker` finds its config the same way.
+
 ### `orca_auto init`
 Creates or updates the shared configuration file (`orca_auto.yaml`).
 ```bash
@@ -54,6 +56,7 @@ Cancels a pending or running job.
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
 - `<TARGET>`: Queue ID (`q_...`), Run ID (`run_...`, including a running job's), or job directory path or name. A directory resolves to its active generation even when older finished rows of it remain.
+- Exits 1 without a discoverable config or an existing `runs_root`, with the same `error:` line as `queue list`.
 
 ---
 

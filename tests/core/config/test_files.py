@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
+from orca_auto.core.config import files
 from orca_auto.core.config.files import (
+    ORCA_AUTO_CONFIG_ENV_VAR,
     SharedConfig,
     default_config_path,
     discover_shared_config_path,
@@ -20,6 +22,8 @@ from orca_auto.core.config.files import (
 )
 from orca_auto.core.config.schema import SchedulerConfig
 from orca_auto.core.paths.validation import validated_absolute_linux_path_text
+from orca_auto.orca.commands import init
+from tests.conftest import isolate_shared_config_discovery
 
 
 def test_messenger_mapping_reads_messenger_section() -> None:
@@ -210,6 +214,42 @@ def test_discovery_order_is_explicit_then_env_then_home(
 
     explicit = tmp_path / "explicit.yaml"
     assert discover_shared_config_path(str(explicit)) == str(explicit.resolve())
+
+
+def test_new_config_default_is_the_home_path_in_every_installation_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # A checkout, a wheel, and a prepared runtime all resolve to the same
+    # place: no package-relative location is probed.
+    home = tmp_path / "home"
+    expected = home / "orca_auto" / "config" / "orca_auto.yaml"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv(ORCA_AUTO_CONFIG_ENV_VAR, raising=False)
+
+    assert init._resolve_init_config_path(SimpleNamespace()) == expected
+    assert default_config_path() == str(expected)
+    assert discover_shared_config_path(None) is None
+    expected.parent.mkdir(parents=True, exist_ok=True)
+    expected.write_text("{}\n", encoding="utf-8")
+    assert discover_shared_config_path(None) == str(expected)
+
+
+def test_checkout_config_is_not_discovered(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    isolate_shared_config_discovery(monkeypatch, tmp_path)
+    checkout = tmp_path / "checkout"
+    module = checkout / "src" / "orca_auto" / "core" / "config" / "files.py"
+    module.parent.mkdir(parents=True)
+    planted = checkout / "config" / "orca_auto.yaml"
+    planted.parent.mkdir()
+    planted.write_text("runs_root: /tmp/planted-runs\n", encoding="utf-8")
+    monkeypatch.setattr(files, "__file__", str(module))
+
+    assert discover_shared_config_path(None) is None
+    assert default_config_path() == str(Path.home() / "orca_auto" / "config" / "orca_auto.yaml")
 
 
 @pytest.mark.parametrize(

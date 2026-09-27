@@ -17,11 +17,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.config.discovery import (
-    resolve_shared_config_path,
-    shared_config_text_from_args,
-)
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.cli_handlers import CommandConfigError, resolve_command_config
 from orca_auto.core.engine_scratch import (
     SCRATCH_REMOVABLE_STATES,
     SCRATCH_STATE_LIVE,
@@ -31,7 +27,7 @@ from orca_auto.core.engine_scratch import (
     inspect_scratch_root,
     remove_scratch_workspace,
 )
-from orca_auto.orca.config import load_config
+from orca_auto.orca.config import worker_config
 from orca_auto.orca.scratch import OrcaScratchPolicy
 from orca_auto.terminal import RED, YELLOW, emit_error, emit_json, label, paint
 
@@ -50,22 +46,20 @@ class _ScratchCommandError(Exception):
 def _scratch_policy_from_args(args: argparse.Namespace) -> tuple[OrcaScratchPolicy, Path]:
     """Build the policy exactly as the worker does and return it with the runs root."""
 
-    config_path = resolve_shared_config_path(shared_config_text_from_args(args) or None)
-    if not config_path:
-        raise _ScratchCommandError(
-            "shared config is not configured",
-            hint="Pass --config pointing at orca_auto.yaml, or run `orca_auto init`.",
-        )
     try:
-        cfg = load_config(config_path)
-    except YAML_CONFIG_LOAD_EXCEPTIONS as exc:
+        config = resolve_command_config(args)
+    except CommandConfigError as exc:
+        raise _ScratchCommandError(str(exc), hint=exc.hint) from exc
+    try:
+        cfg = worker_config(Path(config.path), config.shared, config.orca_sections)
+    except (OSError, ValueError) as exc:
         raise _ScratchCommandError(
             str(exc),
             hint="Check the config path and repair the reported setting before retrying.",
         ) from exc
     if not cfg.scratch.enabled:
         raise _ScratchCommandError(
-            f"orca.runtime.scratch_root is not configured in {config_path}",
+            f"orca.runtime.scratch_root is not configured in {config.path}",
             hint="RAM scratch is disabled; there are no scratch workspaces to inspect.",
         )
     try:
