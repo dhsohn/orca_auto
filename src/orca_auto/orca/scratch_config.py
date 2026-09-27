@@ -7,11 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config.schema import as_nonempty_str, explicit_positive_int
+from orca_auto.core.engine_scratch import SCRATCH_ROOT_PARENT
 from orca_auto.core.paths.validation import validated_absolute_linux_path_text
-
-# Mirrors the confinement enforced by ``core.engine_scratch``; kept as a module
-# constant so tests can relocate both checks onto a private directory.
-_SCRATCH_ROOT_PARENT = Path("/dev/shm")
 
 
 @dataclass(frozen=True)
@@ -38,7 +35,7 @@ def scratch_config_from_runtime_mapping(runtime_raw: dict[str, Any]) -> ScratchC
         field_name="orca.runtime.scratch_root",
     )
     resolved = Path(root).expanduser().resolve(strict=False)
-    shm_root = _SCRATCH_ROOT_PARENT.resolve()
+    shm_root = SCRATCH_ROOT_PARENT.resolve()
     if resolved == shm_root or not resolved.is_relative_to(shm_root):
         raise ValueError("orca.runtime.scratch_root must be a dedicated directory below /dev/shm")
     min_free_gb = explicit_positive_int(

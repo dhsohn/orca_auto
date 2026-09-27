@@ -1,0 +1,48 @@
+"""``orca_auto.orca.queue.worker``: reconciliation of orphaned running rows."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from orca_auto.orca.queue.adapter import enqueue
+from orca_auto.orca.queue.worker import OrcaQueueWorker
+from orca_auto.orca.state_reading import report_json_path
+from tests.conftest import claim_next_entry
+from tests.engine_artifact_helpers import orca_artifact_payload
+
+# ---------------------------------------------------------------------------
+# Reconciliation
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_orphaned_running_ignores_root_report_even_with_worker_pid_file(
+    worker: OrcaQueueWorker, queue_root: Path
+) -> None:
+    rxn = queue_root / "mol_done"
+    rxn.mkdir()
+    entry = enqueue(queue_root, str(rxn))
+    claim_next_entry(queue_root)
+    worker._write_pid_file()
+    report_json_path(rxn).write_text(
+        json.dumps(
+            orca_artifact_payload(
+                job_id=entry.task_id,
+                run_id="run_done_1",
+                reaction_dir=str(rxn),
+                status="completed",
+                final_result={
+                    "status": "completed",
+                    "completed_at": "2026-03-10T04:59:59+00:00",
+                },
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    worker._reconcile_worker_state()
+
+    queue_data = json.loads((queue_root / "queue.json").read_text(encoding="utf-8"))
+    found = next(item for item in queue_data if item["queue_id"] == entry.queue_id)
+    assert found["status"] == "pending"
+    assert "run_id" not in found["metadata"]

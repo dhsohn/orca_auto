@@ -2,7 +2,7 @@
 scratch submodules: the manifest and lock file names, the publication temp,
 backup and tombstone prefixes with their matching regexes, the reserved
 durable names, copy and walk budgets, and the ``SCRATCH_STATE_*`` values.
-This module holds data only; ``_SCRATCH_ROOT_PARENT`` lives in ``_policy``
+This module holds data only; ``SCRATCH_ROOT_PARENT`` lives in ``_policy``
 because it is looked up at call time by the root preparation there.
 """
 

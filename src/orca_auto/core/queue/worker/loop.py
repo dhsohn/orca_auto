@@ -113,7 +113,7 @@ class QueueWorkerLoop:
                 return 1
             while not self._shutdown_requested:
                 with self._poll_pass():
-                    self._run_iteration()
+                    self.run_pass()
         except KeyboardInterrupt:
             self._shutdown_requested = True
         finally:
@@ -171,12 +171,18 @@ class QueueWorkerLoop:
             # Leaving the loop would run the shutdown sweep and restart every
             # running child. The retry waits on the plain sleep because the
             # subclass poll sleep may be the pass that failed; a requested
-            # shutdown skips it, as in _run_iteration.
+            # shutdown skips it, as in run_pass.
             LOGGER.exception("Queue worker poll pass failed; retrying after the poll interval")
             if not self._shutdown_requested:
                 self._sleep_fn(self.poll_interval_seconds)
 
-    def _run_iteration(self) -> None:
+    def run_pass(self) -> None:
+        """One poll pass: reap exited children, honor cancel requests, admit work, sleep.
+
+        ``run`` repeats it until shutdown; it is also the single-pass driver
+        for tests. ``run_once`` is the lifecycle driver instead: startup, one
+        admission, then supervision of what it started until it exits.
+        """
         self._check_completed_jobs()
         if self._shutdown_requested:
             return

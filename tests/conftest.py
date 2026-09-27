@@ -1,8 +1,14 @@
 """Shared test foundation: fixtures and the plain builders behind them.
 
-Pytest-style tests take the fixtures; ``unittest.TestCase`` files import the
-plain builders (``make_app_cfg``, ``write_fake_orca``, ``write_config_file``,
-``make_queue_entry``, ``write_run_state``) directly from this module.
+Tests take the fixtures. Where a fixture does not fit (a helper module, a
+builder called with test-specific arguments, a second root in one test) they
+import the plain builders (``make_app_cfg``, ``write_fake_orca``,
+``write_config_file``, ``make_queue_entry``, ``enqueue_entry``,
+``claim_next_entry``, ``write_run_state``) directly from this module.
+
+Two fixtures are autouse: ``no_fsync`` (``@pytest.mark.real_fsync`` opts out)
+and ``isolated_config_discovery``, which keeps every test off the live shared
+config.
 """
 
 from __future__ import annotations
@@ -17,8 +23,10 @@ from typing import Any
 import pytest
 import yaml
 
+from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import CommonResourceConfig, MessengerConfig
 from orca_auto.core.config.schema import DiscordConfig
+from orca_auto.core.engine_scratch import _policy as _scratch_policy
 from orca_auto.core.messaging.channel import SendResult
 from orca_auto.core.queue import store as _core_queue_store
 from orca_auto.core.queue.publication import (
@@ -27,19 +35,19 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.core.utils.persistence import timestamped_token
+from orca_auto.orca import scratch_config as _scratch_config
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.queue import worker_tracking
-from orca_auto.orca.queue.adapter import dequeue_entry_if_pending, list_queue, worker_log_path
+from orca_auto.orca.queue.adapter import worker_log_path
 from orca_auto.orca.queue.entries import (
     QUEUE_APP_NAME,
     QUEUE_ENGINE,
     QUEUE_TASK_KIND,
     entry_metadata,
 )
-from orca_auto.orca.queue.roots import accept_orca_entry
+from orca_auto.orca.queue.roots import dequeue_next_entry
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state import finalize_state, new_state, write_state
 from orca_auto.orca.statuses import (
@@ -68,6 +76,44 @@ def no_fsync(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) ->
         return
     monkeypatch.setattr(os, "fsync", _no_sync)
     monkeypatch.setattr(os, "fdatasync", _no_sync, raising=False)
+
+
+# ---------------------------------------------------------------------------
+# Config discovery
+# ---------------------------------------------------------------------------
+
+
+def isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Close both config-discovery fallbacks and return the empty ``HOME`` that replaces them.
+
+    On the canonical box ``~/orca_auto/config/orca_auto.yaml`` is the live
+    robot config, so a command that falls back to discovery reads it and,
+    through it, the live worker pid file. Discovery has two fallbacks,
+    ``ORCA_AUTO_CONFIG`` and ``~/orca_auto/config/orca_auto.yaml``; clearing the
+    variable and moving ``HOME`` to an empty directory closes both, for this
+    process and the children it starts. An explicit path still resolves.
+    """
+
+    empty_home = tmp_path / "no-home"
+    empty_home.mkdir(exist_ok=True)
+    monkeypatch.delenv(ORCA_AUTO_CONFIG_ENV_VAR, raising=False)
+    monkeypatch.setenv("HOME", str(empty_home))
+    return empty_home
+
+
+@pytest.fixture(autouse=True)
+def isolated_config_discovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """Keep every test off the live shared config.
+
+    A test of discovery itself sets ``HOME`` or ``ORCA_AUTO_CONFIG`` over this
+    and calls ``isolate_shared_config_discovery`` again where it needs the
+    fallbacks closed. The empty ``HOME`` lives outside ``tmp_path``, so a test
+    that lists its ``tmp_path`` sees only what it wrote.
+    """
+
+    isolate_shared_config_discovery(monkeypatch, tmp_path_factory.mktemp("home"))
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +258,27 @@ def config_path(tmp_path: Path, app_cfg: Callable[..., AppConfig]) -> Callable[.
 
 
 # ---------------------------------------------------------------------------
+# RAM scratch
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_shm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """``tmp_path/shm`` in place of ``/dev/shm`` for the scratch policy and the config loader.
+
+    Both confine a scratch root below ``SCRATCH_ROOT_PARENT``: the engine
+    scratch policy reads it from ``_policy`` and the ``orca.runtime.scratch_*``
+    loader through its import, so both bindings move together.
+    """
+
+    shm = tmp_path / "shm"
+    shm.mkdir()
+    monkeypatch.setattr(_scratch_policy, "SCRATCH_ROOT_PARENT", shm)
+    monkeypatch.setattr(_scratch_config, "SCRATCH_ROOT_PARENT", shm)
+    return shm
+
+
+# ---------------------------------------------------------------------------
 # Queue rows
 # ---------------------------------------------------------------------------
 
@@ -269,16 +336,16 @@ def enqueue_entry(root: Path, entry: QueueEntry) -> QueueEntry:
 def claim_next_entry(root: Path) -> QueueEntry | None:
     """Claim the row the ORCA worker would take next from one queue root.
 
-    The worker's own path: preview the head of ``root`` through
-    ``select_next_claimable_entry`` under the ORCA identity filter, then
-    claim it by id fenced on the previewed row. Returns the running row, or
-    ``None`` when nothing is claimable or the claim was lost.
+    Runs the worker's own claim, ``orca.queue.roots.dequeue_next_entry``, on a
+    configuration whose only queue root is ``root``: preview the head under the
+    ORCA identity filter, then claim it by id fenced on the previewed row. The
+    worker's skip predicate is left out; it reads that worker's in-memory
+    running and withheld rows. Returns the running row, or ``None`` when
+    nothing is claimable or the claim was lost.
     """
 
-    entry = select_next_claimable_entry(list_queue(root), accept_entry_fn=accept_orca_entry)
-    if entry is None:
-        return None
-    return dequeue_entry_if_pending(root, entry.queue_id, expected_entry=entry)
+    claimed = dequeue_next_entry(make_app_cfg(root))
+    return None if claimed is None else claimed[1]
 
 
 @pytest.fixture
