@@ -180,14 +180,15 @@ source_modules = ["orca_auto.cli_worker_supervision"]
 forbidden_modules = ["orca_auto.cli_workers"]
 
 # ORCA input handling is layered: line syntax, then geometry/%block structure,
-# then external-file reference scanning, then whole-input validation. Syntax
-# and blocks never see reference scanning; nothing here reaches runtime consumers.
+# then external-file reference scanning and resource directives side by side,
+# then whole-input validation. Syntax and blocks never see the layers above;
+# nothing here reaches runtime consumers.
 [[tool.importlinter.contracts]]
-name = "ORCA input syntax and blocks never import reference scanning or validation"
+name = "ORCA input syntax and blocks never import reference scanning, resources or validation"
 type = "layers"
 layers = [
     "orca_auto.orca.input_validation",
-    "orca_auto.orca.input_references",
+    "orca_auto.orca.input_references | orca_auto.orca.resource_directives",
     "orca_auto.orca.input_blocks",
     "orca_auto.orca.input_syntax",
 ]
@@ -199,6 +200,7 @@ source_modules = [
     "orca_auto.orca.input_syntax",
     "orca_auto.orca.input_blocks",
     "orca_auto.orca.input_references",
+    "orca_auto.orca.resource_directives",
     "orca_auto.orca.input_validation",
 ]
 forbidden_modules = [

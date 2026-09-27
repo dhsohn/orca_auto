@@ -19,6 +19,7 @@ from .input_syntax import (
     active_orca_directive_text,
     active_orca_line_text,
     orca_line_tokens,
+    value_token_index,
 )
 
 GEOM_HEADER_RE = re.compile(
@@ -50,6 +51,14 @@ class OrcaGeometryBlock:
     terminator_index: int | None
 
 
+def xyzfile_reference_token(tokens: Sequence[OrcaLineToken]) -> OrcaLineToken | None:
+    """The file token of a ``* xyzfile charge multiplicity file`` line, else ``None``."""
+
+    if len(tokens) < 5 or tokens[0].value != "*" or tokens[1].value.lower() != "xyzfile":
+        return None
+    return tokens[4]
+
+
 def geometry_header_match(line: str) -> re.Match[str] | None:
     """Match ``GEOM_HEADER_RE`` against the active (comment-free) text of ``line``."""
 
@@ -67,10 +76,8 @@ def find_geometry_block(lines: Sequence[str]) -> OrcaGeometryBlock | None:
         charge = int(match.group(2))
         multiplicity = int(match.group(3))
         if kind == "xyzfile":
-            # Same token position as input_references' geometry reference, so a
-            # quoted or comment-suffixed filename resolves identically.
-            tokens = orca_line_tokens(line)
-            reference = tokens[4].value if len(tokens) >= 5 else None
+            file_token = xyzfile_reference_token(orca_line_tokens(line))
+            reference = file_token.value if file_token is not None else None
             return OrcaGeometryBlock(header_index, kind, charge, multiplicity, reference, (), None)
         atom_rows: list[tuple[int, str]] = []
         for index in range(header_index + 1, len(lines)):
@@ -338,9 +345,7 @@ def _set_inline_block_key_value(
             None,
         )
         if key_index is not None:
-            value_index = key_index + 1
-            if value_index < len(body_tokens) and body_tokens[value_index].value == "=":
-                value_index += 1
+            value_index = value_token_index(body_tokens, key_index)
             if value_index >= len(body_tokens):
                 return None
             key_token = body_tokens[key_index]

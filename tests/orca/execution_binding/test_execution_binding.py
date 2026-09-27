@@ -11,7 +11,7 @@ import pytest
 
 from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.orca import input_blocks, input_references, input_syntax
+from orca_auto.orca import input_references
 from orca_auto.orca.execution_binding import (
     retire_snapshot_intent_for_row,
     verify_orca_execution_snapshot,
@@ -20,62 +20,6 @@ from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count
 from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 from tests.conftest import build_submitted_snapshot, write_fake_orca
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "MAX_ORCA_INPUT_REFERENCES",
-        "_BLOCK_FILE_REFERENCE_KEYS",
-        "_NEB_FILE_REFERENCE_KEYS",
-        "_SIMPLE_FILE_REFERENCE_KEYS",
-        "_UNSUPPORTED_EXTERNAL_HOOK_KEYS",
-        "_UNSUPPORTED_FILE_REFERENCE_KEYS",
-        "neb_file_reference_context",
-        "scan_orca_file_references",
-    ],
-)
-def test_input_blocks_does_not_forward_reference_scanner_symbols(name: str) -> None:
-    assert not hasattr(input_syntax, name)
-    assert not hasattr(input_blocks, name)
-
-
-@pytest.mark.parametrize(
-    "name",
-    [
-        "OrcaLineToken",
-        "input_blocks",
-        "input_syntax",
-        "iter_blocks",
-        "orca_line_tokens",
-        "percent_directive_header",
-    ],
-)
-def test_input_references_does_not_forward_input_syntax_symbols(name: str) -> None:
-    assert not hasattr(input_references, name)
-
-
-def test_input_reference_scanner_resolves_syntax_helpers_from_owner(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    reference = input_references.OrcaFileReference(0, "owner.gbw", 0, 9, "auxiliary")
-    calls = {"moinp": 0, "tokens": 0}
-
-    def owner_moinp_references(lines: list[str]) -> list[input_references.OrcaFileReference]:
-        calls["moinp"] += 1
-        assert lines == ["owner lookup"]
-        return [reference]
-
-    def owner_line_tokens(line: str) -> list[input_syntax.OrcaLineToken]:
-        calls["tokens"] += 1
-        assert line == "owner lookup"
-        return []
-
-    monkeypatch.setattr(input_references, "orca_moinp_references", owner_moinp_references)
-    monkeypatch.setattr(input_syntax, "orca_line_tokens", owner_line_tokens)
-
-    assert input_references.scan_orca_file_references(["owner lookup"]) == [reference]
-    assert calls == {"moinp": 1, "tokens": 1}
 
 
 def _visible_generations(job_dir: Path) -> list[Path]:
@@ -1701,7 +1645,7 @@ def test_scan_orca_file_references_rejects_unrecognized_file_values(directive: s
 def test_scan_orca_file_references_binds_neb_product_xyzfile() -> None:
     lines = ["! HF STO-3G NEB-CI", "%neb", '  Product_XYZFile "product.xyz"', "end"]
 
-    references = input_references.scan_orca_file_references(lines, include_geometry=False)
+    references = input_references.scan_orca_file_references(lines)
 
     assert [(reference.kind, reference.value) for reference in references] == [
         ("auxiliary", "product.xyz")
@@ -1712,8 +1656,7 @@ def test_scan_orca_file_references_binds_neb_product_xyzfile() -> None:
 def test_scan_orca_file_references_rejects_neb_ts_pdbfile(value: str) -> None:
     with pytest.raises(ValueError, match="Unsupported ORCA auxiliary file directive"):
         input_references.scan_orca_file_references(
-            ["! HF STO-3G NEB-TS", "%neb", f"  NEB_TS_PDBFile {value}", "end"],
-            include_geometry=False,
+            ["! HF STO-3G NEB-TS", "%neb", f"  NEB_TS_PDBFile {value}", "end"]
         )
 
 

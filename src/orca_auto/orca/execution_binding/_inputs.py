@@ -17,7 +17,7 @@ from ..completion_rules import (
     is_optimization_route,
 )
 from ..input_blocks import find_geometry_block, iter_blocks
-from ..input_syntax import orca_route_line, orca_route_tokens
+from ..input_syntax import orca_route_line, orca_route_tokens, value_token_index
 from ..job_type import FREQ_RE
 from ._models import _RouteOutputs
 
@@ -83,9 +83,7 @@ def _neb_preoptimizes_end_points(lines: list[str]) -> bool:
                 return True
             if word not in _NEB_PREOPT_KEYS:
                 continue
-            value_index = index + 1
-            if value_index < len(tokens) and tokens[value_index].value == "=":
-                value_index += 1
+            value_index = value_token_index(tokens, index)
             if (
                 value_index >= len(tokens)
                 or tokens[value_index].quoted

@@ -147,6 +147,10 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - `systemd install` exits 1 with an `error:` line naming the failed command
   instead of passing through raw `sudo`/`systemctl` exit codes.
 - The queue table no longer truncates elapsed times of 100 hours or more.
+- Submission no longer accepts a quoted file path after a `%base` that is
+  itself the value of a file key (`%moinp %base "x.gbw"`). The reference
+  scanner exempted that path from its checks although `%base` binds no file;
+  both of its passes now read file keys by one rule.
 
 ### Changed
 
@@ -264,6 +268,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   queued snapshot no longer verifies now leaves the debug line
   `ORCA scratch preparation failed; run will retry it`; the run still reports
   the verification failure as before.
+- The worker child's attempt log lines (`Attempt N starting: …`,
+  `Attempt N finished: …`, `ORCA runner crashed during attempt N: …` and
+  `Interrupted by worker shutdown during attempt N`) keep their text but come
+  from `orca_auto.orca.attempt.run` instead of `orca_auto.orca.attempt.engine`.
+  A failed content hash of an input or output file reads
+  `File changed while it was hashed: …` or `File is not a regular file: …`
+  instead of naming the file an `Engine executable`.
 
 ## [8.0.1] - 2026-09-26
 

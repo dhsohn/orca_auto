@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from orca_auto.orca.input_validation import validate_unambiguous_orca_directives
 from orca_auto.orca.resource_directives import (
     prepare_submission_resource_request,
     read_maxcore,
@@ -124,3 +125,18 @@ def test_resource_readers_use_maximum() -> None:
 
     assert read_maxcore(lines) == 999999
     assert read_nprocs(lines) == 8
+
+
+@pytest.mark.parametrize(
+    ("line", "value"),
+    [("%maxcore 512", 512), ("% maxcore 512", 512), ("%maxcore 512 # MB", 512)],
+)
+def test_maxcore_value_is_read_only_after_whitespace(line: str, value: int) -> None:
+    assert read_maxcore([line]) == value
+
+
+@pytest.mark.parametrize("line", ["%maxcore", "%maxcore =512", "%maxcore-5", "%maxcore abc"])
+def test_maxcore_directive_without_a_value_is_counted_but_not_read(line: str) -> None:
+    assert read_maxcore([line]) is None
+    with pytest.raises(ValueError, match="ambiguous duplicate ORCA directives: %maxcore"):
+        validate_unambiguous_orca_directives(["%maxcore 512", line], label="job.inp")

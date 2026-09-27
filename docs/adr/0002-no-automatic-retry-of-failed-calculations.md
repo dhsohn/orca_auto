@@ -116,7 +116,8 @@ the change:
   directory entry beyond the snapshot's files. It keeps the generation only
   when its output already verifies as completed, and then the claim settles
   from its recorded attempt or adopts that output without launching ORCA, or
-  when cancellation was requested, and then the row is cancelled.
+  when cancellation was requested, and then the row is cancelled. A claim it
+  cannot rebind, for example at the rebind limit, is rejected.
 - A run writes the generation's `job_state.json` before ORCA launches, and a
   `<stem>.gbw` beside the bound input is itself started-execution evidence
   (binding forbids a dependency with that name). So a requeued interrupted
