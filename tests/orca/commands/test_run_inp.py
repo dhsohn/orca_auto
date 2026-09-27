@@ -100,7 +100,7 @@ def worker_seams(monkeypatch: pytest.MonkeyPatch) -> _WorkerSeams:
         seams.notifications.append((args, kwargs))
         return True
 
-    monkeypatch.setattr(submission_mod, "read_worker_pid", read_worker_pid)
+    monkeypatch.setattr(submission_mod, "read_worker_pid_file", read_worker_pid)
     monkeypatch.setattr(queue_notifications, "notify_queue_enqueued_event", notify)
     return seams
 

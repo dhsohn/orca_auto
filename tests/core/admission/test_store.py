@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from orca_auto.core.admission import store
+from orca_auto.core.utils import persistence as persistence_utils
 
 
 def _patch_deterministic_liveness(
@@ -34,7 +35,9 @@ def _patch_deterministic_liveness(
     monkeypatch.setattr(store, "_process_start_ticks", lambda pid: tick_map.get(pid))
     monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
     if patch_token:
-        monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_fixed")
+        monkeypatch.setattr(
+            persistence_utils, "timestamped_token", lambda prefix: f"{prefix}_fixed"
+        )
     monkeypatch.setattr(store, "now_utc_iso", lambda: "2026-04-19T00:00:00+00:00")
 
 
@@ -490,7 +493,7 @@ def test_reserve_slot_honors_capacity_limit(
     [stored] = _read_slots_file(tmp_path)
     assert stored["owner_pid"] == 5151
     assert stored["process_start_ticks"] == 5151
-    monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_second")
+    monkeypatch.setattr(persistence_utils, "timestamped_token", lambda prefix: f"{prefix}_second")
     assert store.reserve_slot(tmp_path, 2, source="queue-4") == "slot_second"
     assert store.reserve_slot(tmp_path, 1, source="queue-3") is None
 
@@ -501,7 +504,7 @@ def test_reserve_slot_retries_collision_and_mutates_only_selected_owner(
 ) -> None:
     _patch_deterministic_liveness(monkeypatch)
     generated = iter(["slot_same", "slot_same", "slot_unique"])
-    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: next(generated))
+    monkeypatch.setattr(persistence_utils, "timestamped_token", lambda _prefix: next(generated))
 
     first = store.reserve_slot(tmp_path, 2, source="first", state="reserved")
     second = store.reserve_slot(tmp_path, 2, source="second", state="reserved")
@@ -533,7 +536,7 @@ def test_reserve_slot_permanent_collision_preserves_store(
     admission_path = tmp_path / store.ADMISSION_FILE_NAME
     original = admission_path.read_bytes()
 
-    with pytest.raises(RuntimeError, match="unique admission slot token"):
+    with pytest.raises(RuntimeError, match="unique slot token"):
         store.reserve_slot(tmp_path, 2, source="second")
 
     assert admission_path.read_bytes() == original

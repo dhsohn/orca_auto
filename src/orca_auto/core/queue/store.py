@@ -3,12 +3,9 @@
 ``queue.json`` under one queue root holds every row; every read and write
 goes through :func:`queue_lock`. :func:`mutate_entries` is the single
 lock/load/mutate/save primitive, with the after-commit compensation, and
-:func:`mutate_entry_by_id` its one-row form; the module-level operations and
-:mod:`.transitions` (cancellation and terminal marks) build on them. Two
-writers still bypass them: ``orca.queue.orphans`` rewrites rows under a raw
-``queue_lock``/``load_entries``/``save_entries`` sequence, and
-:func:`clear_terminal` takes a load/save override so its caller can remove
-worker logs inside the lock.
+:func:`mutate_entry_by_id` its one-row form; every row writer, including the
+module-level operations and :mod:`.transitions` (cancellation, requeue and
+terminal marks), builds on them.
 """
 
 from __future__ import annotations
@@ -16,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, TypeVar
 
@@ -176,27 +174,27 @@ def mutate_entries(
     root: str | Path,
     mutator: Callable[[list[Any]], tuple[_MutationResultT, bool]],
     *,
+    after_save_fn: Callable[[], Any] | None = None,
     after_commit_fn: Callable[[], Any] | None = None,
-    load_entries_fn: Callable[[Path], list[Any]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[Any]], Any] | None = None,
 ) -> _MutationResultT:
     """Load, mutate and save the rows under the queue lock.
 
     ``mutator`` returns its result and whether it changed the rows; unchanged
-    rows are not saved. When ``after_commit_fn`` rejects the saved rows, the
-    original rows are written back under the same lock and the rejection is
-    raised as :class:`QueueAfterCommitError` with the compensation outcome.
-    Only :func:`clear_terminal` passes a load/save override.
+    rows are not saved. ``after_save_fn`` runs right after the save under the
+    same lock and is not compensated: when it raises, the saved rows stay.
+    When ``after_commit_fn`` rejects the saved rows, the original rows are
+    written back under the same lock and the rejection is raised as
+    :class:`QueueAfterCommitError` with the compensation outcome.
     """
     resolved_root = resolve_root_path(root)
-    load = load_entries_fn or load_entries
-    save = save_entries_fn or save_entries
     with queue_lock(resolved_root):
-        entries = load(resolved_root)
+        entries = load_entries(resolved_root)
         original_entries = list(entries)
         result, changed = mutator(entries)
         if changed:
-            save(resolved_root, entries)
+            save_entries(resolved_root, entries)
+            if after_save_fn is not None:
+                after_save_fn()
             if after_commit_fn is not None:
                 try:
                     after_commit_fn()
@@ -208,11 +206,11 @@ def mutate_entries(
                     verification_error: BaseException | None = None
                     compensation_outcome: QueueCompensationOutcome = "restored"
                     try:
-                        save(resolved_root, original_entries)
+                        save_entries(resolved_root, original_entries)
                     except BaseException as rollback_error:  # noqa: BLE001
                         compensation_error = rollback_error
                         try:
-                            visible_entries = list(load(resolved_root))
+                            visible_entries = list(load_entries(resolved_root))
                             if visible_entries == entries:
                                 compensation_outcome = "not_restored"
                             else:
@@ -268,13 +266,17 @@ def clear_terminal(
     keep_last: int = 0,
     retain_entry_fn: Callable[[QueueEntry], bool] | None = None,
     select_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
-    save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
+    after_save_fn: Callable[[list[QueueEntry]], Any] | None = None,
 ) -> int:
+    """Remove terminal rows; ``after_save_fn`` gets the removed rows right after the save.
+
+    ``after_save_fn`` runs under the queue lock and is not compensated: when it
+    raises, the rows stay removed.
+    """
     resolved_root = resolve_root_path(root)
     if not queue_path(resolved_root).exists():
         return 0
-    removed_ids: list[str] = []
+    removed_entries: list[QueueEntry] = []
 
     def clear(entries: list[QueueEntry]) -> tuple[int, bool]:
         terminal_entries = [
@@ -310,20 +312,19 @@ def clear_terminal(
         if removed_count <= 0:
             return 0, False
         kept_ids = {entry.queue_id for entry in kept_entries}
-        removed_ids.extend(entry.queue_id for entry in entries if entry.queue_id not in kept_ids)
+        removed_entries.extend(entry for entry in entries if entry.queue_id not in kept_ids)
         entries[:] = kept_entries
         return removed_count, True
 
     removed_count = mutate_entries(
         resolved_root,
         clear,
-        load_entries_fn=load_entries_fn,
-        save_entries_fn=save_entries_fn,
+        after_save_fn=None if after_save_fn is None else partial(after_save_fn, removed_entries),
     )
     # A removed row's publication lock file has no owner left; a row that
     # never went through the publication lock has no file to remove.
-    for queue_id in removed_ids:
-        queue_record_publication_lock_path(resolved_root, queue_id).unlink(missing_ok=True)
+    for entry in removed_entries:
+        queue_record_publication_lock_path(resolved_root, entry.queue_id).unlink(missing_ok=True)
     return removed_count
 
 

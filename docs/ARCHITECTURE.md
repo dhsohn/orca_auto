@@ -122,8 +122,8 @@ bag. The parent entry point is `python -m orca_auto.orca.commands.queue
 
 Cancellation observations reuse unchanged queue snapshots. The child publishes its terminal state and reports before exiting. The parent settles the queue entry and claims a completion notification from the matching job/run state. A bounded background sender delivers that captured message without holding the execution slot or writing state afterward. Replayed completion skips an already claimed notification (and recognizes historical sent markers). Delivery is best effort: a crash, a failed send or exhausted sender capacity after the claim can lose the message, without retrying or changing the calculation result. Submission records `orca_queued_notification_pending` on the durable row. After its location record is published, the parent worker claims that intent under the queue lock before dispatching a queued message; CLI exit does not discard the intent. Historical rows without the intent are not notified retroactively. The child captures its started event after recording the attempt and dispatches it before proceeding with the runner. All three lifecycle sends use the same bounded sender (four concurrent sends per process). Transport failure, saturation or process exit can lose advisory delivery, and no send writes execution state. A queued delivery claim failure skips delivery without withholding admission.
 
-The worker CLI loads config, checks the PID file (`read_worker_pid` in
-`orca/queue/orphans.py`), then constructs and runs the ORCA worker directly.
+The worker CLI loads config, checks the PID file (`read_worker_pid_file` in
+`core/queue/worker/pid_file.py`), then constructs and runs the ORCA worker directly.
 `orca/queue/roots.py` resolves the one queue root (`runtime.allowed_root`) and owns
 listing and the fenced by-id claim; rows are never claimed by head-of-queue position.
 `orca/queue/entries.py` owns the ORCA row identity and the one generation identity:
@@ -131,6 +131,9 @@ the writer fences, the publication fence, the cancellation probes and the claim 
 compare `generation_identity`, and each adds only its own status rule. Lifecycle
 metadata (deferral, run id, replay marker and fence, queued-notification claim,
 publication lease) is outside it; `queue_generation` in `job_state.json` is its digest.
+`mutate_entries` in `core/queue/store.py` is the only writer of `queue.json`, and
+`core/queue/transitions.py` builds every requeued and terminal row (`requeued_entry`,
+`terminal_entry`); `tests/core/queue/test_ownership_guards.py` enforces both.
 `queue/replay.py` is only the replay engine (work items, preparation and publication, the
 reconcile pipeline and generation owners) and takes its state explicitly, and
 `queue/run_state_replay.py` synthesizes terminal `job_state.json` under

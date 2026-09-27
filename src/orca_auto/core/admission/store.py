@@ -22,7 +22,7 @@ from ..utils.lock import file_lock
 from ..utils.persistence import (
     now_utc_iso,
     resolve_root_path,
-    timestamped_token,
+    unique_timestamped_token,
 )
 from . import persistence as _admission_persistence
 from . import records as _admission_records
@@ -31,7 +31,6 @@ from .records import AdmissionSlot
 ADMISSION_FILE_NAME = _admission_persistence.ADMISSION_FILE_NAME
 ADMISSION_LOCK_NAME = _admission_persistence.ADMISSION_LOCK_NAME
 _MutationResultT = TypeVar("_MutationResultT")
-_TOKEN_COLLISION_RETRY_LIMIT = 32
 
 
 class _ExpectationUnset:
@@ -359,18 +358,7 @@ def reserve_slot(
         if len(slots) >= max(1, int(limit)):
             # Nothing changed; do not rewrite the file for a refused reservation.
             return None, False
-        occupied_tokens = {slot.token for slot in slots}
-        token = ""
-        for _attempt in range(_TOKEN_COLLISION_RETRY_LIMIT):
-            candidate = timestamped_token("slot")
-            if candidate not in occupied_tokens:
-                token = candidate
-                break
-        if not token:
-            raise RuntimeError(
-                "Could not allocate a unique admission slot token after "
-                f"{_TOKEN_COLLISION_RETRY_LIMIT} attempts"
-            )
+        token = unique_timestamped_token("slot", {slot.token for slot in slots})
         if type(engine_launch_gated) is not bool:
             raise ValueError("Admission engine launch-gated flag must be a boolean")
         resolved_owner_pid = owner_pid if owner_pid is not None else os.getpid()

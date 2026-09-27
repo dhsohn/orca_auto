@@ -10,14 +10,14 @@ from __future__ import annotations
 import logging
 import os
 import stat
-from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Literal, NamedTuple
 
 from orca_auto.core import activity_invalidation as _activity_invalidation
 from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
+from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.process_tracking import run_lock_is_held
 from orca_auto.core.utils.stable_fs import StableFsError, open_pinned_directory
@@ -59,6 +59,31 @@ def _resolved_path_text(path_text: str) -> str:
         return text
 
 
+_RowProtection = Literal["active", "pending_replay", "terminal"]
+_PROTECTS_STATE: frozenset[_RowProtection] = frozenset({"active", "pending_replay"})
+
+
+def _row_protection(entry: QueueEntry) -> _RowProtection | None:
+    """What an ORCA row means for its directory's run state in ``queue list clear``.
+
+    ``active`` and ``pending_replay`` keep the state; a plain ``terminal`` row
+    lets a stale active state be cleared.
+    """
+    status = queue_entry_status(entry)
+    if status in ACTIVE_STATUSES:
+        return "active"
+    if status not in TERMINAL_STATUSES:
+        return None
+    if terminal_replay_marker_kind(entry) is not TerminalReplayMarkerKind.ABSENT:
+        # Queue terminalization and state/report/index/notification are a
+        # cross-store publication.  Deleting state while a valid (or
+        # unsupported/corrupt) replay claim remains can make a fresh worker
+        # classify that generation as superseded and lose the unfinished side
+        # effects permanently.
+        return "pending_replay"
+    return "terminal"
+
+
 def _queue_cleanup_reaction_dirs(
     allowed_root: Path,
 ) -> tuple[set[str], set[str], set[str]]:
@@ -66,22 +91,17 @@ def _queue_cleanup_reaction_dirs(
     terminal_dirs: set[str] = set()
     pending_replay_dirs: set[str] = set()
     for entry in list_queue(allowed_root):
-        status = queue_entry_status(entry)
-        if status not in ACTIVE_STATUSES and status not in TERMINAL_STATUSES:
+        protection = _row_protection(entry)
+        if protection is None:
             continue
         reaction_dir = _resolved_path_text(queue_entry_reaction_dir(entry))
         if not reaction_dir:
             continue
-        if status in ACTIVE_STATUSES:
+        if protection == "active":
             active_dirs.add(reaction_dir)
-        elif status in TERMINAL_STATUSES:
+        else:
             terminal_dirs.add(reaction_dir)
-            if terminal_replay_marker_kind(entry) is not TerminalReplayMarkerKind.ABSENT:
-                # Queue terminalization and state/report/index/notification are
-                # a cross-store publication.  Deleting state while a valid (or
-                # unsupported/corrupt) replay claim remains can make a fresh
-                # worker classify that generation as superseded and lose the
-                # unfinished side effects permanently.
+            if protection == "pending_replay":
                 pending_replay_dirs.add(reaction_dir)
     return active_dirs, terminal_dirs - active_dirs - pending_replay_dirs, pending_replay_dirs
 
@@ -94,20 +114,12 @@ def _queue_generation_blocks_state_cleanup(
     allowed_root: Path,
     reaction_dir: str,
 ) -> bool:
-    for entry in _queue_store.load_entries(allowed_root):
-        if not is_orca_queue_entry(entry):
-            continue
-        if _resolved_path_text(queue_entry_reaction_dir(entry)) != reaction_dir:
-            continue
-        status = queue_entry_status(entry)
-        if status in ACTIVE_STATUSES:
-            return True
-        if (
-            status in TERMINAL_STATUSES
-            and terminal_replay_marker_kind(entry) is not TerminalReplayMarkerKind.ABSENT
-        ):
-            return True
-    return False
+    return any(
+        is_orca_queue_entry(entry)
+        and _resolved_path_text(queue_entry_reaction_dir(entry)) == reaction_dir
+        and _row_protection(entry) in _PROTECTS_STATE
+        for entry in _queue_store.load_entries(allowed_root)
+    )
 
 
 def _should_clear_snapshot(
@@ -307,21 +319,12 @@ def clear_terminal_queue_entries(allowed_root: Path) -> tuple[int, int]:
     (undrained replay marker, other app) keeps its log and a
     concurrent clear cannot see the row without its log or the reverse.
     """
-    loaded: list[Any] = []
     removed_logs = 0
 
-    def load(root: Path) -> list[Any]:
-        loaded[:] = _queue_store.load_entries(root)
-        return list(loaded)
-
-    def save(root: Path, kept: Sequence[Any]) -> None:
+    def remove_logs(removed_entries: list[QueueEntry]) -> None:
         nonlocal removed_logs
-        _queue_store.save_entries(root, kept)
-        kept_ids = {entry.queue_id for entry in kept}
         removed_logs += sum(
-            _remove_worker_log(allowed_root, entry.queue_id)
-            for entry in loaded
-            if entry.queue_id not in kept_ids
+            _remove_worker_log(allowed_root, entry.queue_id) for entry in removed_entries
         )
 
     queue_count = _queue_store.clear_terminal(
@@ -330,8 +333,7 @@ def clear_terminal_queue_entries(allowed_root: Path) -> tuple[int, int]:
             terminal_replay_marker_kind(entry) is not TerminalReplayMarkerKind.ABSENT
         ),
         select_entry_fn=is_orca_queue_entry,
-        load_entries_fn=load,
-        save_entries_fn=save,
+        after_save_fn=remove_logs,
     )
     logger.info("Cleared %d terminal entries", queue_count)
     return queue_count, removed_logs

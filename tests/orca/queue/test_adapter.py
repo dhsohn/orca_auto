@@ -18,6 +18,7 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.pid_file import write_worker_pid_file
+from orca_auto.core.utils import persistence as persistence_utils
 from orca_auto.orca import run_cleanup
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
@@ -132,7 +133,7 @@ def test_enqueue_retries_generated_queue_and_task_id_collisions(
     def next_token(prefix: str) -> str:
         return next(generated[prefix])
 
-    monkeypatch.setattr(queue_adapter, "timestamped_token", next_token)
+    monkeypatch.setattr(persistence_utils, "timestamped_token", next_token)
     first = enqueue(queue_root, str(queue_root / "mol_A"))
     second = enqueue(queue_root, str(queue_root / "mol_B"))
 
@@ -147,7 +148,7 @@ def test_enqueue_retries_generated_queue_and_task_id_collisions(
 def test_enqueue_permanent_generated_id_collision_preserves_queue(
     queue_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(queue_adapter, "timestamped_token", lambda prefix: f"{prefix}_same")
+    monkeypatch.setattr(persistence_utils, "timestamped_token", lambda prefix: f"{prefix}_same")
     first = enqueue(queue_root, str(queue_root / "mol_A"))
     queue_path = queue_root / "queue.json"
     original = queue_path.read_bytes()
@@ -1066,7 +1067,7 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
         return None
 
     with (
-        patch("orca_auto.orca.queue.orphans.read_worker_pid", return_value=None),
+        patch("orca_auto.orca.queue.orphans.read_worker_pid_file", return_value=None),
         patch(
             "orca_auto.orca.queue.orphans.run_lock_is_held",
             return_value=False,
@@ -1115,7 +1116,7 @@ def test_reconcile_orphaned_running_entries_skips_blank_dirs_and_active_locks(
     )
 
     with (
-        patch("orca_auto.orca.queue.orphans.read_worker_pid", return_value=None),
+        patch("orca_auto.orca.queue.orphans.read_worker_pid_file", return_value=None),
         patch(
             "orca_auto.orca.queue.orphans.run_lock_is_held",
             side_effect=lambda reaction_dir, **_kwargs: reaction_dir == locked_dir,

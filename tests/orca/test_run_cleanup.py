@@ -351,6 +351,83 @@ def test_clear_removes_the_worker_log_of_every_cleared_row_and_keeps_retained_on
     assert [entry.queue_id for entry in queue_adapter.list_queue(queue_root)] == ["q-running"]
 
 
+def test_clear_removes_logs_after_the_save_under_the_lock_and_never_restores_rows(
+    queue_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from orca_auto.core.queue.persistence import load_entries, queue_lock_path
+    from orca_auto.core.queue.types import QueueStatus
+    from orca_auto.core.utils.lock import held_file_lock_payload
+    from tests.conftest import enqueue_entry, make_queue_entry
+
+    for queue_id, status in (("q-done", QueueStatus.COMPLETED), ("q-live", QueueStatus.RUNNING)):
+        enqueue_entry(
+            queue_root,
+            make_queue_entry(queue_id=queue_id, reaction_dir=queue_root / queue_id, status=status),
+        )
+    seen: list[tuple[str, list[str], bool]] = []
+
+    def failing_unlink(root: Path, queue_id: str) -> bool:
+        on_disk = [entry.queue_id for entry in load_entries(root)]
+        lock_held = held_file_lock_payload(queue_lock_path(root)) is not None
+        seen.append((queue_id, on_disk, lock_held))
+        raise RuntimeError("unlink interrupted")
+
+    monkeypatch.setattr(run_cleanup, "_remove_worker_log", failing_unlink)
+
+    with pytest.raises(RuntimeError, match="unlink interrupted"):
+        run_cleanup.clear_terminal_queue_entries(queue_root)
+
+    assert seen == [("q-done", ["q-live"], True)]
+    assert [entry.queue_id for entry in queue_adapter.list_queue(queue_root)] == ["q-live"]
+
+
+@pytest.mark.parametrize(
+    ("status", "replay_marker", "protection"),
+    [
+        ("pending", False, "active"),
+        ("running", False, "active"),
+        ("completed", True, "pending_replay"),
+        ("failed", False, "terminal"),
+        ("cancelled", False, "terminal"),
+    ],
+)
+def test_row_protection_drives_both_the_scan_and_the_locked_recheck(
+    queue_root: Path,
+    status: str,
+    replay_marker: bool,
+    protection: str,
+) -> None:
+    from orca_auto.core.queue.types import QueueStatus
+    from tests.conftest import enqueue_entry, make_queue_entry
+
+    reaction_dir = queue_root / "rxn"
+    metadata = (
+        {queue_entries.TERMINAL_REPLAY_METADATA_KEY: {"version": 1}} if replay_marker else None
+    )
+    entry = enqueue_entry(
+        queue_root,
+        make_queue_entry(
+            queue_id="q-1",
+            reaction_dir=reaction_dir,
+            status=QueueStatus(status),
+            metadata=metadata,
+        ),
+    )
+
+    assert run_cleanup._row_protection(entry) == protection
+    active, terminal, pending_replay = run_cleanup._queue_cleanup_reaction_dirs(queue_root)
+    resolved = str(reaction_dir.resolve())
+    assert (resolved in active, resolved in terminal, resolved in pending_replay) == (
+        protection == "active",
+        protection == "terminal",
+        protection == "pending_replay",
+    )
+    assert run_cleanup._queue_generation_blocks_state_cleanup(queue_root, resolved) is (
+        protection != "terminal"
+    )
+
+
 def test_clear_terminal_state_preserves_active_queue_finalization_window(
     tmp_path: Path,
 ) -> None:

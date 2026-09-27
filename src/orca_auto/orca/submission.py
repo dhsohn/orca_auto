@@ -30,6 +30,7 @@ from orca_auto.core.queue.persistence import QueueStoreCorruptError
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca.queue.enqueue_publication import (
     EnqueuePublicationOutcome,
@@ -55,7 +56,7 @@ from .queue import adapter as queue_adapter
 from .queue import entries as queue_entries
 from .queue.adapter import DuplicateEntryError
 from .queue.job_records import upsert_queued_job_record
-from .queue.orphans import DeadRunningRowUnjudgeableError, read_worker_pid
+from .queue.orphans import DeadRunningRowUnjudgeableError
 from .resource_directives import (
     PreparedSubmissionResourceInput,
     prepare_submission_resource_request,
@@ -138,7 +139,7 @@ def find_submission_conflict(
 
 
 def worker_status_for_submission(allowed_root: Path) -> WorkerStatusInfo:
-    pid = read_worker_pid(allowed_root)
+    pid = read_worker_pid_file(allowed_root)
     if pid is None:
         return WorkerStatusInfo(status="inactive")
     return WorkerStatusInfo(status="running", pid=pid)

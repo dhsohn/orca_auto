@@ -32,11 +32,6 @@ from .terminal_replay import (
 logger = logging.getLogger(__name__)
 
 
-def read_worker_pid(allowed_root: Path) -> int | None:
-    """The live pid recorded by the ORCA queue worker under *allowed_root*, if any."""
-    return read_worker_pid_file(allowed_root)
-
-
 def apply_terminal_reconciliation(
     entry: QueueEntry,
     *,
@@ -160,12 +155,11 @@ def reconcile_orphaned_running_entries(
     ``only_reaction_dirs`` (resolved paths) narrows the pass to rows of those
     directories; every other running row is left untouched.
     """
-    if not ignore_worker_pid and read_worker_pid(allowed_root) is not None:
+    if not ignore_worker_pid and read_worker_pid_file(allowed_root) is not None:
         return 0
 
-    changed = 0
-    with _queue_store.queue_lock(allowed_root):
-        entries = _queue_store.load_entries(allowed_root)
+    def reconcile(entries: list[QueueEntry]) -> tuple[int, bool]:
+        changed = 0
         owned_entries = [entry for entry in entries if is_orca_queue_entry(entry)]
         prior_evidence_by_key = _prior_terminal_generation_evidence(owned_entries)
         for index, entry in enumerate(entries):
@@ -202,10 +196,9 @@ def reconcile_orphaned_running_entries(
                 continue
             entries[index] = updated
             changed += 1
+        return changed, changed > 0
 
-        if changed:
-            _queue_store.save_entries(allowed_root, entries)
-    return changed
+    return _queue_store.mutate_entries(allowed_root, reconcile)
 
 
 class DeadRunningRowUnjudgeableError(ValueError):
@@ -213,9 +206,7 @@ class DeadRunningRowUnjudgeableError(ValueError):
 
 
 def _has_running_row_for_dir(allowed_root: Path, normalized_dir: str) -> bool:
-    with _queue_store.queue_lock(allowed_root):
-        entries = _queue_store.load_entries(allowed_root)
-    for entry in entries:
+    for entry in _queue_store.list_queue(allowed_root):
         if not is_orca_queue_entry(entry):
             continue
         if queue_entry_status(entry) != QueueStatus.RUNNING.value:
@@ -260,7 +251,7 @@ def reconcile_dead_running_rows_for_dir(
     resubmitted until a worker restarted, because its stale RUNNING row rejects
     the new submission as an active duplicate.
     """
-    if read_worker_pid(allowed_root) is not None:
+    if read_worker_pid_file(allowed_root) is not None:
         return 0
     normalized_dir = str(Path(reaction_dir).expanduser().resolve())
     if not _has_running_row_for_dir(allowed_root, normalized_dir):
@@ -347,7 +338,7 @@ def _reconcile_entry(
         logger.info("Reconciled orphaned entry %s -> cancelled (cancel_requested)", queue_id)
         return updated
 
-    updated = replace(entry, status=QueueStatus.PENDING, started_at="")
+    updated = _queue_transitions.requeued_entry(entry, clear_error_and_cancel=False)
     logger.info("Reconciled orphaned entry %s -> pending (re-queue)", queue_id)
     return updated
 

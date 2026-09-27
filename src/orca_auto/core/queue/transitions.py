@@ -5,7 +5,8 @@ dequeue/clear operations; the engine adapter appends rows. This module owns
 every transition that ends or interrupts a row's life:
 
 * :func:`terminal_entry` is the only constructor of COMPLETED/FAILED/
-  CANCELLED rows.
+  CANCELLED rows and :func:`requeued_entry` the only constructor of a row
+  returned to PENDING.
 * :func:`request_cancel` cancels a pending row outright (revoking any
   publication lease it holds) or flags a running row for its worker.
 * :func:`mark_completed`, :func:`mark_failed` and :func:`mark_cancelled`
@@ -16,9 +17,8 @@ every transition that ends or interrupts a row's life:
 
 Every writer goes through :func:`.store.mutate_entries` or
 :func:`.store.mutate_entry_by_id`, so lock discipline and the on-disk format
-stay defined in one place; ``orca.queue.orphans`` is the one row writer that
-still bypasses them. The caller's ``accept_entry_fn`` is the whole generation
-fence: each transition adds only its own status rule.
+stay defined in one place. The caller's ``accept_entry_fn`` is the whole
+generation fence: each transition adds only its own status rule.
 """
 
 from __future__ import annotations
@@ -104,6 +104,30 @@ def terminal_entry(
         cancel_requested=cancel_requested,
         error=entry.error if error is None else error.strip(),
         metadata=entry.metadata if metadata is None else dict(metadata),
+    )
+
+
+def requeued_entry(
+    entry: QueueEntry,
+    *,
+    clear_error_and_cancel: bool,
+    metadata_update: Mapping[str, Any] | None = None,
+) -> QueueEntry:
+    """Build the PENDING row that returns a running ``entry`` to the queue.
+
+    This is the only constructor of requeued rows. ``started_at`` is cleared
+    (the next claim re-stamps it) and ``metadata_update`` is merged over the
+    row's metadata. A worker requeue passes ``clear_error_and_cancel=True`` and
+    also clears ``error`` and ``cancel_requested``; orphan reconciliation
+    passes ``False`` and keeps both as recorded.
+    """
+    return replace(
+        entry,
+        status=QueueStatus.PENDING,
+        started_at="",
+        cancel_requested=False if clear_error_and_cancel else entry.cancel_requested,
+        error="" if clear_error_and_cancel else entry.error,
+        metadata=_merged_metadata(entry, metadata_update=metadata_update),
     )
 
 
@@ -267,13 +291,10 @@ def requeue_running_entry(
                 )
                 entries[index] = updated
                 return updated, True
-            updated = replace(
+            updated = requeued_entry(
                 entry,
-                status=QueueStatus.PENDING,
-                started_at="",
-                cancel_requested=False,
-                error="",
-                metadata=_merged_metadata(entry, metadata_update=requeue_metadata_update),
+                clear_error_and_cancel=True,
+                metadata_update=requeue_metadata_update,
             )
             entries[index] = updated
             return updated, True

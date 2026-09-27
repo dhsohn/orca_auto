@@ -18,7 +18,7 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.core.utils.persistence import now_utc_iso, timestamped_token
+from orca_auto.core.utils.persistence import now_utc_iso, unique_timestamped_token
 
 from ..app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from .entries import (
@@ -45,8 +45,6 @@ from .terminal_replay import (
 )
 
 logger = logging.getLogger(__name__)
-
-_TOKEN_COLLISION_RETRY_LIMIT = 32
 
 __all__ = [
     "AmbiguousQueueTargetError",
@@ -151,20 +149,6 @@ def _reject_duplicate_reaction_dir(
     )
 
 
-def _unique_timestamped_token(
-    prefix: str,
-    *,
-    occupied: set[str],
-) -> str:
-    for _attempt in range(_TOKEN_COLLISION_RETRY_LIMIT):
-        candidate = timestamped_token(prefix)
-        if candidate not in occupied:
-            return candidate
-    raise RuntimeError(
-        f"Could not allocate a unique {prefix} token after {_TOKEN_COLLISION_RETRY_LIMIT} attempts"
-    )
-
-
 def enqueue(
     allowed_root: Path,
     reaction_dir: str,
@@ -193,13 +177,9 @@ def enqueue(
     normalized_task_kind = normalize_text(task_kind) or ORCA_TASK_KIND
 
     def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
-        queue_id = _unique_timestamped_token(
-            "q",
-            occupied={entry.queue_id for entry in entries},
-        )
-        resolved_task_id = normalized_task_id or _unique_timestamped_token(
-            "orca",
-            occupied={normalize_text(entry.task_id) for entry in entries},
+        queue_id = unique_timestamped_token("q", {entry.queue_id for entry in entries})
+        resolved_task_id = normalized_task_id or unique_timestamped_token(
+            "orca", {normalize_text(entry.task_id) for entry in entries}
         )
         queue_metadata = entry_metadata(
             reaction_dir=resolved,

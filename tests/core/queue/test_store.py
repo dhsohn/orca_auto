@@ -156,13 +156,13 @@ def test_after_commit_error_reports_unrestored_compensation(
     def reject_after_commit() -> None:
         raise guard_error
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
         store.mutate_entries(
             tmp_path,
             append,
             after_commit_fn=reject_after_commit,
-            load_entries_fn=load,
-            save_entries_fn=save,
         )
 
     error = error_info.value
@@ -206,13 +206,13 @@ def test_after_commit_error_reports_unknown_compensation_when_reload_fails(
     def reject_after_commit() -> None:
         raise RuntimeError("publication target moved")
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
         store.mutate_entries(
             tmp_path,
             append,
             after_commit_fn=reject_after_commit,
-            load_entries_fn=load,
-            save_entries_fn=save,
         )
 
     error = error_info.value
@@ -248,13 +248,13 @@ def test_after_commit_error_requires_clean_return_to_report_restored_compensatio
     def reject_after_commit() -> None:
         raise RuntimeError("publication target moved")
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
         store.mutate_entries(
             tmp_path,
             append,
             after_commit_fn=reject_after_commit,
-            load_entries_fn=load,
-            save_entries_fn=save,
         )
 
     error = error_info.value
@@ -293,13 +293,13 @@ def test_after_commit_base_exception_is_wrapped_after_clean_compensation(
     def reject_after_commit() -> None:
         raise guard_error
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
         store.mutate_entries(
             tmp_path,
             append,
             after_commit_fn=reject_after_commit,
-            load_entries_fn=load,
-            save_entries_fn=save,
         )
 
     error = error_info.value
@@ -344,13 +344,13 @@ def test_compensation_base_exception_is_preserved_and_fails_closed(
         entries.append("provisional")
         return "provisional-result", True
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
         store.mutate_entries(
             tmp_path,
             append,
             after_commit_fn=lambda: (_ for _ in ()).throw(guard_error),
-            load_entries_fn=load,
-            save_entries_fn=save,
         )
 
     error = error_info.value
@@ -397,13 +397,13 @@ def test_compensation_verification_base_exception_is_preserved_as_unknown(
         entries.append("provisional")
         return "provisional-result", True
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
         store.mutate_entries(
             tmp_path,
             append,
             after_commit_fn=lambda: (_ for _ in ()).throw(RuntimeError("publication target moved")),
-            load_entries_fn=load,
-            save_entries_fn=save,
         )
 
     error = error_info.value

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Collection
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from secrets import token_hex
 from typing import Any
 
 JSON_LOAD_EXCEPTIONS = (OSError, UnicodeDecodeError, json.JSONDecodeError)
+_TOKEN_COLLISION_RETRY_LIMIT = 32
 
 
 def now_utc_iso() -> str:
@@ -35,6 +37,17 @@ def parse_iso_utc(value: Any) -> datetime | None:
 def timestamped_token(prefix: str, *, token_bytes: int = 16) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     return f"{prefix}_{stamp}_{token_hex(token_bytes)}"
+
+
+def unique_timestamped_token(prefix: str, occupied: Collection[str]) -> str:
+    """A :func:`timestamped_token` not in ``occupied``; gives up after 32 collisions."""
+    for _attempt in range(_TOKEN_COLLISION_RETRY_LIMIT):
+        candidate = timestamped_token(prefix)
+        if candidate not in occupied:
+            return candidate
+    raise RuntimeError(
+        f"Could not allocate a unique {prefix} token after {_TOKEN_COLLISION_RETRY_LIMIT} attempts"
+    )
 
 
 def timestamped_token_pattern(prefix: str, *, token_bytes: int = 16) -> re.Pattern[str]:

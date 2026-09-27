@@ -90,7 +90,7 @@ def _real_submission(
     monkeypatch.setattr(
         queue_notifications, "notify_queue_enqueued_event", lambda *_args, **_kwargs: True
     )
-    monkeypatch.setattr(run_inp, "read_worker_pid", lambda _root: None)
+    monkeypatch.setattr(run_inp, "read_worker_pid_file", lambda _root: None)
     args = SimpleNamespace(
         config=str(config),
         reaction_dir=str(reaction_dir),

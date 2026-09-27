@@ -114,8 +114,8 @@ def _detect_existing_orca_worker_conflict(
         return None
 
     try:
+        from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
         from orca_auto.orca.config import load_config as _load_orca_config
-        from orca_auto.orca.queue.orphans import read_worker_pid as _read_orca_worker_pid
 
         cfg = _load_orca_config(str(config_path))
     except Exception:  # noqa: BLE001
@@ -123,7 +123,7 @@ def _detect_existing_orca_worker_conflict(
         return None
 
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
-    existing_pid = _read_orca_worker_pid(allowed_root)
+    existing_pid = read_worker_pid_file(allowed_root)
     if existing_pid is None:
         return None
 

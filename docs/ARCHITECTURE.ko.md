@@ -120,7 +120,7 @@ SystemExit, 시작 실패는 이전처럼 워커를 끝낸다. 주기적 워커 
 
 취소 관찰은 변경되지 않은 큐 스냅샷을 재사용한다. 자식은 종료 상태와 보고서를 발행한 뒤 종료합니다. 부모가 큐의 종료 처리를 정리하고 작업·실행 ID가 일치하는 상태에서 완료 알림의 전송권을 기록합니다. 동시 전송 수가 제한된 백그라운드 전송기는 확보한 메시지만 전달하며, 실행 슬롯을 붙잡거나 전송 후 상태를 다시 쓰지 않습니다. 종료 처리를 반복해도 이미 전송권을 기록한 알림은 건너뛰며, 과거 전송 완료 표식도 인식합니다. 알림은 참고용이므로 전송권 기록 뒤 프로세스가 중단되거나 전송 실패·용량 부족이 발생하면 유실될 수 있고, 이를 재시도하거나 계산 결과를 변경하지 않습니다. 제출은 디스크 큐 항목에 `orca_queued_notification_pending`을 기록합니다. 위치 기록 발행 후 부모 워커가 큐 잠금 안에서 전송권을 확보하고 제출 알림을 별도로 전달하므로 CLI가 종료돼도 전송 전의 의도는 남습니다. 이 표시가 없는 과거 항목의 알림을 소급 전송하지 않습니다. 자식은 시도 시작을 기록한 뒤 시작 알림을 캡처해 별도로 전달하고 계산을 진행합니다. 세 알림은 같은 전송기를 사용하며 동시 전송 수는 프로세스당 4개입니다. 전송 실패·용량 부족·프로세스 종료로 참고용 메시지가 유실될 수 있고, 전송기는 실행 상태를 쓰지 않습니다. 제출 알림의 전송권 기록이 실패하면 전송을 건너뛰되 실행권 할당은 보류하지 않습니다.
 
-워커 CLI는 설정 로드, PID 확인(`orca/queue/orphans.py`의 `read_worker_pid`),
+워커 CLI는 설정 로드, PID 확인(`core/queue/worker/pid_file.py`의 `read_worker_pid_file`),
 ORCA 워커 생성·실행을 직접 수행한다. `orca/queue/roots.py`가 하나뿐인 큐 루트
 (`runtime.allowed_root`)를 해석하고 행 나열과 ID 기준 fenced 인수를 소유하며 큐 선두
 위치로 행을 인수하는 일은 없다.
@@ -129,6 +129,9 @@ fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 �
 상태 조건만 더한다. 생명주기 메타데이터(대기 연기, 실행 ID, 재처리 표식과 fence,
 제출 알림 전송권, 발행 임대)는 식별에 들지 않으며, `job_state.json`의
 `queue_generation`은 그 해시다.
+`queue.json`은 `core/queue/store.py`의 `mutate_entries`만 쓰고, 재대기·종료 행은 모두
+`core/queue/transitions.py`의 `requeued_entry`·`terminal_entry`가 만든다.
+`tests/core/queue/test_ownership_guards.py`가 둘 다 강제한다.
 `queue/replay.py`는 재처리 엔진(작업 항목, 종료 준비와 발행, 정리 파이프라인,
 generation 소유자 결정)만 담당하며 상태를 인자로 명시적으로 받고,
 `queue/run_state_replay.py`는 `run.lock` 아래에서 종료 `job_state.json`을
