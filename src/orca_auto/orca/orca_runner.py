@@ -34,12 +34,8 @@ from orca_auto.core.queue.processes import (
     terminate_process_group,
 )
 from orca_auto.core.utils.persistence import open_pinned_readonly
-from orca_auto.orca.engine_runner import (
-    confined_output_identity,
-    executable_identity,
-    open_pinned_executable,
-)
 
+from .file_identity import confined_output_identity, file_content_identity, open_pinned_executable
 from .scratch import OrcaScratchPolicy
 
 logger = logging.getLogger(__name__)
@@ -392,7 +388,7 @@ class OrcaRunner:
             publication = workspace.publish()
             durable_out = durable_input.parent / Path(result.out_path).name
             result.out_path = str(durable_out)
-            result.input_identity = executable_identity(durable_input)
+            result.input_identity = file_content_identity(durable_input)
             result.output_identity = confined_output_identity(durable_input.parent, durable_out)
             result.scratch_provenance = scratch_publication_provenance(publication)
             return result
@@ -439,7 +435,7 @@ class OrcaRunner:
         cwd = str(inp.parent)
 
         command: list[str] = [self.orca_executable, inp.name]
-        input_identity = executable_identity(inp)
+        input_identity = file_content_identity(inp)
         bound_executable_identity = dict(self._bound_executable_identity)
         logger.info("Running ORCA: %s in %s", command, cwd)
 
@@ -594,12 +590,12 @@ class OrcaRunner:
             # delivered only after ownership has been released. A worker's restored
             # handler may also have set the polling callback during handler restore.
             _raise_if_shutdown_requested()
-        if executable_identity(inp) != input_identity:
+        if file_content_identity(inp) != input_identity:
             raise RuntimeError(f"ORCA execution input changed while it was running: {inp}")
         output_identity = (
             confined_output_identity(inp.parent, out)
             if working_directory_fd is None
-            else executable_identity(out)
+            else file_content_identity(out)
         )
         return RunResult(
             out_path=str(out),

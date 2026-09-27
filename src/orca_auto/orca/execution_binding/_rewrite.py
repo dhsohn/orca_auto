@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from ..file_identity import file_content_identity
 from ..input_blocks import geometry_header_match
 from ..input_references import OrcaFileReference, set_moinp
 from ..input_syntax import ensure_route_keywords, quote_orca_path, unquoted_orca_path
@@ -13,7 +14,6 @@ from ..input_validation import validate_unambiguous_orca_directives
 from ._confinement import _confined_reference_path, _write_private_input
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 from ._models import _MaterializedSnapshotInputs, _SelectedSnapshotInput
-from ._snapshot_identity import _file_identity
 
 
 def _render_bound_reference(reference: OrcaFileReference, relative_path: str) -> str:
@@ -102,4 +102,4 @@ def _write_bound_selected_snapshot(
         bound_payload,
         label="ORCA bound selected input",
     )
-    return bound_selected, _file_identity(bound_selected)
+    return bound_selected, file_content_identity(bound_selected)

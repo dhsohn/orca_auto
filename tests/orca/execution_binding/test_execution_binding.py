@@ -17,6 +17,7 @@ from orca_auto.orca.execution_binding import (
     verify_orca_execution_snapshot,
 )
 from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count
+from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 from tests.conftest import build_submitted_snapshot, write_fake_orca
 
@@ -1853,15 +1854,12 @@ def test_orca_execution_snapshot_rejects_private_dependency_mutation(tmp_path: P
 def test_orca_execution_snapshot_rejects_materialized_basename_metadata_tamper(
     tmp_path: Path,
 ) -> None:
-    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir, selected, snapshot, resources = _snapshot(tmp_path)
     generation = Path(snapshot["execution_dir"])
     tampered = generation / "renamed.pc"
     tampered.write_bytes((job_dir / "charges.pc").read_bytes())
-    snapshot["materialized_inputs"]["dependency_000000"] = _snapshot_identity._file_identity(
-        tampered
-    )
+    snapshot["materialized_inputs"]["dependency_000000"] = file_content_identity(tampered)
 
     with pytest.raises(ValueError, match="does not preserve its source basename"):
         _verify(job_dir, selected, snapshot, resources)
@@ -1872,7 +1870,6 @@ def test_orca_execution_snapshot_rejects_materialized_basename_metadata_tamper(
 def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
     tmp_path: Path,
 ) -> None:
-    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir, selected, snapshot, resources = _snapshot(tmp_path)
     role = "dependency_000000"
@@ -1882,7 +1879,7 @@ def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
     original_private.rename(reserved_private)
     snapshot["dependency_paths"][0] = str(reserved_source.resolve())
     snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
-    snapshot["materialized_inputs"][role] = _snapshot_identity._file_identity(reserved_private)
+    snapshot["materialized_inputs"][role] = file_content_identity(reserved_private)
     bound_selected = Path(snapshot["selected_inp"])
     bound_selected.chmod(0o600)
     bound_selected.write_text(
@@ -1890,7 +1887,7 @@ def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
         encoding="utf-8",
     )
     bound_selected.chmod(0o400)
-    snapshot["bound_selected_identity"] = _snapshot_identity._file_identity(bound_selected)
+    snapshot["bound_selected_identity"] = file_content_identity(bound_selected)
 
     with pytest.raises(ValueError, match="runtime/output file: job.resume.out"):
         _verify(job_dir, selected, snapshot, resources)
@@ -1924,7 +1921,6 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
     tmp_path: Path,
     output_route: str,
 ) -> None:
-    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -1950,7 +1946,7 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
     original_private.rename(reserved_private)
     snapshot["dependency_paths"][0] = str(reserved_source.resolve())
     snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
-    snapshot["materialized_inputs"][role] = _snapshot_identity._file_identity(reserved_private)
+    snapshot["materialized_inputs"][role] = file_content_identity(reserved_private)
     bound_selected = Path(snapshot["selected_inp"])
     bound_selected.chmod(0o600)
     bound_selected.write_text(
@@ -1960,7 +1956,7 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
         encoding="utf-8",
     )
     bound_selected.chmod(0o400)
-    snapshot["bound_selected_identity"] = _snapshot_identity._file_identity(bound_selected)
+    snapshot["bound_selected_identity"] = file_content_identity(bound_selected)
 
     with pytest.raises(ValueError, match="runtime/output file: job.engrad"):
         verify_orca_execution_snapshot(
@@ -1985,7 +1981,6 @@ def test_verify_orca_execution_snapshot_rejects_neb_output_name_tamper(
     reserved_name: str,
     neb_block: str,
 ) -> None:
-    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir = tmp_path / "job"
     job_dir.mkdir()
@@ -2010,7 +2005,7 @@ def test_verify_orca_execution_snapshot_rejects_neb_output_name_tamper(
     Path(snapshot["materialized_inputs"][role]["path"]).rename(reserved_private)
     snapshot["dependency_paths"][0] = str(reserved_source.resolve())
     snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
-    snapshot["materialized_inputs"][role] = _snapshot_identity._file_identity(reserved_private)
+    snapshot["materialized_inputs"][role] = file_content_identity(reserved_private)
     bound_selected = Path(snapshot["selected_inp"])
     bound_selected.chmod(0o600)
     bound_selected.write_text(
@@ -2020,7 +2015,7 @@ def test_verify_orca_execution_snapshot_rejects_neb_output_name_tamper(
         encoding="utf-8",
     )
     bound_selected.chmod(0o400)
-    snapshot["bound_selected_identity"] = _snapshot_identity._file_identity(bound_selected)
+    snapshot["bound_selected_identity"] = file_content_identity(bound_selected)
 
     with pytest.raises(ValueError, match=f"runtime/output file: {re.escape(reserved_name)}"):
         verify_orca_execution_snapshot(
@@ -2137,7 +2132,6 @@ def test_verify_orca_execution_snapshot_rejects_selected_input_as_dependency(
 def test_verify_orca_execution_snapshot_rejects_dependency_role_substitution(
     tmp_path: Path,
 ) -> None:
-    from orca_auto.orca.execution_binding import _snapshot_identity
 
     job_dir, selected, snapshot, resources = _snapshot(tmp_path)
     role = "dependency_000001"
@@ -2147,7 +2141,7 @@ def test_verify_orca_execution_snapshot_rejects_dependency_role_substitution(
     replacement_private.write_bytes(original_private.read_bytes())
     snapshot["dependency_paths"][1] = str(replacement_source.resolve())
     snapshot["source_inputs"][role]["source_path"] = str(replacement_source.resolve())
-    snapshot["materialized_inputs"][role] = _snapshot_identity._file_identity(replacement_private)
+    snapshot["materialized_inputs"][role] = file_content_identity(replacement_private)
 
     with pytest.raises(ValueError, match="bound input references do not match"):
         _verify(job_dir, selected, snapshot, resources)

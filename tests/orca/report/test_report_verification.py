@@ -127,7 +127,7 @@ def test_report_hashes_each_available_file_once_per_load(
 
     monkeypatch.setattr(machine_observation.ReceiptDigest, "consume", count_hash)
     monkeypatch.setattr(
-        "orca_auto.orca.engine_runner.executable_identity",
+        "orca_auto.orca.file_identity.file_content_identity",
         lambda *_args: pytest.fail("report verification must reuse the input receipt"),
     )
     assert load_report_json(generation, require_consumable_success=True) is not None

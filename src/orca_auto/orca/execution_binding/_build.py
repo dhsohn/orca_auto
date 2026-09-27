@@ -12,10 +12,10 @@ from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_TOKEN_KEY,
 )
-from orca_auto.orca import engine_runner as _engine_runner
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
 
 from .. import input_references
+from ..file_identity import file_content_identity
 from ..input_references import orca_input_requests_moread, orca_moinp_references
 from ..input_validation import validate_supported_xyz_geometry_syntax
 from ..resource_directives import resource_request_from_lines
@@ -54,7 +54,6 @@ from ._reservation import _reserve_execution_generation
 from ._rewrite import _write_bound_selected_snapshot
 from ._snapshot_identity import (
     STALE_RECOVERY_SNAPSHOT_ERROR,
-    _file_identity,
     dependency_role,
     require_current_snapshot_version,
     validated_resource_request,
@@ -340,7 +339,7 @@ def _materialize_snapshot_inputs(
         if inline_same_stem_xyz:
             target.chmod(0o600)
         private_paths[dependency] = target.resolve()
-        materialized_inputs[role] = _file_identity(target)
+        materialized_inputs[role] = file_content_identity(target)
         if inline_same_stem_xyz:
             runtime_mutable_input_roles.append(role)
         if private_override is not None:
@@ -503,8 +502,9 @@ def build_orca_execution_snapshot(
             selected,
             materialized,
         )
-        executable = _engine_runner.executable_identity(
-            recovery_executable if recovery_executable is not None else orca_executable
+        executable = file_content_identity(
+            recovery_executable if recovery_executable is not None else orca_executable,
+            label="Engine executable",
         )
         if recovery_from is not None:
             executable_identities = recovery_from.get("executable_identities")

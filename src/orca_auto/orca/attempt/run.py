@@ -18,10 +18,7 @@ from ...core.engine_scratch import (
     scratch_provenance_from_exception,
 )
 from ..completion_rules import detect_completion_mode
-from ..engine_runner import (
-    confined_output_identity,
-    verify_confined_output_identity,
-)
+from ..file_identity import confined_output_identity, verify_confined_output_identity
 from ..notifications import dispatch_notification, notification_channel, notify_run_started_event
 from ..orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from ..out_analyzer import OutAnalysis, analyze_output, apply_exit_code

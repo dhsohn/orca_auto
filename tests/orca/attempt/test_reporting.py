@@ -15,7 +15,7 @@ from orca_auto.orca.attempt.reporting import (
     last_out_path_from_state,
     parse_analyzer_status,
 )
-from orca_auto.orca.engine_runner import executable_identity
+from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.notifications import finished_notification_already_sent
 from orca_auto.orca.state import new_state
 from orca_auto.orca.state_reading import load_state
@@ -125,7 +125,7 @@ def test_exit_with_result_publishes_state_and_reports_and_prints_the_summary(
             "inode": generation_status.st_ino,
         },
         "generation_owner_token": owner_token,
-        "bound_selected_identity": executable_identity(selected_inp),
+        "bound_selected_identity": file_content_identity(selected_inp),
     }
     rc = exit_with_result(
         reaction_dir,

@@ -18,8 +18,8 @@ from typing import Any
 from orca_auto.core.confined_io import read_stable_regular_file, require_confined_regular_file
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KEY
-from orca_auto.orca import engine_runner as _engine_runner
 
+from ..file_identity import file_content_identity, verify_executable_identity
 from ..generation_validation import is_retired_generation_marker
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES, ORCA_EXECUTION_SNAPSHOT_VERSION
 
@@ -91,15 +91,6 @@ def validated_resource_request(value: Any, *, error: str) -> dict[str, int]:
     return dict(value)
 
 
-def _file_identity(path: Path) -> dict[str, Any]:
-    identity = _engine_runner.executable_identity(path)
-    return {
-        "path": identity["path"],
-        "sha256": identity["sha256"],
-        "size_bytes": identity["size_bytes"],
-    }
-
-
 def orca_execution_provenance(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     """Return the durable execution identity attached to ORCA run artifacts."""
 
@@ -142,8 +133,8 @@ def verify_orca_snapshot_executable(
     if not isinstance(identity, dict):
         raise ValueError("Queued ORCA execution snapshot has no ORCA executable identity")
     if expected_executable is None:
-        return _engine_runner.verify_executable_identity(identity)
-    current = _engine_runner.executable_identity(expected_executable)
+        return verify_executable_identity(identity)
+    current = file_content_identity(expected_executable, label="Engine executable")
     if current != identity:
         raise ValueError("ORCA crash recovery executable does not match the submitted identity")
     return str(current["path"])
@@ -187,7 +178,7 @@ def _verify_identity(identity: Any, *, root: Path, label: str) -> Path:
         Path(str(identity.get("path") or "")).expanduser(),
         label=f"Queued ORCA {label} snapshot",
     )
-    current = _file_identity(path)
+    current = file_content_identity(path)
     if current != dict(identity):
         raise ValueError(f"Queued ORCA {label} snapshot is corrupt")
     return path

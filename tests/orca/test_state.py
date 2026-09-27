@@ -16,7 +16,7 @@ from orca_auto.core.utils.process_tracking import run_lock_is_held
 from orca_auto.orca import run_lock
 from orca_auto.orca import state as state_module
 from orca_auto.orca import state_reading as state_reading_module
-from orca_auto.orca.engine_runner import executable_identity
+from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.report import publication as publication_module
 from orca_auto.orca.report.publication import write_report_files, write_report_json
 from orca_auto.orca.run_lock import acquire_run_lock
@@ -55,7 +55,7 @@ def _bind_generation(reaction: Path, *, token: str) -> tuple[Path, dict]:
             "inode": generation_status.st_ino,
         },
         "generation_owner_token": token,
-        "bound_selected_identity": executable_identity(inp),
+        "bound_selected_identity": file_content_identity(inp),
     }
     return generation, provenance
 

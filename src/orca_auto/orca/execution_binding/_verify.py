@@ -10,6 +10,7 @@ from typing import Any
 from orca_auto.core.confined_io import read_stable_regular_file, require_confined_regular_file
 
 from .. import input_references
+from ..file_identity import file_content_identity
 from ..input_validation import validate_supported_xyz_geometry_syntax
 from ._confinement import (
     _reference_source,
@@ -20,7 +21,6 @@ from ._inputs import _inline_geometry_atom_count, _route_outputs
 from ._models import _VerifiedSnapshotInputs
 from ._recovery import _is_recovery_checkpoint_source_name, recovery_checkpoint_private_name
 from ._snapshot_identity import (
-    _file_identity,
     _verify_identity,
     dependency_role,
     is_canonical_source_path,
@@ -66,7 +66,7 @@ def orca_execution_started_evidence(job_dir: str | Path, snapshot: Any) -> bool:
                 continue
             path = Path(str(identity.get("path") or ""))
             try:
-                current = _file_identity(path)
+                current = file_content_identity(path)
             except (OSError, ValueError):
                 return True
             if current != dict(identity):
