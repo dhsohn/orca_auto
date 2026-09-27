@@ -468,7 +468,7 @@ def test_fill_slots_counts_existing_worker_admission_slot_once(
     )
     assert token is not None
     worker._running["q_existing"] = OrcaRunningJob(
-        queue_root=worker.allowed_root,
+        queue_root=worker.queue_root,
         queue_id="q_existing",
         reaction_dir=str(active_dir),
         process=fake_children.spawn(),

@@ -132,7 +132,7 @@ def write_completed_run_state(reaction_dir: Path) -> None:
     )
 
 
-def reconcile_statuses(worker: ReplayStateOwner) -> dict[tuple[str, str], str]:
+def reconcile_statuses(worker: ReplayStateOwner) -> dict[str, str]:
     statuses = worker.replay_state.reconcile_statuses
     assert statuses is not None
     return statuses
@@ -140,7 +140,6 @@ def reconcile_statuses(worker: ReplayStateOwner) -> dict[tuple[str, str], str]:
 
 def run_terminal_replay(
     worker: ReplayStateOwner,
-    tmp_path: Path,
     entry: QueueEntry,
     *,
     previous_status: str | None = None,
@@ -148,15 +147,11 @@ def run_terminal_replay(
     if previous_status is not None:
         state = worker.replay_state
         statuses = dict(state.reconcile_statuses or {})
-        statuses[(str(tmp_path.resolve()), entry.queue_id)] = previous_status
+        statuses[entry.queue_id] = previous_status
         state.reconcile_statuses = statuses
     with (
         patch.object(replay_mod, "recover_orphaned_engine_slots"),
-        patch.object(
-            replay_mod.roots,
-            "queue_entries_with_roots",
-            return_value=[(tmp_path, entry)],
-        ),
+        patch.object(replay_mod.roots, "list_orca_rows", return_value=[entry]),
         patch.object(
             replay_mod,
             "live_queue_slot_keys_for_slots",
@@ -319,7 +314,7 @@ def running_job(
     task_id: str | None = None,
 ) -> OrcaRunningJob:
     return OrcaRunningJob(
-        queue_root=worker.allowed_root,
+        queue_root=worker.queue_root,
         queue_id=entry.queue_id,
         reaction_dir=str(reaction_dir),
         process=process,

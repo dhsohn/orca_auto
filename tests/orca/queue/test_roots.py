@@ -1,4 +1,4 @@
-"""``orca.queue.roots``: root listing, ORCA identity filtering and the fenced by-id claim."""
+"""``orca.queue.roots``: the queue root, ORCA identity filtering and the fenced by-id claim."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from tests.conftest import make_app_cfg
 
 
 def _cfg(tmp_path: Path) -> AppConfig:
-    return make_app_cfg(tmp_path / "unused")
+    return make_app_cfg(tmp_path)
 
 
 def _internal_entry(engine: str, queue_id: str) -> QueueEntry:
@@ -37,10 +37,6 @@ def _internal_entry(engine: str, queue_id: str) -> QueueEntry:
         engine=engine,
         metadata={QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_COMPLETE},
     )
-
-
-def _use_roots(monkeypatch: pytest.MonkeyPatch, *queue_roots: Path) -> None:
-    monkeypatch.setattr(roots, "runtime_roots_for_cfg", lambda _cfg: tuple(queue_roots))
 
 
 def test_engine_identity_rejects_conflicting_present_labels() -> None:
@@ -93,33 +89,18 @@ def test_engine_identity_rejects_conflicting_present_labels() -> None:
         assert not entry_matches_engine_identity(partial, "orca")
 
 
-def test_queue_roots_are_the_resolved_runs_root(tmp_path: Path) -> None:
+def test_queue_root_is_the_resolved_runs_root(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
     cfg = make_app_cfg(runs_root)
 
-    assert roots.queue_roots(cfg) == (runs_root.resolve(),)
-    # Listing never creates a missing root.
-    assert roots.existing_queue_roots(cfg) == ()
-    assert roots.queue_entries_with_roots(cfg) == []
+    assert roots.queue_root(cfg) == runs_root.resolve()
+    # Listing and previewing never create a missing root.
+    assert roots.list_orca_rows(cfg) == []
+    assert roots.peek_next_entry(cfg) is None
     assert not runs_root.exists()
 
 
-def test_queue_roots_propagates_runtime_root_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    def broken_roots(_cfg: Any) -> tuple[Path, ...]:
-        raise RuntimeError("bad runtime roots")
-
-    monkeypatch.setattr(roots, "runtime_roots_for_cfg", broken_roots)
-    with pytest.raises(RuntimeError, match="bad runtime roots"):
-        roots.queue_roots(_cfg(tmp_path))
-
-
-def test_listing_skips_missing_roots_and_foreign_entries(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    queue_root = tmp_path / "queue"
-    queue_root.mkdir()
+def test_listing_skips_foreign_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     own_entry = _internal_entry("orca", "own")
     foreign_entry = _internal_entry("other", "foreign")
     seen: list[Path] = []
@@ -128,49 +109,36 @@ def test_listing_skips_missing_roots_and_foreign_entries(
         seen.append(root)
         return [foreign_entry, own_entry]
 
-    _use_roots(monkeypatch, tmp_path / "missing", queue_root)
     monkeypatch.setattr(roots, "list_queue", list_queue)
 
-    assert roots.queue_entries_with_roots(_cfg(tmp_path)) == [(queue_root, own_entry)]
-    assert seen == [queue_root]
-    assert not (tmp_path / "missing").exists()
+    assert roots.list_orca_rows(_cfg(tmp_path)) == [own_entry]
+    assert seen == [tmp_path]
 
 
 def test_peek_preserves_selection_without_dequeuing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root_a, root_b = tmp_path / "a", tmp_path / "b"
-    root_a.mkdir()
-    root_b.mkdir()
     foreign_entry = _internal_entry("other", "foreign")
     own_entry = replace(_internal_entry("orca", "own"), priority=-1)
     fallback_entry = replace(_internal_entry("orca", "fallback"), priority=5)
-    seen: list[Path] = []
-
-    def list_queue(root: Path) -> list[Any]:
-        seen.append(root)
-        return {root_a: [foreign_entry, own_entry], root_b: [fallback_entry]}[root]
 
     def unexpected_dequeue(*_args: Any, **_kwargs: Any) -> Any:
         pytest.fail("preview must not dequeue a row")
 
-    _use_roots(monkeypatch, tmp_path / "missing", root_a, root_b)
-    monkeypatch.setattr(roots, "list_queue", list_queue)
+    monkeypatch.setattr(
+        roots, "list_queue", lambda _root: [fallback_entry, foreign_entry, own_entry]
+    )
     monkeypatch.setattr(roots, "dequeue_entry_if_pending", unexpected_dequeue)
 
-    assert roots.peek_next_entry(_cfg(tmp_path)) == (root_a, own_entry)
-    # The first root with a claimable row wins; only one runtime root exists.
-    assert seen == [root_a]
+    assert roots.peek_next_entry(_cfg(tmp_path)) == (tmp_path, own_entry)
     assert own_entry.status.value == fallback_entry.status.value == "pending"
 
 
 def test_dequeue_claims_the_previewed_row_by_id_fenced_on_that_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = tmp_path / "queue"
-    root.mkdir()
     winner = replace(_internal_entry("orca", "winner"), priority=1)
-    later = replace(_internal_entry("orca", "same-root-later"), priority=9)
+    later = replace(_internal_entry("orca", "later"), priority=9)
     foreign = replace(_internal_entry("other", "foreign"), priority=0)
     claimed: list[tuple[Path, str, Any]] = []
 
@@ -178,21 +146,17 @@ def test_dequeue_claims_the_previewed_row_by_id_fenced_on_that_generation(
         claimed.append((claim_root, queue_id, expected_entry))
         return expected_entry
 
-    _use_roots(monkeypatch, root)
     monkeypatch.setattr(roots, "list_queue", lambda _root: [foreign, later, winner])
     monkeypatch.setattr(roots, "dequeue_entry_if_pending", dequeue_by_id)
 
-    assert roots.peek_next_entry(_cfg(tmp_path)) == (root, winner)
-    assert roots.dequeue_next_entry(_cfg(tmp_path)) == (root, winner)
-    assert claimed == [(root, "winner", winner)]
+    assert roots.peek_next_entry(_cfg(tmp_path)) == (tmp_path, winner)
+    assert roots.dequeue_next_entry(_cfg(tmp_path)) == (tmp_path, winner)
+    assert claimed == [(tmp_path, "winner", winner)]
 
 
 def test_dequeue_returns_none_when_the_previewed_row_is_lost(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = tmp_path / "queue"
-    root.mkdir()
-    _use_roots(monkeypatch, root)
     monkeypatch.setattr(roots, "list_queue", lambda _root: [_internal_entry("orca", "pending")])
     monkeypatch.setattr(roots, "dequeue_entry_if_pending", lambda *_args, **_kwargs: None)
 
@@ -202,8 +166,6 @@ def test_dequeue_returns_none_when_the_previewed_row_is_lost(
 def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = tmp_path / "queue"
-    root.mkdir()
     tracked = _internal_entry("orca", "queue-tracked")
     behind = _internal_entry("orca", "queue-behind")
     foreign = _internal_entry("other", "queue-foreign")
@@ -213,7 +175,6 @@ def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(
         claimed.append((queue_id, expected_entry))
         return expected_entry
 
-    _use_roots(monkeypatch, root)
     monkeypatch.setattr(roots, "list_queue", lambda _root: [foreign, tracked, behind])
     monkeypatch.setattr(roots, "dequeue_entry_if_pending", dequeue_by_id)
 
@@ -223,11 +184,11 @@ def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(
         return entry is tracked
 
     cfg = _cfg(tmp_path)
-    assert roots.peek_next_entry(cfg, skip_entry_fn=skip) == (root, behind)
-    assert roots.dequeue_next_entry(cfg, skip_entry_fn=skip) == (root, behind)
+    assert roots.peek_next_entry(cfg, skip_entry_fn=skip) == (tmp_path, behind)
+    assert roots.dequeue_next_entry(cfg, skip_entry_fn=skip) == (tmp_path, behind)
     assert claimed == [("queue-behind", behind)]
     assert roots.peek_next_entry(cfg, skip_entry_fn=lambda _entry: True) is None
-    assert roots.peek_next_entry(cfg) == (root, tracked)
+    assert roots.peek_next_entry(cfg) == (tmp_path, tracked)
 
 
 def test_by_id_lookup_reports_a_foreign_row_as_absent(

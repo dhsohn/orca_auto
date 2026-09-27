@@ -31,7 +31,6 @@ from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
 from orca_auto.core.queue.engine.snapshot_intent import (
     finalize_queued_snapshot_intent,
     reconcile_orphaned_snapshot_generations,
-    snapshot_runtime_roots_for_cfg,
 )
 from orca_auto.core.queue.processes import ManagedProcess
 from orca_auto.core.queue.store import QueueLockTimeoutError
@@ -149,7 +148,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         )
         self.cfg = worker_cfg
         self.config_path = str(config_path or "").strip()
-        self.allowed_root = Path(str(worker_cfg.runtime.allowed_root)).expanduser().resolve()
+        self.queue_root = roots.queue_root(worker_cfg)
         self.admission_root = (
             Path(str(worker_cfg.runtime.resolved_admission_root)).expanduser().resolve()
         )
@@ -162,16 +161,16 @@ class OrcaQueueWorker(QueueWorkerLoop):
     # -- pid file and singleton lock ----------------------------------------
 
     def _pid_file_path(self) -> Path:
-        return worker_pid_file_path(self.allowed_root, self.worker_pid_file_name)
+        return worker_pid_file_path(self.queue_root, self.worker_pid_file_name)
 
     def _lock_file_path(self) -> Path:
         return self._pid_file_path().with_name(f"{self.worker_pid_file_name}.lock")
 
     def _write_pid_file(self) -> None:
-        write_worker_pid_file(self.allowed_root, self.worker_pid_file_name)
+        write_worker_pid_file(self.queue_root, self.worker_pid_file_name)
 
     def _remove_pid_file(self) -> None:
-        remove_worker_pid_file(self.allowed_root, self.worker_pid_file_name)
+        remove_worker_pid_file(self.queue_root, self.worker_pid_file_name)
 
     def _acquire_worker_lock(self, stack: contextlib.ExitStack) -> bool:
         lock_path = self._lock_file_path()
@@ -321,9 +320,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             return
         self._snapshot_intent_last_reconcile = now
         try:
-            removed = reconcile_orphaned_snapshot_generations(
-                snapshot_runtime_roots_for_cfg(self.cfg)
-            )
+            removed = reconcile_orphaned_snapshot_generations((self.queue_root,))
         except Exception:
             logger.exception("Snapshot orphan reconciliation failed; retaining all candidates")
         else:
@@ -644,7 +641,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             return
         # The queue marker survives a restart. This in-memory handoff also fences
         # same-directory admission before the next periodic reconciliation.
-        self.replay_state.pending_replays[prepared.key] = prepared
+        self.replay_state.pending_replays[prepared.queue_id] = prepared
         self._release_terminal_job(job)
         try:
             replay.finish_terminal_replay(self.cfg, prepared)
@@ -654,7 +651,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 prepared.queue_id,
             )
         else:
-            self.replay_state.pending_replays.pop(prepared.key, None)
+            self.replay_state.pending_replays.pop(prepared.queue_id, None)
 
     def _finalize_completed_job(self, queue_id: str, job: OrcaRunningJob, rc: int) -> None:
         # A child can exit while its engine process is still recorded as active.  Do
@@ -719,26 +716,22 @@ class OrcaQueueWorker(QueueWorkerLoop):
     # -- cancellation -------------------------------------------------------
 
     def _check_cancel_requests(self) -> None:
-        jobs_by_root: dict[Path, list[tuple[str, OrcaRunningJob]]] = {}
-        for queue_id, job in self._running_jobs():
-            # Reaped children retained for completion retry must never be signalled.
-            if job.process.poll() is not None:
-                continue
-            root = replay.job_queue_root(job)
-            jobs_by_root.setdefault(root, []).append((queue_id, job))
-        for root, jobs in jobs_by_root.items():
-            expected_tasks = {
-                queue_id: getattr(job, "task_id", None) or None for queue_id, job in jobs
-            }
-            try:
-                requested = cancel_requested_ids(root, expected_tasks)
-            except QueueLockTimeoutError:
-                # Retry next pass; other queue roots still get their cancellation pass.
-                continue
-            for queue_id, job in jobs:
-                if queue_id in requested and job.process.poll() is None:
-                    if self._cancel_running_job(queue_id, job) is True:
-                        self._discard_running_job(queue_id)
+        # Reaped children retained for completion retry must never be signalled.
+        jobs = [
+            (queue_id, job) for queue_id, job in self._running_jobs() if job.process.poll() is None
+        ]
+        if not jobs:
+            return
+        try:
+            requested = cancel_requested_ids(
+                self.queue_root, {queue_id: job.task_id or None for queue_id, job in jobs}
+            )
+        except QueueLockTimeoutError:
+            return  # Retry next pass.
+        for queue_id, job in jobs:
+            if queue_id in requested and job.process.poll() is None:
+                if self._cancel_running_job(queue_id, job) is True:
+                    self._discard_running_job(queue_id)
 
     def _cancel_running_job(self, queue_id: str, job: OrcaRunningJob) -> bool:
         """Stop *job*, mark its row cancelled and finish the durable cancellation replay.
@@ -746,7 +739,6 @@ class OrcaQueueWorker(QueueWorkerLoop):
         Returns ``True`` only when the job's queue and admission ownership has
         been transferred to durable replay and its slot released; otherwise retry.
         """
-        queue_root = replay.job_queue_root(job)
         logger.info("Cancelling running job: %s", queue_id)
         try:
             terminated = terminate_process_group(job.process)
@@ -771,9 +763,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
             )
             return False
         try:
-            current = replay.queue_entry_by_id(queue_root, queue_id)
+            current = replay.queue_entry_by_id(self.queue_root, queue_id)
             if current is None or not mark_cancelled(
-                queue_root,
+                self.queue_root,
                 queue_id,
                 expected_entry=current,
                 expected_task_id=job.task_id or None,
@@ -785,7 +777,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 queue_id,
             )
             return False
-        terminal_entry = replay.queue_entry_by_id(queue_root, queue_id)
+        terminal_entry = replay.queue_entry_by_id(self.queue_root, queue_id)
         if replay.normalized_entry_status(terminal_entry) == STATUS_RUNNING:
             logger.error(
                 "Cancellation returned without a durable terminal queue transition: %s",
@@ -809,7 +801,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             logger.error("Durable cancellation marker has no reaction identity: %s", queue_id)
             return False
         replay_item = replay.new_terminal_replay_work_item(
-            queue_root,
+            self.queue_root,
             terminal_entry,
             reaction_dir=reaction_dir,
             reaction_key=reaction_key,
@@ -832,7 +824,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
     def _shutdown_running_job(self, queue_id: str, job: OrcaRunningJob) -> None:
         try:
             cancel_requested = get_cancel_requested(
-                replay.job_queue_root(job),
+                self.queue_root,
                 queue_id,
                 expected_task_id=job.task_id,
             )
@@ -884,11 +876,10 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 )
             return
         try:
-            queue_root = replay.job_queue_root(job)
-            current = replay.queue_entry_by_id(queue_root, queue_id)
+            current = replay.queue_entry_by_id(self.queue_root, queue_id)
             if current is not None:
                 requeue_running_entry(
-                    queue_root,
+                    self.queue_root,
                     queue_id,
                     expected_entry=current,
                     expected_task_id=job.task_id or None,

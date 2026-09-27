@@ -388,9 +388,6 @@ def test_start_reserved_finalizes_snapshot_intent_before_start(
         return True
 
     monkeypatch.setattr(
-        queue_worker_mod, "snapshot_runtime_roots_for_cfg", lambda _cfg: (queue_root,)
-    )
-    monkeypatch.setattr(
         queue_worker_mod, "reconcile_orphaned_snapshot_generations", reconcile_snapshots
     )
     monkeypatch.setattr(

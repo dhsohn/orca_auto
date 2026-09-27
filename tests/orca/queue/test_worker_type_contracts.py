@@ -1,4 +1,4 @@
-"""Static regressions: the worker and its queue roots keep concrete ORCA types."""
+"""Static regressions: the worker and its queue root keep concrete ORCA types."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     def worker_contract(worker: OrcaQueueWorker) -> None:
         assert_type(worker.cfg, AppConfig)
         assert_type(worker.admission_root, Path)
-        assert_type(roots.queue_roots(worker.cfg), tuple[Path, ...])
+        assert_type(roots.queue_root(worker.cfg), Path)
         assert_type(roots.peek_next_entry(worker.cfg), tuple[Path, QueueEntry] | None)
         assert_type(worker._reserve_next_entry(), tuple[ReserveStatus, ReservedQueueEntry | None])
         assert_type(worker._running_jobs(), list[tuple[str, OrcaRunningJob]])

@@ -124,8 +124,8 @@ Cancellation observations reuse unchanged queue snapshots. The child publishes i
 
 The worker CLI loads config, checks the PID file (`read_worker_pid` in
 `orca/queue/orphans.py`), then constructs and runs the ORCA worker directly.
-`orca/queue/roots.py` owns root selection, listing and the fenced by-id claim;
-rows are never claimed by head-of-queue position.
+`orca/queue/roots.py` resolves the one queue root (`runtime.allowed_root`) and owns
+listing and the fenced by-id claim; rows are never claimed by head-of-queue position.
 `queue/replay.py` is only the replay engine (work items, preparation and publication, the
 reconcile pipeline and generation owners) and takes its state explicitly, and
 `queue/run_state_replay.py` synthesizes terminal `job_state.json` under

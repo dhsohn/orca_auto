@@ -24,6 +24,7 @@ from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication_
 from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from ..config import AppConfig
+from . import roots
 from .adapter import (
     get_entry_by_id,
     list_queue,
@@ -32,7 +33,6 @@ from .adapter import (
 )
 from .entries import queue_entry_id, queue_entry_reaction_dir
 from .job_records import upsert_queued_job_record
-from .roots import queue_roots
 
 logger = logging.getLogger(__name__)
 
@@ -265,17 +265,15 @@ def repair_queue_publications(cfg: AppConfig) -> frozenset[str] | None:
     COMPLETE lease: path validation or persisting its safety fence can fail,
     and the durable lease alone must not make that row eligible this pass.
     """
-    withheld_ids: set[str] = set()
-    for queue_root in queue_roots(cfg):
-        try:
-            entries = list_queue(queue_root)
-        except Exception:
-            logger.exception("Failed to inspect ORCA publication repairs: %s", queue_root)
-            return None
-        for entry in entries:
-            if not repair_queue_publication(cfg, queue_root, entry):
-                withheld_ids.add(queue_entry_id(entry))
-    return frozenset(withheld_ids)
+    root = roots.queue_root(cfg)
+    try:
+        entries = list_queue(root)
+    except Exception:
+        logger.exception("Failed to inspect ORCA publication repairs: %s", root)
+        return None
+    return frozenset(
+        queue_entry_id(entry) for entry in entries if not repair_queue_publication(cfg, root, entry)
+    )
 
 
 __all__ = ["repair_queue_publication", "repair_queue_publications"]

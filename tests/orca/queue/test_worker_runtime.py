@@ -92,35 +92,26 @@ def test_cancel_requests_never_signal_retained_completed_child(
     assert list(worker._running) == ["1"]
 
 
-def test_busy_root_does_not_delay_cancellation_at_another_root(
+def test_busy_queue_lock_defers_the_cancellation_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     worker = _worker(tmp_path)
-    worker._running = {str(i): _job(tmp_path / str(i // 2), str(i)) for i in range(4)}
-    cancelled: list[str] = []
-    checks: list[Path] = []
+    worker._running = {"1": _job(tmp_path, "1")}
 
-    def requested(root: Path, _tasks: Mapping[str, str | None]) -> set[str]:
-        checks.append(root)
-        if root == tmp_path / "0":
-            raise QueueLockTimeoutError("busy")
-        return {"2", "3"}
+    def busy(_root: Path, _tasks: Mapping[str, str | None]) -> set[str]:
+        raise QueueLockTimeoutError("busy")
 
-    def cancel(qid: str, _job: OrcaRunningJob) -> bool:
-        cancelled.append(qid)
-        return qid == "2"
-
-    monkeypatch.setattr(worker_mod, "cancel_requested_ids", requested)
-    monkeypatch.setattr(worker, "_cancel_running_job", cancel)
+    monkeypatch.setattr(worker_mod, "cancel_requested_ids", busy)
+    monkeypatch.setattr(
+        worker, "_cancel_running_job", lambda *_args: pytest.fail("nothing is cancelled")
+    )
     worker._check_cancel_requests()
-    assert checks == [tmp_path / "0", tmp_path / "1"]
-    assert cancelled == ["2", "3"]
-    assert list(worker._running) == ["0", "1", "3"]
+    assert list(worker._running) == ["1"]
 
 
 def test_replay_state_is_initialized_once_and_is_owned_by_each_worker(tmp_path: Path) -> None:
     first, second = _worker(tmp_path), _worker(tmp_path)
-    first.replay_state.blocked_marker_keys.add(("root", "queue"))
+    first.replay_state.blocked_marker_keys.add("queue")
     assert second.replay_state.blocked_marker_keys == set()
     assert first.replay_state.reconcile_statuses is None
 

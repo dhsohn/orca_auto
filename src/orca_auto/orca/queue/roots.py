@@ -1,8 +1,8 @@
-"""The ORCA worker's queue roots and the row selection bound to the ORCA identity filter.
+"""The ORCA worker's one queue root and the row selection bound to the ORCA identity filter.
 
-Every function here works on the runtime roots of one configuration, lists
-rows through the ORCA adapter and admits only rows with the complete ORCA
-engine identity. Rows are claimed by id with the previewed row as the
+The queue root is the resolved ``runtime.allowed_root``. Rows are listed
+through the ORCA adapter and only rows with the complete ORCA engine identity
+are admitted. Rows are claimed by id with the previewed row as the
 ``expected_entry`` fence, never by head-of-queue position.
 """
 
@@ -11,7 +11,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from orca_auto.core.indexing.roots import runtime_roots_for_cfg
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 
@@ -22,31 +21,16 @@ from .identity import own_engine_accept_entry
 accept_orca_entry = own_engine_accept_entry("orca")
 
 
-def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
-    return tuple(runtime_roots_for_cfg(cfg))
+def queue_root(cfg: AppConfig) -> Path:
+    return Path(cfg.runtime.allowed_root).expanduser().resolve()
 
 
-def existing_queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
-    """The queue roots that exist on disk; listing never creates a root."""
-    return tuple(root for root in queue_roots(cfg) if root.expanduser().exists())
-
-
-def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
-    return [
-        (root, entry)
-        for root in existing_queue_roots(cfg)
-        for entry in list_queue(root)
-        if accept_orca_entry(entry)
-    ]
-
-
-def _accept_unless_skipped(
-    skip_entry_fn: Callable[[QueueEntry], bool] | None,
-) -> Callable[[QueueEntry], bool]:
-    if skip_entry_fn is None:
-        return accept_orca_entry
-    # The engine filter runs first, so a foreign row never reaches the skip predicate.
-    return lambda entry: accept_orca_entry(entry) and not skip_entry_fn(entry)
+def list_orca_rows(cfg: AppConfig) -> list[QueueEntry]:
+    """ORCA rows at the queue root; a missing root lists nothing and is not created."""
+    root = queue_root(cfg)
+    if not root.exists():
+        return []
+    return [entry for entry in list_queue(root) if accept_orca_entry(entry)]
 
 
 def peek_next_entry(
@@ -61,12 +45,14 @@ def peek_next_entry(
     the dequeue: a row it selects may still be lost to a concurrent claim or
     cancellation, and the dequeue then reports that.
     """
-    accept = _accept_unless_skipped(skip_entry_fn)
-    for root in existing_queue_roots(cfg):
-        selected = select_next_claimable_entry(list_queue(root), accept_entry_fn=accept)
-        if selected is not None:
-            return root, selected
-    return None
+    # The engine filter runs first, so a foreign row never reaches the skip predicate.
+    selected = select_next_claimable_entry(
+        list_orca_rows(cfg),
+        accept_entry_fn=(None if skip_entry_fn is None else lambda entry: not skip_entry_fn(entry)),
+    )
+    if selected is None:
+        return None
+    return queue_root(cfg), selected
 
 
 def dequeue_next_entry(
@@ -99,9 +85,8 @@ def queue_entry_by_id(queue_root: Path | str, queue_id: str) -> QueueEntry | Non
 __all__ = [
     "accept_orca_entry",
     "dequeue_next_entry",
-    "existing_queue_roots",
+    "list_orca_rows",
     "peek_next_entry",
-    "queue_entries_with_roots",
     "queue_entry_by_id",
-    "queue_roots",
+    "queue_root",
 ]

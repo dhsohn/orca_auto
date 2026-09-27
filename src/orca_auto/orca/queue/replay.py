@@ -62,13 +62,9 @@ from .terminal_replay import (
 logger = logging.getLogger(__name__)
 
 
-def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
-    return roots.queue_roots(cfg)
-
-
 @dataclass(frozen=True)
 class ReactionGenerationRow:
-    owner: tuple[str, str]
+    owner: str
     task_id: str
     status: str
     transitioned_from_active: bool = False
@@ -126,7 +122,7 @@ def mark_terminal_queue_entry(
     *,
     rc: int,
 ) -> TerminalQueueMarkResult:
-    queue_root = job_queue_root(job)
+    queue_root = job.queue_root
     current = queue_entry_by_id(queue_root, queue_id)
     current_task_id = queue_entry_task_id(current) if current is not None else None
     expected_job_id = current_task_id or job.task_id
@@ -190,7 +186,7 @@ def child_run_concluded(queue_id: str, job: OrcaRunningJob) -> bool:
     non-terminal run state (for example one whose self-requeue write raised
     while it handled the stop) did not conclude; it keeps the resume path.
     """
-    current = queue_entry_by_id(job_queue_root(job), queue_id)
+    current = queue_entry_by_id(job.queue_root, queue_id)
     if current is None or normalized_entry_status(current) != STATUS_RUNNING:
         return True
     reaction_dir = str(getattr(job, "reaction_dir", "") or "").strip()
@@ -207,10 +203,6 @@ def child_run_concluded(queue_id: str, job: OrcaRunningJob) -> bool:
         STATUS_FAILED,
         STATUS_CANCELLED,
     )
-
-
-def job_queue_root(job: OrcaRunningJob) -> Path:
-    return job.queue_root.expanduser().resolve()
 
 
 def normalized_entry_status(entry: Any) -> str:
@@ -248,11 +240,11 @@ def _load_artifact_generation(reaction_key: str) -> ArtifactGeneration:
 def _select_generation_owner(
     rows: list[ReactionGenerationRow],
     *,
-    previous_owner: tuple[str, str] | None,
+    previous_owner: str | None,
     previous_owner_was_active: bool,
     artifacts: ArtifactGeneration,
-) -> tuple[str, str] | None:
-    def choose(candidates: list[ReactionGenerationRow]) -> tuple[str, str] | None:
+) -> str | None:
+    def choose(candidates: list[ReactionGenerationRow]) -> str | None:
         if len(candidates) == 1:
             return candidates[0].owner
         if previous_owner is not None and any(row.owner == previous_owner for row in candidates):
@@ -547,26 +539,26 @@ def _pending_replay_state_is_superseded(item: TerminalReplayWorkItem) -> bool:
 
 
 def _collect_durable_terminal_replays(
-    after_entries: list[tuple[Path, QueueEntry]],
-    pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
-    previously_blocked_markers: set[tuple[str, str]],
-) -> set[tuple[str, str]]:
-    blocked_marker_keys: set[tuple[str, str]] = set()
-    for queue_root, entry in after_entries:
+    queue_root: Path,
+    after_entries: list[QueueEntry],
+    pending_replays: dict[str, TerminalReplayWorkItem],
+    previously_blocked_markers: set[str],
+) -> set[str]:
+    blocked_marker_keys: set[str] = set()
+    for entry in after_entries:
         if normalized_entry_status(entry) not in TERMINAL_STATUSES:
             continue
-        resolved_root = str(Path(queue_root).expanduser().resolve())
-        key = (resolved_root, queue_entry_id(entry))
+        queue_id = queue_entry_id(entry)
         marker_kind = terminal_replay_marker_kind(entry)
         if marker_kind is TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED:
-            blocked_marker_keys.add(key)
-            if key not in previously_blocked_markers:
+            blocked_marker_keys.add(queue_id)
+            if queue_id not in previously_blocked_markers:
                 logger.error(
                     "ORCA terminal replay is repair-blocked by an invalid or unsupported "
                     "durable marker; retaining the queue generation from clear/force: "
                     "queue_id=%s queue_root=%s",
-                    queue_entry_id(entry),
-                    resolved_root,
+                    queue_id,
+                    queue_root,
                 )
             continue
         if marker_kind is not TerminalReplayMarkerKind.VALID:
@@ -580,20 +572,20 @@ def _collect_durable_terminal_replays(
             reaction_dir=queue_entry_reaction_dir(entry),
             reaction_key=reaction_key,
         )
-        existing_item = pending_replays.get(key)
+        existing_item = pending_replays.get(queue_id)
         if not (
             isinstance(existing_item, TerminalReplayWorkItem)
             and existing_item.task_id == durable_item.task_id
             and existing_item.reaction_key == durable_item.reaction_key
         ):
-            pending_replays[key] = durable_item
+            pending_replays[queue_id] = durable_item
     return blocked_marker_keys
 
 
 def _drop_superseded_terminal_replays(
-    pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
-) -> set[tuple[str, str]]:
-    superseded_replay_keys: set[tuple[str, str]] = set()
+    pending_replays: dict[str, TerminalReplayWorkItem],
+) -> set[str]:
+    superseded_replay_keys: set[str] = set()
     for key, item in list(pending_replays.items()):
         if not _pending_replay_state_is_superseded(item):
             continue
@@ -615,21 +607,19 @@ def _drop_superseded_terminal_replays(
 
 
 def _select_replay_generation_owners(
-    after_entries: list[tuple[Path, QueueEntry]],
-    before_by_key: Mapping[tuple[str, str], Any],
-    previous_statuses: Mapping[tuple[str, str], str],
-    pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
+    after_entries: list[QueueEntry],
+    before_by_key: Mapping[str, Any],
+    previous_statuses: Mapping[str, str],
+    pending_replays: dict[str, TerminalReplayWorkItem],
     replay_state: OrcaWorkerReplayState,
-) -> tuple[set[tuple[str, str]], dict[str, tuple[str, str]], set[tuple[str, str]]]:
+) -> tuple[set[str], dict[str, str], set[str]]:
     generation_rows: dict[str, list[ReactionGenerationRow]] = {}
-    current_generation_keys: set[tuple[str, str]] = set()
-    for queue_root, entry in after_entries:
+    current_generation_keys: set[str] = set()
+    for entry in after_entries:
         reaction_key = reaction_generation_key(entry)
         if reaction_key is None:
             continue
-        resolved_root = str(Path(queue_root).expanduser().resolve())
-        queue_id = queue_entry_id(entry)
-        owner = (resolved_root, queue_id)
+        owner = queue_entry_id(entry)
         before_entry = before_by_key.get(owner)
         before_status = normalized_entry_status(before_entry)
         pending_item = pending_replays.get(owner)
@@ -682,9 +672,9 @@ def _select_replay_generation_owners(
 
     previous_owners = replay_state.generation_owners
     previous_owner_active = replay_state.generation_owner_active
-    latest_generation_by_reaction: dict[str, tuple[str, str]] = {}
+    latest_generation_by_reaction: dict[str, str] = {}
     latest_owner_active: dict[str, bool] = {}
-    superseded_generation_keys: set[tuple[str, str]] = set()
+    superseded_generation_keys: set[str] = set()
     for reaction_key, rows in generation_rows.items():
         previous_owner = previous_owners.get(reaction_key)
         selected_owner = _select_generation_owner(
@@ -711,36 +701,36 @@ def _select_replay_generation_owners(
 
 def _replay_current_terminal_entries(
     cfg: AppConfig,
-    after_entries: list[tuple[Path, QueueEntry]],
-    before_by_key: Mapping[tuple[str, str], Any],
-    previous_statuses: Mapping[tuple[str, str], str],
-    pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
-    superseded_replay_keys: set[tuple[str, str]],
-    latest_generation_by_reaction: Mapping[str, tuple[str, str]],
-) -> dict[tuple[str, str], str]:
-    after_statuses: dict[tuple[str, str], str] = {}
-    for queue_root, entry in after_entries:
+    queue_root: Path,
+    after_entries: list[QueueEntry],
+    before_by_key: Mapping[str, Any],
+    previous_statuses: Mapping[str, str],
+    pending_replays: dict[str, TerminalReplayWorkItem],
+    superseded_replay_keys: set[str],
+    latest_generation_by_reaction: Mapping[str, str],
+) -> dict[str, str]:
+    after_statuses: dict[str, str] = {}
+    for entry in after_entries:
         queue_id = queue_entry_id(entry)
-        key = (str(Path(queue_root).expanduser().resolve()), queue_id)
         status = normalized_entry_status(entry)
-        after_statuses[key] = status
+        after_statuses[queue_id] = status
         if status not in TERMINAL_STATUSES:
-            pending_replays.pop(key, None)
+            pending_replays.pop(queue_id, None)
             continue
         marker_kind = terminal_replay_marker_kind(entry)
         if (
             terminal_replay_is_fence_only(entry)
             or marker_kind is TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED
         ):
-            pending_replays.pop(key, None)
+            pending_replays.pop(queue_id, None)
             continue
-        if key in superseded_replay_keys:
+        if queue_id in superseded_replay_keys:
             # The newer generation identity is definitive.  Advance the cursor
             # to this row's terminal status so it is not reconsidered forever.
-            pending_replays.pop(key, None)
-            after_statuses[key] = status
+            pending_replays.pop(queue_id, None)
+            after_statuses[queue_id] = status
             continue
-        before_entry = before_by_key.get(key)
+        before_entry = before_by_key.get(queue_id)
         before_status = normalized_entry_status(before_entry)
         # Replay requires positive evidence: either a durable replay marker (or
         # an in-memory retry snapshot), an active row terminalized during this
@@ -749,15 +739,15 @@ def _replay_current_terminal_entries(
         # transition; replaying it can rewrite its state/run identity and resend
         # an old notification.
         observed_active_transition = (
-            before_status in ACTIVE_STATUSES or previous_statuses.get(key) in ACTIVE_STATUSES
+            before_status in ACTIVE_STATUSES or previous_statuses.get(queue_id) in ACTIVE_STATUSES
         )
-        if key not in pending_replays and not observed_active_transition:
+        if queue_id not in pending_replays and not observed_active_transition:
             continue
         reaction_dir = queue_entry_reaction_dir(entry)
         if not reaction_dir:
             continue
         reaction_key = reaction_generation_key(entry) or ""
-        if latest_generation_by_reaction.get(reaction_key) != key:
+        if latest_generation_by_reaction.get(reaction_key) != queue_id:
             logger.debug(
                 "Skipping terminal replay for superseded or ambiguous ORCA generation: "
                 "queue_id=%s reaction_dir=%s",
@@ -766,9 +756,9 @@ def _replay_current_terminal_entries(
             )
             # Ambiguity is retryable: state/report identity may become durable on
             # the next poll without another queue status transition.
-            after_statuses[key] = STATUS_RUNNING
+            after_statuses[queue_id] = STATUS_RUNNING
             if reaction_key in latest_generation_by_reaction:
-                pending_replays.pop(key, None)
+                pending_replays.pop(queue_id, None)
             continue
 
         new_item = new_terminal_replay_work_item(
@@ -777,13 +767,13 @@ def _replay_current_terminal_entries(
             reaction_dir=reaction_dir,
             reaction_key=reaction_key,
         )
-        existing_item = pending_replays.get(key)
+        existing_item = pending_replays.get(queue_id)
         if isinstance(
             existing_item, TerminalReplayWorkItem
         ) and _pending_replay_state_is_superseded(existing_item):
             _clear_terminal_replay_marker(existing_item)
-            pending_replays.pop(key, None)
-            after_statuses[key] = status
+            pending_replays.pop(queue_id, None)
+            after_statuses[queue_id] = status
             continue
         item = (
             existing_item
@@ -792,13 +782,13 @@ def _replay_current_terminal_entries(
             and existing_item.task_id == new_item.task_id
             else new_item
         )
-        pending_replays[key] = item
+        pending_replays[queue_id] = item
         try:
             if not item.state_prepared:
                 item = _prepare_terminal_replay_work_item(item)
-                pending_replays[key] = item
+                pending_replays[queue_id] = item
             item = _update_terminal_replay_entry(item)
-            pending_replays[key] = item
+            pending_replays[queue_id] = item
             finish_terminal_replay(cfg, item)
         except Exception:
             logger.exception(
@@ -807,18 +797,18 @@ def _replay_current_terminal_entries(
             )
             # Keep this transition pending so the next periodic reconcile
             # retries the idempotent terminal side effects.
-            after_statuses[key] = STATUS_RUNNING
+            after_statuses[queue_id] = STATUS_RUNNING
         else:
-            pending_replays.pop(key, None)
-            after_statuses[key] = item.resolved_status
+            pending_replays.pop(queue_id, None)
+            after_statuses[queue_id] = item.resolved_status
     return after_statuses
 
 
 def _retry_terminal_replays_without_queue_entries(
     cfg: AppConfig,
-    pending_replays: dict[tuple[str, str], TerminalReplayWorkItem],
-    current_generation_keys: set[tuple[str, str]],
-    latest_generation_by_reaction: Mapping[str, tuple[str, str]],
+    pending_replays: dict[str, TerminalReplayWorkItem],
+    current_generation_keys: set[str],
+    latest_generation_by_reaction: Mapping[str, str],
 ) -> None:
     # A queue clear can remove the entry after state synthesis but before the
     # record upsert succeeds.  Retry from the immutable snapshot, including
@@ -867,11 +857,8 @@ def reconcile_worker_state(
     mutated in place so the next pass sees this pass's outcome.
     """
     recover_orphaned_engine_slots(admission_root, strict=False)
-    before_entries = roots.queue_entries_with_roots(cfg)
-    before_by_key = {
-        (str(Path(root).expanduser().resolve()), queue_entry_id(entry)): entry
-        for root, entry in before_entries
-    }
+    queue_root = roots.queue_root(cfg)
+    before_by_key = {queue_entry_id(entry): entry for entry in roots.list_orca_rows(cfg)}
     previous_statuses = replay_state.reconcile_statuses
     if previous_statuses is None:
         # Process startup has no observed status edge.  Treat the first queue
@@ -888,20 +875,20 @@ def reconcile_worker_state(
         list_slots_fn=list_slots,
     )
     reconcile_stale_slots(admission_root)
-    for root in queue_roots(cfg):
-        reconcile_orphaned_running_entries(
-            root,
-            ignore_worker_pid=True,
-            protected_queue_keys=protected_queue_keys,
-            protected_queue_ids=protected_queue_ids,
-        )
+    reconcile_orphaned_running_entries(
+        queue_root,
+        ignore_worker_pid=True,
+        protected_queue_keys=protected_queue_keys,
+        protected_queue_ids=protected_queue_ids,
+    )
     # Reconciliation can terminalize a job whose original parent died, and an
     # old child can also honor cancellation directly. Replay the normal
     # terminal side effects idempotently so job-location records and one-shot
     # notifications are not lost with the parent process.
-    after_entries = roots.queue_entries_with_roots(cfg)
+    after_entries = roots.list_orca_rows(cfg)
     pending_replays = dict(replay_state.pending_replays)
     replay_state.blocked_marker_keys = _collect_durable_terminal_replays(
+        queue_root,
         after_entries,
         pending_replays,
         replay_state.blocked_marker_keys,
@@ -920,6 +907,7 @@ def reconcile_worker_state(
 
     after_statuses = _replay_current_terminal_entries(
         cfg,
+        queue_root,
         after_entries,
         before_by_key,
         previous_statuses,
@@ -944,7 +932,6 @@ __all__ = [
     "TerminalQueueMarkResult",
     "TerminalReplayWorkItem",
     "child_run_concluded",
-    "job_queue_root",
     "mark_terminal_queue_entry",
     "new_terminal_replay_work_item",
     "normalized_entry_status",

@@ -179,7 +179,7 @@ def test_check_completed_jobs_still_running(
     worker: OrcaQueueWorker, fake_children: FakeChildren
 ) -> None:
     worker._running["q_run"] = OrcaRunningJob(
-        queue_root=worker.allowed_root,
+        queue_root=worker.queue_root,
         queue_id="q_run",
         reaction_dir="/tmp/r",
         process=fake_children.spawn(),
@@ -264,7 +264,7 @@ def test_failed_state_write_leaves_durable_replay_for_worker_restart(
     assert marker["observed_state"]["job_id"] == "task-a"
 
     restarted = make_worker()
-    run_terminal_replay(restarted, queue_root, terminal)
+    run_terminal_replay(restarted, terminal)
 
     written = load_state(rxn)
     assert written is not None
@@ -530,7 +530,7 @@ def test_terminal_slot_release_failure_keeps_retry_owner_before_publication(
     assert job.terminal_finalize_pending
     assert job.pending_terminal_replay is not None
     assert job.pending_terminal_replay.state_prepared
-    assert job.pending_terminal_replay.key in worker.replay_state.pending_replays
+    assert job.pending_terminal_replay.queue_id in worker.replay_state.pending_replays
     assert get_slot(queue_root, token) is not None
     assert terminal_replay_marker_from_entry(queue_row(queue_root, entry.queue_id))
     assert job_record(queue_root, entry.task_id) is None
@@ -643,7 +643,7 @@ def test_pending_replay_without_a_slot_does_not_pause_unrelated_jobs(
         metadata=current_orca_queue_metadata(unrelated),
     )
     item = replay_item(queue_root, "q_closed_generation", withheld_dir)
-    worker.replay_state.pending_replays[item.key] = item
+    worker.replay_state.pending_replays[item.queue_id] = item
 
     assert worker._fill_slots() == "processed"
 
@@ -666,7 +666,7 @@ def test_unpublished_generation_without_a_directory_pauses_all_admission(
         metadata=current_orca_queue_metadata(unrelated),
     )
     job = OrcaRunningJob(
-        queue_root=worker.allowed_root,
+        queue_root=worker.queue_root,
         queue_id="q_unknown_directory",
         reaction_dir="",
         process=fake_children.spawn(),
@@ -886,7 +886,7 @@ def test_withheld_keys_follow_a_directory_retargeted_after_the_replay_item_was_b
     moved.mkdir(parents=True)
     (queue_root / "proj").symlink_to(queue_root / "proj_moved", target_is_directory=True)
     item = replay_item(queue_root, "q_retargeted", queue_root / "proj" / "job", resolved=False)
-    worker.replay_state.pending_replays[item.key] = item
+    worker.replay_state.pending_replays[item.queue_id] = item
 
     assert worker._unresolved_terminal_reaction_keys() == frozenset(
         {str(queue_root / "proj" / "job"), str(moved.resolve())}
@@ -918,7 +918,7 @@ def test_exited_job_awaiting_finalize_retry_withholds_its_directory_without_an_i
         metadata=current_orca_queue_metadata(unrelated),
     )
     job = OrcaRunningJob(
-        queue_root=worker.allowed_root,
+        queue_root=worker.queue_root,
         queue_id="q_retry_only",
         reaction_dir=str(retained_dir),
         process=fake_children.spawn(exited=1),
@@ -941,7 +941,7 @@ def test_withheld_directories_are_logged_when_the_set_changes_not_on_every_poll(
     withheld_dir.mkdir()
     item = replay_item(queue_root, "q_logged_once", withheld_dir)
     state = worker.replay_state
-    state.pending_replays[item.key] = item
+    state.pending_replays[item.queue_id] = item
 
     with caplog.at_level(logging.INFO, logger=WORKER_LOGGER):
         for _ in range(3):
@@ -1056,7 +1056,7 @@ def test_finalize_completed_job_recovers_once_and_releases_on_benign_mark_noop(
     )
     assert token is not None
     job = OrcaRunningJob(
-        queue_root=worker.allowed_root,
+        queue_root=worker.queue_root,
         queue_id="queue-moved",
         reaction_dir=str(moved),
         process=fake_children.spawn(exited=1),
@@ -1229,8 +1229,8 @@ def test_child_publishes_and_parent_releases_slot_while_terminal_sender_is_block
             assert saved is not None and saved["final_result"] is not None
             assert saved["final_result"]["finished_notification_claimed_at"]
             assert "finished_notification_sent_at" not in saved["final_result"]
-            run_terminal_replay(worker, queue_root, terminal)
-            run_terminal_replay(worker, queue_root, terminal)
+            run_terminal_replay(worker, terminal)
+            run_terminal_replay(worker, terminal)
             assert len(recording_channel.sends) == 2  # one start, one terminal
             assert {path: path.read_bytes() for path in reports} == reports
 
@@ -1375,12 +1375,11 @@ def test_finalize_finished_job_synthesizes_current_generation_failure_state(
     assert delivered.wait(1)
     assert len(recording_channel.sends) == 1
 
-    run_terminal_replay(worker, queue_root, terminal)
-    run_terminal_replay(worker, queue_root, terminal)
+    run_terminal_replay(worker, terminal)
+    run_terminal_replay(worker, terminal)
 
     assert len(recording_channel.sends) == 1
-    key = (str(queue_root.resolve()), entry.queue_id)
-    assert reconcile_statuses(worker)[key] == "failed"
+    assert reconcile_statuses(worker)[entry.queue_id] == "failed"
 
 
 def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
