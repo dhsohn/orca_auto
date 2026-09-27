@@ -1,0 +1,9 @@
+# Default gitleaks rules, plus one allowlisted fixture: the contract pin of
+# deterministic sha256 queue generation tokens, which the generic-api-key rule
+# reports because the field is named "generation_token".
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Deterministic queue generation tokens pinned by contract tests"
+paths = ['''^tests/contracts/pins/queue_generation_identity\.json$''']

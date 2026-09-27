@@ -32,12 +32,14 @@ def _verdict(out_path: Path, mode: CompletionMode, label: str) -> dict[str, Any]
 
 
 def test_out_analyzer_verdicts(tmp_path: Path) -> None:
+    corpus = sorted(CORPUS_DIR.glob("*.out"))
+    assert corpus, f"no corpus files in {CORPUS_DIR}"
     table: dict[str, Any] = {}
-    for source in sorted(CORPUS_DIR.glob("*.out")):
+    for source in corpus:
         padded = tmp_path / source.name
         padded.write_bytes(_PADDING + source.read_bytes())
         for mode_name, mode in _MODES.items():
             table[f"{source.name}|{mode_name}|as_is"] = _verdict(source, mode, source.name)
             table[f"{source.name}|{mode_name}|padded"] = _verdict(padded, mode, source.name)
-    assert len(table) == 2 * len(_MODES) * len(list(CORPUS_DIR.glob("*.out")))
+    assert len(table) == 2 * len(_MODES) * len(corpus)
     assert_pin("analysis_out_analyzer.json", table)
