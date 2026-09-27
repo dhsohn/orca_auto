@@ -13,8 +13,6 @@ from orca_auto.core.config.files import (
     load_shared_config,
     load_yaml_mapping,
     messenger_mapping_from_root,
-    resolve_configured_path,
-    resolved_admission_root,
     secure_config_file_permissions,
     usable_runs_root_text,
     validate_shared_config_sections,
@@ -87,7 +85,7 @@ def test_validated_runs_root_text_rejects_windows_and_relative_values(tmp_path: 
 
 @pytest.mark.parametrize(
     "field_name",
-    ["runs_root", "scheduler.admission_root", "orca.runtime.scratch_root"],
+    ["runs_root", "orca.runtime.scratch_root"],
 )
 @pytest.mark.parametrize(
     "secret_path",
@@ -121,8 +119,7 @@ def test_validated_sections_apply_schema_defaults_once() -> None:
     shared = validate_shared_config_sections({})
 
     assert shared == SharedConfig()
-    assert shared.scheduler == SchedulerConfig(max_active_simulations=4, configured=False)
-    assert shared.scheduler.admission_limit is None
+    assert shared.scheduler == SchedulerConfig(max_active_simulations=4)
     assert (shared.resources.max_cores_per_task, shared.resources.max_memory_gb_per_task) == (
         8,
         32,
@@ -135,7 +132,7 @@ def test_validated_sections_return_every_configured_model(tmp_path: Path) -> Non
     shared = validate_shared_config_sections(
         {
             "runs_root": "/tmp/runs",
-            "scheduler": {"max_active_simulations": "6", "admission_root": "/tmp/pool"},
+            "scheduler": {"max_active_simulations": "6"},
             "resources": {"max_cores_per_task": 12},
             "orca": {
                 "runtime": {"scratch_root": "/dev/shm/orca-scratch", "scratch_min_free_gb": 2},
@@ -146,10 +143,7 @@ def test_validated_sections_return_every_configured_model(tmp_path: Path) -> Non
     )
 
     assert shared.runs_root == "/tmp/runs"
-    assert shared.scheduler == SchedulerConfig(
-        max_active_simulations=6, admission_root="/tmp/pool", configured=True
-    )
-    assert shared.scheduler.admission_limit == 6
+    assert shared.scheduler == SchedulerConfig(max_active_simulations=6)
     assert shared.resources.max_cores_per_task == 12
     assert shared.resources.max_memory_gb_per_task == 32
     # The engine section is passed through raw for ``orca_auto.orca.config``.
@@ -160,11 +154,16 @@ def test_validated_sections_return_every_configured_model(tmp_path: Path) -> Non
     assert shared.messenger.enabled
 
 
-def test_scheduler_section_with_only_admission_root_pins_default_limit() -> None:
-    shared = validate_shared_config_sections({"scheduler": {"admission_root": "/tmp/pool"}})
+@pytest.mark.parametrize("value", ["/tmp/pool", "relative/pool", "", "misplaced-credential"])
+def test_removed_scheduler_admission_root_is_rejected_with_a_hint(value: str) -> None:
+    with pytest.raises(ValueError) as captured:
+        validate_shared_config_sections({"scheduler": {"admission_root": value}})
 
-    assert shared.scheduler.configured
-    assert shared.scheduler.admission_limit == 4
+    message = str(captured.value)
+    assert message == (
+        "scheduler.admission_root was removed: admission state always lives in "
+        "<runs_root>/.admission. Delete the key."
+    )
 
 
 @pytest.mark.parametrize("invalid", [None, "disabled", []])
@@ -254,10 +253,6 @@ def test_shared_config_unknown_field_error_does_not_echo_raw_key() -> None:
         (
             "resources:\n  max_memory_gb_per_task: 0\n",
             "resources.max_memory_gb_per_task must be an integer >= 1",
-        ),
-        (
-            "scheduler:\n  admission_root: relative/pool\n",
-            "scheduler.admission_root must be an absolute Linux path",
         ),
     ],
 )
@@ -391,22 +386,6 @@ def test_duplicate_key_error_does_not_expose_secret_values(tmp_path: Path) -> No
     assert "duplicate mapping key" in message
     assert first_secret not in message
     assert second_secret not in message
-
-
-def test_configured_path_and_admission_root_helpers(tmp_path: Path) -> None:
-    runs_root = tmp_path / "runs"
-    runtime_root = tmp_path / "runtime-admission"
-    scheduler_root = tmp_path / "scheduler-admission"
-
-    assert resolve_configured_path("  ") is None
-    assert resolve_configured_path(runtime_root) == runtime_root.resolve()
-    explicit = SchedulerConfig(admission_root=str(scheduler_root), configured=True)
-    assert resolved_admission_root(explicit) == scheduler_root.resolve()
-    assert resolved_admission_root(explicit, runs_root=runs_root) == scheduler_root.resolve()
-    assert resolved_admission_root(SchedulerConfig(), runs_root=runs_root) == (
-        runs_root.resolve() / ".admission"
-    )
-    assert resolved_admission_root(SchedulerConfig()) is None
 
 
 def test_secure_config_file_permissions_sets_owner_only_mode(tmp_path: Path) -> None:

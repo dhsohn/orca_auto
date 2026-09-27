@@ -68,7 +68,7 @@ Normal submission and publication repair both call `queue/job_records.py` with t
 ### 2. Dequeue & Admission
 - The background resident worker polls the queue for pending jobs.
 - Publication repair derives each queued location record from its durable queue row. A busy publisher or failed index write withholds that row while other eligible rows can use available slots. The worker keeps per-row refusals for the current admission pass even when a lease says `complete` but path validation or persisting its safety fence fails. It inspects and repairs again on the next pass; an unreadable queue stops admission because the source cannot be verified.
-- When an eligible job is found, the worker checks the available execution slots (`scheduler.max_active_simulations`), claims one and launches the calculation child.
+- When an eligible job is found, the worker checks the available execution slots (`scheduler.max_active_simulations`) in the one admission store, `<runs_root>/.admission` ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)), claims one and launches the calculation child.
 - When RAM Scratch is enabled, the child reserves its scratch workspace before it writes any run state; the reservation checks host memory and tmpfs capacity ([ADR 0004](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)). If capacity is temporarily short, the job returns to `pending` without failing, and `queue list` shows it as waiting for resources. Otherwise the calculation runs in an isolated generation workspace.
 
 ### 3. Supervision & Clean Exit
@@ -169,3 +169,5 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0003: Retire workflows for standalone ORCA jobs](adr/0003-retire-workflows-for-standalone-orca-jobs.md)
 - [ADR 0004: Concurrent RAM scratch under a summed memory guard](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)
 - [ADR 0005: Remove retired workflow support](adr/0005-remove-retired-workflow-support.md)
+- [ADR 0006: One generation identity for the persisted token and every queue-row fence](adr/0006-one-generation-identity-for-token-and-fences.md)
+- [ADR 0007: One admission store per installation under `<runs_root>/.admission`](adr/0007-one-admission-store-under-runs-root.md)

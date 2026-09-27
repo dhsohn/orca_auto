@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.admission import get_slot, reserve_slot
+from orca_auto.core.admission import admission_dir, get_slot, reserve_slot
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import lock as lock_utils
@@ -32,7 +32,7 @@ def test_worker_retains_prelaunch_snapshot_rejection(
     cfg, config_path, queued, executable = queued_submission(tmp_path)
     executable.write_text("#!/bin/sh\nexit 91\n")
     monkeypatch.setattr(loop, "install_shutdown_signal_handlers", lambda _callback: None)
-    worker = OrcaQueueWorker(cfg, str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(cfg, str(config_path))
     worker.poll_interval_seconds = 0.01
 
     assert worker.run_once() == 0
@@ -254,7 +254,7 @@ def test_child_retains_parent_reservation_at_execution_boundaries(
 ) -> None:
     cfg, config_path, queued, _executable = queued_submission(tmp_path)
     queue_root = Path(cfg.runtime.allowed_root)
-    admission_root = Path(cfg.runtime.resolved_admission_root)
+    admission_root = admission_dir(cfg.runtime.allowed_root)
     running = claim_next_entry(queue_root)
     assert running is not None
     token = reserve_slot(admission_root, 1, source="orca-child-boundary-test")
@@ -331,7 +331,7 @@ def _run_cancelled_child(
 ) -> tuple[Path, Path, QueueEntry, Callable[[], int]]:
     cfg, config_path, queued, _executable = queued_submission(tmp_path)
     queue_root = Path(cfg.runtime.allowed_root)
-    admission_root = Path(cfg.runtime.resolved_admission_root)
+    admission_root = admission_dir(cfg.runtime.allowed_root)
     running = claim_next_entry(queue_root)
     assert running is not None
     token = reserve_slot(admission_root, 1, source="orca-child-cancel-lock-test")

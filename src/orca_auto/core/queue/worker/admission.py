@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Protocol
 
 from orca_auto.core.admission import read_active_slot_count
-from orca_auto.core.config.schema import RuntimeAdmissionMixin
 
 from ..priority import normalize_queue_priority
 from ..store import claimable_pending
@@ -13,25 +11,14 @@ from ..types import QueueEntry
 from .models import ReservedQueueEntry, ReserveStatus
 
 
-class WorkerConfig(Protocol):
-    @property
-    def runtime(self) -> RuntimeAdmissionMixin: ...
-
-
-def resolve_admission_root(cfg: WorkerConfig) -> str:
-    """Return the shared admission root resolved by the runtime configuration."""
-    return str(cfg.runtime.resolved_admission_root)
-
-
-def admission_has_capacity(cfg: WorkerConfig) -> bool:
-    """Read-only check that the shared pool could admit one more slot.
+def admission_has_capacity(admission_root: Path, limit: int) -> bool:
+    """Read-only check that the admission store could admit one more slot.
 
     Counts live slots without locking or rewriting the admission file, using
-    the same limit the reservation itself enforces. A worker whose pool is
-    full stops here, before it lists any queue root.
+    the same limit the reservation itself enforces. A worker whose store is
+    full stops here, before it lists the queue.
     """
-    limit = int(cfg.runtime.resolved_admission_limit)
-    return read_active_slot_count(resolve_admission_root(cfg)) < limit
+    return read_active_slot_count(admission_root) < limit
 
 
 def select_next_claimable_entry(
@@ -112,9 +99,7 @@ def reserve_dequeued_entry(
 
 
 __all__ = [
-    "WorkerConfig",
     "admission_has_capacity",
     "reserve_dequeued_entry",
-    "resolve_admission_root",
     "select_next_claimable_entry",
 ]

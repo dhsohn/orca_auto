@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.admission import list_slots, release_slot, reserve_slot
+from orca_auto.core.admission import admission_dir, list_slots, release_slot, reserve_slot
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import worker as queue_worker_mod
@@ -54,15 +54,17 @@ def test_fill_slots_idle_poll_leaves_admission_file_untouched(
     # would make the assertion vacuous. One live slot out of two stays.
     token = reserve_slot(worker.admission_root, 2, source="queue_worker", state="reserved")
     assert token is not None
-    assert worker.admission_limit == 2
+    assert worker.max_concurrent == 2
     assert len(list_slots(worker.admission_root)) == 1
-    before = admission_file_identity(queue_root)
+    before = admission_file_identity(admission_dir(queue_root))
 
     status = worker._fill_slots()
 
     assert status == "idle"
-    assert admission_file_identity(queue_root) == before
-    slots = json.loads((queue_root / "admission_slots.json").read_text(encoding="utf-8"))
+    assert admission_file_identity(admission_dir(queue_root)) == before
+    slots = json.loads(
+        (admission_dir(queue_root) / "admission_slots.json").read_text(encoding="utf-8")
+    )
     assert [slot["token"] for slot in slots] == [token]
     assert len(worker._running) == 0
     assert child_starter.started == []
@@ -76,12 +78,12 @@ def test_admission_reservation_moves_the_admission_file_to_a_new_inode(
     # that no reservation happened.
     first = reserve_slot(worker.admission_root, 2, source="probe", state="reserved")
     assert first is not None
-    before = admission_file_identity(queue_root)
+    before = admission_file_identity(admission_dir(queue_root))
     second = reserve_slot(worker.admission_root, 2, source="probe", state="reserved")
     assert second is not None
     # The atomic replace may reuse the freed inode number, so the probe
     # the idle-poll test relies on is the (inode, mtime_ns) pair.
-    assert admission_file_identity(queue_root) != before
+    assert admission_file_identity(admission_dir(queue_root)) != before
     assert len(list_slots(worker.admission_root)) == 2
 
 
@@ -98,7 +100,9 @@ def test_start_job(worker: OrcaQueueWorker, fake_popen: list[SpawnCall], queue_r
             "worker_log": "/tmp/unsafe-worker.log",
         },
     )
-    token = reserve_slot(queue_root, worker.max_concurrent, source="queue_worker", state="reserved")
+    token = reserve_slot(
+        admission_dir(queue_root), worker.max_concurrent, source="queue_worker", state="reserved"
+    )
     assert token is not None
 
     worker._start_job(queue_root, entry, admission_token=token)
@@ -145,7 +149,9 @@ def test_start_job_prefers_queue_metadata_for_tracking(
             "resource_actual": {"max_cores": 3, "max_memory_gb": 11},
         },
     )
-    token = reserve_slot(queue_root, worker.max_concurrent, source="queue_worker", state="reserved")
+    token = reserve_slot(
+        admission_dir(queue_root), worker.max_concurrent, source="queue_worker", state="reserved"
+    )
     assert token is not None
 
     worker._start_job(queue_root, entry, admission_token=token)
@@ -169,13 +175,13 @@ def test_start_job_oserror(
     rxn = queue_root / "mol_err"
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     claim_next_entry(queue_root)
 
     assert worker._start_job(queue_root, entry, admission_token=token) is False
 
     assert entry.queue_id not in worker._running
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     [failed] = list_queue(queue_root)
     assert (failed.status, failed.error) == (QueueStatus.FAILED, "spawn failed")
 
@@ -193,9 +199,9 @@ def test_start_job_attach_error_releases_slot_and_terminates_process(
     rxn = queue_root / "mol_attach_err"
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     claim_next_entry(queue_root)
-    release_slot(queue_root, token)
+    release_slot(admission_dir(queue_root), token)
     release_calls: list[str] = []
     real_release = worker._release_admission_slot
 
@@ -210,7 +216,7 @@ def test_start_job_attach_error_releases_slot_and_terminates_process(
     assert entry.queue_id not in worker._running
     [started] = child_starter.started
     assert fake_children.stopped(started.process)
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     [updated] = list_queue(queue_root)
     assert updated.status == QueueStatus.FAILED
     # Handled exactly once: the specific refusal reason survives and the slot
@@ -227,7 +233,7 @@ def test_start_error_does_not_fail_replacement_generation(
     selected = enqueue(queue_root, str(rxn), task_id="task-a")
     running = claim_next_entry(queue_root)
     assert running is not None
-    token = reserve_job_slot(queue_root, 2, selected, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), 2, selected, rxn)
     replacement = replace(running, task_id="task-b")
     save_entries_core(queue_root, [replacement])
 
@@ -235,7 +241,7 @@ def test_start_error_does_not_fail_replacement_generation(
 
     [durable] = list_queue(queue_root)
     assert (durable.task_id, durable.status) == ("task-b", QueueStatus.RUNNING)
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
 
 
 def test_fill_slots_starts_pending_jobs(
@@ -292,12 +298,12 @@ def test_fill_slots_with_only_a_tracked_pending_row_leaves_admission_untouched(
     entry = enqueue(queue_root, str(rxn), metadata=current_orca_queue_metadata(rxn))
     worker._fill_slots()
     assert queue_worker_mod.requeue_running_entry(queue_root, entry.queue_id)
-    before = admission_file_identity(queue_root)
+    before = admission_file_identity(admission_dir(queue_root))
 
     status = worker._fill_slots()
 
     assert status == "idle"
-    assert admission_file_identity(queue_root) == before
+    assert admission_file_identity(admission_dir(queue_root)) == before
     assert len(child_starter.started) == 1
     [row] = list_queue(queue_root)
     assert row.status == QueueStatus.PENDING
@@ -313,7 +319,7 @@ def test_fill_slots_attaches_queue_identity_to_reserved_slot(
 
     worker._fill_slots()
 
-    [slot] = list_slots(queue_root)
+    [slot] = list_slots(admission_dir(queue_root))
     [started] = child_starter.started
     assert slot.queue_id == entry.queue_id
     assert slot.app_name == entry.app_name
@@ -339,7 +345,7 @@ def test_fill_slots_preserves_task_id_across_slot_and_worker_handoff(
 
     worker._fill_slots()
 
-    [slot] = list_slots(queue_root)
+    [slot] = list_slots(admission_dir(queue_root))
     assert slot.queue_id == entry.queue_id
     assert slot.task_id == entry.task_id
     assert slot.queue_id != slot.task_id
@@ -411,7 +417,9 @@ def test_fill_slots_refills_immediately_after_completion(
     )
     claim_next_entry(queue_root)
     write_completed_run_state(first_dir)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, completed_entry, first_dir)
+    token = reserve_job_slot(
+        admission_dir(queue_root), worker.max_concurrent, completed_entry, first_dir
+    )
     worker._running[completed_entry.queue_id] = running_job(
         worker, completed_entry, first_dir, fake_children.spawn(exited=0), token, task_id=None
     )
@@ -460,7 +468,7 @@ def test_fill_slots_counts_existing_worker_admission_slot_once(
     worker = make_worker(max_concurrent=2, start=child_starter)
     active_dir = queue_root / "already_running"
     token = reserve_slot(
-        queue_root,
+        admission_dir(queue_root),
         worker.max_concurrent,
         work_dir=str(active_dir),
         queue_id="q_existing",

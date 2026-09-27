@@ -2,6 +2,15 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+ENGINE_PROCESS_PENDING = "pending"
+ENGINE_PROCESS_ACTIVE = "active"
+ENGINE_PROCESS_IDLE = "idle"
+SLOT_STATE_RESERVED = "reserved"
+SLOT_STATE_ACTIVE = "active"
+# The worker reserves a slot under its own source; the child's activation
+# rewrites the source to this value.
+ADMISSION_SOURCE_QUEUE_RUN = "queue_run"
+
 
 @dataclass(frozen=True, kw_only=True)
 class AdmissionSlot:
@@ -13,10 +22,10 @@ class AdmissionSlot:
     acquired_at: str
     app_name: str = ""
     task_id: str = ""
-    state: str = "active"
+    state: str = SLOT_STATE_ACTIVE
     work_dir: str = ""
     queue_id: str = ""
-    engine_process_state: str = "idle"
+    engine_process_state: str = ENGINE_PROCESS_IDLE
     engine_launch_gated: bool = False
     engine_pid: int | None = None
     engine_pgid: int | None = None
@@ -50,14 +59,14 @@ def _engine_process_fields(
     raw: dict[str, object],
 ) -> tuple[str, int | None, int | None, int | None, str | None]:
     state = str(raw.get("engine_process_state", "") or "").strip().lower()
-    if state not in {"pending", "active", "idle"}:
+    if state not in {ENGINE_PROCESS_PENDING, ENGINE_PROCESS_ACTIVE, ENGINE_PROCESS_IDLE}:
         raise ValueError(f"Invalid admission engine process state: {state!r}")
 
     pid = _positive_optional_int(raw, "engine_pid")
     pgid = _positive_optional_int(raw, "engine_pgid")
     start_ticks = _positive_optional_int(raw, "engine_process_start_ticks")
     boot_id = _nonempty_optional_string(raw, "engine_process_boot_id")
-    if state == "active":
+    if state == ENGINE_PROCESS_ACTIVE:
         if pid is None or pgid is None or start_ticks is None or pgid != pid:
             raise ValueError("Invalid active admission engine process identity")
     elif any(value is not None for value in (pid, pgid, start_ticks, boot_id)):
@@ -88,9 +97,9 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
     owner_boot_id = _nonempty_optional_string(raw, "owner_boot_id")
     if owner_start_ticks is None or owner_boot_id is None:
         raise ValueError("Admission slot owner identity is incomplete")
-    if engine_state == "active" and engine_boot_id is None:
+    if engine_state == ENGINE_PROCESS_ACTIVE and engine_boot_id is None:
         raise ValueError("Active admission engine boot identity is incomplete")
-    if engine_state == "active" and owner_boot_id != engine_boot_id:
+    if engine_state == ENGINE_PROCESS_ACTIVE and owner_boot_id != engine_boot_id:
         raise ValueError("Admission owner and engine process boot IDs do not match")
     engine_launch_gated = raw.get("engine_launch_gated", False)
     if type(engine_launch_gated) is not bool:
@@ -104,7 +113,7 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
         owner_boot_id=owner_boot_id,
         app_name=str(raw.get("app_name", "")).strip(),
         task_id=str(raw.get("task_id", "")).strip(),
-        state=str(raw.get("state", "active")).strip() or "active",
+        state=str(raw.get("state", SLOT_STATE_ACTIVE)).strip() or SLOT_STATE_ACTIVE,
         work_dir=str(raw.get("work_dir", "")).strip(),
         queue_id=str(raw.get("queue_id", "")).strip(),
         engine_process_state=engine_state,

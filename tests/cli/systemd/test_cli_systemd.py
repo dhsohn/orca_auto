@@ -29,9 +29,7 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
     python_path.parent.mkdir(parents=True)
     config_path.parent.mkdir(parents=True)
     runs_root = repo / "orca_runs"
-    admission_root = repo / "admission"
     runs_root.mkdir()
-    admission_root.mkdir()
     orca_executable = repo / "orca"
     orca_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     orca_executable.chmod(0o755)
@@ -42,8 +40,6 @@ def _make_repo(tmp_path: Path) -> tuple[Path, Path]:
         "\n".join(
             [
                 f"runs_root: {repo / 'orca_runs'}",
-                "scheduler:",
-                f"  admission_root: {repo / 'admission'}",
                 "messenger:",
                 "  discord:",
                 "    bot_token: token",
@@ -211,11 +207,7 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     assert "StartLimitBurst=3" in worker_content
     assert "Restart=on-failure" in worker_content
     assert "RestartSec=30" in worker_content
-    assert (
-        "ReadWritePaths="
-        f"{repo.resolve(strict=False) / 'admission'} "
-        f"{repo.resolve(strict=False) / 'orca_runs'}"
-    ) in worker_content
+    assert f"ReadWritePaths={repo.resolve(strict=False) / 'orca_runs'}" in worker_content
     engine_target = unit_by_name["orca_auto-engine-workers@.target"].content
     assert "Wants=orca_auto-queue-worker@%i.service" in engine_target
     assert "Wants=orca_auto-xtb-md-worker@%i.service" not in engine_target
@@ -247,7 +239,7 @@ def test_systemd_renderer_escapes_literal_percent_only_in_rendered_paths(tmp_pat
     assert f"WorkingDirectory={escaped_repo}" in worker_content
     assert f"Environment=ORCA_AUTO_CONFIG={escaped_config}" in worker_content
     assert f"ExecStart={escaped_repo}/.venv/bin/python" in worker_content
-    assert f"ReadWritePaths={escaped_repo}/admission {escaped_repo}/orca_runs" in worker_content
+    assert f"ReadWritePaths={escaped_repo}/orca_runs" in worker_content
     # Template-owned instance specifiers are not path data and must still expand.
     assert "User=%i" in worker_content
     assert "PartOf=orca_auto-engine-workers@%i.target" in worker_content
@@ -320,55 +312,15 @@ def test_systemd_rejects_a_repo_without_unit_templates(tmp_path: Path) -> None:
         )
 
 
-def test_systemd_tolerates_an_explicit_admission_root_the_installer_cannot_inspect(
-    tmp_path: Path,
-) -> None:
-    # A non-root administrator installing for another account may be unable
-    # to traverse that account's private tree; the directory is not missing.
-    # Exercised with a real permission error: the explicit root sits under a
-    # mode-0 parent, so stat() raises EACCES for this account.
-    if os.geteuid() == 0:
-        pytest.skip("root can traverse any directory")
+def test_systemd_install_rejects_the_removed_admission_root_with_a_hint(tmp_path: Path) -> None:
     repo, config_path = _make_repo(tmp_path)
-    private_parent = tmp_path / "private"
-    private_parent.mkdir()
-    hidden_root = private_parent / "admission"
-    hidden_root.mkdir()
     config_path.write_text(
-        config_path.read_text(encoding="utf-8").replace(
-            f"admission_root: {repo / 'admission'}", f"admission_root: {hidden_root}"
-        ),
+        config_path.read_text(encoding="utf-8")
+        + f"scheduler:\n  admission_root: {repo / 'admission'}\n",
         encoding="utf-8",
     )
-    admission_root = hidden_root.resolve()
-    private_parent.chmod(0)
-    try:
-        with pytest.raises(PermissionError):
-            admission_root.stat()
-        plan = systemd_plan.build_systemd_install_plan(
-            target_user="alice",
-            repo=repo,
-            config=config_path,
-            unit_dir=tmp_path / "units",
-            no_enable=True,
-            is_root=lambda: True,
-        )
-    finally:
-        private_parent.chmod(0o700)
 
-    unit_by_name = {unit.name: unit for unit in plan.units}
-    assert str(admission_root) in unit_by_name["orca_auto-queue-worker@.service"].content
-
-
-def test_systemd_rejects_missing_explicit_admission_root(tmp_path: Path) -> None:
-    repo, config_path = _make_repo(tmp_path)
-    admission_root = repo / "admission"
-    admission_root.rmdir()
-
-    with pytest.raises(
-        ValueError,
-        match=r"scheduler\.admission_root must exist as a directory before systemd installation",
-    ):
+    with pytest.raises(ValueError, match=r"scheduler\.admission_root was removed"):
         systemd_plan.build_systemd_install_plan(
             target_user="alice",
             repo=repo,
@@ -409,8 +361,6 @@ def test_systemd_rejects_orca_scoped_admission_override(
         "\n".join(
             [
                 f"runs_root: {repo / 'orca_runs'}",
-                "scheduler:",
-                f"  admission_root: {repo / 'admission'}",
                 "orca:",
                 "  scheduler:",
                 f"    admission_root: {repo / 'orca_admission'}",
@@ -441,7 +391,6 @@ def test_systemd_stop_timeout_follows_configured_concurrency(tmp_path: Path) -> 
             [
                 f"runs_root: {repo / 'orca_runs'}",
                 "scheduler:",
-                f"  admission_root: {repo / 'admission'}",
                 "  max_active_simulations: 2",
                 "messenger:",
                 "  discord:",
@@ -641,8 +590,6 @@ def test_systemd_rejects_unquoted_setting_metacharacters(
             "\n".join(
                 [
                     f"runs_root: {repo / f'runs{character}root'}",
-                    "scheduler:",
-                    f"  admission_root: {repo / 'admission'}",
                     "messenger:",
                     "  discord:",
                     "    bot_token: token",
@@ -711,8 +658,6 @@ def test_systemd_read_write_paths_reject_whitespace_from_config(tmp_path: Path) 
         "\n".join(
             [
                 f"runs_root: {repo / 'orca runs'}",
-                "scheduler:",
-                f"  admission_root: {repo / 'admission'}",
                 "messenger:",
                 "  discord:",
                 "    bot_token: token",

@@ -15,7 +15,12 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.admission import get_slot, prepare_slot_engine_process, reserve_slot
+from orca_auto.core.admission import (
+    admission_dir,
+    get_slot,
+    prepare_slot_engine_process,
+    reserve_slot,
+)
 from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -89,7 +94,7 @@ def test_attach_preserves_admission_identity_and_work_dir(
         metadata = {**base.metadata, "reaction_dir": f" {reaction} "}
         expected_work_dir = reaction
     entry = replace(base, metadata=metadata)
-    token = _reserve(tmp_path)
+    token = _reserve(admission_dir(tmp_path))
 
     assert worker._on_worker_process_started(
         tmp_path,
@@ -98,7 +103,7 @@ def test_attach_preserves_admission_identity_and_work_dir(
         admission_token=token,
     )
 
-    slot = get_slot(tmp_path, token)
+    slot = get_slot(admission_dir(tmp_path), token)
     assert slot is not None
     assert slot.state == "active"
     assert slot.queue_id == "queue-1"
@@ -164,7 +169,7 @@ def test_running_record_failure_does_not_untrack_started_child(
     stable_process_identity: ProcessIdentity,
 ) -> None:
     (tmp_path / "reaction").mkdir()
-    token = _reserve(tmp_path)
+    token = _reserve(admission_dir(tmp_path))
     _corrupt_index(tmp_path)
 
     assert worker._on_worker_process_started(
@@ -174,7 +179,7 @@ def test_running_record_failure_does_not_untrack_started_child(
         admission_token=token,
     )
 
-    slot = get_slot(tmp_path, token)
+    slot = get_slot(admission_dir(tmp_path), token)
     assert slot is not None
     assert slot.state == "active"
     assert slot.queue_id == "queue-1"
@@ -272,14 +277,14 @@ def test_cancel_failure_retains_slot_and_retry_owner(
     failure: str,
 ) -> None:
     enqueue_entry(tmp_path, _entry(tmp_path))
-    token = _reserve(tmp_path, queue_id="queue-1")
+    token = _reserve(admission_dir(tmp_path), queue_id="queue-1")
     job = _job(tmp_path, admission_token=token)
     if failure == "surviving":
         job.process = FakeManagedProcess(poll_result=None)
     if failure == "recover":
         # The child's engine launch is still pending under this live owner, so
         # slot recovery refuses to run.
-        assert prepare_slot_engine_process(tmp_path, token) is not None
+        assert prepare_slot_engine_process(admission_dir(tmp_path), token) is not None
     if failure == "mark":
         (tmp_path / QUEUE_FILE).write_text("{not a queue", encoding="utf-8")
 
@@ -293,7 +298,7 @@ def test_cancel_failure_retains_slot_and_retry_owner(
 
     assert not worker._cancel_running_job("queue-1", job)
 
-    assert get_slot(tmp_path, token) is not None
+    assert get_slot(admission_dir(tmp_path), token) is not None
     if failure != "mark":
         current = _row(tmp_path, "queue-1")
         assert current is not None
@@ -319,8 +324,8 @@ def test_reconciliation_keeps_scoped_and_legacy_live_slot_protection(
             )
         )
     save_entries_core(tmp_path, rows)
-    _reserve(tmp_path, queue_id="queue-live", work_dir=tmp_path / "live")
-    _reserve(tmp_path, queue_id="queue-legacy")
+    _reserve(admission_dir(tmp_path), queue_id="queue-live", work_dir=tmp_path / "live")
+    _reserve(admission_dir(tmp_path), queue_id="queue-legacy")
 
     worker._reconcile_worker_state()
 

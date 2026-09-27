@@ -11,7 +11,12 @@ from typing import Any, Literal
 
 from orca_auto.core.utils import process as process_utils
 
-from .records import AdmissionSlot
+from .records import (
+    ENGINE_PROCESS_ACTIVE,
+    ENGINE_PROCESS_IDLE,
+    ENGINE_PROCESS_PENDING,
+    AdmissionSlot,
+)
 from .store import (
     clear_slot_engine_process,
     complete_slot_engine_process,
@@ -95,7 +100,7 @@ def _clear_record(
     root: str | Path,
     slot: AdmissionSlot,
     *,
-    next_state: str = "idle",
+    next_state: str = ENGINE_PROCESS_IDLE,
 ) -> None:
     cleared = clear_slot_engine_process(
         root,
@@ -107,7 +112,7 @@ def _clear_record(
     )
     if cleared is None:
         current = get_slot(root, slot.token)
-        if current is None or current.engine_process_state == "idle":
+        if current is None or current.engine_process_state == ENGINE_PROCESS_IDLE:
             return
         current_identity = (
             current.engine_pid,
@@ -121,7 +126,10 @@ def _clear_record(
             slot.engine_process_start_ticks,
             slot.engine_process_boot_id,
         )
-        if current.engine_process_state == "active" and current_identity == expected_identity:
+        if (
+            current.engine_process_state == ENGINE_PROCESS_ACTIVE
+            and current_identity == expected_identity
+        ):
             retried = clear_slot_engine_process(
                 root,
                 slot.token,
@@ -142,18 +150,18 @@ def register_slot_engine_process(
     token: str,
     running: Any | None,
 ) -> None:
-    """Publish or clear the currently active engine group for a child worker.
+    """Publish or clear the engine process group recorded on the child's slot.
 
-    The callback is intentionally compatible with ``register_running_job`` so
-    ranking sub-jobs update the same top-level admission slot for every launch.
+    ``OrcaRunner`` calls it with the launched process once the launch gate holds
+    the engine back, and with ``None`` after the group has exited.
     """
     if running is None:
         slot = get_slot(root, token)
         if slot is None:
             raise EngineProcessRecordError(f"Admission slot disappeared: {token}")
-        if slot.engine_process_state == "idle":
+        if slot.engine_process_state == ENGINE_PROCESS_IDLE:
             return
-        if slot.engine_process_state == "pending":
+        if slot.engine_process_state == ENGINE_PROCESS_PENDING:
             completed = complete_slot_engine_process(root, token)
             if completed is None:
                 raise EngineProcessRecordError(f"Admission slot disappeared: {token}")
@@ -303,9 +311,9 @@ def recover_slot_engine_process(
 ) -> bool:
     """Reap one dead child's recorded engine group before releasing its slot."""
     slot = get_slot(root, token)
-    if slot is None or slot.engine_process_state == "idle":
+    if slot is None or slot.engine_process_state == ENGINE_PROCESS_IDLE:
         return False
-    if slot.engine_process_state == "pending":
+    if slot.engine_process_state == ENGINE_PROCESS_PENDING:
         if process_utils.process_identity_alive(
             slot.owner_pid, slot.process_start_ticks, slot.owner_boot_id
         ):
@@ -355,21 +363,11 @@ def recover_slot_engine_process(
     return True
 
 
-def recover_orphaned_engine_slots(
-    root: str | Path,
-    *,
-    source: str | tuple[str, ...] | None = None,
-    strict: bool = True,
-) -> int:
+def recover_orphaned_engine_slots(root: str | Path, *, strict: bool) -> int:
     """Recover dead-owner engine groups before generic stale-slot cleanup."""
-    allowed_sources = (
-        None if source is None else {source} if isinstance(source, str) else set(source)
-    )
     recovered = 0
     orphaned: list[AdmissionSlot] = []
     for slot in list_all_slots(root):
-        if allowed_sources is not None and slot.source not in allowed_sources:
-            continue
         if process_utils.process_identity_alive(
             slot.owner_pid, slot.process_start_ticks, slot.owner_boot_id
         ):
@@ -380,7 +378,7 @@ def recover_orphaned_engine_slots(
     # Recover every trustworthy active record first. One ambiguous pending
     # launch must not leave unrelated, fully identified engine groups running.
     for slot in orphaned:
-        if slot.engine_process_state != "active":
+        if slot.engine_process_state != ENGINE_PROCESS_ACTIVE:
             continue
         try:
             recover_slot_engine_process(root, slot.token)
@@ -389,7 +387,7 @@ def recover_orphaned_engine_slots(
         else:
             recovered += 1
     for slot in orphaned:
-        if slot.engine_process_state == "pending":
+        if slot.engine_process_state == ENGINE_PROCESS_PENDING:
             error = _clear_dead_owner_pending_launch(root, slot)
             if error is not None:
                 errors.append(error)

@@ -9,9 +9,8 @@ resources:
   max_memory_gb_per_task: 32
 
 scheduler:
+  # Concurrent calculations and the admission limit; slots live in <runs_root>/.admission.
   max_active_simulations: 4
-  # Defaults to <runs_root>/.admission. Share it to coordinate workers on one host.
-  # admission_root: /home/user/orca_runs/.admission
 
 orca:
   paths:

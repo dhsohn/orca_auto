@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from orca_auto.core.admission import persistence as admission_persistence
 from orca_auto.core.admission import store
+from orca_auto.core.admission.records import slot_to_dict
 from orca_auto.core.utils import persistence as persistence_utils
 from orca_auto.core.utils import process as process_utils
 
@@ -279,7 +281,7 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
     )
 
     slots = [
-        store._slot_to_dict(
+        slot_to_dict(
             store.AdmissionSlot(
                 token="live",
                 owner_pid=1111,
@@ -289,7 +291,7 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
         ),
-        store._slot_to_dict(
+        slot_to_dict(
             store.AdmissionSlot(
                 token="dead",
                 owner_pid=2222,
@@ -382,7 +384,7 @@ def test_read_active_slot_count_does_not_prune_or_rewrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch, live_pids={4242})
-    store._save_slots(
+    admission_persistence.save_slots(
         tmp_path,
         [
             store.AdmissionSlot(
@@ -485,7 +487,7 @@ def test_save_slots_rejects_duplicate_tokens_before_replace(
     [slot] = store.list_all_slots(tmp_path)
 
     with pytest.raises(store.AdmissionStoreCorruptError, match="duplicate token"):
-        store._save_slots(tmp_path, [slot, replace(slot, source="wrong-owner")])
+        admission_persistence.save_slots(tmp_path, [slot, replace(slot, source="wrong-owner")])
 
     assert admission_path.read_bytes() == original
     [remaining] = store.list_all_slots(tmp_path)
@@ -624,7 +626,7 @@ def test_list_slots_does_not_rewrite_an_unchanged_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch, live_pids={4242})
-    store._save_slots(
+    admission_persistence.save_slots(
         tmp_path,
         [
             store.AdmissionSlot(
@@ -651,7 +653,7 @@ def test_list_slots_still_drops_a_dead_owner_from_the_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch, live_pids={4242})
-    store._save_slots(
+    admission_persistence.save_slots(
         tmp_path,
         [
             store.AdmissionSlot(
@@ -682,7 +684,7 @@ def test_reserve_slot_at_capacity_does_not_rewrite_the_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch, live_pids={4242})
-    store._save_slots(
+    admission_persistence.save_slots(
         tmp_path,
         [
             store.AdmissionSlot(
@@ -711,7 +713,7 @@ def test_slot_row_with_a_field_outside_the_schema_fails_closed(
     token = store.reserve_slot(tmp_path, 1, source="orca_auto.orca.queue_worker")
     assert token is not None
     [current] = store.list_all_slots(tmp_path)
-    raw = {**store._slot_to_dict(current), "workflow_id": "legacy"}
+    raw = {**slot_to_dict(current), "workflow_id": "legacy"}
     (tmp_path / store.ADMISSION_FILE_NAME).write_text(json.dumps([raw]), encoding="utf-8")
     with pytest.raises(store.AdmissionStoreCorruptError):
         store.list_slots(tmp_path)

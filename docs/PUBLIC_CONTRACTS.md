@@ -18,7 +18,7 @@ ORCA_auto operates on Linux and WSL2 with Python 3.11+ and systemd supervision, 
 | `queue cancel TARGET` | Cancels a job by queue ID, run ID, or unambiguous directory path alias. A directory path or name resolves to that directory's active generation, or to its newest finished row when none is active; a name shared by different directories, or two active generations, is ambiguous. Exits 1 without a discoverable config or an existing `runs_root`. |
 | `index prune` | Previews indexed rows whose disk paths no longer exist. Removes them only when `--apply` is passed. |
 | `index rebuild` | Re-derives `job_locations.json` rows from every `job_state.json` under `runs_root`, adding or updating rows by job id and never removing one. `--dry-run` reports without writing. |
-| `systemd install` | Installs systemd unit templates for the specified user and repository or prepared runtime root (`--repo`). A config that exists but does not load exits 1 and writes no units; `TimeoutStopSec` is rendered from `scheduler.max_active_simulations`. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
+| `systemd install` | Installs systemd unit templates for the specified user and repository or prepared runtime root (`--repo`). A config that exists but does not load exits 1 and writes no units; `TimeoutStopSec` is rendered from `scheduler.max_active_simulations` and `ReadWritePaths` names only `runs_root`. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
 | `service status` | Inspects systemd units and verifies worker process freshness against the checkout HEAD or the installed runtime build. Exits 1 (`ok: false` under `--json`) when a unit is unhealthy or a worker is stale or undetermined. |
 | `service restart` | Refuses restart if active calculations or reservations exist, preventing accidental data loss. Use `--force` to bypass. A failed `sudo`/`systemctl` step exits 1 with an `error:` line naming the command. |
 | `scratch list` | Lists RAM-scratch workspaces under `orca.runtime.scratch_root` and whether any non-live workspace blocks new scratch launches. Exits 0 even when blockers exist; supports `--json`. |
@@ -50,6 +50,8 @@ A source checkout is not probed.
 
 > **Validation Policy**:
 > Invalid mappings, explicit nulls and unrecognized keys (including a `workflow` section) are rejected before default values are applied. See [config/orca_auto.yaml.example](../config/orca_auto.yaml.example) for accepted settings.
+
+Admission state always lives in `<runs_root>/.admission`, and its limit is `scheduler.max_active_simulations`. The removed `scheduler.admission_root` key is rejected with a hint to delete it ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)).
 
 ---
 

@@ -16,6 +16,7 @@ import pytest
 
 from orca_auto.core import admission
 from orca_auto.core.admission import engine_process, store
+from orca_auto.core.admission import persistence as admission_persistence
 from orca_auto.core.queue.engine.child import (
     await_parent_admission_handoff,
 )
@@ -391,7 +392,7 @@ def test_global_recovery_clears_cross_boot_pending_fence(
     )
     recovered = engine_process.recover_orphaned_engine_slots(
         tmp_path,
-        source="test-engine",
+        strict=True,
     )
 
     assert recovered == 1
@@ -415,7 +416,7 @@ def test_global_recovery_clears_same_boot_launch_gated_pending_fence(
     )
     recovered = engine_process.recover_orphaned_engine_slots(
         tmp_path,
-        source="test-engine",
+        strict=True,
     )
 
     assert recovered == 1
@@ -451,7 +452,6 @@ def test_same_boot_launch_gated_pending_cas_retains_direct_replacement(
     )
     recovered = engine_process.recover_orphaned_engine_slots(
         tmp_path,
-        source="test-engine",
         strict=False,
     )
 
@@ -492,7 +492,6 @@ def test_cross_boot_pending_cas_retains_concurrent_replacement(
     )
     recovered = engine_process.recover_orphaned_engine_slots(
         tmp_path,
-        source="test-engine",
         strict=False,
     )
 
@@ -566,7 +565,6 @@ def test_global_recovery_handles_active_before_retaining_dead_pending(
     assert (
         engine_process.recover_orphaned_engine_slots(
             tmp_path,
-            source="test-engine",
             strict=False,
         )
         == 1
@@ -577,7 +575,6 @@ def test_global_recovery_handles_active_before_retaining_dead_pending(
     with pytest.raises(engine_process.EngineProcessRecordError, match="pending engine launch"):
         engine_process.recover_orphaned_engine_slots(
             tmp_path,
-            source="test-engine",
             strict=True,
         )
 
@@ -613,7 +610,7 @@ def test_prepare_compensates_pending_record_after_post_replace_save_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = _reserve_managed(tmp_path, monkeypatch)
-    original_save = store._save_slots
+    original_save = admission_persistence.save_slots
     save_calls = 0
 
     def save_then_fail_once(root: Path, slots: list[store.AdmissionSlot]) -> None:
@@ -623,7 +620,7 @@ def test_prepare_compensates_pending_record_after_post_replace_save_error(
         if save_calls == 1:
             raise OSError("directory fsync failed after replace")
 
-    monkeypatch.setattr(store, "_save_slots", save_then_fail_once)
+    monkeypatch.setattr(admission_persistence, "save_slots", save_then_fail_once)
 
     with pytest.raises(engine_process.EngineProcessRecordError, match="Cannot prepare"):
         admission.build_slot_engine_process_preparer(tmp_path, token)()
@@ -638,7 +635,7 @@ def test_prepare_compensation_never_discards_visible_active_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = _reserve_managed(tmp_path, monkeypatch)
-    original_save = store._save_slots
+    original_save = admission_persistence.save_slots
 
     def publish_active_then_fail(root: Path, slots: list[store.AdmissionSlot]) -> None:
         pending = next(slot for slot in slots if slot.token == token)
@@ -656,7 +653,7 @@ def test_prepare_compensation_never_discards_visible_active_identity(
         )
         raise OSError("save outcome was ambiguous")
 
-    monkeypatch.setattr(store, "_save_slots", publish_active_then_fail)
+    monkeypatch.setattr(admission_persistence, "save_slots", publish_active_then_fail)
 
     with pytest.raises(engine_process.EngineProcessRecordError, match="Cannot prepare"):
         admission.build_slot_engine_process_preparer(tmp_path, token)()
@@ -841,7 +838,7 @@ def test_global_dead_owner_recovery_escalates_term_to_kill(
     )
     recovered = engine_process.recover_orphaned_engine_slots(
         tmp_path,
-        source="test-engine",
+        strict=True,
     )
 
     assert recovered == 1
@@ -1038,7 +1035,7 @@ def test_pending_recovery_retains_unverifiable_owner_without_signalling(
         with pytest.raises(engine_process.EngineProcessRecordPendingError, match="live owner"):
             engine_process.recover_slot_engine_process(tmp_path, token)
     else:
-        assert engine_process.recover_orphaned_engine_slots(tmp_path) == 0
+        assert engine_process.recover_orphaned_engine_slots(tmp_path, strict=True) == 0
 
     assert path.read_bytes() == recorded
     slot = admission.get_slot(tmp_path, token)

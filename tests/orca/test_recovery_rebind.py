@@ -918,7 +918,7 @@ def test_worker_child_runs_the_replacement_generation(
 ) -> None:
     queue_root, running, snapshot, executable = _claimed_mutable_entry(tmp_path)
     _crash_generation(snapshot)
-    config = _worker_config(tmp_path, queue_root, executable, admission_root=tmp_path / "admission")
+    config = _worker_config(tmp_path, queue_root, executable)
     calls: dict[str, Any] = {}
 
     monkeypatch.setattr(worker_execution, "install_shutdown_signal_handlers", lambda _cb: None)

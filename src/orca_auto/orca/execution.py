@@ -29,6 +29,7 @@ from orca_auto.core.admission import (
     release_slot,
 )
 from orca_auto.core.admission import activate_reserved_slot as _activate_reserved_slot
+from orca_auto.core.admission.records import ADMISSION_SOURCE_QUEUE_RUN, SLOT_STATE_ACTIVE
 from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, run_lock_status
@@ -125,7 +126,7 @@ def _activated_reserved_slot_context(
     activated = _activate_reserved_slot(
         admission_root,
         reservation_token,
-        state="active",
+        state=SLOT_STATE_ACTIVE,
         work_dir=reaction_dir,
         source=source,
         app_name=app_name,
@@ -166,7 +167,7 @@ def _admission_context(
             admission_root,
             reservation_token,
             reaction_dir=reaction_dir,
-            source="queue_run",
+            source=ADMISSION_SOURCE_QUEUE_RUN,
             app_name=admission_app_name,
             task_id=admission_task_id,
         )

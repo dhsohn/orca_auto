@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
@@ -382,7 +383,7 @@ def _publish_submission(
             metadata=kwargs["metadata"],
             before_commit_fn=kwargs.get("before_commit_fn"),
             after_commit_fn=kwargs.get("after_commit_fn"),
-            admission_root=Path(cfg.runtime.resolved_admission_root),
+            admission_root=admission_dir(cfg.runtime.allowed_root),
         )
 
     spec = EnqueuePublicationSpec(

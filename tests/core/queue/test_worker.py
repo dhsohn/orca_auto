@@ -62,15 +62,6 @@ def _select(entries: list[Any], accept_entry_fn: Any = None) -> Any:
     return worker_common.select_next_claimable_entry(entries, accept_entry_fn=accept_entry_fn)
 
 
-def test_resolve_admission_root_reads_the_runtime_property() -> None:
-    cfg = SimpleNamespace(
-        runtime=SimpleNamespace(admission_root="/configured", resolved_admission_root="/resolved")
-    )
-
-    # The config owns the resolution; this adapter only exposes it as a callable.
-    assert worker_common.resolve_admission_root(cfg) == "/resolved"
-
-
 def test_select_next_claimable_entry_handles_empty_and_single_pending_listing() -> None:
     entry = _entry("q-1")
 

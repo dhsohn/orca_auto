@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from orca_auto.core.admission import (
+    admission_dir,
     get_slot,
     list_slots,
     prepare_slot_engine_process,
@@ -107,7 +108,7 @@ def test_check_completed_jobs_success(
     rxn = queue_root / "mol_done"
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     claim_next_entry(queue_root)
     write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
     worker._running[entry.queue_id] = running_job(
@@ -117,7 +118,7 @@ def test_check_completed_jobs_success(
     worker._check_completed_jobs()
 
     assert len(worker._running) == 0
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
 
 
@@ -133,7 +134,7 @@ def test_check_completed_jobs_leaves_a_deferred_child_pending(
     rxn = queue_root / "mol_deferred"
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     claim_next_entry(queue_root)
     assert queue_worker_mod.requeue_running_entry(
         queue_root,
@@ -148,7 +149,7 @@ def test_check_completed_jobs_leaves_a_deferred_child_pending(
         worker._check_completed_jobs()
 
     assert len(worker._running) == 0
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     [updated] = list_queue(queue_root)
     assert (updated.status, updated.error) == (QueueStatus.PENDING, "")
     assert any(
@@ -204,7 +205,7 @@ def test_completed_job_retries_when_engine_recovery_raises(
     claim_next_entry(queue_root)
     owner = sleeping_child()
     token = reserve_job_slot(
-        queue_root,
+        admission_dir(queue_root),
         worker.max_concurrent,
         entry,
         rxn,
@@ -212,7 +213,7 @@ def test_completed_job_retries_when_engine_recovery_raises(
         engine_process_state="idle",
         engine_launch_gated=True,
     )
-    assert prepare_slot_engine_process(queue_root, token) is not None
+    assert prepare_slot_engine_process(admission_dir(queue_root), token) is not None
     worker._running[entry.queue_id] = running_job(
         worker, entry, rxn, fake_children.spawn(exited=1), token
     )
@@ -220,7 +221,7 @@ def test_completed_job_retries_when_engine_recovery_raises(
     worker._check_completed_jobs()
 
     assert entry.queue_id in worker._running
-    assert len(list_slots(queue_root)) == 1
+    assert len(list_slots(admission_dir(queue_root))) == 1
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.RUNNING}
 
     owner.kill()
@@ -228,7 +229,7 @@ def test_completed_job_retries_when_engine_recovery_raises(
     worker._check_completed_jobs()
 
     assert entry.queue_id not in worker._running
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
 
 
@@ -248,14 +249,14 @@ def test_failed_state_write_leaves_durable_replay_for_worker_restart(
     )
     entry = enqueue(queue_root, str(rxn), force=True, task_id="task-b")
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
 
     # Another ORCA instance holds the directory: the failed run state cannot be written.
     with held_run_lock(rxn), pytest.raises(RuntimeError, match="already running"):
         worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
-    assert len(list_slots(queue_root)) == 1
+    assert len(list_slots(admission_dir(queue_root))) == 1
     [terminal] = list_queue(queue_root)
     assert terminal.status == QueueStatus.FAILED
     marker = terminal.metadata.get("orca_terminal_replay")
@@ -285,7 +286,7 @@ def test_terminal_side_effect_failure_withholds_only_the_same_directory(
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn), task_id="task-a")
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, 2, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), 2, entry, rxn)
     worker._running[entry.queue_id] = running_job(
         worker, entry, rxn, fake_children.spawn(exited=1), token
     )
@@ -296,7 +297,7 @@ def test_terminal_side_effect_failure_withholds_only_the_same_directory(
         worker._check_completed_jobs()
 
         assert entry.queue_id in worker._running
-        assert len(list_slots(queue_root)) == 1
+        assert len(list_slots(admission_dir(queue_root))) == 1
         [pending_replay] = list_queue(queue_root)
         assert isinstance(pending_replay.metadata.get("orca_terminal_replay"), dict)
         with pytest.raises(DuplicateEntryError):
@@ -305,10 +306,10 @@ def test_terminal_side_effect_failure_withholds_only_the_same_directory(
         # replay barrier, not capacity. With nothing else pending the poll
         # is idle and leaves the admission file alone.
         successor = insert_pending_successor(queue_root, rxn, queue_id="q_forced_successor")
-        before = admission_file_identity(queue_root)
+        before = admission_file_identity(admission_dir(queue_root))
         with caplog.at_level(logging.WARNING, logger=WORKER_LOGGER):
             assert worker._fill_slots() == "idle"
-        assert admission_file_identity(queue_root) == before
+        assert admission_file_identity(admission_dir(queue_root)) == before
         assert any(str(rxn.resolve()) in record.getMessage() for record in caplog.records)
         assert child_starter.started == []
 
@@ -358,7 +359,7 @@ def test_terminal_index_failure_releases_capacity_and_replays_after_recovery(
     claim_next_entry(queue_root)
     if outcome == "completed":
         write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
-    token = reserve_job_slot(queue_root, 1, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), 1, entry, rxn)
     child = fake_children.spawn(exited=None if outcome == "cancelled" else int(outcome == "failed"))
     worker._running[entry.queue_id] = running_job(worker, entry, rxn, child, token)
     if outcome == "cancelled":
@@ -384,7 +385,7 @@ def test_terminal_index_failure_releases_capacity_and_replays_after_recovery(
     # Execution capacity is independent of the derived index. The durable
     # marker still owns this generation even after the reaped child is dropped.
     assert entry.queue_id not in worker._running
-    assert get_slot(queue_root, token) is None
+    assert get_slot(admission_dir(queue_root), token) is None
     terminal = queue_row(queue_root, entry.queue_id)
     assert terminal.status.value == outcome
     assert terminal_replay_marker_from_entry(terminal) is not None
@@ -443,13 +444,13 @@ def test_completed_child_retains_capacity_until_terminal_evidence_is_ready(
         (rxn / "job_state.json").write_text("{unreadable state", encoding="utf-8")
     elif state_problem == "running":
         write_run_state(rxn, status=RunStatus.RUNNING, job_id=entry.task_id)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
     worker._running[entry.queue_id] = job
 
     worker._check_completed_jobs()
     assert worker._running[entry.queue_id] is job
-    assert get_slot(queue_root, token) is not None
+    assert get_slot(admission_dir(queue_root), token) is not None
     assert job.pending_terminal_replay is not None
     assert not job.pending_terminal_replay.state_prepared
     assert worker.replay_state.pending_replays == {}
@@ -470,7 +471,7 @@ def test_completed_child_retains_capacity_until_terminal_evidence_is_ready(
         write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
     worker._check_completed_jobs()
     assert entry.queue_id not in worker._running
-    assert get_slot(queue_root, token) is None
+    assert get_slot(admission_dir(queue_root), token) is None
     assert queue_row(queue_root, entry.queue_id).metadata.get("orca_terminal_replay") is None
     assert job_record(queue_root, entry.task_id) is not None
 
@@ -487,7 +488,7 @@ def test_terminal_evidence_corrects_zero_exit_status_before_capacity_is_returned
     entry = enqueue(queue_root, str(rxn), task_id="task-actual-outcome")
     claim_next_entry(queue_root)
     write_run_state(rxn, status=actual_status, job_id=entry.task_id)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
     release = worker._release_admission_slot
     seen: list[tuple[str, str]] = []
@@ -505,7 +506,7 @@ def test_terminal_evidence_corrects_zero_exit_status_before_capacity_is_returned
     assert seen == [(actual_status.value, saved["run_id"])]
     record = job_record(queue_root, entry.task_id)
     assert record is not None and record["status"] == actual_status.value
-    assert get_slot(queue_root, token) is None
+    assert get_slot(admission_dir(queue_root), token) is None
 
 
 def test_terminal_slot_release_failure_keeps_retry_owner_before_publication(
@@ -519,7 +520,7 @@ def test_terminal_slot_release_failure_keeps_retry_owner_before_publication(
     entry = enqueue(queue_root, str(rxn), task_id="task-release-failure")
     claim_next_entry(queue_root)
     write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
     worker._running[entry.queue_id] = job
 
@@ -531,7 +532,7 @@ def test_terminal_slot_release_failure_keeps_retry_owner_before_publication(
     assert job.pending_terminal_replay is not None
     assert job.pending_terminal_replay.state_prepared
     assert job.pending_terminal_replay.queue_id in worker.replay_state.pending_replays
-    assert get_slot(queue_root, token) is not None
+    assert get_slot(admission_dir(queue_root), token) is not None
     assert terminal_replay_marker_from_entry(queue_row(queue_root, entry.queue_id))
     assert job_record(queue_root, entry.task_id) is None
     assert recording_channel.sends == []
@@ -544,7 +545,7 @@ def test_terminal_slot_release_failure_keeps_retry_owner_before_publication(
     assert delivered.wait(1)
     assert queue_row(queue_root, entry.queue_id).status == QueueStatus.COMPLETED
     assert entry.queue_id not in worker._running
-    assert get_slot(queue_root, token) is None
+    assert get_slot(admission_dir(queue_root), token) is None
     assert job.pending_terminal_replay is None
     assert not job.terminal_finalize_pending
     assert worker.replay_state.pending_replays == {}
@@ -561,7 +562,7 @@ def test_pending_publication_rechecks_current_queue_outcome_on_retry(
     entry = enqueue(queue_root, str(rxn), task_id="task-queue-correction")
     claim_next_entry(queue_root)
     write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
     index_path = queue_root / "job_locations.json"
     index_path.write_text("{unreadable index", encoding="utf-8")
@@ -595,7 +596,7 @@ def test_terminal_marker_clear_noop_retains_replay_without_execution_capacity(
     entry = enqueue(queue_root, str(rxn), task_id="task-marker-failure")
     claim_next_entry(queue_root)
     write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     worker._running[entry.queue_id] = running_job(
         worker, entry, rxn, fake_children.spawn(exited=0), token
     )
@@ -605,7 +606,7 @@ def test_terminal_marker_clear_noop_retains_replay_without_execution_capacity(
         worker._check_completed_jobs()
         assert delivered.wait(1)
         assert entry.queue_id not in worker._running
-        assert get_slot(queue_root, token) is None
+        assert get_slot(admission_dir(queue_root), token) is None
         assert len(worker.replay_state.pending_replays) == 1
         restarted = make_worker()
         restarted._reconcile_worker_state()
@@ -729,7 +730,7 @@ def test_publication_repair_failure_withholds_only_its_row_and_later_recovers(
         assert worker._fill_slots() == "processed"
         assert list(worker._running) == [other.queue_id]
         assert [started.entry.queue_id for started in child_starter.started] == [other.queue_id]
-        assert len(list_slots(queue_root)) == 1
+        assert len(list_slots(admission_dir(queue_root))) == 1
         assert queue_statuses(queue_root) == {
             row.queue_id: QueueStatus.PENDING,
             other.queue_id: QueueStatus.RUNNING,
@@ -741,9 +742,9 @@ def test_publication_repair_failure_withholds_only_its_row_and_later_recovers(
             assert "job_locations.json" in blocker["reason"]
             assert row.queue_id in blocker["next_action"]
         # A blocked row alone does not churn admission slots on each poll.
-        before = admission_file_identity(queue_root)
+        before = admission_file_identity(admission_dir(queue_root))
         assert worker._fill_slots() == "idle"
-        assert admission_file_identity(queue_root) == before
+        assert admission_file_identity(admission_dir(queue_root)) == before
 
     # Recovery automatically makes the original high-priority row eligible.
     assert worker._fill_slots() == "processed"
@@ -756,7 +757,7 @@ def test_publication_repair_failure_withholds_only_its_row_and_later_recovers(
         other.queue_id,
         row.queue_id,
     ]
-    assert len(list_slots(queue_root)) == 2
+    assert len(list_slots(admission_dir(queue_root))) == 2
 
 
 def test_failed_publication_fence_and_diagnostic_write_withhold_only_unsafe_row(
@@ -817,7 +818,7 @@ def test_unreadable_queue_still_blocks_admission_without_reserving_capacity(
     queue_path = queue_root / "queue.json"
     original = queue_path.read_bytes()
     queue_path.write_text("{invalid queue")
-    admission_path = queue_root / "admission_slots.json"
+    admission_path = admission_dir(queue_root) / "admission_slots.json"
     assert not admission_path.exists()
     assert worker._fill_slots() == "blocked"
     assert child_starter.started == []
@@ -964,20 +965,25 @@ def test_finalize_clears_active_engine_record_before_mark_and_release(
     claim_next_entry(queue_root)
     write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
     token = reserve_job_slot(
-        queue_root, worker.max_concurrent, entry, rxn, engine_process_state="idle"
+        admission_dir(queue_root), worker.max_concurrent, entry, rxn, engine_process_state="idle"
     )
-    prepare_slot_engine_process(queue_root, token)
+    prepare_slot_engine_process(admission_dir(queue_root), token)
     # The recorded engine group is gone (the child exited with it): recovery
     # must clear the active record before anything terminal is published.
-    set_slot_engine_process(queue_root, token, pid=424242, pgid=424242, process_start_ticks=10101)
+    set_slot_engine_process(
+        admission_dir(queue_root), token, pid=424242, pgid=424242, process_start_ticks=10101
+    )
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
     seen_at_mark: list[tuple[str | None, int]] = []
     real_mark = replay_mod.mark_terminal_queue_entry
 
     def mark(*args: Any, **kwargs: Any) -> TerminalQueueMarkResult:
-        current = get_slot(queue_root, token)
+        current = get_slot(admission_dir(queue_root), token)
         seen_at_mark.append(
-            (current.engine_process_state if current else None, len(list_slots(queue_root)))
+            (
+                current.engine_process_state if current else None,
+                len(list_slots(admission_dir(queue_root))),
+            )
         )
         return real_mark(*args, **kwargs)
 
@@ -986,7 +992,7 @@ def test_finalize_clears_active_engine_record_before_mark_and_release(
 
     # At mark time the engine record was already idle and the slot still held.
     assert seen_at_mark == [("idle", 1)]
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
 
 
@@ -997,7 +1003,7 @@ def test_finalize_does_not_publish_without_persisted_marker_after_mark(
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn), task_id="task-b")
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
     real_mark = replay_mod.mark_terminal_queue_entry
 
@@ -1014,7 +1020,7 @@ def test_finalize_does_not_publish_without_persisted_marker_after_mark(
     assert not (rxn / "job_state.json").exists()
     assert job_record(queue_root, "task-b") is None
     assert list_queue(queue_root) == []
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
 
 
 def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(
@@ -1025,7 +1031,7 @@ def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(
     entry = enqueue(queue_root, str(rxn), task_id="task-stale-finalizer")
     running = claim_next_entry(queue_root)
     assert running is not None
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     assert mark_failed(queue_root, entry.queue_id, error="first_owner", expected_entry=running)
     assert replay_mod.update_queue_metadata(
         queue_root, entry.queue_id, {"orca_terminal_replay": None}
@@ -1036,7 +1042,7 @@ def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(
     worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
     assert not (rxn / "job_state.json").exists()
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     assert list_queue(queue_root) == [closed]
     assert closed.metadata.get("orca_terminal_replay") is None
 
@@ -1047,7 +1053,7 @@ def test_finalize_completed_job_recovers_once_and_releases_on_benign_mark_noop(
     # The row was moved or removed by another actor: nothing to mark, slot freed.
     moved = queue_root / "moved"
     token = reserve_slot(
-        queue_root,
+        admission_dir(queue_root),
         worker.max_concurrent,
         work_dir=str(moved),
         queue_id="queue-moved",
@@ -1068,7 +1074,7 @@ def test_finalize_completed_job_recovers_once_and_releases_on_benign_mark_noop(
 
     assert not moved.exists()
     assert job_record(queue_root, "task-moved") is None
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
 
 
 def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
@@ -1087,7 +1093,7 @@ def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
     claim_next_entry(queue_root)
     child = sleeping_child()
     token = reserve_job_slot(
-        queue_root,
+        admission_dir(queue_root),
         worker.max_concurrent,
         entry,
         rxn,
@@ -1095,7 +1101,7 @@ def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
         engine_process_state="idle",
         engine_launch_gated=True,
     )
-    assert prepare_slot_engine_process(queue_root, token) is not None
+    assert prepare_slot_engine_process(admission_dir(queue_root), token) is not None
     child.kill()
     child.wait()
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
@@ -1105,8 +1111,8 @@ def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
     record = job_record(queue_root, "task-pending-launch")
     assert record is not None and record["status"] == "failed"
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
-    assert len(list_slots(queue_root)) == 0
-    assert get_slot(queue_root, token) is None
+    assert len(list_slots(admission_dir(queue_root))) == 0
+    assert get_slot(admission_dir(queue_root), token) is None
 
 
 def test_finalize_finished_job_marks_completed_and_releases_slot(
@@ -1117,7 +1123,7 @@ def test_finalize_finished_job_marks_completed_and_releases_slot(
     entry = enqueue(queue_root, str(rxn))
     claim_next_entry(queue_root)
     write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
 
     worker._finalize_completed_job(
         entry.queue_id, running_job(worker, entry, rxn, fake_children.spawn(exited=0), token), rc=0
@@ -1126,7 +1132,7 @@ def test_finalize_finished_job_marks_completed_and_releases_slot(
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
     record = job_record(queue_root, entry.task_id)
     assert record is not None and record["status"] == "completed"
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
 
 
 def test_finalize_finished_job_sends_parent_terminal_notification_when_unmarked(
@@ -1141,7 +1147,7 @@ def test_finalize_finished_job_sends_parent_terminal_notification_when_unmarked(
     write_completed_run_state(rxn)
     entry = enqueue(queue_root, str(rxn), task_id="task_terminal_123")
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
 
     worker._finalize_completed_job(
         entry.queue_id, running_job(worker, entry, rxn, fake_children.spawn(exited=0), token), rc=0
@@ -1174,7 +1180,7 @@ def test_child_publishes_and_parent_releases_slot_while_terminal_sender_is_block
     selected.write_text("! HF STO-3G SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
     entry = enqueue(queue_root, str(rxn))
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     state = new_state(rxn, selected)
     state["job_id"] = entry.task_id
     generation = bind_report_generation(rxn, cast(dict[str, Any], state))
@@ -1213,13 +1219,13 @@ def test_child_publishes_and_parent_releases_slot_while_terminal_sender_is_block
             assert not started.is_set(), "completion delivery must belong to the parent"
             reports = {path: path.read_bytes() for path in generation.iterdir() if path.is_file()}
             assert generation / "machine.json" in reports
-            assert len(list_slots(queue_root)) == 1
+            assert len(list_slots(admission_dir(queue_root))) == 1
             job = running_job(worker, entry, rxn, fake_children.spawn(exited=return_code), token)
             worker._running[entry.queue_id] = job
             finalizing = pool.submit(worker._check_completed_jobs)
             finalizing.result(timeout=2)
             assert started.wait(1)
-            assert len(list_slots(queue_root)) == 0
+            assert len(list_slots(admission_dir(queue_root))) == 0
             assert entry.queue_id not in worker._running
             [terminal] = list_queue(queue_root)
             expected = QueueStatus.COMPLETED if return_code == 0 else QueueStatus.FAILED
@@ -1259,7 +1265,7 @@ def test_finalize_finished_job_releases_slot_when_terminal_notification_fails(
     write_completed_run_state(rxn)
     entry = enqueue(queue_root, str(rxn), task_id="task_terminal_123")
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
 
     worker._finalize_completed_job(entry.queue_id, job, rc=0)
@@ -1271,7 +1277,7 @@ def test_finalize_finished_job_releases_slot_when_terminal_notification_fails(
     [completed] = list_queue(queue_root)
     assert completed.status == QueueStatus.COMPLETED
     assert completed.metadata.get("orca_terminal_replay") is None
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     assert entry.queue_id not in worker._running
     saved = load_state(rxn)
     assert saved is not None
@@ -1315,7 +1321,7 @@ def test_finalize_finished_job_marks_failed_run(
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
 
     worker._finalize_completed_job(
         entry.queue_id,
@@ -1352,7 +1358,7 @@ def test_finalize_finished_job_synthesizes_current_generation_failure_state(
     )
     entry = enqueue(queue_root, str(rxn), force=True, task_id="task-b")
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
 
     worker._finalize_completed_job(entry.queue_id, job, rc=1)
@@ -1390,7 +1396,7 @@ def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
     entry = enqueue(queue_root, str(rxn))
     claim_next_entry(queue_root)
     cancel(queue_root, entry.queue_id)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
 
     worker._finalize_completed_job(
         entry.queue_id,
@@ -1412,4 +1418,4 @@ def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
     assert final_result["status"] == STATUS_CANCELLED
     record = job_record(queue_root, entry.task_id)
     assert record is not None and record["status"] == "cancelled"
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0

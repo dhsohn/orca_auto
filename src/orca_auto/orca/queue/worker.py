@@ -16,17 +16,21 @@ import os
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 
 from orca_auto.core.admission import (
+    admission_dir,
     list_all_slots,
     recover_slot_engine_process,
     release_slot,
     reserve_slot,
     update_slot_metadata,
 )
-from orca_auto.core.config.schema import resolved_admission_limit
+from orca_auto.core.admission.records import (
+    ENGINE_PROCESS_IDLE,
+    SLOT_STATE_ACTIVE,
+    SLOT_STATE_RESERVED,
+)
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
 from orca_auto.core.queue.engine.snapshot_intent import (
     finalize_queued_snapshot_intent,
@@ -77,28 +81,25 @@ from .terminal_replay import terminal_replay_marker_from_entry
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_CONCURRENT = 4
 POLL_INTERVAL_SECONDS = 5
 _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
 _WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
-# Slot state from reservation until the child is attached.
-_RESERVED_SLOT_STATE = "reserved"
 
 
-def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
+def _try_reserve_admission_slot(admission_root: Path, limit: int) -> str | None:
     admission_token = reserve_slot(
-        Path(cfg.runtime.resolved_admission_root),
-        cfg.runtime.resolved_admission_limit,
+        admission_root,
+        limit,
         source=ORCA_ADMISSION_SOURCE,
         app_name=ORCA_AUTO_ORCA_APP_NAME,
-        state=_RESERVED_SLOT_STATE,
-        engine_process_state="idle",
+        state=SLOT_STATE_RESERVED,
+        engine_process_state=ENGINE_PROCESS_IDLE,
         engine_launch_gated=ORCA_ENGINE_LAUNCH_GATED,
     )
     if admission_token is None:
         logger.debug(
             "Queue worker admission paused: admission slots are full (admission_limit=%d)",
-            cfg.runtime.resolved_admission_limit,
+            limit,
         )
     return admission_token
 
@@ -108,22 +109,6 @@ def _host_core_count() -> int | None:
         return len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
         return os.cpu_count()
-
-
-def _worker_admission_limit(cfg: AppConfig, fallback_max_concurrent: int) -> int:
-    raw_limit = cfg.runtime.admission_limit
-    if raw_limit in (None, "", 0):
-        raw_limit = fallback_max_concurrent
-    return resolved_admission_limit(raw_limit, fallback_max_concurrent)
-
-
-def _worker_config_with_effective_concurrency(
-    cfg: AppConfig,
-    configured_max: int,
-) -> AppConfig:
-    if cfg.runtime.admission_limit not in (None, "", 0):
-        return cfg
-    return replace(cfg, runtime=replace(cfg.runtime, max_concurrent=configured_max))
 
 
 class OrcaQueueWorker(QueueWorkerLoop):
@@ -138,23 +123,18 @@ class OrcaQueueWorker(QueueWorkerLoop):
         cfg: AppConfig,
         config_path: str,
         *,
-        max_concurrent: int = DEFAULT_MAX_CONCURRENT,
         sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
-        configured_max = max(1, int(max_concurrent))
-        worker_cfg = _worker_config_with_effective_concurrency(cfg, configured_max)
+        # One number is both the concurrency and the admission limit.
         super().__init__(
-            max_concurrent=configured_max,
+            max_concurrent=cfg.runtime.max_concurrent,
             poll_interval_seconds=POLL_INTERVAL_SECONDS,
             sleep_fn=sleep_fn,
         )
-        self.cfg = worker_cfg
+        self.cfg = cfg
         self.config_path = str(config_path or "").strip()
-        self.queue_root = roots.queue_root(worker_cfg)
-        self.admission_root = (
-            Path(str(worker_cfg.runtime.resolved_admission_root)).expanduser().resolve()
-        )
-        self.admission_limit = _worker_admission_limit(worker_cfg, self.max_concurrent)
+        self.queue_root = roots.queue_root(cfg)
+        self.admission_root = admission_dir(cfg.runtime.allowed_root)
         self.replay_state = OrcaWorkerReplayState()
         self._worker_state_last_reconcile: float | None = None
         self._snapshot_intent_last_reconcile: float | None = None
@@ -218,7 +198,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             os.getpid(),
             self.max_concurrent,
             self.admission_root,
-            self.admission_limit,
+            self.max_concurrent,
         )
         self._warn_if_concurrency_exceeds_host_cores()
 
@@ -303,7 +283,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         """
         worker_pid = os.getpid()
         for slot in list_all_slots(self.admission_root):
-            if slot.owner_pid != worker_pid or slot.state != _RESERVED_SLOT_STATE or slot.queue_id:
+            if slot.owner_pid != worker_pid or slot.state != SLOT_STATE_RESERVED or slot.queue_id:
                 continue
             if self._release_admission_slot(slot.token):
                 logger.warning(
@@ -332,7 +312,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
     # -- admission ----------------------------------------------------------
 
     def _admission_has_capacity(self) -> bool:
-        return admission_has_capacity(self.cfg)
+        return admission_has_capacity(self.admission_root, self.max_concurrent)
 
     def _peek_next_entry(self) -> tuple[Path, QueueEntry] | None:
         return roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
@@ -341,7 +321,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         return roots.dequeue_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
 
     def _reserve_admission_slot(self) -> str | None:
-        return _try_reserve_admission_slot(self.cfg)
+        return _try_reserve_admission_slot(self.admission_root, self.max_concurrent)
 
     def _release_admission_slot(self, admission_token: str) -> object:
         released: object = release_slot(self.admission_root, admission_token)
@@ -607,7 +587,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         attached = update_slot_metadata(
             self.admission_root,
             admission_token,
-            state="active",
+            state=SLOT_STATE_ACTIVE,
             queue_id=queue_id,
             app_name=queue_entry_app_name(entry),
             task_id=queue_entry_task_id(entry),

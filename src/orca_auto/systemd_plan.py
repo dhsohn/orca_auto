@@ -4,14 +4,13 @@ import math
 import os
 import pwd
 import re
-import stat
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.files import resolved_admission_root, usable_runs_root_text
+from orca_auto.core.config.files import usable_runs_root_text
 from orca_auto.core.runtime_bundle import (
     PROCESS_RUNTIME_BUILD_ENV,
     RUNTIME_MANIFEST_NAME,
@@ -132,49 +131,6 @@ def _append_absolute_path(paths: list[Path], value: Any) -> None:
     paths.append(candidate.resolve(strict=False))
 
 
-def _dedupe_paths(paths: Sequence[Path]) -> tuple[Path, ...]:
-    deduped: list[Path] = []
-    seen: set[str] = set()
-    for path in paths:
-        text = str(path)
-        if text in seen:
-            continue
-        seen.add(text)
-        deduped.append(path)
-    return tuple(deduped)
-
-
-def _minimal_writable_roots(paths: Sequence[Path]) -> tuple[Path, ...]:
-    """Drop writable paths already covered by another configured root."""
-
-    deduped = _dedupe_paths(paths)
-    return tuple(
-        path
-        for path in deduped
-        if not any(path != parent and path.is_relative_to(parent) for parent in deduped)
-    )
-
-
-def _require_explicit_admission_directory(admission_root: Path) -> None:
-    # Inspect with stat() so a permission error stays visible: Path.is_dir()
-    # reports every OSError as "not a directory" on newer Pythons.
-    try:
-        details = admission_root.stat()
-    except PermissionError:
-        # The installer may run as an administrator who cannot traverse the
-        # service account's private tree; a directory the caller cannot see
-        # is not a missing directory. Leave the check to the service.
-        return
-    except (FileNotFoundError, NotADirectoryError):
-        details = None
-    if details is not None and stat.S_ISDIR(details.st_mode):
-        return
-    raise ValueError(
-        "scheduler.admission_root must exist as a directory before systemd installation: "
-        f"{admission_root}. Create it with ownership for the service user or update the config."
-    )
-
-
 def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
     if not config.exists():
         return ()
@@ -184,21 +140,12 @@ def _configured_read_write_paths(config: Path) -> tuple[Path, ...]:
 
     _, shared, _orca_sections = load_orca_shared_config(config)
 
+    # The worker writes only under runs_root, including the admission store it
+    # creates at <runs_root>/.admission. Naming that not-yet-created child as a
+    # mandatory systemd path would keep the service namespace from starting.
     paths: list[Path] = []
-    runs_root = usable_runs_root_text(shared.runs_root)
-    admission_root = resolved_admission_root(shared.scheduler, runs_root=runs_root or None)
-    if admission_root is not None:
-        if shared.scheduler.admission_root:
-            _require_explicit_admission_directory(admission_root)
-        paths.append(admission_root)
-
-    _append_absolute_path(paths, runs_root)
-
-    # The default admission root is <runs_root>/.admission. Granting the parent
-    # runs root is sufficient for the worker to create that directory, while
-    # naming the not-yet-created child as a mandatory systemd path prevents the
-    # service namespace from starting at all.
-    return _minimal_writable_roots(paths)
+    _append_absolute_path(paths, usable_runs_root_text(shared.runs_root))
+    return tuple(paths)
 
 
 def _render_read_write_paths(config: Path) -> str:

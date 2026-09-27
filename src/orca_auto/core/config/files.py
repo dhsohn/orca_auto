@@ -27,7 +27,6 @@ from .schema import (
 )
 
 DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
-DEFAULT_SHARED_ADMISSION_DIRNAME = ".admission"
 SECURE_CONFIG_FILE_MODE = 0o600
 # The one engine section. Its contents are the engine's own schema, validated
 # by ``orca_auto.orca.config``; this loader only checks that it is a mapping.
@@ -35,7 +34,7 @@ ENGINE_CONFIG_SECTION = "orca"
 _ROOT_CONFIG_FIELDS = frozenset(
     {"messenger", ENGINE_CONFIG_SECTION, "resources", "runs_root", "scheduler"}
 )
-_SCHEDULER_CONFIG_FIELDS = frozenset({"admission_root", "max_active_simulations"})
+_SCHEDULER_CONFIG_FIELDS = frozenset({"max_active_simulations"})
 _RESOURCE_CONFIG_FIELDS = frozenset({"max_cores_per_task", "max_memory_gb_per_task"})
 YAML_CONFIG_LOAD_EXCEPTIONS = (OSError, ValueError, yaml.YAMLError)
 
@@ -210,27 +209,23 @@ class SharedConfig:
 
 
 def _scheduler_config_from_mapping(scheduler: Mapping[str, Any]) -> SchedulerConfig:
+    if "admission_root" in scheduler:
+        raise ValueError(
+            "scheduler.admission_root was removed: admission state always lives in "
+            "<runs_root>/.admission. Delete the key."
+        )
     _reject_unknown_config_fields(
         scheduler,
         allowed=_SCHEDULER_CONFIG_FIELDS,
         section="scheduler",
     )
-    max_active = SchedulerConfig.max_active_simulations
-    if "max_active_simulations" in scheduler:
-        max_active = explicit_positive_int(
+    if "max_active_simulations" not in scheduler:
+        return SchedulerConfig()
+    return SchedulerConfig(
+        max_active_simulations=explicit_positive_int(
             scheduler.get("max_active_simulations"),
             field_name="scheduler.max_active_simulations",
         )
-    admission_root = ""
-    if "admission_root" in scheduler:
-        admission_root = _validated_absolute_linux_path_text(
-            normalize_text(scheduler.get("admission_root")),
-            field_name="scheduler.admission_root",
-        )
-    return SchedulerConfig(
-        max_active_simulations=max_active,
-        admission_root=admission_root,
-        configured=bool(scheduler),
     )
 
 
@@ -314,31 +309,6 @@ def messenger_mapping_from_root(raw: Mapping[str, Any] | None) -> dict[str, Any]
     if isinstance(messenger_raw, Mapping):
         return dict(messenger_raw)
     raise ValueError("messenger section must be a mapping when configured.")
-
-
-def resolve_configured_path(value: Any) -> Path | None:
-    text = normalize_text(value)
-    return Path(text).expanduser().resolve() if text else None
-
-
-def default_shared_admission_root(runs_root: str | Path | None) -> str:
-    """Default shared admission directory: hidden under the single runs root."""
-    text = normalize_text(runs_root)
-    if not text:
-        return ""
-    return str(Path(text).expanduser().resolve() / DEFAULT_SHARED_ADMISSION_DIRNAME)
-
-
-def resolved_admission_root(
-    scheduler: SchedulerConfig,
-    *,
-    runs_root: str | Path | None = None,
-) -> Path | None:
-    """Explicit ``scheduler.admission_root`` or ``<runs_root>/.admission``; None without either."""
-
-    if scheduler.admission_root:
-        return Path(scheduler.admission_root).expanduser().resolve()
-    return resolve_configured_path(default_shared_admission_root(runs_root))
 
 
 def validated_runs_root_text(root_text: str) -> str:

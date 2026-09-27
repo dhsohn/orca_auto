@@ -27,7 +27,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=<tmp>/orca_auto/admission <tmp>/orca_auto/orca_runs
+ReadWritePaths=<tmp>/orca_auto/orca_runs
 UMask=0077
 # Stop only the supervisor with SIGTERM: it forwards the stop to the queue
 # worker, which stops each ORCA child, waits for it and requeues its row.

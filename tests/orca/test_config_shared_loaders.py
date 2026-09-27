@@ -313,27 +313,12 @@ def test_shared_engine_loaders_reject_invalid_explicit_messenger_values(
 
 
 @pytest.mark.parametrize(("loader_name", "loader"), _SHARED_CONFIG_LOADERS)
-@pytest.mark.parametrize(
-    ("raw_path", "message"),
-    [
-        pytest.param("relative/pool", "absolute Linux path", id="relative"),
-        pytest.param("", "absolute Linux path", id="blank"),
-        pytest.param(None, "absolute Linux path", id="null"),
-        pytest.param(r"C:\\runtime\\pool", "Linux path", id="windows"),
-        pytest.param("/mnt/c/runtime/pool", "Linux path", id="wsl-windows-mount"),
-        pytest.param(
-            "/tmp/../mnt/c/runtime/pool",
-            "outside Windows mounts",
-            id="normalized-wsl-windows-mount",
-        ),
-    ],
-)
-def test_shared_engine_loaders_reject_invalid_admission_root(
+@pytest.mark.parametrize("raw_path", ["/tmp/pool", "relative/pool", "", None])
+def test_shared_engine_loaders_reject_the_removed_admission_root(
     tmp_path: Path,
     loader_name: str,
     loader: Loader,
     raw_path: object,
-    message: str,
 ) -> None:
     del loader_name
     config_path = _write_shared_config(
@@ -341,7 +326,7 @@ def test_shared_engine_loaders_reject_invalid_admission_root(
         {"scheduler": {"admission_root": raw_path}},
     )
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match=r"scheduler\.admission_root was removed"):
         loader(str(config_path))
 
 
@@ -352,7 +337,6 @@ def test_orca_loader_rejects_runs_root_that_canonicalizes_to_windows_mount(
         tmp_path,
         {
             "runs_root": "/tmp/../mnt/c/orca-runs",
-            "scheduler": {"admission_root": str(tmp_path / "admission")},
         },
     )
 
@@ -426,12 +410,12 @@ def test_orca_sections_apply_defaults_once() -> None:
 
 
 @pytest.mark.parametrize("section", ["scheduler", "resources", "messenger"])
-@pytest.mark.parametrize("invalid", [None, "disabled", [], {"admission_root": "/tmp/shared"}])
+@pytest.mark.parametrize("invalid", [None, "disabled", [], {"max_active_simulations": 1}])
 def test_engine_scoped_shared_sections_are_rejected(section: str, invalid: object) -> None:
     # resources, messenger and scheduler are top-level only; an orca.* copy is
     # rejected before any inheritance question can arise.
     raw = {
-        "scheduler": {"max_active_simulations": 1, "admission_root": "/tmp/shared"},
+        "scheduler": {"max_active_simulations": 1},
         "orca": {section: invalid},
     }
 

@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Self, TypeVar
+from typing import Self, TypeVar
 
 from ..utils import process as process_utils
 from ..utils.lock import file_lock
@@ -25,8 +25,13 @@ from ..utils.persistence import (
     unique_timestamped_token,
 )
 from . import persistence as _admission_persistence
-from . import records as _admission_records
-from .records import AdmissionSlot
+from .records import (
+    ENGINE_PROCESS_ACTIVE,
+    ENGINE_PROCESS_IDLE,
+    ENGINE_PROCESS_PENDING,
+    SLOT_STATE_ACTIVE,
+    AdmissionSlot,
+)
 
 ADMISSION_FILE_NAME = _admission_persistence.ADMISSION_FILE_NAME
 ADMISSION_LOCK_NAME = _admission_persistence.ADMISSION_LOCK_NAME
@@ -49,14 +54,6 @@ class AdmissionLimitReachedError(RuntimeError):
 AdmissionStoreCorruptError = _admission_persistence.AdmissionStoreCorruptError
 
 
-def _admission_path(root: Path) -> Path:
-    return _admission_persistence.admission_path(root)
-
-
-def _lock_path(root: Path) -> Path:
-    return _admission_persistence.admission_lock_path(root)
-
-
 def _normalize_work_dir(value: str | Path | None) -> str:
     if value is None:
         return ""
@@ -69,39 +66,19 @@ def _normalize_work_dir(value: str | Path | None) -> str:
         return text
 
 
-def _slot_to_dict(slot: AdmissionSlot) -> dict[str, object]:
-    return _admission_records.slot_to_dict(slot)
-
-
-def _slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
-    return _admission_records.slot_from_dict(raw)
-
-
 def _load_slots(root: Path) -> list[AdmissionSlot]:
     try:
-        return _admission_persistence.load_slots(
-            root,
-            slot_from_dict_fn=_slot_from_dict,
-            corrupt_error=AdmissionStoreCorruptError,
-        )
+        return _admission_persistence.load_slots(root)
     except (TypeError, ValueError) as exc:
         raise AdmissionStoreCorruptError(
-            f"Admission slot file contains an invalid process record: {_admission_path(root)}"
+            "Admission slot file contains an invalid process record: "
+            f"{_admission_persistence.admission_path(root)}"
         ) from exc
-
-
-def _save_slots(root: Path, slots: list[AdmissionSlot]) -> None:
-    _admission_persistence.save_slots(
-        root,
-        slots,
-        slot_to_dict_fn=_slot_to_dict,
-        corrupt_error=AdmissionStoreCorruptError,
-    )
 
 
 def _inactive_engine_process_state(value: str) -> str:
     state = str(value or "").strip().lower()
-    if state not in {"pending", "idle"}:
+    if state not in {ENGINE_PROCESS_PENDING, ENGINE_PROCESS_IDLE}:
         raise ValueError(
             "Engine process state can be made active only with set_slot_engine_process"
         )
@@ -115,7 +92,7 @@ def _updated_inactive_engine_process_state(
     if value is None:
         return slot.engine_process_state
     state = _inactive_engine_process_state(value)
-    if slot.engine_process_state == "active" and state != "active":
+    if slot.engine_process_state == ENGINE_PROCESS_ACTIVE and state != ENGINE_PROCESS_ACTIVE:
         raise ValueError("Cannot discard an active engine identity through metadata update")
     return state
 
@@ -125,11 +102,11 @@ def _slot_owner_alive(slot: AdmissionSlot) -> bool:
         slot.owner_pid, slot.process_start_ticks, slot.owner_boot_id
     ):
         return True
-    if slot.engine_process_state == "pending":
+    if slot.engine_process_state == ENGINE_PROCESS_PENDING:
         # A dead child with a pending marker may have died in the tiny
         # Popen-to-record interval.  Retain capacity instead of guessing.
         return True
-    if slot.engine_process_state == "active":
+    if slot.engine_process_state == ENGINE_PROCESS_ACTIVE:
         # Active identities are removed only by the child registrar or orphan
         # recovery. A generic capacity read must never race either path and
         # discard the sole durable record just because the group exited.
@@ -153,7 +130,10 @@ def _resolved_slot_ownership(
     resolved_owner_pid = owner_pid if owner_pid is not None else default_owner_pid
     if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
         raise ValueError("Admission slot owner PID must be a positive integer")
-    if slot.engine_process_state in {"active", "pending"} and resolved_owner_pid != slot.owner_pid:
+    if (
+        slot.engine_process_state in {ENGINE_PROCESS_ACTIVE, ENGINE_PROCESS_PENDING}
+        and resolved_owner_pid != slot.owner_pid
+    ):
         raise ValueError("Cannot transfer ownership of an active or pending engine slot")
     owner_start_ticks = (
         slot.process_start_ticks
@@ -180,7 +160,7 @@ def admission_lock(root: str | Path) -> Iterator[None]:
     # The store owns its directory (by default ``<runs_root>/.admission``)
     # beneath an already existing root; a missing runs root stays missing.
     resolved_root.mkdir(exist_ok=True)
-    with file_lock(_lock_path(resolved_root)):
+    with file_lock(_admission_persistence.admission_lock_path(resolved_root)):
         yield
 
 
@@ -195,39 +175,27 @@ class AdmissionStore:
     """
 
     root: Path
-    load_slots_fn: Callable[[Path], list[AdmissionSlot]]
-    save_slots_fn: Callable[[Path, list[AdmissionSlot]], Any]
 
     @classmethod
-    def for_root(
-        cls,
-        root: str | Path,
-        *,
-        load_slots_fn: Callable[[Path], list[AdmissionSlot]] | None = None,
-        save_slots_fn: Callable[[Path, list[AdmissionSlot]], Any] | None = None,
-    ) -> Self:
-        return cls(
-            root=resolve_root_path(root),
-            load_slots_fn=load_slots_fn or _load_slots,
-            save_slots_fn=save_slots_fn or _save_slots,
-        )
+    def for_root(cls, root: str | Path) -> Self:
+        return cls(root=resolve_root_path(root))
 
     @property
     def path(self) -> Path:
-        return _admission_path(self.root)
+        return _admission_persistence.admission_path(self.root)
 
     def _load_live_slots(self) -> list[AdmissionSlot]:
-        return [slot for slot in self.load_slots_fn(self.root) if _slot_owner_alive(slot)]
+        return [slot for slot in _load_slots(self.root) if _slot_owner_alive(slot)]
 
     def list_slots(self, *, normalize_file: bool = False) -> list[AdmissionSlot]:
         with admission_lock(self.root):
-            recorded = self.load_slots_fn(self.root)
+            recorded = _load_slots(self.root)
             slots = [slot for slot in recorded if _slot_owner_alive(slot)]
             # Rewrite only when a dead owner is being dropped; every worker
             # poll and reconcile reads this file, and an unchanged rewrite is
             # an fsync for nothing.
             if normalize_file and self.path.exists() and slots != recorded:
-                self.save_slots_fn(self.root, slots)
+                _admission_persistence.save_slots(self.root, slots)
             return slots
 
     def mutate_live_slots(
@@ -238,7 +206,7 @@ class AdmissionStore:
             slots = self._load_live_slots()
             result, changed = mutator(slots)
             if changed:
-                self.save_slots_fn(self.root, slots)
+                _admission_persistence.save_slots(self.root, slots)
             return result
 
     def mutate_all_slots(
@@ -251,10 +219,10 @@ class AdmissionStore:
         owner has died and after the recorded engine group has just exited.
         """
         with admission_lock(self.root):
-            slots = self.load_slots_fn(self.root)
+            slots = _load_slots(self.root)
             result, changed = mutator(slots)
             if changed:
-                self.save_slots_fn(self.root, slots)
+                _admission_persistence.save_slots(self.root, slots)
             return result
 
     def mutate_slot_by_token(
@@ -299,7 +267,7 @@ def list_slots(root: str | Path) -> list[AdmissionSlot]:
 def list_all_slots(root: str | Path) -> list[AdmissionSlot]:
     store = AdmissionStore.for_root(root)
     with admission_lock(store.root):
-        return store.load_slots_fn(store.root)
+        return _load_slots(store.root)
 
 
 def read_active_slot_count(root: str | Path) -> int:
@@ -312,7 +280,7 @@ def read_active_slot_count(root: str | Path) -> int:
     """
 
     store = AdmissionStore.for_root(root)
-    return sum(1 for slot in store.load_slots_fn(store.root) if _slot_owner_alive(slot))
+    return sum(1 for slot in _load_slots(store.root) if _slot_owner_alive(slot))
 
 
 def get_slot(root: str | Path, token: str) -> AdmissionSlot | None:
@@ -326,11 +294,11 @@ def reserve_slot(
     source: str,
     app_name: str = "",
     task_id: str = "",
-    state: str = "active",
+    state: str = SLOT_STATE_ACTIVE,
     work_dir: str | Path = "",
     queue_id: str = "",
     owner_pid: int | None = None,
-    engine_process_state: str = "idle",
+    engine_process_state: str = ENGINE_PROCESS_IDLE,
     engine_launch_gated: bool = False,
 ) -> str | None:
     store = AdmissionStore.for_root(root)
@@ -360,7 +328,7 @@ def reserve_slot(
                 owner_boot_id=owner_boot_id,
                 app_name=app_name.strip(),
                 task_id=task_id.strip(),
-                state=state.strip() or "active",
+                state=state.strip() or SLOT_STATE_ACTIVE,
                 work_dir=_normalize_work_dir(work_dir),
                 queue_id=queue_id.strip(),
                 engine_process_state=inactive_engine_process_state,
@@ -376,7 +344,7 @@ def activate_reserved_slot(
     root: str | Path,
     token: str,
     *,
-    state: str = "active",
+    state: str = SLOT_STATE_ACTIVE,
     work_dir: str | Path | None = None,
     queue_id: str | None = None,
     owner_pid: int | None = None,
@@ -399,7 +367,7 @@ def activate_reserved_slot(
         )
         updated = replace(
             slot,
-            state=state.strip() or slot.state or "active",
+            state=state.strip() or slot.state or SLOT_STATE_ACTIVE,
             work_dir=slot.work_dir if work_dir is None else _normalize_work_dir(work_dir),
             queue_id=slot.queue_id if queue_id is None else queue_id.strip(),
             owner_pid=resolved_owner_pid,
@@ -424,7 +392,7 @@ def release_slot(root: str | Path, token: str) -> bool:
         for index, slot in enumerate(slots):
             if slot.token != token:
                 continue
-            if slot.engine_process_state in {"active", "pending"}:
+            if slot.engine_process_state in {ENGINE_PROCESS_ACTIVE, ENGINE_PROCESS_PENDING}:
                 raise RuntimeError(
                     f"Cannot release admission slot while an engine launch may be active: {token}"
                 )
@@ -468,9 +436,12 @@ def set_slot_engine_process(
                 slot.engine_process_boot_id,
             )
             requested_identity = (pid_value, pgid_value, ticks_value, boot_id_value)
-            if slot.engine_process_state == "active" and existing_identity != requested_identity:
+            if (
+                slot.engine_process_state == ENGINE_PROCESS_ACTIVE
+                and existing_identity != requested_identity
+            ):
                 raise ValueError(f"Admission slot {token} already owns another engine process")
-            if slot.engine_process_state not in {"pending", "active"}:
+            if slot.engine_process_state not in {ENGINE_PROCESS_PENDING, ENGINE_PROCESS_ACTIVE}:
                 raise ValueError(f"Admission slot {token} was not prepared before engine launch")
             if slot.owner_boot_id != boot_id_value:
                 raise ValueError(
@@ -478,7 +449,7 @@ def set_slot_engine_process(
                 )
             updated = replace(
                 slot,
-                engine_process_state="active",
+                engine_process_state=ENGINE_PROCESS_ACTIVE,
                 engine_pid=pid_value,
                 engine_pgid=pgid_value,
                 engine_process_start_ticks=ticks_value,
@@ -499,11 +470,11 @@ def prepare_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot |
         raise ValueError("Cannot verify the current boot identity before engine launch")
 
     with admission_lock(admission_store.root):
-        slots = admission_store.load_slots_fn(admission_store.root)
+        slots = _load_slots(admission_store.root)
         for index, slot in enumerate(slots):
             if slot.token != token:
                 continue
-            if slot.engine_process_state != "idle":
+            if slot.engine_process_state != ENGINE_PROCESS_IDLE:
                 raise ValueError(f"Admission slot {token} is not a managed idle engine slot")
             if slot.owner_boot_id is None or slot.owner_boot_id != current_boot_id:
                 raise ValueError(
@@ -511,7 +482,7 @@ def prepare_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot |
                 )
             updated = replace(
                 slot,
-                engine_process_state="pending",
+                engine_process_state=ENGINE_PROCESS_PENDING,
                 engine_pid=None,
                 engine_pgid=None,
                 engine_process_start_ticks=None,
@@ -519,14 +490,14 @@ def prepare_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot |
             )
             slots[index] = updated
             try:
-                admission_store.save_slots_fn(admission_store.root, slots)
+                _admission_persistence.save_slots(admission_store.root, slots)
             except BaseException:
                 # atomic_write_json may have replaced the file before a
                 # parent-directory fsync fails. Popen has not happened yet,
                 # so restore only the exact pending marker created above.
                 # Never erase an active identity observed during recovery.
                 try:
-                    visible_slots = admission_store.load_slots_fn(admission_store.root)
+                    visible_slots = _load_slots(admission_store.root)
                     for visible_index, visible in enumerate(visible_slots):
                         if visible.token != token:
                             continue
@@ -541,7 +512,7 @@ def prepare_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot |
                         )
                         if (
                             same_owner
-                            and visible.engine_process_state == "pending"
+                            and visible.engine_process_state == ENGINE_PROCESS_PENDING
                             and visible.engine_pid is None
                             and visible.engine_pgid is None
                             and visible.engine_process_start_ticks is None
@@ -549,9 +520,9 @@ def prepare_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot |
                         ):
                             visible_slots[visible_index] = replace(
                                 visible,
-                                engine_process_state="idle",
+                                engine_process_state=ENGINE_PROCESS_IDLE,
                             )
-                            admission_store.save_slots_fn(
+                            _admission_persistence.save_slots(
                                 admission_store.root,
                                 visible_slots,
                             )
@@ -598,9 +569,9 @@ def complete_slot_engine_process(
         for index, slot in enumerate(slots):
             if slot.token != token:
                 continue
-            if slot.engine_process_state == "active":
+            if slot.engine_process_state == ENGINE_PROCESS_ACTIVE:
                 raise ValueError(f"Admission slot {token} still owns an active engine process")
-            if slot.engine_process_state != "pending":
+            if slot.engine_process_state != ENGINE_PROCESS_PENDING:
                 return (None if has_expectations else slot), False
             if (
                 expected_owner_pid is not _EXPECTATION_UNSET
@@ -632,7 +603,7 @@ def complete_slot_engine_process(
                 )
             ):
                 return None, False
-            updated = replace(slot, engine_process_state="idle")
+            updated = replace(slot, engine_process_state=ENGINE_PROCESS_IDLE)
             slots[index] = updated
             return updated, True
         return None, False
@@ -647,10 +618,10 @@ def clear_slot_engine_process(
     expected_pid: int | None = None,
     expected_process_start_ticks: int | None = None,
     expected_process_boot_id: str | None | _ExpectationUnset = _EXPECTATION_UNSET,
-    next_state: str = "idle",
+    next_state: str = ENGINE_PROCESS_IDLE,
 ) -> AdmissionSlot | None:
     resolved_next_state = _inactive_engine_process_state(next_state)
-    if resolved_next_state not in {"pending", "idle"}:
+    if resolved_next_state not in {ENGINE_PROCESS_PENDING, ENGINE_PROCESS_IDLE}:
         raise ValueError("Cleared engine process state must be pending or idle")
 
     def update(slots: list[AdmissionSlot]) -> tuple[AdmissionSlot | None, bool]:

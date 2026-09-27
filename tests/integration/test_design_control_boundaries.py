@@ -76,9 +76,7 @@ def test_worker_body_timeout_is_not_duplicate_worker(
         def _reserve_next_entry(self) -> NoReturn:
             raise QueueLockTimeoutError("actual queue lock timed out")
 
-    worker = Worker(
-        make_app_cfg(tmp_path, max_concurrent=1), "unused", max_concurrent=1, sleep_fn=stop
-    )
+    worker = Worker(make_app_cfg(tmp_path, max_concurrent=1), "unused", sleep_fn=stop)
     workers.append(worker)
     if method == "run":
         # The long-running loop logs the failed pass and keeps supervising.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import signal
 import subprocess
@@ -14,19 +15,25 @@ from typing import Any
 
 import pytest
 
+from orca_auto import systemd_plan
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.admission import store as admission_store
-from orca_auto.core.queue.processes import ManagedProcess
+from orca_auto.core.config.schema import SchedulerConfig
+from orca_auto.core.queue.processes import (
+    KILL_TIMEOUT_SECONDS,
+    ManagedProcess,
+    worker_shutdown_budget_seconds,
+)
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.models import ReservedQueueEntry
-from orca_auto.orca.config import AppConfig
+from orca_auto.orca.config import AppConfig, load_config
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import enqueue
 from orca_auto.orca.queue.models import OrcaRunningJob
-from orca_auto.orca.queue.worker import DEFAULT_MAX_CONCURRENT, OrcaQueueWorker
-from tests.conftest import make_app_cfg
+from orca_auto.orca.queue.worker import OrcaQueueWorker
+from tests.conftest import make_app_cfg, write_config_file
 from tests.process_helpers import FakeManagedProcess
 from tests.queue_worker_helpers import (
     WORKER_LOGGER,
@@ -42,45 +49,31 @@ from tests.queue_worker_helpers import (
 # ---------------------------------------------------------------------------
 
 
-def test_max_concurrent_floor(tmp_path: Path) -> None:
-    worker = OrcaQueueWorker(
-        make_app_cfg(tmp_path), str(tmp_path / "config.yaml"), max_concurrent=0
-    )
-    assert worker.max_concurrent == 1
-
-
 def test_default_init(tmp_path: Path) -> None:
     worker = OrcaQueueWorker(make_app_cfg(tmp_path), str(tmp_path / "config.yaml"))
-    assert worker.max_concurrent == DEFAULT_MAX_CONCURRENT
+    assert worker.max_concurrent == SchedulerConfig.max_active_simulations
+    assert worker.admission_root == tmp_path.resolve() / ".admission"
     assert not worker._shutdown_requested
     assert len(worker._running) == 0
 
 
-def test_queue_worker_does_not_mutate_config_max_concurrent(tmp_path: Path) -> None:
-    cfg = make_app_cfg(tmp_path)
-    original_max_concurrent = cfg.runtime.max_concurrent
+@pytest.mark.parametrize("max_active", [None, 1, 3])
+def test_worker_roots_and_limit_match_the_rendered_unit(
+    tmp_path: Path, fake_orca: Path, max_active: int | None
+) -> None:
+    runs = tmp_path / "runs"
+    cfg = make_app_cfg(runs, orca_executable=fake_orca, max_concurrent=max_active)
+    config = write_config_file(tmp_path / "orca_auto.yaml", cfg)
 
-    worker = OrcaQueueWorker(cfg, str(tmp_path / "config.yaml"), max_concurrent=2)
+    worker = OrcaQueueWorker(load_config(str(config)), str(config))
 
-    assert cfg.runtime.max_concurrent == original_max_concurrent
-    assert worker.cfg is not cfg
-    assert worker.cfg.runtime is not cfg.runtime
-    assert worker.cfg.runtime.max_concurrent == 2
-    assert worker.max_concurrent == 2
-    assert worker.admission_limit == 2
-
-
-def test_queue_worker_does_not_mutate_config_with_explicit_admission_limit(tmp_path: Path) -> None:
-    cfg = make_app_cfg(tmp_path)
-    cfg = replace(cfg, runtime=replace(cfg.runtime, admission_limit=5))
-    original_max_concurrent = cfg.runtime.max_concurrent
-
-    worker = OrcaQueueWorker(cfg, str(tmp_path / "config.yaml"), max_concurrent=2)
-
-    assert worker.cfg is cfg
-    assert cfg.runtime.max_concurrent == original_max_concurrent
-    assert worker.max_concurrent == 2
-    assert worker.admission_limit == 5
+    assert systemd_plan._configured_read_write_paths(config) == (worker.queue_root,)
+    assert worker.admission_root == worker.queue_root / ".admission"
+    assert worker.max_concurrent == (max_active or SchedulerConfig.max_active_simulations)
+    budget = worker_shutdown_budget_seconds(worker.max_concurrent)
+    assert systemd_plan._configured_stop_timeout_seconds(config) == (
+        math.ceil(budget + KILL_TIMEOUT_SECONDS) + 1
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +255,7 @@ def test_run_reclaims_the_slot_a_failed_admission_pass_could_not_release(
 
     worker = make_worker(max_concurrent=1, start=child_starter, sleep=sleep)
     workers.append(worker)
-    assert worker.admission_limit == 1
+    assert worker.max_concurrent == 1
     admission_lock_held = TimeoutError("admission lock held past its deadline")
     if failing_step == "attach":
         monkeypatch.setattr(
@@ -356,7 +349,11 @@ class _RecordingWorker(OrcaQueueWorker):
     def __init__(
         self, cfg: AppConfig, calls: list[tuple[str, str]], *, fail_finalize: bool = False
     ) -> None:
-        super().__init__(cfg, "/tmp/config.yaml", max_concurrent=2, sleep_fn=lambda _seconds: None)
+        super().__init__(
+            replace(cfg, runtime=replace(cfg.runtime, max_concurrent=2)),
+            "/tmp/config.yaml",
+            sleep_fn=lambda _seconds: None,
+        )
         self.calls = calls
         self.fail_finalize = fail_finalize
 
@@ -541,7 +538,10 @@ def test_rejected_attach_terminates_child_and_reports_start_error(
         ) -> None:
             start_errors.append((queue_root, admission_token, str(exc)))
 
-    worker = RejectingWorker(worker_cfg, str(queue_root / "config.yaml"), max_concurrent=1)
+    worker = RejectingWorker(
+        replace(worker_cfg, runtime=replace(worker_cfg.runtime, max_concurrent=1)),
+        str(queue_root / "config.yaml"),
+    )
 
     assert not worker._start_job(queue_root, _plain_entry("queue-reject"), admission_token="slot-1")
     assert fake_children.stopped(process)

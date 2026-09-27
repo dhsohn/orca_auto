@@ -65,7 +65,7 @@ def _worker_config(tmp_path: Path, queue_root: Path) -> Path:
         write_fake_orca(executable)
     return write_config_file(
         tmp_path / "orca_auto.yaml",
-        make_app_cfg(queue_root, orca_executable=executable, admission_root=tmp_path / "admission"),
+        make_app_cfg(queue_root, orca_executable=executable),
     )
 
 

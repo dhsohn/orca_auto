@@ -504,9 +504,7 @@ def test_repaired_and_claimed_row_gets_its_queued_notification(harness: Harness)
         harness.runs, queue_id, {QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_REPAIR_PENDING}
     )
     sends_before = len(harness.channel.sends)
-    worker = OrcaQueueWorker(
-        load_config(str(harness.config)), str(harness.config), max_concurrent=1
-    )
+    worker = OrcaQueueWorker(load_config(str(harness.config)), str(harness.config))
     status, reserved = worker._reserve_next_entry()
     try:
         _join_notification_senders()

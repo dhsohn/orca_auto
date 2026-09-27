@@ -155,21 +155,19 @@ def make_app_cfg(
     *,
     orca_executable: str | Path = "",
     max_concurrent: int | None = None,
-    admission_root: str | Path | None = None,
-    admission_limit: int | None = None,
     resources: CommonResourceConfig | None = None,
     scratch: ScratchConfig | None = None,
     messenger: MessengerConfig | None = None,
 ) -> AppConfig:
-    """Build an ``AppConfig`` from the real dataclasses with test-friendly defaults."""
+    """Build an ``AppConfig`` from the real dataclasses with test-friendly defaults.
+
+    Like ``load_config``, the admission store is ``admission_dir(runs_root)``
+    and ``max_concurrent`` is also the admission limit.
+    """
 
     runtime_fields: dict[str, Any] = {"allowed_root": str(runs_root)}
     if max_concurrent is not None:
         runtime_fields["max_concurrent"] = max_concurrent
-    if admission_root is not None:
-        runtime_fields["admission_root"] = str(admission_root)
-    if admission_limit is not None:
-        runtime_fields["admission_limit"] = admission_limit
     return AppConfig(
         runtime=OrcaRuntimeConfig(**runtime_fields),
         paths=PathsConfig(orca_executable=str(orca_executable)),
@@ -193,9 +191,7 @@ def app_cfg(tmp_path: Path, fake_orca: Path) -> Callable[..., AppConfig]:
 def config_yaml_text(cfg: AppConfig) -> str:
     """Render ``cfg`` as the ``orca_auto.yaml`` text ``load_config`` reads back.
 
-    ``scheduler`` is written whenever ``max_concurrent`` or ``admission_root``
-    leaves its default, which (as in production) pins ``admission_limit`` to
-    ``max_active_simulations`` on reload.
+    ``scheduler`` is written whenever ``max_concurrent`` leaves its default.
     """
 
     payload: dict[str, Any] = {
@@ -208,8 +204,6 @@ def config_yaml_text(cfg: AppConfig) -> str:
     scheduler: dict[str, Any] = {}
     if cfg.runtime.max_concurrent != OrcaRuntimeConfig.max_concurrent:
         scheduler["max_active_simulations"] = cfg.runtime.max_concurrent
-    if cfg.runtime.admission_root:
-        scheduler["admission_root"] = cfg.runtime.admission_root
     if scheduler:
         payload["scheduler"] = scheduler
     orca: dict[str, Any] = {"paths": {"orca_executable": cfg.paths.orca_executable}}

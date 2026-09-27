@@ -10,10 +10,8 @@ from ..processes import (
     terminate_process_group,
 )
 from .admission import (
-    WorkerConfig,
     admission_has_capacity,
     reserve_dequeued_entry,
-    resolve_admission_root,
     select_next_claimable_entry,
 )
 from .loop import (
@@ -43,7 +41,6 @@ __all__ = [
     "ReserveStatus",
     "ReservedQueueEntry",
     "SlotFillResult",
-    "WorkerConfig",
     "admission_has_capacity",
     "fill_worker_slots",
     "install_shutdown_signal_handlers",
@@ -52,7 +49,6 @@ __all__ = [
     "read_worker_pid_file",
     "remove_worker_pid_file",
     "reserve_dequeued_entry",
-    "resolve_admission_root",
     "select_next_claimable_entry",
     "start_background_process",
     "terminate_process_group",

@@ -245,15 +245,13 @@ def _unit_repo(tmp_path: Path) -> tuple[Path, Path]:
     orca = repo / "orca"
     orca.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     orca.chmod(0o755)
-    for name in ("orca_runs", "admission"):
-        (repo / name).mkdir()
+    (repo / "orca_runs").mkdir()
     config = repo / "config" / "orca_auto.yaml"
     config.parent.mkdir()
     config.write_text(
         f"runs_root: {repo / 'orca_runs'}\n"
         "scheduler:\n"
         "  max_active_simulations: 2\n"
-        f"  admission_root: {repo / 'admission'}\n"
         "orca:\n"
         "  paths:\n"
         f"    orca_executable: {orca}\n",

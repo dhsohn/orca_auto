@@ -18,7 +18,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 | `queue cancel TARGET` | 큐 ID, Run ID, 또는 모호하지 않은 작업 디렉터리 경로를 지정하여 작업을 취소합니다. 디렉터리 경로나 이름은 그 디렉터리의 활성 generation으로, 활성 generation이 없으면 가장 최근에 끝난 행으로 해석합니다. 서로 다른 디렉터리가 같은 이름을 쓰거나 활성 generation이 둘이면 모호한 대상으로 거부합니다. 설정 파일을 찾지 못하거나 `runs_root`가 없으면 종료 코드 1을 반환합니다. |
 | `index prune` | 디스크에서 실제 경로가 삭제된 인덱스 항목을 확인합니다. `--apply` 플래그를 넘길 때만 실제 정리가 수행됩니다. |
 | `index rebuild` | `runs_root` 아래의 모든 `job_state.json`에서 `job_locations.json` 항목을 다시 유도합니다. 작업 ID 기준으로 추가·갱신만 하며 삭제하지 않습니다. `--dry-run`은 기록 없이 결과만 출력합니다. |
-| `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. 설정 파일이 존재하지만 읽을 수 없으면 유닛을 쓰지 않고 종료 코드 1을 반환하며, `TimeoutStopSec`은 `scheduler.max_active_simulations`에서 계산해 렌더링합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
+| `systemd install` | 현재 사용자 및 소스 체크아웃 또는 빌드된 런타임 경로(`--repo`)에 맞는 systemd 유닛 템플릿을 등록하고 활성화합니다. 설정 파일이 존재하지만 읽을 수 없으면 유닛을 쓰지 않고 종료 코드 1을 반환하며, `TimeoutStopSec`은 `scheduler.max_active_simulations`에서 계산해 렌더링하고 `ReadWritePaths`에는 `runs_root`만 둡니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
 | `service status` | 등록된 유닛의 상태와 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지(freshness) 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 종료 코드 1(`--json`에서는 `ok: false`)을 반환합니다. |
 | `service restart` | 활성 계산이나 예약된 작업이 진행 중일 때는 중단을 방지하기 위해 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 사용합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다. |
 | `scratch list` | `orca.runtime.scratch_root` 아래의 RAM scratch 워크스페이스 목록과, 비활성(non-live) 워크스페이스가 새 scratch 실행을 막고 있는지 표시합니다. 차단 항목이 있어도 종료 코드는 0이며 `--json`을 지원합니다. |
@@ -50,6 +50,8 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 > **설정 검증 원칙**:
 > 유효하지 않은 매핑, 명시적 null, 알 수 없는 키(`workflow` 섹션 포함)는 기본값을 적용하기 전에 거부(fail-closed)됩니다. 전체 설정 항목 예시는 [config/orca_auto.yaml.example](../config/orca_auto.yaml.example)를 참고하세요.
+
+실행권(admission) 상태는 항상 `<runs_root>/.admission`에 있고 한도는 `scheduler.max_active_simulations`입니다. 제거된 `scheduler.admission_root` 키는 삭제하라는 안내와 함께 거부됩니다([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)).
 
 ---
 

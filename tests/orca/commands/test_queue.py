@@ -64,11 +64,11 @@ def test_worker_runs_in_foreground_only(
 
     assert rc == 7
     assert fake_worker.calls == [
-        ((load_config(str(config)), str(config)), {"max_concurrent": 4}),
+        ((load_config(str(config)), str(config)), {}),
     ]
 
 
-def test_worker_uses_config_max_concurrent_when_flag_omitted(
+def test_worker_takes_max_concurrent_from_the_config(
     config_path: Callable[..., Path],
     fake_worker: type[_FakeWorker],
 ) -> None:
@@ -78,7 +78,7 @@ def test_worker_uses_config_max_concurrent_when_flag_omitted(
 
     assert rc == 0
     assert fake_worker.calls == [
-        ((load_config(str(config)), str(config)), {"max_concurrent": 6}),
+        ((load_config(str(config)), str(config)), {}),
     ]
 
 

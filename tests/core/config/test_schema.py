@@ -1,115 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 from orca_auto.core.config.schema import (
     DiscordConfig,
-    OrcaRuntimeConfig,
-    SchedulerConfig,
     as_nonempty_str,
     discord_config_from_mapping,
     messenger_config_from_mapping,
     positive_int_mapping,
-    resolved_admission_limit,
 )
-
-
-@pytest.mark.parametrize(
-    ("allowed_root", "admission_root", "expected_root"),
-    [
-        ("/allowed", None, "/allowed"),
-        ("/allowed", "/custom", "/custom"),
-    ],
-)
-def test_orca_runtime_config_resolved_admission_root(
-    allowed_root: str,
-    admission_root: str | None,
-    expected_root: str,
-) -> None:
-    config = OrcaRuntimeConfig(
-        allowed_root=allowed_root,
-        admission_root=admission_root,
-    )
-
-    assert config.resolved_admission_root == expected_root
-
-
-@pytest.mark.parametrize(
-    ("max_concurrent", "admission_limit", "expected_limit"),
-    [
-        (4, None, 4),
-        (0, None, 1),
-        (3, 2, 2),
-    ],
-)
-def test_orca_runtime_config_resolved_admission_limit_lower_bounds(
-    max_concurrent: int,
-    admission_limit: int | None,
-    expected_limit: int,
-) -> None:
-    config = OrcaRuntimeConfig(
-        allowed_root="/allowed",
-        max_concurrent=max_concurrent,
-        admission_limit=admission_limit,
-    )
-
-    assert config.resolved_admission_limit == expected_limit
-
-
-@pytest.mark.parametrize("admission_limit", [-7, 0, "bad", True])
-def test_orca_runtime_config_rejects_invalid_explicit_admission_limit(
-    admission_limit: object,
-) -> None:
-    config = OrcaRuntimeConfig(
-        allowed_root="/allowed",
-        max_concurrent=3,
-        admission_limit=cast(Any, admission_limit),
-    )
-
-    with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
-        _ = config.resolved_admission_limit
-
-
-def test_orca_runtime_config_stores_validated_values_verbatim() -> None:
-    # load_config is the only producer; the dataclass no longer re-normalises.
-    config = OrcaRuntimeConfig(allowed_root="/runs/engine", max_concurrent=6)
-
-    assert config.max_concurrent == 6
-    assert config.admission_root is None
-    assert config.admission_limit is None
-    assert config.resolved_admission_root == "/runs/engine"
-    assert config.resolved_admission_limit == 6
-    assert OrcaRuntimeConfig().max_concurrent == SchedulerConfig.max_active_simulations
-
-
-def test_scheduler_config_pins_admission_limit_only_when_configured() -> None:
-    assert SchedulerConfig().admission_limit is None
-    assert SchedulerConfig(max_active_simulations=3, configured=True).admission_limit == 3
-
-
-@pytest.mark.parametrize(
-    ("admission_limit", "max_concurrent", "expected"),
-    [
-        (None, "6", 6),
-        ("", 0, 1),
-        (None, "bad", 1),
-        ("2", 6, 2),
-    ],
-)
-def test_resolved_admission_limit_falls_back_to_bounded_max_concurrent(
-    admission_limit: object,
-    max_concurrent: object,
-    expected: int,
-) -> None:
-    assert resolved_admission_limit(admission_limit, max_concurrent) == expected
-
-
-@pytest.mark.parametrize("value", ["0", "bad", -1, True])
-def test_resolved_admission_limit_rejects_invalid_explicit_values(value: object) -> None:
-    with pytest.raises(ValueError, match="admission_limit must be an integer >= 1"):
-        resolved_admission_limit(value, 4)
 
 
 def test_positive_int_mapping_keeps_only_positive_integer_values() -> None:

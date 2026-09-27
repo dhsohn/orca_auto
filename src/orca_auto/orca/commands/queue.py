@@ -33,12 +33,7 @@ def cmd_queue_worker(args: argparse.Namespace) -> int:
             existing_pid,
         )
         return 1
-    worker = OrcaQueueWorker(
-        cfg,
-        str(args.config),
-        max_concurrent=max(1, int(cfg.runtime.max_concurrent)),
-    )
-    return worker.run()
+    return OrcaQueueWorker(cfg, str(args.config)).run()
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -295,8 +295,6 @@ class TestConfigValidation:
 
             assert cfg.runtime.allowed_root == str(allowed)
             assert cfg.runtime.max_concurrent == 6
-            assert cfg.runtime.resolved_admission_limit == 6
-            assert cfg.runtime.resolved_admission_root == str(allowed / ".admission")
 
     def test_removed_orca_runtime_scheduler_keys_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -329,19 +327,12 @@ class TestConfigValidation:
             allowed.mkdir()
             fake_orca = root / "orca"
             write_fake_orca(fake_orca)
-            shared_admission = root / "shared-admission"
-
             cfg_path = _write_orca_config(
                 root / "orca_auto.yaml",
                 {
                     "runs_root": str(allowed),
-                    "scheduler": {
-                        "max_active_simulations": 1,
-                        "admission_root": str(shared_admission),
-                    },
-                    "orca": {
-                        "scheduler": {"admission_root": str(shared_admission)},
-                    },
+                    "scheduler": {"max_active_simulations": 1},
+                    "orca": {"scheduler": {"max_active_simulations": 1}},
                     "paths": {"orca_executable": str(fake_orca)},
                 },
             )

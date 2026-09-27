@@ -332,12 +332,12 @@ def test_cmd_service_restart_default_guard_covers_every_mutation(
 ) -> None:
     commands: list[tuple[str, ...]] = []
     guarded = False
-    seen_units: list[tuple[str, ...]] = []
+    seen_units: list[str] = []
 
     @contextmanager
-    def guard(worker_units: tuple[str, ...], **_kwargs: Any) -> Iterator[None]:
+    def guard(worker_unit: str, **_kwargs: Any) -> Iterator[None]:
         nonlocal guarded
-        seen_units.append(worker_units)
+        seen_units.append(worker_unit)
         guarded = True
         try:
             yield
@@ -364,7 +364,7 @@ def test_cmd_service_restart_default_guard_covers_every_mutation(
         ),
     )
     assert result == 0
-    assert seen_units == [("orca_auto-queue-worker@alice.service",)]
+    assert seen_units == ["orca_auto-queue-worker@alice.service"]
     assert not guarded
     assert [command[1] for command in commands] == [
         "reset-failed",

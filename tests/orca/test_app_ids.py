@@ -11,6 +11,7 @@ import pytest
 
 from orca_auto import cli
 from orca_auto.activity import _cancel as activity_cancel
+from orca_auto.core.admission import admission_dir
 from orca_auto.orca import app_ids
 
 
@@ -102,14 +103,18 @@ def test_orca_worker_reservation_uses_the_persisted_identity(
     from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path), max_concurrent=2))
-    assert orca_worker._try_reserve_admission_slot(cfg) == "slot-1"
+    admission_root = admission_dir(cfg.runtime.allowed_root)
+    assert (
+        orca_worker._try_reserve_admission_slot(admission_root, cfg.runtime.max_concurrent)
+        == "slot-1"
+    )
     assert captured[0]["source"] == "orca_auto.orca.queue_worker"
     assert captured[0]["app_name"] == "orca_auto_orca"
     assert captured[0]["engine_launch_gated"] is True
     assert captured[0]["engine_process_state"] == "idle"
     assert captured[0]["state"] == "reserved"
-    assert captured[0]["root"] == Path(cfg.runtime.resolved_admission_root)
-    assert captured[0]["limit"] == cfg.runtime.resolved_admission_limit
+    assert captured[0]["root"] == admission_root
+    assert captured[0]["limit"] == 2
 
 
 def test_queue_list_and_worker_have_no_engine_selection_options() -> None:

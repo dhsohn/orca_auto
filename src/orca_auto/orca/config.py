@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.config import (
     CommonResourceConfig,
     MessengerConfig,
@@ -13,7 +14,6 @@ from orca_auto.core.config import (
 from orca_auto.core.config.files import (
     SharedConfig,
     configured_mapping_section,
-    default_shared_admission_root,
     load_shared_config,
     load_yaml_mapping,
     validate_optional_text_field,
@@ -21,12 +21,15 @@ from orca_auto.core.config.files import (
     validated_runs_root_text,
 )
 from orca_auto.core.config.schema import (
-    OrcaRuntimeConfig,
+    SchedulerConfig,
     as_nonempty_str,
     reject_unknown_config_fields,
 )
+from orca_auto.core.paths import (
+    is_rejected_windows_path,
+    validate_configured_executable_path,
+)
 
-from .config_validation import _validate_config
 from .scratch_config import ScratchConfig, scratch_config_from_runtime_mapping
 
 logger = logging.getLogger(__name__)
@@ -148,6 +151,18 @@ def _placeholder_settings_error(path: Path, placeholder_keys: list[str]) -> Valu
     )
 
 
+@dataclass(frozen=True)
+class OrcaRuntimeConfig:
+    """Validated ORCA runtime settings; ``load_config`` is the only producer.
+
+    ``max_concurrent`` is ``scheduler.max_active_simulations``: the worker's
+    concurrency and the admission limit of ``admission_dir(allowed_root)``.
+    """
+
+    allowed_root: str = ""
+    max_concurrent: int = SchedulerConfig.max_active_simulations
+
+
 @dataclass
 class PathsConfig:
     orca_executable: str = ""
@@ -185,6 +200,31 @@ def _placeholder_keys(cfg: AppConfig) -> list[str]:
     return placeholder_keys
 
 
+def _validate_config(cfg: AppConfig) -> None:
+    """Validate the path constraints of a loaded configuration."""
+    for label, path_val in (
+        ("runs_root", cfg.runtime.allowed_root),
+        ("orca_executable", cfg.paths.orca_executable),
+    ):
+        if is_rejected_windows_path(path_val):
+            raise ValueError(f"{label} must be a Linux path (Windows paths are not supported).")
+        if not Path(path_val).is_absolute():
+            raise ValueError(f"{label} must be an absolute Linux path.")
+    validate_configured_executable_path(
+        cfg.paths.orca_executable,
+        label="orca_executable",
+        display_name="ORCA",
+    )
+
+    allowed_root = Path(cfg.runtime.allowed_root)
+    if not allowed_root.exists():
+        raise ValueError(
+            "runs_root directory not found. Create the directory or update the config."
+        )
+    if not allowed_root.is_dir():
+        raise ValueError("runs_root is not a directory.")
+
+
 def load_config(config_path: str) -> AppConfig:
     """Load the worker configuration: one shared validation pass plus path checks."""
 
@@ -200,9 +240,6 @@ def load_config(config_path: str) -> AppConfig:
         runtime=OrcaRuntimeConfig(
             allowed_root=runs_root,
             max_concurrent=shared.scheduler.max_active_simulations,
-            admission_root=shared.scheduler.admission_root
-            or default_shared_admission_root(runs_root),
-            admission_limit=shared.scheduler.admission_limit,
         ),
         paths=PathsConfig(orca_executable=orca_sections.orca_executable),
         resources=shared.resources,
@@ -218,9 +255,9 @@ def load_config(config_path: str) -> AppConfig:
     logger.info(
         "Config loaded: allowed_root=%s, admission_root=%s, orca_executable=%s, max_concurrent=%d, admission_limit=%d",
         cfg.runtime.allowed_root,
-        cfg.runtime.resolved_admission_root,
+        admission_dir(cfg.runtime.allowed_root),
         cfg.paths.orca_executable,
         cfg.runtime.max_concurrent,
-        cfg.runtime.resolved_admission_limit,
+        cfg.runtime.max_concurrent,
     )
     return cfg

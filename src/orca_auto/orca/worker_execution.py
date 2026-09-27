@@ -22,6 +22,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
@@ -33,10 +34,7 @@ from orca_auto.core.queue.child.process import entry_status_is_running
 from orca_auto.core.queue.engine.child import await_parent_admission_handoff
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry
-from orca_auto.core.queue.worker import (
-    install_shutdown_signal_handlers,
-    resolve_admission_root,
-)
+from orca_auto.core.queue.worker import install_shutdown_signal_handlers
 
 from .attempt.reporting import build_final_result, last_out_path_from_state
 from .config import AppConfig, load_config
@@ -61,7 +59,7 @@ from .queue.entries import (
     queue_entry_task_id,
 )
 from .recovery_rebind import maybe_rebind_recovery_generation
-from .run_context import RunExecutionContext, configured_admission_root
+from .run_context import RunExecutionContext
 from .run_lock import acquire_run_lock
 from .state import finalize_state
 from .state_reading import load_state
@@ -294,7 +292,7 @@ def _run_orca_job_for_entry(
             cfg=bound_cfg,
             reaction_dir=Path(context.reaction_dir).expanduser().resolve(),
             selected_inp=Path(context.selected_inp).expanduser().resolve(),
-            admission_root=configured_admission_root(bound_cfg),
+            admission_root=admission_dir(bound_cfg.runtime.allowed_root),
             reservation_token=context.admission_token,
             admission_app_name=context.admission_app_name,
             admission_task_id=context.admission_task_id,
@@ -495,7 +493,7 @@ def run_worker_child_job(
     if entry is None or not entry_status_is_running(entry):
         return 1
     if admission_token and not await_parent_admission_handoff_fn(
-        resolve_admission_root(cfg),
+        admission_dir(cfg.runtime.allowed_root),
         admission_token,
     ):
         return 1

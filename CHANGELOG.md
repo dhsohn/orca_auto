@@ -23,6 +23,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - Public contract: an `admission_slots.json` row that carries the retired
   `workflow_id` field is rejected as corrupt instead of being read. 8.x never
   writes it; upgrading directly from 7.0.x needs no reserved or active slots.
+- Public contract: `scheduler.admission_root` is removed
+  ([ADR 0007](docs/adr/0007-one-admission-store-under-runs-root.md)). Admission
+  state always lives in `<runs_root>/.admission` and its limit is always
+  `scheduler.max_active_simulations`. A config that still sets the key is
+  rejected with a one-line hint to delete it, `systemd install` renders
+  `ReadWritePaths` with `runs_root` only and no longer requires an explicit
+  admission directory, and `service restart` locks the one admission store of
+  the worker it restarts. Delete the key in an idle window before installing
+  the new units; see
+  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
 - The worker and recovery rebind no longer check queue-row metadata for the
   pre-4.0 `max_retries` setting. Such rows carry a version-2 execution snapshot
   and are still refused before execution, now with the execution-snapshot error
@@ -131,7 +141,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 ### Changed
 
 - Public contract: one generation identity now decides whether a queue row is
-  still the generation a writer read, and the `queue_generation` value that
+  still the generation a writer read
+  ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),
+  and the `queue_generation` value that
   `job_state.json` records is the SHA-256 of that identity. The value is
   opaque and comparable only within one major version. The identity is the
   row's queue ID, app, task ID, task kind, engine, priority, submission time

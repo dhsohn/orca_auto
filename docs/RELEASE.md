@@ -48,7 +48,18 @@ directory, and a queue row's `workflow_id` metadata is ignored.
   queue generation identity, and nothing rewrites the values 8.x recorded. A
   job still running across the upgrade is listed twice by `queue list` and
   cannot be cancelled by its run ID until it finishes; upgrade in an idle
-  window to avoid that.
+  window to avoid that ([ADR 0006](adr/0006-one-generation-identity-for-token-and-fences.md)).
+- `scheduler.admission_root` is removed: admission state always lives in
+  `<runs_root>/.admission` and its limit is `scheduler.max_active_simulations`
+  ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)). A config that
+  still sets the key, including one that followed the 7.0 steps below with a
+  separate root, no longer loads. In the idle window, when `admission_slots.json`
+  holds no reserved or active slot (as `service restart` already requires),
+  delete the key before running the new `systemd install`, which loads the
+  config and stops with a one-line hint while the key is present. The old
+  directory may then be deleted. `ReadWritePaths` in the rendered unit names
+  only `runs_root`. Rolling back to 8.x needs no config change: 8.x uses the
+  same `<runs_root>/.admission` when the key is absent.
 
 ## Upgrading to 8.0
 

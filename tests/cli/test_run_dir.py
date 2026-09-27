@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from orca_auto import cli, cli_handlers, cli_queue
-from orca_auto.core.admission import reserve_slot
+from orca_auto.core.admission import admission_dir, reserve_slot
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as CONFIG_ENV_VAR
 from orca_auto.core.config.discovery import default_shared_config_path as default_config_path
 from orca_auto.orca.cli_logging import (
@@ -25,7 +25,7 @@ from orca_auto.orca.config import load_config
 from orca_auto.orca.execution import _emit, execute_orca_run, select_latest_inp
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
 from orca_auto.orca.output_adoption import existing_completed_out
-from orca_auto.orca.run_context import RunExecutionContext, configured_admission_root
+from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state_reading import load_state, state_path
 from orca_auto.orca.types import AttemptRecord, RunFinalResult, RunState
@@ -92,7 +92,7 @@ def _run_internal_execute(config: Path, reaction_dir: Path) -> int:
             cfg=cfg,
             reaction_dir=reaction_dir.resolve(),
             selected_inp=select_latest_inp(reaction_dir),
-            admission_root=configured_admission_root(cfg),
+            admission_root=admission_dir(cfg.runtime.allowed_root),
             reservation_token=token,
         ),
     )

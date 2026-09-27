@@ -7,6 +7,7 @@ from .engine_process import (
     recover_slot_engine_process,
     register_slot_engine_process,
 )
+from .persistence import admission_dir
 from .store import (
     AdmissionLimitReachedError,
     AdmissionSlot,
@@ -35,6 +36,7 @@ __all__ = [
     "AdmissionStoreCorruptError",
     "EngineProcessRecordError",
     "EngineProcessRecordPendingError",
+    "admission_dir",
     "admission_lock",
     "activate_reserved_slot",
     "clear_slot_engine_process",

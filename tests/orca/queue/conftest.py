@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -112,9 +113,11 @@ def make_worker(
         start: ChildStarter | None = None,
         sleep: Callable[[float], None] | None = None,
     ) -> OrcaQueueWorker:
-        config_path = str(queue_root / "config.yaml")
+        base = cfg or worker_cfg
         worker = OrcaQueueWorker(
-            cfg or worker_cfg, config_path, max_concurrent=max_concurrent, sleep_fn=sleep
+            replace(base, runtime=replace(base.runtime, max_concurrent=max_concurrent)),
+            str(queue_root / "config.yaml"),
+            sleep_fn=sleep,
         )
         if start is not None:
             monkeypatch.setattr(worker, "_start_background_process", start)

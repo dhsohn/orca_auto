@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.config import CommonResourceConfig
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
@@ -140,7 +141,6 @@ def _child_config(tmp_path: Path, queue_root: Path, **overrides: Any) -> Path:
             queue_root,
             orca_executable=executable,
             max_concurrent=1,
-            admission_root=tmp_path / "admission",
             **overrides,
         ),
     )
@@ -595,7 +595,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     )
 
     queue_root = tmp_path / "queue"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(queue_root)
     rxn = queue_root / "rxn"
     fake_orca = tmp_path / "fake-orca"
     fake_orca.write_text(
@@ -619,7 +619,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     )
 
     def run_child() -> int:
-        token = _try_reserve_admission_slot(cfg)
+        token = _try_reserve_admission_slot(admission_root, cfg.runtime.max_concurrent)
         assert token is not None
         return worker_execution.run_worker_child_job(
             config_path=str(config),

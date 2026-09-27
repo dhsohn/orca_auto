@@ -1,4 +1,4 @@
-"""Idle-only restart guard for the installed, shared-admission worker services."""
+"""Idle-only restart guard for the installed worker service and its one admission store."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from typing import Any
 from orca_auto import cli_systemd_evidence, cli_systemd_units
 from orca_auto.core.admission import (
     AdmissionStoreCorruptError,
+    admission_dir,
     admission_lock,
     read_active_slot_count,
 )
@@ -115,7 +116,7 @@ def _worker_binding(
     try:
         identity = _config_identity(config)
         cfg = load_config(str(config))
-        root = Path(cfg.runtime.resolved_admission_root).resolve(strict=True)
+        root = admission_dir(cfg.runtime.allowed_root).resolve(strict=True)
         if _config_identity(config) != identity:
             raise ValueError
     except (*YAML_CONFIG_LOAD_EXCEPTIONS, RuntimeError):
@@ -175,40 +176,34 @@ def _root_identity(root: Path) -> tuple[int, int, int, int]:
 
 @contextmanager
 def guard_service_restart(
-    worker_units: tuple[str, ...],
+    worker_unit: str,
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
     read_process_file: Callable[[str], bytes] = cli_systemd_evidence.read_process_file,
 ) -> Iterator[None]:
-    """Hold existing admission locks from verified idleness through restart.
+    """Hold the existing admission lock from verified idleness through restart.
 
     This is an idle-only guard, not a drain: live reservations and unresolved
     process ownership refuse immediately. No queue or admission records are
     reconciled, and no missing admission directory or lock is initialized.
     """
-    if not worker_units:
-        raise ValueError("No worker services were selected for restart.")
-    bindings = tuple(
-        _worker_binding(unit, run=run, read_process_file=read_process_file) for unit in worker_units
-    )
-    roots = sorted({binding.admission_root for binding in bindings})
+    binding = _worker_binding(worker_unit, run=run, read_process_file=read_process_file)
+    root = binding.admission_root
     with ExitStack() as stack:
         try:
-            identities = {root: _root_identity(root) for root in roots}
-            for root in roots:
-                stack.enter_context(admission_lock(root))
-                if _root_identity(root) != identities[root]:
-                    raise ValueError("Admission root or lock changed during restart inspection.")
+            identity = _root_identity(root)
+            stack.enter_context(admission_lock(root))
+            if _root_identity(root) != identity:
+                raise ValueError("Admission root or lock changed during restart inspection.")
         except (OSError, RuntimeError, ValueError):
             raise ValueError(
                 "Cannot lock existing service admission state for a safe restart."
             ) from None
-        for before in bindings:
-            after = _worker_binding(before.unit, run=run, read_process_file=read_process_file)
-            if after != before:
-                raise ValueError(f"Service configuration or process changed for {before.unit}.")
+        after = _worker_binding(worker_unit, run=run, read_process_file=read_process_file)
+        if after != binding:
+            raise ValueError(f"Service configuration or process changed for {worker_unit}.")
         try:
-            active_count = sum(read_active_slot_count(root) for root in roots)
+            active_count = read_active_slot_count(root)
         except (AdmissionStoreCorruptError, OSError, ValueError):
             raise ValueError("Cannot read service admission state for a safe restart.") from None
         if active_count:
