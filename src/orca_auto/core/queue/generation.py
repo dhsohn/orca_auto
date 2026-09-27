@@ -5,7 +5,6 @@ import json
 import re
 import secrets
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from .deferral import ADMISSION_DEFERRAL_METADATA_KEY
@@ -18,39 +17,6 @@ def is_visible_generation_name(value: str) -> bool:
     """Return whether *value* is an exact user-visible execution generation name."""
 
     return bool(VISIBLE_GENERATION_NAME_RE.fullmatch(str(value)))
-
-
-def visible_generation_children(job_dir: Path) -> tuple[Path, ...]:
-    """Direct generation-named child directories of *job_dir*, newest first.
-
-    Generation names embed a local timestamp, so the reverse lexicographic
-    order is the creation order. Symlinked children are excluded so readers
-    cannot be steered outside the job directory.
-    """
-
-    try:
-        entries = list(job_dir.iterdir())
-    except OSError:
-        return ()
-    children = [
-        entry
-        for entry in entries
-        if is_visible_generation_name(entry.name) and entry.is_dir() and not entry.is_symlink()
-    ]
-
-    def _recency_key(entry: Path) -> tuple[str, int, str]:
-        # Generation names carry only second-resolution timestamps followed by
-        # random hex, so the name alone cannot order two generations minted in
-        # the same second. Break the tie with the directory's own mtime (the
-        # newer generation is created — and written — after the older one
-        # stopped changing), keeping the full name as a stable last resort.
-        try:
-            mtime_ns = entry.stat().st_mtime_ns
-        except OSError:
-            mtime_ns = 0
-        return (entry.name[:15], mtime_ns, entry.name)
-
-    return tuple(sorted(children, key=_recency_key, reverse=True))
 
 
 def new_visible_generation_name() -> str:
@@ -131,5 +97,4 @@ __all__ = [
     "new_visible_generation_name",
     "queue_entries_same_generation",
     "queue_entry_generation_token",
-    "visible_generation_children",
 ]

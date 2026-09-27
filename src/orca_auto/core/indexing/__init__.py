@@ -10,9 +10,7 @@ from .store import (
     load_job_locations,
     merge_job_locations,
     prune_job_locations,
-    resolve_job_location,
     upsert_job_location,
-    upsert_job_locations,
 )
 
 __all__ = [
@@ -27,7 +25,5 @@ __all__ = [
     "load_job_locations",
     "merge_job_locations",
     "prune_job_locations",
-    "resolve_job_location",
     "upsert_job_location",
-    "upsert_job_locations",
 ]

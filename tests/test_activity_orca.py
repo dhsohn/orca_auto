@@ -49,11 +49,6 @@ def _records_by_id(config: str) -> dict[str, _activity_model.ActivityRecord]:
 
 
 def test_activity_helper_edges_and_discovery_paths(tmp_path: Path) -> None:
-    from orca_auto.core.utils.coercion import mapping_or_empty
-
-    assert mapping_or_empty({"a": 1}) == {"a": 1}
-    assert mapping_or_empty(["not", "mapping"]) == {}
-
     empty_timestamp = _activity_model.ActivityRecord(
         "empty", "job", "x", "running", "", "", "", "", ""
     )
@@ -86,7 +81,6 @@ def test_activity_helper_edges_and_discovery_paths(tmp_path: Path) -> None:
     assert _activity_model.sort_key(bad_timestamp) < _activity_model.sort_key(valid_timestamp)
     assert _activity_model.sort_key(naive_timestamp)[0].tzinfo is not None
     assert _activity_model.unique_texts([" a ", "", "a", "b"]) == ("a", "b")
-    assert _activity_model.mapping_text({"key": " value "}, "key") == "value"
     assert _activity_model.path_aliases("", root=tmp_path) == ()
 
 

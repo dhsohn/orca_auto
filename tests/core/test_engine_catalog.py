@@ -11,11 +11,7 @@ import pytest
 
 from orca_auto import cli as unified_cli
 from orca_auto.activity import _cancel as activity_cancel
-from orca_auto.orca.engine_catalog import (
-    engine_catalog,
-    find_engine_catalog_entry,
-    get_engine_catalog_entry,
-)
+from orca_auto.orca.engine_catalog import find_engine_catalog_entry, get_engine_catalog_entry
 
 
 def _subparser(
@@ -35,8 +31,8 @@ def _subparser(
 def test_engine_catalog_is_import_safe() -> None:
     script = """
 import sys
-from orca_auto.orca.engine_catalog import engine_catalog
-assert tuple(entry.engine_id for entry in engine_catalog()) == ("orca",)
+from orca_auto.orca.engine_catalog import get_engine_catalog_entry
+assert get_engine_catalog_entry("orca").engine_id == "orca"
 allowed = {'orca_auto.orca', 'orca_auto.orca.engine_catalog'}
 assert not any(
     name.startswith(('orca_auto.flow', 'orca_auto.orca')) and name not in allowed
@@ -80,7 +76,7 @@ def test_engine_entrypoint_module_runs_without_eager_import_warning(module_name:
 
 
 def test_catalog_holds_exactly_the_orca_identity() -> None:
-    (entry,) = engine_catalog()
+    entry = get_engine_catalog_entry("orca")
     assert entry.engine_id == "orca"
     assert entry.app_id == "orca_auto_orca"
     assert entry.source_id == "orca_auto_orca"
@@ -91,9 +87,8 @@ def test_catalog_holds_exactly_the_orca_identity() -> None:
 
 
 def test_catalog_lookup_normalizes_and_rejects_unknown_engines() -> None:
-    assert find_engine_catalog_entry(" ORCA ") is engine_catalog()[0]
+    assert find_engine_catalog_entry(" ORCA ") is get_engine_catalog_entry("orca")
     assert find_engine_catalog_entry("other") is None
-    assert get_engine_catalog_entry("orca") is engine_catalog()[0]
     with pytest.raises(ValueError, match=r"unsupported engine: other \(supported: orca\)"):
         get_engine_catalog_entry("other")
     with pytest.raises(ValueError, match="unsupported engine: <blank>"):
@@ -118,7 +113,7 @@ def test_orca_worker_reservation_uses_catalog_identity(
 
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path), max_concurrent=2))
     assert orca_worker._try_reserve_admission_slot(cfg) == "slot-1"
-    orca_entry = next(entry for entry in engine_catalog() if entry.engine_id == "orca")
+    orca_entry = get_engine_catalog_entry("orca")
     assert captured[0]["source"] == orca_entry.admission_source
     assert captured[0]["app_name"] == orca_entry.app_id
     assert captured[0]["engine_launch_gated"] is True

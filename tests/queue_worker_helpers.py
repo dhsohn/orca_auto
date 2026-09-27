@@ -119,7 +119,7 @@ def run_terminal_replay(
     with (
         patch.object(replay_mod, "recover_orphaned_engine_slots"),
         patch.object(
-            replay_mod,
+            replay_mod.roots,
             "queue_entries_with_roots",
             return_value=[(tmp_path, entry)],
         ),

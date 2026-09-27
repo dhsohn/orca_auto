@@ -42,9 +42,9 @@ preparer never contacts a package index.
   --releases-root "$HOME/.local/share/orca_auto/releases"
 ```
 
-Version 7 accepts the ORCA package and its dependencies; the retired workflow
-extension cannot be included. Follow [the 7.0 cutover](RELEASE.md#upgrading-to-70)
-when replacing an older installation.
+The runtime holds the ORCA package and its dependencies. Follow
+[the 7.0 cutover](RELEASE.md#upgrading-to-70) when replacing a 6.x or older
+installation.
 `--templates` optionally selects the matching `systemd/` template directory.
 
 The command prints JSON containing `runtime_root` and the full SHA-256 `build_id`.

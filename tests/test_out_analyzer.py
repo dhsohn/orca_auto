@@ -6,7 +6,7 @@ from orca_auto.orca import out_analyzer
 from orca_auto.orca.completion_rules import CompletionMode
 from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.out_analyzer import analyze_output, scan_ts_lines_for_imag_count
-from orca_auto.orca.output_status import has_error_termination, has_normal_termination
+from orca_auto.orca.output_status import iter_output_lines, termination_line
 from orca_auto.orca.parser.io import open_orca_text
 from orca_auto.orca.statuses import AnalyzerStatus
 from tests.orca_output_helpers import FREQ_TS_BLOCK, si_out_text
@@ -18,10 +18,10 @@ from tests.test_integration_parser_realistic import (
 from tests.test_orca_evidence import _FREQUENCIES as _EVIDENCE_FREQUENCIES
 
 NORMAL = "****ORCA TERMINATED NORMALLY****"
-_OPT_MODE = CompletionMode(kind="opt", require_irc=False, route_line="! Opt")
-_TS_MODE = CompletionMode(kind="ts", require_irc=False, route_line="! OptTS")
-_TS_IRC_MODE = CompletionMode(kind="ts", require_irc=True, route_line="! OptTS IRC")
-_TS_FREQ_MODE = CompletionMode(kind="ts", require_irc=False, route_line="! OptTS Freq")
+_OPT_MODE = CompletionMode(kind="opt", require_irc=False)
+_TS_MODE = CompletionMode(kind="ts", require_irc=False)
+_TS_IRC_MODE = CompletionMode(kind="ts", require_irc=True)
+_TS_FREQ_MODE = CompletionMode(kind="ts", require_irc=False)
 
 
 def _write_out(tmp_path: Path, payload: str) -> Path:
@@ -411,9 +411,7 @@ def test_not_converged_marker_before_the_tail_window_is_still_a_verdict(tmp_path
     )
     assert out_path.stat().st_size > out_analyzer._DEFAULT_BUFFER_BYTES
 
-    analysis = analyze_output(
-        out_path, CompletionMode(kind="opt", require_irc=False, route_line="! Opt Freq")
-    )
+    analysis = analyze_output(out_path, CompletionMode(kind="opt", require_irc=False))
 
     assert analysis.status is AnalyzerStatus.GEOM_NOT_CONVERGED
     assert analysis.markers["last_opt_converged"] is False
@@ -434,9 +432,7 @@ def test_input_block_syntax_abort_is_an_error_termination(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    analysis = analyze_output(
-        out_path, CompletionMode(kind="ts", require_irc=False, route_line="! OptTS Freq")
-    )
+    analysis = analyze_output(out_path, CompletionMode(kind="ts", require_irc=False))
 
     assert analysis.status is AnalyzerStatus.UNKNOWN_FAILURE
     assert analysis.reason == "error_termination"
@@ -446,8 +442,9 @@ def test_input_block_syntax_abort_is_an_error_termination(tmp_path: Path) -> Non
 def test_input_block_syntax_abort_is_error_termination_evidence() -> None:
     text = "\t Unknown error in GEOM block - check syntax! \n\t LEAVING ORCA\n"
 
-    assert has_error_termination(text)
-    assert not has_normal_termination(text)
+    evidence = [termination_line(line) for line in iter_output_lines(text)]
+    assert any(error for _normal, error in evidence)
+    assert not any(normal for normal, _error in evidence)
 
 
 # Every frequency-bearing inline output fixture in the test suite, with the

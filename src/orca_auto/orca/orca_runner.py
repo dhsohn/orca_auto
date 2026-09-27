@@ -25,14 +25,12 @@ from orca_auto.core.engine_scratch import (
     attach_scratch_provenance_to_exception,
     scratch_publication_provenance,
 )
-from orca_auto.core.queue.cancellable import (
-    ProcessCleanupError,
-    retain_process_ownership_until_exit,
-)
 from orca_auto.core.queue.processes import (
+    ProcessCleanupError,
     ProcessGroupTerminationDeps,
     managed_process_group_has_exited,
     process_group_exists,
+    retain_process_ownership_until_exit,
     terminate_process_group,
 )
 from orca_auto.core.utils.persistence import open_pinned_readonly

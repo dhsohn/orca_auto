@@ -192,8 +192,6 @@ def test_build_systemd_install_plan_renders_repo_and_config_paths(tmp_path: Path
     worker_content = unit_by_name["orca_auto-queue-worker@.service"].content
     assert "-m orca_auto.cli queue worker\n" in worker_content
     assert "--app" not in worker_content
-    assert "orca_auto-workflow-worker@.service" not in unit_by_name
-    assert "orca_auto-xtb-md-worker@.service" not in unit_by_name
     assert f"WorkingDirectory={repo.resolve(strict=False)}" in worker_content
     assert f"Environment=ORCA_AUTO_CONFIG={config_path.resolve(strict=False)}" in worker_content
     assert f"ExecStart={repo.resolve(strict=False)}/.venv/bin/python" in worker_content
@@ -969,8 +967,6 @@ def test_cmd_service_status_prints_compact_systemd_state(capsys: Any) -> None:
     assert "Enabled" not in output
     assert "worker" in output
     assert "orca_auto-queue-worker@alice.service" in output
-    assert "workflow" not in output
-    assert "orca_auto-workflow-worker@alice.service" not in output
 
 
 def test_cmd_service_status_worker_only_requires_only_worker(capsys: Any) -> None:

@@ -8,7 +8,6 @@ from argparse import Namespace
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
-from zipfile import ZipFile
 
 import pytest
 
@@ -286,24 +285,3 @@ def test_status_detects_installed_unit_cutover_before_worker_restart(
         assert f"installed unit requires runtime {desired_build}" in capsys.readouterr().err
     finally:
         _unseal(desired)
-
-
-@pytest.mark.parametrize("retired_version", ["6.0.0", "7.0.0"])
-def test_runtime_preparation_refuses_retired_distribution_before_creating_runtime(
-    tmp_path: Path, retired_version: str
-) -> None:
-    from scripts.prepare_runtime import prepare_runtime
-
-    wheels = []
-    for name, version in (("orca_auto", "7.0.0"), ("orca_auto_workflows", retired_version)):
-        wheel = tmp_path / f"{name}-{version}-py3-none-any.whl"
-        with ZipFile(wheel, "w") as archive:
-            archive.writestr(
-                f"{name}-{version}.dist-info/METADATA",
-                f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n",
-            )
-        wheels.append(wheel)
-    releases = tmp_path / "releases"
-    with pytest.raises(ValueError, match="workflow distributions are no longer supported"):
-        prepare_runtime(wheels=wheels, releases_root=releases, templates=tmp_path / "absent")
-    assert not releases.exists()

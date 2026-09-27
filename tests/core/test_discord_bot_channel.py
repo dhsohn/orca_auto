@@ -12,13 +12,9 @@ from urllib.error import HTTPError
 import pytest
 
 from orca_auto.core.config import DiscordConfig, MessengerConfig
-from orca_auto.core.messaging import (
-    DiscordBotChannel,
-    Message,
-    SendResult,
-    build_channel,
-)
+from orca_auto.core.messaging import Message, SendResult, build_channel
 from orca_auto.core.messaging import discord_bot as bot_mod
+from orca_auto.core.messaging.discord_bot import DiscordBotChannel
 
 
 class _FakeResponse:
@@ -283,7 +279,7 @@ def test_build_channel_uses_bot_only_when_token_and_channel_are_set() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Shared HTTP retry/backoff behavior (discord_http helpers, via the bot sender)
+# HTTP retry/backoff behavior (discord_bot retry helpers, via the bot sender)
 # --------------------------------------------------------------------------- #
 def test_discord_bot_channel_uses_retry_after_json_body(
     monkeypatch: pytest.MonkeyPatch,

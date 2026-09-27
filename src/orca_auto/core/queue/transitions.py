@@ -1,8 +1,8 @@
 """Queue row lifecycle transitions: cancellation and terminal marks.
 
-:mod:`.store` owns storage, locking, duplicate policy and the
-enqueue/dequeue/clear operations. This module owns every transition that
-ends or interrupts a row's life:
+:mod:`.store` owns storage, locking, the duplicate-key policy and the
+dequeue/clear operations; the engine adapter appends rows. This module owns
+every transition that ends or interrupts a row's life:
 
 * :func:`terminal_entry` is the only constructor of COMPLETED/FAILED/
   CANCELLED rows.
@@ -39,7 +39,7 @@ from .publication import (
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     queue_record_publication_lock,
 )
-from .store import QueueStore, queue_lock
+from .store import QueueStore
 from .types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 
 _TERMINAL_STATUSES = TERMINAL_QUEUE_STATUSES
@@ -218,60 +218,6 @@ def _cancel_in_one_mutation(
     return queue_store.mutate_entry_by_id(queue_id, update, missing_result=None)
 
 
-def _cancel_pending_with_publication(
-    queue_store: QueueStore,
-    queue_id: str,
-    *,
-    accepts: _AcceptEntryFn,
-    pending_metadata_update_fn: _MetadataUpdateFn | None,
-    before_pending_cancel_fn: Callable[[QueueEntry], Any],
-) -> QueueEntry | None:
-    """Two-phase pending cancel: durable fence, publication callback, terminal save.
-
-    Persist the dequeue fence before invoking the cross-store publication
-    callback. Keep both locks through the final queue transition so no
-    successor, worker claim, or metadata mutation can interleave. If
-    publication or the final save fails, the pending row remains durably
-    cancel-requested and a retry can idempotently finish the exact same
-    generation. A running row is only flagged; the callback is not invoked.
-    """
-    with queue_lock(queue_store.root):
-        entries = queue_store.load_entries_fn(queue_store.root)
-        for index, entry in enumerate(entries):
-            if not isinstance(entry, QueueEntry) or entry.queue_id != queue_id:
-                continue
-            if not accepts(entry):
-                return None
-            if entry.status == QueueStatus.RUNNING:
-                updated = _flagged_running_entry(entry)
-                entries[index] = updated
-                queue_store.save_entries_fn(queue_store.root, entries)
-                return updated
-            if entry.status != QueueStatus.PENDING:
-                return None
-
-            finished_at = now_utc_iso()
-            fenced = replace(
-                entry,
-                cancel_requested=True,
-                metadata=_revoked_publication_metadata(entry, finished_at=finished_at),
-            )
-            if fenced != entry:
-                entries[index] = fenced
-                queue_store.save_entries_fn(queue_store.root, entries)
-
-            updated = _cancelled_pending_entry(
-                fenced,
-                finished_at=finished_at,
-                pending_metadata_update_fn=pending_metadata_update_fn,
-            )
-            before_pending_cancel_fn(updated)
-            entries[index] = updated
-            queue_store.save_entries_fn(queue_store.root, entries)
-            return updated
-        return None
-
-
 def request_cancel(
     root: str | Path,
     queue_id: str,
@@ -279,7 +225,6 @@ def request_cancel(
     accept_entry_fn: _AcceptEntryFn | None = None,
     expected_entry: QueueEntry | None = None,
     pending_metadata_update_fn: _MetadataUpdateFn | None = None,
-    before_pending_cancel_fn: Callable[[QueueEntry], Any] | None = None,
     load_entries_fn: Callable[[Path], list[QueueEntry]] | None = None,
     save_entries_fn: Callable[[Path, Sequence[QueueEntry]], Any] | None = None,
 ) -> QueueEntry | None:
@@ -306,14 +251,6 @@ def request_cancel(
     # either revokes ownership before any side effect or terminalizes only after
     # publication has fully completed.
     with queue_record_publication_lock(queue_store.root, queue_id):
-        if before_pending_cancel_fn is not None:
-            return _cancel_pending_with_publication(
-                queue_store,
-                queue_id,
-                accepts=accepts,
-                pending_metadata_update_fn=pending_metadata_update_fn,
-                before_pending_cancel_fn=before_pending_cancel_fn,
-            )
         return _cancel_in_one_mutation(
             queue_store,
             queue_id,
@@ -401,8 +338,6 @@ def _mark_status(
     accept_entry_fn: _AcceptEntryFn | None = None,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
-    before_update_fn: Callable[[], Any] | None = None,
-    require_cancel_requested: bool = False,
 ) -> QueueEntry | None:
     def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
         if accept_entry_fn is not None and not accept_entry_fn(entry):
@@ -432,8 +367,6 @@ def _mark_status(
                 metadata_update=metadata_update,
                 metadata_update_fn=metadata_update_fn,
             )
-            if before_update_fn is not None:
-                before_update_fn()
             updated = terminal_entry(
                 entry,
                 status=status,
@@ -442,19 +375,11 @@ def _mark_status(
                 metadata=merged,
             )
             return updated, (updated if updated != entry else None)
-        if (
-            status == QueueStatus.CANCELLED
-            and require_cancel_requested
-            and not entry.cancel_requested
-        ):
-            return None, None
         merged = _merged_metadata(
             entry,
             metadata_update=metadata_update,
             metadata_update_fn=metadata_update_fn,
         )
-        if before_update_fn is not None:
-            before_update_fn()
         updated = terminal_entry(entry, status=status, error=error, metadata=merged)
         return updated, updated
 
@@ -540,7 +465,6 @@ def mark_completed(
     accept_entry_fn: _AcceptEntryFn | None = None,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
-    before_update_fn: Callable[[], Any] | None = None,
 ) -> QueueEntry | None:
     return _mark_status(
         root,
@@ -553,7 +477,6 @@ def mark_completed(
         accept_entry_fn=accept_entry_fn,
         expected_entry=expected_entry,
         expected_task_id=expected_task_id,
-        before_update_fn=before_update_fn,
     )
 
 
@@ -569,7 +492,6 @@ def mark_failed(
     accept_entry_fn: _AcceptEntryFn | None = None,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
-    before_update_fn: Callable[[], Any] | None = None,
 ) -> QueueEntry | None:
     return _mark_status(
         root,
@@ -583,7 +505,6 @@ def mark_failed(
         accept_entry_fn=accept_entry_fn,
         expected_entry=expected_entry,
         expected_task_id=expected_task_id,
-        before_update_fn=before_update_fn,
     )
 
 
@@ -599,8 +520,6 @@ def mark_cancelled(
     accept_entry_fn: _AcceptEntryFn | None = None,
     expected_entry: QueueEntry | None = None,
     expected_task_id: str | None = None,
-    before_update_fn: Callable[[], Any] | None = None,
-    require_cancel_requested: bool = False,
 ) -> QueueEntry | None:
     return _mark_status(
         root,
@@ -614,6 +533,4 @@ def mark_cancelled(
         accept_entry_fn=accept_entry_fn,
         expected_entry=expected_entry,
         expected_task_id=expected_task_id,
-        before_update_fn=before_update_fn,
-        require_cancel_requested=require_cancel_requested,
     )

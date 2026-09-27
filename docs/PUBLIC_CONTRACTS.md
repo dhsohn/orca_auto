@@ -49,7 +49,7 @@ Configuration files are resolved in the following priority order:
 A source checkout is not probed.
 
 > **Validation Policy**:
-> Invalid mappings, explicit nulls, unrecognized keys, and retired workflow configuration sections are rejected before default values are applied. See [config/orca_auto.yaml.example](../config/orca_auto.yaml.example) for accepted settings.
+> Invalid mappings, explicit nulls and unrecognized keys (including a `workflow` section) are rejected before default values are applied. See [config/orca_auto.yaml.example](../config/orca_auto.yaml.example) for accepted settings.
 
 ---
 
@@ -77,14 +77,13 @@ Upon completion, each job publishes a structured `machine.json` artifact in its 
 
 - **Envelope Schema**: Conforms to the standard `factory/machine-observation` v1 contract.
 - **Operation & Payload**: Emits `chemistry/orca-run` with a `chemistry/results-bundle` v1 payload.
-- **Input Provenance**: When submission source identities are recorded, `payload.data.results.execution_provenance_artifact` references the required `execution-provenance` artifact (`execution_provenance.json`, `application/json`). It preserves the captured original input/dependency identities, bound input and materialized-copy identities, resolved resource request, executable identity and any crash-recovery origin. `artifacts.input` refers to the execution `.inp`, which can differ from the original after resource normalization and reference rewriting. The provenance file records identities, not an archive of original file contents. Its filename is reserved; referenced input files with that basename are rejected before execution. Readers verify its receipt and agreement with generation state without reopening source paths. Historical reports lacking this evidence remain readable and are not backfilled; terminal publication and replay do not rewrite it.
+- **Input Provenance**: When submission source identities are recorded, `payload.data.results.execution_provenance_artifact` references the required `execution-provenance` artifact (`execution_provenance.json`, `application/json`). It preserves the captured original input/dependency identities, bound input and materialized-copy identities, resolved resource request, executable identity and any crash-recovery origin. `artifacts.input` refers to the execution `.inp`, which can differ from the original after resource normalization and reference rewriting. The provenance file records identities, not an archive of original file contents. Its filename is reserved; referenced input files with that basename are rejected before execution. Any reader can verify its receipt without reopening source paths; the release smoke checks agreement with generation state. Historical reports lacking this evidence remain readable and are not backfilled; terminal publication and replay do not rewrite it.
 - **Verification**: Completion (`completed`) verifies normal termination (`ORCA TERMINATED NORMALLY`) without detected fatal crash markers (and for TS calculations, satisfies mode-specific stationary point criteria). It does not guarantee that every numerical property converged; for example, if the final single-point energy line is annotated `SCF not fully converged!`, energy fields are omitted (`null`) rather than populated with unverified numbers. Extracted chemical properties (energies, stationary points, electronic states) reflect verified evidence without synthetic defaults.
 - **Scope Boundary**: ORCA_auto supervises process lifecycle and structures output artifacts; scientific acceptance and chemical validity remain the researcher's responsibility.
 
 ---
 
-## 5. Version 7.0 Retirement & Migration
+## 5. No Workflow Support
 
-- **Workflows Retired**: Conformer search orchestration, scaffolds, and internal xTB/CREST engines have been removed in version 7.0 to focus entirely on standalone ORCA execution.
-- **Historical Data Safety**: Existing 6.x workflow directories remain read-only and will not be overwritten by 7.0 workers.
-- Refer to the [7.0 Upgrade Guide](RELEASE.md#upgrading-to-70) for operational transition steps.
+- **Standalone ORCA only**: Conformer search orchestration, scaffolds and the internal xTB/CREST engines were removed in 7.0 ([7.0 Upgrade Guide](RELEASE.md#upgrading-to-70)).
+- **Leftover workflow files have no meaning**: A directory that holds `flow.yaml` or `workflow.json`, or lies under one, is an ordinary directory for `run-dir`, the worker, `queue cancel`, `queue list clear`, cleanup and `index rebuild`. A queue row's `workflow_id` metadata is ignored, and an `admission_slots.json` row carrying `workflow_id` is rejected as corrupt ([ADR 0005](adr/0005-remove-retired-workflow-support.md)).

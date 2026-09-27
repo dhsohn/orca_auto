@@ -163,11 +163,6 @@ def load_yaml_mapping(
     return path, parsed
 
 
-def mapping_section(raw: dict[str, Any] | None, key: str) -> dict[str, Any]:
-    section = raw.get(key) if isinstance(raw, dict) else None
-    return section if isinstance(section, dict) else {}
-
-
 def configured_mapping_section(
     raw: Mapping[str, Any],
     key: str,
@@ -289,24 +284,6 @@ def validate_shared_config_sections(raw: Mapping[str, Any]) -> SharedConfig:
         messenger=messenger_config_from_mapping(messenger_raw),
         engine_section=engine_section,
     )
-
-
-def load_shared_config_mapping(
-    config_path: str | Path,
-    *,
-    invalid_message: str = "YAML top-level is not a mapping: {path}",
-) -> tuple[Path, dict[str, Any]]:
-    """Load and validate one shared ``orca_auto.yaml``, returning the raw mapping.
-
-    For callers that need the file's own text back (for example to preserve a
-    section verbatim). Consumers of settings use ``load_shared_config``. Only
-    the top-level sections are validated here; ``orca_auto.orca.config`` adds
-    the engine section.
-    """
-
-    path, raw = load_yaml_mapping(config_path, invalid_message=invalid_message)
-    validate_shared_config_sections(raw)
-    return path, raw
 
 
 def load_shared_config(

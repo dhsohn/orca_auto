@@ -49,7 +49,6 @@ def is_full_optimization_route(routes: str) -> bool:
 class CompletionMode:
     kind: str  # "ts" or "opt"
     require_irc: bool
-    route_line: str
 
 
 def detect_completion_mode(inp_path: Path) -> CompletionMode:
@@ -58,7 +57,7 @@ def detect_completion_mode(inp_path: Path) -> CompletionMode:
     # of them; reading only
     # the first line would misclassify such a job as Opt mode and skip the
     # imaginary-frequency / IRC completion checks entirely.
-    route_line = "\n".join(file_route_lines(inp_path))
-    kind = "ts" if TS_ROUTE_RE.search(route_line) else "opt"
-    require_irc = bool(IRC_ROUTE_RE.search(route_line))
-    return CompletionMode(kind=kind, require_irc=require_irc, route_line=route_line)
+    routes = "\n".join(file_route_lines(inp_path))
+    kind = "ts" if TS_ROUTE_RE.search(routes) else "opt"
+    require_irc = bool(IRC_ROUTE_RE.search(routes))
+    return CompletionMode(kind=kind, require_irc=require_irc)

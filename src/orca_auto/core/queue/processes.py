@@ -8,7 +8,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 LOGGER = logging.getLogger(__name__)
 
@@ -137,6 +137,40 @@ def managed_process_group_has_exited(
         return not group_exists(pid)
     except Exception:  # noqa: BLE001
         return False
+
+
+class ProcessCleanupError(RuntimeError):
+    """Raised when a live engine process cannot be confirmed terminated."""
+
+
+def retain_process_ownership_until_exit(
+    process: Any,
+    *,
+    terminate_process: Callable[[Any], bool],
+    sleep: Callable[[float], None] = time.sleep,
+    retry_attempts: int = 2,
+    poll_interval_seconds: float = 1.0,
+) -> None:
+    """Do not let the owning worker exit while its engine process is live.
+
+    Termination is retried a bounded number of times.  If it still cannot be
+    confirmed, the owner remains alive and only polls for natural/external
+    process exit; this keeps the admission slot fail-closed.
+    """
+    interval = max(0.0, float(poll_interval_seconds))
+    for _attempt in range(max(0, int(retry_attempts))):
+        if managed_process_group_has_exited(process):
+            return
+        sleep(interval)
+        try:
+            terminate_process(process)
+        except Exception:  # noqa: BLE001
+            pass
+        if managed_process_group_has_exited(process):
+            return
+
+    while not managed_process_group_has_exited(process):
+        sleep(interval)
 
 
 def _wait_for_managed_process_group_exit(
@@ -332,11 +366,13 @@ __all__ = [
     "SHUTDOWN_MARGIN_SECONDS",
     "SHUTDOWN_POLL_LATENCY_SECONDS",
     "ManagedProcess",
+    "ProcessCleanupError",
     "ProcessGroupTerminationDeps",
     "install_shutdown_signal_handlers",
     "managed_process_group_has_exited",
     "process_group_exists",
     "request_process_group_stop",
+    "retain_process_ownership_until_exit",
     "terminate_process_group",
     "worker_shutdown_budget_seconds",
 ]

@@ -15,7 +15,6 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_REPAIR_PENDING,
     queue_record_sync_metadata,
 )
-from orca_auto.core.queue.store import enqueue as enqueue_core
 from orca_auto.core.queue.store import list_queue as list_queue_core
 from orca_auto.core.queue.store import update_metadata
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -24,7 +23,7 @@ from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.terminal_replay import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
 )
-from tests.conftest import claim_next_entry, make_app_cfg
+from tests.conftest import claim_next_entry, enqueue_entry, make_app_cfg
 from tests.queue_worker_helpers import (
     current_orca_queue_metadata as _current_orca_queue_metadata,
 )
@@ -98,20 +97,23 @@ def test_orca_worker_keeps_failed_publication_repair_unclaimable(tmp_path: Path)
 
 def test_orca_publication_repair_ignores_foreign_engine_row(tmp_path: Path) -> None:
     cfg = make_app_cfg(str(tmp_path))
-    foreign = enqueue_core(
+    foreign = enqueue_entry(
         tmp_path,
-        app_name="orca_auto_other",
-        task_id="other-foreign",
-        task_kind="other_opt",
-        engine="other",
-        metadata={
-            "job_dir": str(tmp_path / "other-job"),
-            **queue_record_sync_metadata(
-                QUEUE_RECORD_SYNC_REPAIR_PENDING,
-                token="foreign-token",
-                owner_pid=0,
-            ),
-        },
+        QueueEntry(
+            queue_id="q-foreign",
+            app_name="orca_auto_other",
+            task_id="other-foreign",
+            task_kind="other_opt",
+            engine="other",
+            metadata={
+                "job_dir": str(tmp_path / "other-job"),
+                **queue_record_sync_metadata(
+                    QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                    token="foreign-token",
+                    owner_pid=0,
+                ),
+            },
+        ),
     )
 
     with patch.object(publication_mod, "upsert_queued_job_record") as upsert:

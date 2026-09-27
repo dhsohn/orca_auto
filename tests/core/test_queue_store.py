@@ -18,7 +18,6 @@ from orca_auto.core.queue import publication, store, transitions
 from orca_auto.core.queue.generation import (
     queue_entries_same_generation,
     queue_entry_generation_token,
-    visible_generation_children,
 )
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
@@ -31,21 +30,18 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_REPAIRING,
     QUEUE_RECORD_SYNC_TOKEN_KEY,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
-    current_process_start_token,
+    process_start_token,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
-from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication
+from orca_auto.core.utils.persistence import timestamped_token
+from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication_outcome
 
 
 def _install_deterministic_helpers(monkeypatch: pytest.MonkeyPatch) -> None:
-    token_counter = count(1)
     time_counter = count(1)
 
     monkeypatch.setattr(store, "file_lock", lambda *_args, **_kwargs: nullcontext())
-    monkeypatch.setattr(
-        store, "timestamped_token", lambda prefix: f"{prefix}_{next(token_counter):04d}"
-    )
 
     def clock() -> str:
         return f"2026-04-19T00:00:{next(time_counter):02d}+00:00"
@@ -189,11 +185,50 @@ def _queue_file(root: Path) -> Path:
     return root / "queue.json"
 
 
+def _enqueue(
+    root: str | Path,
+    *,
+    app_name: str,
+    task_id: str,
+    task_kind: str,
+    engine: str,
+    priority: int = 10,
+    metadata: dict[str, object] | None = None,
+) -> QueueEntry:
+    """Append one pending row the way the submission adapter persists it."""
+    queue_id = timestamped_token("q")
+    row_metadata = dict(metadata or {})
+    if QUEUE_RECORD_SYNC_KEY not in row_metadata:
+        row_metadata.update(
+            publication.queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_COMPLETE,
+                token=queue_id,
+                owner_pid=0,
+            )
+        )
+    entry = QueueEntry(
+        queue_id=queue_id,
+        app_name=app_name,
+        task_id=task_id,
+        task_kind=task_kind,
+        engine=engine,
+        priority=priority,
+        enqueued_at=store.now_utc_iso(),
+        metadata=row_metadata,
+    )
+
+    def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
+        entries.append(entry)
+        return entry, True
+
+    return store.mutate_entries(root, append)
+
+
 def _enqueue_transient_publisher_then_crash(
     queue_root: str,
     ready_connection: Connection,
 ) -> None:
-    entry = store.enqueue(
+    entry = _enqueue(
         queue_root,
         app_name="app",
         task_id="crashed-publisher",
@@ -202,7 +237,7 @@ def _enqueue_transient_publisher_then_crash(
         metadata={
             QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
             QUEUE_RECORD_SYNC_OWNER_PID_KEY: os.getpid(),
-            QUEUE_RECORD_SYNC_OWNER_START_KEY: current_process_start_token(),
+            QUEUE_RECORD_SYNC_OWNER_START_KEY: process_start_token(os.getpid()),
             QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
         },
     )
@@ -287,98 +322,6 @@ def test_entry_to_dict_serializes_status_value() -> None:
 
     assert serialized["status"] == "running"
     assert serialized["queue_id"] == "q-1"
-
-
-@pytest.mark.parametrize("priority", [False, 1.0, 1.5, "1.5"])
-def test_enqueue_rejects_noninteger_priority_before_persistence(
-    tmp_path: Path,
-    priority: object,
-) -> None:
-    with pytest.raises(ValueError, match="priority must be an integer"):
-        store.enqueue(
-            tmp_path,
-            app_name="app",
-            task_id="task",
-            task_kind="kind",
-            engine="engine",
-            priority=priority,  # type: ignore[arg-type]
-        )
-
-    assert not _queue_file(tmp_path).exists()
-
-
-@pytest.mark.parametrize("priority", [0, -7])
-def test_enqueue_preserves_zero_and_negative_priority(
-    tmp_path: Path,
-    priority: int,
-) -> None:
-    persisted = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id=f"task-{priority}",
-        task_kind="kind",
-        engine="engine",
-        priority=priority,
-    )
-
-    assert persisted.priority == priority
-    assert store.list_queue(tmp_path)[0].priority == priority
-
-
-def test_enqueue_retries_queue_id_collision_under_lock(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    generated = iter(["q_same", "q_same", "q_unique"])
-    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: next(generated))
-
-    first = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="task-first",
-        task_kind="kind",
-        engine="engine",
-    )
-    second = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="task-second",
-        task_kind="kind",
-        engine="engine",
-    )
-
-    assert first.queue_id == "q_same"
-    assert second.queue_id == "q_unique"
-    assert [entry.queue_id for entry in store.list_queue(tmp_path)] == ["q_same", "q_unique"]
-
-
-def test_enqueue_permanent_queue_id_collision_preserves_file(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: "q_same")
-    store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="task-first",
-        task_kind="kind",
-        engine="engine",
-    )
-    queue_path = _queue_file(tmp_path)
-    original = queue_path.read_bytes()
-
-    with pytest.raises(RuntimeError, match="unique queue id"):
-        store.enqueue(
-            tmp_path,
-            app_name="app",
-            task_id="task-second",
-            task_kind="kind",
-            engine="engine",
-        )
-
-    assert queue_path.read_bytes() == original
-    [remaining] = store.list_queue(tmp_path)
-    assert remaining.task_id == "task-first"
 
 
 def test_list_queue_handles_missing_and_rejects_corrupt_json(
@@ -481,51 +424,26 @@ def test_queue_store_facade_groups_root_and_overrides(tmp_path: Path) -> None:
     assert saved == [(tmp_path.resolve(), entries)]
 
 
-def test_enqueue_rejects_corrupt_queue_file_without_overwriting(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    corrupt_text = "{not valid json"
-    _queue_file(tmp_path).write_text(corrupt_text, encoding="utf-8")
-
-    with pytest.raises(store.QueueStoreCorruptError):
-        store.enqueue(
-            tmp_path,
-            app_name="app",
-            task_id="task-1",
-            task_kind="kind",
-            engine="engine",
-        )
-
-    assert _queue_file(tmp_path).read_text(encoding="utf-8") == corrupt_text
-
-
-def test_enqueue_compensates_row_when_post_commit_contract_rejects(
+def test_mutate_entries_compensates_row_when_post_commit_contract_rejects(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
     stages: list[str] = []
     guard_error = RuntimeError("publication target moved")
+    row = store.entry_from_dict(_entry("q-1", task_id="task-1"))
 
-    def before_commit() -> None:
+    def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
         stages.append("before")
+        entries.append(row)
+        return row, True
 
     def reject_after_commit() -> None:
         stages.append("after")
         raise guard_error
 
     with pytest.raises(store.QueueAfterCommitError, match="publication target moved") as error_info:
-        store.enqueue(
-            tmp_path,
-            app_name="app",
-            task_id="task-1",
-            task_kind="kind",
-            engine="engine",
-            before_commit_fn=before_commit,
-            after_commit_fn=reject_after_commit,
-        )
+        store.mutate_entries(tmp_path, append, after_commit_fn=reject_after_commit)
 
     assert stages == ["before", "after"]
     assert error_info.value.after_commit_error is guard_error
@@ -829,51 +747,6 @@ def test_compensation_verification_base_exception_is_preserved_as_unknown(
     assert persisted == ["provisional"]
 
 
-def test_enqueue_blocks_active_duplicates_and_allows_reenqueue_after_terminal_state(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-
-    first = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="task-1",
-        task_kind="kind",
-        engine="engine",
-    )
-
-    running = _claim_next(tmp_path)
-    assert running is not None
-    assert running.queue_id == first.queue_id
-    assert running.status == QueueStatus.RUNNING
-
-    with pytest.raises(store.DuplicateQueueEntryError):
-        store.enqueue(
-            tmp_path,
-            app_name="app",
-            task_id="task-1",
-            task_kind="kind",
-            engine="engine",
-        )
-
-    completed = transitions.mark_completed(tmp_path, first.queue_id)
-    assert completed is not None
-    assert completed.status == QueueStatus.COMPLETED
-
-    second = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="task-1",
-        task_kind="kind",
-        engine="engine",
-    )
-
-    entries = store.list_queue(tmp_path)
-    assert [entry.status for entry in entries] == [QueueStatus.COMPLETED, QueueStatus.PENDING]
-    assert second.queue_id != first.queue_id
-
-
 def test_reject_duplicate_entry_key_supports_force_over_terminal_only(
     tmp_path: Path,
 ) -> None:
@@ -966,8 +839,8 @@ def test_claim_next_keeps_fifo_when_the_clock_steps_backwards(
     )
     monkeypatch.setattr(store, "now_utc_iso", lambda: next(stamps, "2026-07-16T14:18:25+00:00"))
 
-    first = store.enqueue(tmp_path, app_name="app", task_id="a", task_kind="kind", engine="e")
-    second = store.enqueue(tmp_path, app_name="app", task_id="b", task_kind="kind", engine="e")
+    first = _enqueue(tmp_path, app_name="app", task_id="a", task_kind="kind", engine="e")
+    second = _enqueue(tmp_path, app_name="app", task_id="b", task_kind="kind", engine="e")
     assert first.enqueued_at > second.enqueued_at
 
     picked = _claim_next(tmp_path)
@@ -1146,184 +1019,12 @@ def test_request_cancel_accepts_same_generation_after_publication_transition(
     assert cancelled.status == QueueStatus.CANCELLED
 
 
-def test_pending_cancel_callback_runs_after_durable_fence_under_both_locks(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    lock_state = {"publication": False, "queue": False}
-
-    @contextmanager
-    def publication_lock(_root: Path, _queue_id: str):
-        assert lock_state == {"publication": False, "queue": False}
-        lock_state["publication"] = True
-        try:
-            yield
-        finally:
-            lock_state["publication"] = False
-
-    @contextmanager
-    def queue_mutation_lock(_root: Path, *, timeout_seconds: float = 10.0):
-        del timeout_seconds
-        assert lock_state == {"publication": True, "queue": False}
-        lock_state["queue"] = True
-        try:
-            yield
-        finally:
-            lock_state["queue"] = False
-
-    entry = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="pending-callback",
-        task_kind="kind",
-        engine="engine",
-    )
-    monkeypatch.setattr(transitions, "queue_record_publication_lock", publication_lock)
-    monkeypatch.setattr(transitions, "queue_lock", queue_mutation_lock)
-    events: list[tuple[str, QueueStatus]] = []
-    real_save_entries = store.save_entries
-
-    def pending_metadata(candidate: store.QueueEntry) -> dict[str, object]:
-        assert lock_state == {"publication": True, "queue": True}
-        assert candidate.status == QueueStatus.CANCELLED
-        assert candidate.cancel_requested is True
-        events.append(("metadata", candidate.status))
-        return {"terminal_replay": {"status": candidate.status.value}}
-
-    def before_pending_cancel(candidate: store.QueueEntry) -> None:
-        assert lock_state == {"publication": True, "queue": True}
-        [durable] = store.load_entries(tmp_path)
-        assert durable.status == QueueStatus.PENDING
-        assert durable.cancel_requested is True
-        assert durable.finished_at == ""
-        assert candidate.status == QueueStatus.CANCELLED
-        assert candidate.metadata["terminal_replay"] == {"status": "cancelled"}
-        events.append(("callback", candidate.status))
-
-    def save_after_callback(root: Path, entries: Sequence[store.QueueEntry]) -> None:
-        assert lock_state == {"publication": True, "queue": True}
-        events.append(("save", entries[0].status))
-        real_save_entries(root, entries)
-
-    cancelled = transitions.request_cancel(
-        tmp_path,
-        entry.queue_id,
-        expected_entry=entry,
-        pending_metadata_update_fn=pending_metadata,
-        before_pending_cancel_fn=before_pending_cancel,
-        save_entries_fn=save_after_callback,
-    )
-
-    assert cancelled is not None and cancelled.status == QueueStatus.CANCELLED
-    assert events == [
-        ("save", QueueStatus.PENDING),
-        ("metadata", QueueStatus.CANCELLED),
-        ("callback", QueueStatus.CANCELLED),
-        ("save", QueueStatus.CANCELLED),
-    ]
-    assert lock_state == {"publication": False, "queue": False}
-
-
-def test_pending_cancel_callback_failure_leaves_queue_fenced_and_unclaimable(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="pending-callback-failure",
-        task_kind="kind",
-        engine="engine",
-    )
-
-    def reject_cancel(_candidate: store.QueueEntry) -> None:
-        raise OSError("artifact publication failed")
-
-    with pytest.raises(OSError, match="artifact publication failed"):
-        transitions.request_cancel(
-            tmp_path,
-            entry.queue_id,
-            expected_entry=entry,
-            before_pending_cancel_fn=reject_cancel,
-        )
-
-    [fenced] = store.list_queue(tmp_path)
-    assert fenced.status == QueueStatus.PENDING
-    assert fenced.cancel_requested is True
-    assert fenced.finished_at == ""
-    assert _claim_next(tmp_path) is None
-    with pytest.raises(store.DuplicateQueueEntryError):
-        store.enqueue(
-            tmp_path,
-            app_name="app",
-            task_id="pending-callback-failure",
-            task_kind="kind",
-            engine="engine",
-        )
-
-
-def test_pending_cancel_final_save_failure_keeps_fence_and_can_be_retried(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="pending-final-save-failure",
-        task_kind="kind",
-        engine="engine",
-    )
-    real_save_entries = store.save_entries
-    save_calls = 0
-    callback_calls = 0
-
-    def fail_terminal_save(root: Path, entries: Sequence[store.QueueEntry]) -> None:
-        nonlocal save_calls
-        save_calls += 1
-        if save_calls == 2:
-            raise OSError("terminal queue save failed")
-        real_save_entries(root, entries)
-
-    def publish_cancel(_candidate: store.QueueEntry) -> None:
-        nonlocal callback_calls
-        callback_calls += 1
-
-    with pytest.raises(OSError, match="terminal queue save failed"):
-        transitions.request_cancel(
-            tmp_path,
-            entry.queue_id,
-            expected_entry=entry,
-            before_pending_cancel_fn=publish_cancel,
-            save_entries_fn=fail_terminal_save,
-        )
-
-    [fenced] = store.list_queue(tmp_path)
-    assert fenced.status == QueueStatus.PENDING
-    assert fenced.cancel_requested is True
-    assert fenced.finished_at == ""
-    assert _claim_next(tmp_path) is None
-
-    retried = transitions.request_cancel(
-        tmp_path,
-        entry.queue_id,
-        expected_entry=entry,
-        before_pending_cancel_fn=publish_cancel,
-    )
-
-    assert retried is not None
-    assert retried.status == QueueStatus.CANCELLED
-    assert callback_calls == 2
-
-
 def test_pending_cancel_metadata_callback_failure_aborts_queue_write(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="app",
         task_id="pending-metadata-failure",
@@ -1356,12 +1057,12 @@ def test_pending_cancel_metadata_callback_failure_aborts_queue_write(
     assert _without_sync_metadata(unchanged.metadata) == {"keep": "yes"}
 
 
-def test_running_cancel_does_not_invoke_pending_cancel_callback(
+def test_running_cancel_does_not_invoke_pending_metadata_callback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    pending = store.enqueue(
+    pending = _enqueue(
         tmp_path,
         app_name="app",
         task_id="running-callback",
@@ -1377,9 +1078,6 @@ def test_running_cancel_does_not_invoke_pending_cancel_callback(
         expected_entry=running,
         pending_metadata_update_fn=lambda _candidate: pytest.fail(
             "pending metadata callback must not run for a running cancellation"
-        ),
-        before_pending_cancel_fn=lambda _candidate: pytest.fail(
-            "running cancellation must remain worker-owned"
         ),
     )
 
@@ -1420,7 +1118,7 @@ def test_terminal_completion_does_not_overwrite_acknowledged_cancellation(
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="app",
         task_id="task-a",
@@ -1446,7 +1144,7 @@ def test_request_cancel_handles_pending_running_and_terminal_entries(
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
 
-    pending = store.enqueue(
+    pending = _enqueue(
         tmp_path,
         app_name="app",
         task_id="pending",
@@ -1459,7 +1157,7 @@ def test_request_cancel_handles_pending_running_and_terminal_entries(
     assert pending_cancelled.cancel_requested is True
     assert pending_cancelled.finished_at == "2026-04-19T00:00:02+00:00"
 
-    running = store.enqueue(
+    running = _enqueue(
         tmp_path,
         app_name="app",
         task_id="running",
@@ -1479,7 +1177,7 @@ def test_request_cancel_handles_pending_running_and_terminal_entries(
     assert store.get_cancel_requested(tmp_path, "missing-queue-id") is False
     assert transitions.request_cancel(tmp_path, "missing-queue-id") is None
 
-    terminal = store.enqueue(
+    terminal = _enqueue(
         tmp_path,
         app_name="app",
         task_id="terminal",
@@ -1495,7 +1193,7 @@ def test_request_cancel_revalidates_selected_identity_atomically(
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="foreign-app",
         task_id="foreign-task",
@@ -1520,7 +1218,7 @@ def test_request_cancel_revokes_transient_publication_ownership(
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="app",
         task_id="publishing",
@@ -1529,7 +1227,7 @@ def test_request_cancel_revokes_transient_publication_ownership(
         metadata={
             QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_PREPARING,
             QUEUE_RECORD_SYNC_OWNER_PID_KEY: os.getpid(),
-            QUEUE_RECORD_SYNC_OWNER_START_KEY: current_process_start_token(),
+            QUEUE_RECORD_SYNC_OWNER_START_KEY: process_start_token(os.getpid()),
             QUEUE_RECORD_SYNC_TOKEN_KEY: "publisher-token",
             QUEUE_RECORD_SYNC_UPDATED_AT_KEY: datetime.now(UTC).isoformat(),
         },
@@ -1567,8 +1265,8 @@ def test_dequeue_skips_transient_publication_and_claims_the_next_row(
         # where the recorded owner is genuinely dead is pinned separately by
         # test_sigkilled_publisher_row_stays_parked_until_repair_publishes.
         metadata[QUEUE_RECORD_SYNC_OWNER_PID_KEY] = os.getpid()
-        metadata[QUEUE_RECORD_SYNC_OWNER_START_KEY] = current_process_start_token()
-    blocked = store.enqueue(
+        metadata[QUEUE_RECORD_SYNC_OWNER_START_KEY] = process_start_token(os.getpid())
+    blocked = _enqueue(
         tmp_path,
         app_name="app",
         task_id="blocked",
@@ -1577,7 +1275,7 @@ def test_dequeue_skips_transient_publication_and_claims_the_next_row(
         priority=1,
         metadata=metadata,
     )
-    ready = store.enqueue(
+    ready = _enqueue(
         tmp_path,
         app_name="app",
         task_id="ready",
@@ -1599,7 +1297,7 @@ def test_dequeue_quarantines_unknown_or_aborted_publication_state(
     tmp_path: Path,
     sync_state: str,
 ) -> None:
-    blocked = store.enqueue(
+    blocked = _enqueue(
         tmp_path,
         app_name="app",
         task_id="blocked",
@@ -1645,12 +1343,13 @@ def test_sigkilled_publisher_row_stays_parked_until_repair_publishes(
     assert parked.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_PREPARING
 
     published: list[str] = []
-    assert repair_enqueue_publication(
+    assert repair_enqueue_publication_outcome(
         tmp_path,
         parked,
         publish=lambda current: published.append(current.queue_id),
         label="test",
-    )
+        same_generation=queue_entries_same_generation,
+    ).repaired
     assert published == [queue_id]
 
     [repaired] = store.list_queue(tmp_path)
@@ -1667,7 +1366,7 @@ def test_update_metadata_merges_without_changing_lifecycle_fields(
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="app",
         task_id="task",
@@ -1698,7 +1397,7 @@ def test_update_metadata_can_fence_the_exact_queue_generation(
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    submitted = store.enqueue(
+    submitted = _enqueue(
         tmp_path,
         app_name="app",
         task_id="task",
@@ -1747,7 +1446,7 @@ def test_requeue_running_entry_returns_running_entry_to_pending(
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
 
-    running = store.enqueue(
+    running = _enqueue(
         tmp_path,
         app_name="app",
         task_id="running",
@@ -1790,7 +1489,7 @@ def test_requeue_running_entry_cancels_when_cancel_requested(
     # and let the cancelled job be dequeued and resumed.
     _install_deterministic_helpers(monkeypatch)
 
-    running = store.enqueue(
+    running = _enqueue(
         tmp_path,
         app_name="app",
         task_id="running",
@@ -1843,7 +1542,7 @@ def test_requeue_cancel_metadata_callback_failure_aborts_queue_write(
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="app",
         task_id="running-metadata-failure",
@@ -2024,7 +1723,7 @@ def test_mark_helpers_merge_metadata_updates(
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
 
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="app",
         task_id=f"task-{helper_name}",
@@ -2069,7 +1768,7 @@ def test_mark_helpers_merge_callback_metadata_under_queue_lock(
     expected_status: QueueStatus,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="app",
         task_id=f"callback-{helper_name}",
@@ -2124,7 +1823,7 @@ def test_mark_metadata_callback_failure_aborts_queue_write(
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    entry = store.enqueue(
+    entry = _enqueue(
         tmp_path,
         app_name="app",
         task_id="mark-metadata-failure",
@@ -2211,54 +1910,12 @@ def test_mark_status_replays_same_terminal_side_effect_under_lock(
         )
         is not None
     )
-    calls: list[str] = []
 
-    replayed = transitions.mark_cancelled(
-        tmp_path,
-        "q-1",
-        expected_entry=running,
-        require_cancel_requested=True,
-        before_update_fn=lambda: calls.append("repair"),
-    )
+    replayed = transitions.mark_cancelled(tmp_path, "q-1", expected_entry=running)
 
     assert replayed is not None
     assert replayed.status == QueueStatus.CANCELLED
-    assert calls == ["repair"]
-
-
-def test_same_second_generations_order_by_recency(tmp_path: Path) -> None:
-    job_dir = tmp_path / "job"
-    job_dir.mkdir()
-    # Same second-resolution timestamp; the hex suffixes reverse-sort against
-    # the actual creation order.
-    older = job_dir / "20260717-120000-ffffffff"
-    newer = job_dir / "20260717-120000-00000000"
-    older.mkdir()
-    newer.mkdir()
-    base_ns = 1_700_000_000_000_000_000
-    os.utime(older, ns=(base_ns, base_ns))
-    os.utime(newer, ns=(base_ns + 2_000_000_000, base_ns + 2_000_000_000))
-
-    children = visible_generation_children(job_dir)
-
-    assert [entry.name for entry in children] == [newer.name, older.name]
-
-
-def test_distinct_second_generations_still_order_by_name(tmp_path: Path) -> None:
-    job_dir = tmp_path / "job"
-    job_dir.mkdir()
-    older = job_dir / "20260717-120000-aaaaaaaa"
-    newer = job_dir / "20260717-120001-aaaaaaaa"
-    older.mkdir()
-    newer.mkdir()
-    # Even with a misleading mtime, a later timestamp prefix wins.
-    base_ns = 1_700_000_000_000_000_000
-    os.utime(older, ns=(base_ns + 9_000_000_000, base_ns + 9_000_000_000))
-    os.utime(newer, ns=(base_ns, base_ns))
-
-    children = visible_generation_children(job_dir)
-
-    assert [entry.name for entry in children] == [newer.name, older.name]
+    assert replayed.metadata["candidate_count"] == 2
 
 
 def _terminal_source_entry(**overrides: object) -> store.QueueEntry:
@@ -2361,7 +2018,7 @@ def test_terminal_entry_error_and_metadata_rules(monkeypatch: pytest.MonkeyPatch
 
 
 def _failed_row(tmp_path: Path) -> store.QueueEntry:
-    submitted = store.enqueue(
+    submitted = _enqueue(
         tmp_path,
         app_name="app",
         task_id="task",
@@ -2379,7 +2036,7 @@ def test_correct_terminal_status_refuses_non_terminal_row(
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
-    submitted = store.enqueue(
+    submitted = _enqueue(
         tmp_path,
         app_name="app",
         task_id="task",

@@ -69,7 +69,6 @@ from .adapter import (
     requeue_running_entry,
     worker_log_path,
 )
-from .entries import queue_entry_is_retired_workflow_owned
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .notifications import notify_queued_jobs
 from .terminal_replay import terminal_replay_marker_from_entry
@@ -439,7 +438,6 @@ class OrcaQueueWorker(QueueWorkerLoop):
         return (
             queue_entry_id(entry) in self._running
             or queue_entry_id(entry) in self._publication_withheld_ids
-            or queue_entry_is_retired_workflow_owned(entry, self.cfg.runtime.allowed_root)
             or self._entry_waits_for_terminal_replay(entry)
         )
 

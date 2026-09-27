@@ -729,6 +729,45 @@ def test_terminate_process_group_returns_true_after_forced_exit() -> None:
     assert proc.wait_calls == pytest.approx([1, 2], rel=1e-4)
 
 
+@pytest.mark.parametrize("termination", ["unconfirmed", "raises"])
+def test_retain_process_ownership_retries_termination_then_waits_for_exit(
+    termination: str,
+) -> None:
+    class Process:
+        exited = False
+
+        def poll(self) -> int | None:
+            return 0 if self.exited else None
+
+    process = Process()
+    terminate_calls: list[Process] = []
+    sleeps: list[float] = []
+
+    def terminate(actual: Process) -> bool:
+        terminate_calls.append(actual)
+        if termination == "raises":
+            raise RuntimeError("termination callback failed")
+        return False
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 4:
+            process.exited = True
+
+    process_helpers.retain_process_ownership_until_exit(
+        process,
+        terminate_process=terminate,
+        sleep=sleep,
+        retry_attempts=2,
+        poll_interval_seconds=0.25,
+    )
+
+    # Two bounded termination attempts, then polling only until the process exits.
+    assert terminate_calls == [process, process]
+    assert sleeps == [0.25, 0.25, 0.25, 0.25]
+    assert process.exited is True
+
+
 def test_install_shutdown_signal_handlers_invokes_callback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -11,9 +11,7 @@ from orca_auto.core.config.files import (
     default_config_path,
     discover_shared_config_path,
     load_shared_config,
-    load_shared_config_mapping,
     load_yaml_mapping,
-    mapping_section,
     messenger_mapping_from_root,
     resolve_configured_path,
     resolved_admission_root,
@@ -227,14 +225,6 @@ def test_discovery_order_is_explicit_then_env_then_home(
             {"resources": {"max_core_per_task": 8}},
             "Unknown resources config fields are not supported",
         ),
-        (
-            {"workflow": {"root": "/tmp/runs"}},
-            "Unknown top-level config fields are not supported",
-        ),
-        (
-            {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
-            "Unknown top-level config fields are not supported",
-        ),
     ],
 )
 def test_shared_config_validation_rejects_unknown_fields(
@@ -280,7 +270,7 @@ def test_complete_shared_loader_rejects_malformed_execution_controls(
     config_path.write_text(payload, encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        load_shared_config_mapping(config_path)
+        load_shared_config(config_path)
 
 
 @pytest.mark.parametrize(
@@ -300,20 +290,19 @@ def test_shared_config_errors_do_not_echo_misplaced_credentials(
     config_path.write_text(payload, encoding="utf-8")
 
     with pytest.raises(ValueError) as captured:
-        load_shared_config_mapping(config_path)
+        load_shared_config(config_path)
 
     assert "misplaced-credential" not in str(captured.value)
 
 
-def test_yaml_mapping_and_section_helpers(tmp_path: Path) -> None:
+def test_yaml_mapping_loader(tmp_path: Path) -> None:
     config_path = tmp_path / "orca_auto.yaml"
     config_path.write_text("scheduler:\n  max_active_simulations: 4\n", encoding="utf-8")
 
     path, raw = load_yaml_mapping(config_path)
 
     assert path == config_path.resolve()
-    assert mapping_section(raw, "scheduler") == {"max_active_simulations": 4}
-    assert mapping_section(raw, "missing") == {}
+    assert raw == {"scheduler": {"max_active_simulations": 4}}
 
     invalid_path = tmp_path / "invalid.yaml"
     invalid_path.write_text("- no\n- mapping\n", encoding="utf-8")

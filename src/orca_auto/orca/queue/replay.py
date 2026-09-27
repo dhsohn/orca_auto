@@ -46,11 +46,7 @@ from .adapter import (
     update_terminal,
 )
 from .adapter import update_metadata as update_queue_metadata
-from .entries import (
-    ACTIVE_STATUSES,
-    TERMINAL_STATUSES,
-    queue_entry_is_retired_workflow_owned,
-)
+from .entries import ACTIVE_STATUSES, TERMINAL_STATUSES
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .run_state_replay import record_cancelled_run_state, record_failed_run_state
 from .terminal_replay import (
@@ -68,14 +64,6 @@ logger = logging.getLogger(__name__)
 
 def queue_roots(cfg: AppConfig) -> tuple[Path, ...]:
     return roots.queue_roots(cfg)
-
-
-def queue_entries_with_roots(cfg: AppConfig) -> list[tuple[Path, QueueEntry]]:
-    return [
-        (root, entry)
-        for root, entry in roots.queue_entries_with_roots(cfg)
-        if not queue_entry_is_retired_workflow_owned(entry, root)
-    ]
 
 
 @dataclass(frozen=True)
@@ -879,7 +867,7 @@ def reconcile_worker_state(
     mutated in place so the next pass sees this pass's outcome.
     """
     recover_orphaned_engine_slots(admission_root, strict=False)
-    before_entries = queue_entries_with_roots(cfg)
+    before_entries = roots.queue_entries_with_roots(cfg)
     before_by_key = {
         (str(Path(root).expanduser().resolve()), queue_entry_id(entry)): entry
         for root, entry in before_entries
@@ -911,7 +899,7 @@ def reconcile_worker_state(
     # old child can also honor cancellation directly. Replay the normal
     # terminal side effects idempotently so job-location records and one-shot
     # notifications are not lost with the parent process.
-    after_entries = queue_entries_with_roots(cfg)
+    after_entries = roots.queue_entries_with_roots(cfg)
     pending_replays = dict(replay_state.pending_replays)
     replay_state.blocked_marker_keys = _collect_durable_terminal_replays(
         after_entries,

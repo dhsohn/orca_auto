@@ -1708,8 +1708,8 @@ def test_retired_generation_is_frozen_across_terminal_replay_and_notification(
 ) -> None:
     from orca_auto.orca.queue.worker_tracking import notify_terminal_job_from_state
     from orca_auto.orca.report.publication import write_report_files
-    from orca_auto.orca.state_reading import load_report_json_with_output_receipt
     from tests.conftest import make_app_cfg
+    from tests.contracts.report_verifier import load_report_json_with_output_receipt
     from tests.engine_artifact_helpers import bind_report_generation
 
     selected = tmp_path / "job.inp"

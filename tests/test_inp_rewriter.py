@@ -5,13 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.orca.inp_rewriter import (
-    _latest_geometry_file,
-    ensure_submission_resource_request,
-    prepare_checkpoint_restart_input,
-    prepare_submission_resource_request,
-    read_resource_request_from_input,
-)
+from orca_auto.orca.inp_rewriter import _latest_geometry_file, prepare_checkpoint_restart_input
 from orca_auto.orca.input_blocks import (
     find_block_range,
     find_geometry_block,
@@ -24,7 +18,12 @@ from orca_auto.orca.input_blocks import (
 from orca_auto.orca.input_references import set_moinp
 from orca_auto.orca.input_syntax import ensure_route_keywords
 from orca_auto.orca.input_validation import validate_unambiguous_orca_directives
-from orca_auto.orca.resource_directives import read_maxcore, read_nprocs
+from orca_auto.orca.resource_directives import (
+    prepare_submission_resource_request,
+    read_maxcore,
+    read_nprocs,
+    resource_request_from_lines,
+)
 
 BASE_INP = """! OptTS Freq IRC
 
@@ -56,48 +55,50 @@ def test_prepare_submission_resource_request_rejects_invalid_utf8(tmp_path: Path
     assert inp.read_bytes() == payload
 
 
-def test_ensure_submission_resource_request_injects_missing_directives(tmp_path: Path) -> None:
-    inp = _write_inp(tmp_path, "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
+def test_prepare_submission_resource_request_injects_missing_directives(tmp_path: Path) -> None:
+    source = "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
+    inp = _write_inp(tmp_path, source)
 
-    resource_request, actions = ensure_submission_resource_request(
+    prepared = prepare_submission_resource_request(
         inp, default_max_cores=8, default_max_memory_gb=32
     )
-    text = inp.read_text(encoding="utf-8")
+    text = prepared.normalized_payload.decode("utf-8")
 
-    assert resource_request == {"max_cores": 8, "max_memory_gb": 32}
-    assert actions == ["pal_nprocs_injected", "maxcore_injected"]
+    assert prepared.resource_request == {"max_cores": 8, "max_memory_gb": 32}
+    assert prepared.actions == ("pal_nprocs_injected", "maxcore_injected")
+    assert inp.read_text(encoding="utf-8") == source
     assert "%pal" in text
     assert "nprocs 8" in text
     assert "%maxcore 4096" in text
 
 
-def test_ensure_submission_resource_request_preserves_existing_nprocs(tmp_path: Path) -> None:
+def test_prepare_submission_resource_request_preserves_existing_nprocs(tmp_path: Path) -> None:
     inp = _write_inp(tmp_path, "! Opt\n%pal\n  nprocs 12\nend\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
 
-    resource_request, actions = ensure_submission_resource_request(
+    prepared = prepare_submission_resource_request(
         inp, default_max_cores=8, default_max_memory_gb=32
     )
-    text = inp.read_text(encoding="utf-8")
+    text = prepared.normalized_payload.decode("utf-8")
 
-    assert resource_request == {"max_cores": 12, "max_memory_gb": 32}
-    assert actions == ["maxcore_injected"]
+    assert prepared.resource_request == {"max_cores": 12, "max_memory_gb": 32}
+    assert prepared.actions == ("maxcore_injected",)
     assert "nprocs 12" in text
     assert "%maxcore 2730" in text
 
 
-def test_ensure_submission_resource_request_honors_pal_route_shorthand(tmp_path: Path) -> None:
+def test_prepare_submission_resource_request_honors_pal_route_shorthand(tmp_path: Path) -> None:
     # "! Opt PAL4" already requests 4 processes via ORCA's route shorthand, so
     # no conflicting %pal nprocs block should be injected and the resource
     # request must reflect 4 cores (not the default_max_cores).
     inp = _write_inp(tmp_path, "! Opt PAL4\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
 
-    resource_request, actions = ensure_submission_resource_request(
+    prepared = prepare_submission_resource_request(
         inp, default_max_cores=8, default_max_memory_gb=32
     )
-    text = inp.read_text(encoding="utf-8")
+    text = prepared.normalized_payload.decode("utf-8")
 
-    assert resource_request["max_cores"] == 4
-    assert "pal_nprocs_injected" not in actions
+    assert prepared.resource_request["max_cores"] == 4
+    assert "pal_nprocs_injected" not in prepared.actions
     assert "%pal" not in text
 
 
@@ -129,13 +130,10 @@ def test_prepare_submission_resource_request_honors_nprocs_with_optional_equals(
     assert prepared.normalized_payload.decode("utf-8") == source
 
 
-def test_read_resource_request_from_input_uses_inp_values(tmp_path: Path) -> None:
-    inp = _write_inp(
-        tmp_path,
-        "! Opt\n%pal\n  nprocs 6\nend\n%maxcore 3072\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n",
-    )
+def test_resource_request_from_lines_uses_inp_values() -> None:
+    lines = "! Opt\n%pal\n  nprocs 6\nend\n%maxcore 3072\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
 
-    assert read_resource_request_from_input(inp) == {"max_cores": 6, "max_memory_gb": 18}
+    assert resource_request_from_lines(lines.splitlines()) == {"max_cores": 6, "max_memory_gb": 18}
 
 
 def test_prepare_checkpoint_restart_input_keeps_original_input_untouched(tmp_path: Path) -> None:

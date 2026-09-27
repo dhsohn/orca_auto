@@ -49,7 +49,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 소스 체크아웃 경로는 탐색하지 않습니다.
 
 > **설정 검증 원칙**:
-> 유효하지 않은 매핑, 명시적 null, 알 수 없는 키 또는 7.0에서 지원 종료된 이전 워크플로우 설정 섹션은 기본값을 적용하기 전에 거부(fail-closed)됩니다. 전체 설정 항목 예시는 [config/orca_auto.yaml.example](../config/orca_auto.yaml.example)를 참고하세요.
+> 유효하지 않은 매핑, 명시적 null, 알 수 없는 키(`workflow` 섹션 포함)는 기본값을 적용하기 전에 거부(fail-closed)됩니다. 전체 설정 항목 예시는 [config/orca_auto.yaml.example](../config/orca_auto.yaml.example)를 참고하세요.
 
 ---
 
@@ -77,14 +77,13 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 - **메타데이터 래퍼 (Envelope)**: 공통 규격인 `factory/machine-observation` v1 메타데이터 스키마(Envelope)를 준수합니다.
 - **오퍼레이션 및 페이로드**: `chemistry/orca-run` 작업 식별자와 `chemistry/results-bundle` v1 페이로드를 포함합니다.
-- **입력 출처**: 접수 당시 원본 식별 정보가 기록되어 있으면 `payload.data.results.execution_provenance_artifact`가 필수 artifact인 `execution-provenance`를 참조합니다(`execution_provenance.json`, `application/json`). 이 파일은 접수 당시 원본 입력·참조 파일, 실행 입력과 복사본, 확정된 자원 요청, 실행 파일, 장애 복구 시 이전 실행의 식별 정보를 보존합니다. `artifacts.input`은 실행용 `.inp`를 가리키며, 자원 지시어 보완과 참조 경로 변경으로 원본과 다를 수 있습니다. 출처 파일은 식별 정보 기록이며 원본 파일 내용의 보관본은 아닙니다. 이 파일 이름은 예약되어 있으므로 같은 이름의 참조 입력 파일은 실행 전에 거부합니다. 읽는 쪽은 원본 경로를 다시 열지 않고 파일 영수증과 generation 상태의 일치를 확인합니다. 이 근거가 없는 과거 보고서는 그대로 읽을 수 있고 정보를 소급해서 채우지 않습니다. 종료 결과 발행·재처리도 당시 출처를 덮어쓰지 않습니다.
+- **입력 출처**: 접수 당시 원본 식별 정보가 기록되어 있으면 `payload.data.results.execution_provenance_artifact`가 필수 artifact인 `execution-provenance`를 참조합니다(`execution_provenance.json`, `application/json`). 이 파일은 접수 당시 원본 입력·참조 파일, 실행 입력과 복사본, 확정된 자원 요청, 실행 파일, 장애 복구 시 이전 실행의 식별 정보를 보존합니다. `artifacts.input`은 실행용 `.inp`를 가리키며, 자원 지시어 보완과 참조 경로 변경으로 원본과 다를 수 있습니다. 출처 파일은 식별 정보 기록이며 원본 파일 내용의 보관본은 아닙니다. 이 파일 이름은 예약되어 있으므로 같은 이름의 참조 입력 파일은 실행 전에 거부합니다. 영수증은 원본 경로를 다시 열지 않고 어느 읽는 쪽이든 검증할 수 있고, generation 상태와의 일치는 릴리스 smoke가 확인합니다. 이 근거가 없는 과거 보고서는 그대로 읽을 수 있고 정보를 소급해서 채우지 않습니다. 종료 결과 발행·재처리도 당시 출처를 덮어쓰지 않습니다.
 - **결과 검증**: 프로세스 종료 코드(0)에만 의존하지 않고, ORCA 출력 로그의 정상 종료 배너(`ORCA TERMINATED NORMALLY`) 및 치명적 오류 마커 유무를 검사하여 완료(`completed`) 상태를 판정합니다(TS 계산의 경우 추가 stationary point 조건 검사). 이는 모든 수치적 속성의 수렴을 보장하는 것은 아니며, 예컨대 단일점 에너지 출력에 `SCF not fully converged!` 마커가 있을 경우 해당 에너지 필드는 미검증 값 대신 `null`로 생략됩니다. 추출된 화학적 속성은 검증된 근거만을 반영합니다.
 - **도구의 역할 및 범위**: ORCA_auto는 계산의 런타임 실행 제어와 구조화된 데이터 추출을 담당하며, 화학적 입력 구성과 결과 해석은 사용자의 몫입니다.
 
 ---
 
-## 5. 7.0 워크플로우 지원 종료 및 마이그레이션 안내
+## 5. 워크플로우 미지원
 
-- **워크플로우 기능 제거**: 7.0부터 `orca_auto_workflows` 확장, conformer 탐색, 내장 xTB/CREST 엔진 및 워크플로우 CLI 명령이 공식 제거되었습니다.
-- **기존 데이터 보존**: 기존 6.x 이전 워크플로우로 생성된 작업 디렉터리는 보존되며, 새로운 7.0 워커가 과거 데이터를 임의로 변경하거나 덮어쓰지 않도록 보호됩니다.
-- 자세한 전환 절차는 [7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)를 확인하세요.
+- **독립 ORCA 작업만 지원**: conformer 탐색 오케스트레이션, scaffold, 내장 xTB/CREST 엔진은 7.0에서 제거되었습니다([7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)).
+- **남은 워크플로우 파일은 의미가 없음**: `flow.yaml`이나 `workflow.json`이 있는 디렉터리와 그 하위 디렉터리는 `run-dir`, 워커, `queue cancel`, `queue list clear`, 정리 작업, `index rebuild`에서 일반 디렉터리로 취급합니다. 큐 항목 메타데이터의 `workflow_id`는 무시하며, `workflow_id`가 있는 `admission_slots.json` 항목은 손상된 기록으로 거부합니다([ADR 0005](adr/0005-remove-retired-workflow-support.md)).

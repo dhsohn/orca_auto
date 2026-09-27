@@ -25,7 +25,10 @@ def test_termination_scan_does_not_clone_the_full_output() -> None:
     text = " bounded irrelevant output\n" * 100_000 + "ORCA TERMINATED NORMALLY\n"
     tracemalloc.start()
     try:
-        assert output_status.has_normal_termination(text)
+        assert any(
+            output_status.termination_line(line)[0]
+            for line in output_status.iter_output_lines(text)
+        )
         _current, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()

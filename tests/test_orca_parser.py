@@ -12,10 +12,11 @@ import pytest
 
 from orca_auto.orca.completion_rules import CompletionMode
 from orca_auto.orca.frequencies import parse_frequency_analysis
-from orca_auto.orca.orca_opt_progress import parse_opt_progress
+from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.output_status import last_optimization_convergence
-from orca_auto.orca.parser import parse_orca_output
+from orca_auto.orca.parser import parse_orca_output_text
+from orca_auto.orca.parser.io import read_orca_text
 from orca_auto.orca.report.opt import collect_opt_report_data
 
 
@@ -51,9 +52,9 @@ def test_last_optimization_verdict_agrees_across_consumers(
         f"{padding}****ORCA TERMINATED NORMALLY****\n",
         encoding="utf-8",
     )
-    analysis = analyze_output(out, CompletionMode("opt", False, "! Opt"))
-    result = parse_orca_output(str(out))
-    progress = parse_opt_progress(str(out))
+    analysis = analyze_output(out, CompletionMode("opt", False))
+    result = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
+    progress = parse_opt_progress_text(read_orca_text(str(out)), source_path=str(out))
     inp = tmp_path / "optimization.inp"
     inp.write_text("! HF STO-3G Opt\n", encoding="utf-8")
     report = collect_opt_report_data(
@@ -96,7 +97,7 @@ def test_annotated_final_energy_is_not_published(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.energy_hartree is None
     assert result.energy_ev is None
@@ -128,7 +129,7 @@ def test_utf16_completed_output_is_parsed(tmp_path: Path) -> None:
         encoding="utf-16",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.method == "B3LYP"
 
@@ -155,7 +156,7 @@ def test_parse_orca_output_reads_output_once(
 
     monkeypatch.setattr(builtins, "open", tracked_open)
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.method == "B3LYP"
     assert result.energy_hartree == pytest.approx(-100.123456)
@@ -192,7 +193,7 @@ def test_frequency_analysis_uses_final_vibrational_frequency_block(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
-# parse_opt_progress tests
+# parse_opt_progress_text tests
 # ---------------------------------------------------------------------------
 
 _OPT_RUNNING_OUT = "\n".join(
@@ -253,7 +254,7 @@ def test_parse_opt_progress_extracts_all_cycles(tmp_path: Path) -> None:
     out_file = tmp_path / "opt_running.out"
     out_file.write_text(_OPT_RUNNING_OUT, encoding="utf-8")
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert len(progress.steps) == 3
     assert progress.formula == "CH"
@@ -281,7 +282,7 @@ def test_parse_opt_progress_accepts_uppercase_cycle_headers(tmp_path: Path) -> N
         encoding="utf-8",
     )
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert len(progress.steps) == 3
     assert progress.steps[-1].cycle == 3
@@ -291,7 +292,7 @@ def test_parse_opt_progress_keeps_unfinished_energy_steps(tmp_path: Path) -> Non
     out_file = tmp_path / "running.out"
     out_file.write_text(_OPT_RUNNING_OUT, encoding="utf-8")
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
     assert [step.cycle for step in progress.steps] == [1, 2, 3]
     assert progress.steps[-1].energy_hartree == pytest.approx(-100.123)
     assert progress.is_converged is False
@@ -309,7 +310,7 @@ def test_parse_opt_progress_converged_detection(tmp_path: Path) -> None:
     out_file = tmp_path / "converged.out"
     out_file.write_text(converged_out, encoding="utf-8")
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
     assert progress.is_converged is True
 
 
@@ -329,7 +330,7 @@ def test_parse_opt_progress_sp_returns_empty_steps(tmp_path: Path) -> None:
     out_file = tmp_path / "sp.out"
     out_file.write_text(sp_out, encoding="utf-8")
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
     assert progress.steps == []
     assert progress.is_converged is False
 
@@ -345,7 +346,7 @@ def test_parse_opt_progress_without_finite_cycles_returns_no_steps(
     out_file = tmp_path / "unfinished.out"
     out_file.write_text(header + "FINAL SINGLE POINT ENERGY 1E999\n", encoding="utf-8")
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert progress.steps == []
     assert progress.is_converged is False
@@ -373,7 +374,7 @@ def test_parse_opt_progress_keeps_last_finite_energy_per_cycle(tmp_path: Path) -
         encoding="utf-8",
     )
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert [(step.cycle, step.energy_hartree) for step in progress.steps] == [
         (3, -3.0),
@@ -395,7 +396,7 @@ def test_parse_opt_progress_reads_energy_despite_malformed_convergence_table(
         encoding="utf-8",
     )
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert [(step.cycle, step.energy_hartree) for step in progress.steps] == [(1, -1.0)]
     assert progress.is_converged is True
@@ -410,7 +411,7 @@ def test_parse_opt_progress_assigns_whole_text_energy_matches_by_start(tmp_path:
         encoding="utf-8",
     )
 
-    progress = parse_opt_progress(str(out_file))
+    progress = parse_opt_progress_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert [(step.cycle, step.energy_hartree) for step in progress.steps] == [(1, -1.0), (2, -2.0)]
 
@@ -452,7 +453,7 @@ def test_parser_extracts_si_fields(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.orca_version == "6.0.1"
     assert result.solvation == "CPCM(toluene)"
@@ -485,7 +486,7 @@ def test_parser_detects_smd_solvation(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.solvation == "SMD(water)"
 
@@ -515,7 +516,7 @@ def test_parser_reads_charge_multiplicity_from_geometry(
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.charge == -1
     assert result.multiplicity == 2
@@ -526,7 +527,12 @@ def test_parser_does_not_verify_electronic_state_from_a_commented_geometry(tmp_p
     out_file = tmp_path / "commented_geometry.out"
     out_file.write_text("| 2> # old geometry: * xyz -1 2\nORCA TERMINATED NORMALLY\n")
 
-    assert parse_orca_output(str(out_file)).electronic_state_verified is False
+    assert (
+        parse_orca_output_text(
+            read_orca_text(str(out_file)), source_path=str(out_file)
+        ).electronic_state_verified
+        is False
+    )
 
 
 def test_parser_derives_gibbs_correction_when_line_absent(tmp_path: Path) -> None:
@@ -554,7 +560,7 @@ def test_parser_derives_gibbs_correction_when_line_absent(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.gibbs_correction == pytest.approx(-100.38210988 - (-100.5))
 
@@ -625,7 +631,7 @@ def test_parser_binds_thermochemistry_to_the_final_energy_stage(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.energy_hartree == pytest.approx(-100.2)
     assert result.zpe_correction == pytest.approx(0.06)
@@ -661,7 +667,7 @@ def test_parser_publishes_no_thermochemistry_when_the_final_stage_has_none(
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.energy_hartree == pytest.approx(-100.2)
     assert result.zpe_correction is None
@@ -693,7 +699,7 @@ def test_parser_publishes_no_thermochemistry_without_a_published_final_energy(
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_file))
+    result = parse_orca_output_text(read_orca_text(str(out_file)), source_path=str(out_file))
 
     assert result.energy_hartree is None
     assert result.gibbs_energy is None
@@ -705,7 +711,6 @@ def test_parser_publishes_no_thermochemistry_without_a_published_final_energy(
 
 def test_final_energy_pattern_is_line_anchored_and_parses_d_exponent() -> None:
     from orca_auto.orca.parser.patterns import (
-        FINAL_SINGLE_POINT_ENERGY_BYTES_RE,
         FINAL_SINGLE_POINT_ENERGY_RE,
         final_single_point_energy_value,
     )
@@ -736,12 +741,6 @@ def test_final_energy_pattern_is_line_anchored_and_parses_d_exponent() -> None:
         "(SCF not fully converged!)",
     ]
 
-    byte_values = [
-        final_single_point_energy_value(match.group(1))
-        for match in FINAL_SINGLE_POINT_ENERGY_BYTES_RE.finditer(text.encode("ascii"))
-    ]
-    assert byte_values == values
-
     with pytest.raises(ValueError, match="non-finite"):
         final_single_point_energy_value("1E999")
 
@@ -766,7 +765,7 @@ def test_error_banner_is_not_parsed_as_a_route_line(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = parse_orca_output(str(out_path))
+    result = parse_orca_output_text(read_orca_text(str(out_path)), source_path=str(out_path))
 
     assert result.input_line == "B3LYP def2-SVP OptTS Freq"
     assert "FATAL" not in result.input_line
@@ -776,7 +775,7 @@ def test_route_line_without_a_prompt_is_still_parsed(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     out_path.write_text("! Opt B3LYP def2-SVP\n!Freq\n", encoding="utf-8")
 
-    result = parse_orca_output(str(out_path))
+    result = parse_orca_output_text(read_orca_text(str(out_path)), source_path=str(out_path))
 
     assert result.input_line == "Opt B3LYP def2-SVP Freq"
 

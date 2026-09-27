@@ -6,7 +6,7 @@ from collections.abc import Mapping, Set
 from dataclasses import dataclass, field
 from typing import Any
 
-from orca_auto.core.utils.coercion import normalize_text, positive_int, safe_float, safe_int
+from orca_auto.core.utils.coercion import positive_int, safe_float, safe_int
 
 # The only outbound messenger; ``messenger.provider`` stays accepted in YAML.
 _MESSENGER_PROVIDER = "discord"
@@ -16,10 +16,6 @@ MAX_MESSENGER_ATTEMPTS = 10
 MAX_MESSENGER_RETRY_BACKOFF_SECONDS = 120.0
 _MAX_DISCORD_SNOWFLAKE = (1 << 64) - 1
 _ASCII_INTEGER_PATTERN = re.compile(r"^[+-]?[0-9]+$")
-
-
-def as_str(value: Any, default: str = "") -> str:
-    return normalize_text(value, none=default)
 
 
 def as_nonempty_str(value: Any, default: str = "") -> str:

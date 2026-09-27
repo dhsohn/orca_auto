@@ -1,4 +1,4 @@
-"""Durable queue file: storage, locking, duplicate policy, enqueue/dequeue/clear.
+"""Durable queue file: storage, locking, duplicate-key policy, dequeue/clear.
 
 ``queue.json`` under one queue root holds every row; every read and write
 goes through :func:`queue_lock`. :class:`QueueStore` binds a root to its
@@ -16,22 +16,11 @@ from pathlib import Path
 from typing import Any, Literal, Self, TypeVar
 
 from ..utils.lock import FileLockTimeoutError, file_lock
-from ..utils.persistence import (
-    now_utc_iso,
-    resolve_root_path,
-    timestamped_token,
-)
+from ..utils.persistence import now_utc_iso, resolve_root_path
 from . import persistence as _queue_persistence
 from .deferral import ADMISSION_DEFERRAL_METADATA_KEY, queue_entry_admission_is_deferred
 from .generation import queue_entries_same_generation
-from .priority import normalize_queue_priority
-from .publication import (
-    QUEUE_RECORD_SYNC_COMPLETE,
-    QUEUE_RECORD_SYNC_KEY,
-    queue_entry_is_claimable,
-    queue_record_publication_lock_path,
-    queue_record_sync_metadata,
-)
+from .publication import queue_entry_is_claimable, queue_record_publication_lock_path
 from .types import ACTIVE_QUEUE_STATUSES, TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 
 QUEUE_FILE_NAME = _queue_persistence.QUEUE_FILE_NAME
@@ -40,9 +29,7 @@ _ACTIVE_STATUSES = ACTIVE_QUEUE_STATUSES
 _TERMINAL_STATUSES = TERMINAL_QUEUE_STATUSES
 _QueueEntryT = TypeVar("_QueueEntryT", bound=QueueEntry)
 _MutationResultT = TypeVar("_MutationResultT")
-_TOKEN_COLLISION_RETRY_LIMIT = 32
 
-QueueDuplicatePolicy = Callable[[Sequence[QueueEntry], QueueEntry], None]
 DuplicateErrorFactory = Callable[[str, QueueEntry], Exception]
 
 
@@ -187,19 +174,6 @@ def reject_duplicate_entry_key(
     )
     if terminal is not None:
         raise make_error(key, terminal)
-
-
-def reject_active_task_duplicate(
-    entries: Sequence[QueueEntry],
-    entry: QueueEntry,
-) -> None:
-    for existing in entries:
-        if existing.app_name != entry.app_name or existing.task_id != entry.task_id:
-            continue
-        if existing.status in _ACTIVE_STATUSES:
-            raise DuplicateQueueEntryError(
-                f"Active queue entry already exists for app={entry.app_name} task_id={entry.task_id}"
-            )
 
 
 @contextmanager
@@ -441,67 +415,6 @@ def clear_terminal(
     for queue_id in removed_ids:
         queue_record_publication_lock_path(resolved_root, queue_id).unlink(missing_ok=True)
     return removed_count
-
-
-def enqueue(
-    root: str | Path,
-    *,
-    app_name: str,
-    task_id: str,
-    task_kind: str,
-    engine: str,
-    priority: int = 10,
-    metadata: dict[str, Any] | None = None,
-    duplicate_policy: QueueDuplicatePolicy | None = None,
-    before_commit_fn: Callable[[], Any] | None = None,
-    after_commit_fn: Callable[[], Any] | None = None,
-) -> QueueEntry:
-    resolved_root = resolve_root_path(root)
-    reject_duplicate = duplicate_policy or reject_active_task_duplicate
-    normalized_priority = normalize_queue_priority(priority)
-
-    def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
-        occupied_queue_ids = {entry.queue_id for entry in entries}
-        queue_id = ""
-        for _attempt in range(_TOKEN_COLLISION_RETRY_LIMIT):
-            candidate = timestamped_token("q")
-            if candidate not in occupied_queue_ids:
-                queue_id = candidate
-                break
-        if not queue_id:
-            raise RuntimeError(
-                "Could not allocate a unique queue id after "
-                f"{_TOKEN_COLLISION_RETRY_LIMIT} attempts"
-            )
-        entry_metadata = dict(metadata or {})
-        if QUEUE_RECORD_SYNC_KEY not in entry_metadata:
-            entry_metadata.update(
-                queue_record_sync_metadata(
-                    QUEUE_RECORD_SYNC_COMPLETE,
-                    token=queue_id,
-                    owner_pid=0,
-                )
-            )
-        entry = QueueEntry(
-            queue_id=queue_id,
-            app_name=app_name.strip(),
-            task_id=task_id.strip(),
-            task_kind=task_kind.strip(),
-            engine=engine.strip(),
-            priority=normalized_priority,
-            enqueued_at=now_utc_iso(),
-            metadata=entry_metadata,
-        )
-        reject_duplicate(entries, entry)
-        if before_commit_fn is not None:
-            before_commit_fn()
-        entries.append(entry)
-        return entry, True
-
-    return QueueStore.for_root(resolved_root).mutate_entries(
-        append,
-        after_commit_fn=after_commit_fn,
-    )
 
 
 def _claimed(entry: QueueEntry) -> QueueEntry:

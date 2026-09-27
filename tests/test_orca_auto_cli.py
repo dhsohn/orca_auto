@@ -494,25 +494,6 @@ def test_run_dir_help_renders_engine_directives(capsys: pytest.CaptureFixture[st
     assert "--max-cores" not in rendered
 
 
-@pytest.mark.parametrize(
-    "removed_option",
-    [
-        "--workflow-type",
-        "--workflow-root",
-        "--reactant-xyz",
-        "--product-xyz",
-        "--input-xyz",
-        "--max-cores",
-        "--max-memory-gb",
-    ],
-)
-def test_run_dir_parser_rejects_internal_workflow_options(removed_option: str) -> None:
-    parser = unified_cli.build_parser()
-
-    with pytest.raises(SystemExit):
-        parser.parse_args(["run-dir", "/tmp/workflow-inputs", removed_option, "value"])
-
-
 def test_build_parser_parses_unified_init_command() -> None:
     parser = unified_cli.build_parser()
 

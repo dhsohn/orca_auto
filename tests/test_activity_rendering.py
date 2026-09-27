@@ -54,33 +54,27 @@ def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypat
         lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
     )
     rows = [
-        (
-            0,
-            {
-                "activity_id": "wf_한국어_very_long_identifier",
-                "kind": "job",
-                "engine": "orca",
-                "status": "running",
-                "submitted_at": "2026-05-20T00:00:00+00:00",
-                "metadata": {
-                    "selected_inp_name": "opt.inp",
-                    "reaction_dir": "/tmp/매우긴계산이름_very_long_reaction_name",
-                },
+        {
+            "activity_id": "wf_한국어_very_long_identifier",
+            "kind": "job",
+            "engine": "orca",
+            "status": "running",
+            "submitted_at": "2026-05-20T00:00:00+00:00",
+            "metadata": {
+                "selected_inp_name": "opt.inp",
+                "reaction_dir": "/tmp/매우긴계산이름_very_long_reaction_name",
             },
-        ),
-        (
-            1,
-            {
-                "activity_id": "orca_1",
-                "kind": "job",
-                "engine": "orca",
-                "status": "submitted",
-                "updated_at": "2026-05-20T00:00:00+00:00",
-                "metadata": {
-                    "selected_inp_name": "긴파일이름_opt_ts_freq.inp",
-                },
+        },
+        {
+            "activity_id": "orca_1",
+            "kind": "job",
+            "engine": "orca",
+            "status": "submitted",
+            "updated_at": "2026-05-20T00:00:00+00:00",
+            "metadata": {
+                "selected_inp_name": "긴파일이름_opt_ts_freq.inp",
             },
-        ),
+        },
     ]
 
     lines = rendering.queue_table_lines(rows)
@@ -91,20 +85,17 @@ def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypat
     assert "매우긴계산이름" in "\n".join(lines)
 
 
-def _basic_rows() -> list[tuple[int, dict[str, object]]]:
+def _basic_rows() -> list[dict[str, object]]:
     return [
-        (
-            0,
-            {
-                "activity_id": "orca_a_very_long_activity_identifier_value",
-                "kind": "job",
-                "engine": "orca",
-                "status": "running",
-                "label": "a_reasonably_long_reaction_name_here",
-                "updated_at": "2026-05-20T00:00:00+00:00",
-                "metadata": {"job_type": "opt"},
-            },
-        )
+        {
+            "activity_id": "orca_a_very_long_activity_identifier_value",
+            "kind": "job",
+            "engine": "orca",
+            "status": "running",
+            "label": "a_reasonably_long_reaction_name_here",
+            "updated_at": "2026-05-20T00:00:00+00:00",
+            "metadata": {"job_type": "opt"},
+        }
     ]
 
 
@@ -148,18 +139,15 @@ def test_queue_table_lines_shrinks_detail_before_id(monkeypatch) -> None:
     )
 
     rows = [
-        (
-            0,
-            {
-                "activity_id": "orca_keep_this_id",
-                "kind": "job",
-                "engine": "orca",
-                "status": "running",
-                "label": "a_really_really_long_reaction_name_value_here",
-                "updated_at": "2026-05-20T00:00:00+00:00",
-                "metadata": {"job_type": "opt"},
-            },
-        )
+        {
+            "activity_id": "orca_keep_this_id",
+            "kind": "job",
+            "engine": "orca",
+            "status": "running",
+            "label": "a_really_really_long_reaction_name_value_here",
+            "updated_at": "2026-05-20T00:00:00+00:00",
+            "metadata": {"job_type": "opt"},
+        }
     ]
 
     # Tight enough to force the name column to shrink, but the ID — which doubles
@@ -171,18 +159,15 @@ def test_queue_table_lines_shrinks_detail_before_id(monkeypatch) -> None:
 
 def test_queue_table_lines_keeps_elapsed_of_one_hundred_hours_or_more() -> None:
     rows = [
-        (
-            0,
-            {
-                "activity_id": "orca_long_job",
-                "kind": "job",
-                "engine": "orca",
-                "status": "running",
-                "label": "multi_day_freq",
-                "updated_at": "2026-05-15T00:00:00+00:00",
-                "metadata": {"elapsed_started_at": "2026-05-15T00:00:00+00:00"},
-            },
-        )
+        {
+            "activity_id": "orca_long_job",
+            "kind": "job",
+            "engine": "orca",
+            "status": "running",
+            "label": "multi_day_freq",
+            "updated_at": "2026-05-15T00:00:00+00:00",
+            "metadata": {"elapsed_started_at": "2026-05-15T00:00:00+00:00"},
+        }
     ]
     now = datetime(2026, 5, 20, 12, 5, 7, tzinfo=UTC)
 
@@ -209,11 +194,11 @@ def test_queue_worker_log_lines_name_running_and_failed_rows_only() -> None:
     from orca_auto import activity_rendering
 
     rows = [
-        (0, {"activity_id": "q-run", "status": "running", "worker_log": "/runs/logs/q-run.log"}),
-        (0, {"activity_id": "q-rb", "status": "repair_blocked", "worker_log": "/l/q-rb.log"}),
-        (0, {"activity_id": "q-done", "status": "completed", "worker_log": "/l/q-done.log"}),
-        (0, {"activity_id": "q-nolog", "status": "running", "worker_log": ""}),
-        (0, {"activity_id": "q-legacy", "status": "failed"}),
+        {"activity_id": "q-run", "status": "running", "worker_log": "/runs/logs/q-run.log"},
+        {"activity_id": "q-rb", "status": "repair_blocked", "worker_log": "/l/q-rb.log"},
+        {"activity_id": "q-done", "status": "completed", "worker_log": "/l/q-done.log"},
+        {"activity_id": "q-nolog", "status": "running", "worker_log": ""},
+        {"activity_id": "q-legacy", "status": "failed"},
     ]
 
     assert activity_rendering.queue_worker_log_lines(rows) == [

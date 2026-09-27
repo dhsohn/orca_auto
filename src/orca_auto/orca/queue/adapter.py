@@ -42,7 +42,6 @@ from .entries import (
     queue_entry_app_name,
     queue_entry_force,
     queue_entry_id,
-    queue_entry_is_retired_workflow_owned,
     queue_entry_matches_target,
     queue_entry_metadata,
     queue_entry_priority,
@@ -325,10 +324,7 @@ def dequeue_entry_if_pending(
         allowed_root,
         queue_id,
         save_entries_fn=_queue_store.save_entries,
-        accept_entry_fn=lambda entry: (
-            is_orca_queue_entry(entry)
-            and not queue_entry_is_retired_workflow_owned(entry, allowed_root)
-        ),
+        accept_entry_fn=is_orca_queue_entry,
         expected_entry=expected_entry,
     )
     if entry is None:
@@ -585,7 +581,6 @@ def cancel(
         ),
         accept_entry_fn=lambda current: (
             is_orca_queue_entry(current)
-            and not queue_entry_is_retired_workflow_owned(current, allowed_root)
             and (
                 expected_entry is None
                 or queue_entries_same_publication_generation(current, expected_entry)

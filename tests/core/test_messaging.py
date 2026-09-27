@@ -14,7 +14,6 @@ from orca_auto.core.config import (
 )
 from orca_auto.core.messaging import (
     DisabledChannel,
-    DiscordBotChannel,
     Message,
     Severity,
     build_channel,
@@ -25,6 +24,7 @@ from orca_auto.core.messaging import (
     render_discord_embed,
     text,
 )
+from orca_auto.core.messaging.discord_bot import DiscordBotChannel
 
 
 def test_neutral_messaging_import_does_not_eagerly_load_adapters() -> None:
@@ -32,10 +32,7 @@ def test_neutral_messaging_import_does_not_eagerly_load_adapters() -> None:
 import sys
 import orca_auto.core.messaging
 blocked = [
-    name for name in (
-        'orca_auto.core.messaging.discord_bot',
-        'orca_auto.core.messaging.discord_http',
-    )
+    name for name in ('orca_auto.core.messaging.discord_bot',)
     if name in sys.modules
 ]
 if blocked:

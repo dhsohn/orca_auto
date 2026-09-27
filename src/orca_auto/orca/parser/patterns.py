@@ -24,16 +24,14 @@ FINAL_SINGLE_POINT_ENERGY_PATTERN = (
     r"[ \t]*(\([^)\r\n]*\))?[ \t]*\r?$"
 )
 FINAL_SINGLE_POINT_ENERGY_RE = re.compile(FINAL_SINGLE_POINT_ENERGY_PATTERN)
-FINAL_SINGLE_POINT_ENERGY_BYTES_RE = re.compile(FINAL_SINGLE_POINT_ENERGY_PATTERN.encode("ascii"))
 
 
-def final_single_point_energy_value(raw: str | bytes) -> float:
+def final_single_point_energy_value(text: str) -> float:
     """Parse one captured energy value, accepting Fortran D exponents.
 
     Raises ValueError for a value that is not finite, so every consumer
     shares the same rejection of overflowed exponent forms.
     """
-    text = raw.decode("ascii") if isinstance(raw, (bytes, bytearray)) else raw
     value = float(text.replace("D", "E").replace("d", "e"))
     if not math.isfinite(value):
         raise ValueError(f"non-finite ORCA energy value: {text!r}")

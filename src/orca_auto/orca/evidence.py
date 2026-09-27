@@ -239,7 +239,6 @@ class OrcaStructureEvidence:
     analysis: FrequencyAnalysis | None
     imaginary_count: int | None
     last_out_name: str = ""
-    provenance_warnings: tuple[str, ...] = ()
 
 
 def collect_structure_evidence(

@@ -24,13 +24,9 @@ from orca_auto.orca.cli_logging import (
 from orca_auto.orca.commands import init as init_command
 from orca_auto.orca.commands import run_inp as run_inp_command
 from orca_auto.orca.config import load_config
-from orca_auto.orca.execution import (
-    _emit,
-    execute_orca_run,
-    existing_completed_out,
-    select_latest_inp,
-)
+from orca_auto.orca.execution import _emit, execute_orca_run, select_latest_inp
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
+from orca_auto.orca.output_adoption import existing_completed_out
 from orca_auto.orca.run_context import RunExecutionContext, configured_admission_root
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state_reading import load_state, state_path
@@ -275,11 +271,14 @@ def test_main_dispatches_list_command(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(calls) == 1
 
 
-def test_cmd_run_inp_dispatches_to_orca_command_module(
-    monkeypatch: pytest.MonkeyPatch, restored_root_logger: logging.Logger
+def test_cmd_run_dir_dispatches_to_orca_command_module(
+    monkeypatch: pytest.MonkeyPatch, restored_root_logger: logging.Logger, tmp_path: Path
 ) -> None:
     seen: list[Namespace] = []
-    resolved_config = object()
+    resolved_config = str(tmp_path / "resolved.yaml")
+    target = tmp_path / "rxn"
+    target.mkdir()
+    (target / "rxn.inp").write_text("! Opt\n", encoding="utf-8")
 
     def _fake_run_inp(args: Namespace, **_seams: Any) -> int:
         seen.append(args)
@@ -290,20 +289,18 @@ def test_cmd_run_inp_dispatches_to_orca_command_module(
     args = Namespace(
         config="/tmp/orca_auto.yaml",
         verbose=True,
-        log_file="/tmp/orca.log",
-        path="/tmp/rxn",
+        log_file=str(tmp_path / "orca.log"),
+        path=str(target),
         priority=3,
         force=True,
-        max_cores=12,
-        max_memory_gb=48,
     )
-    rc = cli_run_dir.cmd_orca_run_dir(args)
+    rc = cli_run_dir.cmd_run_dir(args)
 
     assert rc == 41
     assert seen == [args]
-    # The wrapper must hand the command the engine-resolved config, not the
-    # raw parser value the identity check alone would accept.
-    assert seen[0].config is resolved_config
+    # run-dir must hand the command the engine-resolved config, not the raw
+    # parser value the identity check alone would accept.
+    assert seen[0].config == resolved_config
 
 
 def test_other_public_wrappers_dispatch_to_orca_command_modules(

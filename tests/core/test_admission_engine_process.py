@@ -13,7 +13,6 @@ import pytest
 
 from orca_auto.core import admission
 from orca_auto.core.admission import engine_process, store
-from orca_auto.core.queue.cancellable import run_cancellable_engine_process
 from orca_auto.core.queue.engine.child import (
     await_parent_admission_handoff,
 )
@@ -566,49 +565,6 @@ def test_concurrent_recovery_clear_is_idempotent(
     assert admission.get_slot(tmp_path, token).engine_process_state == "idle"  # type: ignore[union-attr]
 
 
-def test_registrar_publication_failure_cleans_process_and_pending_marker(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        engine_process.process_utils,
-        "process_start_ticks",
-        lambda *_args, **_kwargs: None,
-    )
-
-    class Process:
-        pid = 202
-        exited = False
-
-        def poll(self) -> int | None:
-            return 1 if self.exited else None
-
-    process = Process()
-
-    def terminate(_process: Process) -> bool:
-        process.exited = True
-        return True
-
-    def start_job() -> SimpleNamespace:
-        # Engine preparation happens immediately inside start_job, just before Popen;
-        # the outer cancellable preparation flag therefore remains false.
-        admission.build_slot_engine_process_preparer(tmp_path, token)()
-        return SimpleNamespace(process=process)
-
-    result = run_cancellable_engine_process(
-        start_job=start_job,
-        register_running_job=admission.build_slot_engine_process_registrar(tmp_path, token),
-        finalize_job=lambda *_args, **_kwargs: pytest.fail("finalizer must not run"),
-        terminate_process=terminate,
-        build_failure_result=lambda exc: type(exc).__name__,
-    )
-
-    assert result == "EngineProcessRecordError"
-    assert process.exited is True
-    assert admission.get_slot(tmp_path, token).engine_process_state == "idle"  # type: ignore[union-attr]
-
-
 def test_prepare_compensates_pending_record_after_post_replace_save_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -725,6 +681,58 @@ def test_orca_popen_failure_clears_only_unambiguous_pending_launch(
         runner.run(inp)
 
     assert admission.get_slot(tmp_path, token).engine_process_state == expected_state  # type: ignore[union-attr]
+
+
+def test_orca_registrar_without_start_ticks_terminates_launch_before_clearing_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_orca: Path,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    runner = OrcaRunner(str(fake_orca))
+    runner.set_running_job_registrar(
+        admission.build_slot_engine_process_registrar(tmp_path, token),
+        prepare=admission.build_slot_engine_process_preparer(tmp_path, token),
+    )
+    inp = tmp_path / "job.inp"
+    inp.write_text("! SP\n", encoding="utf-8")
+    monkeypatch.setattr(
+        engine_process.process_utils,
+        "process_start_ticks",
+        lambda *_args, **_kwargs: None,
+    )
+
+    class Process:
+        pid = 202
+        exited = False
+
+        def poll(self) -> int | None:
+            return -signal.SIGTERM if self.exited else None
+
+    process = Process()
+    states_at_termination: list[str] = []
+
+    def terminate(proc: Process) -> bool:
+        assert proc is process
+        slot = admission.get_slot(tmp_path, token)
+        assert slot is not None
+        states_at_termination.append(slot.engine_process_state)
+        process.exited = True
+        return True
+
+    monkeypatch.setattr("orca_auto.orca.orca_runner.subprocess.Popen", lambda *_a, **_k: process)
+    monkeypatch.setattr(runner, "_terminate_subprocess_tree", terminate)
+
+    with pytest.raises(
+        engine_process.EngineProcessRecordError,
+        match="pid=202: start ticks unavailable",
+    ):
+        runner.run(inp)
+
+    # The unidentified launch stays fenced as pending until its exit is confirmed.
+    assert states_at_termination == ["pending"]
+    assert process.exited is True
+    assert admission.get_slot(tmp_path, token).engine_process_state == "idle"  # type: ignore[union-attr]
 
 
 def test_parent_handoff_waits_until_slot_owner_matches_child(

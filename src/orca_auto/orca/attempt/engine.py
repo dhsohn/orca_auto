@@ -25,7 +25,7 @@ from ..types import (
     RunState,
 )
 from .notifications import AttemptStartedNotification, notify_attempt_started
-from .reporting import exit_with_result as _exit_with_result
+from .reporting import exit_with_result
 from .reporting import last_out_path_from_state as _last_out_path_from_state
 from .resume import prepare_resumed_checkpoint_input, resume_terminal_decision
 
@@ -181,7 +181,7 @@ def _finish_attempt(
     exit_code: int,
     extra: dict[str, Any] | None = None,
 ) -> int:
-    return _exit_with_result(
+    return exit_with_result(
         ctx.reaction_dir,
         ctx.state,
         ctx.selected_inp,
@@ -203,7 +203,7 @@ def _resume_attempts_if_terminal(ctx: AttemptRunContext) -> int | None:
         state=ctx.state,
         resumed=ctx.resumed,
         last_out_path_from_state=_last_out_path_from_state,
-        exit_with_result=_exit_with_result,
+        exit_with_result=exit_with_result,
         emit=ctx.emit,
     )
 

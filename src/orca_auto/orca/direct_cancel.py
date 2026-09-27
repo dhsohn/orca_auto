@@ -10,7 +10,6 @@ from orca_auto.core.utils import normalize_text as _normalize_text
 
 from .engine_runtime import engine_runtime_paths
 from .queue import adapter as queue_adapter
-from .queue.entries import queue_entry_is_retired_workflow_owned
 
 _CANCEL_API_NAME = "orca_auto.orca.direct_cancel"
 
@@ -199,12 +198,6 @@ def cancel_target(
                 reason="target_not_found",
             )
         allowed_root, matched = entry_with_root
-        if queue_entry_is_retired_workflow_owned(matched, allowed_root):
-            return _failure_payload(
-                command_argv=request.command_argv,
-                stderr="Workflow directories are retired; use the previous runtime to cancel this job",
-                reason="retired_workflow",
-            )
         updated = _request_orca_cancel(allowed_root, matched)
         if updated is None:
             current = queue_adapter.get_entry_by_id(

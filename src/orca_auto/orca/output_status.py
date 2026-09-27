@@ -80,11 +80,3 @@ def iter_output_lines(text: str) -> Iterator[str]:
         start = match.end()
     if start < len(text):
         yield text[start:]
-
-
-def has_normal_termination(text: str) -> bool:
-    return any(termination_line(line)[0] for line in iter_output_lines(text))
-
-
-def has_error_termination(text: str) -> bool:
-    return any(termination_line(line)[1] for line in iter_output_lines(text))

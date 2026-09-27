@@ -18,9 +18,9 @@ CORPUS_DIR = PINS_DIR / "out_corpus"
 # 257 KiB of space-only lines: past both buffered-read limits (64 KiB, 256 KiB TS).
 _PADDING = (b" " * 1023 + b"\n") * 257
 _MODES = {
-    "opt": CompletionMode(kind="opt", require_irc=False, route_line="! Opt"),
-    "ts": CompletionMode(kind="ts", require_irc=False, route_line="! OptTS"),
-    "ts_irc": CompletionMode(kind="ts", require_irc=True, route_line="! OptTS IRC"),
+    "opt": CompletionMode(kind="opt", require_irc=False),
+    "ts": CompletionMode(kind="ts", require_irc=False),
+    "ts_irc": CompletionMode(kind="ts", require_irc=True),
 }
 
 

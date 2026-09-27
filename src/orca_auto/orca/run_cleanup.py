@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from orca_auto.core import activity_invalidation as _activity_invalidation
+from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.utils.lock import file_lock_at
@@ -30,7 +31,6 @@ from .queue.adapter import (
     queue_entry_status,
     worker_log_path,
 )
-from .queue.entries import queue_entry_is_retired_workflow_owned
 from .queue.terminal_replay import (
     TerminalReplayMarkerKind,
     terminal_replay_marker_kind,
@@ -41,7 +41,6 @@ from .run_snapshot import (
     load_pinned_state,
     state_publication_identity,
 )
-from .state import STATE_MUTATION_LOCK_FILE_NAME
 from .state_reading import STATE_FILE_NAME
 from .statuses import ACTIVE_RUN_STATUS_VALUES, TERMINAL_RUN_STATUS_VALUES
 
@@ -74,7 +73,7 @@ def _queue_cleanup_reaction_dirs(
         reaction_dir = _resolved_path_text(queue_entry_reaction_dir(entry))
         if not reaction_dir:
             continue
-        if status in ACTIVE_STATUSES or queue_entry_is_retired_workflow_owned(entry, allowed_root):
+        if status in ACTIVE_STATUSES:
             active_dirs.add(reaction_dir)
         elif status in TERMINAL_STATUSES:
             terminal_dirs.add(reaction_dir)
@@ -102,7 +101,7 @@ def _queue_generation_blocks_state_cleanup(
         if _resolved_path_text(queue_entry_reaction_dir(entry)) != reaction_dir:
             continue
         status = queue_entry_status(entry)
-        if status in ACTIVE_STATUSES or queue_entry_is_retired_workflow_owned(entry, allowed_root):
+        if status in ACTIVE_STATUSES:
             return True
         if (
             status in TERMINAL_STATUSES
@@ -306,7 +305,7 @@ def clear_terminal_queue_entries(allowed_root: Path) -> tuple[int, int]:
 
     The log of every removed row is unlinked inside the store's queue lock,
     right after the queue file is rewritten without the row, so a retained row
-    (undrained replay marker, other app, retired workflow) keeps its log and a
+    (undrained replay marker, other app) keeps its log and a
     concurrent clear cannot see the row without its log or the reverse.
     """
     loaded: list[Any] = []
@@ -331,10 +330,7 @@ def clear_terminal_queue_entries(allowed_root: Path) -> tuple[int, int]:
         retain_entry_fn=lambda entry: (
             terminal_replay_marker_kind(entry) is not TerminalReplayMarkerKind.ABSENT
         ),
-        select_entry_fn=lambda entry: (
-            is_orca_queue_entry(entry)
-            and not queue_entry_is_retired_workflow_owned(entry, allowed_root)
-        ),
+        select_entry_fn=is_orca_queue_entry,
         load_entries_fn=load,
         save_entries_fn=save,
     )

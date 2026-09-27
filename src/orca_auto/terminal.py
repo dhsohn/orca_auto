@@ -155,13 +155,6 @@ def emit_error(message: Any, *, hint: str | None = None, json_output: bool = Fal
         print(paint(f"hint: {hint}", DIM, stream=sys.stderr), file=sys.stderr)
 
 
-def emit_prefixed_error(prefix: str, message: Any) -> None:
-    """Print ``<prefix>: <message>`` to stderr using the shared error styling."""
-
-    styled_prefix = paint(f"{prefix}:", RED, stream=sys.stderr)
-    print(f"{styled_prefix} {message}", file=sys.stderr)
-
-
 __all__ = [
     "BLUE",
     "BOLD",
@@ -174,7 +167,6 @@ __all__ = [
     "color_enabled",
     "emit_error",
     "emit_json",
-    "emit_prefixed_error",
     "label",
     "paint",
     "set_color_override",

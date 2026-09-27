@@ -9,30 +9,8 @@ def normalize_text(value: Any, *, none: str = "") -> str:
     return str(value).strip()
 
 
-def coerce_mapping(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    return {str(key): item for key, item in value.items()}
-
-
-def mapping_or_empty(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
 def copy_dict_or_empty(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
-
-
-def set_mapping_field(parent: dict[str, Any], key: str, value: dict[str, Any]) -> None:
-    """Copy a non-empty mapping into ``parent[key]``; an empty one removes the key."""
-    if value:
-        parent[key] = dict(value)
-    else:
-        parent.pop(key, None)
-
-
-def coerce_list(value: Any) -> list[Any]:
-    return list(value) if isinstance(value, list) else []
 
 
 @overload
@@ -85,31 +63,8 @@ def normalize_bool(
     return default
 
 
-def coerce_bool(value: Any) -> bool:
-    if isinstance(value, (bool, str)) or value is None:
-        return normalize_bool(value)
-    return bool(value)
-
-
-def coerce_int_mapping(value: Any, *, default: int = 0) -> dict[str, int]:
-    if not isinstance(value, dict):
-        return {}
-    payload: dict[str, int] = {}
-    for key, raw in value.items():
-        name = normalize_text(key)
-        if not name:
-            continue
-        payload[name] = safe_int(raw, default=default)
-    return payload
-
-
 __all__ = [
-    "coerce_bool",
-    "coerce_int_mapping",
-    "coerce_list",
-    "coerce_mapping",
     "copy_dict_or_empty",
-    "mapping_or_empty",
     "normalize_bool",
     "normalize_text",
     "positive_int",

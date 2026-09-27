@@ -2,7 +2,8 @@
 
 ``harness`` gives each test its own runs root, admission root, ``orca_auto.yaml``
 and fake ORCA, records parent notifications in a ``RecordingChannel`` and
-installs the effect log in this process and in every worker child it spawns.
+installs the effect log and the causal clock in this process and in every
+worker child it spawns.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from orca_auto.orca.config import load_config
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from tests.conftest import RecordingChannel, make_app_cfg, write_config_file
-from tests.contracts import effect_log
+from tests.contracts import causal_clock, effect_log
 from tests.contracts.normalize import Normalizer, read_json
 
 H2O_INPUT = """\
@@ -231,6 +232,8 @@ def harness(
         queue_notifications, "notification_channel", lambda *_args: recording_channel
     )
     effect_log.install(monkeypatch.setattr)
+    monkeypatch.setenv(causal_clock.ENV_VAR, str(tmp_path / "causal_clock"))
+    causal_clock.install(monkeypatch.setattr)
     fake_orca = make_fake_orca(FAKE_ORCA, name="bin/fake_orca")
     monkeypatch.setenv(FAKE_ORCA_DIR_ENV, str(fake_orca.parent))
     h = Harness(

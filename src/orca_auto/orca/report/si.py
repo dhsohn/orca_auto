@@ -107,7 +107,7 @@ def render_si_block_md(block: evidence.OrcaStructureEvidence) -> str:
         lines.append(nimag_line)
 
     warnings = _lint_warnings(block.kind, result, block.imaginary_count)
-    lines.extend(f"⚠ {warning}" for warning in (*warnings, *block.provenance_warnings))
+    lines.extend(f"⚠ {warning}" for warning in warnings)
 
     # Multi-attempt runs keep several outputs (submitted and resumed outputs):
     # name the one these numbers came from, as the IRC block does.

@@ -51,14 +51,6 @@ class NebPathPoint(PathPoint):
     def image_index(self) -> int | None:
         return self.position
 
-    @property
-    def max_force(self) -> float:
-        return self.max_gradient
-
-    @property
-    def rms_force(self) -> float:
-        return self.rms_gradient
-
 
 P = TypeVar("P", bound=PathPoint)
 

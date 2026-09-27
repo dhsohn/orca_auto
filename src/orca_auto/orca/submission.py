@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
-from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_STATE_CREATING,
@@ -49,16 +48,17 @@ from .execution_binding import (
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
 )
-from .inp_rewriter import prepare_submission_resource_request
 from .input_artifacts import OrcaSelectedInputArtifacts, selected_input_artifacts
 from .job_locations import resolve_job_metadata
 from .queue import adapter as queue_adapter
 from .queue.adapter import DuplicateEntryError
-from .queue.entries import queue_entry_is_retired_workflow_owned
 from .queue.job_records import upsert_queued_job_record
 from .queue.notifications import QUEUED_NOTIFICATION_PENDING_KEY
 from .queue.orphans import DeadRunningRowUnjudgeableError, read_worker_pid
-from .resource_directives import PreparedSubmissionResourceInput
+from .resource_directives import (
+    PreparedSubmissionResourceInput,
+    prepare_submission_resource_request,
+)
 from .run_context import WorkerStatusInfo, resolve_submission_context
 
 logger = logging.getLogger(__name__)
@@ -185,15 +185,6 @@ def prepared_resource_input_from_selected_inp(
     return prepared
 
 
-def warn_ignored_resource_override_flags(args: Any, *, logger: logging.Logger) -> None:
-    if getattr(args, "max_cores", None) is None and getattr(args, "max_memory_gb", None) is None:
-        return
-    logger.warning(
-        "Standalone ORCA queue submission ignores --max-cores/--max-memory-gb; "
-        "resource metadata is read from the input file."
-    )
-
-
 def build_queue_metadata(
     *,
     artifacts: OrcaSelectedInputArtifacts,
@@ -260,24 +251,6 @@ class _SnapshotIntent:
     token: str
 
 
-def _submission_queue_root(cfg: Any, reaction_dir: Path) -> Path:
-    """Stage 0: the queue root, after refusing retired-workflow targets."""
-    allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
-    resolved_reaction_dir = reaction_dir.expanduser().resolve()
-    if path_is_retired_workflow_owned(resolved_reaction_dir, allowed_root) or any(
-        queue_entry_is_retired_workflow_owned(entry, allowed_root)
-        and queue_adapter.queue_entry_reaction_dir(entry)
-        and resolved_reaction_dir.is_relative_to(
-            Path(queue_adapter.queue_entry_reaction_dir(entry)).expanduser().resolve()
-        )
-        for entry in queue_adapter.list_queue(allowed_root)
-    ):
-        raise ValueError(
-            "Workflow directories are retired; submit a standalone ORCA input directory"
-        )
-    return allowed_root
-
-
 def _prepare_submission_inputs(
     cfg: Any,
     args: Any,
@@ -291,8 +264,7 @@ def _prepare_submission_inputs(
             selected_inp = select_latest_inp(reaction_dir)
         except ValueError:
             selected_inp = None
-    warn_ignored_resource_override_flags(args, logger=logger)
-    priority = normalize_queue_priority(getattr(args, "priority", 10))
+    priority = normalize_queue_priority(getattr(args, "priority", None))
     force = bool(getattr(args, "force", False))
     assert_run_dir_publication_allowed("ORCA target mutation preflight")
     artifacts = selected_input_artifacts(selected_inp)
@@ -469,7 +441,7 @@ def create_queued_submission(
     A failure between snapshot creation and publication removes the unowned generation;
     a compensated publication failure removes it through the driver.
     """
-    queue_root = _submission_queue_root(cfg, reaction_dir)
+    queue_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
     inputs = _prepare_submission_inputs(cfg, args, reaction_dir, selected_inp=selected_inp)
     execution_snapshot = _build_execution_snapshot(cfg, reaction_dir, inputs, queue_root=queue_root)
     try:

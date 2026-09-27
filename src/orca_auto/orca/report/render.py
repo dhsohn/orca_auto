@@ -15,20 +15,11 @@ from typing import Any
 from ..parser import KCAL_PER_HARTREE
 from ..statuses import RunStatus
 
-# Molar gas constant R in kcal·mol⁻¹·K⁻¹ (CODATA 8.314462618 J·mol⁻¹·K⁻¹),
-# used for Boltzmann populations: p_i ∝ exp(−ΔG_i / (R·T)).
-R_KCAL_PER_MOL_K = 1.987204259e-3
-
 REASON_NOTES = {
     "ts_criteria_met": "TS criteria met: exactly one imaginary mode at the converged structure.",
     "ts_criteria_failed": (
         "The optimization converged, but the structure does not satisfy the TS criteria "
         "(imaginary mode count is not exactly one)."
-    ),
-    "scan_profile_no_barrier": (
-        "The assembled forward profile is monotonic: no interior maximum above the noise "
-        "threshold exists along the scanned coordinate. Reconsider the scan coordinate or "
-        "the mechanistic hypothesis."
     ),
     "geometry_zero_distance": (
         "ORCA aborted after constructing a geometry with two atoms at zero distance; "

@@ -823,7 +823,7 @@ def test_rebind_passes_through_a_pristine_claim(tmp_path: Path) -> None:
     def unexpected_cfg() -> Any:
         raise AssertionError("a pristine claim must not load worker configuration")
 
-    result = worker_job._maybe_rebind_recovery_generation(
+    result = _rebind.maybe_rebind_recovery_generation(
         running,
         queue_root=queue_root,
         cfg_factory=unexpected_cfg,
@@ -839,7 +839,7 @@ def test_rebind_moves_crashed_claim_into_new_generation(tmp_path: Path) -> None:
     old_generation = _crash_generation(snapshot)
     cfg = _worker_cfg(queue_root, executable)
 
-    result = worker_job._maybe_rebind_recovery_generation(
+    result = _rebind.maybe_rebind_recovery_generation(
         running,
         queue_root=queue_root,
         cfg_factory=lambda: cfg,
@@ -875,7 +875,7 @@ def test_rebind_honors_a_pending_cancellation(tmp_path: Path) -> None:
     def unexpected_cfg() -> Any:
         raise AssertionError("a cancelled claim must not load worker configuration")
 
-    result = worker_job._maybe_rebind_recovery_generation(
+    result = _rebind.maybe_rebind_recovery_generation(
         running,
         queue_root=queue_root,
         cfg_factory=unexpected_cfg,
@@ -903,7 +903,7 @@ def test_rebind_fails_closed_at_the_recovery_limit(tmp_path: Path) -> None:
     (claimed,) = list_queue(queue_root)
 
     with pytest.raises(ValueError, match="recovery limit"):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             claimed,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -961,7 +961,7 @@ def test_rebind_consumes_budget_before_building(
     monkeypatch.setattr(_rebind, "build_orca_execution_snapshot", explode)
 
     with pytest.raises(RuntimeError, match="simulated crash"):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -992,7 +992,7 @@ def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
     monkeypatch.setattr(_rebind, "build_orca_execution_snapshot", crash_first_build)
 
     with pytest.raises(RuntimeError, match="simulated crash after budget claim"):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -1008,7 +1008,7 @@ def test_rebind_replay_after_budget_claim_reuses_the_same_ordinal(
     assert intent_token
     assert is_visible_generation_name(target_generation_name)
 
-    result = worker_job._maybe_rebind_recovery_generation(
+    result = _rebind.maybe_rebind_recovery_generation(
         claimed,
         queue_root=queue_root,
         cfg_factory=lambda: cfg,
@@ -1057,7 +1057,7 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
     monkeypatch.setattr(_rebind, "build_orca_execution_snapshot", crash_first_build)
 
     with pytest.raises(RuntimeError, match="simulated crash after final budget claim"):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             penultimate,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -1073,7 +1073,7 @@ def test_rebind_replay_resumes_a_pending_claim_at_the_recovery_limit(
         str(durable_claim.get("intent_token") or "") if isinstance(durable_claim, dict) else ""
     )
 
-    result = worker_job._maybe_rebind_recovery_generation(
+    result = _rebind.maybe_rebind_recovery_generation(
         claimed,
         queue_root=queue_root,
         cfg_factory=lambda: cfg,
@@ -1149,7 +1149,7 @@ def test_rebind_rejects_each_invalid_durable_recovery_identity_without_mutation(
         else "durable rebind claim does not match"
     )
     with pytest.raises(ValueError, match=expected_error):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             claimed,
             queue_root=queue_root,
             cfg_factory=unexpected_cfg,
@@ -1193,7 +1193,7 @@ def test_rebind_rejects_boolean_count_with_pending_claim_without_mutation(
     (claimed,) = list_queue(queue_root)
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             claimed,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -1301,7 +1301,7 @@ def test_child_recovery_leaves_a_requeued_row_alone(
             assert next_running.started_at != entry.started_at
         raise ValueError("ORCA crash recovery found an invalid durable rebind count")
 
-    monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", requeue_then_reject)
+    monkeypatch.setattr(worker_job, "maybe_rebind_recovery_generation", requeue_then_reject)
     config = _worker_config(tmp_path, queue_root, _executable)
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
@@ -1339,7 +1339,7 @@ def test_child_recovery_fences_the_failure_write_to_its_own_dequeue(
             assert redequeued is not None and redequeued.started_at != running.started_at
         return snapshot
 
-    monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", reject)
+    monkeypatch.setattr(worker_job, "maybe_rebind_recovery_generation", reject)
     monkeypatch.setattr(worker_job, "_queue_entry_by_id", lookup_then_lose_the_row)
     config = _worker_config(tmp_path, queue_root, _executable)
 
@@ -1367,7 +1367,7 @@ def test_child_recovery_does_not_overwrite_a_racing_cancellation(
         assert cancelled is not None and cancelled.cancel_requested
         raise ValueError("ORCA crash recovery found an invalid durable rebind count")
 
-    monkeypatch.setattr(worker_job, "_maybe_rebind_recovery_generation", cancel_then_reject)
+    monkeypatch.setattr(worker_job, "maybe_rebind_recovery_generation", cancel_then_reject)
     config = _worker_config(tmp_path, queue_root, _executable)
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):
@@ -1454,7 +1454,7 @@ def test_rebind_rejects_noncanonical_intent_token_without_mutation(
     )
 
     with pytest.raises(ValueError, match="durable rebind claim does not match"):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             claimed,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -1518,7 +1518,7 @@ def test_rebind_committed_cancellation_precedes_malformed_recovery_metadata(
     def unexpected_cfg() -> Any:
         raise AssertionError("a cancelled claim must not load worker configuration")
 
-    result = worker_job._maybe_rebind_recovery_generation(
+    result = _rebind.maybe_rebind_recovery_generation(
         claimed,
         queue_root=queue_root,
         cfg_factory=unexpected_cfg,
@@ -1574,7 +1574,7 @@ def test_rebind_does_not_publish_after_cancellation_commits(
     monkeypatch.setattr(_rebind, "update_metadata", cancel_before_publication)
 
     with pytest.raises(ValueError, match="could not publish its replacement generation"):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -1617,7 +1617,7 @@ def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growt
             _reservation.bind_snapshot_intent_generation_identities = exit_before_identity_bind
             try:
                 current = list_queue(queue_root)[0]
-                worker_job._maybe_rebind_recovery_generation(
+                _rebind.maybe_rebind_recovery_generation(
                     current,
                     queue_root=queue_root,
                     cfg_factory=lambda: cfg,
@@ -1671,7 +1671,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
             os._exit(73)
 
         _rebind.transition_snapshot_intent = exit_after_snapshot_build
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -1709,7 +1709,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
         if child.is_dir() and is_visible_generation_name(child.name)
     ] == [old_generation]
 
-    result = worker_job._maybe_rebind_recovery_generation(
+    result = _rebind.maybe_rebind_recovery_generation(
         claimed,
         queue_root=queue_root,
         cfg_factory=lambda: cfg,
@@ -1745,7 +1745,7 @@ def test_rebind_rejects_executable_mismatch_before_consuming_budget(
     cfg = _worker_cfg(queue_root, configured_executable)
 
     with pytest.raises(ValueError, match="executable does not match the submitted identity"):
-        worker_job._maybe_rebind_recovery_generation(
+        _rebind.maybe_rebind_recovery_generation(
             running,
             queue_root=queue_root,
             cfg_factory=lambda: cfg,
@@ -1823,7 +1823,7 @@ def test_rebind_keeps_a_completed_generation_for_adoption(
     def unexpected_cfg() -> Any:
         raise AssertionError("a completed claim must not rebind")
 
-    result = worker_job._maybe_rebind_recovery_generation(
+    result = _rebind.maybe_rebind_recovery_generation(
         running,
         queue_root=queue_root,
         cfg_factory=unexpected_cfg,

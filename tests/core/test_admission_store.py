@@ -486,7 +486,7 @@ def test_reserve_slot_honors_capacity_limit(
 
     assert first is not None and first.startswith("slot_")
     assert second is None
-    assert store.active_slot_count(tmp_path) == 1
+    assert len(store.list_slots(tmp_path)) == 1
     [stored] = _read_slots_file(tmp_path)
     assert stored["owner_pid"] == 5151
     assert stored["process_start_ticks"] == 5151
@@ -773,18 +773,14 @@ def test_reserve_slot_at_capacity_does_not_rewrite_the_file(
     assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
 
 
-def test_retired_workflow_slot_identity_remains_readable_and_occupies_capacity(
+def test_slot_row_with_a_field_outside_the_schema_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _patch_deterministic_liveness(monkeypatch)
-    token = store.reserve_slot(tmp_path, 1, source="orca_auto.flow.cli.workflow")
+    token = store.reserve_slot(tmp_path, 1, source="orca_auto.orca.queue_worker")
     assert token is not None
     [current] = store.list_all_slots(tmp_path)
-    # Production slot files still carry the retired ``workflow_id`` column;
-    # it must load without being rewritten into the record.
-    raw = {**store._slot_to_dict(current), "workflow_id": "retired-workflow"}
+    raw = {**store._slot_to_dict(current), "workflow_id": "legacy"}
     (tmp_path / store.ADMISSION_FILE_NAME).write_text(json.dumps([raw]), encoding="utf-8")
-    assert store.list_slots(tmp_path) == [current]
-    assert store.reserve_slot(tmp_path, 1, source="orca_auto.orca.queue_worker") is None
-    assert store.get_slot(tmp_path, token) == current
-    assert "workflow_id" not in store._slot_to_dict(current)
+    with pytest.raises(store.AdmissionStoreCorruptError):
+        store.list_slots(tmp_path)

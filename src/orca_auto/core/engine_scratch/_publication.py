@@ -112,7 +112,7 @@ def _validate_publication_target_name(name: str) -> None:
         raise EngineScratchError(f"engine scratch artifact collides with runtime state: {name}")
 
 
-def _copy_artifact_to_staging(
+def _prepare_publication_temp(
     source_name: str,
     workspace: Path,
     workspace_dir_fd: int,
@@ -510,7 +510,7 @@ def _publish_workspace(
                 ).st_size
                 continue
             staged_publications.append(
-                _copy_artifact_to_staging(
+                _prepare_publication_temp(
                     source_name,
                     workspace,
                     workspace_dir_fd,

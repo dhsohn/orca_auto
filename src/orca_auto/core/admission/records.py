@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -23,43 +22,6 @@ class AdmissionSlot:
     engine_pgid: int | None = None
     engine_process_start_ticks: int | None = None
     engine_process_boot_id: str | None = None
-
-
-@dataclass(frozen=True)
-class AdmissionReservationRequest:
-    limit: int
-    source: str
-    app_name: str = ""
-    task_id: str = ""
-    state: str = "active"
-    work_dir: str | Path = ""
-    queue_id: str = ""
-    owner_pid: int | None = None
-    engine_process_state: str = "idle"
-    engine_launch_gated: bool = False
-
-
-@dataclass(frozen=True)
-class AdmissionSlotActivation:
-    state: str = "active"
-    work_dir: str | Path | None = None
-    queue_id: str | None = None
-    owner_pid: int | None = None
-    source: str | None = None
-    app_name: str | None = None
-    task_id: str | None = None
-    engine_process_state: str | None = None
-
-
-@dataclass(frozen=True)
-class AdmissionSlotMetadataUpdate:
-    state: str | None = None
-    queue_id: str | None = None
-    app_name: str | None = None
-    task_id: str | None = None
-    work_dir: str | Path | None = None
-    owner_pid: int | None = None
-    engine_process_state: str | None = None
 
 
 def slot_to_dict(slot: AdmissionSlot) -> dict[str, object]:
@@ -109,11 +71,8 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
     # default.  Treating them as gated would make same-boot recovery discard a
     # potentially running process in the Popen-to-record interval.
     legacy_optional_fields = {"engine_launch_gated"}
-    # ``workflow_id`` is a retired durable field: existing slot files still
-    # carry it, so it is tolerated on read and never written again.
-    retired_fields = {"workflow_id"}
     missing = expected_fields - set(raw) - legacy_optional_fields
-    unknown = set(raw) - expected_fields - retired_fields
+    unknown = set(raw) - expected_fields
     if missing or unknown:
         raise ValueError(
             "Admission slot fields do not match the canonical schema: "

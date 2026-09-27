@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.paths import is_subpath
-from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.orca.config import AppConfig
 
 
@@ -19,10 +18,6 @@ def _validate_reaction_dir(cfg: AppConfig, reaction_dir_raw: str) -> Path:
     if not is_subpath(reaction_dir, allowed_root):
         raise ValueError(
             f"Job directory must be under allowed root: {allowed_root}. got={reaction_dir}"
-        )
-    if path_is_retired_workflow_owned(reaction_dir, allowed_root):
-        raise ValueError(
-            "Workflow directories are retired; submit a standalone ORCA input directory"
         )
     return reaction_dir
 
@@ -63,16 +58,8 @@ class RunSubmissionContext:
     allowed_root: Path
 
 
-def configured_max_concurrent(cfg: AppConfig) -> int:
-    return cfg.runtime.max_concurrent
-
-
 def configured_admission_root(cfg: AppConfig) -> Path:
     return Path(cfg.runtime.resolved_admission_root).expanduser().resolve()
-
-
-def configured_admission_limit(cfg: AppConfig) -> int:
-    return cfg.runtime.resolved_admission_limit
 
 
 def reaction_dir_arg(args: Any) -> str | None:
@@ -148,9 +135,7 @@ __all__ = [
     "RunExecutionContext",
     "RunSubmissionContext",
     "WorkerStatusInfo",
-    "configured_admission_limit",
     "configured_admission_root",
-    "configured_max_concurrent",
     "reaction_dir_arg",
     "resolve_run_target",
     "resolve_run_target_or_log",

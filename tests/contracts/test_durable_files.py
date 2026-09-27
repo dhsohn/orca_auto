@@ -23,7 +23,6 @@ import pytest
 from orca_auto.core.messaging import Message
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.scratch_config import ScratchConfig
-from tests.conftest import enqueue_entry, make_queue_entry
 from tests.contracts import effect_log
 from tests.contracts.conftest import Harness
 from tests.contracts.normalize import Normalizer, assert_golden, key_tree, read_json
@@ -210,25 +209,3 @@ def test_forced_resubmission_into_same_directory(harness: Harness) -> None:
     assert harness.cli("run-dir", str(job), "--force")[0] == 0
     assert harness.run_worker() == 0
     assert_durable_goldens("10_forced_resubmission", harness, job)
-
-
-def test_retired_workflow_refusal(harness: Harness) -> None:
-    flow = harness.runs / "legacy_flow"
-    job = harness.job("legacy_flow/step1")
-    (flow / "workflow.json").write_text("{}", encoding="utf-8")
-    rc, out, err = harness.cli("run-dir", str(job))
-    assert_golden(
-        "11_retired_workflow/run_dir.txt",
-        harness.n.text(f"exit={rc}\n--- stdout\n{out}--- stderr\n{err}"),
-    )
-    enqueue_entry(
-        harness.runs,
-        make_queue_entry(
-            queue_id="legacy-row",
-            task_id="legacy-task",
-            reaction_dir=harness.job("legacy_owned"),
-            metadata={"workflow_id": "legacy-flow"},
-        ),
-    )
-    assert harness.run_worker() == 0
-    assert_durable_goldens("11_retired_workflow", harness, job)

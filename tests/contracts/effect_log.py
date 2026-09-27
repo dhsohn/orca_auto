@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -174,9 +175,19 @@ def _child_channel(*_args: Any, **_kwargs: Any) -> Any:
 
 
 def install_in_worker_child() -> None:
-    """``sitecustomize`` entry: log only from worker children, never the ORCA launch gate."""
+    """``sitecustomize`` entry: log only from worker children, never the ORCA launch gate.
+
+    The child also stamps through ``causal_clock``, loaded by path like this module.
+    """
     if os.environ.get(ENV_VAR) and _role() == "child":
         install()
+        spec = importlib.util.spec_from_file_location(
+            "_orca_auto_contract_causal_clock", Path(__file__).with_name("causal_clock.py")
+        )
+        assert spec is not None and spec.loader is not None
+        clock = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(clock)
+        clock.install()
         from orca_auto.orca import notifications
 
         notifications.build_channel = _child_channel

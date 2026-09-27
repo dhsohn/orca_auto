@@ -16,7 +16,8 @@ fi
 
 mkdir -p "$WORKDIR"
 
-PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" - "$ROOT" "$WORKDIR" <<'PY'
+# The machine.json verifier lives in the repository test tree (tests/contracts).
+PYTHONPATH="$ROOT/src:$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" - "$ROOT" "$WORKDIR" <<'PY'
 from __future__ import annotations
 
 import json
@@ -28,7 +29,8 @@ from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
 from orca_auto.orca.queue.worker import OrcaQueueWorker
-from orca_auto.orca.state_reading import load_report_json, load_state
+from orca_auto.orca.state_reading import load_state
+from tests.contracts.report_verifier import load_report_json
 
 repo_root = Path(sys.argv[1]).resolve()
 workdir = Path(sys.argv[2]).resolve()

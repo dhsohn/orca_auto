@@ -21,7 +21,6 @@ from ..state_reading import load_state
 from ..statuses import RunStatus
 from .entries import (
     queue_entry_id,
-    queue_entry_is_retired_workflow_owned,
     queue_entry_reaction_dir,
     queue_entry_status,
 )
@@ -182,8 +181,6 @@ def reconcile_orphaned_running_entries(
             ):
                 continue
             if only_reaction_dirs is not None and normalized_dir not in only_reaction_dirs:
-                continue
-            if queue_entry_is_retired_workflow_owned(entry, allowed_root):
                 continue
             if queue_id in (protected_queue_ids or set()) or (
                 queue_id,

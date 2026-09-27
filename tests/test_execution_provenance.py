@@ -17,9 +17,10 @@ from orca_auto.orca.execution_binding import (
 from orca_auto.orca.machine_observation import artifact_receipt
 from orca_auto.orca.queue.run_state_replay import record_cancelled_run_state
 from orca_auto.orca.report.publication import write_report_files, write_report_json
-from orca_auto.orca.state import new_state, save_state
-from orca_auto.orca.state_reading import load_report_json, load_state
+from orca_auto.orca.state import new_state, normalized_payload_from_state, save_state
+from orca_auto.orca.state_reading import load_state
 from tests.conftest import write_fake_orca
+from tests.contracts.report_verifier import load_report_json
 
 
 @pytest.fixture
@@ -89,7 +90,12 @@ def provenance_report(submitted_snapshot: dict[str, Any]) -> tuple[Path, dict[st
         },
     )
     save_state(generation.parent, state)
-    assert write_report_json(generation.parent, state) == generation / "machine.json"
+    assert (
+        write_report_json(
+            generation.parent, normalized_payload_from_state(generation.parent, state)
+        )
+        == generation / "machine.json"
+    )
     return generation, state
 
 
@@ -180,11 +186,18 @@ def test_terminal_republication_does_not_rewrite_provenance(
     path = generation / "execution_provenance.json"
     original = path.read_bytes()
     before = path.stat()
-    assert write_report_json(generation.parent, state) == generation / "machine.json"
+    assert (
+        write_report_json(
+            generation.parent, normalized_payload_from_state(generation.parent, state)
+        )
+        == generation / "machine.json"
+    )
     assert path.stat().st_mtime_ns == before.st_mtime_ns
     state["execution_provenance"]["source_inputs"]["selected_source"]["sha256"] = "f" * 64
     with pytest.raises(RuntimeError, match="immutable"):
-        write_report_json(generation.parent, state)
+        write_report_json(
+            generation.parent, normalized_payload_from_state(generation.parent, state)
+        )
     assert path.read_bytes() == original
     assert write_report_files(generation.parent, state)["report_json"] == str(
         generation / "machine.json"

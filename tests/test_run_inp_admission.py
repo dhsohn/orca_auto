@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.admission import active_slot_count
+from orca_auto.core.admission import list_slots
 from orca_auto.orca import execution
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.execution import execute_orca_run
@@ -44,7 +44,7 @@ def test_internal_run_rejects_without_queue_reservation(
 
     assert rc == 1
     assert attempts == []
-    assert active_slot_count(tmp_path) == 0
+    assert len(list_slots(tmp_path)) == 0
     assert not state_path(reaction_dir).exists()
     # The advisory lock file persists; only kernel ownership is released.
     assert (reaction_dir / "run.lock").exists()
