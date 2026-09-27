@@ -26,8 +26,8 @@ from unittest.mock import patch
 
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.messaging.channel import SendResult
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.processes import ManagedProcess
-from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME

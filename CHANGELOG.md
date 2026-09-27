@@ -155,12 +155,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   reading the row and cancelling it. Metadata keys no current writer sets
   (`attempt`, `candidate_count`, `retained_conformer_count`, `execution_dir`,
   `terminal_artifacts`, `terminal_repair_blocked_reason`) now count as
-  identity like any other key. Rows queued under 8.x get a different
-  `queue_generation`, and nothing is rewritten. Only the queue listing compares
-  it, for a running row that has no run ID yet: a job still running across an
-  upgrade outside an idle window is listed twice (its queue row and a
-  run-state row) and `queue cancel <run ID>` cannot find it until it finishes;
-  cancel it by queue ID. An upgrade in an idle window sees no difference.
+  identity like any other key. Rows that carry the queued-notification flag,
+  nearly every row 8.x wrote, get a different `queue_generation`, and nothing
+  is rewritten. Only the queue listing compares it, for a running row that has
+  no run ID yet: until a job still running across an upgrade outside an idle
+  window finishes, it is listed twice (its queue row and a run-state row),
+  `queue cancel <run ID>` cannot find it and `queue cancel <job directory>`
+  fails as ambiguous; cancel it by queue ID. Upgrade and roll back only in an
+  idle window (`active_simulations: 0`), where neither sees a difference; see
+  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
 - A job queued under 8.0.1 is verified against the new binding rules when it
   is claimed. Its input fails verification before ORCA starts, and must be
   resubmitted, when it has a file reference the new rules bind or refuse (ESD

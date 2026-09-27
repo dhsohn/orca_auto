@@ -20,7 +20,7 @@ from orca_auto.activity import model as _activity_model
 from orca_auto.core.activity_index import DB_NAME as ACTIVITY_INDEX_DB_NAME
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.artifacts import QUEUE_FILE
-from orca_auto.core.queue import store as queue_store
+from orca_auto.core.queue import persistence as queue_persistence
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import run_status
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE
@@ -106,7 +106,7 @@ def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
         enqueued_at="2026-04-26T00:00:00+00:00",
         started_at="2026-04-26T00:01:00+00:00",
     )
-    queue_store.save_entries(allowed, [entry])
+    queue_persistence.save_entries(allowed, [entry])
     queue_path = allowed / QUEUE_FILE
     before = queue_path.read_bytes()
 
@@ -119,7 +119,7 @@ def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
     # The listing reports the dead running row as pending (or running while a
     # child holds run.lock) without rewriting it: recovery belongs to the worker.
     assert queue_path.read_bytes() == before
-    (persisted,) = queue_store.load_entries(allowed)
+    (persisted,) = queue_persistence.load_entries(allowed)
     assert persisted.status == QueueStatus.RUNNING
     assert len(rows) == 1
     assert rows[0].activity_id == entry.queue_id
@@ -188,7 +188,7 @@ def test_orca_records_merge_queue_entries_and_snapshots(
             metadata={"job_type": "sp", "job_dir": str(allowed / "other")},
         ),
     ]
-    queue_store.save_entries(allowed, entries)
+    queue_persistence.save_entries(allowed, entries)
     queue_path = allowed / QUEUE_FILE
     before = queue_path.read_bytes()
 
@@ -239,7 +239,7 @@ def test_queue_record_lifts_worker_log_to_the_row(allowed: Path, orca_config: st
         status=QueueStatus.RUNNING,
         metadata={"worker_log": str(allowed / "logs" / "q-logged.log")},
     )
-    queue_store.save_entries(allowed, [entry])
+    queue_persistence.save_entries(allowed, [entry])
 
     row = _records_by_id(orca_config)["q-logged"]
 
@@ -263,7 +263,7 @@ def test_orca_records_suppress_stale_snapshot_for_terminal_entry(
         job_id="task-ts3",
         selected_inp=reaction_dir / "ts3.inp",
     )
-    queue_store.save_entries(
+    queue_persistence.save_entries(
         allowed,
         [
             make_queue_entry(
@@ -299,7 +299,7 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
         job_id="task-ts4-rerun",
         selected_inp=reaction_dir / "ts4.inp",
     )
-    queue_store.save_entries(
+    queue_persistence.save_entries(
         allowed,
         [
             make_queue_entry(
@@ -447,7 +447,7 @@ def test_cancel_activity_path_alias_prefers_active_generation(
         reaction_dir=reaction_dir,
         enqueued_at="2026-09-26T00:00:00+00:00",
     )
-    queue_store.save_entries(allowed, [finished, resubmitted])
+    queue_persistence.save_entries(allowed, [finished, resubmitted])
     target = {
         "absolute": str(reaction_dir),
         "relative": "batch/water",
@@ -542,7 +542,7 @@ def test_cancel_activity_basename_across_directories_stays_ambiguous(
         reaction_dir=project_a,
         enqueued_at="2026-09-01T00:00:00+00:00",
     )
-    queue_store.save_entries(allowed, [finished, other])
+    queue_persistence.save_entries(allowed, [finished, other])
 
     with pytest.raises(ValueError, match="Ambiguous activity target: water. Matches: q-a, q-b$"):
         activity.cancel_activity(target="water", orca_config=orca_config)
@@ -577,7 +577,7 @@ def test_cancel_activity_by_state_run_id_of_running_job(
         queue_entry_generation_token(entry) if current_generation else "q-previous"
     )
     write_state(reaction_dir, state)
-    queue_store.save_entries(allowed, [entry])
+    queue_persistence.save_entries(allowed, [entry])
 
     with acquire_run_lock(reaction_dir):
         [row] = [

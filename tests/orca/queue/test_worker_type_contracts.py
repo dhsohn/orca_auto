@@ -17,6 +17,6 @@ if TYPE_CHECKING:
         assert_type(worker.cfg, AppConfig)
         assert_type(worker.admission_root, Path)
         assert_type(roots.queue_root(worker.cfg), Path)
-        assert_type(roots.peek_next_entry(worker.cfg), tuple[Path, QueueEntry] | None)
+        assert_type(roots.peek_next_entry(worker.cfg), QueueEntry | None)
         assert_type(worker._admit_next(), tuple[ReserveStatus, ReservedQueueEntry | None])
         assert_type(worker._running_jobs(), list[tuple[str, OrcaRunningJob]])

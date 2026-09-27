@@ -81,8 +81,9 @@ directory only after confirming its ownership and that no service uses it.
 ## Switch during an idle maintenance window
 
 Keep configuration, `runs_root` (whose `.admission` directory holds the admission
-state), logs, and scratch outside the prepared runtime. Preserve the currently deployed configuration and state during
-the switch. Configure the chemical engine executables separately.
+state), logs, and scratch outside the prepared runtime. Preserve the currently
+deployed configuration and state during the switch. Configure the chemical
+engine executables separately.
 
 1. Check the current installation's `queue list --json` and wait for
    `active_simulations: 0`. Keep the existing source, environment, and configuration

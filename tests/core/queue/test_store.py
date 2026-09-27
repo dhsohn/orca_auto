@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.queue import publication, store
+from orca_auto.core.queue import persistence, publication, store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from tests.queue_store_helpers import (
@@ -33,7 +33,7 @@ def test_entry_to_dict_serializes_status_value() -> None:
         started_at="2026-04-19T00:00:01+00:00",
     )
 
-    serialized = store.entry_to_dict(entry)
+    serialized = persistence.entry_to_dict(entry)
 
     assert serialized["status"] == "running"
     assert serialized["queue_id"] == "q-1"
@@ -107,7 +107,7 @@ def test_mutate_entries_compensates_row_when_post_commit_contract_rejects(
     _install_deterministic_helpers(monkeypatch)
     stages: list[str] = []
     guard_error = RuntimeError("publication target moved")
-    row = store.entry_from_dict(_entry("q-1", task_id="task-1"))
+    row = persistence.entry_from_dict(_entry("q-1", task_id="task-1"))
 
     def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
         stages.append("before")

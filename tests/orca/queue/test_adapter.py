@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from orca_auto.core.artifacts import QUEUE_FILE
+from orca_auto.core.queue import persistence as queue_persistence
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -550,7 +551,7 @@ def test_orca_engine_dequeue_skips_foreign_engine_entries(queue_root: Path) -> N
         priority=1,  # higher priority than the ORCA entry -> claimed first if unfiltered
         metadata={**orca_entry.metadata, "reaction_dir": str(queue_root / "other_job")},
     )
-    queue_store.save_entries(queue_root, [foreign, orca_entry])
+    queue_persistence.save_entries(queue_root, [foreign, orca_entry])
 
     cfg = make_app_cfg(queue_root)
 
@@ -700,11 +701,11 @@ def _entry(
     }
     if run_id is not None:
         entry["metadata"]["run_id"] = run_id
-    return queue_store.entry_from_dict(entry)
+    return queue_persistence.entry_from_dict(entry)
 
 
 def _save_entries(root: Path, entries: list[QueueEntry]) -> None:
-    queue_store.save_entries(root, entries)
+    queue_persistence.save_entries(root, entries)
 
 
 def _assert_terminal_replay_marker(
@@ -755,16 +756,16 @@ def _foreign_entry(
 
 
 def test_load_entries_cover_edge_cases(tmp_path: Path) -> None:
-    assert queue_store.load_entries(tmp_path) == []
+    assert queue_persistence.load_entries(tmp_path) == []
 
     queue_path = tmp_path / QUEUE_FILE
     queue_path.write_text("{not-json", encoding="utf-8")
     with pytest.raises(queue_store.QueueStoreCorruptError):
-        queue_store.load_entries(tmp_path)
+        queue_persistence.load_entries(tmp_path)
 
     queue_path.write_text(json.dumps({"status": "bad"}), encoding="utf-8")
     with pytest.raises(queue_store.QueueStoreCorruptError):
-        queue_store.load_entries(tmp_path)
+        queue_persistence.load_entries(tmp_path)
 
     queue_path.write_text(
         json.dumps(
@@ -791,7 +792,7 @@ def test_load_entries_cover_edge_cases(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(queue_store.QueueStoreCorruptError, match="must be a JSON object"):
-        queue_store.load_entries(tmp_path)
+        queue_persistence.load_entries(tmp_path)
 
 
 def test_enqueue_overwrites_worker_log_metadata_with_safe_queue_log(tmp_path: Path) -> None:
@@ -920,7 +921,7 @@ def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> No
     assert queue_adapter.cancel(tmp_path, foreign_pending.queue_id) is None
     assert run_cleanup.clear_terminal_queue_entries(tmp_path) == (0, 0)
 
-    durable = queue_store.load_entries(tmp_path)
+    durable = queue_persistence.load_entries(tmp_path)
     assert [(entry.queue_id, entry.status) for entry in durable] == [
         (foreign_pending.queue_id, QueueStatus.PENDING),
         (foreign_terminal.queue_id, QueueStatus.COMPLETED),
@@ -931,7 +932,7 @@ def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> No
 
 
 def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) -> None:
-    entry = queue_store.entry_from_dict(
+    entry = queue_persistence.entry_from_dict(
         {
             "queue_id": "q_meta",
             "app_name": "orca_auto_orca",
@@ -969,7 +970,7 @@ def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> 
     _save_entries(
         root,
         [
-            queue_store.entry_from_dict(
+            queue_persistence.entry_from_dict(
                 {
                     "queue_id": "q_backend",
                     "app_name": "orca_auto_orca",

@@ -27,8 +27,9 @@ definitions that drifted apart:
 The two answers disagreed on real rows. A `queue cancel` that read a pending
 row before the worker claimed its queued notification was refused and
 reported the job as "already terminal", because the claim rewrote a flag the
-fence counted as identity (commit bc6bd405, pin
-`tests/contracts/pins/queue_cancel_after_notification_claim.json`).
+fence counted as identity. The baseline pin
+`tests/contracts/pins/queue_cancel_after_notification_claim.json`, added in
+PR #371 and unchanged on `origin/main` at 7fc3f3c2, records that refusal.
 
 ## Decision
 
@@ -68,19 +69,29 @@ when a row is created.
   cells: snapshots that differ only in the queued-notification flag or in
   other lifecycle data of a claimable row are now accepted, and snapshots
   that differ only in `enqueued_at` are now refused. Deferred and
-  cancel-requested rows and every identity difference stay refused. Every
-  other golden and pin was unchanged by that commit.
+  cancel-requested rows and every identity difference stay refused.
+  `tests/contracts/pins/queue_cancel_after_notification_claim.json` now
+  records the cancellation instead of the refusal. This decision changes no
+  other golden or pin of the baseline (`origin/main` at 7fc3f3c2).
 - `tests/orca/queue/test_entries.py` covers the token and the key set.
 - `tests/core/queue/test_ownership_guards.py` fails when a `QueueEntry` is
   constructed outside `entry_from_dict` and `adapter.enqueue`, or when a
   `replace()` call sets `enqueued_at`.
 
 Limits: the token is opaque and comparable only within one major version, and
-nothing rewrites the values 8.x recorded. Only the activity projection
-compares it, for an active row that has no run ID; completed rows match by run
-ID. Rows queued under 8.x keep their stored value, and a pending row claimed by
-the new child records the new token. A job still running across an upgrade
-outside an idle window keeps an 8.x token that no longer matches: `queue list`
-shows it twice (its queue row and a run-state row) and `queue cancel <run ID>`
-cannot find it until it finishes, while `queue cancel <queue ID>` still works.
-An upgrade in an idle window sees no difference (`docs/RELEASE.md`).
+nothing rewrites the values 8.x recorded. The identity leaves out the
+queued-notification flag (`orca_queued_notification_pending`) that the 8.x
+token counted, so every row that carries the flag, nearly every row 8.x wrote,
+gets a new token. Only the activity projection compares it, for an active row
+that has no run ID; completed rows match by run ID. Rows queued under 8.x keep
+their stored value, and a pending row claimed by the new child records the new
+token. A job still running across an upgrade outside an idle window keeps an
+8.x token that no longer matches: `queue list` shows it twice (its queue row
+and a run-state row), `queue cancel <run ID>` cannot find it and
+`queue cancel <job directory>` fails as ambiguous, while
+`queue cancel <queue ID>` still works. All of this clears when the job
+finishes. An upgrade therefore runs only in an idle window
+(`active_simulations: 0`), where it sees no difference. A rollback to 8.x
+needs an idle window too: 8.x counts the flag again, so a job the new version
+started that is still running shows the same effects in reverse
+(`docs/RELEASE.md`).

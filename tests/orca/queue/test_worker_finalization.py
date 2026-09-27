@@ -23,6 +23,7 @@ from orca_auto.core.admission import (
     reserve_slot,
     set_slot_engine_process,
 )
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_BLOCKED_KEY,
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -31,7 +32,6 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_metadata,
     queue_record_sync_state,
 )
-from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
 from orca_auto.core.utils.lock import file_lock

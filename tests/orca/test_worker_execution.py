@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from orca_auto.core.admission import admission_dir, get_slot, reserve_slot
+from orca_auto.core.queue import persistence as queue_persistence
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import lock as lock_utils
@@ -67,7 +68,9 @@ def test_prelaunch_rejection_does_not_overwrite_a_changed_claim(
         elif transition == "replacement":
             # A stale child must not reject another generation, even if its
             # queue ID and dequeue timestamp remain the same.
-            queue_store.save_entries(runs_root, [replace(running, task_id="replacement-task")])
+            queue_persistence.save_entries(
+                runs_root, [replace(running, task_id="replacement-task")]
+            )
         else:
             assert adapter.requeue_running_entry(
                 runs_root, running.queue_id, expected_entry=running

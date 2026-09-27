@@ -278,9 +278,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
 
         A pass that fails after reserving a slot releases it, and that release
         can fail on the same held admission lock. The slot's owner is this live
-        process, so the dead-owner reconcile keeps it and the shared pool loses
-        that capacity until the worker exits. Attach gives a slot its queue id
-        and hands it to the child, and this runs between passes, when no
+        process, so the dead-owner reconcile keeps it and the admission store
+        loses that capacity until the worker exits. Attach gives a slot its queue
+        id and hands it to the child, and this runs between passes, when no
         reservation of this process is in flight.
         """
         worker_pid = os.getpid()

@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from orca_auto.core.admission import admission_dir, list_slots, prepare_slot_engine_process
-from orca_auto.core.queue.store import save_entries as save_entries_core
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import STATUS_CANCELLED
 from orca_auto.orca.config import AppConfig

@@ -34,7 +34,7 @@ def peek_next_entry(
     cfg: AppConfig,
     *,
     skip_entry_fn: Callable[[QueueEntry], bool] | None = None,
-) -> tuple[Path, QueueEntry] | None:
+) -> QueueEntry | None:
     """Read-only preview of what ``dequeue_next_entry`` would claim.
 
     The worker consults this before reserving an admission slot so an idle
@@ -43,13 +43,10 @@ def peek_next_entry(
     cancellation, and the dequeue then reports that.
     """
     # The listing holds ORCA rows only, so a foreign row never reaches the skip predicate.
-    selected = select_next_claimable_entry(
+    return select_next_claimable_entry(
         list_orca_rows(cfg),
         accept_entry_fn=(None if skip_entry_fn is None else lambda entry: not skip_entry_fn(entry)),
     )
-    if selected is None:
-        return None
-    return queue_root(cfg), selected
 
 
 def dequeue_next_entry(
@@ -58,10 +55,10 @@ def dequeue_next_entry(
     skip_entry_fn: Callable[[QueueEntry], bool] | None = None,
 ) -> tuple[Path, QueueEntry] | None:
     """Claim the previewed row by id, fenced on the previewed generation."""
-    selected = peek_next_entry(cfg, skip_entry_fn=skip_entry_fn)
-    if selected is None:
+    entry = peek_next_entry(cfg, skip_entry_fn=skip_entry_fn)
+    if entry is None:
         return None
-    root, entry = selected
+    root = queue_root(cfg)
     queue_id = str(getattr(entry, "queue_id", "")).strip()
     if not queue_id:
         return None

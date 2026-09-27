@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.messaging import Message
+from orca_auto.core.queue import persistence as queue_persistence
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.deferral import ADMISSION_DEFERRAL_METADATA_KEY, admission_deferral_update
 from orca_auto.core.queue.publication import (
@@ -379,7 +380,7 @@ def _stored_row(root: Path) -> QueueEntry | None:
 
 
 def _cell(root: Path, row: QueueEntry, call: Callable[[], Any]) -> str:
-    queue_store.save_entries(root, [row])
+    queue_persistence.save_entries(root, [row])
     try:
         result = _result(call())
     except Exception as exc:  # noqa: BLE001 - the raised type is the pinned answer
@@ -460,7 +461,7 @@ def test_requeue_fields(tmp_path: Path) -> None:
     }
     table: dict[str, Any] = {}
     for name, (row, call) in cases.items():
-        queue_store.save_entries(root, [row])
+        queue_persistence.save_entries(root, [row])
         returned = call()
         after = _stored_row(root)
         assert after is not None
@@ -468,7 +469,7 @@ def test_requeue_fields(tmp_path: Path) -> None:
             {
                 "returned": list(returned) if isinstance(returned, tuple) else returned,
                 "row_change": _row_change(row, after),
-                "row": queue_store.entry_to_dict(after),
+                "row": queue_persistence.entry_to_dict(after),
             }
         )
     assert_pin("queue_requeue_fields.json", table)
@@ -482,7 +483,7 @@ def test_cancel_with_snapshot_taken_before_queued_notification_claim(tmp_path: P
     job = root / "job"
     job.mkdir(parents=True)
     row = _with_metadata(_row(str(job)), {_PENDING_KEY: True})
-    queue_store.save_entries(root, [row])
+    queue_persistence.save_entries(root, [row])
     snapshot = adapter.get_entry_by_id(root, _QUEUE_ID)
     claimed = notifications._claim_queued_notifications(root)
     cancelled = adapter.cancel(root, _QUEUE_ID, expected_entry=snapshot)

@@ -17,6 +17,7 @@ from orca_auto.core import activity_invalidation as _activity_invalidation
 from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
+from orca_auto.core.queue.persistence import load_entries
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.process_tracking import run_lock_is_held
@@ -118,7 +119,7 @@ def _queue_generation_blocks_state_cleanup(
         is_orca_queue_entry(entry)
         and _resolved_path_text(queue_entry_reaction_dir(entry)) == reaction_dir
         and _row_protection(entry) in _PROTECTS_STATE
-        for entry in _queue_store.load_entries(allowed_root)
+        for entry in load_entries(allowed_root)
     )
 
 

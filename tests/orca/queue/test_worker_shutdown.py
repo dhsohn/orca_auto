@@ -15,8 +15,8 @@ from unittest.mock import patch
 import pytest
 
 from orca_auto.core.admission import admission_dir, get_slot, list_slots
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.processes import ManagedProcess, terminate_process_group
-from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod

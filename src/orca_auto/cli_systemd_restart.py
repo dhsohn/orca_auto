@@ -108,7 +108,7 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
 
     if use_sudo:
         # Authenticate before blocking admission. Mutation commands must not
-        # prompt while workers are waiting for the shared pool lock.
+        # prompt while the worker is waiting for the admission store lock.
         try:
             authenticated = run(["sudo", "-v"], check=False)
         except OSError as exc:

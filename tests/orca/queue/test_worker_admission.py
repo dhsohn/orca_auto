@@ -12,8 +12,8 @@ from typing import Any
 import pytest
 
 from orca_auto.core.admission import admission_dir, list_slots, release_slot, reserve_slot
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.store import QueueLockTimeoutError
-from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import enqueue, list_queue

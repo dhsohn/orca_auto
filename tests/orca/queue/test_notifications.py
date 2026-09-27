@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from orca_auto.core.messaging.channel import SendResult
-from orca_auto.core.queue import store
+from orca_auto.core.queue import persistence, store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -81,7 +81,7 @@ def test_ambiguous_queued_claim_never_sends(tmp_path, monkeypatch, after_commit)
             QUEUED_NOTIFICATION_PENDING_KEY: True,
         },
     )
-    store.save_entries(tmp_path, [entry])
+    persistence.save_entries(tmp_path, [entry])
     channel = RecordingChannel()
     monkeypatch.setattr(notifications, "notification_channel", lambda _cfg: channel)
 
@@ -120,7 +120,7 @@ def test_queued_delivery_waits_for_publication_and_ignores_cancelled_or_old_rows
     )
     cancelled = replace(ready, queue_id="cancelled", status=QueueStatus.CANCELLED)
     old = make_queue_entry(reaction_dir=tmp_path / "old")
-    store.save_entries(tmp_path, [ready, waiting, cancelled, old])
+    persistence.save_entries(tmp_path, [ready, waiting, cancelled, old])
     cfg = make_app_cfg(tmp_path)
     notifications.notify_queued_jobs(cfg)
     _join_senders()

@@ -146,7 +146,7 @@ def test_terminal_publication_is_visible_until_marker_clears(
 ) -> None:
     from orca_auto.activity import list_activities
     from orca_auto.activity_labels import queue_detail_text
-    from orca_auto.core.queue.store import save_entries
+    from orca_auto.core.queue.persistence import save_entries
     from orca_auto.orca.queue.entries import TERMINAL_REPLAY_METADATA_KEY
     from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_for_entry
     from tests.conftest import make_queue_entry

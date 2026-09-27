@@ -21,7 +21,7 @@ import pytest
 from orca_auto.core.admission import release_slot, reserve_slot
 from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.messaging.channel import SendResult
-from orca_auto.core.queue.store import save_entries as save_entries_core
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import (
     STATUS_CANCELLED,
