@@ -9,11 +9,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.cli_worker_supervision import worker_stop_budget_seconds
 from orca_auto.core.config.files import (
     ORCA_AUTO_CONFIG_ENV_VAR,
     SharedConfig,
     usable_runs_root_text,
 )
+from orca_auto.core.queue.processes import KILL_TIMEOUT_SECONDS
 from orca_auto.core.runtime_bundle import (
     PROCESS_RUNTIME_BUILD_ENV,
     RUNTIME_MANIFEST_NAME,
@@ -160,12 +162,10 @@ def _render_read_write_paths(shared: SharedConfig | None) -> str:
 
 
 def _configured_stop_timeout_seconds(shared: SharedConfig | None) -> int | None:
-    """The worker's shutdown budget for the configured concurrency, or None without a config."""
+    """The supervisor's stop budget plus its kill wait, or None without a config."""
     if shared is None:
         return None
-    from orca_auto.core.queue.processes import KILL_TIMEOUT_SECONDS, worker_shutdown_budget_seconds
-
-    budget = worker_shutdown_budget_seconds(shared.scheduler.max_active_simulations)
+    budget = worker_stop_budget_seconds(shared.scheduler.max_active_simulations)
     # One extra second so systemd's SIGKILL can never precede the supervisor's own kill wait.
     return math.ceil(budget + KILL_TIMEOUT_SECONDS) + 1
 

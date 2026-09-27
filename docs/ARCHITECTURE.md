@@ -161,8 +161,14 @@ pre-enqueue intent ledger) and `generation_owner.py` (the owner xattr of a
 generation directory and its pinned removal) serve every process that creates,
 claims or recovers a generation.
 
-The worker CLI loads config, checks the PID file (`read_worker_pid_file` in
-`core/queue/worker/pid_file.py`), then constructs and runs the ORCA worker directly.
+The worker CLI loads config, checks the PID file (`existing_worker_pid`, over
+`read_worker_pid_file` in `core/queue/worker/pid_file.py`), then constructs and runs
+the ORCA worker directly. `orca_auto queue worker` refuses through the same
+`existing_worker_pid`, then `cli_worker_supervision.py` supervises that one worker
+process: it restarts the worker after each exit, stops after two failing exits
+within 5 s of a start or three exits within 300 s, and on SIGTERM gives the worker
+`worker_stop_budget_seconds` before a kill. `systemd install` renders
+`TimeoutStopSec` from the same budget.
 `orca/queue/roots.py` resolves the one queue root (`runtime.allowed_root`) and owns
 listing and the fenced by-id claim; rows are never claimed by head-of-queue position.
 `orca/queue/entries.py` owns the ORCA row identity and the one generation identity:

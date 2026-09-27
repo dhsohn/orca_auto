@@ -156,8 +156,12 @@ ORCA 프로세스 그룹을 멈춘다. `snapshot_intent.py`(enqueue 전 의도 �
 `generation_owner.py`(generation 디렉터리의 소유자 xattr과 고정 핸들을 통한 삭제)는
 generation을 만들거나 인수하거나 복구하는 모든 프로세스가 쓴다.
 
-워커 CLI는 설정 로드, PID 확인(`core/queue/worker/pid_file.py`의 `read_worker_pid_file`),
-ORCA 워커 생성·실행을 직접 수행한다. `orca/queue/roots.py`가 하나뿐인 큐 루트
+워커 CLI는 설정 로드, PID 확인(`core/queue/worker/pid_file.py`의 `read_worker_pid_file`을
+쓰는 `existing_worker_pid`), ORCA 워커 생성·실행을 직접 수행한다. `orca_auto queue worker`도
+같은 `existing_worker_pid`로 두 번째 워커를 거부한 뒤, `cli_worker_supervision.py`가 그 워커
+프로세스 하나를 감독한다. 종료할 때마다 다시 시작하고, 시작 후 5초 안의 실패 종료가 두 번
+이어지거나 300초 안에 세 번 종료하면 멈추며, SIGTERM을 받으면 `worker_stop_budget_seconds`
+만큼 기다린 뒤 강제 종료한다. `systemd install`은 같은 예산으로 `TimeoutStopSec`을 렌더링한다. `orca/queue/roots.py`가 하나뿐인 큐 루트
 (`runtime.allowed_root`)를 해석하고 행 나열과 ID 기준 fenced 인수를 소유하며 큐 선두
 위치로 행을 인수하는 일은 없다.
 `orca/queue/entries.py`가 ORCA 행 식별과 하나뿐인 generation 식별을 소유한다. 쓰기
