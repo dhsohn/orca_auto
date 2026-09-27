@@ -17,7 +17,6 @@ from orca_auto.core.admission import AdmissionStore, reserve_slot, update_slot_m
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.pid_file import WORKER_PID_FILE_NAME, write_worker_pid_file
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING
-from orca_auto.orca.queue import adapter
 from orca_auto.orca.queue.adapter import DuplicateEntryError, enqueue, list_queue
 from orca_auto.orca.queue.orphans import reconcile_dead_running_rows_for_dir
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
@@ -63,14 +62,14 @@ def test_dead_running_row_lists_as_pending_until_a_worker_reconciles_it(tmp_path
     rxn, entry = _running_row(tmp_path, "rxn")
 
     # Running row, no run.lock, no worker: the listing does not claim it is running.
-    assert queue_entry_status(adapter, entry, None) == STATUS_PENDING
-    assert queue_entry_status(adapter, entry, _snapshot(rxn, STATUS_RUNNING)) == STATUS_PENDING
+    assert queue_entry_status(entry, None) == STATUS_PENDING
+    assert queue_entry_status(entry, _snapshot(rxn, STATUS_RUNNING)) == STATUS_PENDING
     # The row itself is left for the worker; the listing did not rewrite it.
     assert _row(tmp_path, entry.queue_id).status is QueueStatus.RUNNING
 
     # A child that holds run.lock is genuinely running.
     with acquire_run_lock(rxn):
-        assert queue_entry_status(adapter, entry, None) == STATUS_RUNNING
+        assert queue_entry_status(entry, None) == STATUS_RUNNING
 
 
 def test_submission_never_sweeps_running_rows_of_other_directories(tmp_path: Path) -> None:

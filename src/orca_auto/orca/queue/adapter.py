@@ -10,49 +10,34 @@ from typing import Any
 
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue import transitions as _queue_transitions
-from orca_auto.core.queue.deferral import (
-    ADMISSION_DEFERRAL_METADATA_KEY,
-    admission_deferral_update,
-)
+from orca_auto.core.queue.deferral import admission_deferral_update
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.publication import (
-    QUEUE_RECORD_SYNC_BLOCKED_KEY,
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
-    QUEUE_RECORD_SYNC_OWNER_PID_KEY,
-    QUEUE_RECORD_SYNC_OWNER_START_KEY,
-    QUEUE_RECORD_SYNC_TOKEN_KEY,
-    QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     queue_record_sync_metadata,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import now_utc_iso, timestamped_token
-from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
+from ..app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from .entries import (
     ACTIVE_STATUSES,
-    QUEUE_APP_NAME,
-    QUEUE_ENGINE,
-    QUEUE_TASK_KIND,
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    TERMINAL_REPLAY_METADATA_KEY,
     TERMINAL_STATUSES,
     entry_metadata,
     find_active_entry,
+    is_orca_queue_entry,
     normalize_text,
-    queue_entry_app_name,
-    queue_entry_force,
     queue_entry_id,
     queue_entry_matches_target,
-    queue_entry_metadata,
-    queue_entry_priority,
     queue_entry_reaction_dir,
-    queue_entry_run_id,
     queue_entry_status,
-    queue_entry_task_id,
+    same_generation,
 )
-from .orphans import reconcile_dead_running_rows_for_dir, reconcile_orphaned_running_entries
+from .orphans import reconcile_dead_running_rows_for_dir
 from .terminal_replay import (
-    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
-    TERMINAL_REPLAY_METADATA_KEY,
     TerminalReplayMarkerKind,
     terminal_replay_is_fence_only,
     terminal_replay_marker_kind,
@@ -64,42 +49,23 @@ logger = logging.getLogger(__name__)
 _TOKEN_COLLISION_RETRY_LIMIT = 32
 
 __all__ = [
-    "ACTIVE_STATUSES",
-    "DuplicateEntryError",
     "AmbiguousQueueTargetError",
-    "QUEUE_APP_NAME",
-    "QUEUE_ENGINE",
-    "QUEUE_TASK_KIND",
-    "TERMINAL_STATUSES",
-    "TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY",
-    "TERMINAL_REPLAY_METADATA_KEY",
+    "DuplicateEntryError",
     "cancel",
     "cancel_requested_ids",
     "cancellation_probe",
     "dequeue_entry_if_pending",
     "enqueue",
-    "get_active_entry_for_reaction_dir",
-    "get_entry_by_id",
-    "get_cancel_requested",
-    "is_orca_queue_entry",
     "find_entry_by_target",
+    "get_active_entry_for_reaction_dir",
+    "get_cancel_requested",
+    "get_entry_by_id",
     "list_queue",
     "mark_cancelled",
     "mark_completed",
     "mark_failed",
-    "queue_entry_matches_target",
-    "queue_entry_app_name",
-    "queue_entry_force",
-    "queue_entry_id",
-    "queue_entry_metadata",
-    "queue_entry_priority",
-    "queue_entry_reaction_dir",
-    "queue_entry_run_id",
-    "queue_entry_status",
-    "queue_entry_task_id",
-    "queue_entries_same_publication_generation",
-    "reconcile_orphaned_running_entries",
     "requeue_running_entry",
+    "update_metadata",
     "update_terminal",
     "worker_log_path",
 ]
@@ -154,11 +120,6 @@ class AmbiguousQueueTargetError(ValueError):
     """Raised when a cancel alias names multiple active ORCA generations."""
 
 
-def is_orca_queue_entry(entry: Any) -> bool:
-    """Return whether a row carries the complete canonical ORCA identity."""
-    return entry_matches_engine_identity(entry, QUEUE_ENGINE)
-
-
 def _reject_duplicate_reaction_dir(
     entries: Sequence[QueueEntry],
     entry: QueueEntry,
@@ -211,7 +172,7 @@ def enqueue(
     priority: int = 10,
     force: bool = False,
     task_id: str | None = None,
-    task_kind: str = QUEUE_TASK_KIND,
+    task_kind: str = ORCA_TASK_KIND,
     metadata: dict[str, Any] | None = None,
     before_commit_fn: Callable[[], Any] | None = None,
     after_commit_fn: Callable[[], Any] | None = None,
@@ -229,7 +190,7 @@ def enqueue(
         reconcile_dead_running_rows_for_dir(allowed_root, resolved, admission_root=admission_root)
     normalized_priority = normalize_queue_priority(priority)
     normalized_task_id = normalize_text(task_id)
-    normalized_task_kind = normalize_text(task_kind) or QUEUE_TASK_KIND
+    normalized_task_kind = normalize_text(task_kind) or ORCA_TASK_KIND
 
     def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
         queue_id = _unique_timestamped_token(
@@ -256,10 +217,10 @@ def enqueue(
             )
         entry = QueueEntry(
             queue_id=queue_id,
-            app_name=QUEUE_APP_NAME,
+            app_name=ORCA_AUTO_ORCA_APP_NAME,
             task_id=resolved_task_id,
             task_kind=normalized_task_kind,
-            engine=QUEUE_ENGINE,
+            engine=ORCA_ENGINE,
             status=QueueStatus.PENDING,
             priority=normalized_priority,
             enqueued_at=now_utc_iso(),
@@ -276,36 +237,6 @@ def enqueue(
     return entry
 
 
-def queue_entries_same_publication_generation(current: QueueEntry, expected: QueueEntry) -> bool:
-    return bool(
-        current.queue_id == expected.queue_id
-        and current.app_name == expected.app_name
-        and current.task_id == expected.task_id
-        and current.task_kind == expected.task_kind
-        and current.engine == expected.engine
-        and current.priority == expected.priority
-        and queue_entry_reaction_dir(current) == queue_entry_reaction_dir(expected)
-        and queue_entry_force(current) is queue_entry_force(expected)
-        and _immutable_publication_metadata(current.metadata)
-        == _immutable_publication_metadata(expected.metadata)
-    )
-
-
-def _immutable_publication_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    lease_keys = {
-        QUEUE_RECORD_SYNC_BLOCKED_KEY,
-        QUEUE_RECORD_SYNC_KEY,
-        QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
-        QUEUE_RECORD_SYNC_OWNER_PID_KEY,
-        QUEUE_RECORD_SYNC_OWNER_START_KEY,
-        QUEUE_RECORD_SYNC_TOKEN_KEY,
-        TERMINAL_REPLAY_METADATA_KEY,
-        ADMISSION_DEFERRAL_METADATA_KEY,
-        "run_id",
-    }
-    return {key: value for key, value in metadata.items() if key not in lease_keys}
-
-
 def _same_orca_generation(
     current: QueueEntry,
     *,
@@ -315,10 +246,7 @@ def _same_orca_generation(
     """The one ORCA fence: may a writer holding this snapshot or task id change ``current``?"""
     return (
         is_orca_queue_entry(current)
-        and (
-            expected_entry is None
-            or queue_entries_same_publication_generation(current, expected_entry)
-        )
+        and (expected_entry is None or same_generation(current, expected_entry))
         and (
             expected_task_id is None
             or normalize_text(current.task_id) == normalize_text(expected_task_id)
@@ -336,8 +264,9 @@ def dequeue_entry_if_pending(
     entry = _queue_store.dequeue_entry_if_pending(
         allowed_root,
         queue_id,
-        accept_entry_fn=is_orca_queue_entry,
-        expected_entry=expected_entry,
+        accept_entry_fn=lambda current: _same_orca_generation(
+            current, expected_entry=expected_entry
+        ),
     )
     if entry is None:
         return None

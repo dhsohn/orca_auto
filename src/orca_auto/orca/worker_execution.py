@@ -28,20 +28,15 @@ from orca_auto.core.engine_scratch import (
     attach_scratch_provenance_mapping_to_exception,
     scratch_provenance_from_exception,
 )
-from orca_auto.core.queue.child.execution import (
-    ChildWorkerShutdownController,
-    find_queue_entry_by_id,
-)
+from orca_auto.core.queue.child.execution import ChildWorkerShutdownController
 from orca_auto.core.queue.child.process import entry_status_is_running
 from orca_auto.core.queue.engine.child import await_parent_admission_handoff
-from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker import (
     install_shutdown_signal_handlers,
     resolve_admission_root,
 )
-from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from .attempt.reporting import build_final_result, last_out_path_from_state
 from .config import AppConfig, load_config
@@ -54,13 +49,16 @@ from .orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
 from .output_adoption import completed_out_or_none
 from .queue.adapter import (
     cancellation_probe,
-    list_queue,
+    get_entry_by_id,
     mark_failed,
+    requeue_running_entry,
+)
+from .queue.entries import (
     queue_entry_app_name,
+    queue_entry_generation_token,
     queue_entry_id,
     queue_entry_reaction_dir,
     queue_entry_task_id,
-    requeue_running_entry,
 )
 from .recovery_rebind import maybe_rebind_recovery_generation
 from .run_context import RunExecutionContext, configured_admission_root
@@ -137,14 +135,6 @@ class WorkerShutdownRequested(RuntimeError):
     def __init__(self, context: OrcaWorkerExecutionContext) -> None:
         super().__init__("worker_shutdown")
         self.context = context
-
-
-def _queue_entry_by_id(queue_root: Path, queue_id: str) -> QueueEntry | None:
-    return find_queue_entry_by_id(
-        queue_root,
-        queue_id,
-        list_queue_fn=list_queue,
-    )
 
 
 def _build_execution_context(
@@ -416,7 +406,7 @@ def _record_worker_rejection(
     """
 
     queue_id = str(entry.queue_id)
-    current = _queue_entry_by_id(queue_root, queue_id)
+    current = get_entry_by_id(queue_root, queue_id)
     recorded = current is not None and mark_failed(
         queue_root,
         queue_id,
@@ -487,8 +477,8 @@ def run_worker_child_job(
     controller = ChildWorkerShutdownController()
     cfg = load_config(config_path)
     resolved_queue_root = Path(queue_root).expanduser().resolve()
-    entry = _queue_entry_by_id(resolved_queue_root, queue_id)
-    if entry is not None and entry_matches_engine_identity(entry, "orca"):
+    entry = get_entry_by_id(resolved_queue_root, queue_id)
+    if entry is not None:
         try:
             entry = maybe_rebind_recovery_generation(
                 entry,
@@ -502,9 +492,7 @@ def run_worker_child_job(
                 reason=f"crash recovery rejected: {exc}",
             )
             raise
-    if entry is None or not (
-        entry_status_is_running(entry) and entry_matches_engine_identity(entry, "orca")
-    ):
+    if entry is None or not entry_status_is_running(entry):
         return 1
     if admission_token and not await_parent_admission_handoff_fn(
         resolve_admission_root(cfg),

@@ -45,7 +45,7 @@ def _claim_next(root: Path) -> QueueEntry | None:
     entry = select_next_claimable_entry(store.list_queue(root))
     if entry is None:
         return None
-    return store.dequeue_entry_if_pending(root, entry.queue_id, expected_entry=entry)
+    return store.dequeue_entry_if_pending(root, entry.queue_id)
 
 
 def _queue_file(root: Path) -> Path:

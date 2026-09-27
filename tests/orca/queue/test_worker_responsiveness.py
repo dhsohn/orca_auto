@@ -13,8 +13,8 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.lock import FileLockTimeoutError
-from orca_auto.orca.queue.adapter import queue_entries_same_publication_generation
 from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication_outcome
+from orca_auto.orca.queue.entries import same_generation
 
 
 def _pending_publication(root: Path) -> QueueEntry:
@@ -44,7 +44,7 @@ def test_busy_publication_repair_does_not_wait_or_change_lease(tmp_path: Path) -
                 entry,
                 label="test",
                 publish=published.append,
-                same_generation=queue_entries_same_publication_generation,
+                same_generation=same_generation,
                 lock_timeout_seconds=0,
             )
             assert future.result(timeout=1).reason == "busy"
@@ -55,7 +55,7 @@ def test_busy_publication_repair_does_not_wait_or_change_lease(tmp_path: Path) -
         entry,
         label="test",
         publish=published.append,
-        same_generation=queue_entries_same_publication_generation,
+        same_generation=same_generation,
         lock_timeout_seconds=0,
     ).repaired
     assert len(published) == 1
@@ -72,7 +72,7 @@ def test_publication_callback_timeout_is_failure_not_busy(tmp_path: Path) -> Non
         entry,
         label="test",
         publish=publish,
-        same_generation=queue_entries_same_publication_generation,
+        same_generation=same_generation,
         lock_timeout_seconds=0,
     )
     assert outcome.reason == "failed"

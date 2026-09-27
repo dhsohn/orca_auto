@@ -37,16 +37,12 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca import scratch_config as _scratch_config
+from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.queue import worker_tracking
 from orca_auto.orca.queue.adapter import worker_log_path
-from orca_auto.orca.queue.entries import (
-    QUEUE_APP_NAME,
-    QUEUE_ENGINE,
-    QUEUE_TASK_KIND,
-    entry_metadata,
-)
+from orca_auto.orca.queue.entries import entry_metadata
 from orca_auto.orca.queue.roots import dequeue_next_entry
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state import finalize_state, new_state, write_state
@@ -306,10 +302,10 @@ def make_queue_entry(
         )
     return QueueEntry(
         queue_id=resolved_queue_id,
-        app_name=QUEUE_APP_NAME,
+        app_name=ORCA_AUTO_ORCA_APP_NAME,
         task_id=task_id or timestamped_token("orca"),
-        task_kind=QUEUE_TASK_KIND,
-        engine=QUEUE_ENGINE,
+        task_kind=ORCA_TASK_KIND,
+        engine=ORCA_ENGINE,
         status=status,
         priority=priority,
         metadata=row_metadata,

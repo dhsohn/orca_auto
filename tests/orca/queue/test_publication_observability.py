@@ -8,7 +8,6 @@ import pytest
 
 from orca_auto import cli_queue
 from orca_auto.activity._orca import queue_record
-from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_REPAIR_PENDING,
@@ -16,6 +15,7 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.queue import adapter, publication_repair
+from orca_auto.orca.queue.entries import queue_entry_generation_token
 from tests.conftest import claim_next_entry, make_app_cfg
 from tests.queue_worker_helpers import current_orca_queue_metadata
 
@@ -46,7 +46,7 @@ def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: P
     [blocked] = adapter.list_queue(tmp_path)
     assert blocked.status == QueueStatus.PENDING
     assert queue_entry_generation_token(blocked) == generation
-    metadata = queue_record(adapter, blocked, None, allowed_root=tmp_path).metadata
+    metadata = queue_record(blocked, None, allowed_root=tmp_path).metadata
     assert "index unavailable" in metadata["publication_blocked_reason"]
     assert metadata["publication_blocked_scope"] == "orca_queue"
     assert entry.queue_id in metadata["publication_blocked_action"]
@@ -55,7 +55,7 @@ def test_publication_failure_persists_reason_and_clears_after_repair(tmp_path: P
     with patch.object(publication_repair, "upsert_queued_job_record"):
         assert publication_repair.repair_queue_publication(cfg, tmp_path, blocked)
     [repaired] = adapter.list_queue(tmp_path)
-    metadata = queue_record(adapter, repaired, None, allowed_root=tmp_path).metadata
+    metadata = queue_record(repaired, None, allowed_root=tmp_path).metadata
     assert metadata["publication_blocked_reason"] == ""
     assert queue_entry_generation_token(repaired) == generation
     assert claim_next_entry(tmp_path) is not None
@@ -101,7 +101,7 @@ def test_old_generation_cannot_publish_a_blocker_on_replacement(tmp_path: Path) 
     assert not publication_repair.repair_queue_publication(cfg, tmp_path, entry)
     [current] = adapter.list_queue(tmp_path)
     assert current.task_id == "replacement"
-    assert not queue_record(adapter, current, None, allowed_root=tmp_path).metadata.get(
+    assert not queue_record(current, None, allowed_root=tmp_path).metadata.get(
         "publication_blocked_reason"
     )
 
@@ -129,12 +129,10 @@ def test_complete_publication_clears_resolved_path_error(tmp_path: Path) -> None
     with patch.object(Path, "resolve", interrupted_resolve):
         assert not publication_repair.repair_queue_publication(cfg, tmp_path, entry)
     [blocked] = adapter.list_queue(tmp_path)
-    assert queue_record(adapter, blocked, None, allowed_root=tmp_path).metadata[
-        "publication_blocked_reason"
-    ]
+    assert queue_record(blocked, None, allowed_root=tmp_path).metadata["publication_blocked_reason"]
     assert publication_repair.repair_queue_publication(cfg, tmp_path, blocked)
     [recovered] = adapter.list_queue(tmp_path)
-    assert not queue_record(adapter, recovered, None, allowed_root=tmp_path).metadata[
+    assert not queue_record(recovered, None, allowed_root=tmp_path).metadata[
         "publication_blocked_reason"
     ]
 
@@ -149,10 +147,8 @@ def test_terminal_publication_is_visible_until_marker_clears(
     from orca_auto.activity import list_activities
     from orca_auto.activity_labels import queue_detail_text
     from orca_auto.core.queue.store import save_entries
-    from orca_auto.orca.queue.terminal_replay import (
-        TERMINAL_REPLAY_METADATA_KEY,
-        terminal_replay_marker_for_entry,
-    )
+    from orca_auto.orca.queue.entries import TERMINAL_REPLAY_METADATA_KEY
+    from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_for_entry
     from tests.conftest import make_queue_entry
 
     config = str(config_path(runs_root=tmp_path))

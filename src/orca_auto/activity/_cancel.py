@@ -11,6 +11,7 @@ from orca_auto.activity.model import (
 )
 from orca_auto.core.statuses import is_queue_active_status
 from orca_auto.core.utils import normalize_text
+from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE, ORCA_ENGINE
 from orca_auto.orca.direct_cancel import cancel_target as cancel_orca_target
 
 
@@ -82,7 +83,7 @@ def cancel_orca_activity(
     resolved: ResolvedActivitySources,
     request: ActivityCancelRequest,
 ) -> dict[str, Any]:
-    if record.engine != "orca" or record.source != "orca_auto_orca":
+    if record.engine != ORCA_ENGINE or record.source != ORCA_AUTO_ORCA_SOURCE:
         raise ValueError(f"Unsupported activity source: {record.source}")
     config_path = normalize_text(resolved.orca_config)
     if not config_path:

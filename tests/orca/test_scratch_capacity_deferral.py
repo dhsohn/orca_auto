@@ -23,7 +23,6 @@ from orca_auto.core.queue.deferral import (
     queue_entry_admission_deferral_reason,
     queue_entry_admission_is_deferred,
 )
-from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.orca import execution, worker_execution
@@ -33,11 +32,8 @@ from orca_auto.orca.execution_binding import (
     orca_execution_started_evidence,
 )
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult
-from orca_auto.orca.queue.adapter import (
-    enqueue,
-    list_queue,
-    queue_entries_same_publication_generation,
-)
+from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.queue.entries import queue_entry_generation_token, same_generation
 from orca_auto.orca.recovery_rebind import RECOVERY_REBIND_COUNT_METADATA_KEY
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
@@ -99,7 +95,7 @@ def test_deferral_is_lifecycle_metadata_not_generation_identity() -> None:
     deferred = _entry({"reaction_dir": "/runs/rxn", **admission_deferral_update(_REFUSAL)})
 
     assert queue_entry_generation_token(deferred) == queue_entry_generation_token(plain)
-    assert queue_entries_same_publication_generation(deferred, plain)
+    assert same_generation(deferred, plain)
 
 
 # --- claiming -------------------------------------------------------------------------------
@@ -214,7 +210,7 @@ def test_capacity_refusal_returns_the_row_to_the_queue_without_touching_its_gene
     assert deferred.error == ""
     assert queue_entry_admission_deferral_reason(deferred) == _REFUSAL
     assert queue_entry_generation_token(deferred) == queue_entry_generation_token(running)
-    assert queue_entries_same_publication_generation(deferred, running)
+    assert same_generation(deferred, running)
     # Nothing ran: the generation is pristine, so the next claim reuses it
     # instead of spending the bounded crash-recovery rebind budget.
     assert _generation_listing(rxn) == listing_before

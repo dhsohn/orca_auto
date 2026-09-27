@@ -1320,7 +1320,7 @@ def test_child_recovery_fences_the_failure_write_to_its_own_dequeue(
     queue_root, running, _snapshot, _executable = _claimed_mutable_entry(tmp_path)
     from orca_auto.orca.queue.adapter import requeue_running_entry
 
-    real_lookup = worker_execution._queue_entry_by_id
+    real_lookup = worker_execution.get_entry_by_id
     lookups = 0
 
     def reject(entry: Any, *, queue_root: Path, cfg_factory: Any) -> Any:
@@ -1339,7 +1339,7 @@ def test_child_recovery_fences_the_failure_write_to_its_own_dequeue(
         return snapshot
 
     monkeypatch.setattr(worker_execution, "maybe_rebind_recovery_generation", reject)
-    monkeypatch.setattr(worker_execution, "_queue_entry_by_id", lookup_then_lose_the_row)
+    monkeypatch.setattr(worker_execution, "get_entry_by_id", lookup_then_lose_the_row)
     config = _worker_config(tmp_path, queue_root, _executable)
 
     with pytest.raises(ValueError, match="invalid durable rebind count"):

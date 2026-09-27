@@ -10,6 +10,7 @@ import pytest
 
 from orca_auto.orca import run_cleanup, run_snapshot
 from orca_auto.orca.queue import adapter as queue_adapter
+from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import save_state
@@ -431,7 +432,7 @@ def test_clear_terminal_records_removes_cancelled_queue_stale_running_state(
     assert queue_adapter.update_metadata(
         allowed_root,
         entry.queue_id,
-        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+        {queue_entries.TERMINAL_REPLAY_METADATA_KEY: None},
     )
 
     assert state_path(reaction_dir).exists()
@@ -464,7 +465,7 @@ def test_clear_terminal_records_removes_cancelled_queue_cancelled_run_state(
     assert queue_adapter.update_metadata(
         allowed_root,
         entry.queue_id,
-        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+        {queue_entries.TERMINAL_REPLAY_METADATA_KEY: None},
     )
 
     assert state_path(reaction_dir).exists()
@@ -490,7 +491,7 @@ def test_clear_terminal_records_keeps_live_running_state_despite_terminal_queue(
     assert queue_adapter.update_metadata(
         allowed_root,
         entry.queue_id,
-        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+        {queue_entries.TERMINAL_REPLAY_METADATA_KEY: None},
     )
 
     with patch("orca_auto.orca.run_cleanup.run_lock_is_held", return_value=True):
@@ -513,7 +514,7 @@ def test_clear_terminal_records_keeps_state_when_same_dir_has_active_entry(
     assert queue_adapter.update_metadata(
         allowed_root,
         old_entry.queue_id,
-        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+        {queue_entries.TERMINAL_REPLAY_METADATA_KEY: None},
     )
     active_entry = queue_adapter.enqueue(allowed_root, str(reaction_dir), force=True)
 

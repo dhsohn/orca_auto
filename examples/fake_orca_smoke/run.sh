@@ -27,7 +27,8 @@ from pathlib import Path
 from orca_auto.cli import main as cli_main
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
-from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
+from orca_auto.orca.queue.adapter import list_queue
+from orca_auto.orca.queue.entries import queue_entry_reaction_dir
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_state
 from tests.contracts.report_verifier import load_report_json

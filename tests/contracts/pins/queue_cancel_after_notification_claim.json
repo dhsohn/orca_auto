@@ -2,6 +2,6 @@
   "claimed_queue_ids": [
     "q-pin"
   ],
-  "cancel_result": "None",
-  "row_change_after_claim_and_cancel": "~orca_queued_notification_pending"
+  "cancel_result": "entry(cancelled)",
+  "row_change_after_claim_and_cancel": "status=cancelled finished_at=<timestamp> cancel_requested=True ~orca_queued_notification_pending +orca_terminal_replay"
 }

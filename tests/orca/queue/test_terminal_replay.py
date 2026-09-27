@@ -40,6 +40,10 @@ from orca_auto.orca.queue.adapter import (
     mark_failed,
     requeue_running_entry,
 )
+from orca_auto.orca.queue.entries import (
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    TERMINAL_REPLAY_METADATA_KEY,
+)
 from orca_auto.orca.queue.models import OrcaRunningJob, OrcaWorkerReplayState
 from orca_auto.orca.queue.run_state_replay import (
     record_cancelled_run_state as _record_cancelled_run_state,
@@ -48,8 +52,6 @@ from orca_auto.orca.queue.run_state_replay import (
     record_failed_run_state as _record_failed_run_state,
 )
 from orca_auto.orca.queue.terminal_replay import (
-    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
-    TERMINAL_REPLAY_METADATA_KEY,
     StateGenerationFingerprint,
     terminal_replay_marker,
 )

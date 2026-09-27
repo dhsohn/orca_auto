@@ -21,17 +21,11 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.store import mutate_entries
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication_outcome
-from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from ..config import AppConfig
 from . import roots
-from .adapter import (
-    get_entry_by_id,
-    list_queue,
-    mark_failed,
-    queue_entries_same_publication_generation,
-)
-from .entries import queue_entry_id, queue_entry_reaction_dir
+from .adapter import get_entry_by_id, list_queue, mark_failed
+from .entries import is_orca_queue_entry, queue_entry_id, queue_entry_reaction_dir, same_generation
 from .job_records import upsert_queued_job_record
 
 logger = logging.getLogger(__name__)
@@ -59,7 +53,7 @@ def _record_publication_blocker(
             if current.queue_id != entry.queue_id:
                 continue
             if (
-                not queue_entries_same_publication_generation(current, entry)
+                not same_generation(current, entry)
                 or current.status != QueueStatus.PENDING
                 or current.cancel_requested
                 or (
@@ -179,7 +173,7 @@ def repair_queue_publication(
     entry: QueueEntry,
 ) -> bool:
     """Repair one queued-index publication before the row can be claimed."""
-    if not entry_matches_engine_identity(entry, "orca"):
+    if not is_orca_queue_entry(entry):
         return True
     if entry.status != QueueStatus.PENDING or entry.cancel_requested:
         return True
@@ -245,7 +239,7 @@ def repair_queue_publication(
         entry,
         publish=lambda current: upsert_queued_job_record(cfg, current),
         label="ORCA",
-        same_generation=queue_entries_same_publication_generation,
+        same_generation=same_generation,
         lock_timeout_seconds=0.0,
     )
     if outcome.reason == "busy":

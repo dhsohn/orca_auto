@@ -26,7 +26,6 @@ from orca_auto.core.statuses import (
     STATUS_FAILED,
     STATUS_RUNNING,
 )
-from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from ..config import AppConfig
 from ..execution_binding import orca_execution_provenance
@@ -34,23 +33,26 @@ from ..state_reading import load_state, state_path, state_payload_job_id
 from . import roots, worker_tracking
 from .adapter import (
     get_cancel_requested,
-    list_queue,
+    get_entry_by_id,
     mark_cancelled,
     mark_completed,
     mark_failed,
+    update_terminal,
+)
+from .adapter import update_metadata as update_queue_metadata
+from .entries import (
+    ACTIVE_STATUSES,
+    TERMINAL_REPLAY_METADATA_KEY,
+    TERMINAL_STATUSES,
     queue_entry_id,
     queue_entry_metadata,
     queue_entry_reaction_dir,
     queue_entry_task_id,
-    reconcile_orphaned_running_entries,
-    update_terminal,
 )
-from .adapter import update_metadata as update_queue_metadata
-from .entries import ACTIVE_STATUSES, TERMINAL_STATUSES
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
+from .orphans import reconcile_orphaned_running_entries
 from .run_state_replay import record_cancelled_run_state, record_failed_run_state
 from .terminal_replay import (
-    TERMINAL_REPLAY_METADATA_KEY,
     TerminalReplayMarkerKind,
     load_state_generation_fingerprint,
     state_fingerprint_from_payload,
@@ -85,15 +87,6 @@ class ArtifactGeneration:
     state_job_id: str = ""
 
 
-def queue_entry_by_id(queue_root: Path, target_queue_id: str) -> QueueEntry | None:
-    for entry in list_queue(Path(queue_root)):
-        if queue_entry_id(entry) == target_queue_id and entry_matches_engine_identity(
-            entry, "orca"
-        ):
-            return entry
-    return None
-
-
 def reaction_key_for_dir(reaction_dir: str) -> str | None:
     if not reaction_dir:
         return None
@@ -123,7 +116,7 @@ def mark_terminal_queue_entry(
     rc: int,
 ) -> TerminalQueueMarkResult:
     queue_root = job.queue_root
-    current = queue_entry_by_id(queue_root, queue_id)
+    current = get_entry_by_id(queue_root, queue_id)
     current_task_id = queue_entry_task_id(current) if current is not None else None
     expected_job_id = current_task_id or job.task_id
     if current is None or not entry_status_is_running(current):
@@ -186,7 +179,7 @@ def child_run_concluded(queue_id: str, job: OrcaRunningJob) -> bool:
     non-terminal run state (for example one whose self-requeue write raised
     while it handled the stop) did not conclude; it keeps the resume path.
     """
-    current = queue_entry_by_id(job.queue_root, queue_id)
+    current = get_entry_by_id(job.queue_root, queue_id)
     if current is None or normalized_entry_status(current) != STATUS_RUNNING:
         return True
     reaction_dir = str(getattr(job, "reaction_dir", "") or "").strip()
@@ -437,7 +430,7 @@ def _run_terminal_replay_side_effects(cfg: AppConfig, item: TerminalReplayWorkIt
 def _clear_terminal_replay_marker_or_confirm_absent(item: TerminalReplayWorkItem) -> None:
     if _clear_terminal_replay_marker(item):
         return
-    current = queue_entry_by_id(item.queue_root, item.queue_id)
+    current = get_entry_by_id(item.queue_root, item.queue_id)
     if current is None or terminal_replay_marker_from_entry(current) is None:
         return
     raise RuntimeError(
@@ -447,7 +440,7 @@ def _clear_terminal_replay_marker_or_confirm_absent(item: TerminalReplayWorkItem
 
 def _update_terminal_replay_entry(item: TerminalReplayWorkItem) -> TerminalReplayWorkItem:
     """Bind the queue projection to the prepared run's actual outcome and identity."""
-    current = queue_entry_by_id(item.queue_root, item.queue_id)
+    current = get_entry_by_id(item.queue_root, item.queue_id)
     if item.resolved_status != normalized_entry_status(current) or (
         item.run_id and item.recorded_run_id != item.run_id
     ):
@@ -935,7 +928,6 @@ __all__ = [
     "mark_terminal_queue_entry",
     "new_terminal_replay_work_item",
     "normalized_entry_status",
-    "queue_entry_by_id",
     "reaction_generation_key",
     "reaction_key_for_dir",
     "reconcile_worker_state",

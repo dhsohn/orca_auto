@@ -16,6 +16,7 @@ from orca_auto.core.utils import lock as lock_utils
 from orca_auto.orca import worker_execution
 from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
 from orca_auto.orca.queue import adapter
+from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_state
@@ -335,7 +336,7 @@ def _run_cancelled_child(
     assert running is not None
     token = reserve_slot(admission_root, 1, source="orca-child-cancel-lock-test")
     assert token is not None
-    rxn = Path(adapter.queue_entry_reaction_dir(running))
+    rxn = Path(queue_entries.queue_entry_reaction_dir(running))
     _running_state_for(rxn, queued.task_id)
 
     def execute(*_args: Any, **_kwargs: Any) -> int:

@@ -130,6 +130,25 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Public contract: one generation identity now decides whether a queue row is
+  still the generation a writer read, and the `queue_generation` value that
+  `job_state.json` records is the SHA-256 of that identity. The value is
+  opaque and comparable only within one major version. The identity is the
+  row's queue ID, app, task ID, task kind, engine, priority, submission time
+  and its metadata without the lifecycle keys: admission deferral, run ID,
+  terminal replay marker and fence, queued-notification claim and publication
+  lease. Every writer, the publication repair, the cancellation checks and the
+  worker's claim compare it. `queue cancel` no longer answers "already
+  terminal" when the worker claimed the job's queued notification between
+  reading the row and cancelling it. Metadata keys no current writer sets
+  (`attempt`, `candidate_count`, `retained_conformer_count`, `execution_dir`,
+  `terminal_artifacts`, `terminal_repair_blocked_reason`) now count as
+  identity like any other key. Rows queued under 8.x get a different
+  `queue_generation`, and nothing is rewritten. Only the queue listing compares
+  it, for a running row that has no run ID yet: a job still running across an
+  upgrade outside an idle window is listed twice (its queue row and a
+  run-state row) and `queue cancel <run ID>` cannot find it until it finishes;
+  cancel it by queue ID. An upgrade in an idle window sees no difference.
 - A job queued under 8.0.1 is verified against the new binding rules when it
   is claimed. Its input fails verification before ORCA starts, and must be
   resubmitted, when it has a file reference the new rules bind or refuse (ESD

@@ -5,7 +5,7 @@ move into one owner; the tables live in ``pins/queue_*.json``:
 
 * ``queue_generation_identity.json``: the literal ``queue_entry_generation_token``
   of a fixed row and of one variant per field or metadata key, and whether the
-  core and the ORCA publication rule call each variant the same generation.
+  one ORCA generation identity calls each variant the same generation.
 * ``queue_writer_fences.json``: accept/refuse and the row change of every
   fenced adapter writer over (current row, expected_entry, expected_task_id).
 * ``queue_requeue_fields.json``: the rows the orphan and core requeue paths leave.
@@ -29,10 +29,6 @@ from typing import Any
 from orca_auto.core.messaging import Message
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.deferral import ADMISSION_DEFERRAL_METADATA_KEY, admission_deferral_update
-from orca_auto.core.queue.generation import (
-    queue_entries_same_generation,
-    queue_entry_generation_token,
-)
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_BLOCKED_KEY,
     QUEUE_RECORD_SYNC_KEY,
@@ -43,14 +39,17 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.config import load_config
 from orca_auto.orca.queue import adapter, notifications
-from orca_auto.orca.queue.entries import QUEUE_APP_NAME, QUEUE_ENGINE, QUEUE_TASK_KIND
-from orca_auto.orca.queue.orphans import reconcile_orphaned_running_entries
-from orca_auto.orca.queue.terminal_replay import (
+from orca_auto.orca.queue.entries import (
+    QUEUED_NOTIFICATION_PENDING_KEY,
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
     TERMINAL_REPLAY_METADATA_KEY,
+    queue_entry_generation_token,
+    same_generation,
 )
+from orca_auto.orca.queue.orphans import reconcile_orphaned_running_entries
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.worker_execution import build_worker_child_command
 from tests.contracts.conftest import Harness, _join_notification_senders
@@ -62,7 +61,7 @@ _ENQUEUED_AT = "2026-01-02T03:04:05.000006+00:00"
 _STARTED_AT = "2026-01-02T03:05:00.000006+00:00"
 _FINISHED_AT = "2026-01-02T03:06:00.000006+00:00"
 _LATER = "2026-02-03T04:05:06.000007+00:00"
-_PENDING_KEY = notifications.QUEUED_NOTIFICATION_PENDING_KEY
+_PENDING_KEY = QUEUED_NOTIFICATION_PENDING_KEY
 
 
 def _row(reaction_dir: str, **fields: Any) -> QueueEntry:
@@ -81,10 +80,10 @@ def _row(reaction_dir: str, **fields: Any) -> QueueEntry:
     }
     return QueueEntry(
         queue_id=_QUEUE_ID,
-        app_name=QUEUE_APP_NAME,
+        app_name=ORCA_AUTO_ORCA_APP_NAME,
         task_id=_TASK_ID,
-        task_kind=QUEUE_TASK_KIND,
-        engine=QUEUE_ENGINE,
+        task_kind=ORCA_TASK_KIND,
+        engine=ORCA_ENGINE,
         status=QueueStatus.PENDING,
         priority=10,
         enqueued_at=_ENQUEUED_AT,
@@ -154,10 +153,7 @@ def test_generation_identity() -> None:
     table = {
         name: {
             "generation_token": queue_entry_generation_token(entry),
-            "core_same_generation": queue_entries_same_generation(entry, base),
-            "adapter_same_publication_generation": (
-                adapter.queue_entries_same_publication_generation(entry, base)
-            ),
+            "same_generation": same_generation(entry, base),
         }
         for name, entry in variants.items()
     }

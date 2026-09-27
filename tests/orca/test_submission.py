@@ -30,6 +30,7 @@ from orca_auto.orca.input_artifacts import OrcaSelectedInputArtifacts
 from orca_auto.orca.notifications import notify_queue_enqueued_event
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import enqueue_publication, publication_repair
+from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.run_dir_guard import use_run_dir_publication_guard
 from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
@@ -290,7 +291,7 @@ def test_notification_delivery_failure_does_not_park_queue_publication(
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
     assert queue_entry_is_claimable(entry)
-    assert entry.metadata[queue_notifications.QUEUED_NOTIFICATION_PENDING_KEY] is False
+    assert entry.metadata[queue_entries.QUEUED_NOTIFICATION_PENDING_KEY] is False
 
 
 def test_truncated_discord_response_does_not_park_queue_publication(
@@ -346,7 +347,7 @@ def test_truncated_discord_response_does_not_park_queue_publication(
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
     assert queue_entry_is_claimable(entry)
-    assert entry.metadata[queue_notifications.QUEUED_NOTIFICATION_PENDING_KEY] is False
+    assert entry.metadata[queue_entries.QUEUED_NOTIFICATION_PENDING_KEY] is False
 
 
 def test_submission_rejects_distinct_sources_with_same_basename_before_enqueue(
@@ -392,7 +393,7 @@ def test_closed_job_directory_resubmits_to_a_new_sibling_generation_without_forc
     assert queue_adapter.update_metadata(
         tmp_path,
         first.queue_id,
-        {queue_adapter.TERMINAL_REPLAY_METADATA_KEY: None},
+        {queue_entries.TERMINAL_REPLAY_METADATA_KEY: None},
     )
 
     second_result = run_inp.submit_reaction_dir_to_queue(args)
@@ -405,7 +406,7 @@ def test_closed_job_directory_resubmits_to_a_new_sibling_generation_without_forc
     assert first_generation.parent == second_generation.parent == reaction_dir.resolve()
     assert first_generation.is_dir()
     assert second_generation.is_dir()
-    assert queue_adapter.queue_entry_force(second) is False
+    assert queue_entries.queue_entry_force(second) is False
 
 
 def test_complete_transition_after_commit_returns_submitted_with_truthful_warning(
@@ -600,8 +601,8 @@ def test_orca_compensation_failure_fences_row_without_publication(
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.status == QueueStatus.FAILED
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_ABORTED
-    assert entry.metadata[queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True
-    assert entry.metadata.get(queue_adapter.TERMINAL_REPLAY_METADATA_KEY) is None
+    assert entry.metadata[queue_entries.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY] is True
+    assert entry.metadata.get(queue_entries.TERMINAL_REPLAY_METADATA_KEY) is None
     assert "queue_after_commit_guard_failed" in entry.error
     assert queue_entry_is_claimable(entry) is False
     assert not (tmp_path / "job_locations.json").exists()

@@ -1,14 +1,14 @@
-"""``orca.queue.roots``: the queue root, ORCA identity filtering and the fenced by-id claim."""
+"""``orca.queue.roots``: the queue root, its ORCA listing and the fenced by-id claim."""
 
 from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -16,10 +16,6 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.queue import roots
-from orca_auto.orca.queue.identity import (
-    entry_matches_engine_identity,
-    own_engine_accept_entry,
-)
 from tests.conftest import make_app_cfg
 
 
@@ -39,56 +35,6 @@ def _internal_entry(engine: str, queue_id: str) -> QueueEntry:
     )
 
 
-def test_engine_identity_rejects_conflicting_present_labels() -> None:
-    accept_orca = own_engine_accept_entry("orca")
-
-    own_entry = SimpleNamespace(
-        queue_id="q-orca",
-        app_name="orca_auto_orca",
-        task_id="orca-1",
-        task_kind="orca_run_inp",
-        engine="orca",
-        metadata={"job_type": "opt"},
-    )
-    assert accept_orca(own_entry)
-
-    for overrides in (
-        {"app_name": "orca_auto_other"},
-        {"engine": "other"},
-        {"queue_id": ""},
-        {"task_id": ""},
-        {"task_kind": ""},
-        {"task_kind": "other_run"},
-        {"app_name": "", "engine": ""},
-    ):
-        assert not accept_orca(SimpleNamespace(**{**vars(own_entry), **overrides}))
-
-    assert not entry_matches_engine_identity(
-        SimpleNamespace(
-            queue_id="q-other-invalid",
-            app_name="orca_auto_other",
-            task_id="other-1",
-            task_kind="other_run",
-            engine="other",
-        ),
-        "other",
-    )
-
-    canonical_orca_mapping = {
-        "queue_id": "q-orca",
-        "app_name": "orca_auto_orca",
-        "task_id": "orca-1",
-        "task_kind": "orca_run_inp",
-        "engine": "orca",
-        "metadata": {},
-    }
-    assert entry_matches_engine_identity(canonical_orca_mapping, "orca")
-    for missing_field in ("app_name", "task_id", "task_kind", "engine"):
-        partial = dict(canonical_orca_mapping)
-        partial.pop(missing_field)
-        assert not entry_matches_engine_identity(partial, "orca")
-
-
 def test_queue_root_is_the_resolved_runs_root(tmp_path: Path) -> None:
     runs_root = tmp_path / "runs"
     cfg = make_app_cfg(runs_root)
@@ -100,38 +46,28 @@ def test_queue_root_is_the_resolved_runs_root(tmp_path: Path) -> None:
     assert not runs_root.exists()
 
 
-def test_listing_skips_foreign_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_listing_holds_only_orca_rows(tmp_path: Path) -> None:
     own_entry = _internal_entry("orca", "own")
-    foreign_entry = _internal_entry("other", "foreign")
-    seen: list[Path] = []
-
-    def list_queue(root: Path) -> list[Any]:
-        seen.append(root)
-        return [foreign_entry, own_entry]
-
-    monkeypatch.setattr(roots, "list_queue", list_queue)
+    queue_store.save_entries(tmp_path, [_internal_entry("other", "foreign"), own_entry])
 
     assert roots.list_orca_rows(_cfg(tmp_path)) == [own_entry]
-    assert seen == [tmp_path]
 
 
 def test_peek_preserves_selection_without_dequeuing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    foreign_entry = _internal_entry("other", "foreign")
-    own_entry = replace(_internal_entry("orca", "own"), priority=-1)
+    own_entry = replace(_internal_entry("orca", "own"), priority=1)
     fallback_entry = replace(_internal_entry("orca", "fallback"), priority=5)
+    foreign_entry = replace(_internal_entry("other", "foreign"), priority=0)
+    queue_store.save_entries(tmp_path, [fallback_entry, foreign_entry, own_entry])
 
     def unexpected_dequeue(*_args: Any, **_kwargs: Any) -> Any:
         pytest.fail("preview must not dequeue a row")
 
-    monkeypatch.setattr(
-        roots, "list_queue", lambda _root: [fallback_entry, foreign_entry, own_entry]
-    )
     monkeypatch.setattr(roots, "dequeue_entry_if_pending", unexpected_dequeue)
 
     assert roots.peek_next_entry(_cfg(tmp_path)) == (tmp_path, own_entry)
-    assert own_entry.status.value == fallback_entry.status.value == "pending"
+    assert [entry.status.value for entry in queue_store.list_queue(tmp_path)] == ["pending"] * 3
 
 
 def test_dequeue_claims_the_previewed_row_by_id_fenced_on_that_generation(
@@ -140,13 +76,13 @@ def test_dequeue_claims_the_previewed_row_by_id_fenced_on_that_generation(
     winner = replace(_internal_entry("orca", "winner"), priority=1)
     later = replace(_internal_entry("orca", "later"), priority=9)
     foreign = replace(_internal_entry("other", "foreign"), priority=0)
+    queue_store.save_entries(tmp_path, [foreign, later, winner])
     claimed: list[tuple[Path, str, Any]] = []
 
     def dequeue_by_id(claim_root: Path, queue_id: str, *, expected_entry: Any) -> Any:
         claimed.append((claim_root, queue_id, expected_entry))
         return expected_entry
 
-    monkeypatch.setattr(roots, "list_queue", lambda _root: [foreign, later, winner])
     monkeypatch.setattr(roots, "dequeue_entry_if_pending", dequeue_by_id)
 
     assert roots.peek_next_entry(_cfg(tmp_path)) == (tmp_path, winner)
@@ -157,7 +93,7 @@ def test_dequeue_claims_the_previewed_row_by_id_fenced_on_that_generation(
 def test_dequeue_returns_none_when_the_previewed_row_is_lost(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(roots, "list_queue", lambda _root: [_internal_entry("orca", "pending")])
+    queue_store.save_entries(tmp_path, [_internal_entry("orca", "pending")])
     monkeypatch.setattr(roots, "dequeue_entry_if_pending", lambda *_args, **_kwargs: None)
 
     assert roots.dequeue_next_entry(_cfg(tmp_path)) is None
@@ -169,19 +105,19 @@ def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(
     tracked = _internal_entry("orca", "queue-tracked")
     behind = _internal_entry("orca", "queue-behind")
     foreign = _internal_entry("other", "queue-foreign")
+    queue_store.save_entries(tmp_path, [foreign, tracked, behind])
     claimed: list[tuple[str, Any]] = []
 
     def dequeue_by_id(_root: Path, queue_id: str, *, expected_entry: Any) -> Any:
         claimed.append((queue_id, expected_entry))
         return expected_entry
 
-    monkeypatch.setattr(roots, "list_queue", lambda _root: [foreign, tracked, behind])
     monkeypatch.setattr(roots, "dequeue_entry_if_pending", dequeue_by_id)
 
     def skip(entry: Any) -> bool:
-        # The engine filter runs first, so a foreign row never reaches it.
-        assert entry is not foreign
-        return entry is tracked
+        # The listing holds ORCA rows only, so a foreign row never reaches it.
+        assert entry.queue_id != foreign.queue_id
+        return bool(entry.queue_id == tracked.queue_id)
 
     cfg = _cfg(tmp_path)
     assert roots.peek_next_entry(cfg, skip_entry_fn=skip) == (tmp_path, behind)
@@ -189,21 +125,3 @@ def test_skip_predicate_steers_both_the_preview_and_the_by_id_claim(
     assert claimed == [("queue-behind", behind)]
     assert roots.peek_next_entry(cfg, skip_entry_fn=lambda _entry: True) is None
     assert roots.peek_next_entry(cfg) == (tmp_path, tracked)
-
-
-def test_by_id_lookup_reports_a_foreign_row_as_absent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    own_entry = _internal_entry("orca", "queue-own")
-    foreign_entry = _internal_entry("other", "queue-foreign")
-    looked_up: list[tuple[Path, str]] = []
-
-    def get_entry_by_id(root: Path, queue_id: str) -> Any | None:
-        looked_up.append((root, queue_id))
-        return own_entry if queue_id == own_entry.queue_id else foreign_entry
-
-    monkeypatch.setattr(roots, "get_entry_by_id", get_entry_by_id)
-
-    assert roots.queue_entry_by_id(tmp_path, own_entry.queue_id) is own_entry
-    assert roots.queue_entry_by_id(str(tmp_path), foreign_entry.queue_id) is None
-    assert looked_up == [(tmp_path, own_entry.queue_id), (tmp_path, foreign_entry.queue_id)]

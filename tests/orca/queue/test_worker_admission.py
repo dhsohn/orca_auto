@@ -13,7 +13,8 @@ from orca_auto.core.admission import list_slots, release_slot, reserve_slot
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import worker as queue_worker_mod
-from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_reaction_dir
+from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.queue.entries import queue_entry_reaction_dir
 from orca_auto.orca.queue.models import OrcaRunningJob
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from tests.conftest import claim_next_entry

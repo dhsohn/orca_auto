@@ -21,13 +21,13 @@ from orca_auto.core.activity_index import DB_NAME as ACTIVITY_INDEX_DB_NAME
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.queue import store as queue_store
-from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import run_status
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.job_locations import upsert_job_record
 from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.queue.entries import queue_entry_generation_token
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import write_state

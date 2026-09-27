@@ -50,23 +50,26 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING
 from orca_auto.core.utils.lock import file_lock
-from orca_auto.orca.engine_catalog import get_engine_catalog_entry
 from orca_auto.orca.worker_execution import build_worker_child_command
 
+from ..app_ids import ORCA_ADMISSION_SOURCE, ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE_LAUNCH_GATED
 from ..config import AppConfig
 from . import publication_repair, replay, roots, worker_tracking
 from .adapter import (
     cancel_requested_ids,
     get_cancel_requested,
+    get_entry_by_id,
     mark_cancelled,
     mark_failed,
+    requeue_running_entry,
+    worker_log_path,
+)
+from .entries import (
     queue_entry_app_name,
     queue_entry_id,
     queue_entry_metadata,
     queue_entry_reaction_dir,
     queue_entry_task_id,
-    requeue_running_entry,
-    worker_log_path,
 )
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .notifications import notify_queued_jobs
@@ -83,15 +86,14 @@ _RESERVED_SLOT_STATE = "reserved"
 
 
 def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
-    catalog_entry = get_engine_catalog_entry("orca")
     admission_token = reserve_slot(
         Path(cfg.runtime.resolved_admission_root),
         cfg.runtime.resolved_admission_limit,
-        source=catalog_entry.admission_source,
-        app_name=catalog_entry.app_id,
+        source=ORCA_ADMISSION_SOURCE,
+        app_name=ORCA_AUTO_ORCA_APP_NAME,
         state=_RESERVED_SLOT_STATE,
         engine_process_state="idle",
-        engine_launch_gated=catalog_entry.engine_launch_gated,
+        engine_launch_gated=ORCA_ENGINE_LAUNCH_GATED,
     )
     if admission_token is None:
         logger.debug(
@@ -668,7 +670,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         mark_result = replay.mark_terminal_queue_entry(queue_id, job, rc=rc)
         # A no-op is benign only when another actor already moved or removed the
         # queue row. Re-read the pre-mark snapshot before giving up ownership.
-        current_after_mark = replay.queue_entry_by_id(mark_result.queue_root, queue_id)
+        current_after_mark = get_entry_by_id(mark_result.queue_root, queue_id)
         if replay.normalized_entry_status(current_after_mark) == STATUS_RUNNING:
             raise RuntimeError(
                 "terminal queue mark did not update the running entry; "
@@ -763,7 +765,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             )
             return False
         try:
-            current = replay.queue_entry_by_id(self.queue_root, queue_id)
+            current = get_entry_by_id(self.queue_root, queue_id)
             if current is None or not mark_cancelled(
                 self.queue_root,
                 queue_id,
@@ -777,7 +779,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 queue_id,
             )
             return False
-        terminal_entry = replay.queue_entry_by_id(self.queue_root, queue_id)
+        terminal_entry = get_entry_by_id(self.queue_root, queue_id)
         if replay.normalized_entry_status(terminal_entry) == STATUS_RUNNING:
             logger.error(
                 "Cancellation returned without a durable terminal queue transition: %s",
@@ -876,7 +878,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 )
             return
         try:
-            current = replay.queue_entry_by_id(self.queue_root, queue_id)
+            current = get_entry_by_id(self.queue_root, queue_id)
             if current is not None:
                 requeue_running_entry(
                     self.queue_root,

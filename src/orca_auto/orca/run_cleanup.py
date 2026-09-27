@@ -22,14 +22,13 @@ from orca_auto.core.utils.lock import file_lock_at
 from orca_auto.core.utils.process_tracking import run_lock_is_held
 from orca_auto.core.utils.stable_fs import StableFsError, open_pinned_directory
 
-from .queue.adapter import (
+from .queue.adapter import list_queue, worker_log_path
+from .queue.entries import (
     ACTIVE_STATUSES,
     TERMINAL_STATUSES,
     is_orca_queue_entry,
-    list_queue,
     queue_entry_reaction_dir,
     queue_entry_status,
-    worker_log_path,
 )
 from .queue.terminal_replay import (
     TerminalReplayMarkerKind,

@@ -188,6 +188,7 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
     from unittest.mock import MagicMock
 
     from orca_auto.core.admission import list_slots, reserve_slot
+    from orca_auto.core.queue.types import QueueStatus
     from orca_auto.orca.config import OrcaRuntimeConfig
     from orca_auto.orca.queue import adapter
     from orca_auto.orca.queue.models import OrcaRunningJob as _RunningJob
@@ -240,7 +241,7 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
             future.result(timeout=5)
             assert len(list_slots(tmp_path)) == 0
             [completed] = adapter.list_queue(tmp_path)
-            assert completed.status == adapter.QueueStatus.COMPLETED
+            assert completed.status == QueueStatus.COMPLETED
             assert completed.metadata.get("orca_terminal_replay") is None
         finally:
             release.set()

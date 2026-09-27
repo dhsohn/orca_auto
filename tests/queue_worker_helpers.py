@@ -34,7 +34,8 @@ from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, load_config
 from orca_auto.orca.queue import replay as replay_mod
-from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
+from orca_auto.orca.queue.adapter import list_queue
+from orca_auto.orca.queue.entries import queue_entry_reaction_dir
 from orca_auto.orca.queue.models import OrcaRunningJob, OrcaWorkerReplayState
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus

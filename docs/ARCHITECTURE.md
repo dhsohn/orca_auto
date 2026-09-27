@@ -126,6 +126,11 @@ The worker CLI loads config, checks the PID file (`read_worker_pid` in
 `orca/queue/orphans.py`), then constructs and runs the ORCA worker directly.
 `orca/queue/roots.py` resolves the one queue root (`runtime.allowed_root`) and owns
 listing and the fenced by-id claim; rows are never claimed by head-of-queue position.
+`orca/queue/entries.py` owns the ORCA row identity and the one generation identity:
+the writer fences, the publication fence, the cancellation probes and the claim all
+compare `generation_identity`, and each adds only its own status rule. Lifecycle
+metadata (deferral, run id, replay marker and fence, queued-notification claim,
+publication lease) is outside it; `queue_generation` in `job_state.json` is its digest.
 `queue/replay.py` is only the replay engine (work items, preparation and publication, the
 reconcile pipeline and generation owners) and takes its state explicitly, and
 `queue/run_state_replay.py` synthesizes terminal `job_state.json` under

@@ -124,6 +124,11 @@ SystemExit, 시작 실패는 이전처럼 워커를 끝낸다. 주기적 워커 
 ORCA 워커 생성·실행을 직접 수행한다. `orca/queue/roots.py`가 하나뿐인 큐 루트
 (`runtime.allowed_root`)를 해석하고 행 나열과 ID 기준 fenced 인수를 소유하며 큐 선두
 위치로 행을 인수하는 일은 없다.
+`orca/queue/entries.py`가 ORCA 행 식별과 하나뿐인 generation 식별을 소유한다. 쓰기
+fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 비교하고 각자 자기
+상태 조건만 더한다. 생명주기 메타데이터(대기 연기, 실행 ID, 재처리 표식과 fence,
+제출 알림 전송권, 발행 임대)는 식별에 들지 않으며, `job_state.json`의
+`queue_generation`은 그 해시다.
 `queue/replay.py`는 재처리 엔진(작업 항목, 종료 준비와 발행, 정리 파이프라인,
 generation 소유자 결정)만 담당하며 상태를 인자로 명시적으로 받고,
 `queue/run_state_replay.py`는 `run.lock` 아래에서 종료 `job_state.json`을

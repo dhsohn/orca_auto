@@ -539,7 +539,7 @@ def test_select_next_claimable_entry_accept_entry_fn_skips_other_engine_entries(
     # Skips the higher-priority ORCA entry, selects the other app's one.
     selected = select_next_claimable_entry(store.list_queue(tmp_path), accept_entry_fn=accept_other)
     assert selected is not None and selected.queue_id == "q-other"
-    claimed = store.dequeue_entry_if_pending(tmp_path, selected.queue_id, expected_entry=selected)
+    claimed = store.dequeue_entry_if_pending(tmp_path, selected.queue_id)
     assert claimed is not None and claimed.queue_id == "q-other"
 
     # Only the ORCA entry remains; the other app's filter now selects nothing.
@@ -597,34 +597,6 @@ def test_dequeue_entry_if_pending_ignores_cancel_requested_entry(
     entries = store.list_queue(tmp_path)
     assert entries[0].status == QueueStatus.PENDING
     assert entries[0].cancel_requested is True
-
-
-def test_dequeue_entry_if_pending_rejects_replacement_with_same_queue_id(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    _queue_file(tmp_path).write_text(
-        json.dumps([_entry("q-same", task_id="task-a")], indent=2),
-        encoding="utf-8",
-    )
-    [selected] = store.list_queue(tmp_path)
-    _queue_file(tmp_path).write_text(
-        json.dumps([_entry("q-same", task_id="task-b")], indent=2),
-        encoding="utf-8",
-    )
-
-    assert (
-        store.dequeue_entry_if_pending(
-            tmp_path,
-            "q-same",
-            expected_entry=selected,
-        )
-        is None
-    )
-    [replacement] = store.list_queue(tmp_path)
-    assert replacement.task_id == "task-b"
-    assert replacement.status == QueueStatus.PENDING
 
 
 def test_update_metadata_merges_without_changing_lifecycle_fields(

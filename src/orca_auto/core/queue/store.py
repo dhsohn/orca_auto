@@ -358,20 +358,16 @@ def dequeue_entry_if_pending(
     queue_id: str,
     *,
     accept_entry_fn: Callable[[QueueEntry], bool] | None = None,
-    expected_entry: QueueEntry | None = None,
 ) -> QueueEntry | None:
     """Mark one selected pending entry running if it is still eligible.
 
-    The ``expected_entry`` fence is exact row equality, deliberately stricter
-    than the writers' generation fence: a claim starts execution, so any
-    change since the row was selected sends it back to selection.
+    ``accept_entry_fn`` is the caller's generation fence; the claim adds only
+    :func:`claimable_pending`.
     """
 
     def dequeue(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
-        if (
-            (accept_entry_fn is not None and not accept_entry_fn(entry))
-            or (expected_entry is not None and entry != expected_entry)
-            or not claimable_pending(entry)
+        if (accept_entry_fn is not None and not accept_entry_fn(entry)) or not claimable_pending(
+            entry
         ):
             return None, None
         updated = _claimed(entry)

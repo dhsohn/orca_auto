@@ -26,7 +26,7 @@ from orca_auto.core.queue import persistence as queue
 from orca_auto.core.queue.store import queue_lock
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.utils.lock import file_lock
-from orca_auto.orca.queue import adapter
+from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.run_snapshot import RunSnapshot, collect_run_snapshots
 from orca_auto.orca.run_status import (
     STALE_SNAPSHOT_STATUSES,
@@ -86,7 +86,7 @@ def _group_snapshots(
             for row in sources
             if row["kind"] == "queue"
         ]
-        entries = [entry for entry in entries if adapter.is_orca_queue_entry(entry)]
+        entries = [entry for entry in entries if queue_entries.is_orca_queue_entry(entry)]
         records = [
             JobLocationRecord(**json.loads(row["body"]))
             for row in sources
@@ -97,9 +97,9 @@ def _group_snapshots(
             discover_unindexed=False,
             location_records=records,
             known_dirs=(
-                Path(adapter.queue_entry_reaction_dir(entry))
+                Path(queue_entries.queue_entry_reaction_dir(entry))
                 for entry in entries
-                if adapter.queue_entry_reaction_dir(entry)
+                if queue_entries.queue_entry_reaction_dir(entry)
             ),
             synchronize=True,
         )
@@ -170,9 +170,9 @@ def _store_group(
         _store_activity(connection, kind, key, record)
     by_run, by_dir = _orca.snapshot_indexes(snapshots)
     for entry in entries:
-        if adapter.queue_entry_status(entry) != QueueStatus.RUNNING.value:
+        if queue_entries.queue_entry_status(entry) != QueueStatus.RUNNING.value:
             continue
-        matched = _orca.snapshot_matches_entry(adapter, entry, by_run, by_dir)
+        matched = _orca.snapshot_matches_entry(entry, by_run, by_dir)
         payload: dict[str, Any] = {
             "entry": queue.entry_to_dict(entry),
             "snapshot": _snapshot_payload(matched) if matched else None,
@@ -184,11 +184,10 @@ def _store_group(
     represented = {
         matched_snapshot.key
         for entry in entries
-        if (matched_snapshot := _orca.snapshot_matches_entry(adapter, entry, by_run, by_dir))
-        is not None
-        and _orca.queue_represents_snapshot(adapter, entry, matched_snapshot)
+        if (matched_snapshot := _orca.snapshot_matches_entry(entry, by_run, by_dir)) is not None
+        and _orca.queue_represents_snapshot(entry, matched_snapshot)
     }
-    superseded = superseded_snapshot_dirs(adapter, entries)
+    superseded = superseded_snapshot_dirs(entries)
     for snapshot in snapshots:
         if snapshot.key in represented:
             continue
@@ -210,7 +209,7 @@ def _refresh_locks(connection: sqlite3.Connection, root: Path) -> None:
         snapshot = _decode_snapshot(payload["snapshot"])
         if row["kind"] == "queue":
             record = _orca.queue_record(
-                adapter, queue.entry_from_dict(payload["entry"]), snapshot, allowed_root=root
+                queue.entry_from_dict(payload["entry"]), snapshot, allowed_root=root
             )
         else:
             assert snapshot is not None

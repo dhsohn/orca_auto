@@ -1,8 +1,8 @@
-"""The ORCA worker's one queue root and the row selection bound to the ORCA identity filter.
+"""The ORCA worker's one queue root and the row selection it claims from.
 
 The queue root is the resolved ``runtime.allowed_root``. Rows are listed
-through the ORCA adapter and only rows with the complete ORCA engine identity
-are admitted. Rows are claimed by id with the previewed row as the
+through the ORCA adapter, which returns only rows with the complete ORCA
+identity. Rows are claimed by id with the previewed row as the
 ``expected_entry`` fence, never by head-of-queue position.
 """
 
@@ -15,10 +15,7 @@ from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 
 from ..config import AppConfig
-from .adapter import dequeue_entry_if_pending, get_entry_by_id, list_queue
-from .identity import own_engine_accept_entry
-
-accept_orca_entry = own_engine_accept_entry("orca")
+from .adapter import dequeue_entry_if_pending, list_queue
 
 
 def queue_root(cfg: AppConfig) -> Path:
@@ -30,7 +27,7 @@ def list_orca_rows(cfg: AppConfig) -> list[QueueEntry]:
     root = queue_root(cfg)
     if not root.exists():
         return []
-    return [entry for entry in list_queue(root) if accept_orca_entry(entry)]
+    return list_queue(root)
 
 
 def peek_next_entry(
@@ -45,7 +42,7 @@ def peek_next_entry(
     the dequeue: a row it selects may still be lost to a concurrent claim or
     cancellation, and the dequeue then reports that.
     """
-    # The engine filter runs first, so a foreign row never reaches the skip predicate.
+    # The listing holds ORCA rows only, so a foreign row never reaches the skip predicate.
     selected = select_next_claimable_entry(
         list_orca_rows(cfg),
         accept_entry_fn=(None if skip_entry_fn is None else lambda entry: not skip_entry_fn(entry)),
@@ -74,19 +71,9 @@ def dequeue_next_entry(
     return root, claimed
 
 
-def queue_entry_by_id(queue_root: Path | str, queue_id: str) -> QueueEntry | None:
-    """One ORCA row by id; a row without the ORCA identity is reported as absent."""
-    entry = get_entry_by_id(Path(queue_root), queue_id)
-    if entry is not None and not accept_orca_entry(entry):
-        return None
-    return entry
-
-
 __all__ = [
-    "accept_orca_entry",
     "dequeue_next_entry",
     "list_orca_rows",
     "peek_next_entry",
-    "queue_entry_by_id",
     "queue_root",
 ]

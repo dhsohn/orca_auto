@@ -11,6 +11,7 @@ import pytest
 from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.queue import store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.queue import adapter
 
@@ -18,10 +19,10 @@ from orca_auto.orca.queue import adapter
 def entry(queue_id: str = "target", *, cancel_requested: bool = False) -> QueueEntry:
     return QueueEntry(
         queue_id=queue_id,
-        app_name=adapter.QUEUE_APP_NAME,
+        app_name=ORCA_AUTO_ORCA_APP_NAME,
         task_id=queue_id,
-        task_kind=adapter.QUEUE_TASK_KIND,
-        engine=adapter.QUEUE_ENGINE,
+        task_kind=ORCA_TASK_KIND,
+        engine=ORCA_ENGINE,
         status=QueueStatus.RUNNING,
         cancel_requested=cancel_requested,
     )

@@ -12,7 +12,8 @@ import pytest
 from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.commands.run_inp import cmd_run_inp
 from orca_auto.orca.queue import notifications as queue_notifications
-from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
+from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.queue.entries import queue_entry_metadata
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.submission import submit_reaction_dir_to_queue
 from tests.conftest import make_queue_entry

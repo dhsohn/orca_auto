@@ -44,6 +44,11 @@ directory, and a queue row's `workflow_id` metadata is ignored.
 - 8.x never writes `workflow_id` into `admission_slots.json`, and the new version
   rejects a slot row that carries it. Upgrading directly from 7.0.x therefore
   needs an idle window with no reserved or active slots.
+- The `queue_generation` value in `job_state.json` is computed from the new
+  queue generation identity, and nothing rewrites the values 8.x recorded. A
+  job still running across the upgrade is listed twice by `queue list` and
+  cannot be cancelled by its run ID until it finishes; upgrade in an idle
+  window to avoid that.
 
 ## Upgrading to 8.0
 

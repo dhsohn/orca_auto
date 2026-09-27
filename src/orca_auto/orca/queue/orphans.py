@@ -14,12 +14,12 @@ from orca_auto.core.queue.child.process import live_queue_slot_keys_for_slots
 from orca_auto.core.queue.types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
 from orca_auto.core.utils.process_tracking import run_lock_is_held
-from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from ..job_locations._generation import payload_matches_queue_generation
 from ..state_reading import load_state
 from ..statuses import RunStatus
 from .entries import (
+    is_orca_queue_entry,
     queue_entry_id,
     queue_entry_reaction_dir,
     queue_entry_status,
@@ -166,10 +166,10 @@ def reconcile_orphaned_running_entries(
     changed = 0
     with _queue_store.queue_lock(allowed_root):
         entries = _queue_store.load_entries(allowed_root)
-        owned_entries = [entry for entry in entries if entry_matches_engine_identity(entry, "orca")]
+        owned_entries = [entry for entry in entries if is_orca_queue_entry(entry)]
         prior_evidence_by_key = _prior_terminal_generation_evidence(owned_entries)
         for index, entry in enumerate(entries):
-            if not entry_matches_engine_identity(entry, "orca"):
+            if not is_orca_queue_entry(entry):
                 continue
             if queue_entry_status(entry) != QueueStatus.RUNNING.value:
                 continue
@@ -216,7 +216,7 @@ def _has_running_row_for_dir(allowed_root: Path, normalized_dir: str) -> bool:
     with _queue_store.queue_lock(allowed_root):
         entries = _queue_store.load_entries(allowed_root)
     for entry in entries:
-        if not entry_matches_engine_identity(entry, "orca"):
+        if not is_orca_queue_entry(entry):
             continue
         if queue_entry_status(entry) != QueueStatus.RUNNING.value:
             continue

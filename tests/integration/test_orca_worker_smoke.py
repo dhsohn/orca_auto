@@ -12,10 +12,6 @@ import pytest
 from orca_auto.cli import main as cli_main
 from orca_auto.core.admission import list_slots
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, SI_BLOCK_MD_FILE
-from orca_auto.core.queue.generation import (
-    immutable_generation_metadata,
-    queue_entry_generation_token,
-)
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
 from orca_auto.orca.config import load_config
@@ -24,7 +20,12 @@ from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
-from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
+from orca_auto.orca.queue.adapter import list_queue
+from orca_auto.orca.queue.entries import (
+    queue_entry_generation_token,
+    queue_entry_reaction_dir,
+    same_generation,
+)
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.report.irc import collect_irc_report_data
 from orca_auto.orca.report.opt import collect_opt_report_data
@@ -208,9 +209,7 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
         (generation_dir / "job_state.json").read_text(encoding="utf-8")
     )
     expected_generation = queue_entry_generation_token(completed)
-    assert immutable_generation_metadata(completed.metadata) == immutable_generation_metadata(
-        queued.metadata
-    )
+    assert same_generation(completed, queued)
     for raw_state in (raw_root_state, raw_generation_state):
         assert raw_state["job"]["queue_id"] == completed.queue_id
         assert raw_state["job"]["generation"] == expected_generation
