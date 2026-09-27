@@ -1,0 +1,50 @@
+{
+  "admission_token": [
+    "<sys.executable>",
+    "-m",
+    "orca_auto.orca.commands.worker_child",
+    "--config",
+    "/pins/orca_auto.yaml",
+    "--queue-root",
+    "/pins/runs",
+    "--queue-id",
+    "q-pin",
+    "--admission-token",
+    "slot_pin"
+  ],
+  "admission_token_none": [
+    "<sys.executable>",
+    "-m",
+    "orca_auto.orca.commands.worker_child",
+    "--config",
+    "/pins/orca_auto.yaml",
+    "--queue-root",
+    "/pins/runs",
+    "--queue-id",
+    "q-pin"
+  ],
+  "admission_token_empty": [
+    "<sys.executable>",
+    "-m",
+    "orca_auto.orca.commands.worker_child",
+    "--config",
+    "/pins/orca_auto.yaml",
+    "--queue-root",
+    "/pins/runs",
+    "--queue-id",
+    "q-pin"
+  ],
+  "path_queue_root": [
+    "<sys.executable>",
+    "-m",
+    "orca_auto.orca.commands.worker_child",
+    "--config",
+    "/pins/orca_auto.yaml",
+    "--queue-root",
+    "/pins/runs",
+    "--queue-id",
+    "q-pin",
+    "--admission-token",
+    "slot_pin"
+  ]
+}

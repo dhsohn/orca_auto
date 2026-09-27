@@ -8,8 +8,9 @@ placeholder, so equal values stay visibly equal across files. Timestamp
 placeholders keep the shape (separator, fraction digits, zone suffix) and
 key placeholders keep the JSON type, so format and type changes still show.
 
-``assert_golden`` compares a normalized value with ``golden/<name>``.
-``ORCA_AUTO_REGEN_GOLDENS=1`` rewrites the golden instead; it is off by default.
+``assert_golden`` compares a normalized value with ``golden/<name>`` and
+``assert_pin`` with ``pins/<name>``, the rule characterization tables.
+``ORCA_AUTO_REGEN_GOLDENS=1`` rewrites the file instead; it is off by default.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 GOLDEN_DIR = Path(__file__).resolve().with_name("golden")
+PINS_DIR = Path(__file__).resolve().with_name("pins")
 REGEN_ENV_VAR = "ORCA_AUTO_REGEN_GOLDENS"
 
 _TIMESTAMP_RE = re.compile(
@@ -132,22 +134,32 @@ def _golden_text(value: Any) -> str:
 
 def assert_golden(name: str, value: Any) -> None:
     """Compare ``value`` (already normalized) with ``golden/<name>``."""
-    path = GOLDEN_DIR / name
+    _assert_file(GOLDEN_DIR, name, value)
+
+
+def assert_pin(name: str, value: Any) -> None:
+    """Compare a rule table with ``pins/<name>``."""
+    _assert_file(PINS_DIR, name, value)
+
+
+def _assert_file(directory: Path, name: str, value: Any) -> None:
+    path = directory / name
+    label = f"{directory.name}/{name}"
     actual = _golden_text(value)
     if os.environ.get(REGEN_ENV_VAR) == "1":
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(actual, encoding="utf-8")
         return
     if not path.exists():
-        raise AssertionError(f"missing golden {path}; regenerate with {REGEN_ENV_VAR}=1")
+        raise AssertionError(f"missing {path}; regenerate with {REGEN_ENV_VAR}=1")
     expected = path.read_text(encoding="utf-8")
     if actual != expected:
         diff = "".join(
             difflib.unified_diff(
                 expected.splitlines(keepends=True),
                 actual.splitlines(keepends=True),
-                fromfile=f"golden/{name}",
+                fromfile=label,
                 tofile="actual",
             )
         )
-        raise AssertionError(f"golden mismatch for {name}:\n{diff}")
+        raise AssertionError(f"mismatch for {label}:\n{diff}")

@@ -1,0 +1,7 @@
+{
+  "claimed_queue_ids": [
+    "q-pin"
+  ],
+  "cancel_result": "None",
+  "row_change_after_claim_and_cancel": "~orca_queued_notification_pending"
+}

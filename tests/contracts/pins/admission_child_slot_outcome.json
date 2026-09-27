@@ -1,0 +1,362 @@
+{
+  "none|idle": {
+    "result": 0,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "idle",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "none|prepared": {
+    "result": 0,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "idle",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "none|registered": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "active",
+        "engine_launch_gated": true,
+        "engine_pid": "<pid:int>",
+        "engine_pgid": "<pgid:int>",
+        "engine_process_start_ticks": "<start_ticks:int>",
+        "engine_process_boot_id": "<boot_id:str>"
+      }
+    ]
+  },
+  "EngineScratchCapacityError|idle": {
+    "result": "raise EngineScratchCapacityError: scratch root is full",
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "idle",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "EngineScratchCapacityError|prepared": {
+    "result": "raise EngineScratchCapacityError: scratch root is full",
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "pending",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "EngineScratchCapacityError|registered": {
+    "result": "raise EngineScratchCapacityError: scratch root is full",
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "active",
+        "engine_launch_gated": true,
+        "engine_pid": "<pid:int>",
+        "engine_pgid": "<pgid:int>",
+        "engine_process_start_ticks": "<start_ticks:int>",
+        "engine_process_boot_id": "<boot_id:str>"
+      }
+    ]
+  },
+  "AdmissionLimitReachedError|idle": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "idle",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "AdmissionLimitReachedError|prepared": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "pending",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "AdmissionLimitReachedError|registered": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "active",
+        "engine_launch_gated": true,
+        "engine_pid": "<pid:int>",
+        "engine_pgid": "<pgid:int>",
+        "engine_process_start_ticks": "<start_ticks:int>",
+        "engine_process_boot_id": "<boot_id:str>"
+      }
+    ]
+  },
+  "RuntimeError|idle": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "idle",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "RuntimeError|prepared": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "pending",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "RuntimeError|registered": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "active",
+        "engine_launch_gated": true,
+        "engine_pid": "<pid:int>",
+        "engine_pgid": "<pgid:int>",
+        "engine_process_start_ticks": "<start_ticks:int>",
+        "engine_process_boot_id": "<boot_id:str>"
+      }
+    ]
+  },
+  "other|idle": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "idle",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "other|prepared": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "pending",
+        "engine_launch_gated": true,
+        "engine_pid": null,
+        "engine_pgid": null,
+        "engine_process_start_ticks": null,
+        "engine_process_boot_id": null
+      }
+    ]
+  },
+  "other|registered": {
+    "result": 1,
+    "admission_slots.json": [
+      {
+        "token": "<slot:1>",
+        "owner_pid": "<pid:int>",
+        "process_start_ticks": "<start_ticks:int>",
+        "owner_boot_id": "<boot_id:str>",
+        "source": "queue_run",
+        "acquired_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "app_name": "orca_auto",
+        "task_id": "orca-pin",
+        "state": "active",
+        "work_dir": "<tmp>/runs/job",
+        "queue_id": "",
+        "engine_process_state": "active",
+        "engine_launch_gated": true,
+        "engine_pid": "<pid:int>",
+        "engine_pgid": "<pgid:int>",
+        "engine_process_start_ticks": "<start_ticks:int>",
+        "engine_process_boot_id": "<boot_id:str>"
+      }
+    ]
+  }
+}
