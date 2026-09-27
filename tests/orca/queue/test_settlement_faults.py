@@ -13,12 +13,17 @@ Faults act below settlement (a held ``run.lock``, an unreadable location
 index, one refused queue or slot save), so the matrix does not depend on how
 settlement is split into functions. The paths are a child that exited
 non-zero without a terminal state (``exit``), a cancelled running child
-(``cancel``), and a fresh worker replaying a row whose parent died after the
-terminal mark (``restart``).
+(``cancel``), a cancelled child that ignored SIGTERM and was SIGKILLed
+(``cancel_killed``), a fresh worker replaying a row whose parent died after the
+terminal mark (``restart``), and a fresh worker replaying a row the cancelled
+child marked before its parent died (``cancel_restart``). No child writes a
+terminal state: the parent's settlement is the one writer of the cancelled
+result (ADR 0008).
 """
 
 from __future__ import annotations
 
+import signal
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -31,7 +36,13 @@ from orca_auto.core.admission import admission_dir, get_slot, release_slot
 from orca_auto.core.admission import persistence as admission_persistence
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.types import QueueEntry
-from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue, mark_failed
+from orca_auto.orca.queue.adapter import (
+    cancel,
+    enqueue,
+    list_queue,
+    mark_failed,
+    requeue_running_entry,
+)
 from orca_auto.orca.queue.models import TerminalReplayWorkItem
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_state
@@ -81,7 +92,13 @@ _RESTART = {
     "finish": Kept(None, "bound", True, True, True, True, False, "unclaimed", False, False),
     "clear": Kept(None, "bound", True, True, True, True, False, "claimed", True, True),
 }
-_EXPECTED = {"exit": _LIVE, "cancel": _LIVE, "restart": _RESTART}
+_EXPECTED = {
+    "exit": _LIVE,
+    "cancel": _LIVE,
+    "cancel_killed": _LIVE,
+    "restart": _RESTART,
+    "cancel_restart": _RESTART,
+}
 
 
 def _item(item: TerminalReplayWorkItem | None, status: str) -> str | None:
@@ -223,7 +240,7 @@ def _fault(name: str, entry: QueueEntry, root: Path, token: str | None) -> Itera
 
 
 @pytest.mark.parametrize("fault", ["none", "prepare", "bind", "release", "finish", "clear"])
-@pytest.mark.parametrize("path", ["exit", "cancel", "restart"])
+@pytest.mark.parametrize("path", ["exit", "cancel", "cancel_killed", "restart", "cancel_restart"])
 def test_settlement_fault_matrix(
     make_worker: Callable[..., OrcaQueueWorker],
     fake_children: FakeChildren,
@@ -232,9 +249,9 @@ def test_settlement_fault_matrix(
     path: str,
     fault: str,
 ) -> None:
-    if path == "restart" and fault == "release":
+    if path in ("restart", "cancel_restart") and fault == "release":
         pytest.skip("restart replay holds no execution slot")
-    status = "cancelled" if path == "cancel" else "failed"
+    status = "failed" if path in ("exit", "restart") else "cancelled"
     worker = make_worker(max_concurrent=1)
     rxn = queue_root / "job"
     rxn.mkdir()
@@ -248,19 +265,33 @@ def test_settlement_fault_matrix(
         assert mark_failed(queue_root, entry.queue_id, error="exit_code=1", expected_entry=running)
         assert release_slot(admission_dir(queue_root), token)
         token = None
+    elif path == "cancel_restart":
+        # The cancelled child marked its row and exited without a terminal
+        # state; the parent died before settling it.
+        cancel(queue_root, entry.queue_id)
+        assert requeue_running_entry(queue_root, entry.queue_id, expected_entry=running)
+        assert release_slot(admission_dir(queue_root), token)
+        token = None
     else:
-        child = fake_children.spawn(exited=1 if path == "exit" else None)
+        child = fake_children.spawn(
+            exited=1 if path == "exit" else None, ignores_sigterm=path == "cancel_killed"
+        )
         worker._running[entry.queue_id] = running_job(worker, entry, rxn, child, token)
-        if path == "cancel":
+        if path != "exit":
             cancel(queue_root, entry.queue_id)
 
     with _fault(fault, entry, queue_root, token):
         if path == "exit":
             worker._check_completed_jobs()
-        elif path == "cancel":
+        elif path in ("cancel", "cancel_killed"):
             worker._check_cancel_requests()
         else:
             worker._reconcile_worker_state()
+    if path == "cancel_killed":
+        assert [signum for _pid, signum in fake_children.signals] == [
+            signal.SIGTERM,
+            signal.SIGKILL,
+        ]
 
     assert _observe(worker, entry, token, status, recording_channel) == _EXPECTED[path][fault]
 

@@ -140,6 +140,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- A cancelled running job's `job_state.json` gets its `cancelled` result only
+  from the worker parent, when it settles the cancelled queue row
+  ([ADR 0008](docs/adr/0008-parent-writes-the-cancelled-result.md)). The
+  worker child no longer writes that result before it exits, and its
+  `Skipping cancel finalization of …; run lock is held` warning is gone. Until
+  the parent settles the row, normally right after the child exits and after a
+  parent crash on the next worker start, the state still says `running` behind
+  a cancelled row whose result publication is pending. States that already
+  record a cancelled result are not rewritten.
 - Public contract: one generation identity now decides whether a queue row is
   still the generation a writer read
   ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),
