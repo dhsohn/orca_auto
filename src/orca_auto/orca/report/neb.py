@@ -34,6 +34,7 @@ from .path import (
     iter_phase_table_rows,
     parse_path_summary,
     path_marker_index,
+    path_marker_point,
     path_profile_chart_svg,
     path_summary_row_re,
     path_table_html,
@@ -45,7 +46,6 @@ from .render import (
     job_meta_html,
     line_chart_svg,
     metric_card,
-    path_marker_point,
     relative_energy_cycle_chart_svg,
     status_badges,
 )
@@ -159,7 +159,8 @@ def collect_neb_report_data(state: Mapping[str, Any], header: ReportHeader) -> N
     progress = latest_optimization_progress(attempts)
     ts_steps = latest_attempt_with_content(attempts, _neb_ts_steps, bool) or ()
     formula = method = basis_set = ""
-    final_energy = _ts_path_energy(parsed.path_points)
+    ts_point = path_marker_point(parsed.path_points, "TS")
+    final_energy = ts_point.energy_hartree if ts_point is not None else None
     opt_converged = False
     if progress is not None:
         formula, method, basis_set = progress.formula, progress.method, progress.basis_set
@@ -283,13 +284,6 @@ def _parse_path_summary(text: str) -> tuple[NebPathPoint, ...]:
 
 def _optional_float(value: str | None) -> float | None:
     return None if value is None else float(value)
-
-
-def _ts_path_energy(points: Sequence[NebPathPoint]) -> float | None:
-    for point in points:
-        if point.marker == "TS" or point.label == "TS":
-            return point.energy_hartree
-    return None
 
 
 def _path_peak(points: Sequence[NebPathPoint]) -> NebPathPoint | None:

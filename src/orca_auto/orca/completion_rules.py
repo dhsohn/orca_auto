@@ -17,10 +17,10 @@ from .relaxed_scan import scan_coordinate_rows
 
 # Only real ORCA TS keywords. No bare `TS` token: ORCA has no `! TS`, so it
 # can only ever match stray text (the SCAN-functional collision class), never
-# a job ORCA would actually run as a TS search.
+# a job ORCA would actually run as a TS search. NEB-TS also matches the tail
+# of ZOOM-NEB-TS.
 TS_ROUTE_RE = re.compile(r"\b(OPTTS|NEB-TS)\b", re.IGNORECASE)
 IRC_ROUTE_RE = re.compile(r"\bIRC\b", re.IGNORECASE)
-_NEB_TS_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB-TS\b", re.IGNORECASE)
 # ORCA 6.1 simple-input keywords that run a non-TS geometry optimization:
 # convergence-prefixed (TightOpt ... SloppyOpt), coordinate-system (COpt/ZOpt)
 # and L-BFGS (L-Opt) spellings, so a TightOpt job cannot slip through as a
@@ -82,14 +82,15 @@ def route_facts(inp_path: Path) -> RouteFacts:
     lines = input_file_lines(inp_path)
     route_lines = tuple(orca_route_lines(lines))
     routes = " ".join(route_lines)
-    is_ts = bool(TS_ROUTE_RE.search(routes))
+    ts_keywords = {match.group(1).upper() for match in TS_ROUTE_RE.finditer(routes)}
+    is_ts = bool(ts_keywords)
     is_opt = is_optimization_route(routes)
     return RouteFacts(
         inp_path=inp_path,
         route_lines=route_lines,
         is_ts=is_ts,
         is_irc=bool(IRC_ROUTE_RE.search(routes)),
-        is_neb_ts=bool(_NEB_TS_ROUTE_RE.search(routes)),
+        is_neb_ts="NEB-TS" in ts_keywords,
         is_opt=is_opt,
         is_full_opt=is_full_optimization_route(routes),
         is_relaxed_scan=is_opt and scan_coordinate_rows(lines) is not None,

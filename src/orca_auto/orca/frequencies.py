@@ -28,6 +28,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from .output_status import is_execution_output_line, iter_output_lines
+from .parser.patterns import COORD_XYZ_LINE_RE, FINAL_SINGLE_POINT_ENERGY_RE
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,6 @@ IMAGINARY_FREQ_THRESHOLD_CM1 = 10.0
 _TOP_ATOM_COUNT = 5
 
 _FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
-_FINAL_ENERGY_HEADER = "FINAL SINGLE POINT ENERGY"
 _MODES_HEADER = "NORMAL MODES"
 _COORDS_HEADER = "CARTESIAN COORDINATES (ANGSTROEM)"
 # One printed wavenumber: a signed number followed by ``cm**-1``, preceded by
@@ -47,7 +47,6 @@ _COORDS_HEADER = "CARTESIAN COORDINATES (ANGSTROEM)"
 # This is the rule the completion analyzer has always verified a TS by; it
 # also accepts the numbered form ORCA prints.
 FREQUENCY_VALUE_RE = re.compile(r"(?:^|[\s:])(-?\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
-_COORD_LINE_RE = re.compile(r"^\s*([A-Za-z]{1,2})\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s*$")
 
 
 @dataclass(frozen=True)
@@ -147,10 +146,10 @@ def scan_frequency_sections(lines: Iterable[str]) -> FrequencySections:
             continue
         stripped = line.strip()
         upper = stripped.upper()
-        if upper.startswith(_FINAL_ENERGY_HEADER):
-            # A later final energy supersedes every frequency block before it;
-            # the final geometry's coordinates are printed before this line and
-            # are kept.
+        if FINAL_SINGLE_POINT_ENERGY_RE.match(line):
+            # A later final energy (the parser's line rule) supersedes every
+            # frequency block before it; the final geometry's coordinates are
+            # printed before this line and are kept.
             close_section()
             freqs = None
             modes = None
@@ -176,7 +175,7 @@ def scan_frequency_sections(lines: Iterable[str]) -> FrequencySections:
             elif stripped and started:
                 close_section()
         elif section == "coords":
-            match = _COORD_LINE_RE.match(line)
+            match = COORD_XYZ_LINE_RE.match(line)
             if match is not None:
                 current_coords.append(
                     (

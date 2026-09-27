@@ -1,8 +1,8 @@
 """Rule pin: the output analyzer verdict for every corpus ``.out`` file.
 
-Each file of ``pins/out_corpus`` is analyzed as-is (the buffered read) and
-padded past 256 KiB with leading space-only lines (the streaming read), in each
-completion mode. The table is ``pins/analysis_out_analyzer.json``.
+Each file of ``pins/out_corpus`` is analyzed as-is and padded past 256 KiB
+with leading space-only lines, in each completion mode, so the verdict cannot
+depend on the output's size. The table is ``pins/analysis_out_analyzer.json``.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from orca_auto.orca.out_analyzer import analyze_output
 from tests.contracts.normalize import PINS_DIR, assert_pin
 
 CORPUS_DIR = PINS_DIR / "out_corpus"
-# 257 KiB of space-only lines: past both buffered-read limits (64 KiB, 256 KiB TS).
+# 257 KiB of space-only lines: past the former buffered-read limits (64 KiB, 256 KiB TS).
 _PADDING = (b" " * 1023 + b"\n") * 257
 _MODES = {
     "opt": CompletionMode(kind="opt", require_irc=False),

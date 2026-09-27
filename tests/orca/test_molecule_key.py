@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from orca_auto.orca.molecule_key import (
-    _atoms_to_hill_formula,
     _directory_name_fallback,
     _find_user_tag,
     _formula_from_lines,
@@ -101,19 +100,15 @@ def test_missing_file() -> None:
 # --- Hill formula ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("atoms", "expected"),
-    [
-        pytest.param(["O", "H", "H", "C"], "CH2O", id="carbon_first"),
-        pytest.param(["Na", "Cl"], "ClNa", id="no_carbon_alphabetical"),
-        pytest.param([], None, id="empty_returns_none"),
-        pytest.param(["C"], "C", id="single_element_no_count"),
-        pytest.param(["C", "C", "C"], "C3", id="multiple_same"),
-        pytest.param(["C"] * 8 + ["H"] * 10 + ["O"] * 2, "C8H10O2", id="complex_molecule"),
-    ],
-)
-def test_hill_formula(atoms: list[str], expected: str | None) -> None:
-    assert _atoms_to_hill_formula(atoms) == expected
+def test_formula_key_is_hill_order_without_carbon(tmp_path: Path) -> None:
+    inp = _inp(tmp_path, "! Opt\n* xyz 0 1\nNa 0 0 0\nCl 2.3 0 0\n*\n")
+    assert resolve_molecule_key(inp).key == "ClNa"
+
+
+def test_empty_geometry_block_falls_back_to_the_directory(tmp_path: Path) -> None:
+    directory = tmp_path / "empty_geometry"
+    directory.mkdir()
+    assert resolve_molecule_key(_inp(directory, "! Opt\n* xyz 0 1\n*\n")).key == "empty_geometry"
 
 
 # --- key sanitizing -------------------------------------------------------------------------

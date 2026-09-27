@@ -432,7 +432,7 @@ class TestParserRealisticOutputs:
         assert r.basis_set == "def2-TZVP"
         assert r.charge == -1
         assert r.multiplicity == 2
-        assert r.formula == "O4Fe"
+        assert r.formula == "FeO4"
         assert r.n_atoms == 5
         assert r.energy_hartree is None
         assert r.wall_time_seconds is None

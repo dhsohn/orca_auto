@@ -4,23 +4,19 @@ import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypedDict, cast
+from typing import Literal, TypedDict
 
 from .completion_rules import CompletionMode
 from .frequencies import frequency_values, is_imaginary_frequency, scan_frequency_sections
 from .output_status import (
     is_execution_output_line,
-    iter_output_lines,
     optimization_convergence_line,
     termination_line,
 )
-from .parser.io import open_orca_text, read_orca_text
+from .parser.io import open_orca_text
 from .statuses import AnalyzerStatus
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_BUFFER_BYTES = 64 * 1024
-_TS_BUFFER_BYTES = 256 * 1024
 
 BooleanMarkerName = Literal[
     "terminated_normally",
@@ -64,9 +60,13 @@ class OutMarkers(TypedDict):
     final_frequency_section: bool
 
 
+# Upper-case needles showing that ORCA's IRC driver ran. The IRC report
+# searches its raw output for the same needles.
+IRC_PATH_FOUND_NEEDLES = ("IRC PATH SUMMARY", "IRC-DRV")
+
 _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     ("total_run_time_seen", ("TOTAL RUN TIME",)),
-    ("irc_marker_found", ("IRC PATH SUMMARY", "IRC-DRV")),
+    ("irc_marker_found", IRC_PATH_FOUND_NEEDLES),
     ("scf_error", ("SCF NOT CONVERGED", "SCF CONVERGENCE FAILED")),
     ("scfgrad_abort", ("ORCA FINISHED BY ERROR TERMINATION IN SCF GRADIENT",)),
     ("disk_io_error", ("COULD NOT WRITE TO DISK", "NO SPACE LEFT ON DEVICE")),
@@ -114,18 +114,6 @@ def _default_markers(out_path: Path) -> OutMarkers:
     }
 
 
-def _marker_payload(markers: OutMarkers) -> dict[str, Any]:
-    return cast(dict[str, Any], markers)
-
-
-def _set_marker(markers: OutMarkers, marker_name: BooleanMarkerName) -> None:
-    _marker_payload(markers)[marker_name] = True
-
-
-def _marker_is_set(markers: OutMarkers, marker_name: BooleanMarkerName) -> bool:
-    return bool(_marker_payload(markers).get(marker_name))
-
-
 def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
     if not is_execution_output_line(line):
         return
@@ -142,15 +130,20 @@ def _scan_line_for_markers(line: str, markers: OutMarkers) -> None:
     verdict = optimization_convergence_line(line)
     if verdict is not None:
         markers["last_opt_converged"] = verdict
-        _set_marker(markers, "opt_converged" if verdict else "geom_not_converged")
+        if verdict:
+            markers["opt_converged"] = True
+        else:
+            markers["geom_not_converged"] = True
     for marker_name, needles in _MARKER_RULES:
         if any(needle in upper for needle in needles):
-            _set_marker(markers, marker_name)
+            markers[marker_name] = True
 
 
-def _scan_text_for_markers(text: str, markers: OutMarkers) -> None:
-    for line in iter_output_lines(text):
+def _marked_lines(lines: Iterable[str], markers: OutMarkers) -> Iterator[str]:
+    """``lines`` passed through unchanged, each scanned for the diagnostic markers."""
+    for line in lines:
         _scan_line_for_markers(line, markers)
+        yield line
 
 
 def _interpret_markers(markers: OutMarkers, mode: CompletionMode) -> OutAnalysis:
@@ -200,7 +193,7 @@ def _marker_error_analysis(markers: OutMarkers) -> OutAnalysis | None:
         ("scf_error", AnalyzerStatus.ERROR_SCF, "scf_not_converged"),
     )
     for marker_name, status, reason in checks:
-        if _marker_is_set(markers, marker_name):
+        if markers[marker_name]:
             return OutAnalysis(status=status, reason=reason, markers=markers)
     if markers["last_opt_converged"] is False:
         return OutAnalysis(
@@ -223,13 +216,6 @@ def _interpret_ts_completion(markers: OutMarkers, mode: CompletionMode) -> OutAn
     )
 
 
-def _scan_full_for_markers(out_path: Path, markers: OutMarkers) -> None:
-    """Stream complete lines with the same diagnostic rules as buffered reads."""
-    with open_orca_text(out_path) as handle:
-        for line in handle:
-            _scan_line_for_markers(line, markers)
-
-
 def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
     """Imaginary modes of the frequency section that verifies the final geometry.
 
@@ -246,9 +232,8 @@ def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
 
     Returns ``(imaginary_count, final_section)`` where ``final_section`` is
     True only when the count came from a section after the last final energy.
-
-    Every caller feeds the same universal-newline line stream, so the count
-    does not depend on whether the file was small enough to be read whole.
+    ``lines`` are split like a file read (CR, LF and CRLF only), as
+    :func:`analyze_output` streams them.
     """
     headerless_count = 0
 
@@ -269,21 +254,6 @@ def scan_ts_lines_for_imag_count(lines: Iterable[str]) -> tuple[int, bool]:
     return headerless_count, False
 
 
-def _scan_ts_full_for_imag_count(out_path: Path) -> tuple[int, bool]:
-    with open_orca_text(out_path) as handle:
-        return scan_ts_lines_for_imag_count(handle)
-
-
-def _scan_ts_text_for_imag_count(text: str) -> tuple[int, bool]:
-    # The shared iterator splits exactly where reading the file
-    # would: on LF, CR and CRLF only. ``str.splitlines()`` also breaks on the
-    # vertical tab, the form feed, the file/group/record separators, NEL, and
-    # the Unicode line and paragraph separators, so a small output holding any
-    # of those would be sectioned differently from the same output read past
-    # the tail window.
-    return scan_ts_lines_for_imag_count(iter_output_lines(text))
-
-
 def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
     markers = _default_markers(out_path)
     logger.debug("Analyzing output: %s (mode=%s)", out_path, mode.kind)
@@ -292,33 +262,24 @@ def analyze_output(out_path: Path, mode: CompletionMode) -> OutAnalysis:
             status=AnalyzerStatus.INCOMPLETE, reason="output_missing", markers=markers
         )
 
+    ts_count: tuple[int, bool] | None = None
     try:
-        file_size = out_path.stat().st_size
-        buffer_bytes = _TS_BUFFER_BYTES if mode.kind == "ts" else _DEFAULT_BUFFER_BYTES
-        full_text: str | None = None
-
-        # Both branches decode by the parser's rule (``parser.io``), so the
+        # One streamed pass, decoded by the parser's rule (``parser.io``), so the
         # verdict reads the same text as the frequency analysis and the reports.
-        if file_size <= buffer_bytes:
-            # Buffer small files so TS verification can reuse the same text.
-            full_text = read_orca_text(out_path)
-            _scan_text_for_markers(full_text, markers)
-        else:
-            _scan_full_for_markers(out_path, markers)
-
-        # TS mode needs exact imaginary frequency count from the final vibration block.
-        if mode.kind == "ts" and markers["terminated_normally"]:
-            if full_text is None:
-                imag_count, final_section = _scan_ts_full_for_imag_count(out_path)
+        with open_orca_text(out_path) as handle:
+            if mode.kind == "ts":
+                # The section scan reads every line, so the markers see all of them.
+                ts_count = scan_ts_lines_for_imag_count(_marked_lines(handle, markers))
             else:
-                imag_count, final_section = _scan_ts_text_for_imag_count(full_text)
-            markers["imaginary_frequency_count"] = imag_count
-            markers["final_frequency_section"] = final_section
-
+                for line in handle:
+                    _scan_line_for_markers(line, markers)
     except OSError:
         return OutAnalysis(
             status=AnalyzerStatus.INCOMPLETE, reason="output_read_error", markers=markers
         )
+    # A TS verdict needs the imaginary count of the final frequency section.
+    if ts_count is not None and markers["terminated_normally"]:
+        markers["imaginary_frequency_count"], markers["final_frequency_section"] = ts_count
 
     analysis = _interpret_markers(markers, mode)
     if analysis.reason not in ("ts_criteria_met", "ts_criteria_failed"):

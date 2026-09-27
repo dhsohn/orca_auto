@@ -12,6 +12,7 @@ from typing import Any
 from ..completion_rules import RouteFacts
 from ..evidence import final_out_path, parsed_final_output, parsed_output_facts
 from ..frequencies import ModeSummary, mode_summaries
+from ..out_analyzer import IRC_PATH_FOUND_NEEDLES
 from ..parser import OrcaResult
 from ..statuses import RunStatus
 from .attempts import (
@@ -35,6 +36,7 @@ from .path import (
     iter_phase_table_rows,
     parse_path_summary,
     path_marker_index,
+    path_marker_point,
     path_profile_chart_svg,
     path_summary_row_re,
     path_table_html,
@@ -44,7 +46,6 @@ from .render import (
     ReportHeader,
     job_meta_html,
     metric_card,
-    path_marker_point,
     relative_energy_cycle_chart_svg,
     status_badges,
 )
@@ -128,13 +129,13 @@ class IrcReportError(Exception):
 
 def parse_irc_output_text(text: str) -> IrcParsedOutput:
     """IRC facts of decoded output text; ``parse_irc_output`` memoizes this per file."""
+    upper = text.upper()
     return IrcParsedOutput(
         settings=_parse_irc_settings(text),
         iterations=_parse_irc_iterations(text),
         path_points=_parse_irc_path_summary(text),
-        irc_marker_found=bool(
-            _IRC_PATH_SUMMARY_HEADER_RE.search(text) or "IRC-DRV" in text.upper()
-        ),
+        # The analyzer's needles over the raw text, input echoes and comments included.
+        irc_marker_found=any(needle in upper for needle in IRC_PATH_FOUND_NEEDLES),
     )
 
 

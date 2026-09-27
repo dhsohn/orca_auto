@@ -157,6 +157,12 @@ def path_marker_index(points: Sequence[PathPoint], marker: str) -> int | None:
     return None
 
 
+def path_marker_point(points: Sequence[P], marker: str) -> P | None:
+    """The point :func:`path_marker_index` finds, or ``None``."""
+    index = path_marker_index(points, marker)
+    return None if index is None else points[index]
+
+
 def path_table_html(
     points: Sequence[PathPoint],
     columns: Sequence[tuple[str, Callable[[PathPoint], str]]],
@@ -225,6 +231,7 @@ __all__ = [
     "iter_phase_table_rows",
     "parse_path_summary",
     "path_marker_index",
+    "path_marker_point",
     "path_profile_chart_svg",
     "path_summary_row_re",
     "path_table_html",

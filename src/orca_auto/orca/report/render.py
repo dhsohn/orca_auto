@@ -11,7 +11,6 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 from ..parser import KCAL_PER_HARTREE
 from ..statuses import RunStatus
@@ -166,15 +165,6 @@ def verdict_note(reason: str, fallback_reason: str = "") -> str:
     if note is None:
         return ""
     return f'<p class="verdict">{html.escape(note)}</p>'
-
-
-def path_marker_point(points: Sequence[Any], marker: str) -> Any | None:
-    """First path point whose ``marker`` or ``label`` equals ``marker`` (upper-cased)."""
-    marker = marker.upper()
-    for point in points:
-        if point.marker == marker or point.label == marker:
-            return point
-    return None
 
 
 def relative_energy_cycle_chart_svg(

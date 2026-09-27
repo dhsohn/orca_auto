@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TextIO
 
 import pytest
 
@@ -49,16 +50,20 @@ def test_completed_ts(tmp_path: Path) -> None:
     assert result.status == "completed"
 
 
-def test_ts_small_file_avoids_full_rescan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ts_verdict_reads_the_output_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     payload = "\n".join(["VIBRATIONAL FREQUENCIES", "  -120.00 cm**-1", "  140.00 cm**-1", NORMAL])
     out = _write_out(tmp_path, payload)
+    opened: list[Path] = []
 
-    def full_scan_called(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("full scan called")
+    def counting_open(path: Path) -> TextIO:
+        opened.append(path)
+        return open_orca_text(path)
 
-    monkeypatch.setattr(out_analyzer, "_scan_ts_full_for_imag_count", full_scan_called)
+    monkeypatch.setattr(out_analyzer, "open_orca_text", counting_open)
     result = analyze_output(out, _TS_MODE)
     assert result.status == AnalyzerStatus.COMPLETED
+    assert result.markers["imaginary_frequency_count"] == 1
+    assert opened == [out]
 
 
 def test_completed_ts_with_irc_marker_outside_tail_window(tmp_path: Path) -> None:
@@ -194,11 +199,10 @@ def test_ts_legacy_headerless_count_is_not_a_final_section(tmp_path: Path) -> No
 
 
 def test_ts_line_rule_matches_the_workflow_recount_across_a_form_feed(tmp_path: Path) -> None:
-    # A small output is read whole and a large one is iterated; the
-    # workflow report iterates it too. ``str.splitlines()`` breaks on a
-    # form feed and file iteration does not, so a run whose output carries
-    # one inside a frequency section would otherwise be sectioned one way
-    # by the analyzer and the other way by the recount.
+    # The analyzer and the recount both iterate the file. ``str.splitlines()``
+    # breaks on a form feed and file iteration does not, so a run whose output
+    # carries one inside a frequency section would otherwise be sectioned one
+    # way by the analyzer and the other way by the recount.
     payload = "\n".join(
         [
             "FINAL SINGLE POINT ENERGY      -100.200000000000",
@@ -416,7 +420,7 @@ def test_not_converged_marker_before_the_tail_window_is_still_a_verdict(tmp_path
         "****ORCA TERMINATED NORMALLY****\n",
         encoding="utf-8",
     )
-    assert out_path.stat().st_size > out_analyzer._DEFAULT_BUFFER_BYTES
+    assert out_path.stat().st_size > 64 * 1024
 
     analysis = analyze_output(out_path, CompletionMode(kind="opt", require_irc=False))
 
@@ -584,29 +588,24 @@ _FREQUENCY_FIXTURES: tuple[tuple[str, str, AnalyzerStatus, int, bool], ...] = (
 )
 def test_verifier_count_is_the_published_frequency_analysis(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     text: str,
     status: AnalyzerStatus,
     count: int,
     final_section: bool,
 ) -> None:
-    # The TS verdict, the SI/report frequency analysis, and the streaming and
-    # buffered analyzer paths must all count the same modes of the same
-    # section; the expectations pin the verdicts from before the consolidation.
+    # The TS verdict and the SI/report frequency analysis must count the same
+    # modes of the same section; the expectations pin the verdicts from before
+    # the consolidation.
     out = tmp_path / "rxn.out"
     out.write_text(text, encoding="utf-8")
 
-    buffered = analyze_output(out, _TS_FREQ_MODE)
-    monkeypatch.setattr(out_analyzer, "_TS_BUFFER_BYTES", 0)
-    streamed = analyze_output(out, _TS_FREQ_MODE)
+    result = analyze_output(out, _TS_FREQ_MODE)
     analysis = parsed_frequency_analysis(out)
 
-    assert buffered.status is status
-    assert buffered.markers["imaginary_frequency_count"] == count
-    assert buffered.markers["final_frequency_section"] is final_section
-    assert streamed.status is status
-    assert streamed.markers == buffered.markers
-    if not buffered.markers["terminated_normally"]:
+    assert result.status is status
+    assert result.markers["imaginary_frequency_count"] == count
+    assert result.markers["final_frequency_section"] is final_section
+    if not result.markers["terminated_normally"]:
         # An unterminated run is never counted; nothing is published for it.
         assert count == 0
     elif analysis is not None:
@@ -615,10 +614,7 @@ def test_verifier_count_is_the_published_frequency_analysis(
         assert not final_section
 
 
-@pytest.mark.parametrize("streamed", [False, True], ids=["buffered", "streamed"])
-def test_utf16_output_gets_the_same_verdict_as_its_utf8_twin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, streamed: bool
-) -> None:
+def test_utf16_output_gets_the_same_verdict_as_its_utf8_twin(tmp_path: Path) -> None:
     # ORCA can write UTF-16 output; the analyzer used to decode every file as
     # UTF-8 and so saw NUL-riddled text where the parser saw a normal run.
     utf8 = tmp_path / "utf8.out"
@@ -626,8 +622,6 @@ def test_utf16_output_gets_the_same_verdict_as_its_utf8_twin(
     utf16 = tmp_path / "utf16.out"
     utf16.write_text(_TS_REAL_VIB_FORMAT, encoding="utf-16")
     assert utf16.read_bytes().startswith((b"\xff\xfe", b"\xfe\xff"))
-    if streamed:
-        monkeypatch.setattr(out_analyzer, "_TS_BUFFER_BYTES", 0)
 
     expected = analyze_output(utf8, _TS_FREQ_MODE)
     result = analyze_output(utf16, _TS_FREQ_MODE)
