@@ -11,6 +11,7 @@ from orca_auto import cli_handlers as cli_run_dir
 from orca_auto.cli import main as cli_main
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import discovery
+from orca_auto.orca.commands import run_inp as run_inp_command
 from orca_auto.orca.queue import adapter as queue_adapter
 from tests.config_discovery_helpers import isolate_shared_config_discovery
 from tests.conftest import make_queue_entry
@@ -53,11 +54,12 @@ def test_cmd_run_dir_dispatches_to_orca_for_inp_directories(
     (target / "job.inp").write_text("! Opt\n", encoding="utf-8")
     calls: list[tuple[str, str]] = []
 
-    def _fake_orca_run_dir(args: Any) -> int:
+    def _fake_run_inp(args: Any, **_seams: Any) -> int:
         calls.append(("orca", str(Path(args.path).resolve())))
         return 41
 
-    monkeypatch.setattr(cli_run_dir, "cmd_orca_run_dir", _fake_orca_run_dir)
+    monkeypatch.setattr(cli_run_dir, "_configure_orca_logging", lambda _args: None)
+    monkeypatch.setattr(run_inp_command, "cmd_run_inp", _fake_run_inp)
 
     result = cli_run_dir.cmd_run_dir(
         SimpleNamespace(
@@ -124,43 +126,14 @@ def test_pinned_run_dir_does_not_relabel_downstream_oserror(
     target.mkdir()
     (target / "job.inp").write_text("! Opt\n", encoding="utf-8")
 
-    def _raise_publication_error(_args: Any) -> int:
+    def _raise_publication_error(_args: Any, **_seams: Any) -> int:
         raise OSError("disk full while publishing queue")
 
-    monkeypatch.setattr(cli_run_dir, "cmd_orca_run_dir", _raise_publication_error)
+    monkeypatch.setattr(cli_run_dir, "_configure_orca_logging", lambda _args: None)
+    monkeypatch.setattr(run_inp_command, "cmd_run_inp", _raise_publication_error)
 
     with pytest.raises(OSError, match="disk full while publishing queue"):
         cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(target), priority=None))
-
-
-def test_cmd_run_dir_rejects_resource_overrides_for_orca_directories(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    target = tmp_path / "orca_job"
-    target.mkdir()
-    (target / "job.inp").write_text("! Opt\n", encoding="utf-8")
-
-    def _fake_orca_run_dir(args: Any) -> int:
-        raise AssertionError(f"ORCA run-dir should not be called: {args}")
-
-    monkeypatch.setattr(cli_run_dir, "cmd_orca_run_dir", _fake_orca_run_dir)
-
-    result = cli_run_dir.cmd_run_dir(
-        SimpleNamespace(
-            path=str(target),
-            max_cores=12,
-            max_memory_gb=None,
-            priority=None,
-        )
-    )
-
-    assert result == 1
-    err = capsys.readouterr().err
-    assert "--max-cores" in err
-    assert "--max-memory-gb" in err
-    assert "%pal/%maxcore" in err
 
 
 def test_cmd_run_dir_prefers_orca_for_mixed_input_xyz_and_inp_without_manifest(
@@ -173,11 +146,12 @@ def test_cmd_run_dir_prefers_orca_for_mixed_input_xyz_and_inp_without_manifest(
     (target / "tsopt.inp").write_text("! OptTS\n", encoding="utf-8")
     calls: list[tuple[str, str]] = []
 
-    def _fake_orca_run_dir(args: Any) -> int:
+    def _fake_run_inp(args: Any, **_seams: Any) -> int:
         calls.append(("orca", str(Path(args.path).resolve())))
         return 41
 
-    monkeypatch.setattr(cli_run_dir, "cmd_orca_run_dir", _fake_orca_run_dir)
+    monkeypatch.setattr(cli_run_dir, "_configure_orca_logging", lambda _args: None)
+    monkeypatch.setattr(run_inp_command, "cmd_run_inp", _fake_run_inp)
 
     result = cli_run_dir.cmd_run_dir(
         SimpleNamespace(
@@ -242,28 +216,6 @@ def test_cmd_run_dir_reports_missing_and_file_targets(
     file_target.write_text("not a directory\n", encoding="utf-8")
     assert cli_run_dir.cmd_run_dir(SimpleNamespace(path=str(file_target))) == 1
     assert f"run-dir target is not a directory: {file_target.resolve()}" in capsys.readouterr().err
-
-
-def test_cmd_run_dir_sets_default_orca_priority(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "orca_job"
-    target.mkdir()
-    (target / "job.inp").write_text("! Opt\n", encoding="utf-8")
-    seen: list[Any] = []
-
-    def _fake_orca_run_dir(args: Any) -> int:
-        seen.append(args)
-        return 44
-
-    monkeypatch.setattr(cli_run_dir, "cmd_orca_run_dir", _fake_orca_run_dir)
-
-    args = SimpleNamespace(path=str(target), priority=None)
-
-    assert cli_run_dir.cmd_run_dir(args) == 44
-    assert args.priority == 10
-    assert seen == [args]
 
 
 def _run_dir_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:

@@ -122,7 +122,6 @@ def test_queue_list_stays_plain_under_force_color_pipe(
     plain = _strip_ansi(stdout)
     assert "active_simulations:" in plain  # plain layout kept
     assert "orca_auto queue" not in plain  # no summary band
-    assert "├─" not in plain and "└─" not in plain  # no tree connectors
     assert "▎" not in plain  # no rail
     assert "\x1b[" in stdout  # color codes are still emitted
 
@@ -133,7 +132,7 @@ def test_repair_blocked_is_counted_as_failed() -> None:
 
 def test_queue_header_band_respects_terminal_width() -> None:
     rows = [
-        (0, {"status": status})
+        {"status": status}
         for status in ("running", "queued", "completed", "repair_blocked", "cancelled", "unknown")
     ]
     terminal.set_color_override(True)
@@ -351,8 +350,7 @@ def test_cmd_queue_list_tty_renders_styled_view(
     assert "orca_auto queue" in plain
     assert "active" in plain and "running" in plain
     assert "active_simulations:" not in plain
-    # Standalone rows retain the per-row rail without hierarchy connectors.
-    assert "├─" not in plain and "└─" not in plain
+    # Each row carries the status-colored rail.
     assert "▎" in plain
     # Real ANSI SGR codes were emitted (not just the plain fallback).
     assert "\x1b[" in stdout

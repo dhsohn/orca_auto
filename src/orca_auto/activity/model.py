@@ -154,10 +154,6 @@ def unique_texts(values: list[str]) -> tuple[str, ...]:
     return tuple(ordered)
 
 
-def mapping_text(mapping: dict[str, Any], key: str) -> str:
-    return normalize_text(mapping.get(key))
-
-
 def path_aliases(path_text: str, *, root: Path | None = None) -> tuple[str, ...]:
     text = normalize_text(path_text)
     if not text:

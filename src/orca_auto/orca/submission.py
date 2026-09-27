@@ -185,15 +185,6 @@ def prepared_resource_input_from_selected_inp(
     return prepared
 
 
-def warn_ignored_resource_override_flags(args: Any, *, logger: logging.Logger) -> None:
-    if getattr(args, "max_cores", None) is None and getattr(args, "max_memory_gb", None) is None:
-        return
-    logger.warning(
-        "Standalone ORCA queue submission ignores --max-cores/--max-memory-gb; "
-        "resource metadata is read from the input file."
-    )
-
-
 def build_queue_metadata(
     *,
     artifacts: OrcaSelectedInputArtifacts,
@@ -273,8 +264,7 @@ def _prepare_submission_inputs(
             selected_inp = select_latest_inp(reaction_dir)
         except ValueError:
             selected_inp = None
-    warn_ignored_resource_override_flags(args, logger=logger)
-    priority = normalize_queue_priority(getattr(args, "priority", 10))
+    priority = normalize_queue_priority(getattr(args, "priority", None))
     force = bool(getattr(args, "force", False))
     assert_run_dir_publication_allowed("ORCA target mutation preflight")
     artifacts = selected_input_artifacts(selected_inp)

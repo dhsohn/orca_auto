@@ -119,14 +119,14 @@ def _summary_status_group(status: object) -> str:
 
 
 def _queue_header_band_lines(
-    display_rows: Sequence[tuple[int, dict[str, Any]]],
+    display_rows: Sequence[dict[str, Any]],
     *,
     active_simulations: int,
     max_width: int | None = None,
 ) -> list[str]:
     """Build the TTY summary band: a title line plus a status-count line."""
 
-    counts = Counter(_summary_status_group(item.get("status")) for _indent, item in display_rows)
+    counts = Counter(_summary_status_group(item.get("status")) for item in display_rows)
     segments: list[tuple[str, str | None]] = []
     for key in _SUMMARY_ORDER:
         count = counts.get(key, 0)
@@ -201,7 +201,7 @@ def _queue_header_band_lines(
 
 
 def _queue_list_text_lines(
-    rows: Sequence[tuple[int, dict[str, Any]]],
+    rows: Sequence[dict[str, Any]],
     *,
     active_simulations: int,
     now: Any | None = None,
@@ -216,7 +216,6 @@ def _queue_list_text_lines(
         max_width=max_width if max_width is not None else terminal_table.terminal_max_width(),
         include_id=include_id,
         empty_message=empty_message,
-        use_tree_glyphs=_layout_interactive(),
     )
 
 
@@ -232,12 +231,6 @@ def _queue_list_request(args: Any) -> _QueueListRequest:
     )
 
 
-def _queue_list_clear_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
-    return clear_activities(
-        orca_config=request.shared_config,
-    )
-
-
 def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int:
     if json_output:
         emit_json(payload)
@@ -247,7 +240,7 @@ def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int
     return 0
 
 
-def _missing_runs_root(args: Any, request: _QueueListRequest) -> str | None:
+def _missing_runs_root(request: _QueueListRequest) -> str | None:
     """The configured runs root when it is not a directory, else None."""
     root = shared_runs_root_from_config(request.shared_config)
     if not root:
@@ -255,22 +248,11 @@ def _missing_runs_root(args: Any, request: _QueueListRequest) -> str | None:
     return None if Path(root).is_dir() else str(root)
 
 
-def _queue_list_payload(args: Any, request: _QueueListRequest) -> dict[str, Any]:
-    # ``list_activities`` owns the status filter and the page; its payload is
-    # rendered as is, so the count, rows and summaries can never disagree.
-    return list_activities(
-        limit=request.limit,
-        statuses=request.status_values,
-        refresh=bool(getattr(args, "refresh", False)),
-        orca_config=request.shared_config,
-    )
-
-
 def _print_queue_list_text(*, payload: dict[str, Any]) -> int:
     tty = _layout_interactive()
     term_width = terminal_table.terminal_max_width()
     rail_width = terminal_table.display_width(_QUEUE_RAIL)
-    display_rows = [(0, item) for item in payload.get("activities", [])]
+    display_rows = list(payload.get("activities", []))
     active_simulations = int(payload.get("active_simulations", 0))
     lines = _queue_list_text_lines(
         display_rows,
@@ -319,7 +301,7 @@ def _print_queue_list_text(*, payload: dict[str, Any]) -> int:
     if not tty:
         print(terminal.paint(lines[1], terminal.BOLD))
         print(lines[2])
-        for (_indent, item), line in zip(display_rows, lines[3:], strict=True):
+        for item, line in zip(display_rows, lines[3:], strict=True):
             color = terminal.status_color(item.get("status"))
             print(terminal.paint(line, color) if color else line)
         for note in pending_cancel_lines:
@@ -336,7 +318,7 @@ def _print_queue_list_text(*, payload: dict[str, Any]) -> int:
     gutter = " " * rail_width if show_rail else ""
     print(gutter + terminal.paint(lines[1], terminal.BOLD))
     print(gutter + terminal.paint(lines[2], terminal.DIM))
-    for (_indent, item), line in zip(display_rows, lines[3:], strict=True):
+    for item, line in zip(display_rows, lines[3:], strict=True):
         color = terminal.status_color(item.get("status"))
         body = terminal.paint(line, color) if color else line
         if show_rail:
@@ -366,7 +348,7 @@ def cmd_queue_list(args: Any) -> int:
         )
         return 1
 
-    missing_root = _missing_runs_root(args, request)
+    missing_root = _missing_runs_root(request)
     if missing_root is not None:
         emit_error(
             f"runs_root does not exist: {missing_root}",
@@ -383,7 +365,7 @@ def cmd_queue_list(args: Any) -> int:
             )
             return 1
         try:
-            clear_payload = _queue_list_clear_payload(args, request)
+            clear_payload = clear_activities(orca_config=request.shared_config)
         except _QUEUE_STATE_ERRORS as exc:
             emit_error(
                 exc,
@@ -397,7 +379,14 @@ def cmd_queue_list(args: Any) -> int:
             return 0
 
     try:
-        payload = _queue_list_payload(args, request)
+        # ``list_activities`` owns the status filter and the page; its payload is
+        # rendered as is, so the count, rows and summaries can never disagree.
+        payload = list_activities(
+            limit=request.limit,
+            statuses=request.status_values,
+            refresh=bool(getattr(args, "refresh", False)),
+            orca_config=request.shared_config,
+        )
     except _QUEUE_STATE_ERRORS as exc:
         emit_error(
             exc,

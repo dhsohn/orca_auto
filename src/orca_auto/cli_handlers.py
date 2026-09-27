@@ -66,28 +66,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     return int(_cmd_orca_init(args, report_error=emit_error))
 
 
-def cmd_orca_run_dir(args: argparse.Namespace) -> int:
-    from orca_auto.orca.commands.run_inp import cmd_run_inp as _cmd_orca_run_dir
-
-    _configure_orca_logging(args)
-    args.config = engine_config_for_args(args)
-    json_output = bool(getattr(args, "json", False))
-    # With --log-file the submission logger writes nowhere the operator looks;
-    # the terminal error line (and the JSON error document) must not depend on
-    # how logging was configured.
-    return int(
-        _cmd_orca_run_dir(
-            args,
-            report_error=lambda message: emit_error(message, json_output=json_output),
-            emit_json=emit_json,
-        )
-    )
-
-
-def _detect_run_dir_app(target: Path) -> str:
-    if any(candidate.is_file() for candidate in target.glob("*.inp")):
-        return "orca"
-    raise ValueError("Could not infer run-dir target type: expected an ORCA *.inp file.")
+def _require_orca_input(target: Path) -> None:
+    if not any(candidate.is_file() for candidate in target.glob("*.inp")):
+        raise ValueError("Could not infer run-dir target type: expected an ORCA *.inp file.")
 
 
 def _configured_runs_root_for_run_dir(args: Any) -> str:
@@ -200,7 +181,7 @@ def cmd_run_dir(args: Any) -> int:
                 if runs_root:
                     validate_production_run_dir_target(raw_target, runs_root)
                     validate_production_run_dir_target(pinned_target, runs_root)
-                run_dir_app = _detect_run_dir_app(pinned_target)
+                _require_orca_input(pinned_target)
                 pinned_stat = pinned_target.stat()
                 publication_contract = _RunDirPublicationContract(
                     pinned_target=pinned_target,
@@ -214,24 +195,24 @@ def cmd_run_dir(args: Any) -> int:
                 return 1
 
             args.path = str(pinned_target)
-            args.run_dir_app = run_dir_app
             with use_run_dir_publication_guard(
                 publication_contract,
                 pinned_target=pinned_target,
             ):
-                if (
-                    getattr(args, "max_cores", None) is not None
-                    or getattr(args, "max_memory_gb", None) is not None
-                ):
-                    emit_error(
-                        "ORCA run-dir does not support --max-cores or --max-memory-gb. "
-                        "Edit %pal/%maxcore in the selected .inp.",
-                        json_output=json_output,
+                from orca_auto.orca.commands.run_inp import cmd_run_inp
+
+                _configure_orca_logging(args)
+                args.config = engine_config_for_args(args)
+                # With --log-file the submission logger writes nowhere the operator
+                # looks; the terminal error line (and the JSON error document) must
+                # not depend on how logging was configured.
+                return int(
+                    cmd_run_inp(
+                        args,
+                        report_error=lambda message: emit_error(message, json_output=json_output),
+                        emit_json=emit_json,
                     )
-                    return 1
-                if getattr(args, "priority", None) is None:
-                    args.priority = 10
-                return int(cmd_orca_run_dir(args))
+                )
     except _RunDirTargetChangedError as exc:
         emit_error(exc, json_output=json_output)
         return 1

@@ -139,7 +139,7 @@ def test_engine_config_for_args_uses_discovered_shared_config(
     assert discovered == str(Path("/tmp/orca_auto.yaml").resolve())
 
 
-def test_cmd_orca_run_dir_uses_discovered_shared_config(
+def test_cmd_run_dir_uses_discovered_shared_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -149,14 +149,13 @@ def test_cmd_orca_run_dir_uses_discovered_shared_config(
     captured: list[tuple[str | None, str]] = []
 
     monkeypatch.setattr(cli_run_dir, "_configure_orca_logging", lambda args: None)
-    monkeypatch.setattr(
-        discovery, "resolve_shared_config_path", lambda explicit: "/tmp/orca_auto.yaml"
-    )
+    discovered = tmp_path / "orca_auto.yaml"
+    monkeypatch.setattr(discovery, "resolve_shared_config_path", lambda explicit: str(discovered))
 
     import orca_auto.orca.commands.run_inp as run_inp_cmd
 
     def _fake_cmd_run_inp(args: argparse.Namespace, **_seams: object) -> int:
-        captured.append((getattr(args, "config", None), getattr(args, "path", "")))
+        captured.append((getattr(args, "config", None), str(Path(args.path).resolve())))
         return 31
 
     monkeypatch.setattr(
@@ -165,7 +164,7 @@ def test_cmd_orca_run_dir_uses_discovered_shared_config(
         _fake_cmd_run_inp,
     )
 
-    result = cli_run_dir.cmd_orca_run_dir(
+    result = cli_run_dir.cmd_run_dir(
         argparse.Namespace(
             path=str(target),
             orca_auto_config=None,
@@ -176,7 +175,7 @@ def test_cmd_orca_run_dir_uses_discovered_shared_config(
     )
 
     assert result == 31
-    assert captured == [(str(Path("/tmp/orca_auto.yaml").resolve()), str(target))]
+    assert captured == [(str(discovered.resolve()), str(target))]
 
 
 def test_cmd_queue_worker_returns_supervisor_status(monkeypatch: pytest.MonkeyPatch) -> None:

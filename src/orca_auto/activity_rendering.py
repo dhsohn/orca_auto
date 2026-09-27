@@ -16,59 +16,19 @@ from orca_auto.core.utils import normalize_text, safe_int
 _WORKER_LOG_STATUSES = frozenset({_s.STATUS_RUNNING, *_s.FAILED_STATUSES})
 
 
-def _tree_prefixes(indents: Sequence[int]) -> list[str]:
-    """Return box-drawing tree prefixes for a flat, depth-ordered row list.
-
-    A row is the last child at its depth when no later row shares that depth
-    before the indentation drops below it; ancestors that still have a later
-    sibling contribute a ``│`` continuation bar. Depth-0 rows get no prefix, so
-    the result lines up one-to-one with ``rows``.
-    """
-
-    normalized = [max(0, int(value)) for value in indents]
-    count = len(normalized)
-
-    def _has_later_row_at(start: int, depth: int) -> bool:
-        for later in range(start, count):
-            if normalized[later] < depth:
-                return False
-            if normalized[later] == depth:
-                return True
-        return False
-
-    prefixes: list[str] = []
-    for index, depth in enumerate(normalized):
-        if depth <= 0:
-            prefixes.append("")
-            continue
-        segments = [
-            "│  " if _has_later_row_at(index + 1, level) else "   " for level in range(1, depth)
-        ]
-        segments.append("├─ " if _has_later_row_at(index + 1, depth) else "└─ ")
-        prefixes.append("".join(segments))
-    return prefixes
-
-
 def _prepare_queue_table_rows(
-    rows: Sequence[tuple[int, dict[str, Any]]],
+    rows: Sequence[dict[str, Any]],
     *,
     now: datetime | None = None,
-    use_tree_glyphs: bool = False,
 ) -> list[dict[str, str]]:
     prepared: list[dict[str, str]] = []
     resolved_now = now or _activity_labels.queue_table_now()
-    prefixes = _tree_prefixes([indent for indent, _ in rows]) if use_tree_glyphs else None
-    for position, (indent, item) in enumerate(rows):
-        name = _activity_labels.queue_name_text(item)
-        if prefixes is not None:
-            name = prefixes[position] + name
-        elif int(indent) > 0:
-            name = ("  " * int(indent)) + name
+    for item in rows:
         item_id = normalize_text(item.get("activity_id")) or "-"
         prepared.append(
             {
                 "status": _activity_labels.queue_status_icon(item),
-                "name": name,
+                "name": _activity_labels.queue_name_text(item),
                 "detail": _activity_labels.queue_detail_text(item),
                 "id": item_id,
                 "elapsed": _activity_labels.queue_elapsed_text(item, now=resolved_now),
@@ -78,14 +38,13 @@ def _prepare_queue_table_rows(
 
 
 def queue_table_lines(
-    rows: Sequence[tuple[int, dict[str, Any]]],
+    rows: Sequence[dict[str, Any]],
     *,
     now: datetime | None = None,
     max_width: int | None = None,
     include_id: bool = True,
-    use_tree_glyphs: bool = False,
 ) -> list[str]:
-    prepared = _prepare_queue_table_rows(rows, now=now, use_tree_glyphs=use_tree_glyphs)
+    prepared = _prepare_queue_table_rows(rows, now=now)
     return _terminal_table.queue_table_lines(
         prepared,
         max_width=max_width,
@@ -94,14 +53,13 @@ def queue_table_lines(
 
 
 def queue_list_text_lines(
-    rows: Sequence[tuple[int, dict[str, Any]]],
+    rows: Sequence[dict[str, Any]],
     *,
     active_simulations: int,
     now: datetime | None = None,
     max_width: int | None = None,
     include_id: bool = True,
     empty_message: str = "No matching activities.",
-    use_tree_glyphs: bool = False,
 ) -> list[str]:
     lines = [f"active_simulations: {int(active_simulations)}"]
     if not rows:
@@ -113,7 +71,6 @@ def queue_list_text_lines(
             now=now,
             max_width=max_width,
             include_id=include_id,
-            use_tree_glyphs=use_tree_glyphs,
         )
     )
     return lines
@@ -123,7 +80,7 @@ def queue_list_text_lines(
 _MAX_NAMED_PENDING_CANCEL_ROWS = 5
 
 
-def queue_pending_cancel_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> list[str]:
+def queue_pending_cancel_lines(rows: Sequence[dict[str, Any]]) -> list[str]:
     """Name the rows holding cancel transitions no worker has journaled yet.
 
     This is a note printed under the table rather than a cell inside it.
@@ -136,7 +93,7 @@ def queue_pending_cancel_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> li
     """
 
     pending: list[tuple[str, int]] = []
-    for _indent, item in rows:
+    for item in rows:
         metadata = item.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
         count = safe_int(metadata.get("cancel_transitions_pending"), default=0)
@@ -154,7 +111,7 @@ def queue_pending_cancel_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> li
     ]
 
 
-def queue_worker_log_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> list[str]:
+def queue_worker_log_lines(rows: Sequence[dict[str, Any]]) -> list[str]:
     """One ``worker_log:`` note per running or failed row that has a log.
 
     Printed under the table like the cancel note: the path would not survive
@@ -162,7 +119,7 @@ def queue_worker_log_lines(rows: Sequence[tuple[int, dict[str, Any]]]) -> list[s
     """
 
     lines = []
-    for _indent, item in rows:
+    for item in rows:
         path = normalize_text(item.get("worker_log"))
         if path and _s.normalize_status(item.get("status")) in _WORKER_LOG_STATUSES:
             lines.append(f"worker_log: {normalize_text(item.get('activity_id')) or '-'} {path}")
