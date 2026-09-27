@@ -38,14 +38,12 @@ Earlier real-engine evidence remains available in the
 It covers the named ORCA 6.1.1 cases at source revision `2d6cfa7a`, with its stated
 limits; it is not a new acceptance run of version 7.
 
-## Retirement and regression coverage
+## Regression coverage
 
-Version 7 tests reject removed commands/config and old workflow-owned execution
-paths before side effects. Old data and durable identity readers are retained where
-needed for ownership safety. Preserve standalone ORCA tests when moving or removing
-former mixed test directories, including generation fencing, reports, queue crashes,
-admission accounting and cancellation. A stale workflow extension must not appear
-in a new package or prepared runtime.
+Durable identity readers for historical data are retained where needed for
+ownership safety. Preserve standalone ORCA tests when moving or removing tests,
+including generation fencing, reports, queue crashes, admission accounting and
+cancellation.
 
 For a refactor, compare output bytes or behaviors with the prior implementation.
 For a removal, search code, dispatch strings, configuration, CI, documentation and

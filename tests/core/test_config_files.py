@@ -227,14 +227,6 @@ def test_discovery_order_is_explicit_then_env_then_home(
             {"resources": {"max_core_per_task": 8}},
             "Unknown resources config fields are not supported",
         ),
-        (
-            {"workflow": {"root": "/tmp/runs"}},
-            "Unknown top-level config fields are not supported",
-        ),
-        (
-            {"workflow": {"paths": {"xtb_path": "/tmp/xtb"}}},
-            "Unknown top-level config fields are not supported",
-        ),
     ],
 )
 def test_shared_config_validation_rejects_unknown_fields(

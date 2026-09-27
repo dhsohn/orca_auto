@@ -51,7 +51,7 @@ graph TD
 | **`orca/`** | ORCA 전용 로직: 입력 파일(`.inp`) 파싱 및 자원 판별, 실행 준비, 큐 워커 및 프로세스 구동, 출력 로그 분석 및 수렴 판정, 결과 보고서(`machine.json`) 생성 |
 | **`core/`** | 공용 인프라: 디스크 큐 저장소, 동시 실행 슬롯(Admission) 관리, 프로세스 감독 및 PID 파일 관리, 파일 I/O 및 설정 로더, SQLite 인덱스, 파일시스템 잠금 |
 
-> **아키텍처 특징**: 엔진은 ORCA 하나입니다. 워크플로우, conformer scaffold, xTB/CREST 엔진(`flow/`)은 7.0에서 제거되었습니다.
+> **아키텍처 특징**: 엔진은 ORCA 하나이며, 작업 하나는 독립된 ORCA 입력 디렉터리 하나입니다. 워크플로우 계층은 없습니다([ADR 0005](adr/0005-remove-retired-workflow-support.md)).
 
 ---
 
@@ -144,7 +144,6 @@ ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행�
 - **SQLite 조회 캐시**: 대량의 계산 이력이 쌓여도 빠른 조회가 가능하도록 SQLite 기반 activity 인덱스를 운영합니다. 이 캐시는 위치 항목을 작업 ID 기준으로 관리하며, `job_locations.json` 자체는 디스크의 실행 상태에서 `index rebuild`로 재구성할 수 있고 `--refresh`는 같은 재구성으로 미등록 실행을 기록합니다. 목록이 적용하는 실행 상태·스냅샷 대체 규칙은 CLI 계층이 아니라 `orca/run_status.py`에 있습니다. `index rebuild`는 디스크에서 유도한 위치 기록을 병합하며 SQLite activity DB 재생성 명령은 아니다.
 - **Scratch 운영 명령**: `orca_auto scratch list`와 `scratch clear`로 비활성(non-live) RAM scratch 워크스페이스를 점검·제거합니다. stale, unverifiable, invalid-manifest 워크스페이스가 하나라도 남아 있으면 이후의 모든 scratch 실행이 차단(fail-closed)됩니다.
 - **불변 휠 런타임 (Prepared Wheel Runtime)**: 프로덕션 서버 환경에서는 Git 체크아웃 대신 검증된 불변 wheel 런타임을 배포하여, 체크아웃 변경이나 의존성 혼선 없이 운영 환경을 격리합니다 ([docs/RUNTIME.md](RUNTIME.md)).
-- **과거 데이터 보호**: 7.0에서 지원 종료된 이전 워크플로우 디렉터리는 과거 계산 데이터를 보존하기 위해 읽기 전용으로 보호되며, 해당 디렉터리에서 새로운 실행이 시작되는 것을 방지합니다.
 
 ---
 
@@ -156,3 +155,4 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0002: 실패한 계산은 자동으로 재시도하지 않는다](adr/0002-no-automatic-retry-of-failed-calculations.md)
 - [ADR 0003: workflow를 폐기하고 단독 ORCA 작업에 집중한다](adr/0003-retire-workflows-for-standalone-orca-jobs.md)
 - [ADR 0004: 메모리 합산 제한 아래의 RAM scratch 동시 실행](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)
+- [ADR 0005: 폐기된 workflow 지원 코드를 제거한다](adr/0005-remove-retired-workflow-support.md)

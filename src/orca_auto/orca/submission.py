@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
-from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_STATE_CREATING,
@@ -54,7 +53,6 @@ from .input_artifacts import OrcaSelectedInputArtifacts, selected_input_artifact
 from .job_locations import resolve_job_metadata
 from .queue import adapter as queue_adapter
 from .queue.adapter import DuplicateEntryError
-from .queue.entries import queue_entry_is_retired_workflow_owned
 from .queue.job_records import upsert_queued_job_record
 from .queue.notifications import QUEUED_NOTIFICATION_PENDING_KEY
 from .queue.orphans import DeadRunningRowUnjudgeableError, read_worker_pid
@@ -260,24 +258,6 @@ class _SnapshotIntent:
     token: str
 
 
-def _submission_queue_root(cfg: Any, reaction_dir: Path) -> Path:
-    """Stage 0: the queue root, after refusing retired-workflow targets."""
-    allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
-    resolved_reaction_dir = reaction_dir.expanduser().resolve()
-    if path_is_retired_workflow_owned(resolved_reaction_dir, allowed_root) or any(
-        queue_entry_is_retired_workflow_owned(entry, allowed_root)
-        and queue_adapter.queue_entry_reaction_dir(entry)
-        and resolved_reaction_dir.is_relative_to(
-            Path(queue_adapter.queue_entry_reaction_dir(entry)).expanduser().resolve()
-        )
-        for entry in queue_adapter.list_queue(allowed_root)
-    ):
-        raise ValueError(
-            "Workflow directories are retired; submit a standalone ORCA input directory"
-        )
-    return allowed_root
-
-
 def _prepare_submission_inputs(
     cfg: Any,
     args: Any,
@@ -469,7 +449,7 @@ def create_queued_submission(
     A failure between snapshot creation and publication removes the unowned generation;
     a compensated publication failure removes it through the driver.
     """
-    queue_root = _submission_queue_root(cfg, reaction_dir)
+    queue_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
     inputs = _prepare_submission_inputs(cfg, args, reaction_dir, selected_inp=selected_inp)
     execution_snapshot = _build_execution_snapshot(cfg, reaction_dir, inputs, queue_root=queue_root)
     try:

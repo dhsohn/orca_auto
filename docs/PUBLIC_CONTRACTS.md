@@ -49,7 +49,7 @@ Configuration files are resolved in the following priority order:
 A source checkout is not probed.
 
 > **Validation Policy**:
-> Invalid mappings, explicit nulls, unrecognized keys, and retired workflow configuration sections are rejected before default values are applied. See [config/orca_auto.yaml.example](../config/orca_auto.yaml.example) for accepted settings.
+> Invalid mappings, explicit nulls and unrecognized keys (including a `workflow` section) are rejected before default values are applied. See [config/orca_auto.yaml.example](../config/orca_auto.yaml.example) for accepted settings.
 
 ---
 
@@ -83,8 +83,7 @@ Upon completion, each job publishes a structured `machine.json` artifact in its 
 
 ---
 
-## 5. Version 7.0 Retirement & Migration
+## 5. No Workflow Support
 
-- **Workflows Retired**: Conformer search orchestration, scaffolds, and internal xTB/CREST engines have been removed in version 7.0 to focus entirely on standalone ORCA execution.
-- **Historical Data Safety**: Existing 6.x workflow directories remain read-only and will not be overwritten by 7.0 workers.
-- Refer to the [7.0 Upgrade Guide](RELEASE.md#upgrading-to-70) for operational transition steps.
+- **Standalone ORCA only**: Conformer search orchestration, scaffolds and the internal xTB/CREST engines were removed in 7.0 ([7.0 Upgrade Guide](RELEASE.md#upgrading-to-70)).
+- **Leftover workflow files have no meaning**: A directory that holds `flow.yaml` or `workflow.json`, or lies under one, is an ordinary directory for `run-dir`, the worker, `queue cancel`, `queue list clear`, cleanup and `index rebuild`. A queue row's `workflow_id` metadata is ignored, and an `admission_slots.json` row carrying `workflow_id` is rejected as corrupt ([ADR 0005](adr/0005-remove-retired-workflow-support.md)).

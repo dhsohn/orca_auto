@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tarfile
 import venv
-from importlib import metadata, util
+from importlib import metadata
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -17,7 +17,6 @@ from zipfile import ZipFile
 import pytest
 
 from scripts.check_distributions import (
-    _assert_core_sdist,
     _assert_distribution,
     _assert_runtime_writes_no_bytecode,
     _probe,
@@ -33,16 +32,12 @@ def _wheel(
     *,
     name: str = "orca_auto",
     version: str = "5.0.0.dev0",
-    requires: tuple[str, ...] = (),
-    extras: tuple[str, ...] = (),
 ) -> Path:
     metadata = f"{name}-{version}.dist-info"
     files = {
         **payload,
         f"{metadata}/METADATA": (
             f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
-            + "".join(f"Requires-Dist: {value}\n" for value in requires)
-            + "".join(f"Provides-Extra: {value}\n" for value in extras)
         ).encode(),
         f"{metadata}/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
     }
@@ -75,24 +70,13 @@ def test_distribution_owns_only_its_source_payload(tmp_path: Path) -> None:
     assert check_wheel_contents(_wheel(tmp_path / "package.whl", payload), source) == []
 
 
-@pytest.mark.parametrize(
-    "version,requires,extras,accepted",
-    [
-        ("2.3.4", (), (), True),
-        ("2.2.0", (), (), False),
-        ("2.3.4", ("orca_auto_workflows==2.3.4",), (), False),
-        ("2.3.4", ("orca.auto.workflows==2.3.4",), (), False),
-        ("2.3.4", (), ("workflows",), False),
-    ],
-)
-def test_distribution_gate_rejects_stale_version_and_retired_dependency(
-    tmp_path: Path, version: str, requires: tuple[str, ...], extras: tuple[str, ...], accepted: bool
+@pytest.mark.parametrize("version,accepted", [("2.3.4", True), ("2.2.0", False)])
+def test_distribution_gate_rejects_stale_version(
+    tmp_path: Path, version: str, accepted: bool
 ) -> None:
     payload = {"orca_auto/__init__.py": b"", "orca_auto/py.typed": b""}
     source = _source(tmp_path / "source", payload, "orca_auto")
-    wheel = _wheel(
-        tmp_path / "package.whl", payload, version=version, requires=requires, extras=extras
-    )
+    wheel = _wheel(tmp_path / "package.whl", payload, version=version)
     if accepted:
         _assert_distribution(wheel, source, expected_version="2.3.4")
     else:
@@ -101,26 +85,18 @@ def test_distribution_gate_rejects_stale_version_and_retired_dependency(
 
 
 @pytest.mark.parametrize(
-    "core_version,flow_version,cli_output,accepted",
+    "core_version,cli_output,accepted",
     [
-        ("2.3.4", None, "orca_auto 2.3.4\n", True),
-        ("2.3.4", "2.3.4", "orca_auto 2.3.4\n", False),
-        ("2.2.0", None, "orca_auto 2.3.4\n", False),
-        ("2.2.0", "2.2.0", "orca_auto 2.3.4\n", False),
-        ("2.3.4", "2.2.0", "orca_auto 2.3.4\n", False),
-        ("2.3.4", None, "orca_auto 2.2.0\n", False),
-        ("2.3.4", "2.3.4", "orca_auto 2.2.0\n", False),
-        ("2.3.4", None, "unexpected text\norca_auto 2.3.4\n", False),
-        ("2.3.4", None, "orca_auto 2.3.4\n\n", False),
+        ("2.3.4", "orca_auto 2.3.4\n", True),
+        ("2.2.0", "orca_auto 2.3.4\n", False),
+        ("2.3.4", "orca_auto 2.2.0\n", False),
+        ("2.3.4", "unexpected text\norca_auto 2.3.4\n", False),
+        ("2.3.4", "orca_auto 2.3.4\n\n", False),
     ],
     ids=[
-        "core-only",
-        "with-workflows",
-        "stale-core-only",
-        "stale-matching-pair",
-        "stale-workflows",
-        "stale-core-cli",
-        "stale-workflows-cli",
+        "current",
+        "stale-metadata",
+        "stale-cli",
         "extra-cli-text",
         "extra-cli-newline",
     ],
@@ -129,7 +105,6 @@ def test_installed_probe_checks_metadata_and_cli_release_version(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     core_version: str,
-    flow_version: str | None,
     cli_output: str,
     accepted: bool,
 ) -> None:
@@ -137,15 +112,10 @@ def test_installed_probe_checks_metadata_and_cli_release_version(
     core_module = ModuleType("orca_auto")
     core_module.__file__ = str(core_source / "__init__.py")
     core_module.__path__ = [str(core_source)]
-    flow_module = ModuleType("orca_auto.flow")
-    flow_module.__file__ = str(core_source / "flow" / "__init__.py")
-    core_module.__dict__["flow"] = flow_module
 
     def installed_version(name: str) -> str:
         if name == "orca_auto":
             return core_version
-        if name == "orca_auto_workflows" and flow_version is not None:
-            return flow_version
         raise metadata.PackageNotFoundError(name)
 
     def probe_subprocess(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -156,9 +126,7 @@ def test_installed_probe_checks_metadata_and_cli_release_version(
             with monkeypatch.context() as isolated:
                 isolated.setattr(sys, "argv", ["-c", *argv[index + 2 :]])
                 isolated.setitem(sys.modules, "orca_auto", core_module)
-                isolated.setitem(sys.modules, "orca_auto.flow", flow_module)
                 isolated.setattr(metadata, "version", installed_version)
-                isolated.setattr(util, "find_spec", lambda name: None)
                 try:
                     exec(argv[index + 1], {})
                 except AssertionError as exc:
@@ -262,34 +230,6 @@ def test_sdist_rebuild_input_is_self_contained(tmp_path: Path) -> None:
     project = _unpack_sdist(archive, tmp_path / "unpacked")
     assert project == tmp_path / "unpacked" / "package-1.0"
     assert (project / "pyproject.toml").read_bytes() == b"x"
-
-
-@pytest.mark.parametrize(
-    "extra_member",
-    [
-        None,
-        "extensions/workflows/pyproject.toml",
-        "extensions/workflows/src/orca_auto/flow/__init__.py",
-        "src/orca_auto/flow/__init__.py",
-    ],
-)
-def test_core_sdist_manifest_cannot_bundle_workflows(
-    tmp_path: Path, extra_member: str | None
-) -> None:
-    archive = tmp_path / "core.tar.gz"
-    names = ["pyproject.toml", "src/orca_auto/__init__.py"]
-    if extra_member is not None:
-        names.append(extra_member)
-    with tarfile.open(archive, "w:gz") as output:
-        for name in names:
-            member = tarfile.TarInfo("orca_auto-5.0.0.dev0/" + name)
-            member.size = 1
-            output.addfile(member, io.BytesIO(b"x"))
-    if extra_member is None:
-        _assert_core_sdist(archive)
-    else:
-        with pytest.raises(AssertionError, match="core sdist includes workflows source"):
-            _assert_core_sdist(archive)
 
 
 @pytest.mark.parametrize(

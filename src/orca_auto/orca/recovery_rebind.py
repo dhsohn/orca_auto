@@ -54,7 +54,6 @@ from .queue.adapter import (
     requeue_running_entry,
     update_metadata,
 )
-from .queue.entries import queue_entry_is_retired_workflow_owned
 from .resource_directives import prepare_submission_resource_request
 from .run_lock import acquire_run_lock
 from .submission import mark_orca_snapshot_owned
@@ -102,11 +101,7 @@ def _validated_recovery_rebind_claim(
     snapshot: dict[str, Any],
 ) -> tuple[int, dict[str, Any] | None]:
     """Validate the durable recovery budget and claim without performing I/O."""
-    if (
-        snapshot.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION
-        or "max_retries" in snapshot
-        or "max_retries" in metadata
-    ):
+    if snapshot.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION or "max_retries" in snapshot:
         raise ValueError("ORCA recovery requires a current execution snapshot; resubmit the job")
     raw_count = metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY, 0)
     if (
@@ -295,10 +290,6 @@ def maybe_rebind_recovery_generation(
 
     if not entry_status_is_running(entry):
         return entry
-    if queue_entry_is_retired_workflow_owned(entry, queue_root):
-        raise ValueError(
-            "Queued ORCA directory belongs to a retired workflow; use the previous runtime to drain or cancel it"
-        )
     metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
     snapshot = metadata.get("execution_snapshot")
     if not isinstance(snapshot, dict):

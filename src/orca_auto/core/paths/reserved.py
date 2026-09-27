@@ -4,7 +4,6 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue.generation import is_visible_generation_name
 
 
@@ -65,8 +64,6 @@ def should_exclude_from_production_runs_scan(
     try:
         lexical_root = _lexical_absolute(runs_root, label="runs_root")
         lexical_path = _lexical_absolute(path, label="path")
-        if path_is_retired_workflow_owned(lexical_path, lexical_root):
-            return True
         lexical_relative = _relative_if_inside(lexical_path, lexical_root)
         if relative_reaches_reserved_generation(lexical_root, lexical_relative):
             return True

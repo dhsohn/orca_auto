@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.indexing.roots import runtime_roots_for_cfg
-from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue.engine.input_snapshot import (
     bind_direct_generation_owner,
@@ -251,8 +250,6 @@ def create_snapshot_intent(
         require_existing=False,
         kind=normalized_kind,
     )
-    if any(path_is_retired_workflow_owned(path, resolved_root) for path in paths):
-        raise ValueError("Snapshot generation belongs to a retired workflow directory")
     intent_dir = _intent_dir(resolved_root, create=True)
     with file_lock(resolved_root / _MUTATION_LOCK_NAME):
         if len(_bounded_intent_paths(intent_dir)) >= _MAX_PENDING_INTENTS:
@@ -471,10 +468,7 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
             marker = _read_intent(intent_path, expected_root=resolved_root)
         except FileNotFoundError:
             return
-        if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS or any(
-            path_is_retired_workflow_owned(path, resolved_root)
-            for path in marker["generation_paths"]
-        ):
+        if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
             return
         _validated_generation_paths(
             resolved_root,
@@ -657,11 +651,8 @@ def reconcile_orphaned_snapshot_generations(
                                 marker = _read_intent(intent_path, expected_root=root)
                             except (OSError, ValueError):
                                 continue
-                            if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS or any(
-                                path_is_retired_workflow_owned(path, root)
-                                for path in marker["generation_paths"]
-                            ):
-                                # Retired intent formats and workflow trees are read-only.
+                            if marker["kind"] not in _DIRECT_VISIBLE_GENERATION_KINDS:
+                                # Retired intent formats are read-only.
                                 continue
                             if marker["state"] == SNAPSHOT_INTENT_STATE_OWNED or any(
                                 _entry_references_intent(entry, marker) for entry in entries

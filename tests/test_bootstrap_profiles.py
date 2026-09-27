@@ -61,9 +61,7 @@ def test_bootstrap_installs_only_the_requested_local_projects(tmp_path: Path) ->
     assert not (repo / "config/orca_auto.yaml").exists()
 
 
-@pytest.mark.parametrize(
-    ("argument", "exit_code"), [("--help", 0), ("--unknown", 2), ("--with-workflows", 2)]
-)
+@pytest.mark.parametrize(("argument", "exit_code"), [("--help", 0), ("--unknown", 2)])
 def test_bootstrap_parses_options_before_any_installation(argument: str, exit_code: int) -> None:
     result = subprocess.run(
         ["/bin/bash", str(_SCRIPT), argument],

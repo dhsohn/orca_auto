@@ -107,9 +107,7 @@ def test_build_worker_specs_ignores_a_stale_app_selection(
         lambda **kwargs: ["python", "-m", kwargs["module_name"]],
     )
 
-    specs = worker_specs._build_worker_specs(
-        SimpleNamespace(app=["workflow", "xtb"], orca_auto_config=None)
-    )
+    specs = worker_specs._build_worker_specs(SimpleNamespace(app=["orca"], orca_auto_config=None))
 
     assert [spec.app for spec in specs] == ["orca"]
     assert specs[0].argv == ("python", "-m", "orca_auto.orca.commands.queue")

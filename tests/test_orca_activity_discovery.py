@@ -80,10 +80,9 @@ def test_explicit_refresh_discovers_and_indexes_unindexed_runs(
     assert {item["activity_id"] for item in plain["activities"]} == {"tracked", "untracked"}
 
 
-def test_refresh_is_available_without_workflows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_refresh_request_has_no_status_or_engine_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_queue.discovery, "resolve_shared_config_path", lambda path: path)
 
-    assert not hasattr(cli_queue, "require_workflows")
     request = cli_queue._queue_list_request(Namespace(refresh=True))
     assert request.status_values == ()
     assert not hasattr(request, "engine_values")

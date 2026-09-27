@@ -75,8 +75,6 @@ def prepare_runtime(*, wheels: list[Path], releases_root: Path, templates: Path)
         raise ValueError("supply exactly one orca_auto wheel and at most one wheel per dependency")
     versions = {item["name"]: item["version"] for item in identities}
     version = versions["orca-auto"]
-    if "orca-auto-workflows" in versions:
-        raise ValueError("workflow distributions are no longer supported")
     templates = templates.resolve(strict=True)
     unit_hashes = {name: content_sha256(templates / name) for name in SYSTEMD_UNIT_NAMES}
     base_python = Path(str(getattr(sys, "_base_executable", sys.executable))).resolve()

@@ -42,5 +42,5 @@ make check
 - editable 설치를 갱신할 때는 idle window에 `.venv/bin/python -m pip install -e .`,
   worker 재시작, `service status --json`의 실제 프로세스 freshness 검증까지 수행한다.
 - 실제 ORCA 실행 메커니즘이나 출력 분석 로직이 바뀌면 bounded real-engine acceptance가 필요하다.
-- 7.0은 워크플로우 기능을 제거했다. 과거 실행 이력의 읽기·데이터 보호와 신규 실행 지원을
-  구분한다. 기존 계산 데이터는 삭제하지 않으며 업그레이드는 RELEASE를 따른다.
+- 워크플로우는 지원하지 않는다. `flow.yaml`·`workflow.json`이 남은 디렉터리도 일반 디렉터리로
+  취급한다(ADR 0005). 기존 계산 데이터는 삭제하지 않으며 업그레이드는 RELEASE를 따른다.

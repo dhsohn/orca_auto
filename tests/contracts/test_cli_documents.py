@@ -92,19 +92,13 @@ def test_queue_cancel_outcomes(harness: Harness, monkeypatch: pytest.MonkeyPatch
     for job in (first, second):
         assert harness.cli("run-dir", str(job))[0] == 0
     # Fixed ids: an ambiguity error lists its matches in id order.
-    rows = [
-        ("same-a", harness.job("a/same_name"), {}),
-        ("same-b", harness.job("b/same_name"), {}),
-        ("legacy-row", harness.job("legacy_owned"), {"workflow_id": "legacy-flow"}),
-    ]
-    for queue_id, job, metadata in rows:
+    for queue_id, name in (("same-a", "a/same_name"), ("same-b", "b/same_name")):
         enqueue_entry(
             harness.runs,
             make_queue_entry(
                 queue_id=queue_id,
                 task_id=f"{queue_id}-task",
-                reaction_dir=job,
-                metadata=metadata,
+                reaction_dir=harness.job(name),
             ),
         )
 
@@ -118,7 +112,6 @@ def test_queue_cancel_outcomes(harness: Harness, monkeypatch: pytest.MonkeyPatch
         _queue_id(harness, done),
         "--json",
     )
-    _json_document(harness, "queue_cancel_retired", "queue", "cancel", "legacy-row", "--json")
     _json_document(
         harness,
         "queue_cancel_success",

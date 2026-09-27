@@ -8,6 +8,28 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+### Removed
+
+- Public contract: the remaining workflow handling is removed
+  ([ADR 0005](docs/adr/0005-remove-retired-workflow-support.md)). A directory
+  that holds `flow.yaml` or `workflow.json`, or lies under one, is now an
+  ordinary directory: `run-dir` accepts it, the worker claims and runs its rows,
+  `queue cancel` cancels them instead of answering `retired_workflow`, and
+  `queue list clear`, cleanup, `index rebuild` and listing include it. A queue
+  row's `workflow_id` metadata is ignored. Cancel or clear rows that belong to
+  old workflow work, and move workflow trees that must stay untouched out of
+  `runs_root`, before upgrading; see
+  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
+- Public contract: an `admission_slots.json` row that carries the retired
+  `workflow_id` field is rejected as corrupt instead of being read. 8.x never
+  writes it; upgrading directly from 7.0.x needs no reserved or active slots.
+- The worker and recovery rebind no longer check queue-row metadata for the
+  pre-4.0 `max_retries` setting. Such rows carry a version-2 execution snapshot
+  and are still refused before execution, now with the execution-snapshot error
+  instead of "contains a removed execution setting".
+- The package checks and `scripts/prepare_runtime.py` no longer look for the
+  former workflows distribution, extra or source tree.
+
 ### Fixed
 
 - The queue worker no longer stops every running calculation when one poll pass

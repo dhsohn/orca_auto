@@ -109,11 +109,8 @@ def slot_from_dict(raw: dict[str, object]) -> AdmissionSlot:
     # default.  Treating them as gated would make same-boot recovery discard a
     # potentially running process in the Popen-to-record interval.
     legacy_optional_fields = {"engine_launch_gated"}
-    # ``workflow_id`` is a retired durable field: existing slot files still
-    # carry it, so it is tolerated on read and never written again.
-    retired_fields = {"workflow_id"}
     missing = expected_fields - set(raw) - legacy_optional_fields
-    unknown = set(raw) - expected_fields - retired_fields
+    unknown = set(raw) - expected_fields
     if missing or unknown:
         raise ValueError(
             "Admission slot fields do not match the canonical schema: "

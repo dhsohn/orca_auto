@@ -2,7 +2,6 @@ from .reserved import (
     iter_production_runs_artifacts,
     should_exclude_from_production_runs_scan,
 )
-from .retired import path_is_retired_workflow_owned
 from .validation import (
     ensure_directory,
     first_existing_named_file,
@@ -20,7 +19,6 @@ from .validation import (
 )
 
 __all__ = [
-    "path_is_retired_workflow_owned",
     "ensure_directory",
     "first_existing_named_file",
     "iter_existing_dirs",

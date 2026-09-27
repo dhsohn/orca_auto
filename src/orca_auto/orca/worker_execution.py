@@ -69,7 +69,6 @@ from .queue.adapter import (
     queue_entry_task_id,
     requeue_running_entry,
 )
-from .queue.entries import queue_entry_is_retired_workflow_owned
 
 # The rebind keeps its private worker-facing name: the child looks it up
 # through this module, which is also where tests substitute it. Its metadata
@@ -182,8 +181,6 @@ def _build_execution_context(
     admission_token: str | None,
 ) -> OrcaWorkerExecutionContext:
     metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-    if "max_retries" in metadata:
-        raise ValueError("Queued ORCA entry contains a removed execution setting; resubmit the job")
     raw_reaction_dir = Path(queue_entry_reaction_dir(entry)).expanduser()
     reaction_dir = raw_reaction_dir.resolve()
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
@@ -193,10 +190,6 @@ def _build_execution_context(
         or not reaction_dir.is_dir()
     ):
         raise ValueError("Queued ORCA reaction directory is outside the configured root")
-    if queue_entry_is_retired_workflow_owned(entry, allowed_root):
-        raise ValueError(
-            "Queued ORCA directory belongs to a retired workflow; use the previous runtime to drain or cancel it"
-        )
     selected_inp = str(metadata.get("selected_inp") or "").strip()
     source_selected_inp = str(metadata.get("source_selected_inp") or "").strip()
     selected_input_xyz = str(metadata.get("selected_input_xyz") or "").strip()
@@ -459,7 +452,6 @@ def _record_worker_rejection(
         queue_root,
         queue_id,
         error=reason,
-        publish_terminal_side_effects=not queue_entry_is_retired_workflow_owned(entry, queue_root),
         expected_entry=current if expected_entry is None else expected_entry,
         require_running_started_at=str(entry.started_at),
     )

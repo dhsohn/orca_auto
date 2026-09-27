@@ -38,7 +38,6 @@ from orca_auto.orca.queue.entries import (
     QUEUE_ENGINE,
     QUEUE_TASK_KIND,
     entry_metadata,
-    queue_entry_is_retired_workflow_owned,
 )
 from orca_auto.orca.queue.roots import accept_orca_entry
 from orca_auto.orca.scratch_config import ScratchConfig
@@ -271,16 +270,12 @@ def claim_next_entry(root: Path) -> QueueEntry | None:
     """Claim the row the ORCA worker would take next from one queue root.
 
     The worker's own path: preview the head of ``root`` through
-    ``select_next_claimable_entry`` under the ORCA identity filter and the
-    worker's retired-workflow skip (``OrcaQueueWorker._skip_entry``), then
+    ``select_next_claimable_entry`` under the ORCA identity filter, then
     claim it by id fenced on the previewed row. Returns the running row, or
     ``None`` when nothing is claimable or the claim was lost.
     """
 
-    def accept(entry: QueueEntry) -> bool:
-        return accept_orca_entry(entry) and not queue_entry_is_retired_workflow_owned(entry, root)
-
-    entry = select_next_claimable_entry(list_queue(root), accept_entry_fn=accept)
+    entry = select_next_claimable_entry(list_queue(root), accept_entry_fn=accept_orca_entry)
     if entry is None:
         return None
     return dequeue_entry_if_pending(root, entry.queue_id, expected_entry=entry)

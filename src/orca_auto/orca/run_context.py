@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.paths import is_subpath
-from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.orca.config import AppConfig
 
 
@@ -19,10 +18,6 @@ def _validate_reaction_dir(cfg: AppConfig, reaction_dir_raw: str) -> Path:
     if not is_subpath(reaction_dir, allowed_root):
         raise ValueError(
             f"Job directory must be under allowed root: {allowed_root}. got={reaction_dir}"
-        )
-    if path_is_retired_workflow_owned(reaction_dir, allowed_root):
-        raise ValueError(
-            "Workflow directories are retired; submit a standalone ORCA input directory"
         )
     return reaction_dir
 

@@ -28,6 +28,23 @@ checkout. They also verify a prepared immutable runtime. Check metadata with
 If ORCA runtime behavior changes, record bounded real-engine acceptance as
 described in [VALIDATION](VALIDATION.md). Tests and package builds do not deploy.
 
+## Upgrading past 8.0.x (unreleased)
+
+The next major release removes the remaining workflow handling
+([ADR 0005](adr/0005-remove-retired-workflow-support.md)). A directory that
+holds `flow.yaml` or `workflow.json`, or lies under one, becomes an ordinary
+directory, and a queue row's `workflow_id` metadata is ignored.
+
+- Before upgrading, cancel or clear any pending or running row that belongs to
+  old workflow work: the new worker claims and runs it like any other row.
+- Leftover workflow trees under `runs_root` join the scans: `index rebuild`
+  records their ORCA job states and `queue list clear` removes the
+  `job_state.json` of their terminal runs. Move trees that must stay untouched
+  out of `runs_root` first.
+- 8.x never writes `workflow_id` into `admission_slots.json`, and the new version
+  rejects a slot row that carries it. Upgrading directly from 7.0.x therefore
+  needs an idle window with no reserved or active slots.
+
 ## Upgrading to 8.0
 
 Version 8.0 removes public contracts and needs an idle-window
@@ -65,8 +82,8 @@ workflow queue filters/grouping and workflow-only options. `run-dir` accepts ORC
 input directories; resource overrides are supplied through `%pal`/`%maxcore`.
 
 Existing calculation files, reports, historical releases and old installations
-are not deleted or migrated. Retired workspace markers are used only to refuse
-new execution and protect old data. Do not submit an old workflow stage as an
+are not deleted or migrated. In 7.x and 8.x, retired workspace markers are used
+only to refuse new execution and protect old data. Do not submit an old workflow stage as an
 ordinary ORCA job or redirect a new worker at unfinished workflow work.
 
 1. Finish or explicitly cancel all pending/running workflow work using its

@@ -49,7 +49,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 소스 체크아웃 경로는 탐색하지 않습니다.
 
 > **설정 검증 원칙**:
-> 유효하지 않은 매핑, 명시적 null, 알 수 없는 키 또는 7.0에서 지원 종료된 이전 워크플로우 설정 섹션은 기본값을 적용하기 전에 거부(fail-closed)됩니다. 전체 설정 항목 예시는 [config/orca_auto.yaml.example](../config/orca_auto.yaml.example)를 참고하세요.
+> 유효하지 않은 매핑, 명시적 null, 알 수 없는 키(`workflow` 섹션 포함)는 기본값을 적용하기 전에 거부(fail-closed)됩니다. 전체 설정 항목 예시는 [config/orca_auto.yaml.example](../config/orca_auto.yaml.example)를 참고하세요.
 
 ---
 
@@ -83,8 +83,7 @@ ORCA_auto는 Linux 및 WSL 환경에서 Python 3.11+ 및 systemd 기반으로 �
 
 ---
 
-## 5. 7.0 워크플로우 지원 종료 및 마이그레이션 안내
+## 5. 워크플로우 미지원
 
-- **워크플로우 기능 제거**: 7.0부터 `orca_auto_workflows` 확장, conformer 탐색, 내장 xTB/CREST 엔진 및 워크플로우 CLI 명령이 공식 제거되었습니다.
-- **기존 데이터 보존**: 기존 6.x 이전 워크플로우로 생성된 작업 디렉터리는 보존되며, 새로운 7.0 워커가 과거 데이터를 임의로 변경하거나 덮어쓰지 않도록 보호됩니다.
-- 자세한 전환 절차는 [7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)를 확인하세요.
+- **독립 ORCA 작업만 지원**: conformer 탐색 오케스트레이션, scaffold, 내장 xTB/CREST 엔진은 7.0에서 제거되었습니다([7.0 업그레이드 가이드](RELEASE.md#upgrading-to-70)).
+- **남은 워크플로우 파일은 의미가 없음**: `flow.yaml`이나 `workflow.json`이 있는 디렉터리와 그 하위 디렉터리는 `run-dir`, 워커, `queue cancel`, `queue list clear`, 정리 작업, `index rebuild`에서 일반 디렉터리로 취급합니다. 큐 항목 메타데이터의 `workflow_id`는 무시하며, `workflow_id`가 있는 `admission_slots.json` 항목은 손상된 기록으로 거부합니다([ADR 0005](adr/0005-remove-retired-workflow-support.md)).

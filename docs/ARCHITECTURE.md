@@ -51,7 +51,7 @@ graph TD
 | **`orca/`** | ORCA-specific domain logic: input parsing, resource extraction, execution setup, queue worker and runner execution, output log analysis, convergence verification, and result reporting (`machine.json`) |
 | **`core/`** | Shared infrastructure: disk queue store, concurrency admission slots, process supervision and PID management, confined file I/O, configuration loader, index store, and filesystem locks |
 
-> **Architecture Note**: ORCA is the only engine. Workflows, conformer scaffolds, and the xTB/CREST engines (`flow/`) were retired in 7.0.
+> **Architecture Note**: ORCA is the only engine, and each job is one standalone ORCA input directory. There is no workflow layer ([ADR 0005](adr/0005-remove-retired-workflow-support.md)).
 
 ---
 
@@ -149,7 +149,6 @@ empty lifecycle callbacks.
 - **SQLite Activity Projection**: Routine queries are served by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The projection keys location rows by job id; `job_locations.json` itself is rebuildable from the run states on disk with `index rebuild`, and `--refresh` persists unindexed runs through the same rebuild. The run-status and snapshot-supersession rules the listing applies live in `orca/run_status.py`, not in the CLI layer. `index rebuild` merges disk-derived location rows; it does not rebuild the SQLite activity database.
 - **Scratch Operator Surface**: `orca_auto scratch list` and `scratch clear` inspect and remove non-live RAM-scratch workspaces; one stale, unverifiable or invalid-manifest workspace otherwise blocks every later scratch launch (fail-closed).
 - **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation, isolating runtime execution from development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
-- **Historical Data Protection**: Retired workflow directories from previous versions are protected as read-only to ensure historical calculations are preserved without risk of accidental overwrite.
 
 ---
 
@@ -161,3 +160,4 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0002: No automatic retry of failed calculations](adr/0002-no-automatic-retry-of-failed-calculations.md)
 - [ADR 0003: Retire workflows for standalone ORCA jobs](adr/0003-retire-workflows-for-standalone-orca-jobs.md)
 - [ADR 0004: Concurrent RAM scratch under a summed memory guard](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)
+- [ADR 0005: Remove retired workflow support](adr/0005-remove-retired-workflow-support.md)

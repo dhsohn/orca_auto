@@ -30,7 +30,7 @@ from .adapter import (
     mark_failed,
     queue_entries_same_publication_generation,
 )
-from .entries import queue_entry_id, queue_entry_is_retired_workflow_owned, queue_entry_reaction_dir
+from .entries import queue_entry_id, queue_entry_reaction_dir
 from .job_records import upsert_queued_job_record
 from .roots import queue_roots
 
@@ -182,8 +182,6 @@ def repair_queue_publication(
     if not entry_matches_engine_identity(entry, "orca"):
         return True
     if entry.status != QueueStatus.PENDING or entry.cancel_requested:
-        return True
-    if queue_entry_is_retired_workflow_owned(entry, queue_root):
         return True
     job_dir_issue = _orca_publication_job_dir_issue(queue_root, entry)
     if job_dir_issue:

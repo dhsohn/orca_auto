@@ -6,7 +6,6 @@ from contextvars import ContextVar
 from pathlib import Path
 
 from orca_auto.core.paths.reserved import relative_reaches_reserved_generation
-from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 
 RunDirPublicationGuard = Callable[[str], None]
 _ACTIVE_RUN_DIR_PUBLICATION_GUARD: ContextVar[RunDirPublicationGuard | None] = ContextVar(
@@ -55,10 +54,6 @@ def validate_production_run_dir_target(
     """Reject public submission of a nested ORCA execution generation."""
 
     resolved_root = Path(runs_root).expanduser().resolve()
-    if path_is_retired_workflow_owned(raw_job_dir, resolved_root):
-        raise ValueError(
-            "Workflow directories are retired; submit a standalone ORCA input directory"
-        )
     try:
         relative = Path(raw_job_dir).expanduser().resolve().relative_to(resolved_root)
     except (OSError, RuntimeError, ValueError):

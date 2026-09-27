@@ -15,25 +15,22 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _ISOLATED_BOOTSTRAP = """\
-import importlib.util
 import sys
 from pathlib import Path
 
 staged = Path(sys.argv[1]).resolve()
 source = sys.argv[2]
-sys.argv = ["core-only-acceptance", *sys.argv[3:]]
+sys.argv = ["isolated-acceptance", *sys.argv[3:]]
 sys.path.insert(0, str(staged))
 import orca_auto
 assert Path(orca_auto.__file__).resolve().parent == staged / "orca_auto"
-if not (staged / "orca_auto" / "flow").exists():
-    assert importlib.util.find_spec("orca_auto.flow") is None
-exec(compile(source, "<core-only-acceptance>", "exec"))
+exec(compile(source, "<isolated-acceptance>", "exec"))
 """
 _CLI_SOURCE = "from orca_auto.cli import main\nraise SystemExit(main(sys.argv[1:]))\n"
 
 
 @dataclass(frozen=True)
-class _CoreOnlyInstallation:
+class _IsolatedInstallation:
     python: Path
     imports: Path
     runtime: Path
@@ -81,20 +78,6 @@ class _CoreOnlyInstallation:
     def cli(self, *args: str) -> subprocess.CompletedProcess[str]:
         return self.run_code(_CLI_SOURCE, *args)
 
-    def snapshot(
-        self, *, include_locks: bool = True, include_projection: bool = True
-    ) -> dict[str, bytes | None]:
-        return {
-            str(path.relative_to(self.runtime)): path.read_bytes() if path.is_file() else None
-            for path in self.runtime.rglob("*")
-            if include_locks or path.suffix != ".lock"
-            if include_projection
-            or not any(
-                part in {".activity.sqlite3", ".activity-dirty"}
-                for part in path.relative_to(self.runtime).parts
-            )
-        }
-
     def write_orca_input(self, name: str = "public_h2") -> Path:
         directory = self.runs / name
         directory.mkdir()
@@ -106,20 +89,20 @@ class _CoreOnlyInstallation:
 
 
 @pytest.fixture(scope="session")
-def core_only_python(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    environment = tmp_path_factory.mktemp("core-only-interpreter")
+def isolated_python(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    environment = tmp_path_factory.mktemp("isolated-interpreter")
     venv.EnvBuilder(with_pip=False).create(environment)
     return environment / "bin" / "python"
 
 
 @pytest.fixture
-def core_only(tmp_path: Path, core_only_python: Path) -> _CoreOnlyInstallation:
+def isolated(tmp_path: Path, isolated_python: Path) -> _IsolatedInstallation:
     imports = tmp_path / "imports"
     imports.mkdir()
     shutil.copytree(
         _REPO_ROOT / "src" / "orca_auto",
         imports / "orca_auto",
-        ignore=shutil.ignore_patterns("flow", "__pycache__", "*.pyc"),
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     # Only the declared runtime dependency and distribution metadata accompany
     # the staged source. -I -S disables editable .pth files and site imports.
@@ -147,13 +130,11 @@ def core_only(tmp_path: Path, core_only_python: Path) -> _CoreOnlyInstallation:
     executable.write_text(
         textwrap.dedent(
             f"""\
-            #!{core_only_python}
-            import importlib.util
+            #!{isolated_python}
             from pathlib import Path
             import orca_auto
 
             assert Path(orca_auto.__file__).resolve().parent == Path({str(imports)!r}) / "orca_auto"
-            assert importlib.util.find_spec("orca_auto.flow") is None
             counter = Path({str(counter)!r})
             counter.write_text(str(int(counter.read_text()) + 1) if counter.exists() else "1")
             print("Program Version 6.0.1 - RELEASE -")
@@ -201,8 +182,8 @@ def core_only(tmp_path: Path, core_only_python: Path) -> _CoreOnlyInstallation:
         ),
         encoding="utf-8",
     )
-    return _CoreOnlyInstallation(
-        core_only_python, imports, runtime, runs, admission, config, counter
+    return _IsolatedInstallation(
+        isolated_python, imports, runtime, runs, admission, config, counter
     )
 
 
@@ -210,20 +191,13 @@ def _assert_success(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
-def _assert_workflows_unavailable(result: subprocess.CompletedProcess[str]) -> None:
-    assert result.returncode != 0, (result.stdout, result.stderr)
-    output = result.stdout + result.stderr
-    assert "error" in output.lower() or "retired" in output.lower()
-    assert "Traceback" not in output
-
-
 @pytest.mark.slow
-def test_core_worker_runs_fake_orca_child_without_workflow_files(
-    core_only: _CoreOnlyInstallation,
+def test_worker_runs_fake_orca_child_from_an_isolated_installation(
+    isolated: _IsolatedInstallation,
 ) -> None:
-    input_dir = core_only.write_orca_input()
-    _assert_success(core_only.cli("run-dir", str(input_dir), "--json"))
-    result = core_only.run_code(
+    input_dir = isolated.write_orca_input()
+    _assert_success(isolated.cli("run-dir", str(input_dir), "--json"))
+    result = isolated.run_code(
         """\
         from orca_auto.core.admission import list_slots
         from orca_auto.orca.config import load_config
@@ -239,14 +213,14 @@ def test_core_worker_runs_fake_orca_child_without_workflow_files(
         assert entries[0].status == "completed", entries[0]
         assert list_slots(sys.argv[3]) == []
         """,
-        str(core_only.config),
-        str(core_only.runs),
-        str(core_only.admission),
+        str(isolated.config),
+        str(isolated.runs),
+        str(isolated.admission),
     )
     _assert_success(result)
-    assert core_only.engine_counter.read_text(encoding="utf-8") == "1"
-    assert (core_only.runtime / "launch-python-prefix").read_text() == str(
-        core_only.python.parent.parent
+    assert isolated.engine_counter.read_text(encoding="utf-8") == "1"
+    assert (isolated.runtime / "launch-python-prefix").read_text() == str(
+        isolated.python.parent.parent
     )
     machines = list(input_dir.rglob("machine.json"))
     assert len(machines) == 1
@@ -254,44 +228,10 @@ def test_core_worker_runs_fake_orca_child_without_workflow_files(
     assert machine["producer"]["name"] == "orca_auto"
     assert machine["payload"]["contract"] == {"name": "chemistry/results-bundle", "version": 1}
     machine_bytes = machines[0].read_bytes()
-    cleared = core_only.cli("queue", "list", "clear", "--json")
+    cleared = isolated.cli("queue", "list", "clear", "--json")
     _assert_success(cleared)
     assert json.loads(cleared.stdout)["cleared"]["orca_queue_entries"] == 1
-    listed = core_only.cli("queue", "list", "--json")
+    listed = isolated.cli("queue", "list", "--json")
     _assert_success(listed)
     assert json.loads(listed.stdout)["activities"] == []
     assert machines[0].read_bytes() == machine_bytes
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize("operation", ["scaffold", "run-dir", "mixed-run-dir"])
-def test_explicit_workflows_refuse_before_runtime_mutation(
-    core_only: _CoreOnlyInstallation, operation: str
-) -> None:
-    target = core_only.runs / "requested_workflow"
-    command: tuple[str, ...]
-    if operation in {"run-dir", "mixed-run-dir"}:
-        target.mkdir()
-        (target / "flow.yaml").write_text("workflow_type: conformer_screening\n", encoding="utf-8")
-        if operation == "mixed-run-dir":
-            (target / "plausible.inp").write_text(
-                "! HF STO-3G\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
-            )
-        command = ("run-dir", str(target), "--json")
-    else:
-        command = ("scaffold", "scan-ts", str(target))
-    before = core_only.snapshot()
-    _assert_workflows_unavailable(core_only.cli(*command))
-    assert core_only.snapshot() == before
-
-
-@pytest.mark.slow
-def test_retired_installed_package_is_never_imported(core_only: _CoreOnlyInstallation) -> None:
-    flow = core_only.imports / "orca_auto" / "flow"
-    flow.mkdir()
-    (flow / "__init__.py").write_text(
-        "raise RuntimeError('retired extension imported')\n", encoding="utf-8"
-    )
-    result = core_only.cli("queue", "worker", "--json")
-    _assert_success(result)
-    assert [item["app"] for item in json.loads(result.stdout)["workers"]] == ["orca"]

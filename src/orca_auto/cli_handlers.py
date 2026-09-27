@@ -34,7 +34,6 @@ from orca_auto.core.indexing import (
     JobLocationRecord,
     prune_job_locations,
 )
-from orca_auto.core.paths.retired import path_is_retired_workflow_owned
 from orca_auto.core.utils import normalize_text
 from orca_auto.orca.run_dir_guard import (
     use_run_dir_publication_guard,
@@ -86,8 +85,6 @@ def cmd_orca_run_dir(args: argparse.Namespace) -> int:
 
 
 def _detect_run_dir_app(target: Path) -> str:
-    if path_is_retired_workflow_owned(target, target):
-        raise ValueError("Workflow support was removed; submit a standalone ORCA input directory.")
     if any(candidate.is_file() for candidate in target.glob("*.inp")):
         return "orca"
     raise ValueError("Could not infer run-dir target type: expected an ORCA *.inp file.")

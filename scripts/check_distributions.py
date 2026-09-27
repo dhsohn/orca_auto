@@ -21,9 +21,6 @@ from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from zipfile import ZipFile
 
-from packaging.requirements import Requirement
-from packaging.utils import canonicalize_name
-
 from scripts.check_wheel_contents import check_wheel_contents
 from scripts.prepare_runtime import prepare_runtime
 
@@ -66,19 +63,6 @@ def _copy_project(source: Path, destination: Path) -> None:
         source / "src",
         destination / "src",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info"),
-    )
-
-
-def _assert_core_sdist(archive: Path) -> None:
-    with tarfile.open(archive) as source:
-        bundled_workflows = [
-            member.name
-            for member in source
-            if PurePosixPath(member.name).parts[1:2] == ("extensions",)
-            or PurePosixPath(member.name).parts[1:4] == ("src", "orca_auto", "flow")
-        ]
-    assert not bundled_workflows, "core sdist includes workflows source: " + ", ".join(
-        bundled_workflows
     )
 
 
@@ -128,8 +112,6 @@ def _metadata(wheel: Path) -> dict[str, object]:
     return {
         "name": str(metadata["Name"]),
         "version": str(metadata["Version"]),
-        "requires": list(metadata.get_all("Requires-Dist", [])),
-        "extras": list(metadata.get_all("Provides-Extra", [])),
     }
 
 
@@ -138,13 +120,6 @@ def _assert_distribution(wheel: Path, source: Path, *, expected_version: str) ->
     assert not errors, "\n".join(errors)
     metadata = _metadata(wheel)
     assert metadata["version"] == expected_version, "wheel version differs from source release"
-    extras, requirements = metadata["extras"], metadata["requires"]
-    assert isinstance(extras, list) and isinstance(requirements, list)
-    assert "workflows" not in extras, "retired workflows extra is advertised"
-    assert not any(
-        canonicalize_name(Requirement(str(requirement)).name) == "orca-auto-workflows"
-        for requirement in requirements
-    ), "retired workflows dependency is advertised"
 
 
 def _new_environment(path: Path, wheelhouse: Path, *, cwd: Path) -> Path:
@@ -195,7 +170,6 @@ def _probe(
 ) -> None:
     code = """\
     import importlib.metadata
-    import importlib.util
     import sys
     from pathlib import Path
     import orca_auto
@@ -204,13 +178,6 @@ def _probe(
     expected_version = sys.argv[2]
     assert Path(orca_auto.__file__).resolve().parent == expected_core, orca_auto.__file__
     assert importlib.metadata.version("orca_auto") == expected_version, "core version does not match source release"
-    assert importlib.util.find_spec("orca_auto.flow") is None
-    try:
-        importlib.metadata.version("orca_auto_workflows")
-    except importlib.metadata.PackageNotFoundError:
-        pass
-    else:
-        raise AssertionError("retired workflows distribution is installed")
     """
     _run(
         [
@@ -447,7 +414,6 @@ def run_matrix(work: Path) -> dict[str, object]:
     _copy_project(REPO_ROOT, project)
     wheel, sdist = _build(project, work / "core-dist")
     assert sdist is not None
-    _assert_core_sdist(sdist)
     unpacked = _unpack_sdist(sdist, work / "core-sdist")
     rebuilt, _ = _build(unpacked, work / "core-rebuilt", wheel_only=True)
     for candidate in (wheel, rebuilt):
