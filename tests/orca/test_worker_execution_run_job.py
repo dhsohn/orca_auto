@@ -13,7 +13,6 @@ from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import worker_execution
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 from orca_auto.orca.execution_binding import (
-    build_orca_execution_snapshot,
     orca_execution_provenance,
 )
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
@@ -22,7 +21,13 @@ from orca_auto.orca.queue.entries import queue_entry_generation_token
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
-from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
+from tests.conftest import (
+    build_submitted_snapshot,
+    claim_next_entry,
+    make_app_cfg,
+    write_config_file,
+    write_fake_orca,
+)
 
 
 def _bound_orca_metadata(
@@ -39,7 +44,7 @@ def _bound_orca_metadata(
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)
     resources = {"max_cores": 1, "max_memory_gb": 1}
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         reaction_dir,
         selected,
         selected_input_xyz="",

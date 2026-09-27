@@ -13,13 +13,12 @@ from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.generation_owner import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.orca import input_blocks, input_references, input_syntax
 from orca_auto.orca.execution_binding import (
-    build_orca_execution_snapshot,
     retire_snapshot_intent_for_row,
     verify_orca_execution_snapshot,
 )
 from orca_auto.orca.execution_binding._inputs import _inline_geometry_atom_count
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
-from tests.conftest import write_fake_orca
+from tests.conftest import build_submitted_snapshot, write_fake_orca
 
 
 @pytest.mark.parametrize(
@@ -107,7 +106,7 @@ def _snapshot(tmp_path: Path) -> tuple[Path, Path, dict[str, Any], dict[str, int
     )
     executable = write_fake_orca(tmp_path / "orca")
     resources = {"max_cores": 2, "max_memory_gb": 4}
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz=str((job_dir / "input.xyz").resolve()),
@@ -231,7 +230,7 @@ def test_orca_execution_snapshot_allows_same_stem_xyz_dependency(tmp_path: Path)
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz=str(geometry.resolve()),
@@ -280,7 +279,7 @@ def test_orca_execution_snapshot_inlines_same_stem_xyz_for_optimization(
     selected.write_text(f"{route}\n* xyzfile 0 1 h2.xyz\n", encoding="utf-8")
 
     resources = {"max_cores": 1, "max_memory_gb": 1}
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz=str(geometry.resolve()),
@@ -329,7 +328,7 @@ def test_orca_execution_snapshot_rejects_same_stem_hessian_for_frequency(tmp_pat
     )
 
     with pytest.raises(ValueError, match="runtime/output file: h2.hess"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -359,7 +358,7 @@ def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
     )
 
     with pytest.raises(ValueError, match="runtime/output file"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -416,7 +415,7 @@ def test_orca_execution_snapshot_rejects_resume_name_collisions(
     )
 
     with pytest.raises(ValueError, match="runtime/output file"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -463,7 +462,7 @@ def test_orca_execution_snapshot_rejects_neb_restart_path_named_like_neb_output(
     job_dir, previous, selected = _neb_restart_job(tmp_path, route, "nebts_MEP.allxyz")
 
     with pytest.raises(ValueError, match=r"runtime/output file: nebts_MEP\.allxyz; rename"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -511,7 +510,7 @@ def test_orca_execution_snapshot_rejects_neb_output_name_collisions(
     )
 
     with pytest.raises(ValueError, match=f"runtime/output file: {re.escape(dependency_name)}"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -569,7 +568,7 @@ def test_orca_execution_snapshot_reserves_neb_preopt_names_only_with_preopt(
     )
 
     def build() -> dict[str, Any]:
-        return build_orca_execution_snapshot(
+        return build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -602,7 +601,7 @@ def test_orca_execution_snapshot_binds_neb_end_points_named_like_preopt_sub_jobs
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -632,7 +631,7 @@ def test_orca_execution_snapshot_rejects_neb_end_point_after_monitor_internals_p
     )
 
     with pytest.raises(ValueError, match="runtime/output file: rxn_product.xyz"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -689,7 +688,7 @@ def test_orca_execution_snapshot_rejects_neb_endpoint_and_mmfts_output_names(
     )
 
     with pytest.raises(ValueError, match=f"runtime/output file: {re.escape(dependency_name)}"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -725,7 +724,7 @@ def test_orca_execution_snapshot_allows_names_outside_neb_outputs(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -744,7 +743,7 @@ def test_orca_execution_snapshot_binds_renamed_neb_restart_path(tmp_path: Path) 
     )
     resources = {"max_cores": 1, "max_memory_gb": 1}
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -796,7 +795,7 @@ def test_orca_execution_snapshot_allows_same_stem_engrad_without_active_engrad_r
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -831,7 +830,7 @@ def test_orca_execution_snapshot_allows_unreserved_dependency_name(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -858,7 +857,7 @@ def test_orca_execution_snapshot_creates_sequential_sibling_generations(
     )
     monkeypatch.setattr(_reservation, "new_visible_generation_name", lambda: next(generation_names))
     job_dir, selected, first, resources = _snapshot(tmp_path)
-    second = build_orca_execution_snapshot(
+    second = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz=str((job_dir / "input.xyz").resolve()),
@@ -906,7 +905,7 @@ def test_orca_execution_snapshot_rejects_distinct_sources_with_same_basename_and
     )
 
     with pytest.raises(ValueError) as exc_info:
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(reactant.resolve()),
@@ -940,7 +939,7 @@ def test_orca_execution_snapshot_allows_repeated_references_to_one_source_path(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz=str(geometry.resolve()),
@@ -980,7 +979,7 @@ def test_orca_execution_snapshot_binds_official_neb_geometry_files(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz=str((job_dir / "input.xyz").resolve()),
@@ -1033,7 +1032,7 @@ def test_orca_execution_snapshot_does_not_bind_product_or_ts_outside_neb_block(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1060,7 +1059,7 @@ def test_orca_execution_snapshot_limits_neb_file_keys_to_end_boundary(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1176,7 +1175,8 @@ def test_retire_snapshot_intent_for_row_checks_the_intent_before_the_row(
     job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
     row = SimpleNamespace(metadata={"execution_snapshot": {**snapshot, "version": 1}})
     generation = Path(snapshot["execution_dir"])
-    shutil.rmtree(generation)
+    # Keep the original alive while its replacement is made, so the inode cannot be reused.
+    generation.rename(job_dir / "moved-generation")
     generation.mkdir()
 
     with pytest.raises(ValueError, match="^Visible generation directory identity changed$"):
@@ -1345,7 +1345,7 @@ def test_orca_execution_snapshot_rejects_unbounded_geometry_formats(
     executable = write_fake_orca(tmp_path / "orca")
 
     with pytest.raises(ValueError, match="unsupported|invalid"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -1373,7 +1373,7 @@ def test_orca_execution_snapshot_rejects_malformed_xyz_terminators(
     selected.write_text("! SP\n" + geometry_block, encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
@@ -1393,7 +1393,7 @@ def test_orca_execution_snapshot_rejects_multiple_geometry_blocks(tmp_path: Path
     executable = write_fake_orca(tmp_path / "orca")
 
     with pytest.raises(ValueError, match="multiple"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -1429,7 +1429,7 @@ def test_orca_execution_snapshot_rejects_ambiguous_duplicate_directives(
     )
 
     with pytest.raises(ValueError, match="ambiguous duplicate"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -1449,7 +1449,7 @@ def test_orca_execution_snapshot_binds_spaced_percent_moinp(tmp_path: Path) -> N
     )
     executable = write_fake_orca(tmp_path / "orca")
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1483,7 +1483,7 @@ def test_orca_execution_snapshot_rejects_moread_without_explicit_moinp(
     )
 
     with pytest.raises(ValueError, match="MORead requires an explicit MOInp"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -1516,7 +1516,7 @@ def test_orca_execution_snapshot_binds_scf_block_moinp(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1545,7 +1545,7 @@ def test_orca_execution_snapshot_allows_unquoted_progress_input_filenames(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz=str(geometry),
@@ -1573,7 +1573,7 @@ def test_orca_execution_snapshot_rejects_unsafe_generated_xyzfile_path_and_clean
     )
 
     with pytest.raises(ValueError, match="Unsafe unquoted ORCA input path"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(geometry.resolve()),
@@ -1596,7 +1596,7 @@ def test_orca_execution_snapshot_allows_builtin_gcpmethod(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1646,7 +1646,7 @@ def test_orca_execution_snapshot_rejects_unbound_auxiliary_directives(
     executable = write_fake_orca(tmp_path / "orca")
 
     with pytest.raises(ValueError, match="Unsupported ORCA auxiliary"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -1788,7 +1788,7 @@ def test_orca_execution_snapshot_binds_esd_hessian_inputs(tmp_path: Path) -> Non
     )
     resources = {"max_cores": 1, "max_memory_gb": 1}
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1936,7 +1936,7 @@ def test_verify_orca_execution_snapshot_rejects_engrad_output_name_tamper(
         encoding="utf-8",
     )
     resources = {"max_cores": 1, "max_memory_gb": 1}
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1997,7 +1997,7 @@ def test_verify_orca_execution_snapshot_rejects_neb_output_name_tamper(
         encoding="utf-8",
     )
     resources = {"max_cores": 1, "max_memory_gb": 1}
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -2178,7 +2178,7 @@ def test_orca_execution_snapshot_rejects_referenced_path_escape(tmp_path: Path) 
     selected.write_text("! SP\n* xyzfile 0 1 ../outside.xyz\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="stay inside its root"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(outside),
@@ -2196,7 +2196,7 @@ def test_orca_execution_snapshot_rejects_selected_input_symlink(tmp_path: Path) 
     selected.symlink_to(source.name)
 
     with pytest.raises(ValueError, match="must not be a symlink"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -2221,7 +2221,7 @@ def test_orca_execution_snapshot_caps_external_reference_count(tmp_path: Path) -
     )
 
     with pytest.raises(ValueError, match="external file references"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -2249,7 +2249,7 @@ def test_orca_execution_snapshot_checks_aggregate_budget_before_dependency_copy(
     )
 
     with pytest.raises(ValueError, match="aggregate snapshot size"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(dependency),
@@ -2275,7 +2275,7 @@ def test_orca_execution_snapshot_rejects_oversized_dependency_before_copy(
     selected.write_text('! SP MORead\n%moinp "large.gbw"\n* xyz 0 1\nH 0 0 0\n*\n')
 
     with pytest.raises(ValueError, match="exceeds"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -2301,7 +2301,7 @@ def test_orca_execution_snapshot_rejects_inline_geometry_above_atom_cap(
     )
 
     with pytest.raises(ValueError, match="server atom-count limit"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -2323,7 +2323,7 @@ def test_orca_execution_snapshot_rejects_xyzfile_geometry_above_atom_cap(
     selected.write_text("! SP\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="server atom-count limit"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
@@ -2351,7 +2351,7 @@ def test_orca_execution_snapshot_rejects_neb_geometry_above_atom_cap(
     )
 
     with pytest.raises(ValueError, match="server atom-count limit"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
@@ -2376,7 +2376,7 @@ def test_orca_frequency_snapshot_uses_stricter_hessian_atom_cap(
     selected.write_text(f"{route_line}\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="server atom-count limit"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz=str(job_dir / "input.xyz"),
@@ -2403,7 +2403,7 @@ def test_orca_frequency_snapshot_ignores_comment_lines_inside_inline_geometry(
         encoding="utf-8",
     )
 
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -2430,7 +2430,7 @@ def test_orca_frequency_snapshot_rejects_inline_geometry_above_hessian_atom_cap(
     )
 
     with pytest.raises(ValueError, match="Hessian atom-count limit"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -2456,7 +2456,7 @@ def test_removed_route_rejected_before_generation_reservation(
 
     monkeypatch.setattr(_build, "_reserve_execution_generation", unexpected_reservation)
     with pytest.raises(ValueError, match="unsupported.*ScanTS"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",
@@ -2475,7 +2475,7 @@ def test_retired_snapshot_is_never_executable(tmp_path: Path, retired_version: i
         _verify(job_dir, selected, snapshot, resources)
     before = _visible_generations(job_dir)
     with pytest.raises(ValueError, match="current execution snapshot"):
-        build_orca_execution_snapshot(
+        build_submitted_snapshot(
             job_dir,
             selected,
             selected_input_xyz="",

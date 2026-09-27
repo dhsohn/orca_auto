@@ -29,7 +29,6 @@ from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.orca import execution, worker_execution
 from orca_auto.orca.config import AppConfig, PathsConfig, load_config
 from orca_auto.orca.execution_binding import (
-    build_orca_execution_snapshot,
     orca_execution_started_evidence,
 )
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult
@@ -40,6 +39,7 @@ from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state_reading import load_state, state_path
 from tests.conftest import (
+    build_submitted_snapshot,
     claim_next_entry,
     make_app_cfg,
     make_queue_entry,
@@ -111,7 +111,7 @@ def _bound_orca_metadata(tmp_path: Path, reaction_dir: Path) -> dict[str, Any]:
         executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         executable.chmod(0o755)
     resources = {"max_cores": 1, "max_memory_gb": 1}
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         reaction_dir,
         selected,
         selected_input_xyz="",

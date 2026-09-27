@@ -3,8 +3,9 @@
 Tests take the fixtures. Where a fixture does not fit (a helper module, a
 builder called with test-specific arguments, a second root in one test) they
 import the plain builders (``make_app_cfg``, ``write_fake_orca``,
-``write_config_file``, ``make_queue_entry``, ``enqueue_entry``,
-``claim_next_entry``, ``write_run_state``) directly from this module.
+``build_submitted_snapshot``, ``write_config_file``, ``make_queue_entry``,
+``enqueue_entry``, ``claim_next_entry``, ``write_run_state``) directly from
+this module.
 
 Two fixtures are autouse: ``no_fsync`` (``@pytest.mark.real_fsync`` opts out)
 and ``isolated_config_discovery``, which keeps every test off the live shared
@@ -14,8 +15,9 @@ config.
 from __future__ import annotations
 
 import os
+import secrets
 import signal
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -40,10 +42,12 @@ from orca_auto.orca import scratch_config as _scratch_config
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
+from orca_auto.orca.execution_binding import build_orca_execution_snapshot
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import worker_log_path
 from orca_auto.orca.queue.entries import entry_metadata
 from orca_auto.orca.queue.roots import dequeue_next_entry
+from orca_auto.orca.resource_directives import prepare_submission_resource_request
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state import finalize_state, new_state, write_state
 from orca_auto.orca.statuses import (
@@ -126,6 +130,45 @@ def write_fake_orca(path: Path, script: str = FAKE_ORCA_SCRIPT) -> Path:
     path.write_text(script, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def build_submitted_snapshot(
+    job_dir: Path,
+    selected_inp: Path,
+    *,
+    orca_executable: str | Path,
+    resource_request: Mapping[str, int],
+    selected_input_xyz: str = "",
+    queue_root: Path | None = None,
+    snapshot_intent_token: str | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Build an execution snapshot from ``selected_inp`` as a submission does.
+
+    The input is read once and its resources are normalized with
+    ``resource_request`` as the configured defaults. The queue root defaults to
+    the job directory and the intent token to a fresh one.
+    """
+
+    source_payload = Path(selected_inp).read_bytes()
+    prepared = prepare_submission_resource_request(
+        Path(selected_inp),
+        source_payload,
+        default_max_cores=resource_request["max_cores"],
+        default_max_memory_gb=resource_request["max_memory_gb"],
+    )
+    return build_orca_execution_snapshot(
+        job_dir,
+        selected_inp,
+        selected_input_xyz=selected_input_xyz,
+        resource_request=prepared.resource_request,
+        orca_executable=orca_executable,
+        queue_root=queue_root if queue_root is not None else job_dir,
+        snapshot_intent_token=snapshot_intent_token or f"snapshot-{secrets.token_hex(16)}",
+        normalized_selected_payload=prepared.normalized_payload,
+        source_selected_payload=source_payload,
+        **kwargs,
+    )
 
 
 @pytest.fixture

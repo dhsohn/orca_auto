@@ -17,8 +17,12 @@ from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES, ORCA_EXECUTION_SNAPSH
 from ._recovery import recovery_checkpoint_private_name, recovery_checkpoint_source_names
 from ._reservation import retire_snapshot_intent_for_row
 from ._snapshot_identity import (
+    STALE_RECOVERY_SNAPSHOT_ERROR,
     orca_execution_provenance,
     orca_execution_snapshot_generation_dir,
+    require_current_snapshot_version,
+    same_directory_identity,
+    validated_resource_request,
     verify_orca_snapshot_executable,
 )
 from ._verify import orca_execution_started_evidence, verify_orca_execution_snapshot
@@ -26,6 +30,7 @@ from ._verify import orca_execution_started_evidence, verify_orca_execution_snap
 __all__ = [
     "MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES",
     "ORCA_EXECUTION_SNAPSHOT_VERSION",
+    "STALE_RECOVERY_SNAPSHOT_ERROR",
     "build_orca_execution_snapshot",
     "cleanup_unowned_orca_execution_snapshot",
     "orca_execution_provenance",
@@ -33,7 +38,10 @@ __all__ = [
     "orca_execution_started_evidence",
     "recovery_checkpoint_private_name",
     "recovery_checkpoint_source_names",
+    "require_current_snapshot_version",
     "retire_snapshot_intent_for_row",
+    "same_directory_identity",
+    "validated_resource_request",
     "verify_orca_execution_snapshot",
     "verify_orca_snapshot_executable",
 ]

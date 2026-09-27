@@ -37,11 +37,12 @@ from orca_auto.core.utils.persistence import timestamped_token, timestamped_toke
 from .config import AppConfig
 from .execution import recover_crashed_state
 from .execution_binding import (
-    ORCA_EXECUTION_SNAPSHOT_VERSION,
+    STALE_RECOVERY_SNAPSHOT_ERROR,
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
     orca_execution_snapshot_generation_dir,
     orca_execution_started_evidence,
+    require_current_snapshot_version,
     verify_orca_snapshot_executable,
 )
 from .output_adoption import completed_out_or_none
@@ -75,8 +76,7 @@ def _validated_recovery_rebind_claim(
     snapshot: dict[str, Any],
 ) -> tuple[int, dict[str, Any] | None]:
     """Validate the durable recovery budget and claim without performing I/O."""
-    if snapshot.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION or "max_retries" in snapshot:
-        raise ValueError("ORCA recovery requires a current execution snapshot; resubmit the job")
+    require_current_snapshot_version(snapshot, error=STALE_RECOVERY_SNAPSHOT_ERROR)
     raw_count = metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY, 0)
     if (
         isinstance(raw_count, bool)

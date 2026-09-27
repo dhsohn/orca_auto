@@ -24,11 +24,10 @@ from orca_auto.core.artifacts import (
     SI_BLOCK_MD_FILE,
 )
 from orca_auto.orca.execution_binding import (
-    build_orca_execution_snapshot,
     orca_execution_provenance,
 )
 from orca_auto.orca.report.publication import write_report_files
-from tests.conftest import write_fake_orca
+from tests.conftest import build_submitted_snapshot, write_fake_orca
 from tests.contracts.normalize import Normalizer, assert_golden, key_tree, read_json
 from tests.orca_output_helpers import (
     FREQ_TS_BLOCK,
@@ -150,7 +149,7 @@ def test_report_outputs(tmp_path: Path, name: str) -> None:
     case.write_inp(source)
     for xyz in case.xyz_files:
         (job_dir / xyz).write_text(_HOO_XYZ, encoding="utf-8")
-    snapshot = build_orca_execution_snapshot(
+    snapshot = build_submitted_snapshot(
         job_dir,
         source,
         selected_input_xyz="",

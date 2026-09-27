@@ -29,7 +29,6 @@ from orca_auto.orca.execution_binding import (
     _reservation,
     _rewrite,
     _snapshot_identity,
-    build_orca_execution_snapshot,
     orca_execution_started_evidence,
     verify_orca_execution_snapshot,
 )
@@ -37,7 +36,13 @@ from orca_auto.orca.execution_binding import _verify as _verify_stage
 from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.state_reading import load_state
-from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
+from tests.conftest import (
+    build_submitted_snapshot,
+    claim_next_entry,
+    make_app_cfg,
+    write_config_file,
+    write_fake_orca,
+)
 
 _PRISTINE_XYZ = "2\nH2\nH 0 0 0\nH 0 0 0.74\n"
 _CRASHED_XYZ = "2\noptimizing\nH 0 0 0\nH 0 0 0.80\n"
@@ -86,7 +91,7 @@ def _build(
     executable: Path,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    return build_orca_execution_snapshot(
+    return build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1870,7 +1875,7 @@ def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> N
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
     executable = write_fake_orca(tmp_path / "checkpoint-orca")
-    crashed = build_orca_execution_snapshot(
+    crashed = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1885,7 +1890,7 @@ def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> N
     os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
     os.utime(generation / "ts.resume.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
 
-    replacement = build_orca_execution_snapshot(
+    replacement = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1953,7 +1958,7 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
     executable = write_fake_orca(tmp_path / "checkpoint-edit-orca")
-    crashed = build_orca_execution_snapshot(
+    crashed = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1965,7 +1970,7 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
     (generation / "ts.resume.gbw").write_bytes(b"resume-orbitals")
     base_ns = 1_700_000_000_000_000_000
     os.utime(generation / "ts.resume.gbw", ns=(base_ns, base_ns))
-    replacement = build_orca_execution_snapshot(
+    replacement = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -2018,7 +2023,7 @@ def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_o
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
     executable = write_fake_orca(tmp_path / "checkpoint-orca")
-    crashed = build_orca_execution_snapshot(
+    crashed = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -2033,7 +2038,7 @@ def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_o
     os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
     os.utime(generation / "ts.resume.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
 
-    replacement = build_orca_execution_snapshot(
+    replacement = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",

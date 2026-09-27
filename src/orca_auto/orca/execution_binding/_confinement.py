@@ -24,6 +24,7 @@ from orca_auto.core.utils.persistence import durable_mkdir
 
 from ..inp_rewriter import resume_checkpoint_input_path
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
+from ._models import _RouteOutputs
 
 _GENERATION_RUNTIME_FILE_NAMES = frozenset(
     {
@@ -137,12 +138,8 @@ def _validate_unique_dependency_basenames(
 def _validate_dependency_basename(
     source: Path,
     selected_inp: Path,
+    routes: _RouteOutputs,
     *,
-    engrad_is_output: bool,
-    hessian_requested: bool,
-    neb_requested: bool,
-    neb_preopt_ends: bool,
-    same_stem_xyz_is_output: bool,
     inline_same_stem_xyz: bool,
 ) -> None:
     name = source.name
@@ -153,16 +150,16 @@ def _validate_dependency_basename(
     for runtime_input in runtime_input_variants:
         runtime_owned_names.add(runtime_input.with_suffix(".out").name)
         runtime_owned_names.add(runtime_input.with_suffix(".gbw").name)
-        if engrad_is_output:
+        if routes.engrad_is_output:
             runtime_owned_names.add(runtime_input.with_suffix(".engrad").name)
-        if hessian_requested:
+        if routes.hessian_requested:
             runtime_owned_names.add(runtime_input.with_suffix(".hess").name)
-        if same_stem_xyz_is_output and not inline_same_stem_xyz:
+        if routes.same_stem_xyz_is_output and not inline_same_stem_xyz:
             runtime_owned_names.add(runtime_input.with_suffix(".xyz").name)
     neb_patterns = [_NEB_OUTPUT_STEM_SUFFIX_RE]
-    if neb_preopt_ends:
+    if routes.neb_preopt_ends:
         neb_patterns.append(_NEB_PREOPT_STEM_SUFFIX_RE)
-    neb_output = neb_requested and any(
+    neb_output = routes.neb_requested and any(
         name.startswith(runtime_input.stem)
         and pattern.fullmatch(name, len(runtime_input.stem)) is not None
         for runtime_input in runtime_input_variants

@@ -37,6 +37,7 @@ from orca_auto.orca.engine_artifacts import (
 
 from . import state_reading as _state_reading
 from .app_ids import ORCA_AUTO_ORCA_APP_NAME
+from .generation_validation import is_retired_generation_marker
 from .statuses import (
     ACTIVE_RUN_STATUS_VALUES,
     TERMINAL_RUN_STATUSES,
@@ -77,7 +78,7 @@ def _write_generation_state(
     payload: Mapping[str, Any],
 ) -> None:
     existing = _existing_generation_payload(target[0])
-    if existing is not None and "max_retries" in _dict(existing.get("engine_payload")):
+    if existing is not None and is_retired_generation_marker(_dict(existing.get("engine_payload"))):
         return
     execution = _generation_execution_payload(payload)
     if existing is not None:
@@ -283,7 +284,9 @@ def normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any]) 
 def retired_generation(generation_dir: Path) -> bool:
     """Keep pre-removal generation artifacts immutable; root bookkeeping stays current."""
     payload = _existing_generation_payload(generation_dir)
-    return payload is not None and "max_retries" in _dict(payload.get("engine_payload"))
+    return payload is not None and is_retired_generation_marker(
+        _dict(payload.get("engine_payload"))
+    )
 
 
 # --- attempt decisions and resumability ------------------------------------

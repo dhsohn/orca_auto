@@ -38,6 +38,7 @@ from .config import AppConfig, load_config
 from .execution import execute_orca_run
 from .execution_binding import (
     orca_execution_provenance,
+    validated_resource_request,
     verify_orca_execution_snapshot,
 )
 from .orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
@@ -152,16 +153,9 @@ def _build_execution_context(
         raise ValueError(
             "Queued ORCA entry predates immutable execution snapshots; drain or resubmit it"
         )
-    resource_request = metadata.get("resource_request")
-    if (
-        not isinstance(resource_request, dict)
-        or set(resource_request) != {"max_cores", "max_memory_gb"}
-        or any(
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            for value in resource_request.values()
-        )
-    ):
-        raise ValueError("Queued ORCA entry has no resource request")
+    resource_request = validated_resource_request(
+        metadata.get("resource_request"), error="Queued ORCA entry has no resource request"
+    )
     # A generation whose bound input already has a completed, analyzer-verified
     # output legitimately carries runtime files: allow them so the run can
     # settle the finished generation in place instead of dying on the pristine

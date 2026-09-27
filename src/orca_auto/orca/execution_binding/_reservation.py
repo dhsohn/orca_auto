@@ -14,19 +14,17 @@ from orca_auto.core.queue.generation import (
     is_visible_generation_name,
     new_visible_generation_name,
 )
-from orca_auto.core.queue.generation_owner import (
-    cleanup_unowned_direct_generation_directory,
-)
 from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_TOKEN_KEY,
     bind_snapshot_intent_generation_identities,
     create_snapshot_intent,
     discard_snapshot_intent,
-    discard_snapshot_intent_if_generations_absent,
     retire_snapshot_intent,
 )
 from orca_auto.core.utils.persistence import fsync_directory
+
+from ._cleanup import discard_unowned_generation
 
 
 def _execution_directory(job_dir: Path, generation_name: str) -> Path:
@@ -80,17 +78,15 @@ def _reserve_execution_generation(
         try:
             bind_snapshot_intent_generation_identities(queue_root, intent_token)
         except BaseException:
-            try:
-                cleanup_unowned_direct_generation_directory(
-                    job_dir,
-                    namespace=generation_name,
-                    label="ORCA execution snapshot",
-                    expected_job_identity=job_identity,
-                    expected_generation_identity=generation_identity,
-                    expected_owner_token=intent_token,
-                )
-            finally:
-                discard_snapshot_intent_if_generations_absent(queue_root, intent_token)
+            discard_unowned_generation(
+                job_dir,
+                generation_name=generation_name,
+                job_identity=job_identity,
+                generation_identity=generation_identity,
+                owner_token=intent_token,
+                queue_root=queue_root,
+                discard_on_failure=True,
+            )
             raise
         return generation_name, reserved, generation_identity
     if target_generation_name is not None:

@@ -48,6 +48,7 @@ from .config import AppConfig, load_config
 from .execution_binding import (
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
+    same_directory_identity,
 )
 from .input_artifacts import OrcaSelectedInputArtifacts, xyzfile_input_path
 from .input_syntax import orca_route_lines
@@ -76,10 +77,6 @@ def _snapshot_cleanup_job_dir(reaction_dir: Path, snapshot: Any) -> Path:
     identity = snapshot.get("job_dir_identity") if isinstance(snapshot, dict) else None
     if not isinstance(identity, dict):
         return reaction_dir
-    expected = (
-        int(identity.get("device", -1)),
-        int(identity.get("inode", -1)),
-    )
     candidates = (reaction_dir, active_run_dir_pinned_target())
     for candidate in candidates:
         if candidate is None:
@@ -88,7 +85,7 @@ def _snapshot_cleanup_job_dir(reaction_dir: Path, snapshot: Any) -> Path:
             candidate_stat = candidate.stat()
         except OSError:
             continue
-        if (int(candidate_stat.st_dev), int(candidate_stat.st_ino)) == expected:
+        if same_directory_identity(candidate_stat, identity):
             return candidate
     raise ValueError("ORCA cleanup target no longer matches the execution snapshot")
 

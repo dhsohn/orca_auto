@@ -38,6 +38,8 @@ def submitted_snapshot(tmp_path: Path) -> dict[str, Any]:
         selected_input_xyz="",
         resource_request={"max_cores": 2, "max_memory_gb": 2},
         orca_executable=write_fake_orca(tmp_path / "orca"),
+        queue_root=job,
+        snapshot_intent_token="snapshot_intent-provenance-0001",
         normalized_selected_payload=normalized,
         source_selected_payload=original,
     )

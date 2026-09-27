@@ -17,21 +17,18 @@ from ._confinement import (
     _validate_dependency_basename,
     _validate_unique_dependency_basenames,
 )
-from ._constants import ORCA_EXECUTION_SNAPSHOT_VERSION
-from ._inputs import (
-    _inline_geometry_atom_count,
-    _neb_preoptimizes_end_points,
-    _route_requests_hessian,
-    _route_requests_neb,
-    _route_writes_engrad,
-    _route_writes_same_stem_xyz,
-)
+from ._inputs import _inline_geometry_atom_count, _route_outputs
 from ._models import _VerifiedSnapshotInputs
 from ._recovery import _is_recovery_checkpoint_source_name, recovery_checkpoint_private_name
 from ._snapshot_identity import (
     _file_identity,
     _verify_identity,
+    dependency_role,
+    is_canonical_source_path,
     orca_execution_snapshot_generation_dir,
+    require_current_snapshot_version,
+    same_directory_identity,
+    validated_content_descriptor,
     verify_orca_snapshot_executable,
 )
 
@@ -90,34 +87,18 @@ def _verify_source_descriptor(
     raw_source = descriptor.get("source_path")
     if not isinstance(raw_source, str) or not raw_source:
         raise ValueError(f"Queued ORCA source descriptor {role!r} has an invalid path")
-    source_text = raw_source
-    if source_text != expected_source:
+    if raw_source != expected_source:
         raise ValueError(f"Queued ORCA source descriptor {role!r} has a mismatched path")
-    try:
-        source_path = Path(source_text)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise ValueError(f"Queued ORCA source descriptor {role!r} has an invalid path") from exc
-    if (
-        not source_path.is_absolute()
-        or source_text != str(source_path)
-        or ".." in source_path.parts
-        or "\x00" in source_text
-    ):
+    if not is_canonical_source_path(raw_source):
         raise ValueError(
             f"Queued ORCA source descriptor {role!r} does not store a canonical absolute path"
         )
+    source_path = Path(raw_source)
     if not source_path.is_relative_to(job_dir):
         raise ValueError(f"Queued ORCA source descriptor {role!r} escapes its job directory")
-    digest = str(descriptor.get("sha256") or "").strip().lower()
-    size = descriptor.get("size_bytes")
-    if (
-        len(digest) != 64
-        or any(character not in "0123456789abcdef" for character in digest)
-        or isinstance(size, bool)
-        or not isinstance(size, int)
-        or size < 0
-    ):
-        raise ValueError(f"Queued ORCA source descriptor {role!r} has invalid content identity")
+    validated_content_descriptor(
+        descriptor, error=f"Queued ORCA source descriptor {role!r} has invalid content identity"
+    )
     return descriptor, source_path
 
 
@@ -143,9 +124,7 @@ def _verify_snapshot_input_tree(
         or len(runtime_mutable_input_roles) != len(set(runtime_mutable_input_roles))
     ):
         raise ValueError("Queue metadata 'execution_snapshot' has invalid ORCA inputs")
-    expected_dependency_roles = {
-        f"dependency_{index:06d}" for index in range(len(dependency_paths))
-    }
+    expected_dependency_roles = {dependency_role(index) for index in range(len(dependency_paths))}
     if set(raw_inputs) != {"selected_source"} | expected_dependency_roles:
         raise ValueError("Queued ORCA execution snapshot has unexpected source roles")
     if set(materialized_inputs) != expected_dependency_roles:
@@ -176,7 +155,7 @@ def _verify_snapshot_input_tree(
     )
     verified_dependencies: list[tuple[str, Mapping[str, Any], Path]] = []
     for index, expected_source in enumerate(dependency_paths):
-        role = f"dependency_{index:06d}"
+        role = dependency_role(index)
         descriptor, source_path = _verify_source_descriptor(
             raw_inputs[role],
             role=role,
@@ -290,22 +269,14 @@ def _verify_bound_snapshot_content(
     selected_lines = selected_text.splitlines()
     validate_supported_xyz_geometry_syntax(selected_lines, label="Queued ORCA bound input")
     bound_references = input_references.scan_orca_file_references(selected_lines)
-    engrad_is_output = _route_writes_engrad(selected_lines)
-    hessian_requested = _route_requests_hessian(selected_lines)
-    neb_requested = _route_requests_neb(selected_lines)
-    neb_preopt_ends = _neb_preoptimizes_end_points(selected_lines)
-    same_stem_xyz_is_output = _route_writes_same_stem_xyz(selected_lines)
+    routes = _route_outputs(selected_lines)
     for role, _descriptor, source_path in verified.verified_dependencies:
         if role == verified.recovery_checkpoint_role:
             continue
         _validate_dependency_basename(
             source_path,
             verified.source_selected_path,
-            engrad_is_output=engrad_is_output,
-            hessian_requested=hessian_requested,
-            neb_requested=neb_requested,
-            neb_preopt_ends=neb_preopt_ends,
-            same_stem_xyz_is_output=same_stem_xyz_is_output,
+            routes,
             inline_same_stem_xyz=role in verified.mutable_roles,
         )
     bound_reference_paths = {
@@ -351,22 +322,15 @@ def verify_orca_execution_snapshot(
     """Verify a queued private ORCA input tree and its bound executable identity."""
 
     resolved_job_dir = Path(job_dir).expanduser().resolve()
-    if (
-        not isinstance(snapshot, Mapping)
-        or snapshot.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION
-        or "max_retries" in snapshot
-    ):
-        raise ValueError("Queue metadata 'execution_snapshot' has an unsupported version")
+    require_current_snapshot_version(
+        snapshot, error="Queue metadata 'execution_snapshot' has an unsupported version"
+    )
     execution_dir = orca_execution_snapshot_generation_dir(resolved_job_dir, snapshot)
 
     job_identity = snapshot.get("job_dir_identity")
     if not isinstance(job_identity, Mapping):
         raise ValueError("Queued ORCA execution snapshot has no job directory identity")
-    job_details = resolved_job_dir.stat()
-    if (int(job_details.st_dev), int(job_details.st_ino)) != (
-        int(job_identity.get("device", -1)),
-        int(job_identity.get("inode", -1)),
-    ):
+    if not same_directory_identity(resolved_job_dir.stat(), job_identity):
         raise ValueError("Queued ORCA job directory identity changed")
 
     verified = _verify_snapshot_input_tree(
