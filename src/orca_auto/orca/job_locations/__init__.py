@@ -3,13 +3,14 @@
 ``_records`` builds and upserts one row, ``_artifacts_to_records`` projects
 a directory's state and report artifacts onto a row, ``_rebuild`` re-derives
 the index from every state on disk, ``_generation`` matches payloads to a
-queue generation and ``_utils`` holds the text and resource normalizers.
+queue generation and ``_utils`` holds the path and resource normalizers.
 Consumers import only the names exported here.
 """
 
 from __future__ import annotations
 
 from ._artifacts_to_records import record_from_artifacts
+from ._generation import payload_matches_queue_generation
 from ._rebuild import (
     JobLocationRebuildConflict,
     JobLocationRebuildResult,
@@ -29,6 +30,7 @@ __all__ = [
     "JobLocationRebuildResult",
     "index_root_for_cfg",
     "list_job_location_records",
+    "payload_matches_queue_generation",
     "rebuild_job_location_records",
     "record_from_artifacts",
     "resolve_job_metadata",

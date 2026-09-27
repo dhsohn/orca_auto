@@ -320,7 +320,7 @@ def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
         upserts.append((args, kwargs))
         raise RuntimeError("index write failed")
 
-    monkeypatch.setattr(submission_mod, "upsert_queued_job_record", failing_upsert)
+    monkeypatch.setattr(submission_mod, "upsert_row_job_record", failing_upsert)
 
     submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir, priority=3))
 

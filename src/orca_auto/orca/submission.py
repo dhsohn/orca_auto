@@ -32,6 +32,7 @@ from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
+from orca_auto.core.statuses import STATUS_QUEUED
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca.queue.enqueue_publication import (
     EnqueuePublicationOutcome,
@@ -56,7 +57,7 @@ from .job_locations import resolve_job_metadata
 from .queue import adapter as queue_adapter
 from .queue import entries as queue_entries
 from .queue.adapter import DuplicateEntryError
-from .queue.job_records import upsert_queued_job_record
+from .queue.job_records import upsert_row_job_record
 from .queue.orphans import DeadRunningRowUnjudgeableError
 from .resource_directives import (
     PreparedSubmissionResourceInput,
@@ -360,7 +361,7 @@ def _publish_submission(
     """Commit the row and publish its location record before completing the lease."""
 
     def publish(current: QueueEntry) -> None:
-        upsert_queued_job_record(cfg, current)
+        upsert_row_job_record(cfg, current, STATUS_QUEUED, require_task_id=True)
 
     def mark_failed_via_adapter(root: Path, queue_id: str, **kwargs: Any) -> Any:
         # The adapter's mark_failed installs the administrative fence-only

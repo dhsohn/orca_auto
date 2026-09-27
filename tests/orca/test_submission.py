@@ -582,7 +582,7 @@ def test_orca_compensation_failure_fences_row_without_publication(
 
     monkeypatch.setattr(queue_store, "save_entries", fail_compensation_before_replace)
     monkeypatch.setattr(enqueue_publication, "_recover_committed_enqueue", reject_normal_recovery)
-    monkeypatch.setattr(submission_mod, "upsert_queued_job_record", reject_publication)
+    monkeypatch.setattr(submission_mod, "upsert_row_job_record", reject_publication)
 
     with use_run_dir_publication_guard(reject_after_commit):
         result = run_inp.submit_reaction_dir_to_queue(args)
@@ -688,7 +688,7 @@ def test_cancellation_waits_for_publication_boundary(
     publication_started = threading.Event()
     allow_publication = threading.Event()
     cancel_finished = threading.Event()
-    original_upsert = submission_mod.upsert_queued_job_record
+    original_upsert = submission_mod.upsert_row_job_record
     submission_result: list[Any] = []
     cancellation_result: list[Any] = []
 
@@ -697,7 +697,7 @@ def test_cancellation_waits_for_publication_boundary(
         assert allow_publication.wait(timeout=5)
         original_upsert(*upsert_args, **upsert_kwargs)
 
-    monkeypatch.setattr(submission_mod, "upsert_queued_job_record", blocking_upsert)
+    monkeypatch.setattr(submission_mod, "upsert_row_job_record", blocking_upsert)
 
     submit_thread = threading.Thread(
         target=lambda: submission_result.append(run_inp.submit_reaction_dir_to_queue(args))

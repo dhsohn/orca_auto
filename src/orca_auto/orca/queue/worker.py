@@ -71,8 +71,8 @@ from orca_auto.orca.worker_execution import build_worker_child_command
 
 from ..app_ids import ORCA_ADMISSION_SOURCE, ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE_LAUNCH_GATED
 from ..config import AppConfig
-from ..state_reading import load_state
-from . import publication_repair, replay, roots, settlement, worker_tracking
+from ..state_reading import load_state, payload_matches_expected_job_id
+from . import publication_repair, replay, roots, settlement
 from .adapter import (
     cancel_requested_ids,
     get_cancel_requested,
@@ -89,6 +89,7 @@ from .entries import (
     queue_entry_status,
     queue_entry_task_id,
 )
+from .job_records import upsert_row_job_record
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .notifications import notify_queued_jobs
 from .orphans import reconcile_orphaned_running_entries
@@ -133,7 +134,7 @@ def _child_run_concluded(job: OrcaRunningJob) -> bool:
         return False
     state = load_state(Path(reaction_dir).expanduser().resolve())
     expected_job_id = (job.task_id or "").strip() or queue_entry_task_id(current) or None
-    if not state or not worker_tracking.payload_matches_expected_job_id(state, expected_job_id):
+    if not state or not payload_matches_expected_job_id(state, expected_job_id):
         return False
     return str(state.get("status") or "").strip().lower() in (
         STATUS_COMPLETED,
@@ -669,7 +670,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             )
             return False
         try:
-            worker_tracking.upsert_running_job_record(self.cfg, entry)
+            upsert_row_job_record(self.cfg, entry, STATUS_RUNNING, require_task_id=False)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to update running job location for %s: %s", queue_id, exc)
         return True

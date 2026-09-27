@@ -33,7 +33,7 @@ from orca_auto.core.queue.publication import (
     queue_record_sync_state,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
-from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
+from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED, STATUS_QUEUED
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca import execution as execution_mod
 from orca_auto.orca import notifications as lifecycle_notifications
@@ -50,9 +50,9 @@ from orca_auto.orca.queue.adapter import (
     update_terminal,
 )
 from orca_auto.orca.queue.models import OrcaRunningJob, TerminalReplayWorkItem
+from orca_auto.orca.queue.notifications import claim_and_send_terminal
 from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
-from orca_auto.orca.queue.worker_tracking import notify_terminal_job_from_state
 from orca_auto.orca.state import finalize_state, new_state, save_state
 from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.statuses import RunStatus
@@ -394,7 +394,7 @@ def test_terminal_index_failure_releases_capacity_and_replays_after_recovery(
         task_id="task-unrelated",
         metadata=current_orca_queue_metadata(other_dir),
     )
-    job_records.upsert_queued_job_record(worker.cfg, other)
+    job_records.upsert_row_job_record(worker.cfg, other, STATUS_QUEUED, require_task_id=True)
     index_path = queue_root / "job_locations.json"
     index_before = index_path.read_bytes()
     index_path.write_text("{unreadable index", encoding="utf-8")
@@ -736,7 +736,7 @@ def test_publication_repair_failure_withholds_only_its_row_and_later_recovers(
         task_id="task-unrelated",
         metadata=current_orca_queue_metadata(unrelated),
     )
-    job_records.upsert_queued_job_record(worker.cfg, other)
+    job_records.upsert_row_job_record(worker.cfg, other, STATUS_QUEUED, require_task_id=True)
     index_path = queue_root / "job_locations.json"
     index_before = index_path.read_bytes()
     with ExitStack() as stack:
@@ -1317,7 +1317,7 @@ def test_terminal_notification_skips_when_state_already_marked(
     final_result["finished_notification_sent_at"] = "2026-05-29T12:02:00+00:00"
     finalize_state(rxn, state, status="completed", final_result=final_result)
 
-    assert notify_terminal_job_from_state(worker_cfg, str(rxn)) is False
+    assert claim_and_send_terminal(worker_cfg, str(rxn)) is False
     assert recording_channel.sends == []
 
 
@@ -1328,7 +1328,7 @@ def test_terminal_notification_rejects_previous_generation_state(
     rxn.mkdir()
     write_completed_run_state(rxn)
 
-    assert notify_terminal_job_from_state(worker_cfg, str(rxn), expected_job_id="task-b") is False
+    assert claim_and_send_terminal(worker_cfg, str(rxn), expected_job_id="task-b") is False
     assert recording_channel.sends == []
 
 

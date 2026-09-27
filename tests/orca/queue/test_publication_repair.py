@@ -54,8 +54,8 @@ def test_orca_worker_repairs_queued_publication_before_claim(tmp_path: Path) -> 
 
     with patch.object(
         publication_mod,
-        "upsert_queued_job_record",
-        side_effect=lambda _cfg, current: upserts.append(current.task_id),
+        "upsert_row_job_record",
+        side_effect=lambda _cfg, current, *_args, **_kwargs: upserts.append(current.task_id),
     ):
         assert publication_mod.repair_queue_publication(cfg, tmp_path, entry) is True
 
@@ -83,7 +83,7 @@ def test_orca_worker_keeps_failed_publication_repair_unclaimable(tmp_path: Path)
 
     with patch.object(
         publication_mod,
-        "upsert_queued_job_record",
+        "upsert_row_job_record",
         side_effect=OSError("index unavailable"),
     ):
         assert publication_mod.repair_queue_publication(cfg, tmp_path, entry) is False
@@ -114,7 +114,7 @@ def test_orca_publication_repair_ignores_foreign_engine_row(tmp_path: Path) -> N
         ),
     )
 
-    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+    with patch.object(publication_mod, "upsert_row_job_record") as upsert:
         assert publication_mod.repair_queue_publication(cfg, tmp_path, foreign)
 
     upsert.assert_not_called()
@@ -139,7 +139,7 @@ def test_orca_publication_repair_reclaims_abandoned_live_pid_lease(tmp_path: Pat
         ),
     )
 
-    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+    with patch.object(publication_mod, "upsert_row_job_record") as upsert:
         assert publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_called_once()
@@ -178,7 +178,7 @@ def test_orca_publication_repair_rejects_invalid_marker_after_lock_reload(
         is not None
     )
 
-    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+    with patch.object(publication_mod, "upsert_row_job_record") as upsert:
         assert not publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_not_called()
@@ -199,7 +199,7 @@ def test_orca_publication_repair_ignores_malformed_terminal_history(tmp_path: Pa
         },
     )
 
-    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+    with patch.object(publication_mod, "upsert_row_job_record") as upsert:
         assert publication_mod.repair_queue_publication(cfg, tmp_path, terminal)
 
     upsert.assert_not_called()
@@ -226,7 +226,7 @@ def test_orca_publication_repair_validates_every_selected_input_path(tmp_path: P
         ),
     )
 
-    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+    with patch.object(publication_mod, "upsert_row_job_record") as upsert:
         assert not publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_not_called()
@@ -267,7 +267,7 @@ def test_orca_publication_repair_fences_crash_row_with_reserved_reaction_dir(
     reaction_dir.rename(generation_dir)
     reaction_dir.symlink_to(generation_dir, target_is_directory=True)
 
-    with patch.object(publication_mod, "upsert_queued_job_record") as upsert:
+    with patch.object(publication_mod, "upsert_row_job_record") as upsert:
         assert publication_mod.repair_queue_publication(cfg, tmp_path, entry)
 
     upsert.assert_not_called()

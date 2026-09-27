@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from orca_auto.orca.job_locations._generation import payload_matches_queue_generation
+from orca_auto.orca.job_locations import payload_matches_queue_generation
 
 
 def _provenance(*, suffix: str = "a1b2c3d4") -> dict[str, object]:

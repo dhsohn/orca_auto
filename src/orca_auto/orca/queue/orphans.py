@@ -15,7 +15,7 @@ from orca_auto.core.queue.types import TERMINAL_QUEUE_STATUSES, QueueEntry, Queu
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
 from orca_auto.core.utils.process_tracking import run_lock_is_held
 
-from ..job_locations._generation import payload_matches_queue_generation
+from ..job_locations import payload_matches_queue_generation
 from ..state_reading import load_state
 from ..statuses import RunStatus
 from .entries import (

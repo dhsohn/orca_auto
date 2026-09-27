@@ -23,7 +23,8 @@ from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_F
 
 from ..config import AppConfig
 from ..execution_binding import orca_execution_provenance
-from . import worker_tracking
+from ..state_reading import get_run_id_from_state
+from . import job_records, notifications
 from .adapter import (
     get_cancel_requested,
     get_entry_by_id,
@@ -87,7 +88,7 @@ def mark_terminal_row(
     if task_id and current_task_id and task_id != current_task_id:
         logger.error("Skipping terminal mark for %s; running queue generation changed", queue_id)
         return False
-    run_id = worker_tracking.get_run_id_from_state(reaction_dir, expected_job_id=expected_job_id)
+    run_id = get_run_id_from_state(reaction_dir, expected_job_id=expected_job_id)
     if get_cancel_requested(
         queue_root, queue_id, expected_entry=current, expected_task_id=expected_job_id
     ):
@@ -307,7 +308,7 @@ def retire_marker(item: TerminalReplayWorkItem) -> None:
 def _publish(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
     if not str(item.reaction_dir or "").strip():
         raise RuntimeError("terminal replay has no reaction directory")
-    record_upserted = worker_tracking.upsert_terminal_job_record(
+    record_upserted = job_records.upsert_terminal_job_record(
         cfg,
         item.reaction_dir,
         fallback_job_id=item.task_id,
@@ -325,7 +326,7 @@ def _publish(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
     # An exception out of the notifier is the same missed message:
     # only the record upsert above and the marker may retain the publication.
     try:
-        worker_tracking.notify_terminal_job_from_state(
+        notifications.claim_and_send_terminal(
             cfg,
             item.reaction_dir,
             expected_job_id=item.task_id,

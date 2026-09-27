@@ -171,6 +171,23 @@ def load_state(reaction_dir: Path) -> RunState | None:
     return state_from_normalized_payload(raw)
 
 
+def payload_matches_expected_job_id(payload: Any, expected_job_id: str | None) -> bool:
+    expected = str(expected_job_id or "").strip()
+    return not expected or state_payload_job_id(payload) == expected
+
+
+def get_run_id_from_state(
+    reaction_dir: str,
+    *,
+    expected_job_id: str | None = None,
+) -> str | None:
+    """Try to read run_id from the reaction_dir's job_state.json."""
+    state = load_state(Path(reaction_dir))
+    if state and payload_matches_expected_job_id(state, expected_job_id):
+        return state.get("run_id")
+    return None
+
+
 def load_generation_state(
     generation_dir: Path,
 ) -> tuple[dict[str, Any], RunState] | None:
@@ -230,10 +247,12 @@ def machine_lifecycle(status: str) -> tuple[str, str]:
 __all__ = [
     "REPORT_JSON_NAME",
     "STATE_FILE_NAME",
+    "get_run_id_from_state",
     "load_generation_state",
     "load_state",
     "machine_lifecycle",
     "normalized_text",
+    "payload_matches_expected_job_id",
     "report_json_path",
     "state_from_normalized_payload",
     "state_path",

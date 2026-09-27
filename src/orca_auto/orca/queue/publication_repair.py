@@ -20,13 +20,14 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.store import mutate_entries
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.core.statuses import STATUS_QUEUED
 from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication_outcome
 
 from ..config import AppConfig
 from . import roots
 from .adapter import get_entry_by_id, list_queue, mark_failed
 from .entries import is_orca_queue_entry, queue_entry_id, queue_entry_reaction_dir, same_generation
-from .job_records import upsert_queued_job_record
+from .job_records import upsert_row_job_record
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +238,9 @@ def repair_queue_publication(
     outcome = repair_enqueue_publication_outcome(
         queue_root,
         entry,
-        publish=lambda current: upsert_queued_job_record(cfg, current),
+        publish=lambda current: upsert_row_job_record(
+            cfg, current, STATUS_QUEUED, require_task_id=True
+        ),
         label="ORCA",
         same_generation=same_generation,
         lock_timeout_seconds=0.0,

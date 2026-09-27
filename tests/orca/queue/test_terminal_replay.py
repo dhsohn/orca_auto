@@ -32,8 +32,8 @@ from orca_auto.core.statuses import (
 )
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.job_locations import list_job_location_records
-from orca_auto.orca.queue import settlement
-from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
+from orca_auto.orca.queue import job_records, settlement
+from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import (
     cancel,
     enqueue,
@@ -60,12 +60,10 @@ from orca_auto.orca.queue.terminal_state import (
     record_failed_run_state as _record_failed_run_state,
 )
 from orca_auto.orca.queue.worker import OrcaQueueWorker
-from orca_auto.orca.queue.worker_tracking import (
-    get_run_id_from_state as _get_run_id_from_state,
-)
 from orca_auto.orca.run_cleanup import clear_terminal_queue_entries
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import finalize_state, new_state, save_state
+from orca_auto.orca.state_reading import get_run_id_from_state as _get_run_id_from_state
 from orca_auto.orca.state_reading import load_state, report_json_path, state_path
 from orca_auto.orca.statuses import RunStatus
 from tests.conftest import RecordingChannel, claim_next_entry, make_queue_entry, write_run_state
@@ -640,7 +638,7 @@ def test_terminal_replay_completes_when_the_notifier_raises(
 
     # Fault injection at the messenger boundary: the product has no other way
     # to make the notifier itself raise.
-    monkeypatch.setattr(worker_tracking_mod, "notification_channel", channel_resolution_fails_once)
+    monkeypatch.setattr(queue_notifications, "notification_channel", channel_resolution_fails_once)
 
     _reconcile(worker)
 
@@ -1634,7 +1632,7 @@ def test_terminal_upsert_filters_previous_generation_report(
         encoding="utf-8",
     )
 
-    assert worker_tracking_mod.upsert_terminal_job_record(
+    assert job_records.upsert_terminal_job_record(
         replay_cfg,
         str(reaction_dir),
         fallback_job_id="task-b",
@@ -1701,7 +1699,7 @@ def test_retired_generation_is_frozen_across_terminal_replay_and_notification(
     terminal: bool,
     recording_channel: Any,
 ) -> None:
-    from orca_auto.orca.queue.worker_tracking import notify_terminal_job_from_state
+    from orca_auto.orca.queue.notifications import claim_and_send_terminal
     from orca_auto.orca.report.publication import write_report_files
     from tests.conftest import make_app_cfg
     from tests.contracts.report_verifier import load_report_json_with_output_receipt
@@ -1747,7 +1745,7 @@ def test_retired_generation_is_frozen_across_terminal_replay_and_notification(
         current = load_state(tmp_path)
         assert current is not None
         assert current["status"] == "failed"
-        notify_terminal_job_from_state(
+        claim_and_send_terminal(
             make_app_cfg(tmp_path), str(tmp_path), expected_job_id="retired-job"
         )
         assert {path: path.read_bytes() for path in frozen} == frozen

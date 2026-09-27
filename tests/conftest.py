@@ -40,7 +40,7 @@ from orca_auto.orca import scratch_config as _scratch_config
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
-from orca_auto.orca.queue import worker_tracking
+from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import worker_log_path
 from orca_auto.orca.queue.entries import entry_metadata
 from orca_auto.orca.queue.roots import dequeue_next_entry
@@ -469,10 +469,12 @@ class RecordingChannel:
 
 @pytest.fixture
 def recording_channel(monkeypatch: pytest.MonkeyPatch) -> RecordingChannel:
-    """Install a ``RecordingChannel`` as the worker's terminal notification channel."""
+    """Install a ``RecordingChannel`` as the worker's notification channel."""
 
     channel = RecordingChannel()
-    monkeypatch.setattr(worker_tracking, "notification_channel", lambda *_args, **_kwargs: channel)
+    monkeypatch.setattr(
+        queue_notifications, "notification_channel", lambda *_args, **_kwargs: channel
+    )
     return channel
 
 
