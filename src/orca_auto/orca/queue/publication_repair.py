@@ -1,9 +1,20 @@
+"""Worker-side repair of the queued-record publication lease.
+
+Before a row can be claimed, the worker's repair pass validates its bound
+paths and, for a lease still in flight, re-claims it with a fresh REPAIRING
+token under the publication lock, publishes the queued job record and
+completes the lease. The lease protocol is described in
+:mod:`orca_auto.core.queue.publication`.
+"""
+
 from __future__ import annotations
 
 import logging
+import os
 import stat
 from collections.abc import Mapping
-from dataclasses import replace
+from contextlib import ExitStack
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
@@ -11,17 +22,19 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_BLOCKED_KEY,
     QUEUE_RECORD_SYNC_COMPLETE,
-    QUEUE_RECORD_SYNC_PREPARING,
-    QUEUE_RECORD_SYNC_REPAIR_PENDING,
     QUEUE_RECORD_SYNC_REPAIRING,
-    QUEUE_RECORD_SYNC_TOKEN_KEY,
+    REPAIRABLE_SYNC_STATES,
+    park_queue_record_repair_pending,
+    queue_record_publication_lock,
     queue_record_sync_metadata,
     queue_record_sync_state,
+    queue_record_sync_token,
 )
 from orca_auto.core.queue.store import mutate_entries
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import STATUS_QUEUED
-from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication_outcome
+from orca_auto.core.utils.lock import FileLockTimeoutError
+from orca_auto.core.utils.persistence import timestamped_token
 
 from ..config import AppConfig
 from . import roots
@@ -30,6 +43,219 @@ from .entries import is_orca_queue_entry, queue_entry_id, queue_entry_reaction_d
 from .job_records import upsert_row_job_record
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RepairOutcome:
+    """One repair attempt's result; ``reason`` names the branch taken.
+
+    ``published`` means this call claimed the lease and published the queued
+    record. ``complete``/``cancelled``/``running``/``terminal``/``missing``
+    mean there was nothing left for this repair to do. ``invalid_state`` and
+    ``identity_changed`` are refusals; ``failed``/``claim_failed`` mean the
+    attempt raised (``error`` carries the exception) and the lease was parked
+    back to REPAIR_PENDING.
+    """
+
+    reason: str
+    entry: QueueEntry | None = None
+    error: BaseException | None = None
+
+    @property
+    def repaired(self) -> bool:
+        return self.reason in {
+            "published",
+            "complete",
+            "cancelled",
+            "running",
+            "terminal",
+            "missing",
+        }
+
+
+def _claim_repair_lease(
+    entries: list[QueueEntry],
+    entry: QueueEntry,
+    *,
+    repair_token: str,
+) -> tuple[tuple[str, QueueEntry | None], bool]:
+    """Claim a repairable row with a fresh REPAIRING lease, or name why not.
+
+    The first element of the result is the :class:`RepairOutcome` reason
+    (``claimed`` when the lease was taken) and the row it was decided on.
+    """
+
+    for index, current in enumerate(entries):
+        if current.queue_id != entry.queue_id:
+            continue
+        if not same_generation(current, entry):
+            return ("identity_changed", current), False
+        if current.cancel_requested:
+            return ("cancelled", current), False
+        sync_state = queue_record_sync_state(current)
+        if sync_state == QUEUE_RECORD_SYNC_COMPLETE:
+            return ("complete", current), False
+        if current.status == QueueStatus.RUNNING:
+            return ("running", current), False
+        if current.status != QueueStatus.PENDING:
+            return ("terminal", current), False
+        if sync_state not in REPAIRABLE_SYNC_STATES:
+            return ("invalid_state", current), False
+        metadata = dict(current.metadata)
+        metadata.update(
+            queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIRING,
+                token=repair_token,
+                owner_pid=os.getpid(),
+            )
+        )
+        updated = replace(current, metadata=metadata)
+        entries[index] = updated
+        return ("claimed", updated), True
+    return ("missing", None), False
+
+
+def _complete_repair_lease(
+    entries: list[QueueEntry],
+    entry: QueueEntry,
+    *,
+    repair_token: str,
+) -> tuple[QueueEntry | None, bool]:
+    """CAS this repair's REPAIRING lease to COMPLETE; anything else is a lost lease."""
+
+    for index, row in enumerate(entries):
+        if row.queue_id != entry.queue_id:
+            continue
+        # The COMPLETE transition belongs to this repair lease only: any
+        # other sync state or token here (for example a cancel fence
+        # written concurrently) must never be overwritten.
+        if (
+            row.status != QueueStatus.PENDING
+            or row.cancel_requested
+            or queue_record_sync_state(row) != QUEUE_RECORD_SYNC_REPAIRING
+            or queue_record_sync_token(row) != repair_token
+        ):
+            raise RuntimeError(
+                f"ORCA: queued record repair lost publication ownership: queue_id={entry.queue_id}"
+            )
+        metadata = dict(row.metadata)
+        metadata.update(
+            queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_COMPLETE,
+                token=repair_token,
+                owner_pid=0,
+            )
+        )
+        updated = replace(row, metadata=metadata)
+        entries[index] = updated
+        return updated, True
+    raise RuntimeError(f"ORCA: queue entry disappeared during repair: {entry.queue_id}")
+
+
+def _log_repair_refusal(entry: QueueEntry, *, reason: str, current: QueueEntry | None) -> None:
+    """Log the two refusals; the other non-claim reasons leave nothing to do."""
+
+    if reason == "invalid_state":
+        logger.error(
+            "ORCA: cannot repair queue publication with invalid state %r: queue_id=%s",
+            queue_record_sync_state(current),
+            entry.queue_id,
+        )
+    elif reason == "identity_changed":
+        logger.warning(
+            "ORCA: queued record repair refused a changed queue generation: queue_id=%s",
+            entry.queue_id,
+        )
+    # complete / cancelled / running / terminal / missing: nothing
+    # left for this repair to do.
+
+
+def _park_failed_repair_lease(queue_root: Path, entry: QueueEntry, *, repair_token: str) -> None:
+    """Park this repair's lease REPAIR_PENDING after a failure, never masking it.
+
+    Even a failed claim may have committed before its durability barrier
+    reported failure; the park CAS is token-gated, so it never touches a row
+    this repair does not own.
+    """
+
+    def park_repair_lease(entries: list[QueueEntry]) -> tuple[None, bool]:
+        return park_queue_record_repair_pending(
+            entries,
+            entry,
+            expected_state=QUEUE_RECORD_SYNC_REPAIRING,
+            expected_token=repair_token,
+        )
+
+    try:
+        mutate_entries(queue_root, park_repair_lease)
+    except BaseException:  # noqa: BLE001 - never mask the original failure
+        logger.warning(
+            "ORCA: failed to park queued record as repair pending: queue_id=%s",
+            getattr(entry, "queue_id", ""),
+            exc_info=True,
+        )
+
+
+def repair_enqueue_publication_outcome(
+    cfg: AppConfig,
+    queue_root: Path,
+    entry: QueueEntry,
+) -> RepairOutcome:
+    """Re-publish one committed row whose queued record never landed.
+
+    Claims the row under the publication lock with a fresh token (the lock,
+    not a live PID in the row, is the authoritative ownership proof), writes
+    the queued job artifact, and marks the sync lease COMPLETE. Any failure
+    parks the row as REPAIR_PENDING so it stays unclaimable rather than
+    running without its published record. A lock held by another publisher
+    is ``busy``: the worker never waits for it.
+    """
+
+    repair_token = timestamped_token("record_sync", token_bytes=16)
+
+    def claim(entries: list[QueueEntry]) -> tuple[tuple[str, QueueEntry | None], bool]:
+        return _claim_repair_lease(entries, entry, repair_token=repair_token)
+
+    def complete(entries: list[QueueEntry]) -> tuple[QueueEntry | None, bool]:
+        return _complete_repair_lease(entries, entry, repair_token=repair_token)
+
+    claimed = False
+    try:
+        # One lock acquisition covers claim, publication, and completion, so no
+        # cancel fence or foreign publication can interleave between them.
+        with ExitStack() as publication_lock:
+            try:
+                publication_lock.enter_context(
+                    queue_record_publication_lock(queue_root, entry.queue_id, timeout_seconds=0.0)
+                )
+            except FileLockTimeoutError:
+                # Another publisher still owns the lease; leave it untouched.
+                return RepairOutcome(reason="busy", entry=entry)
+            reason, current = mutate_entries(queue_root, claim)
+            if reason != "claimed":
+                _log_repair_refusal(entry, reason=reason, current=current)
+                return RepairOutcome(reason=reason, entry=current)
+            claimed = True
+            assert current is not None
+            upsert_row_job_record(cfg, current, STATUS_QUEUED, require_task_id=True)
+            completed = mutate_entries(queue_root, complete)
+    except BaseException as exc:
+        _park_failed_repair_lease(queue_root, entry, repair_token=repair_token)
+        if not isinstance(exc, Exception):
+            raise
+        logger.warning(
+            "ORCA: queued record repair %s: queue_id=%s",
+            "failed" if claimed else "claim failed",
+            entry.queue_id,
+            exc_info=True,
+        )
+        return RepairOutcome(
+            reason="failed" if claimed else "claim_failed",
+            entry=entry,
+            error=exc,
+        )
+    logger.info("ORCA: repaired queued record publication: queue_id=%s", entry.queue_id)
+    return RepairOutcome(reason="published", entry=completed)
 
 
 def _record_publication_blocker(
@@ -132,8 +358,6 @@ def _fence_invalid_orca_publication(
 ) -> bool:
     """Terminally fence an exact pending row whose bound job path changed."""
 
-    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-    token = str(metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY) or "").strip()
     try:
         fenced = mark_failed(
             queue_root,
@@ -142,7 +366,7 @@ def _fence_invalid_orca_publication(
             publish_terminal_side_effects=False,
             metadata_update=queue_record_sync_metadata(
                 QUEUE_RECORD_SYNC_ABORTED,
-                token=token,
+                token=queue_record_sync_token(entry),
                 owner_pid=0,
             ),
             expected_entry=entry,
@@ -220,31 +444,18 @@ def repair_queue_publication(
         if entry.metadata.get(QUEUE_RECORD_SYNC_BLOCKED_KEY):
             return _record_publication_blocker(queue_root, entry, "")
         return True
-    if state not in {
-        QUEUE_RECORD_SYNC_PREPARING,
-        QUEUE_RECORD_SYNC_REPAIR_PENDING,
-        QUEUE_RECORD_SYNC_REPAIRING,
-    }:
+    if state not in REPAIRABLE_SYNC_STATES:
         logger.error(
             "Cannot repair ORCA queue publication with invalid state %r: %s",
             state,
             queue_entry_id(entry),
         )
         return _record_publication_blocker(queue_root, entry, f"invalid publication state: {state}")
-    # The shared repair driver holds one publication-lock acquisition across
-    # claim, publication, and completion, and it claims with a freshly minted
-    # token: the lock, not process liveness or the recorded token, is the
+    # The repair holds one publication-lock acquisition across claim,
+    # publication, and completion, and it claims with a freshly minted token:
+    # the lock, not process liveness or the recorded token, is the
     # authoritative ownership proof, and the original publisher is hard-fenced.
-    outcome = repair_enqueue_publication_outcome(
-        queue_root,
-        entry,
-        publish=lambda current: upsert_row_job_record(
-            cfg, current, STATUS_QUEUED, require_task_id=True
-        ),
-        label="ORCA",
-        same_generation=same_generation,
-        lock_timeout_seconds=0.0,
-    )
+    outcome = repair_enqueue_publication_outcome(cfg, queue_root, entry)
     if outcome.reason == "busy":
         return False
     if not outcome.repaired:
@@ -273,4 +484,9 @@ def repair_queue_publications(cfg: AppConfig) -> frozenset[str] | None:
     )
 
 
-__all__ = ["repair_queue_publication", "repair_queue_publications"]
+__all__ = [
+    "RepairOutcome",
+    "repair_enqueue_publication_outcome",
+    "repair_queue_publication",
+    "repair_queue_publications",
+]

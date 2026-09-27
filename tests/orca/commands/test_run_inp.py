@@ -11,6 +11,7 @@ import pytest
 
 from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.commands.run_inp import cmd_run_inp
+from orca_auto.orca.queue import enqueue_publication
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_metadata
@@ -320,7 +321,7 @@ def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
         upserts.append((args, kwargs))
         raise RuntimeError("index write failed")
 
-    monkeypatch.setattr(submission_mod, "upsert_row_job_record", failing_upsert)
+    monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", failing_upsert)
 
     submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir, priority=3))
 

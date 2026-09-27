@@ -1,26 +1,18 @@
-"""One crash-scenario matrix over every enqueue-publication engine adapter.
+"""One crash-scenario matrix over the ORCA enqueue-publication path.
 
-The ORCA adapter delegates to the core publication driver. This
-suite drives the real adapter entry point through the crash windows,
+The suite drives the real submission entry point through the crash windows,
 breaking the protocol at the shared layers only — the queue store's
 ``save_entries``, the driver's ``queue_record_publication_lock``, and the
-engine's publish symbol — and asserts the invariants that must hold for
-every engine: a committed row is never claimable without its published
-record, no foreign lease state is overwritten, cancellation wins without a
-publication, ambiguous rows are all fenced with an outcome-unknown report,
-and notifications are at-most-once.
+driver's publish call — and asserts the invariants: a committed row is
+never claimable without its published record, no foreign lease state is
+overwritten, cancellation wins without a publication, ambiguous rows are
+all fenced with an outcome-unknown report, and notifications are
+at-most-once.
 
-If an adapter ever re-implements protocol steps instead of delegating to
-the driver, the shared interception points stop firing and these tests
-fail structurally.
-
-Known limitations (deliberate; the per-engine suites carry these):
-the structural enforcement covers the publication window (the driver's
-lock binding) — a faithful adapter-local re-implementation of the
-commit-recovery or repair steps would pass on outcomes alone; snapshot
-intent finalization is not observed by any scenario; and
-``set_publish_failing`` only gates the submit-side publish for ORCA
-(its repair publishes through an independent binding).
+Known limitations (deliberate; the driver and repair suites carry these):
+snapshot intent finalization is not observed by any scenario, and
+``set_publish_failing`` only gates the submit-side publish (the repair
+publishes through its own ``upsert_row_job_record`` binding).
 """
 
 from __future__ import annotations
@@ -64,9 +56,8 @@ class Outcome:
 
 @dataclass
 class Harness:
-    """One engine adapter, normalized for the shared scenario matrix."""
+    """The ORCA submission and repair entry points the scenario matrix drives."""
 
-    name: str
     queue_root: Path
     submit: Callable[[], Outcome]
     repair: Callable[[Any], bool]
@@ -86,7 +77,7 @@ def _single_row(queue_root: Path) -> Any:
 
 
 # --------------------------------------------------------------------------
-# Engine harnesses
+# Harness
 # --------------------------------------------------------------------------
 
 
@@ -111,7 +102,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     )
     notifications: list[str] = []
     publish_failing = {"value": False}
-    original_upsert = orca_submission.upsert_row_job_record
+    original_upsert = enqueue_publication.upsert_row_job_record
 
     def controllable_upsert(*args: Any, **kwargs: Any) -> None:
         if publish_failing["value"]:
@@ -125,7 +116,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     write_config_file(root / "orca_auto.yaml", cfg)
     monkeypatch.setattr(queue_notifications, "notify_queue_enqueued_event", count_notification)
     monkeypatch.setattr(orca_submission, "read_worker_pid_file", lambda _root: None)
-    monkeypatch.setattr(orca_submission, "upsert_row_job_record", controllable_upsert)
+    monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", controllable_upsert)
     args = SimpleNamespace(
         config=str(root / "orca_auto.yaml"),
         reaction_dir=str(reaction_dir),
@@ -147,7 +138,6 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
         )
 
     return Harness(
-        name="orca",
         queue_root=root,
         submit=submit,
         repair=lambda entry: publication_repair.repair_queue_publication(cfg, root, entry),
@@ -163,14 +153,9 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     )
 
 
-_HARNESS_BUILDERS = {
-    "orca": _make_orca_harness,
-}
-
-
-@pytest.fixture(params=sorted(_HARNESS_BUILDERS))
-def harness(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    return _HARNESS_BUILDERS[request.param](tmp_path, monkeypatch)
+@pytest.fixture
+def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
+    return _make_orca_harness(tmp_path, monkeypatch)
 
 
 # --------------------------------------------------------------------------

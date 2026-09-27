@@ -17,7 +17,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.admission import admission_dir
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
@@ -32,12 +31,9 @@ from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
-from orca_auto.core.statuses import STATUS_QUEUED
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca.queue.enqueue_publication import (
-    EnqueuePublicationOutcome,
     EnqueuePublicationOutcomeUnknown,
-    EnqueuePublicationSpec,
     run_enqueue_publication,
 )
 from orca_auto.orca.run_dir_guard import (
@@ -45,7 +41,6 @@ from orca_auto.orca.run_dir_guard import (
     assert_run_dir_publication_allowed,
 )
 
-from .app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from .config import load_config
 from .execution import active_direct_run_error, select_latest_inp
 from .execution_binding import (
@@ -57,7 +52,6 @@ from .job_locations import resolve_job_metadata
 from .queue import adapter as queue_adapter
 from .queue import entries as queue_entries
 from .queue.adapter import DuplicateEntryError
-from .queue.job_records import upsert_row_job_record
 from .queue.orphans import DeadRunningRowUnjudgeableError
 from .resource_directives import (
     PreparedSubmissionResourceInput,
@@ -348,75 +342,6 @@ def _cleanup_submission_snapshot(reaction_dir: Path, execution_snapshot: Any) ->
     )
 
 
-def _publish_submission(
-    cfg: Any,
-    reaction_dir: Path,
-    inputs: _PreparedSubmissionInputs,
-    *,
-    queue_root: Path,
-    task_id: str,
-    queue_metadata: dict[str, Any],
-    execution_snapshot: dict[str, Any],
-) -> EnqueuePublicationOutcome:
-    """Commit the row and publish its location record before completing the lease."""
-
-    def publish(current: QueueEntry) -> None:
-        upsert_row_job_record(cfg, current, STATUS_QUEUED, require_task_id=True)
-
-    def mark_failed_via_adapter(root: Path, queue_id: str, **kwargs: Any) -> Any:
-        # The adapter's mark_failed installs the administrative fence-only
-        # replay marker, keeping the fenced generation's terminal ownership.
-        return queue_adapter.mark_failed(
-            root,
-            queue_id,
-            publish_terminal_side_effects=False,
-            **kwargs,
-        )
-
-    def enqueue_via_adapter(root: Path, **kwargs: Any) -> QueueEntry:
-        return queue_adapter.enqueue(
-            root,
-            str(reaction_dir),
-            priority=kwargs["priority"],
-            force=inputs.force,
-            task_id=kwargs["task_id"],
-            task_kind=kwargs["task_kind"],
-            metadata=kwargs["metadata"],
-            before_commit_fn=kwargs.get("before_commit_fn"),
-            after_commit_fn=kwargs.get("after_commit_fn"),
-            admission_root=admission_dir(cfg.runtime.allowed_root),
-        )
-
-    spec = EnqueuePublicationSpec(
-        queue_root=queue_root,
-        app_name=ORCA_AUTO_ORCA_APP_NAME,
-        task_id=task_id,
-        task_kind=ORCA_TASK_KIND,
-        engine=ORCA_ENGINE,
-        priority=inputs.priority,
-        metadata=queue_metadata,
-        label="ORCA",
-        publish=publish,
-        before_commit_fn=lambda: assert_run_dir_publication_allowed(
-            "ORCA durable queue pre-commit"
-        ),
-        after_commit_fn=lambda: assert_run_dir_publication_allowed(
-            "ORCA durable queue post-commit"
-        ),
-        enqueue_fn=enqueue_via_adapter,
-        mark_failed_fn=mark_failed_via_adapter,
-        # Ambiguity-fenced rows keep the administrative fence-only marker so a
-        # successor generation stays blocked until the duplicates are cleared.
-        ambiguous_fence_metadata={queue_entries.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
-        on_compensated_failure=lambda: _cleanup_submission_snapshot(
-            reaction_dir, execution_snapshot
-        ),
-        job_dir_metadata_key="reaction_dir",
-        same_generation=queue_entries.same_generation,
-    )
-    return run_enqueue_publication(spec)
-
-
 def _submission_worker_info(
     queue_root: Path, entry: Any, warnings: list[str | None]
 ) -> WorkerStatusInfo:
@@ -461,14 +386,16 @@ def create_queued_submission(
     except BaseException:
         _cleanup_submission_snapshot(reaction_dir, execution_snapshot)
         raise
-    outcome = _publish_submission(
+    outcome = run_enqueue_publication(
         cfg,
         reaction_dir,
-        inputs,
-        queue_root=queue_root,
         task_id=task_id,
-        queue_metadata=queue_metadata,
-        execution_snapshot=execution_snapshot,
+        priority=inputs.priority,
+        force=inputs.force,
+        metadata=queue_metadata,
+        on_compensated_failure=lambda: _cleanup_submission_snapshot(
+            reaction_dir, execution_snapshot
+        ),
     )
     entry = outcome.entry
     marker_warning = mark_orca_snapshot_owned(intent.root, intent.token)

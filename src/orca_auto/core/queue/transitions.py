@@ -37,11 +37,9 @@ from .publication import (
     QUEUE_RECORD_SYNC_KEY,
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
     QUEUE_RECORD_SYNC_OWNER_START_KEY,
-    QUEUE_RECORD_SYNC_PREPARING,
-    QUEUE_RECORD_SYNC_REPAIR_PENDING,
-    QUEUE_RECORD_SYNC_REPAIRING,
     QUEUE_RECORD_SYNC_TOKEN_KEY,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
+    REPAIRABLE_SYNC_STATES,
     queue_record_publication_lock,
 )
 from .store import mutate_entries, mutate_entry_by_id
@@ -144,11 +142,7 @@ def _revoked_publication_metadata(entry: QueueEntry, *, finished_at: str) -> dic
     """
     metadata = dict(entry.metadata)
     sync_state = str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
-    if sync_state in {
-        QUEUE_RECORD_SYNC_PREPARING,
-        QUEUE_RECORD_SYNC_REPAIR_PENDING,
-        QUEUE_RECORD_SYNC_REPAIRING,
-    }:
+    if sync_state in REPAIRABLE_SYNC_STATES:
         # Cancellation owns the per-entry publication lock here. Revoke
         # the publisher's fencing token before releasing it so a
         # publisher that had not started its side effects cannot resume.

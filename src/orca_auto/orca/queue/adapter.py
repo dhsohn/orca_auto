@@ -36,7 +36,6 @@ from .entries import (
     queue_entry_status,
     same_generation,
 )
-from .orphans import reconcile_dead_running_rows_for_dir
 from .terminal_marker import (
     TerminalReplayMarkerKind,
     terminal_replay_is_fence_only,
@@ -160,18 +159,14 @@ def enqueue(
     metadata: dict[str, Any] | None = None,
     before_commit_fn: Callable[[], Any] | None = None,
     after_commit_fn: Callable[[], Any] | None = None,
-    admission_root: Path | None = None,
 ) -> QueueEntry:
     """Add a reaction directory to the ORCA queue.
 
-    RUNNING-row reconciliation belongs to the worker. A submission only recovers
-    this directory's own rows, and only when ``admission_root`` is given so the
-    worker's live-slot protection can be applied; see
-    ``reconcile_dead_running_rows_for_dir``.
+    RUNNING rows are left alone: the worker reconciles them, and a submission
+    recovers its own directory's dead rows first
+    (``enqueue_publication.run_enqueue_publication``).
     """
     resolved = str(Path(reaction_dir).expanduser().resolve())
-    if admission_root is not None:
-        reconcile_dead_running_rows_for_dir(allowed_root, resolved, admission_root=admission_root)
     normalized_priority = normalize_queue_priority(priority)
     normalized_task_id = normalize_text(task_id)
     normalized_task_kind = normalize_text(task_kind) or ORCA_TASK_KIND

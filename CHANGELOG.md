@@ -171,6 +171,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   job is still retained. `Failed to prepare or release cancelled job …` reads
   `Failed to settle or release cancelled job …`. The crash rebind's debug line
   `completed-output probe failed …` comes from `orca_auto.orca.output_adoption`.
+- The queued-record repair log lines keep their text but come from
+  `orca_auto.orca.queue.publication_repair` instead of
+  `orca_auto.orca.queue.enqueue_publication`:
+  `ORCA: repaired queued record publication …`,
+  `ORCA: queued record repair failed …` and `… claim failed …`,
+  `ORCA: cannot repair queue publication with invalid state …`,
+  `ORCA: queued record repair refused a changed queue generation …` and the
+  repair's `ORCA: failed to park queued record as repair pending …`.
 - Public contract: one generation identity now decides whether a queue row is
   still the generation a writer read
   ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),

@@ -12,6 +12,7 @@ from typing import Any, Literal, Self
 import pytest
 
 import orca_auto.orca.submission as submission_mod
+from orca_auto.core.admission import AdmissionStore, admission_dir
 from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.core.messaging import discord_bot as discord_bot_mod
 from orca_auto.core.queue import store as queue_store
@@ -154,7 +155,7 @@ def test_submission_cleans_created_snapshot_on_pre_enqueue_failure(
 
     monkeypatch.setattr(run_inp, "build_orca_execution_snapshot", build)
     monkeypatch.setattr(
-        run_inp, "run_enqueue_publication", lambda *_args: pytest.fail("must not enqueue")
+        run_inp, "run_enqueue_publication", lambda *_a, **_k: pytest.fail("must not enqueue")
     )
     if failure_stage == "metadata":
         monkeypatch.setattr(run_inp, "build_queue_metadata", fail)
@@ -582,7 +583,7 @@ def test_orca_compensation_failure_fences_row_without_publication(
 
     monkeypatch.setattr(queue_store, "save_entries", fail_compensation_before_replace)
     monkeypatch.setattr(enqueue_publication, "_recover_committed_enqueue", reject_normal_recovery)
-    monkeypatch.setattr(submission_mod, "upsert_row_job_record", reject_publication)
+    monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", reject_publication)
 
     with use_run_dir_publication_guard(reject_after_commit):
         result = run_inp.submit_reaction_dir_to_queue(args)
@@ -688,7 +689,7 @@ def test_cancellation_waits_for_publication_boundary(
     publication_started = threading.Event()
     allow_publication = threading.Event()
     cancel_finished = threading.Event()
-    original_upsert = submission_mod.upsert_row_job_record
+    original_upsert = enqueue_publication.upsert_row_job_record
     submission_result: list[Any] = []
     cancellation_result: list[Any] = []
 
@@ -697,7 +698,7 @@ def test_cancellation_waits_for_publication_boundary(
         assert allow_publication.wait(timeout=5)
         original_upsert(*upsert_args, **upsert_kwargs)
 
-    monkeypatch.setattr(submission_mod, "upsert_row_job_record", blocking_upsert)
+    monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", blocking_upsert)
 
     submit_thread = threading.Thread(
         target=lambda: submission_result.append(run_inp.submit_reaction_dir_to_queue(args))
@@ -756,3 +757,27 @@ def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
     assert result.status == "failed"
     assert result.reason == "submission_conflict"
     assert result.stderr == message
+
+
+def test_unjudgeable_dead_running_row_during_submit_leaves_no_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The directory's RUNNING row appears after the conflict check; its dead
+    # worker's slot protection cannot be read, so the enqueue fails closed.
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    queue_adapter.enqueue(tmp_path, str(reaction_dir), task_id="task-dead-worker")
+    running = claim_next_entry(tmp_path)
+    assert running is not None and running.status == QueueStatus.RUNNING
+    admission_file = AdmissionStore.for_root(admission_dir(tmp_path)).path
+    admission_file.parent.mkdir(parents=True, exist_ok=True)
+    admission_file.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(run_inp, "find_submission_conflict", lambda *_args: None)
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "failed"
+    assert result.reason == "submission_conflict"
+    assert str(admission_file) in result.stderr
+    assert not [path for path in reaction_dir.iterdir() if is_visible_generation_name(path.name)]
+    assert not list((tmp_path / ".orca_auto_snapshot_intents").glob("*.json"))
+    assert queue_adapter.list_queue(tmp_path) == [running]

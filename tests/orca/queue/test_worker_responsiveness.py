@@ -3,6 +3,8 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.queue import persistence
 from orca_auto.core.queue.publication import (
@@ -13,8 +15,9 @@ from orca_auto.core.queue.publication import (
 )
 from orca_auto.core.queue.types import QueueEntry
 from orca_auto.core.utils.lock import FileLockTimeoutError
-from orca_auto.orca.queue.enqueue_publication import repair_enqueue_publication_outcome
-from orca_auto.orca.queue.entries import same_generation
+from orca_auto.orca.queue import publication_repair
+from orca_auto.orca.queue.publication_repair import repair_enqueue_publication_outcome
+from tests.conftest import make_app_cfg
 
 
 def _pending_publication(root: Path) -> QueueEntry:
@@ -32,49 +35,39 @@ def _pending_publication(root: Path) -> QueueEntry:
     return entry
 
 
-def test_busy_publication_repair_does_not_wait_or_change_lease(tmp_path: Path) -> None:
+def test_busy_publication_repair_does_not_wait_or_change_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     entry = _pending_publication(tmp_path)
     before = (tmp_path / QUEUE_FILE).read_bytes()
     published: list[object] = []
+    monkeypatch.setattr(
+        publication_repair,
+        "upsert_row_job_record",
+        lambda _cfg, current, *_args, **_kwargs: published.append(current),
+    )
+    cfg = make_app_cfg(tmp_path)
     with ThreadPoolExecutor(max_workers=1) as pool:
         with queue_record_publication_lock(tmp_path, entry.queue_id):
-            future = pool.submit(
-                repair_enqueue_publication_outcome,
-                tmp_path,
-                entry,
-                label="test",
-                publish=published.append,
-                same_generation=same_generation,
-                lock_timeout_seconds=0,
-            )
+            future = pool.submit(repair_enqueue_publication_outcome, cfg, tmp_path, entry)
             assert future.result(timeout=1).reason == "busy"
             assert not published
             assert (tmp_path / QUEUE_FILE).read_bytes() == before
-    assert repair_enqueue_publication_outcome(
-        tmp_path,
-        entry,
-        label="test",
-        publish=published.append,
-        same_generation=same_generation,
-        lock_timeout_seconds=0,
-    ).repaired
+    assert repair_enqueue_publication_outcome(cfg, tmp_path, entry).repaired
     assert len(published) == 1
 
 
-def test_publication_callback_timeout_is_failure_not_busy(tmp_path: Path) -> None:
+def test_publication_callback_timeout_is_failure_not_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     entry = _pending_publication(tmp_path)
 
-    def publish(_entry: QueueEntry) -> None:
+    def publish(*_args: object, **_kwargs: object) -> None:
         raise FileLockTimeoutError("publisher internal timeout")
 
-    outcome = repair_enqueue_publication_outcome(
-        tmp_path,
-        entry,
-        label="test",
-        publish=publish,
-        same_generation=same_generation,
-        lock_timeout_seconds=0,
-    )
+    monkeypatch.setattr(publication_repair, "upsert_row_job_record", publish)
+
+    outcome = repair_enqueue_publication_outcome(make_app_cfg(tmp_path), tmp_path, entry)
     assert outcome.reason == "failed"
     assert isinstance(outcome.error, FileLockTimeoutError)
     assert queue_record_sync_state(persistence.load_entries(tmp_path)[0]) == "repair_pending"
