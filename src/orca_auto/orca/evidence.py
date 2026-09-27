@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
@@ -10,30 +9,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from .completion_rules import (
-    IRC_ROUTE_RE,
-    TS_ROUTE_RE,
-    is_full_optimization_route,
-    is_optimization_route,
-)
+from .completion_rules import RouteFacts
 from .frequencies import FrequencyAnalysis, parse_frequency_analysis_text
-from .input_syntax import file_route_lines
 from .orca_opt_progress import OptProgress, parse_opt_progress_text
 from .parser import OrcaResult, parse_orca_output_text
 from .parser.io import read_orca_text
-from .relaxed_scan import input_uses_relaxed_scan
 from .statuses import RunStatus
-
-# Route families whose final geometry is not a stationary point: path methods
-# (plain NEB / NEB-CI — NEB-TS is claimed by the TS check first) and dynamics.
-# Their endpoints must never be published as structures in an SI. No SCAN
-# token here: `SCAN` in a route line is the density functional
-# (`! SCAN def2-SVP Opt Freq`), not a scan job — relaxed scans are identified
-# from the `%geom Scan` block and OptTS by the TS check.
-_NON_STATIONARY_ROUTE_RE = re.compile(
-    r"\b(?:ZOOM-)?NEB(?:-CI)?\b|\bMD\b",
-    re.IGNORECASE,
-)
 
 
 class OrcaEvidenceError(Exception):
@@ -77,7 +58,7 @@ def final_out_name(state: Mapping[str, Any]) -> str:
     return path.name if path is not None else ""
 
 
-def structure_kind(selected_inp: Path) -> str | None:
+def structure_kind(route: RouteFacts) -> str | None:
     """``"ts"`` / ``"min"`` / ``"sp"``; ``None`` for non-stationary jobs.
 
     A plain relaxed scan (any optimization route + scan coordinate), IRC,
@@ -87,18 +68,13 @@ def structure_kind(selected_inp: Path) -> str | None:
     points. Everything else (single points, bare Freq, partial optimizations
     such as OptH or MECP-Opt) is reported without a minimum/TS claim.
     """
-    routes = " ".join(file_route_lines(selected_inp))
-    if not routes:
+    if not route.route_lines or route.is_irc:
         return None
-    if IRC_ROUTE_RE.search(routes):
-        return None
-    if TS_ROUTE_RE.search(routes):
+    if route.is_ts:
         return "ts"
-    if _NON_STATIONARY_ROUTE_RE.search(routes):
+    if route.is_non_stationary or route.is_relaxed_scan:
         return None
-    if is_optimization_route(routes) and input_uses_relaxed_scan(selected_inp):
-        return None
-    if is_full_optimization_route(routes):
+    if route.is_full_opt:
         return "min"
     return "sp"
 
@@ -242,9 +218,11 @@ class OrcaStructureEvidence:
 
 
 def collect_structure_evidence(
-    reaction_dir: Path, state: Mapping[str, Any]
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
 ) -> OrcaStructureEvidence | None:
     """Structure evidence for a completed job; ``None`` for non-stationary jobs.
+
+    ``route`` classifies the job's ``selected_inp``.
 
     Raises:
         OrcaEvidenceError: for a job that should have structure evidence but is missing its
@@ -252,16 +230,12 @@ def collect_structure_evidence(
     """
     if str(state.get("status") or "") != RunStatus.COMPLETED.value:
         return None
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
     # An unreadable input is an error, not "this job type has no structure evidence":
     # every valid ORCA input has at least one route line, so an empty read
     # means the file is gone (archived / moved stage dir).
-    if not file_route_lines(selected_inp):
-        raise OrcaEvidenceError(f"cannot read route lines from input {selected_inp}")
-    kind = structure_kind(selected_inp)
+    if not route.route_lines:
+        raise OrcaEvidenceError(f"cannot read route lines from input {route.inp_path}")
+    kind = structure_kind(route)
     if kind is None:
         return None
 

@@ -11,6 +11,7 @@ from typing import Any, Self
 import pytest
 
 from orca_auto.orca import evidence
+from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.parser import parse_orca_output_text
@@ -182,7 +183,7 @@ def test_opt_report_and_si_share_absent_frequency_result(
     state = _state(tmp_path, out, reason="normal_termination")
     reads = _record_output_reads(monkeypatch)
     assert compose_job_report_html(tmp_path, state)
-    assert evidence.collect_structure_evidence(tmp_path, state)
+    assert evidence.collect_structure_evidence(tmp_path, state, route_facts(tmp_path / "rxn.inp"))
     assert len(reads) == 1
 
 

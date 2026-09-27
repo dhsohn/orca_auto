@@ -23,9 +23,10 @@ from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
 from orca_auto.core.confined_io import atomic_write_confined_bytes
 
 from .. import evidence
+from ..completion_rules import route_facts
 from ..frequencies import ModeSummary, mode_summaries
 from ..parser import OrcaResult
-from .irc import collect_irc_si_block, input_uses_irc, render_irc_si_block_md
+from .irc import collect_irc_si_block, render_irc_si_block_md
 
 logger = logging.getLogger(__name__)
 
@@ -154,15 +155,19 @@ def write_si_block(
 
     try:
         selected_raw = str(state.get("selected_inp") or "").strip()
-        if selected_raw and input_uses_irc(Path(selected_raw)):
-            irc_block = collect_irc_si_block(reaction_dir, state)
+        if not selected_raw:
+            _remove_stale()
+            return None
+        route = route_facts(Path(selected_raw))
+        if route.is_irc:
+            irc_block = collect_irc_si_block(reaction_dir, state, route)
             if irc_block is None:
                 _remove_stale()
                 return None
             _publish(render_irc_si_block_md(irc_block))
             return path
 
-        block = evidence.collect_structure_evidence(reaction_dir, state)
+        block = evidence.collect_structure_evidence(reaction_dir, state, route)
         if block is None:
             _remove_stale()
             return None

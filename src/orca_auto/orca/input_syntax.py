@@ -179,13 +179,17 @@ def orca_route_lines(lines: list[str]) -> list[str]:
     return [route for line in lines if (route := orca_route_line(line)) is not None]
 
 
-def file_route_lines(inp_path: Path) -> list[str]:
-    """:func:`orca_route_lines` of an input file; ``[]`` when unreadable."""
+def input_file_lines(inp_path: Path) -> list[str]:
+    """Lines of an input file as the route and ``%geom`` readers see them; ``[]`` when unreadable."""
     try:
-        lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        return inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
         return []
-    return orca_route_lines(lines)
+
+
+def file_route_lines(inp_path: Path) -> list[str]:
+    """:func:`orca_route_lines` of an input file; ``[]`` when unreadable."""
+    return orca_route_lines(input_file_lines(inp_path))
 
 
 def ensure_route_keywords(lines: list[str], keywords: list[str]) -> bool:

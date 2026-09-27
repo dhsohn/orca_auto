@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.relaxed_scan import (
     ScanCoordinateSpec,
     first_scan_coordinate_spec,
-    input_uses_relaxed_scan,
     parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
 )
@@ -348,7 +348,7 @@ def test_scan_after_a_geom_end_still_counts_as_a_relaxed_scan(tmp_path: Path) ->
 
     assert spec is not None
     assert (spec.kind, spec.atoms, spec.start, spec.end, spec.points) == ("B", (0, 1), 1.2, 3.0, 10)
-    assert input_uses_relaxed_scan(inp)
+    assert route_facts(inp).is_relaxed_scan
 
 
 @pytest.mark.parametrize(
@@ -442,7 +442,7 @@ def test_first_scan_coordinate_spec_reads_every_orca_scan_form(
 
     assert spec is not None
     assert (spec.kind, spec.atoms, spec.start, spec.end, spec.points) == expected
-    assert input_uses_relaxed_scan(inp)
+    assert route_facts(inp).is_relaxed_scan
 
 
 @pytest.mark.parametrize(
@@ -463,7 +463,7 @@ def test_unreadable_scan_coordinate_still_counts_as_a_relaxed_scan(
     inp.write_text("! Opt B3LYP def2-SVP\n" + body + "* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
 
     assert first_scan_coordinate_spec(inp) is None
-    assert input_uses_relaxed_scan(inp)
+    assert route_facts(inp).is_relaxed_scan
 
 
 @pytest.mark.parametrize(
@@ -481,7 +481,7 @@ def test_input_without_scan_block_is_not_a_relaxed_scan(tmp_path: Path, text: st
     inp = tmp_path / "opt.inp"
     inp.write_text(text + "* xyz 0 1\nH 0 0 0\n*\n")
 
-    assert not input_uses_relaxed_scan(inp)
+    assert not route_facts(inp).is_relaxed_scan
 
 
 @pytest.mark.parametrize(

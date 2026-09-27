@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..completion_rules import RouteFacts
 from ..evidence import (
     OrcaEvidenceError,
     collect_structure_evidence,
@@ -29,7 +30,6 @@ from ..frequencies import (
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_syntax import file_route_lines
 from ..parser import OrcaResult
 from .attempts import (
     AttemptReportRow,
@@ -72,11 +72,9 @@ class SpReportData:
     last_out_name: str
 
 
-def collect_sp_report_data(reaction_dir: Path, state: Mapping[str, Any]) -> SpReportData | None:
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    route_lines = file_route_lines(Path(selected_raw))
+def collect_sp_report_data(
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+) -> SpReportData:
     attempts = attempt_dicts(state)
     rows = attempt_report_rows(attempts, "initial SP")
 
@@ -102,7 +100,7 @@ def collect_sp_report_data(reaction_dir: Path, state: Mapping[str, Any]) -> SpRe
     # geometry; the report is still useful without it (failed runs keep the
     # attempt chain), so its absence is not an error here.
     try:
-        block = collect_structure_evidence(reaction_dir, state)
+        block = collect_structure_evidence(reaction_dir, state, route)
     except OrcaEvidenceError:
         block = None
     si_block_text = render_si_block_md(block) if block is not None else None
@@ -115,7 +113,7 @@ def collect_sp_report_data(reaction_dir: Path, state: Mapping[str, Any]) -> SpRe
         job_id=str(state.get("job_id") or ""),
         status=str(state.get("status") or ""),
         reason=str(final_payload.get("reason") or ""),
-        route_line=route_lines[0] if route_lines else "",
+        route_line=route.route_lines[0] if route.route_lines else "",
         started_at=str(state.get("started_at") or ""),
         finished_at=str(final_payload.get("completed_at") or ""),
         total_duration_text=duration_text(

@@ -8,16 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import TS_ROUTE_RE, is_full_optimization_route, is_optimization_route
-from ..evidence import (
-    structure_kind,
-)
-from ..input_syntax import file_route_lines
-from ..relaxed_scan import input_uses_relaxed_scan
+from ..completion_rules import route_facts
+from ..evidence import structure_kind
 from .irc import (
     IrcReportData,
     collect_irc_report_data,
-    input_uses_irc,
     irc_report_badges,
     irc_report_component,
     irc_report_meta_html,
@@ -25,7 +20,6 @@ from .irc import (
 from .neb import (
     NebReportData,
     collect_neb_report_data,
-    input_uses_neb_ts,
     neb_report_badges,
     neb_report_component,
     neb_report_meta_html,
@@ -61,8 +55,6 @@ JobReportData = NebReportData | ScanReportData | IrcReportData | OptReportData |
 
 @dataclass(frozen=True)
 class HtmlReportParts:
-    selected_inp: Path
-    routes: str
     opt: OptReportData | None = None
     scan: ScanReportData | None = None
     neb: NebReportData | None = None
@@ -115,52 +107,22 @@ def collect_html_report_parts(
     selected_raw = str(state.get("selected_inp") or "").strip()
     if not selected_raw:
         return None
-    selected_inp = Path(selected_raw)
-    route_lines = file_route_lines(selected_inp)
-    routes = " ".join(route_lines)
+    route = route_facts(Path(selected_raw))
 
-    has_irc = input_uses_irc(selected_inp)
-    has_neb_ts = input_uses_neb_ts(selected_inp)
-    has_relaxed_scan = input_uses_relaxed_scan(selected_inp)
-    has_ts = bool(TS_ROUTE_RE.search(routes))
-    has_opt = is_optimization_route(routes)
-
-    neb = collect_neb_report_data(reaction_dir, state) if has_neb_ts else None
-    scan: ScanReportData | None = None
-    if has_relaxed_scan and has_opt:
-        scan = collect_scan_report_data(reaction_dir, state)
-
+    neb = collect_neb_report_data(reaction_dir, state, route) if route.is_neb_ts else None
+    scan = collect_scan_report_data(reaction_dir, state, route) if route.is_relaxed_scan else None
     opt: OptReportData | None = None
-    if (has_ts or has_opt) and neb is None and scan is None:
-        # A partial optimization (OptH, QMMMOpt, MECP-Opt, ...) is still an
-        # optimization, but only a full one may be presented as a minimum.
-        if has_ts:
-            kind = "ts"
-        elif is_full_optimization_route(routes):
-            kind = "opt"
-        else:
-            kind = "partial"
-        opt = collect_opt_report_data(reaction_dir, state, kind=kind)
-
-    irc = collect_irc_report_data(reaction_dir, state) if has_irc else None
+    if (route.is_ts or route.is_opt) and neb is None and scan is None:
+        opt = collect_opt_report_data(reaction_dir, state, route)
+    irc = collect_irc_report_data(reaction_dir, state, route) if route.is_irc else None
 
     sp: SpReportData | None = None
     if all(part is None for part in (opt, scan, neb, irc)):
-        if structure_kind(selected_inp) != "sp":
+        if structure_kind(route) != "sp":
             return None
-        sp = collect_sp_report_data(reaction_dir, state)
+        sp = collect_sp_report_data(reaction_dir, state, route)
 
-    if all(part is None for part in (opt, scan, neb, irc, sp)):
-        return None
-    return HtmlReportParts(
-        selected_inp=selected_inp,
-        routes=routes,
-        opt=opt,
-        scan=scan,
-        neb=neb,
-        irc=irc,
-        sp=sp,
-    )
+    return HtmlReportParts(opt=opt, scan=scan, neb=neb, irc=irc, sp=sp)
 
 
 def _report_components(

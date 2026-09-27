@@ -29,16 +29,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1
 from .output_status import is_execution_output_line, iter_output_lines
 from .parser.io import read_orca_text
 
 logger = logging.getLogger(__name__)
 
-# Same noise cutoff the completion analyzer applies: the SI and reports must
-# count a verified TS's modes exactly as the verifier did, or the pipeline
-# publishes a Nimag that contradicts its own COMPLETED verdict.
-FREQ_EPS_CM = IMAGINARY_FREQ_THRESHOLD_CM1
+# Negative modes at or below this magnitude are numerical noise, not a reaction
+# coordinate. The completion analyzer and the SI/report renderers all count
+# through is_imaginary_frequency, so a verified TS can never be re-counted
+# differently in the published SI.
+IMAGINARY_FREQ_THRESHOLD_CM1 = 10.0
 _TOP_ATOM_COUNT = 5
 
 _FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
@@ -291,7 +291,11 @@ def mode_summaries(
         chosen = imaginary
     else:
         lowest_real = next(
-            (idx for idx, freq in enumerate(analysis.frequencies) if freq > FREQ_EPS_CM),
+            (
+                idx
+                for idx, freq in enumerate(analysis.frequencies)
+                if freq > IMAGINARY_FREQ_THRESHOLD_CM1
+            ),
             None,
         )
         chosen = [] if lowest_real is None else [lowest_real]

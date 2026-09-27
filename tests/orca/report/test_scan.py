@@ -7,8 +7,8 @@ import pytest
 
 from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.report import write_job_html_report
+from orca_auto.orca.report.composer import collect_html_report_parts
 from orca_auto.orca.report.publication import write_report_files
-from orca_auto.orca.report.scan import collect_scan_report_data
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 from tests.orca_output_helpers import (
     COORDS_BLOCK,
@@ -84,8 +84,10 @@ def test_collect_summarizes_imaginary_mode_and_alignment(tmp_path: Path) -> None
     out_path = tmp_path / "rxn.out"
     write_scan_out(out_path)
 
-    data = collect_scan_report_data(tmp_path, _state(tmp_path, out_path))
+    parts = collect_html_report_parts(tmp_path, _state(tmp_path, out_path))
 
+    assert parts is not None
+    data = parts.scan
     assert data is not None
     assert data.imaginary_count == 1
     assert len(data.mode_summaries) == 1
@@ -102,13 +104,17 @@ def test_collect_summarizes_imaginary_mode_and_alignment(tmp_path: Path) -> None
     assert data.segments[0].points[0].coordinates[0] == pytest.approx(1.86)
 
 
-def test_collect_returns_none_for_non_scan_input(tmp_path: Path) -> None:
+def test_non_scan_input_gets_no_scan_section(tmp_path: Path) -> None:
     inp = tmp_path / "rxn.inp"
     inp.write_text("! Opt B3LYP def2-SVP\n* xyzfile 0 1 input.xyz\n", encoding="utf-8")
     out_path = tmp_path / "rxn.out"
     write_scan_out(out_path)
 
-    assert collect_scan_report_data(tmp_path, _state(tmp_path, out_path)) is None
+    parts = collect_html_report_parts(tmp_path, _state(tmp_path, out_path))
+
+    assert parts is not None
+    assert parts.scan is None
+    assert parts.opt is not None
 
 
 def test_write_job_html_report_renders_scan_sections(tmp_path: Path) -> None:

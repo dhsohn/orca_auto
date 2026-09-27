@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..completion_rules import RouteFacts
 from ..evidence import (
     final_out_name,
     final_out_path,
@@ -20,7 +21,6 @@ from ..frequencies import (
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_syntax import file_route_lines
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
@@ -72,16 +72,16 @@ class OptReportData:
 
 
 def collect_opt_report_data(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-    *,
-    kind: str,
-) -> OptReportData | None:
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-    route_lines = file_route_lines(selected_inp)
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+) -> OptReportData:
+    # A partial optimization (OptH, QMMMOpt, MECP-Opt, ...) is still an
+    # optimization, but only a full one may be presented as a minimum.
+    if route.is_ts:
+        kind = "ts"
+    elif route.is_full_opt:
+        kind = "opt"
+    else:
+        kind = "partial"
     attempts = attempt_dicts(state)
 
     rows = attempt_report_rows(attempts, f"initial {'OptTS' if kind == 'ts' else 'Opt'}")
@@ -130,7 +130,7 @@ def collect_opt_report_data(
         job_id=str(state.get("job_id") or ""),
         status=str(state.get("status") or ""),
         reason=str(final_payload.get("reason") or ""),
-        route_line=route_lines[0] if route_lines else "",
+        route_line=route.route_lines[0] if route.route_lines else "",
         formula=formula,
         method=method,
         basis_set=basis_set,

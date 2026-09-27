@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.composer import collect_html_report_parts
-from orca_auto.orca.report.opt import collect_opt_report_data
+from orca_auto.orca.report.opt import OptReportData
 from orca_auto.orca.statuses import AnalyzerStatus
 from tests.engine_artifact_helpers import report_generation_target
 from tests.orca_output_helpers import (
@@ -15,6 +15,12 @@ from tests.orca_output_helpers import (
     write_opt_inp,
     write_opt_out,
 )
+
+
+def _opt_data(reaction_dir: Path, state: dict[str, Any]) -> OptReportData:
+    parts = collect_html_report_parts(reaction_dir, state)
+    assert parts is not None and parts.opt is not None
+    return parts.opt
 
 
 def _state(reaction_dir: Path, out_path: Path, *, reason: str) -> dict[str, Any]:
@@ -55,9 +61,7 @@ def test_collect_opt_report_parses_cycles_and_convergence(tmp_path: Path) -> Non
     out_path = tmp_path / "rxn.out"
     write_opt_out(out_path)
 
-    data = collect_opt_report_data(
-        tmp_path, _state(tmp_path, out_path, reason="normal_termination"), kind="opt"
-    )
+    data = _opt_data(tmp_path, _state(tmp_path, out_path, reason="normal_termination"))
 
     assert data is not None
     assert data.kind == "opt"
@@ -90,7 +94,7 @@ def test_collect_opt_report_skips_contentless_final_attempt(tmp_path: Path) -> N
             "ended_at": "2026-07-03T02:16:30+00:00",
         }
     )
-    data = collect_opt_report_data(tmp_path, state, kind="opt")
+    data = _opt_data(tmp_path, state)
 
     assert data is not None
     assert [cycle for cycle, _ in data.steps] == [1, 2, 3]
@@ -326,7 +330,7 @@ def test_opt_card_prefers_the_final_output_and_labels_an_earlier_frequency(
     )
     state["attempts"][1]["index"] = 2
 
-    data = collect_opt_report_data(reaction_dir, state, kind="opt")
+    data = _opt_data(reaction_dir, state)
 
     assert data is not None
     assert data.imaginary_count == 1
@@ -343,7 +347,7 @@ def test_opt_card_final_output_frequency_is_not_labeled(tmp_path: Path) -> None:
     write_opt_out(out_path, freq_block=FREQ_TS_BLOCK)
     state = _state(reaction_dir, out_path, reason="completed")
 
-    data = collect_opt_report_data(reaction_dir, state, kind="opt")
+    data = _opt_data(reaction_dir, state)
 
     assert data is not None
     assert data.imaginary_count == 1
@@ -364,7 +368,7 @@ def test_opt_card_matches_the_final_attempt_through_a_symlinked_path(tmp_path: P
     # The attempt row keeps the alias path; the final result holds the resolved one.
     state["attempts"][0]["out_path"] = str(alias / "rxn.out")
 
-    data = collect_opt_report_data(reaction_dir, state, kind="opt")
+    data = _opt_data(reaction_dir, state)
 
     assert data is not None
     assert data.imaginary_count == 1

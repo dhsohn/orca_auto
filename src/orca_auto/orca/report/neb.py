@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..completion_rules import RouteFacts
 from ..evidence import (
     final_out_name,
     parsed_frequency_analysis,
@@ -19,7 +20,6 @@ from ..frequencies import (
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_syntax import file_route_lines
 from ..parser import KCAL_PER_HARTREE
 from ..parser.extractors import parse_optimization_cycles
 from .attempts import (
@@ -61,7 +61,6 @@ from .render import (
 )
 from .settings import ReportSetting, match_dotted_setting, settings_table_html
 
-_NEB_TS_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB-TS\b", re.IGNORECASE)
 _NEB_SETTINGS_HEADER_RE = re.compile(r"^\s*NEB settings\s*$", re.IGNORECASE)
 _HEI_HEADER_RE = re.compile(r"\bE\(HEI\)-E\(0\)", re.IGNORECASE)
 _CI_HEADER_RE = re.compile(r"\bE\(CI\)-E\(0\)", re.IGNORECASE)
@@ -136,10 +135,6 @@ class NebReportData:
     last_out_name: str
 
 
-def input_uses_neb_ts(inp_path: Path) -> bool:
-    return bool(_NEB_TS_ROUTE_RE.search(" ".join(file_route_lines(inp_path))))
-
-
 def parse_neb_output_text(text: str) -> NebParsedOutput:
     """NEB facts of decoded output text; ``parse_neb_output`` memoizes this per file."""
     return NebParsedOutput(
@@ -165,17 +160,8 @@ def _neb_ts_steps(out_path: Path) -> tuple[tuple[int, float], ...]:
 
 
 def collect_neb_report_data(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-) -> NebReportData | None:
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-    if not input_uses_neb_ts(selected_inp):
-        return None
-
-    route_lines = file_route_lines(selected_inp)
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+) -> NebReportData:
     attempts = attempt_dicts(state)
     parsed_attempts = [parse_attempt_output(attempt, parse_neb_output) for attempt in attempts]
     rows = with_details(
@@ -213,7 +199,7 @@ def collect_neb_report_data(
         job_id=str(state.get("job_id") or ""),
         status=str(state.get("status") or ""),
         reason=str(final_payload.get("reason") or ""),
-        route_line=route_lines[0] if route_lines else "",
+        route_line=route.route_lines[0] if route.route_lines else "",
         formula=formula,
         method=method,
         basis_set=basis_set,
@@ -616,7 +602,6 @@ __all__ = [
     "NebPathPoint",
     "NebReportData",
     "collect_neb_report_data",
-    "input_uses_neb_ts",
     "neb_report_badges",
     "parse_neb_output",
     "parse_neb_output_text",

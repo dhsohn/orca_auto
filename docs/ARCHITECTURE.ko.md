@@ -81,6 +81,8 @@ graph TD
 
 원본 근거가 기록된 결과는 `machine.json`보다 먼저 `execution_provenance.json`을 발행합니다. 보고서 발행자는 generation에 기록된 근거를 복사하고, 기계 결과는 `input`, `orca-output`과 함께 `execution-provenance` artifact로 이를 참조합니다. 영수증은 어느 읽는 쪽이든 검증할 수 있고, generation 상태와의 일치는 릴리스 smoke가 확인합니다. 종료 보고서와 그 출처 파일은 불변이며, 종료 처리를 재실행해도 출처 artifact가 없는 과거 보고서를 포함해 당시의 근거를 유지합니다.
 
+작업 종류는 선택된 입력을 한 번 읽어 정합니다. `completion_rules.route_facts`가 `.inp`를 한 번 읽어 route 줄과 플래그(TS, IRC, NEB-TS, 전체·부분 최적화, relaxed scan(`%geom Scan` 블록이 있는 최적화), 비정류 경로·동역학)를 기록합니다. 분석기의 완료 모드, HTML 보고서 구성(`report/composer.py`), 구조 종류(`evidence.structure_kind`), SI 작성(`report/si.py`)이 모두 이 기록에서 나오므로 같은 입력을 서로 다르게 분류할 수 없습니다.
+
 ### 결과 발행과 큐 종료 처리
 
 자식은 실행 상태와 generation 보고서를 발행합니다. 자식이 종료되면 부모는 엔진 종료·복구를 확인하고, 디스크의 복구 표식을 기준으로 큐 generation을 정리합니다. 완료·실패한 자식의 행은 부모가 직접 표시합니다(`mark_terminal_row`). 취소된 행은 자식이 SIGTERM을 처리하면서 표시합니다. `requeue_running_entry`는 취소 요청이 있는 행을 큐로 돌려보내지 않고 복구 표식과 함께 취소로 표시합니다. 자식이 표시하지 못하고 끝난 경우(예: 먼저 강제 종료된 경우)에는 부모가 `mark_cancelled`로 표시합니다. 어느 쪽이든 부모는 이어서 행을 정리합니다. 누락된 실패·취소 근거를 확정하고, 이 근거에 큐의 실제 결과와 실행 식별자를 결합하고, 슬롯을 반환한 뒤 발행을 마무리합니다. 취소된 자식은 종료 결과를 쓰지 않습니다. 쓰기 전에 강제 종료된 자식을 포함해, 취소 결과는 부모의 근거 확정 단계(`terminal_state.record_cancelled_run_state`)만 씁니다([ADR 0008](adr/0008-parent-writes-the-cancelled-result.md)). 종료 코드가 0이어도 해당 작업의 종료 상태가 있어야 하며, 종료 코드만으로 결과를 대신하지 않습니다.

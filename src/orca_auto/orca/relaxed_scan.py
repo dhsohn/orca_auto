@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .input_blocks import percent_directive_header
-from .input_syntax import OrcaLineToken, orca_line_tokens
+from .input_syntax import OrcaLineToken, input_file_lines, orca_line_tokens
 from .parser import KCAL_PER_HARTREE
 from .parser.io import open_orca_text
 
@@ -235,11 +235,6 @@ def parse_scan_coordinate(text: str) -> ScanCoordinateSpec | None:
     )
 
 
-def input_uses_relaxed_scan(inp_path: Path) -> bool:
-    """True when ``%geom`` opens a ``Scan`` sub-block, readable coordinate or not."""
-    return _scan_coordinate_rows(inp_path) is not None
-
-
 def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     """Kind, atom indices, and range of the first scan coordinate.
 
@@ -247,25 +242,22 @@ def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     surface table's first column is that coordinate, so a later one never
     stands in for it.
     """
-    rows = _scan_coordinate_rows(inp_path)
+    rows = scan_coordinate_rows(input_file_lines(inp_path))
     if not rows:
         return None
     return parse_scan_coordinate(rows[0])
 
 
-def _scan_coordinate_rows(inp_path: Path) -> list[str] | None:
+def scan_coordinate_rows(lines: Sequence[str]) -> list[str] | None:
     """Coordinate texts of the ``%geom`` ``Scan`` sub-blocks; ``None`` when there is none.
 
+    A ``Scan`` sub-block counts even when no coordinate in it can be read.
     Walks each ``%geom`` header up to the next ``%`` directive, route line, or
     geometry section, past the block's own closing ``end``: the shared block
     rule nests only ``scan``/``constraints``, so another end-terminated
     sub-block (``modify_internal ... end``) closes ``%geom`` there before a
     later ``Scan``. ``Scan`` may share its row with a coordinate or its ``end``.
     """
-    try:
-        lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return None
     rows: list[str] = []
     found = in_geom = in_scan = False
     for line in lines:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import IRC_ROUTE_RE
+from ..completion_rules import RouteFacts
 from ..evidence import (
     final_out_name,
     final_out_path,
@@ -22,7 +22,6 @@ from ..frequencies import (
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_syntax import file_route_lines
 from ..parser import OrcaResult
 from ..statuses import RunStatus
 from .attempts import (
@@ -111,6 +110,7 @@ class IrcReportData:
     status: str
     reason: str
     route_line: str
+    ts_route: bool
     formula: str
     method: str
     basis_set: str
@@ -145,10 +145,6 @@ class IrcReportError(Exception):
     """The IRC report cannot be assembled because required artifacts are missing."""
 
 
-def input_uses_irc(inp_path: Path) -> bool:
-    return bool(IRC_ROUTE_RE.search(" ".join(file_route_lines(inp_path))))
-
-
 def parse_irc_output_text(text: str) -> IrcParsedOutput:
     """IRC facts of decoded output text; ``parse_irc_output`` memoizes this per file."""
     return IrcParsedOutput(
@@ -176,17 +172,8 @@ _EMPTY_IRC_OUTPUT = IrcParsedOutput(
 
 
 def collect_irc_report_data(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-) -> IrcReportData | None:
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-    if not input_uses_irc(selected_inp):
-        return None
-
-    route_lines = file_route_lines(selected_inp)
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+) -> IrcReportData:
     attempts = attempt_dicts(state)
     rows = with_details(
         attempt_report_rows(attempts, "initial IRC"),
@@ -220,7 +207,8 @@ def collect_irc_report_data(
         job_id=str(state.get("job_id") or ""),
         status=str(state.get("status") or ""),
         reason=str(final_payload.get("reason") or ""),
-        route_line=" ".join(route_lines),
+        route_line=" ".join(route.route_lines),
+        ts_route=route.is_ts,
         formula=result.formula if result is not None else "",
         method=result.method if result is not None else "",
         basis_set=result.basis_set if result is not None else "",
@@ -244,19 +232,12 @@ def collect_irc_report_data(
     )
 
 
-def collect_irc_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> IrcSiBlock | None:
+def collect_irc_si_block(
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+) -> IrcSiBlock | None:
+    """The IRC validation block of an IRC route (``route.is_irc``); ``None`` until completed."""
     if str(state.get("status") or "") != RunStatus.COMPLETED.value:
         return None
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-    route_lines = file_route_lines(selected_inp)
-    if not route_lines:
-        raise IrcReportError(f"cannot read route lines from input {selected_inp}")
-    if not IRC_ROUTE_RE.search(" ".join(route_lines)):
-        return None
-
     out_path = final_out_path(state)
     if out_path is None:
         raise IrcReportError(f"no output file found for {reaction_dir}")
@@ -267,7 +248,7 @@ def collect_irc_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> IrcSiB
         result = None
     return IrcSiBlock(
         name=reaction_dir.name,
-        route_line=" ".join(route_lines),
+        route_line=" ".join(route.route_lines),
         orca_version=result.orca_version if result is not None else "",
         settings=parsed.settings,
         path_points=parsed.path_points,
@@ -491,16 +472,8 @@ def _irc_path_chart_svg(data: IrcReportData) -> str:
     )
 
 
-def _is_ts_route(route_line: str) -> bool:
-    return bool(re.search(r"\b(?:OPTTS|(?:ZOOM-)?NEB-TS)\b", route_line, re.IGNORECASE))
-
-
 def _optimization_section_title(data: IrcReportData) -> str:
-    return (
-        "TS optimization convergence"
-        if _is_ts_route(data.route_line)
-        else "Optimization convergence"
-    )
+    return "TS optimization convergence" if data.ts_route else "Optimization convergence"
 
 
 def _optimization_section_html(data: IrcReportData) -> str:
@@ -591,13 +564,13 @@ def _irc_metric_cards(
     if include_optimization and data.optimization_steps:
         cards.append(
             metric_card(
-                "TS opt cycles" if _is_ts_route(data.route_line) else "Opt cycles",
+                "TS opt cycles" if data.ts_route else "Opt cycles",
                 str(data.optimization_steps[-1][0]),
                 "converged" if data.optimization_converged else "not converged",
             )
         )
     if data.imaginary_count is not None:
-        expected = 1 if _is_ts_route(data.route_line) else 0
+        expected = 1 if data.ts_route else 0
         cards.append(
             metric_card(
                 "Imaginary frequencies",
@@ -649,7 +622,6 @@ __all__ = [
     "IrcSiBlock",
     "collect_irc_report_data",
     "collect_irc_si_block",
-    "input_uses_irc",
     "irc_report_badges",
     "irc_report_component",
     "irc_report_meta_html",

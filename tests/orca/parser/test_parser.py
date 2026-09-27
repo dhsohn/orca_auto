@@ -17,7 +17,7 @@ from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.output_status import last_optimization_convergence
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
-from orca_auto.orca.report.opt import collect_opt_report_data
+from orca_auto.orca.report.composer import collect_html_report_parts
 
 
 def test_optimization_verdict_absence_and_same_line_negative_precedence() -> None:
@@ -57,10 +57,8 @@ def test_last_optimization_verdict_agrees_across_consumers(
     progress = parse_opt_progress_text(read_orca_text(str(out)), source_path=str(out))
     inp = tmp_path / "optimization.inp"
     inp.write_text("! HF STO-3G Opt\n", encoding="utf-8")
-    report = collect_opt_report_data(
-        tmp_path,
-        {"selected_inp": str(inp), "attempts": [{"out_path": str(out)}]},
-        kind="opt",
+    parts = collect_html_report_parts(
+        tmp_path, {"selected_inp": str(inp), "attempts": [{"out_path": str(out)}]}
     )
 
     assert analysis.markers["last_opt_converged"] is converged
@@ -68,8 +66,8 @@ def test_last_optimization_verdict_agrees_across_consumers(
     assert result.opt_converged is converged
     assert progress.is_converged is converged
     assert len(progress.steps) == 2
-    assert report is not None
-    assert report.opt_converged is converged
+    assert parts is not None and parts.opt is not None
+    assert parts.opt.opt_converged is converged
 
 
 def test_annotated_final_energy_is_not_published(tmp_path: Path) -> None:

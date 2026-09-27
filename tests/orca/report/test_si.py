@@ -8,8 +8,10 @@ from typing import Any
 
 import pytest
 
+from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.evidence import (
     OrcaEvidenceError,
+    OrcaStructureEvidence,
     collect_structure_evidence,
     final_out_path,
     parsed_final_output,
@@ -114,6 +116,10 @@ def _job_dir(
     return reaction_dir, state
 
 
+def _evidence(reaction_dir: Path, state: dict[str, Any]) -> OrcaStructureEvidence | None:
+    return collect_structure_evidence(reaction_dir, state, route_facts(Path(state["selected_inp"])))
+
+
 _TS_INP = "! wB97X-D3 def2-TZVP CPCM(toluene) OptTS Freq\n* xyz 0 1\nC 0 0 0\n*\n"
 _OPT_INP = "! B3LYP def2-SVP Opt Freq\n* xyz 0 1\nC 0 0 0\n*\n"
 _SP_INP = "! wB97M-V def2-TZVPP\n* xyz 0 1\nC 0 0 0\n*\n"
@@ -140,7 +146,7 @@ def test_si_block_does_not_publish_unverified_electronic_state(
         out_text=si_out_text().replace("|  2> * xyz 0 1", geometry_line),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     rendered = render_si_block_md(block)
 
@@ -157,7 +163,7 @@ def test_si_block_publishes_verified_uppercase_geometry_state(tmp_path: Path) ->
         out_text=si_out_text().replace("* xyz 0 1", "* XYZ -1 2"),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert "Charge -1, Multiplicity 2" in render_si_block_md(block)
 
@@ -193,7 +199,7 @@ def test_missing_output_route_does_not_invent_a_single_point_label(tmp_path: Pat
         out_text=output,
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     rendered = render_si_block_md(block)
 
@@ -210,7 +216,7 @@ def test_ts_block_renders_thermochemistry_mode_and_coordinates(tmp_path: Path) -
         out_text=si_out_text(freqs=(-512.3, 120.0), thermo=True),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     rendered = render_si_block_md(block)
 
@@ -243,7 +249,7 @@ def test_minimum_with_imaginary_mode_gets_warning(tmp_path: Path) -> None:
         out_text=si_out_text(route="B3LYP def2-SVP Opt Freq", freqs=(-512.3, 120.0), thermo=True),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert block.kind == "min"
     assert "expected a minimum" in render_si_block_md(block)
@@ -258,7 +264,7 @@ def test_uncharacterized_stationary_point_gets_warning(tmp_path: Path) -> None:
         out_text=si_out_text(route="B3LYP def2-SVP Opt"),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert "uncharacterized" in render_si_block_md(block)
 
@@ -271,7 +277,7 @@ def test_sp_block_has_no_nimag_and_no_warnings(tmp_path: Path) -> None:
         out_text=si_out_text(route="wB97M-V def2-TZVPP"),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert block.kind == "sp"
     assert "⚠" not in render_si_block_md(block)
@@ -292,8 +298,8 @@ def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
         reaction_dir, state = _job_dir(
             tmp_path, name, inp_text=inp_text, out_text=si_out_text(route="B3LYP def2-SVP Opt")
         )
-        assert structure_kind(Path(state["selected_inp"])) is None, name
-        assert collect_structure_evidence(reaction_dir, state) is None, name
+        assert structure_kind(route_facts(Path(state["selected_inp"]))) is None, name
+        assert _evidence(reaction_dir, state) is None, name
 
 
 @pytest.mark.parametrize(
@@ -329,8 +335,8 @@ def test_every_relaxed_scan_form_gets_no_block(tmp_path: Path, geom_block: str) 
         out_text=si_out_text(route="B3LYP def2-SVP Opt"),
     )
 
-    assert structure_kind(Path(state["selected_inp"])) is None
-    assert collect_structure_evidence(reaction_dir, state) is None
+    assert structure_kind(route_facts(Path(state["selected_inp"]))) is None
+    assert _evidence(reaction_dir, state) is None
 
 
 def test_write_si_block_writes_irc_summary_without_coordinates(tmp_path: Path) -> None:
@@ -351,8 +357,8 @@ Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
         out_text=si_out_text(route="B3LYP def2-SVP IRC") + irc_summary,
     )
 
-    assert structure_kind(Path(state["selected_inp"])) is None
-    assert collect_structure_evidence(reaction_dir, state) is None
+    assert structure_kind(route_facts(Path(state["selected_inp"]))) is None
+    assert _evidence(reaction_dir, state) is None
     generation, identity = report_generation_target(reaction_dir)
     path = write_si_block(reaction_dir, state, generation_target=(generation, identity))
 
@@ -375,7 +381,7 @@ def test_scan_functional_optimization_is_a_min_block(tmp_path: Path) -> None:
         out_text=si_out_text(route="SCAN def2-SVP Opt Freq", freqs=(30.0, 120.0), thermo=True),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert block.kind == "min"
     assert "⚠" not in render_si_block_md(block)
@@ -391,7 +397,7 @@ def test_neb_ts_route_is_still_a_ts_block(tmp_path: Path) -> None:
         ),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert block.kind == "ts"
 
@@ -400,7 +406,7 @@ def test_incomplete_job_gets_no_block(tmp_path: Path) -> None:
     reaction_dir, state = _job_dir(tmp_path, "failed_job", inp_text=_TS_INP, out_text=si_out_text())
     state["status"] = "failed"
 
-    assert collect_structure_evidence(reaction_dir, state) is None
+    assert _evidence(reaction_dir, state) is None
 
 
 def test_write_si_block_removes_stale_file_for_blockless_job(tmp_path: Path) -> None:
@@ -434,7 +440,7 @@ def test_ts_block_parses_frequencies_from_utf16_output(tmp_path: Path) -> None:
         "final_result": {"last_out_path": str(out)},
     }
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert block.imaginary_count == 1
     assert "Nimag = 1" in render_si_block_md(block)
@@ -452,7 +458,7 @@ def test_tightopt_route_is_a_min_block(tmp_path: Path) -> None:
         ),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert block.kind == "min"
     assert "⚠" not in render_si_block_md(block)
@@ -481,7 +487,7 @@ def test_tightopt_route_is_a_min_block(tmp_path: Path) -> None:
 def test_optimization_keyword_structure_kind(tmp_path: Path, route: str, expected: str) -> None:
     inp = tmp_path / "job.inp"
     inp.write_text(f"{route}\n* xyz 0 1\nC 0 0 0\n*\n", encoding="utf-8")
-    assert structure_kind(inp) == expected
+    assert structure_kind(route_facts(inp)) == expected
 
 
 @pytest.mark.parametrize(
@@ -501,8 +507,8 @@ def test_relaxed_scan_of_any_optimization_gets_no_block(tmp_path: Path, route: s
         tmp_path, "scan_job", inp_text=inp_text, out_text=si_out_text(route=route[2:])
     )
 
-    assert structure_kind(Path(state["selected_inp"])) is None
-    assert collect_structure_evidence(reaction_dir, state) is None
+    assert structure_kind(route_facts(Path(state["selected_inp"]))) is None
+    assert _evidence(reaction_dir, state) is None
 
 
 def test_route_comment_does_not_change_structure_kind(tmp_path: Path) -> None:
@@ -513,7 +519,7 @@ def test_route_comment_does_not_change_structure_kind(tmp_path: Path) -> None:
         "! B3LYP def2-SVP Opt Freq  # TS guess from scan\n* xyz 0 1\nC 0 0 0\n*\n",
         encoding="utf-8",
     )
-    assert structure_kind(inp) == "min"
+    assert structure_kind(route_facts(inp)) == "min"
 
 
 def test_unreadable_input_is_an_error_not_a_blockless_job(tmp_path: Path) -> None:
@@ -528,7 +534,7 @@ def test_unreadable_input_is_an_error_not_a_blockless_job(tmp_path: Path) -> Non
     Path(state["selected_inp"]).unlink()
 
     with pytest.raises(OrcaEvidenceError, match="route lines"):
-        collect_structure_evidence(reaction_dir, state)
+        _evidence(reaction_dir, state)
 
 
 def test_small_negative_modes_are_noise_not_imaginary(tmp_path: Path) -> None:
@@ -542,7 +548,7 @@ def test_small_negative_modes_are_noise_not_imaginary(tmp_path: Path) -> None:
         out_text=si_out_text(freqs=(-512.3, -6.2, 120.0), thermo=True),
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     assert block.imaginary_count == 1
     assert "⚠" not in render_si_block_md(block)
@@ -559,7 +565,7 @@ def test_thermo_rows_omit_temperature_the_output_never_stated(tmp_path: Path) ->
         tmp_path, "unknown_temp_job", inp_text=_TS_INP, out_text=out_text
     )
 
-    block = collect_structure_evidence(reaction_dir, state)
+    block = _evidence(reaction_dir, state)
     assert block is not None
     rendered = render_si_block_md(block)
     assert "298.15" not in rendered

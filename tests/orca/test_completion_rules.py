@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca_auto.orca.completion_rules import CompletionMode, detect_completion_mode
+import pytest
+
+from orca_auto.orca.completion_rules import CompletionMode, detect_completion_mode, route_facts
 
 
 def _detect(tmp_path: Path, text: str) -> CompletionMode:
@@ -106,3 +108,51 @@ def test_detect_completion_mode_defaults_to_opt_when_no_route_line_is_present(
 
     assert mode.kind == "opt"
     assert mode.require_irc is False
+
+
+_SCAN = "%geom\n  Scan\n    B 0 1 = 1.0, 2.0, 5\n  end\nend\n"
+_FLAGS = (
+    "is_ts",
+    "is_irc",
+    "is_neb_ts",
+    "is_opt",
+    "is_full_opt",
+    "is_relaxed_scan",
+    "is_non_stationary",
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("! Opt Freq\n", {"is_opt", "is_full_opt"}),
+        ("! MECP-Opt\n", {"is_opt"}),
+        ("! OptTS Freq\n! IRC\n", {"is_ts", "is_irc"}),
+        ("! ZOOM-NEB-TS Freq\n", {"is_ts", "is_neb_ts"}),
+        ("! NEB-CI\n", {"is_non_stationary"}),
+        ("! MD\n", {"is_non_stationary"}),
+        ("! Opt\n" + _SCAN, {"is_opt", "is_full_opt", "is_relaxed_scan"}),
+        # A scan block without an optimization is no relaxed scan, and the
+        # SCAN functional in a route line is no scan block.
+        ("! SP\n" + _SCAN, set()),
+        ("! SCAN def2-SVP Opt\n", {"is_opt", "is_full_opt"}),
+        ("# no route line\n", set()),
+    ],
+)
+def test_route_facts_classify_every_route_line_and_the_scan_block(
+    tmp_path: Path, text: str, expected: set[str]
+) -> None:
+    inp = tmp_path / "rxn.inp"
+    inp.write_text(text + "* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
+
+    facts = route_facts(inp)
+
+    assert {flag for flag in _FLAGS if getattr(facts, flag)} == expected
+    assert facts.route_lines == tuple(line for line in text.splitlines() if line.startswith("!"))
+
+
+def test_route_facts_of_an_unreadable_input_have_no_route(tmp_path: Path) -> None:
+    facts = route_facts(tmp_path / "missing.inp")
+
+    assert facts.route_lines == ()
+    assert not any(getattr(facts, flag) for flag in _FLAGS)

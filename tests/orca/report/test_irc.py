@@ -7,7 +7,8 @@ import pytest
 
 from orca_auto.orca import evidence
 from orca_auto.orca.report import write_job_html_report
-from orca_auto.orca.report.irc import collect_irc_report_data, parse_irc_output
+from orca_auto.orca.report.composer import collect_html_report_parts
+from orca_auto.orca.report.irc import IrcReportData, parse_irc_output
 from orca_auto.orca.report.publication import write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 from tests.orca_output_helpers import (
@@ -16,6 +17,12 @@ from tests.orca_output_helpers import (
     write_irc_inp,
     write_irc_out,
 )
+
+
+def _irc_data(reaction_dir: Path, state: dict[str, Any]) -> IrcReportData:
+    parts = collect_html_report_parts(reaction_dir, state)
+    assert parts is not None and parts.irc is not None
+    return parts.irc
 
 
 def _state(
@@ -126,7 +133,7 @@ def test_collect_irc_report_data_summarizes_path(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     write_irc_out(out_path, route="! B3LYP def2-SVP IRC")
 
-    data = collect_irc_report_data(tmp_path, _state(tmp_path, out_path))
+    data = _irc_data(tmp_path, _state(tmp_path, out_path))
 
     assert data is not None
     assert data.orca_version == "6.0.1"
@@ -160,7 +167,7 @@ def test_collect_irc_report_data_skips_contentless_final_attempt(tmp_path: Path)
             }
         ],
     )
-    data = collect_irc_report_data(tmp_path, state)
+    data = _irc_data(tmp_path, state)
 
     assert data is not None
     assert len(data.path_points) == 5
@@ -211,7 +218,7 @@ def test_irc_report_decodes_each_attempt_output_once(
 
     monkeypatch.setattr(evidence, "read_orca_text", tracked_read)
 
-    data = collect_irc_report_data(tmp_path, state)
+    data = _irc_data(tmp_path, state)
 
     assert data is not None
     assert len(data.path_points) == (5 if initial_has_data else 0)
@@ -326,7 +333,7 @@ def test_multiline_route_classifies_ts_correctly(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     write_irc_out(out_path, route="! OptTS Freq IRC B3LYP def2-SVP", freq=True, opt=True)
 
-    data = collect_irc_report_data(tmp_path, _state(tmp_path, out_path))
+    data = _irc_data(tmp_path, _state(tmp_path, out_path))
 
     assert data is not None
     assert "OptTS" in data.route_line

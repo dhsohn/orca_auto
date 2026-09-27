@@ -8,19 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..completion_rules import RouteFacts
 from ..evidence import final_out_name, parsed_frequency_analysis
 from ..frequencies import (
     ModeSummary,
     find_frequency_analysis,
     mode_summaries,
 )
-from ..input_syntax import file_route_lines
 from ..parser import KCAL_PER_HARTREE
 from ..relaxed_scan import (
     ScanCoordinateSpec,
     ScanSurfacePoint,
     first_scan_coordinate_spec,
-    input_uses_relaxed_scan,
     parse_scan_actual_surface,
     scan_profile_interior_barrier_kcal,
 )
@@ -80,20 +79,11 @@ class ScanReportData:
 
 
 def collect_scan_report_data(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-) -> ScanReportData | None:
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+) -> ScanReportData:
     """Collect the energy profile and vibrational summary of a relaxed scan."""
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-
-    route_lines = file_route_lines(selected_inp)
-    if not input_uses_relaxed_scan(selected_inp):
-        return None
     # ``None`` for an unreadable coordinate: the profile is still a scan.
-    scan_spec = first_scan_coordinate_spec(selected_inp)
+    scan_spec = first_scan_coordinate_spec(route.inp_path)
     attempts = attempt_dicts(state)
 
     initial_label = "initial relaxed scan"
@@ -147,7 +137,7 @@ def collect_scan_report_data(
         job_id=str(state.get("job_id") or ""),
         status=str(state.get("status") or ""),
         reason=str(final_payload.get("reason") or ""),
-        route_line=route_lines[0] if route_lines else "",
+        route_line=route.route_lines[0] if route.route_lines else "",
         scan_spec=scan_spec,
         started_at=str(state.get("started_at") or ""),
         finished_at=str(final_payload.get("completed_at") or ""),
