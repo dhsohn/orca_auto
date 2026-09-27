@@ -149,8 +149,11 @@ fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 �
 `queue/settlement.py`는 종료 정리 단계(작업 항목, 종료 표시, 준비, 결합, 발행, 표식
 제거)를, `queue/replay.py`는 재시작 재처리 파이프라인(정리할 종료 행과 디렉터리마다
 하나의 소유 generation 결정)만 담당하며, 둘 다 상태를 인자로 명시적으로 받는다.
-`queue/terminal_marker.py`는 지속 재처리 표식 형식과 표식이 기록하는 상태 fingerprint를,
-`queue/terminal_state.py`는 `run.lock` 아래에서 종료 `job_state.json` 합성을 담당한다. 각 경로는 선택한 큐 행과 작업 식별자를 구체적인 어댑터에 전달한다.
+`queue/terminal_marker.py`는 지속 재처리 표식 형식, 표식이 기록하는 상태 fingerprint,
+그리고 종료 generation이 아직 디렉터리 상태를 소유하는지 판정하는 단 하나의 fail-closed 규칙
+`terminal_generation_verdict`를 담당한다. 재처리 사전 확인(`settlement.is_superseded`)은
+그 판정으로 generation을 버릴지 정하고, `run.lock` 아래에서 종료 `job_state.json`을 합성하는
+`queue/terminal_state.py`는 쓸지 거부할지 정한다. 각 경로는 선택한 큐 행과 작업 식별자를 구체적인 어댑터에 전달한다.
 종료 근거를 확정한 뒤 실행 슬롯을 해제하고, 파생 결과 발행은 복구 표식으로 같은 폴더를 보호하며 재시도한다. RUNNING 행 정리는 워커가 소유한다:
 제출은 큐 전체를 훑지 않으며, 살아 있는 워커 pid가 없을 때 자기 디렉터리의
 죽은 행만 복구한다.

@@ -18,7 +18,6 @@ from pathlib import Path
 from orca_auto.core.queue.types import QueueEntry
 
 from ..config import AppConfig
-from ..state_reading import load_state, state_path, state_payload_job_id
 from . import roots, settlement
 from .entries import (
     ACTIVE_STATUSES,
@@ -30,7 +29,9 @@ from .entries import (
 )
 from .models import OrcaWorkerReplayState, TerminalReplayWorkItem
 from .terminal_marker import (
+    StateGenerationFingerprint,
     TerminalReplayMarkerKind,
+    load_state_generation_fingerprint,
     terminal_replay_is_fence_only,
     terminal_replay_marker_kind,
 )
@@ -55,37 +56,12 @@ class ReactionGenerationRow:
         return self.status in ACTIVE_STATUSES
 
 
-@dataclass(frozen=True)
-class ArtifactGeneration:
-    readable: bool
-    state_job_id: str = ""
-
-
-def _load_artifact_generation(reaction_key: str) -> ArtifactGeneration:
-    reaction_dir = Path(reaction_key)
-    state_file = state_path(reaction_dir)
-    state_existed = state_file.exists()
-    try:
-        state = load_state(reaction_dir)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to read ORCA state generation for %s: %s", reaction_dir, exc)
-        return ArtifactGeneration(readable=False)
-    if (state_existed or state_file.exists()) and state is None:
-        logger.warning("Failing closed on unreadable ORCA state generation: %s", state_file)
-        return ArtifactGeneration(readable=False)
-
-    return ArtifactGeneration(
-        readable=True,
-        state_job_id=state_payload_job_id(state),
-    )
-
-
 def _select_generation_owner(
     rows: list[ReactionGenerationRow],
     *,
     previous_owner: str | None,
     previous_owner_was_active: bool,
-    artifacts: ArtifactGeneration,
+    artifacts: StateGenerationFingerprint,
 ) -> str | None:
     def choose(candidates: list[ReactionGenerationRow]) -> str | None:
         if len(candidates) == 1:
@@ -113,9 +89,9 @@ def _select_generation_owner(
         or (row.owner == previous_owner and previous_owner_was_active)
     ]
     if transition_rows:
-        if artifacts.state_job_id:
+        if artifacts.job_id:
             matching_transition = [
-                row for row in transition_rows if row.task_id == artifacts.state_job_id
+                row for row in transition_rows if row.task_id == artifacts.job_id
             ]
             selected = choose(matching_transition)
             if selected is not None:
@@ -125,7 +101,7 @@ def _select_generation_owner(
             newer_rows = [
                 row
                 for row in rows
-                if row.new_since_previous_poll and row.task_id == artifacts.state_job_id
+                if row.new_since_previous_poll and row.task_id == artifacts.job_id
             ]
             if newer_rows:
                 return choose(newer_rows)
@@ -136,8 +112,8 @@ def _select_generation_owner(
 
     # State is authoritative.  A mismatching explicit identity means the visible
     # terminal entries do not own the current reaction-dir generation.
-    if artifacts.state_job_id:
-        return choose([row for row in rows if row.task_id == artifacts.state_job_id])
+    if artifacts.job_id:
+        return choose([row for row in rows if row.task_id == artifacts.job_id])
 
     pending_rows = [row for row in rows if row.pending_replay]
     if pending_rows:
@@ -287,11 +263,14 @@ def _select_replay_generation_owners(
     superseded_generation_keys: set[str] = set()
     for reaction_key, rows in generation_rows.items():
         previous_owner = previous_owners.get(reaction_key)
+        artifacts = load_state_generation_fingerprint(Path(reaction_key))
+        if not artifacts.readable:
+            logger.warning("Failing closed on unreadable ORCA state generation: %s", reaction_key)
         selected_owner = _select_generation_owner(
             rows,
             previous_owner=previous_owner,
             previous_owner_was_active=bool(previous_owner_active.get(reaction_key, False)),
-            artifacts=_load_artifact_generation(reaction_key),
+            artifacts=artifacts,
         )
         if selected_owner is None:
             continue

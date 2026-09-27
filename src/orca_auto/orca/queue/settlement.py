@@ -43,8 +43,10 @@ from .entries import (
 )
 from .models import TerminalReplayWorkItem
 from .terminal_marker import (
+    TerminalGenerationVerdict,
     load_state_generation_fingerprint,
     state_fingerprint_from_payload,
+    terminal_generation_verdict,
     terminal_replay_marker_from_entry,
 )
 from .terminal_state import record_cancelled_run_state, record_failed_run_state
@@ -176,44 +178,42 @@ def work_item_for_row(queue_root: Path, entry: QueueEntry | None) -> TerminalRep
     return new_work_item(queue_root, entry, reaction_dir=reaction_dir, reaction_key=reaction_key)
 
 
+# The verdicts that prove a newer generation owns the directory. An unreadable
+# state, an unverifiable mark and an unidentified state are left to the writer
+# under run.lock, which fails closed.
+_SUPERSEDING_VERDICTS = frozenset(
+    {
+        TerminalGenerationVerdict.DISAPPEARED,
+        TerminalGenerationVerdict.RESTARTED,
+        TerminalGenerationVerdict.NEWER_RUN,
+        TerminalGenerationVerdict.REPLACED,
+        TerminalGenerationVerdict.OTHER_ACTIVE,
+        TerminalGenerationVerdict.UNOBSERVED_PREVIOUS_TERMINAL,
+        TerminalGenerationVerdict.UNOBSERVED_OTHER_ACTIVE,
+    }
+)
+
+
 def is_superseded(item: TerminalReplayWorkItem) -> bool:
     """Whether the reaction directory's state now belongs to a newer generation."""
     if not str(item.reaction_dir or "").strip():
         return True
     if not item.task_id:
         return True
-    current = load_state_generation_fingerprint(Path(item.reaction_dir).expanduser().resolve())
-    if not current.readable:
-        return False
-    if current.readable and current.job_id == item.task_id:
-        if (
-            item.observed_state is not None
-            and item.observed_state.readable
-            and item.observed_state.job_id
-            and item.observed_state.job_id != item.task_id
-            and not current.terminal_status
-        ):
-            return True
-        expected_run_id = str(item.run_id or item.recorded_run_id or "").strip()
-        if (
-            not expected_run_id
-            and item.observed_state is not None
-            and item.observed_state.job_id == item.task_id
-        ):
-            expected_run_id = item.observed_state.run_id
-        return bool(expected_run_id and current.run_id and current.run_id != expected_run_id)
-    if item.observed_state is not None:
-        if not item.observed_state.readable:
-            return False
-        if current != item.observed_state:
-            return True
-        return bool(
-            current.readable
-            and current.job_id
-            and current.job_id != item.task_id
-            and not current.terminal_status
-        )
-    return bool(current.job_id and current.job_id != item.task_id)
+    expected_run_id = str(item.run_id or item.recorded_run_id or "").strip()
+    if (
+        not expected_run_id
+        and item.observed_state is not None
+        and item.observed_state.job_id == item.task_id
+    ):
+        expected_run_id = item.observed_state.run_id
+    verdict = terminal_generation_verdict(
+        load_state_generation_fingerprint(Path(item.reaction_dir).expanduser().resolve()),
+        task_id=item.task_id,
+        observed=item.observed_state,
+        expected_run_id=expected_run_id,
+    )
+    return verdict in _SUPERSEDING_VERDICTS
 
 
 def prepare(item: TerminalReplayWorkItem) -> TerminalReplayWorkItem:

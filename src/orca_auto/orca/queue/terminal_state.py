@@ -15,10 +15,16 @@ from ..attempt.reporting import build_final_result, last_out_path_from_state
 from ..report.publication import write_report_files
 from ..run_lock import acquire_run_lock
 from ..state import finalize_state, new_state
-from ..state_reading import load_state, state_path, state_payload_job_id
+from ..state_reading import load_state, state_path
 from ..statuses import TERMINAL_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
 from ..types import RunState
-from .terminal_marker import StateGenerationFingerprint, terminal_status_from_run_state
+from .terminal_marker import (
+    StateGenerationFingerprint,
+    TerminalGenerationVerdict,
+    state_generation_fingerprint,
+    terminal_generation_verdict,
+    terminal_status_from_run_state,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,93 +35,77 @@ def _load_state_for_terminal_generation(
     expected_job_id: str,
     observed_state: StateGenerationFingerprint | None = None,
 ) -> RunState | None:
+    """The state to finalize, ``None`` to synthesize a fresh one, or a fail-closed error."""
     state_file = state_path(job_dir)
     state_existed = state_file.exists()
     state = load_state(job_dir)
-    if (state_existed or state_file.exists()) and state is None:
-        raise RuntimeError(f"ORCA run state is unreadable: {state_file}")
-    if state is None:
-        current_fingerprint = StateGenerationFingerprint(present=False, readable=True)
-        if observed_state is not None and current_fingerprint != observed_state:
-            raise RuntimeError(
-                "ORCA terminal replay state disappeared after its queue mark: "
-                f"job_dir={job_dir} expected_job_id={expected_job_id}"
-            )
+    current = state_generation_fingerprint(state, present=state_existed or state_file.exists())
+    observed_run_id = (
+        observed_state.run_id
+        if observed_state is not None
+        and observed_state.readable
+        and observed_state.job_id == expected_job_id
+        else ""
+    )
+    verdict = terminal_generation_verdict(
+        current,
+        task_id=expected_job_id,
+        observed=observed_state,
+        expected_run_id=observed_run_id,
+    )
+    target = f"job_dir={job_dir} expected_job_id={expected_job_id}"
+    state_job_id = current.job_id or "<missing>"
+    if verdict is TerminalGenerationVerdict.OWNED:
+        return state
+    if verdict is TerminalGenerationVerdict.ABSENT:
         return None
-    if not expected_job_id:
-        return state
-
-    state_job_id = state_payload_job_id(state)
-    existing_terminal_status = terminal_status_from_run_state(state)
-    if state_job_id == expected_job_id:
-        if (
-            observed_state is not None
-            and observed_state.readable
-            and observed_state.job_id
-            and observed_state.job_id != expected_job_id
-            and existing_terminal_status is None
-        ):
-            raise RuntimeError(
-                "ORCA terminal replay observed a new run for the expected task "
-                "after marking a different state generation: "
-                f"job_dir={job_dir} expected_job_id={expected_job_id} "
-                f"observed_job_id={observed_state.job_id}"
-            )
-        if (
-            observed_state is not None
-            and observed_state.readable
-            and observed_state.job_id == expected_job_id
-            and observed_state.run_id
-            and str(state.get("run_id") or "").strip()
-            and str(state.get("run_id") or "").strip() != observed_state.run_id
-        ):
-            raise RuntimeError(
-                "ORCA terminal replay observed a newer run for the same task: "
-                f"job_dir={job_dir} expected_job_id={expected_job_id}"
-            )
-        return state
-
-    if observed_state is not None:
-        current_fingerprint = StateGenerationFingerprint(
-            present=True,
-            readable=True,
-            job_id=state_job_id,
-            run_id=str(state.get("run_id") or "").strip(),
-            terminal_status=existing_terminal_status or "",
-        )
-        if current_fingerprint != observed_state:
-            raise RuntimeError(
-                "ORCA terminal replay was superseded by another state generation: "
-                f"job_dir={job_dir} expected_job_id={expected_job_id} "
-                f"state_job_id={state_job_id or '<missing>'}"
-            )
-        if state_job_id and state_job_id != expected_job_id and not existing_terminal_status:
-            raise RuntimeError(
-                "ORCA terminal replay observed another active state generation: "
-                f"job_dir={job_dir} expected_job_id={expected_job_id} "
-                f"state_job_id={state_job_id}"
-            )
-    if existing_terminal_status is not None:
-        # A forced submission can reuse a reaction directory before the new
-        # child writes state.  A complete terminal result is durable evidence
-        # that this is the previous generation, so synthesize a fresh state for
-        # the expected queue task instead of relabeling the old result.
+    if verdict in (
+        TerminalGenerationVerdict.PREVIOUS_TERMINAL,
+        TerminalGenerationVerdict.UNOBSERVED_PREVIOUS_TERMINAL,
+    ):
+        # Synthesize a fresh state for the expected queue task instead of
+        # relabeling the previous generation's result.
         logger.info(
             "Ignoring previous-generation terminal ORCA state: "
             "job_dir=%s expected_job_id=%s state_job_id=%s",
             job_dir,
             expected_job_id,
-            state_job_id,
+            current.job_id,
         )
         return None
-
-    # A nonterminal mismatch can be the current active generation.  Failing
-    # closed under the run lock is essential: overwriting it would make an old
-    # finalizer publish a terminal result for a newer child.
+    if verdict is TerminalGenerationVerdict.UNREADABLE:
+        raise RuntimeError(f"ORCA run state is unreadable: {state_file}")
+    if verdict in (
+        TerminalGenerationVerdict.DISAPPEARED,
+        TerminalGenerationVerdict.DISAPPEARED_UNVERIFIED,
+    ):
+        raise RuntimeError(f"ORCA terminal replay state disappeared after its queue mark: {target}")
+    if verdict is TerminalGenerationVerdict.RESTARTED:
+        assert observed_state is not None
+        raise RuntimeError(
+            "ORCA terminal replay observed a new run for the expected task "
+            f"after marking a different state generation: {target} "
+            f"observed_job_id={observed_state.job_id}"
+        )
+    if verdict is TerminalGenerationVerdict.NEWER_RUN:
+        raise RuntimeError(f"ORCA terminal replay observed a newer run for the same task: {target}")
+    if verdict in (
+        TerminalGenerationVerdict.REPLACED,
+        TerminalGenerationVerdict.REPLACED_UNVERIFIED,
+    ):
+        raise RuntimeError(
+            "ORCA terminal replay was superseded by another state generation: "
+            f"{target} state_job_id={state_job_id}"
+        )
+    if verdict is TerminalGenerationVerdict.OTHER_ACTIVE:
+        raise RuntimeError(
+            "ORCA terminal replay observed another active state generation: "
+            f"{target} state_job_id={current.job_id}"
+        )
+    # UNIDENTIFIED_ACTIVE or UNOBSERVED_OTHER_ACTIVE: possibly the live generation.
     raise RuntimeError(
-        "ORCA run state belongs to a different active generation: "
-        f"job_dir={job_dir} expected_job_id={expected_job_id} "
-        f"state_job_id={state_job_id or '<missing>'}"
+        f"ORCA run state belongs to a different active generation: {target} "
+        f"state_job_id={state_job_id}"
     )
 
 

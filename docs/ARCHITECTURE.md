@@ -153,9 +153,12 @@ publication lease) is outside it; `queue_generation` in `job_state.json` is its 
 preparation, binding, publication and marker retirement), `queue/replay.py` only the
 restart replay pipeline (which terminal rows to settle, and one owner generation per
 directory); both take their state explicitly. `queue/terminal_marker.py` holds the
-durable replay marker format and the state fingerprint it records, and
-`queue/terminal_state.py` synthesizes terminal `job_state.json` under
-`run.lock`. These paths call concrete adapters with the selected entry and task
+durable replay marker format, the state fingerprint it records and
+`terminal_generation_verdict`, the one fail-closed rule that decides whether a
+terminal generation still owns its directory's state: the replay pre-check
+(`settlement.is_superseded`) maps the verdict to whether to drop the generation,
+and `queue/terminal_state.py`, which synthesizes terminal `job_state.json` under
+`run.lock`, maps it to write or refuse. These paths call concrete adapters with the selected entry and task
 identity. Durable execution preparation precedes admission release; derived publication
 can retry afterward while its marker fences the same directory. RUNNING-row
 reconciliation is worker-owned: a submission never sweeps the queue and recovers
