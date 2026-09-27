@@ -15,10 +15,8 @@ from orca_auto.orca.evidence import (
     collect_structure_evidence,
     final_out_path,
     parsed_final_output,
+    parsed_frequency_analysis,
     structure_kind,
-)
-from orca_auto.orca.frequencies import (
-    parse_frequency_analysis,
 )
 from orca_auto.orca.report.si import (
     render_si_block_md,
@@ -50,7 +48,7 @@ def test_frequency_block_before_the_final_energy_is_not_reported(tmp_path: Path)
         encoding="utf-8",
     )
 
-    assert parse_frequency_analysis(out) is None
+    assert parsed_frequency_analysis(out) is None
 
 
 def test_frequency_block_after_the_last_final_energy_is_reported(tmp_path: Path) -> None:
@@ -83,7 +81,7 @@ def test_frequency_block_after_the_last_final_energy_is_reported(tmp_path: Path)
         encoding="utf-8",
     )
 
-    analysis = parse_frequency_analysis(out)
+    analysis = parsed_frequency_analysis(out)
 
     assert analysis is not None
     assert analysis.frequencies == (-420.0, 120.0)

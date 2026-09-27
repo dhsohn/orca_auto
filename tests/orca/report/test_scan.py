@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.evidence import parsed_frequency_analysis
 from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.composer import collect_html_report_parts
 from orca_auto.orca.report.publication import write_report_files
@@ -61,7 +61,7 @@ def test_parse_frequency_analysis_reads_last_blocks(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    analysis = parse_frequency_analysis(out_path)
+    analysis = parsed_frequency_analysis(out_path)
 
     assert analysis is not None
     assert len(analysis.frequencies) == 9
@@ -76,7 +76,7 @@ def test_parse_frequency_analysis_reads_last_blocks(tmp_path: Path) -> None:
 def test_parse_frequency_analysis_without_freq_block(tmp_path: Path) -> None:
     out_path = tmp_path / "rxn.out"
     out_path.write_text(COORDS_BLOCK + SCAN_SURFACE_BLOCK, encoding="utf-8")
-    assert parse_frequency_analysis(out_path) is None
+    assert parsed_frequency_analysis(out_path) is None
 
 
 def test_collect_summarizes_imaginary_mode_and_alignment(tmp_path: Path) -> None:

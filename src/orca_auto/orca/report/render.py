@@ -1,8 +1,9 @@
 """Shared HTML/SVG rendering primitives for job reports.
 
-Everything here is calculation-type agnostic: page skeleton, badges, metric
-cards, and a dependency-free SVG line chart. Type-specific report modules
-(``scan``, ``opt``) compose these into full pages.
+Everything here is calculation-type agnostic: the page header, skeleton,
+badges, metric cards, and a dependency-free SVG line chart. The type-specific
+report modules (``opt``, ``sp``, ``scan``, ``neb``, ``irc``) each render one
+:class:`ReportComponent`, and the composer assembles them into a page.
 """
 
 from __future__ import annotations
@@ -87,9 +88,40 @@ class ReportPage:
 
 
 @dataclass(frozen=True)
+class ReportHeader:
+    """Job facts every report page shows, built once per page by the composer."""
+
+    title: str
+    job_id: str
+    status: str
+    reason: str
+    route_lines: tuple[str, ...]
+    started_at: str
+    finished_at: str
+    total_duration_text: str
+    # The verdict note falls back to it when ``reason`` has none.
+    last_analyzer_reason: str
+    last_out_name: str
+
+    @property
+    def first_route_line(self) -> str:
+        """The meta line's route for every report but IRC, which shows all route lines."""
+        return self.route_lines[0] if self.route_lines else ""
+
+
+@dataclass(frozen=True)
 class ReportComponent:
-    metrics_html: str = ""
-    sections: tuple[tuple[str, str], ...] = ()
+    """One report facet's part of the page.
+
+    ``kind_label``, ``badges`` and ``meta_html`` of the primary facet head the
+    page; other facets add only the badges it lacks.
+    """
+
+    kind_label: str
+    badges: tuple[tuple[str, str], ...]
+    meta_html: str
+    metrics_html: str
+    sections: tuple[tuple[str, str], ...]
 
 
 def badge(text: str, kind: str) -> str:
@@ -100,29 +132,22 @@ def status_badge_kind(status: str) -> str:
     return {RunStatus.COMPLETED.value: "ok", RunStatus.FAILED.value: "bad"}.get(status, "muted")
 
 
-def status_badges(status: str, reason: str) -> list[tuple[str, str]]:
+def status_badges(header: ReportHeader) -> list[tuple[str, str]]:
     """Standard status/reason badge pair every job report starts with."""
-    kind = status_badge_kind(status)
-    badges: list[tuple[str, str]] = [(status or "unknown", kind)]
-    if reason:
-        badges.append((reason, "warn" if kind == "bad" else "muted"))
+    kind = status_badge_kind(header.status)
+    badges: list[tuple[str, str]] = [(header.status or "unknown", kind)]
+    if header.reason:
+        badges.append((header.reason, "warn" if kind == "bad" else "muted"))
     return badges
 
 
-def job_meta_html(
-    *,
-    route_line: str,
-    job_id: str,
-    started_at: str,
-    finished_at: str,
-    extra_html: str = "",
-) -> str:
+def job_meta_html(header: ReportHeader, route_line: str, extra_html: str = "") -> str:
     """Standard meta line: route (plus pre-escaped extras), job id, timestamps."""
     return (
         f"<code>{html.escape(route_line)}</code>{extra_html}<br>"
-        f"job <code>{html.escape(job_id)}</code>"
-        f" &#183; started {html.escape(started_at)}"
-        f" &#183; finished {html.escape(finished_at)}"
+        f"job <code>{html.escape(header.job_id)}</code>"
+        f" &#183; started {html.escape(header.started_at)}"
+        f" &#183; finished {html.escape(header.finished_at)}"
     )
 
 

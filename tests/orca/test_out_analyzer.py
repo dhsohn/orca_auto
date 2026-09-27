@@ -6,7 +6,7 @@ import pytest
 
 from orca_auto.orca import out_analyzer
 from orca_auto.orca.completion_rules import CompletionMode
-from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.evidence import parsed_frequency_analysis
 from orca_auto.orca.out_analyzer import (
     OutAnalysis,
     analyze_output,
@@ -599,7 +599,7 @@ def test_verifier_count_is_the_published_frequency_analysis(
     buffered = analyze_output(out, _TS_FREQ_MODE)
     monkeypatch.setattr(out_analyzer, "_TS_BUFFER_BYTES", 0)
     streamed = analyze_output(out, _TS_FREQ_MODE)
-    analysis = parse_frequency_analysis(out)
+    analysis = parsed_frequency_analysis(out)
 
     assert buffered.status is status
     assert buffered.markers["imaginary_frequency_count"] == count

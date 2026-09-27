@@ -9,17 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import RouteFacts
-from ..evidence import (
-    final_out_name,
-    parsed_frequency_analysis,
-    parsed_output_facts,
-)
-from ..frequencies import (
-    ModeSummary,
-    find_frequency_analysis,
-    mode_summaries,
-)
+from ..evidence import parsed_output_facts
+from ..frequencies import ModeSummary, mode_summaries
 from ..parser import KCAL_PER_HARTREE
 from ..parser.extractors import parse_optimization_cycles
 from .attempts import (
@@ -28,16 +19,14 @@ from .attempts import (
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    duration_text,
     latest_attempt_with_content,
+    latest_frequency_analysis,
     latest_optimization_progress,
     parse_attempt_output,
     terminal_actions_html,
     with_details,
 )
-from .frequencies import (
-    mode_section_html,
-)
+from .frequencies import mode_section_html
 from .path import (
     NebPathPoint,
     PathPoint,
@@ -52,6 +41,7 @@ from .path import (
 from .render import (
     ChartSeries,
     ReportComponent,
+    ReportHeader,
     job_meta_html,
     line_chart_svg,
     metric_card,
@@ -109,17 +99,10 @@ class NebParsedOutput:
 
 @dataclass(frozen=True)
 class NebReportData:
-    title: str
-    job_id: str
-    status: str
-    reason: str
-    route_line: str
+    header: ReportHeader
     formula: str
     method: str
     basis_set: str
-    started_at: str
-    finished_at: str
-    total_duration_text: str
     attempts: tuple[AttemptReportRow, ...]
     settings: tuple[ReportSetting, ...]
     iterations: tuple[NebIterationPoint, ...]
@@ -132,7 +115,6 @@ class NebReportData:
     imaginary_count: int | None
     mode_summaries: tuple[ModeSummary, ...]
     frequency_attempt_index: int | None
-    last_out_name: str
 
 
 def parse_neb_output_text(text: str) -> NebParsedOutput:
@@ -159,9 +141,7 @@ def _neb_ts_steps(out_path: Path) -> tuple[tuple[int, float], ...]:
     return parse_neb_output(out_path).ts_steps
 
 
-def collect_neb_report_data(
-    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
-) -> NebReportData:
+def collect_neb_report_data(state: Mapping[str, Any], header: ReportHeader) -> NebReportData:
     attempts = attempt_dicts(state)
     parsed_attempts = [parse_attempt_output(attempt, parse_neb_output) for attempt in attempts]
     rows = with_details(
@@ -187,27 +167,13 @@ def collect_neb_report_data(
         if final_energy is None and ts_steps:
             final_energy = ts_steps[-1][1]
 
-    analysis, frequency_attempt_index = find_frequency_analysis(
-        attempts, parse_analysis_fn=parsed_frequency_analysis
-    )
-
-    final_result = state.get("final_result")
-    final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
+    analysis, frequency_attempt_index = latest_frequency_analysis(attempts)
 
     return NebReportData(
-        title=reaction_dir.name or str(reaction_dir),
-        job_id=str(state.get("job_id") or ""),
-        status=str(state.get("status") or ""),
-        reason=str(final_payload.get("reason") or ""),
-        route_line=route.route_lines[0] if route.route_lines else "",
+        header=header,
         formula=formula,
         method=method,
         basis_set=basis_set,
-        started_at=str(state.get("started_at") or ""),
-        finished_at=str(final_payload.get("completed_at") or ""),
-        total_duration_text=duration_text(
-            state.get("started_at"), final_payload.get("completed_at")
-        ),
         attempts=rows,
         settings=parsed.settings,
         iterations=parsed.iterations,
@@ -220,7 +186,6 @@ def collect_neb_report_data(
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         frequency_attempt_index=frequency_attempt_index,
-        last_out_name=final_out_name(state),
     )
 
 
@@ -420,8 +385,8 @@ def _neb_history_chart_svg(data: NebReportData) -> str:
     )
 
 
-def neb_report_badges(data: NebReportData) -> tuple[tuple[str, str], ...]:
-    badges = status_badges(data.status, data.reason)
+def _neb_badges(data: NebReportData) -> tuple[tuple[str, str], ...]:
+    badges = status_badges(data.header)
     if data.neb_converged:
         badges.append(("CI-NEB converged", "ok"))
     if data.ts_converged:
@@ -429,23 +394,7 @@ def neb_report_badges(data: NebReportData) -> tuple[tuple[str, str], ...]:
     return tuple(badges)
 
 
-def neb_report_meta_html(data: NebReportData) -> str:
-    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
-    return job_meta_html(
-        route_line=data.route_line,
-        job_id=data.job_id,
-        started_at=data.started_at,
-        finished_at=data.finished_at,
-        extra_html=formula_text,
-    )
-
-
-def _neb_metric_cards(
-    data: NebReportData,
-    *,
-    include_attempts: bool = True,
-    include_frequency: bool = True,
-) -> str:
+def _neb_metric_cards(data: NebReportData, *, is_primary: bool, irc_present: bool) -> str:
     cards = []
     peak = _path_peak(data.path_points)
     ci = path_marker_point(data.path_points, "CI")
@@ -486,7 +435,7 @@ def _neb_metric_cards(
                 f"{data.method}/{data.basis_set}" if data.method and data.basis_set else "",
             )
         )
-    if include_frequency and data.imaginary_count is not None:
+    if not irc_present and data.imaginary_count is not None:
         cards.append(
             metric_card(
                 "Imaginary frequencies",
@@ -496,8 +445,8 @@ def _neb_metric_cards(
                 else "",
             )
         )
-    if include_attempts:
-        cards.append(attempts_metric_card(data.attempts, data.total_duration_text))
+    if is_primary:
+        cards.append(attempts_metric_card(data.attempts, data.header.total_duration_text))
     return "".join(cards)
 
 
@@ -551,12 +500,7 @@ def _neb_history_html(data: NebReportData) -> str:
 
 
 def neb_report_component(
-    data: NebReportData,
-    *,
-    include_attempt_metric: bool = True,
-    include_attempt_chain: bool = True,
-    include_frequency_metric: bool = True,
-    include_vibrational: bool = True,
+    data: NebReportData, *, is_primary: bool, irc_present: bool
 ) -> ReportComponent:
     ts_chart = relative_energy_cycle_chart_svg(data.ts_steps, x_label="TS optimization cycle") or (
         '<p class="muted">No TS optimization cycles were parsed from the attempt outputs.</p>'
@@ -569,12 +513,12 @@ def neb_report_component(
     settings_html = settings_table_html(data.settings)
     if settings_html:
         sections.append(("NEB setup", settings_html))
-    if include_attempt_chain:
+    if is_primary:
         attempts_html = attempts_table_html(data.attempts, "NEB/TS detail") + terminal_actions_html(
             data.attempts
         )
         sections.append(("Attempt chain", attempts_html))
-    if include_vibrational:
+    if not irc_present:
         sections.append(
             (
                 "Vibrational summary",
@@ -586,12 +530,12 @@ def neb_report_component(
             )
         )
 
+    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
     return ReportComponent(
-        metrics_html=_neb_metric_cards(
-            data,
-            include_attempts=include_attempt_metric,
-            include_frequency=include_frequency_metric,
-        ),
+        kind_label="NEB-TS",
+        badges=_neb_badges(data),
+        meta_html=job_meta_html(data.header, data.header.first_route_line, formula_text),
+        metrics_html=_neb_metric_cards(data, is_primary=is_primary, irc_present=irc_present),
         sections=tuple(sections),
     )
 
@@ -602,9 +546,7 @@ __all__ = [
     "NebPathPoint",
     "NebReportData",
     "collect_neb_report_data",
-    "neb_report_badges",
+    "neb_report_component",
     "parse_neb_output",
     "parse_neb_output_text",
-    "neb_report_component",
-    "neb_report_meta_html",
 ]

@@ -24,13 +24,10 @@ from __future__ import annotations
 import logging
 import math
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 
 from .output_status import is_execution_output_line, iter_output_lines
-from .parser.io import read_orca_text
 
 logger = logging.getLogger(__name__)
 
@@ -108,16 +105,6 @@ class ModeSummary:
     imaginary: bool
     top_atoms: tuple[ModeAtomDisplacement, ...]
     scan_alignment: float | None
-
-
-def parse_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
-    """Last frequency/mode/geometry blocks of one out file; ``None`` without freqs."""
-    try:
-        # Use the same ORCA-aware decoding as the result parser, including UTF-16.
-        text = read_orca_text(str(out_path))
-    except OSError:
-        return None
-    return parse_frequency_analysis_text(text)
 
 
 def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
@@ -250,33 +237,6 @@ def _consume_modes_line(
     for col, value in zip(cols, values, strict=True):
         row_entries[col] = value
     return True
-
-
-def find_frequency_analysis(
-    attempts: Sequence[Mapping[str, Any]],
-    *,
-    parse_analysis_fn: Callable[[Path], FrequencyAnalysis | None] | None = None,
-) -> tuple[FrequencyAnalysis | None, int | None]:
-    """Latest attempt output containing a frequency block, searched backwards.
-
-    Returns the parsed analysis and the matching attempt's 1-based ``index``
-    field (list position + 1 when absent).
-    """
-    for position in range(len(attempts) - 1, -1, -1):
-        out_raw = str(attempts[position].get("out_path") or "").strip()
-        if not out_raw:
-            continue
-        out_path = Path(out_raw)
-        if not out_path.exists():
-            continue
-        try:
-            analysis = (parse_analysis_fn or parse_frequency_analysis)(out_path)
-        except OSError:
-            continue
-        if analysis is not None:
-            index = int(attempts[position].get("index", position + 1) or (position + 1))
-            return analysis, index
-    return None, None
 
 
 def mode_summaries(

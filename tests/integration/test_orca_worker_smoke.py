@@ -16,8 +16,7 @@ from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
 from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.config import load_config
-from orca_auto.orca.evidence import collect_structure_evidence
-from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.evidence import collect_structure_evidence, parsed_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
@@ -864,7 +863,7 @@ def test_real_orca_ammonia_ts_irc_acceptance_when_configured(
     assert "THE IRC HAS CONVERGED" in forward
     assert "THE IRC HAS CONVERGED" in backward.split("IRC PATH SUMMARY", 1)[0]
 
-    analysis = parse_frequency_analysis(out)
+    analysis = parsed_frequency_analysis(out)
     assert analysis is not None and analysis.imaginary_count() == 1
     assert len(analysis.frequencies) == 12
     assert all(math.isfinite(value) for value in analysis.frequencies)

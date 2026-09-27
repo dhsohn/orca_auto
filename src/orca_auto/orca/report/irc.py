@@ -10,18 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from ..completion_rules import RouteFacts
-from ..evidence import (
-    final_out_name,
-    final_out_path,
-    parsed_final_output,
-    parsed_frequency_analysis,
-    parsed_output_facts,
-)
-from ..frequencies import (
-    ModeSummary,
-    find_frequency_analysis,
-    mode_summaries,
-)
+from ..evidence import final_out_path, parsed_final_output, parsed_output_facts
+from ..frequencies import ModeSummary, mode_summaries
 from ..parser import OrcaResult
 from ..statuses import RunStatus
 from .attempts import (
@@ -30,16 +20,14 @@ from .attempts import (
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    duration_text,
     latest_attempt_with_content,
+    latest_frequency_analysis,
     latest_optimization_progress,
     parse_attempt_output,
     terminal_actions_html,
     with_details,
 )
-from .frequencies import (
-    mode_section_html,
-)
+from .frequencies import mode_section_html
 from .path import (
     IrcPathPoint,
     PathPoint,
@@ -53,6 +41,7 @@ from .path import (
 )
 from .render import (
     ReportComponent,
+    ReportHeader,
     job_meta_html,
     metric_card,
     path_marker_point,
@@ -105,19 +94,12 @@ class IrcParsedOutput:
 
 @dataclass(frozen=True)
 class IrcReportData:
-    title: str
-    job_id: str
-    status: str
-    reason: str
-    route_line: str
+    header: ReportHeader
     ts_route: bool
     formula: str
     method: str
     basis_set: str
     orca_version: str
-    started_at: str
-    finished_at: str
-    total_duration_text: str
     attempts: tuple[AttemptReportRow, ...]
     settings: tuple[ReportSetting, ...]
     iterations: tuple[IrcIterationPoint, ...]
@@ -128,7 +110,6 @@ class IrcReportData:
     result: OrcaResult | None
     imaginary_count: int | None
     mode_summaries: tuple[ModeSummary, ...]
-    last_out_name: str
 
 
 @dataclass(frozen=True)
@@ -172,7 +153,7 @@ _EMPTY_IRC_OUTPUT = IrcParsedOutput(
 
 
 def collect_irc_report_data(
-    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+    state: Mapping[str, Any], route: RouteFacts, header: ReportHeader
 ) -> IrcReportData:
     attempts = attempt_dicts(state)
     rows = with_details(
@@ -195,29 +176,15 @@ def collect_irc_report_data(
             result, _analysis = parsed_final_output(out_path)
         except OSError:
             result = None
-    analysis, _frequency_attempt_index = find_frequency_analysis(
-        attempts, parse_analysis_fn=parsed_frequency_analysis
-    )
-
-    final_result = state.get("final_result")
-    final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
+    analysis, _frequency_attempt_index = latest_frequency_analysis(attempts)
 
     return IrcReportData(
-        title=reaction_dir.name or str(reaction_dir),
-        job_id=str(state.get("job_id") or ""),
-        status=str(state.get("status") or ""),
-        reason=str(final_payload.get("reason") or ""),
-        route_line=" ".join(route.route_lines),
+        header=header,
         ts_route=route.is_ts,
         formula=result.formula if result is not None else "",
         method=result.method if result is not None else "",
         basis_set=result.basis_set if result is not None else "",
         orca_version=result.orca_version if result is not None else "",
-        started_at=str(state.get("started_at") or ""),
-        finished_at=str(final_payload.get("completed_at") or ""),
-        total_duration_text=duration_text(
-            state.get("started_at"), final_payload.get("completed_at")
-        ),
         attempts=rows,
         settings=parsed.settings,
         iterations=parsed.iterations,
@@ -228,7 +195,6 @@ def collect_irc_report_data(
         result=result,
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
-        last_out_name=final_out_name(state),
     )
 
 
@@ -298,38 +264,28 @@ def render_irc_si_block_md(block: IrcSiBlock) -> str:
     return "\n".join(lines)
 
 
-def irc_report_badges(data: IrcReportData) -> tuple[tuple[str, str], ...]:
-    badges = status_badges(data.status, data.reason)
+def _irc_badges(data: IrcReportData) -> tuple[tuple[str, str], ...]:
+    badges = status_badges(data.header)
     if data.irc_marker_found:
         badges.append(("IRC path found", "ok"))
     return tuple(badges)
 
 
-def irc_report_meta_html(data: IrcReportData) -> str:
-    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
-    version_text = f" &#183; ORCA {html.escape(data.orca_version)}" if data.orca_version else ""
-    return job_meta_html(
-        route_line=data.route_line,
-        job_id=data.job_id,
-        started_at=data.started_at,
-        finished_at=data.finished_at,
-        extra_html=formula_text + version_text,
-    )
-
-
 def irc_report_component(
-    data: IrcReportData,
-    *,
-    include_attempt_metric: bool = True,
-    include_attempt_chain: bool = True,
-    include_common_metric: bool = True,
-    include_optimization: bool = True,
+    data: IrcReportData, *, is_primary: bool, optimization_elsewhere: bool
 ) -> ReportComponent:
+    """The IRC facet's part of the page.
+
+    Its vibrational summary replaces the other facets' (they drop theirs when
+    an IRC facet is present). Its own optimization trace shows only without
+    ``optimization_elsewhere`` (an Opt, scan or NEB-TS facet), and its final
+    energy card and attempt chain only when it is the primary facet.
+    """
     sections: list[tuple[str, str]] = []
     common_html = _calculation_summary_html(data)
     if common_html:
         sections.append(("Calculation summary", common_html))
-    if include_optimization:
+    if not optimization_elsewhere:
         opt_html = _optimization_section_html(data)
         if opt_html:
             sections.append((_optimization_section_title(data), opt_html))
@@ -347,17 +303,22 @@ def irc_report_component(
     iteration_html = _iterations_table_html(data.iterations)
     if iteration_html:
         sections.append(("IRC iterations", iteration_html))
-    if include_attempt_chain:
+    if is_primary:
         attempts_html = attempts_table_html(data.attempts, "Detail") + terminal_actions_html(
             data.attempts
         )
         sections.append(("Attempt chain", attempts_html))
+    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
+    version_text = f" &#183; ORCA {html.escape(data.orca_version)}" if data.orca_version else ""
     return ReportComponent(
+        kind_label="IRC",
+        badges=_irc_badges(data),
+        # Unlike the other reports, IRC shows every route line, not just the first.
+        meta_html=job_meta_html(
+            data.header, " ".join(data.header.route_lines), formula_text + version_text
+        ),
         metrics_html=_irc_metric_cards(
-            data,
-            include_attempts=include_attempt_metric,
-            include_common=include_common_metric,
-            include_optimization=include_optimization,
+            data, is_primary=is_primary, optimization_elsewhere=optimization_elsewhere
         ),
         sections=tuple(sections),
     )
@@ -524,11 +485,7 @@ def _calculation_summary_html(data: IrcReportData) -> str:
 
 
 def _irc_metric_cards(
-    data: IrcReportData,
-    *,
-    include_attempts: bool = True,
-    include_common: bool = True,
-    include_optimization: bool = True,
+    data: IrcReportData, *, is_primary: bool, optimization_elsewhere: bool
 ) -> str:
     cards = []
     if data.path_points:
@@ -554,14 +511,14 @@ def _irc_metric_cards(
         cards.append(
             metric_card(label, f"{endpoint.relative_kcal:+.2f} <small>kcal/mol</small>", note)
         )
-    if include_common and data.result is not None and data.result.energy_hartree is not None:
+    if is_primary and data.result is not None and data.result.energy_hartree is not None:
         level = "/".join(part for part in (data.method, data.basis_set) if part)
         cards.append(
             metric_card(
                 "Final energy", f"{data.result.energy_hartree:.6f} <small>Eh</small>", level
             )
         )
-    if include_optimization and data.optimization_steps:
+    if not optimization_elsewhere and data.optimization_steps:
         cards.append(
             metric_card(
                 "TS opt cycles" if data.ts_route else "Opt cycles",
@@ -578,8 +535,8 @@ def _irc_metric_cards(
                 f"expected {expected}",
             )
         )
-    if include_attempts:
-        cards.append(attempts_metric_card(data.attempts, data.total_duration_text))
+    if is_primary:
+        cards.append(attempts_metric_card(data.attempts, data.header.total_duration_text))
     return "".join(cards)
 
 
@@ -622,9 +579,7 @@ __all__ = [
     "IrcSiBlock",
     "collect_irc_report_data",
     "collect_irc_si_block",
-    "irc_report_badges",
     "irc_report_component",
-    "irc_report_meta_html",
     "parse_irc_output",
     "parse_irc_output_text",
     "render_irc_si_block_md",

@@ -19,17 +19,10 @@ from ..completion_rules import RouteFacts
 from ..evidence import (
     OrcaEvidenceError,
     collect_structure_evidence,
-    final_out_name,
     final_out_path,
     parsed_final_output,
-    parsed_frequency_analysis,
 )
-from ..frequencies import (
-    FrequencyAnalysis,
-    ModeSummary,
-    find_frequency_analysis,
-    mode_summaries,
-)
+from ..frequencies import FrequencyAnalysis, ModeSummary, mode_summaries
 from ..parser import OrcaResult
 from .attempts import (
     AttemptReportRow,
@@ -37,43 +30,32 @@ from .attempts import (
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    duration_text,
+    latest_frequency_analysis,
     terminal_actions_html,
 )
-from .frequencies import (
-    mode_section_html,
-)
+from .frequencies import mode_section_html
 from .render import (
     ReportComponent,
+    ReportHeader,
     job_meta_html,
     metric_card,
     status_badges,
 )
-from .si import (
-    render_si_block_md,
-)
+from .si import render_si_block_md
 
 
 @dataclass(frozen=True)
 class SpReportData:
-    title: str
-    job_id: str
-    status: str
-    reason: str
-    route_line: str
-    started_at: str
-    finished_at: str
-    total_duration_text: str
+    header: ReportHeader
     attempts: tuple[AttemptReportRow, ...]
     result: OrcaResult | None
     imaginary_count: int | None
     mode_summaries: tuple[ModeSummary, ...]
     si_block_text: str | None
-    last_out_name: str
 
 
 def collect_sp_report_data(
-    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts, header: ReportHeader
 ) -> SpReportData:
     attempts = attempt_dicts(state)
     rows = attempt_report_rows(attempts, "initial SP")
@@ -92,9 +74,7 @@ def collect_sp_report_data(
     # output has no frequency section (e.g. a failed run whose earlier attempt
     # still carries one).
     if analysis is None:
-        analysis, _attempt_index = find_frequency_analysis(
-            attempts, parse_analysis_fn=parsed_frequency_analysis
-        )
+        analysis, _attempt_index = latest_frequency_analysis(attempts)
 
     # The SI block only exists for completed jobs with a parsed energy and
     # geometry; the report is still useful without it (failed runs keep the
@@ -105,26 +85,13 @@ def collect_sp_report_data(
         block = None
     si_block_text = render_si_block_md(block) if block is not None else None
 
-    final_result = state.get("final_result")
-    final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
-
     return SpReportData(
-        title=reaction_dir.name or str(reaction_dir),
-        job_id=str(state.get("job_id") or ""),
-        status=str(state.get("status") or ""),
-        reason=str(final_payload.get("reason") or ""),
-        route_line=route.route_lines[0] if route.route_lines else "",
-        started_at=str(state.get("started_at") or ""),
-        finished_at=str(final_payload.get("completed_at") or ""),
-        total_duration_text=duration_text(
-            state.get("started_at"), final_payload.get("completed_at")
-        ),
+        header=header,
         attempts=rows,
         result=result,
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         si_block_text=si_block_text,
-        last_out_name=final_out_name(state),
     )
 
 
@@ -168,24 +135,6 @@ def _energy_section_html(data: SpReportData) -> str:
     )
 
 
-def sp_report_badges(data: SpReportData) -> tuple[tuple[str, str], ...]:
-    return tuple(status_badges(data.status, data.reason))
-
-
-def sp_report_meta_html(data: SpReportData) -> str:
-    formula = data.result.formula if data.result is not None else ""
-    formula_text = f" &#183; {html.escape(formula)}" if formula else ""
-    version = data.result.orca_version if data.result is not None else ""
-    version_text = f" &#183; ORCA {html.escape(version)}" if version else ""
-    return job_meta_html(
-        route_line=data.route_line,
-        job_id=data.job_id,
-        started_at=data.started_at,
-        finished_at=data.finished_at,
-        extra_html=formula_text + version_text,
-    )
-
-
 def _metric_cards(data: SpReportData) -> str:
     cards: list[str] = []
     result = data.result
@@ -206,11 +155,12 @@ def _metric_cards(data: SpReportData) -> str:
         cards.append(metric_card("Charge / multiplicity", electronic_state, note))
     if data.imaginary_count is not None:
         cards.append(metric_card("Imaginary frequencies", str(data.imaginary_count), ""))
-    cards.append(attempts_metric_card(data.attempts, data.total_duration_text))
+    cards.append(attempts_metric_card(data.attempts, data.header.total_duration_text))
     return "".join(cards)
 
 
 def sp_report_component(data: SpReportData) -> ReportComponent:
+    """The SP facet is only collected alone, so it is always the primary one."""
     sections: list[tuple[str, str]] = [("Energy summary", _energy_section_html(data))]
     if data.mode_summaries:
         sections.append(("Vibrational summary", mode_section_html(data.mode_summaries, None)))
@@ -229,13 +179,23 @@ def sp_report_component(data: SpReportData) -> ReportComponent:
                 "next to this report.</p>",
             )
         )
-    return ReportComponent(metrics_html=_metric_cards(data), sections=tuple(sections))
+    formula = data.result.formula if data.result is not None else ""
+    formula_text = f" &#183; {html.escape(formula)}" if formula else ""
+    version = data.result.orca_version if data.result is not None else ""
+    version_text = f" &#183; ORCA {html.escape(version)}" if version else ""
+    return ReportComponent(
+        kind_label="SP",
+        badges=tuple(status_badges(data.header)),
+        meta_html=job_meta_html(
+            data.header, data.header.first_route_line, formula_text + version_text
+        ),
+        metrics_html=_metric_cards(data),
+        sections=tuple(sections),
+    )
 
 
 __all__ = [
     "SpReportData",
     "collect_sp_report_data",
-    "sp_report_badges",
     "sp_report_component",
-    "sp_report_meta_html",
 ]

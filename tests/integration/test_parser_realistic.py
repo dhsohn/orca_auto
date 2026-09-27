@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from orca_auto.orca.completion_rules import CompletionMode
-from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.evidence import parsed_frequency_analysis
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
@@ -364,7 +364,7 @@ class TestParserRealisticOutputs:
         assert r.enthalpy == pytest.approx(-113.834210)
         assert r.gibbs_energy == pytest.approx(-113.862100)
         assert r.wall_time_seconds == 2 * 3600 + 15 * 60 + 30
-        analysis = parse_frequency_analysis(out)
+        analysis = parsed_frequency_analysis(out)
         assert analysis is not None
         assert analysis.imaginary_count() == 0
         assert min(f for f in analysis.frequencies if f != 0.0) == pytest.approx(1167.32)
@@ -384,7 +384,7 @@ class TestParserRealisticOutputs:
         assert r.opt_converged is None
         assert r.enthalpy is None
         assert r.wall_time_seconds == 5 * 3600 + 42 * 60 + 18
-        assert parse_frequency_analysis(out) is None
+        assert parsed_frequency_analysis(out) is None
 
     def test_ts_with_imaginary_frequency(self, tmp_path: Path) -> None:
         """OptTS with one imaginary frequency (expected for TS)."""
@@ -400,7 +400,7 @@ class TestParserRealisticOutputs:
         assert r.opt_converged is True
         assert r.enthalpy == pytest.approx(-500.089123)
         assert r.gibbs_energy == pytest.approx(-500.112345)
-        analysis = parse_frequency_analysis(out)
+        analysis = parsed_frequency_analysis(out)
         assert analysis is not None
         assert analysis.imaginary_count() == 1
         assert min(analysis.frequencies) == pytest.approx(-432.15)
@@ -413,7 +413,7 @@ class TestParserRealisticOutputs:
         out = tmp_path / "ts_real.out"
         out.write_text(_TS_REAL_VIB_FORMAT, encoding="utf-8")
 
-        analysis = parse_frequency_analysis(out)
+        analysis = parsed_frequency_analysis(out)
 
         assert analysis is not None
         assert analysis.imaginary_count() == 1

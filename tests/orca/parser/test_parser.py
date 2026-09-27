@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from orca_auto.orca.completion_rules import CompletionMode
-from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.evidence import parsed_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.output_status import last_optimization_convergence
@@ -183,7 +183,7 @@ def test_frequency_analysis_uses_final_vibrational_frequency_block(tmp_path: Pat
         encoding="utf-8",
     )
 
-    analysis = parse_frequency_analysis(out_file)
+    analysis = parsed_frequency_analysis(out_file)
 
     assert analysis is not None
     assert analysis.frequencies == pytest.approx((-5.0, 130.0))
@@ -637,7 +637,7 @@ def test_parser_binds_thermochemistry_to_the_final_energy_stage(tmp_path: Path) 
     assert result.gibbs_energy == pytest.approx(-100.30)
     assert result.gibbs_correction == pytest.approx(-0.10)
     assert result.thermo_temperature_k == pytest.approx(350.0)
-    analysis = parse_frequency_analysis(out_file)
+    analysis = parsed_frequency_analysis(out_file)
     assert analysis is not None
     assert analysis.frequencies == pytest.approx((0.0, -420.0))
     assert analysis.imaginary_count() == 1

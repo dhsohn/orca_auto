@@ -336,7 +336,8 @@ def test_multiline_route_classifies_ts_correctly(tmp_path: Path) -> None:
     data = _irc_data(tmp_path, _state(tmp_path, out_path))
 
     assert data is not None
-    assert "OptTS" in data.route_line
+    assert "OptTS" in " ".join(data.header.route_lines)
+    assert data.ts_route
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
     )
