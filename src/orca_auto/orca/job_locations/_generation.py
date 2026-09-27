@@ -5,15 +5,15 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.core.queue.metadata import mapping_metadata_value
 from orca_auto.core.utils import normalize_text
 
 
 def _queue_generation(queue_entry: dict[str, Any] | None) -> tuple[str, str]:
     queue = queue_entry or {}
+    metadata = queue.get("metadata")
     return (
         normalize_text(queue.get("task_id")),
-        normalize_text(mapping_metadata_value(queue, "run_id")),
+        normalize_text(metadata.get("run_id") if isinstance(metadata, dict) else None),
     )
 
 
@@ -121,28 +121,7 @@ def payload_matches_queue_generation(
     return True
 
 
-def current_generation_payloads(
-    queue_entry: dict[str, Any] | None,
-    state: dict[str, Any],
-    report: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    current_state = state if payload_matches_queue_generation(queue_entry, state) else {}
-    current_report = report if payload_matches_queue_generation(queue_entry, report) else {}
-    if (
-        current_state
-        and current_report
-        and (
-            _payload_generation(current_state) != _payload_generation(current_report)
-            or payload_generation_provenance(current_state)
-            != payload_generation_provenance(current_report)
-        )
-    ):
-        return {}, {}
-    return current_state, current_report
-
-
 __all__ = [
-    "current_generation_payloads",
     "payload_generation_provenance",
     "payload_matches_queue_generation",
 ]

@@ -26,12 +26,7 @@ from ..utils.persistence import (
 )
 from . import persistence as _admission_persistence
 from . import records as _admission_records
-from .records import (
-    AdmissionReservationRequest,
-    AdmissionSlot,
-    AdmissionSlotActivation,
-    AdmissionSlotMetadataUpdate,
-)
+from .records import AdmissionSlot
 
 ADMISSION_FILE_NAME = _admission_persistence.ADMISSION_FILE_NAME
 ADMISSION_LOCK_NAME = _admission_persistence.ADMISSION_LOCK_NAME
@@ -162,49 +157,11 @@ def _slot_owner_alive(slot: AdmissionSlot) -> bool:
     return False
 
 
-def _reservation_limit_reached(
-    slots: list[AdmissionSlot],
-    request: AdmissionReservationRequest,
-) -> bool:
-    return len(slots) >= max(1, int(request.limit))
-
-
-def _slot_from_reservation_request(
-    request: AdmissionReservationRequest,
-    *,
-    token: str,
-) -> AdmissionSlot:
-    if type(request.engine_launch_gated) is not bool:
-        raise ValueError("Admission engine launch-gated flag must be a boolean")
-    resolved_owner_pid = request.owner_pid if request.owner_pid is not None else os.getpid()
-    if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
-        raise ValueError("Admission slot owner PID must be a positive integer")
-    engine_process_state = _inactive_engine_process_state(request.engine_process_state)
-    owner_start_ticks = _process_start_ticks(resolved_owner_pid)
-    owner_boot_id = _linux_boot_id()
-    if owner_start_ticks is None or owner_boot_id is None:
-        raise ValueError("Cannot verify admission slot owner process identity")
-    return AdmissionSlot(
-        token=token,
-        owner_pid=resolved_owner_pid,
-        process_start_ticks=owner_start_ticks,
-        source=request.source.strip(),
-        acquired_at=now_utc_iso(),
-        owner_boot_id=owner_boot_id,
-        app_name=request.app_name.strip(),
-        task_id=request.task_id.strip(),
-        state=request.state.strip() or "active",
-        work_dir=_normalize_work_dir(request.work_dir),
-        queue_id=request.queue_id.strip(),
-        engine_process_state=engine_process_state,
-        engine_launch_gated=request.engine_launch_gated,
-    )
-
-
 def _resolved_slot_ownership(
     slot: AdmissionSlot,
-    update: AdmissionSlotActivation | AdmissionSlotMetadataUpdate,
     *,
+    owner_pid: int | None,
+    engine_process_state: str | None,
     default_owner_pid: int,
 ) -> tuple[int, int, str, str]:
     """Resolve the owner identity a slot update may claim.
@@ -213,7 +170,7 @@ def _resolved_slot_ownership(
     active or pending engine slot never changes hands, and an owner whose start
     ticks or boot id cannot be observed is refused rather than trusted.
     """
-    resolved_owner_pid = update.owner_pid if update.owner_pid is not None else default_owner_pid
+    resolved_owner_pid = owner_pid if owner_pid is not None else default_owner_pid
     if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
         raise ValueError("Admission slot owner PID must be a positive integer")
     if slot.engine_process_state in {"active", "pending"} and resolved_owner_pid != slot.owner_pid:
@@ -223,9 +180,9 @@ def _resolved_slot_ownership(
         if resolved_owner_pid == slot.owner_pid
         else _process_start_ticks(resolved_owner_pid)
     )
-    engine_process_state = _updated_inactive_engine_process_state(
+    resolved_engine_process_state = _updated_inactive_engine_process_state(
         slot,
-        update.engine_process_state,
+        engine_process_state,
     )
     owner_boot_id: str | None
     if resolved_owner_pid == slot.owner_pid:
@@ -234,53 +191,7 @@ def _resolved_slot_ownership(
         owner_boot_id = _linux_boot_id()
     if owner_start_ticks is None or owner_boot_id is None:
         raise ValueError("Cannot verify admission slot owner process identity")
-    return resolved_owner_pid, owner_start_ticks, owner_boot_id, engine_process_state
-
-
-def _activated_slot(slot: AdmissionSlot, update: AdmissionSlotActivation) -> AdmissionSlot:
-    (
-        resolved_owner_pid,
-        owner_start_ticks,
-        owner_boot_id,
-        engine_process_state,
-    ) = _resolved_slot_ownership(slot, update, default_owner_pid=os.getpid())
-    return replace(
-        slot,
-        state=update.state.strip() or slot.state or "active",
-        work_dir=slot.work_dir if update.work_dir is None else _normalize_work_dir(update.work_dir),
-        queue_id=slot.queue_id if update.queue_id is None else update.queue_id.strip(),
-        owner_pid=resolved_owner_pid,
-        process_start_ticks=owner_start_ticks,
-        owner_boot_id=owner_boot_id,
-        source=slot.source if update.source is None else update.source.strip(),
-        app_name=slot.app_name if update.app_name is None else update.app_name.strip(),
-        task_id=slot.task_id if update.task_id is None else update.task_id.strip(),
-        engine_process_state=engine_process_state,
-    )
-
-
-def _metadata_updated_slot(
-    slot: AdmissionSlot,
-    update: AdmissionSlotMetadataUpdate,
-) -> AdmissionSlot:
-    (
-        resolved_owner_pid,
-        owner_start_ticks,
-        owner_boot_id,
-        engine_process_state,
-    ) = _resolved_slot_ownership(slot, update, default_owner_pid=slot.owner_pid)
-    return replace(
-        slot,
-        state=slot.state if update.state is None else update.state.strip() or slot.state,
-        queue_id=slot.queue_id if update.queue_id is None else update.queue_id.strip(),
-        app_name=slot.app_name if update.app_name is None else update.app_name.strip(),
-        task_id=slot.task_id if update.task_id is None else update.task_id.strip(),
-        work_dir=slot.work_dir if update.work_dir is None else _normalize_work_dir(update.work_dir),
-        owner_pid=resolved_owner_pid,
-        process_start_ticks=owner_start_ticks,
-        owner_boot_id=owner_boot_id,
-        engine_process_state=engine_process_state,
-    )
+    return resolved_owner_pid, owner_start_ticks, owner_boot_id, resolved_engine_process_state
 
 
 @contextmanager
@@ -428,10 +339,6 @@ def get_slot(root: str | Path, token: str) -> AdmissionSlot | None:
     return next((slot for slot in list_all_slots(root) if slot.token == token), None)
 
 
-def active_slot_count(root: str | Path) -> int:
-    return len(list_slots(root))
-
-
 def reserve_slot(
     root: str | Path,
     limit: int,
@@ -446,31 +353,10 @@ def reserve_slot(
     engine_process_state: str = "idle",
     engine_launch_gated: bool = False,
 ) -> str | None:
-    return reserve_slot_from_request(
-        root,
-        AdmissionReservationRequest(
-            limit=limit,
-            source=source,
-            app_name=app_name,
-            task_id=task_id,
-            state=state,
-            work_dir=work_dir,
-            queue_id=queue_id,
-            owner_pid=owner_pid,
-            engine_process_state=engine_process_state,
-            engine_launch_gated=engine_launch_gated,
-        ),
-    )
-
-
-def reserve_slot_from_request(
-    root: str | Path,
-    request: AdmissionReservationRequest,
-) -> str | None:
     store = AdmissionStore.for_root(root)
 
     def reserve(slots: list[AdmissionSlot]) -> tuple[str | None, bool]:
-        if _reservation_limit_reached(slots, request):
+        if len(slots) >= max(1, int(limit)):
             # Nothing changed; do not rewrite the file for a refused reservation.
             return None, False
         occupied_tokens = {slot.token for slot in slots}
@@ -485,9 +371,34 @@ def reserve_slot_from_request(
                 "Could not allocate a unique admission slot token after "
                 f"{_TOKEN_COLLISION_RETRY_LIMIT} attempts"
             )
-        slot = _slot_from_reservation_request(request, token=token)
-        slots.append(slot)
-        return slot.token, True
+        if type(engine_launch_gated) is not bool:
+            raise ValueError("Admission engine launch-gated flag must be a boolean")
+        resolved_owner_pid = owner_pid if owner_pid is not None else os.getpid()
+        if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
+            raise ValueError("Admission slot owner PID must be a positive integer")
+        inactive_engine_process_state = _inactive_engine_process_state(engine_process_state)
+        owner_start_ticks = _process_start_ticks(resolved_owner_pid)
+        owner_boot_id = _linux_boot_id()
+        if owner_start_ticks is None or owner_boot_id is None:
+            raise ValueError("Cannot verify admission slot owner process identity")
+        slots.append(
+            AdmissionSlot(
+                token=token,
+                owner_pid=resolved_owner_pid,
+                process_start_ticks=owner_start_ticks,
+                source=source.strip(),
+                acquired_at=now_utc_iso(),
+                owner_boot_id=owner_boot_id,
+                app_name=app_name.strip(),
+                task_id=task_id.strip(),
+                state=state.strip() or "active",
+                work_dir=_normalize_work_dir(work_dir),
+                queue_id=queue_id.strip(),
+                engine_process_state=inactive_engine_process_state,
+                engine_launch_gated=engine_launch_gated,
+            )
+        )
+        return token, True
 
     return store.mutate_live_slots(reserve)
 
@@ -505,29 +416,31 @@ def activate_reserved_slot(
     task_id: str | None = None,
     engine_process_state: str | None = None,
 ) -> AdmissionSlot | None:
-    return activate_reserved_slot_with_update(
-        root,
-        token,
-        AdmissionSlotActivation(
-            state=state,
-            work_dir=work_dir,
-            queue_id=queue_id,
-            owner_pid=owner_pid,
-            source=source,
-            app_name=app_name,
-            task_id=task_id,
-            engine_process_state=engine_process_state,
-        ),
-    )
-
-
-def activate_reserved_slot_with_update(
-    root: str | Path,
-    token: str,
-    update: AdmissionSlotActivation,
-) -> AdmissionSlot | None:
     def activate(slot: AdmissionSlot) -> tuple[AdmissionSlot, AdmissionSlot]:
-        updated = _activated_slot(slot, update)
+        (
+            resolved_owner_pid,
+            owner_start_ticks,
+            owner_boot_id,
+            resolved_engine_process_state,
+        ) = _resolved_slot_ownership(
+            slot,
+            owner_pid=owner_pid,
+            engine_process_state=engine_process_state,
+            default_owner_pid=os.getpid(),
+        )
+        updated = replace(
+            slot,
+            state=state.strip() or slot.state or "active",
+            work_dir=slot.work_dir if work_dir is None else _normalize_work_dir(work_dir),
+            queue_id=slot.queue_id if queue_id is None else queue_id.strip(),
+            owner_pid=resolved_owner_pid,
+            process_start_ticks=owner_start_ticks,
+            owner_boot_id=owner_boot_id,
+            source=slot.source if source is None else source.strip(),
+            app_name=slot.app_name if app_name is None else app_name.strip(),
+            task_id=slot.task_id if task_id is None else task_id.strip(),
+            engine_process_state=resolved_engine_process_state,
+        )
         return updated, updated
 
     return AdmissionStore.for_root(root).mutate_slot_by_token(
@@ -811,28 +724,30 @@ def update_slot_metadata(
     owner_pid: int | None = None,
     engine_process_state: str | None = None,
 ) -> AdmissionSlot | None:
-    return update_slot_metadata_with_update(
-        root,
-        token,
-        AdmissionSlotMetadataUpdate(
-            state=state,
-            queue_id=queue_id,
-            app_name=app_name,
-            task_id=task_id,
-            work_dir=work_dir,
+    def update_metadata(slot: AdmissionSlot) -> tuple[AdmissionSlot, AdmissionSlot]:
+        (
+            resolved_owner_pid,
+            owner_start_ticks,
+            owner_boot_id,
+            resolved_engine_process_state,
+        ) = _resolved_slot_ownership(
+            slot,
             owner_pid=owner_pid,
             engine_process_state=engine_process_state,
-        ),
-    )
-
-
-def update_slot_metadata_with_update(
-    root: str | Path,
-    token: str,
-    update: AdmissionSlotMetadataUpdate,
-) -> AdmissionSlot | None:
-    def update_metadata(slot: AdmissionSlot) -> tuple[AdmissionSlot, AdmissionSlot]:
-        updated = _metadata_updated_slot(slot, update)
+            default_owner_pid=slot.owner_pid,
+        )
+        updated = replace(
+            slot,
+            state=slot.state if state is None else state.strip() or slot.state,
+            queue_id=slot.queue_id if queue_id is None else queue_id.strip(),
+            app_name=slot.app_name if app_name is None else app_name.strip(),
+            task_id=slot.task_id if task_id is None else task_id.strip(),
+            work_dir=slot.work_dir if work_dir is None else _normalize_work_dir(work_dir),
+            owner_pid=resolved_owner_pid,
+            process_start_ticks=owner_start_ticks,
+            owner_boot_id=owner_boot_id,
+            engine_process_state=resolved_engine_process_state,
+        )
         return updated, updated
 
     return AdmissionStore.for_root(root).mutate_slot_by_token(

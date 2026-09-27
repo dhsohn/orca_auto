@@ -10,15 +10,10 @@ from .engine_process import (
 )
 from .store import (
     AdmissionLimitReachedError,
-    AdmissionReservationRequest,
     AdmissionSlot,
-    AdmissionSlotActivation,
-    AdmissionSlotMetadataUpdate,
     AdmissionStore,
     AdmissionStoreCorruptError,
     activate_reserved_slot,
-    activate_reserved_slot_with_update,
-    active_slot_count,
     admission_lock,
     clear_slot_engine_process,
     complete_slot_engine_process,
@@ -30,18 +25,13 @@ from .store import (
     reconcile_stale_slots,
     release_slot,
     reserve_slot,
-    reserve_slot_from_request,
     set_slot_engine_process,
     update_slot_metadata,
-    update_slot_metadata_with_update,
 )
 
 __all__ = [
     "AdmissionLimitReachedError",
-    "AdmissionReservationRequest",
     "AdmissionSlot",
-    "AdmissionSlotActivation",
-    "AdmissionSlotMetadataUpdate",
     "AdmissionStore",
     "AdmissionStoreCorruptError",
     "EngineProcessRecordError",
@@ -49,8 +39,6 @@ __all__ = [
     "EngineProcessRecoveryDeps",
     "admission_lock",
     "activate_reserved_slot",
-    "activate_reserved_slot_with_update",
-    "active_slot_count",
     "clear_slot_engine_process",
     "complete_slot_engine_process",
     "build_slot_engine_process_preparer",
@@ -66,8 +54,6 @@ __all__ = [
     "register_slot_engine_process",
     "release_slot",
     "reserve_slot",
-    "reserve_slot_from_request",
     "set_slot_engine_process",
     "update_slot_metadata",
-    "update_slot_metadata_with_update",
 ]

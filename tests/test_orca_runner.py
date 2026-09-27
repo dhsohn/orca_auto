@@ -19,7 +19,7 @@ from orca_auto.core.engine_scratch import (
 )
 from orca_auto.core.engine_scratch import _policy as policy_mod
 from orca_auto.core.engine_scratch import _workspace as workspace_mod
-from orca_auto.core.queue.cancellable import ProcessCleanupError
+from orca_auto.core.queue.processes import ProcessCleanupError
 from orca_auto.orca import orca_runner
 from orca_auto.orca.orca_runner import (
     OrcaRunner,

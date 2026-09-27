@@ -2,9 +2,9 @@
 
 One committed queue row must always end up with its queued job artifact
 published exactly once, no matter where the publisher crashes. Publication
-policy stays in the :class:`EnqueuePublicationSpec` — commit guards,
-duplicate policy, the publish callback, and the generation comparator — while
-the crash-safety state machine lives here.
+policy stays in the :class:`EnqueuePublicationSpec` — commit guards, the
+enqueue and fence functions, the publish callback, and the generation
+comparator — while the crash-safety state machine lives here.
 
 Protocol invariants:
 
@@ -27,11 +27,10 @@ import logging
 import os
 from collections.abc import Callable
 from contextlib import ExitStack
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.generation import queue_entries_same_generation
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS,
     QUEUE_RECORD_SYNC_ABORTED,
@@ -50,10 +49,9 @@ from orca_auto.core.queue.store import (
     QueueAfterCommitError,
     QueueLockTimeoutError,
     QueueStoreCorruptError,
-    enqueue,
     mutate_entries,
 )
-from orca_auto.core.queue.transitions import mark_failed, terminal_entry
+from orca_auto.core.queue.transitions import terminal_entry
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils import now_utc_iso
 from orca_auto.core.utils.coercion import normalize_text
@@ -98,17 +96,14 @@ class EnqueuePublicationSpec:
     metadata: dict[str, Any]
     label: str
     publish: Callable[[QueueEntry], None]
-    duplicate_policy: Callable[..., None] | None = None
+    enqueue_fn: Callable[..., QueueEntry]
+    mark_failed_fn: Callable[..., Any]
+    same_generation: Callable[[QueueEntry, QueueEntry], bool]
     before_commit_fn: Callable[[], Any] | None = None
     after_commit_fn: Callable[[], Any] | None = None
     on_compensated_failure: Callable[[], None] | None = None
-    enqueue_fn: Callable[..., Any] | None = None
-    mark_failed_fn: Callable[..., Any] | None = None
     job_dir_metadata_key: str = "job_dir"
     ambiguous_fence_metadata: dict[str, Any] | None = None
-    same_generation: Callable[[QueueEntry, QueueEntry], bool] = field(
-        default=queue_entries_same_generation
-    )
 
 
 @dataclass(frozen=True)
@@ -175,9 +170,8 @@ def _fence_uncompensated_enqueue(
             spec.label,
         )
         return
-    mark_failed_fn = spec.mark_failed_fn if spec.mark_failed_fn is not None else mark_failed
     try:
-        fenced = mark_failed_fn(
+        fenced = spec.mark_failed_fn(
             spec.queue_root,
             entry.queue_id,
             error=(
@@ -633,9 +627,8 @@ def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationO
             owner_pid=os.getpid(),
         )
     )
-    enqueue_fn = spec.enqueue_fn if spec.enqueue_fn is not None else enqueue
     try:
-        entry = enqueue_fn(
+        entry = spec.enqueue_fn(
             spec.queue_root,
             app_name=spec.app_name,
             task_id=spec.task_id,
@@ -643,7 +636,6 @@ def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationO
             engine=spec.engine,
             priority=spec.priority,
             metadata=metadata,
-            duplicate_policy=spec.duplicate_policy,
             before_commit_fn=spec.before_commit_fn,
             after_commit_fn=spec.after_commit_fn,
         )
@@ -708,25 +700,6 @@ def run_enqueue_publication(spec: EnqueuePublicationSpec) -> EnqueuePublicationO
         )
 
     return _publish_owned_record(spec, entry, publication_token=publication_token)
-
-
-def repair_enqueue_publication(
-    queue_root: Path,
-    entry: QueueEntry,
-    *,
-    publish: Callable[[QueueEntry], None],
-    label: str,
-    same_generation: Callable[[QueueEntry, QueueEntry], bool] = queue_entries_same_generation,
-) -> bool:
-    """Boolean form of :func:`repair_enqueue_publication_outcome`."""
-
-    return repair_enqueue_publication_outcome(
-        queue_root,
-        entry,
-        publish=publish,
-        label=label,
-        same_generation=same_generation,
-    ).repaired
 
 
 def _claim_repair_lease(
@@ -876,7 +849,7 @@ def repair_enqueue_publication_outcome(
     *,
     publish: Callable[[QueueEntry], None],
     label: str,
-    same_generation: Callable[[QueueEntry, QueueEntry], bool] = queue_entries_same_generation,
+    same_generation: Callable[[QueueEntry, QueueEntry], bool],
     lock_timeout_seconds: float = QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS,
 ) -> RepairOutcome:
     """Re-publish one committed row whose queued record never landed.
@@ -949,7 +922,6 @@ __all__ = [
     "EnqueuePublicationOutcomeUnknown",
     "EnqueuePublicationSpec",
     "RepairOutcome",
-    "repair_enqueue_publication",
     "repair_enqueue_publication_outcome",
     "run_enqueue_publication",
 ]

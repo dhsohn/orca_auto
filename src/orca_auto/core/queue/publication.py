@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -65,10 +64,6 @@ def process_start_token(process_id: int) -> str:
         return ""
     boot_id = _linux_boot_id()
     return f"{boot_id}:{start_ticks}" if boot_id else ""
-
-
-def current_process_start_token() -> str:
-    return process_start_token(os.getpid())
 
 
 def queue_record_sync_metadata(
@@ -141,7 +136,6 @@ __all__ = [
     "QUEUE_RECORD_SYNC_REPAIRING",
     "QUEUE_RECORD_SYNC_TOKEN_KEY",
     "QUEUE_RECORD_SYNC_UPDATED_AT_KEY",
-    "current_process_start_token",
     "process_start_token",
     "queue_entry_is_claimable",
     "queue_record_publication_lock",

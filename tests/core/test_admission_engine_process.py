@@ -13,7 +13,6 @@ import pytest
 
 from orca_auto.core import admission
 from orca_auto.core.admission import engine_process, store
-from orca_auto.core.queue.cancellable import run_cancellable_engine_process
 from orca_auto.core.queue.engine.child import (
     await_parent_admission_handoff,
 )
@@ -563,49 +562,6 @@ def test_concurrent_recovery_clear_is_idempotent(
 
     observed = sorted(results.get(timeout=1) for _ in workers)
     assert all(kind == "ok" for kind, _value in observed)
-    assert admission.get_slot(tmp_path, token).engine_process_state == "idle"  # type: ignore[union-attr]
-
-
-def test_registrar_publication_failure_cleans_process_and_pending_marker(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    token = _reserve_managed(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        engine_process.process_utils,
-        "process_start_ticks",
-        lambda *_args, **_kwargs: None,
-    )
-
-    class Process:
-        pid = 202
-        exited = False
-
-        def poll(self) -> int | None:
-            return 1 if self.exited else None
-
-    process = Process()
-
-    def terminate(_process: Process) -> bool:
-        process.exited = True
-        return True
-
-    def start_job() -> SimpleNamespace:
-        # Engine preparation happens immediately inside start_job, just before Popen;
-        # the outer cancellable preparation flag therefore remains false.
-        admission.build_slot_engine_process_preparer(tmp_path, token)()
-        return SimpleNamespace(process=process)
-
-    result = run_cancellable_engine_process(
-        start_job=start_job,
-        register_running_job=admission.build_slot_engine_process_registrar(tmp_path, token),
-        finalize_job=lambda *_args, **_kwargs: pytest.fail("finalizer must not run"),
-        terminate_process=terminate,
-        build_failure_result=lambda exc: type(exc).__name__,
-    )
-
-    assert result == "EngineProcessRecordError"
-    assert process.exited is True
     assert admission.get_slot(tmp_path, token).engine_process_state == "idle"  # type: ignore[union-attr]
 
 

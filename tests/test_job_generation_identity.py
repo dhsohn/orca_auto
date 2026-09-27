@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from orca_auto.orca.job_locations._generation import (
-    current_generation_payloads,
-    payload_matches_queue_generation,
-)
+from orca_auto.orca.job_locations._generation import payload_matches_queue_generation
 
 
 def _provenance(*, suffix: str = "a1b2c3d4") -> dict[str, object]:
@@ -25,37 +22,13 @@ def _payload(job_id: str, run_id: str) -> dict[str, object]:
     }
 
 
-def test_queue_absent_state_and_report_require_the_same_generation_identity() -> None:
+def test_queue_absent_requires_one_consistent_generation_provenance() -> None:
     state = _payload("job-a", "run-a")
-    report = _payload("job-b", "run-b")
-
-    assert current_generation_payloads(None, state, report) == ({}, {})
-
-
-def test_queue_absent_keeps_matching_or_single_available_payloads() -> None:
-    state = _payload("job-a", "run-a")
-    report = _payload("job-a", "run-a")
-
-    assert current_generation_payloads(None, state, report) == (state, report)
-    assert current_generation_payloads(None, state, {}) == (state, {})
-
-
-def test_queue_absent_rejects_mixed_or_conflicting_generation_provenance() -> None:
-    state = _payload("job-a", "run-a")
-    report = _payload("job-a", "run-a")
-    report["execution_provenance"] = _provenance(suffix="b1c2d3e4")
-
-    assert current_generation_payloads(None, state, report) == ({}, {})
+    assert payload_matches_queue_generation(None, state)
 
     state["engine_payload"] = {"execution_provenance": _provenance(suffix="b1c2d3e4")}
+
     assert not payload_matches_queue_generation(None, state)
-
-
-def test_queue_present_without_run_id_rejects_state_report_run_mismatch() -> None:
-    state = {"job_id": "job-a", "run_id": "run-a"}
-    report = {"job_id": "job-a", "run_id": "run-b"}
-
-    assert current_generation_payloads({"task_id": "job-a"}, state, report) == ({}, {})
 
 
 @pytest.mark.parametrize(

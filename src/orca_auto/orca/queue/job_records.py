@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.resource_requests import coerce_resource_request
+from orca_auto.core.config.schema import positive_int_mapping
 from orca_auto.core.statuses import STATUS_QUEUED
 
 from ..config import AppConfig
@@ -60,15 +60,15 @@ def tracking_metadata_from_queue_entry(
     job_type = str(metadata.get("job_type") or "").strip() or "other"
     molecule_key = str(metadata.get("molecule_key") or "").strip() or "unknown"
 
-    requested = coerce_resource_request(metadata.get("resource_request"))
+    requested = positive_int_mapping(metadata.get("resource_request"))
     snapshot = metadata.get("execution_snapshot")
     if not requested and isinstance(snapshot, dict):
-        requested = coerce_resource_request(snapshot.get("resource_request"))
+        requested = positive_int_mapping(snapshot.get("resource_request"))
     if not requested:
         requested = resource_dict(
             cfg.resources.max_cores_per_task,
             cfg.resources.max_memory_gb_per_task,
         )
 
-    actual = coerce_resource_request(metadata.get("resource_actual")) or dict(requested)
+    actual = positive_int_mapping(metadata.get("resource_actual")) or dict(requested)
     return selected_input, job_type, molecule_key, requested, actual

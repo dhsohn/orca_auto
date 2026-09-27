@@ -486,7 +486,7 @@ def test_reserve_slot_honors_capacity_limit(
 
     assert first is not None and first.startswith("slot_")
     assert second is None
-    assert store.active_slot_count(tmp_path) == 1
+    assert len(store.list_slots(tmp_path)) == 1
     [stored] = _read_slots_file(tmp_path)
     assert stored["owner_pid"] == 5151
     assert stored["process_start_ticks"] == 5151

@@ -20,7 +20,8 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     reconcile_orphaned_snapshot_generations,
     transition_snapshot_intent,
 )
-from orca_auto.core.queue.store import enqueue
+from orca_auto.core.queue.store import mutate_entries
+from orca_auto.core.queue.types import QueueEntry
 
 
 def _visible_generation_path(
@@ -30,6 +31,24 @@ def _visible_generation_path(
     job_dir = queue_root / "job"
     job_dir.mkdir(exist_ok=True)
     return job_dir / name
+
+
+def _enqueue_foreign_row(queue_root: Path, token: str) -> None:
+    """Append a non-ORCA row that references ``token`` under the queue lock."""
+    row = QueueEntry(
+        queue_id="q-foreign",
+        app_name="foreign-app",
+        task_id="foreign-task",
+        task_kind="foreign-kind",
+        engine="foreign-engine",
+        metadata={"execution_snapshot": {SNAPSHOT_INTENT_TOKEN_KEY: token}},
+    )
+
+    def append(entries: list[QueueEntry]) -> tuple[None, bool]:
+        entries.append(row)
+        return None, True
+
+    mutate_entries(queue_root, append)
 
 
 def _create_generation(path: Path) -> None:
@@ -327,14 +346,7 @@ def test_default_reconcile_reads_raw_queue_rows_under_the_core_store(tmp_path: P
         generation_paths=[generation],
     )
     _create_generation(generation)
-    enqueue(
-        tmp_path,
-        app_name="foreign-app",
-        task_id="foreign-task",
-        task_kind="foreign-kind",
-        engine="foreign-engine",
-        metadata={"execution_snapshot": {SNAPSHOT_INTENT_TOKEN_KEY: token}},
-    )
+    _enqueue_foreign_row(tmp_path, token)
 
     removed = reconcile_orphaned_snapshot_generations(
         [tmp_path],
@@ -506,14 +518,7 @@ def test_reconcile_keeps_queue_lock_through_owner_decision(
     assert queue_loaded.wait(timeout=2)
 
     def publish() -> None:
-        enqueue(
-            tmp_path,
-            app_name="foreign-app",
-            task_id="foreign-task",
-            task_kind="foreign-kind",
-            engine="foreign-engine",
-            metadata={"execution_snapshot": {SNAPSHOT_INTENT_TOKEN_KEY: token}},
-        )
+        _enqueue_foreign_row(tmp_path, token)
         enqueue_done.set()
 
     enqueue_thread = Thread(target=publish)

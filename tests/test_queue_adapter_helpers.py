@@ -819,6 +819,9 @@ def _driver_recovery_spec(root: Path) -> Any:
         metadata={},
         label="ORCA",
         publish=lambda _entry: None,
+        enqueue_fn=lambda *_args, **_kwargs: pytest.fail("recovery never enqueues"),
+        mark_failed_fn=queue_adapter.mark_failed,
+        same_generation=queue_adapter.queue_entries_same_publication_generation,
         job_dir_metadata_key="reaction_dir",
         ambiguous_fence_metadata={queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
     )

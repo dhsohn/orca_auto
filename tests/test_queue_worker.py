@@ -29,7 +29,6 @@ from unittest.mock import patch
 import pytest
 
 from orca_auto.core.admission import (
-    active_slot_count,
     get_slot,
     list_slots,
     prepare_slot_engine_process,
@@ -1020,7 +1019,7 @@ def test_start_job_oserror(
     assert worker._start_job(queue_root, entry, admission_token=token) is False
 
     assert entry.queue_id not in worker._running
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     [failed] = list_queue(queue_root)
     assert (failed.status, failed.error) == (QueueStatus.FAILED, "spawn failed")
 
@@ -1055,7 +1054,7 @@ def test_start_job_attach_error_releases_slot_and_terminates_process(
     assert entry.queue_id not in worker._running
     [started] = child_starter.started
     assert fake_children.stopped(started.process)
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     [updated] = list_queue(queue_root)
     assert updated.status == QueueStatus.FAILED
     # Handled exactly once: the specific refusal reason survives and the slot
@@ -1080,7 +1079,7 @@ def test_start_error_does_not_fail_replacement_generation(
 
     [durable] = list_queue(queue_root)
     assert (durable.task_id, durable.status) == ("task-b", QueueStatus.RUNNING)
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
 
 
 def test_fill_slots_starts_pending_jobs(
@@ -1351,7 +1350,7 @@ def test_check_completed_jobs_success(
     worker._check_completed_jobs()
 
     assert len(worker._running) == 0
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
 
 
@@ -1382,7 +1381,7 @@ def test_check_completed_jobs_leaves_a_deferred_child_pending(
         worker._check_completed_jobs()
 
     assert len(worker._running) == 0
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     [updated] = list_queue(queue_root)
     assert (updated.status, updated.error) == (QueueStatus.PENDING, "")
     assert any(
@@ -1454,7 +1453,7 @@ def test_completed_job_retries_when_engine_recovery_raises(
     worker._check_completed_jobs()
 
     assert entry.queue_id in worker._running
-    assert active_slot_count(queue_root) == 1
+    assert len(list_slots(queue_root)) == 1
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.RUNNING}
 
     owner.kill()
@@ -1462,7 +1461,7 @@ def test_completed_job_retries_when_engine_recovery_raises(
     worker._check_completed_jobs()
 
     assert entry.queue_id not in worker._running
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
 
 
@@ -1489,7 +1488,7 @@ def test_failed_state_write_leaves_durable_replay_for_worker_restart(
     with held_run_lock(rxn), pytest.raises(RuntimeError, match="already running"):
         worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
-    assert active_slot_count(queue_root) == 1
+    assert len(list_slots(queue_root)) == 1
     [terminal] = list_queue(queue_root)
     assert terminal.status == QueueStatus.FAILED
     marker = terminal.metadata.get("orca_terminal_replay")
@@ -1530,7 +1529,7 @@ def test_terminal_side_effect_failure_withholds_only_the_same_directory(
         worker._check_completed_jobs()
 
         assert entry.queue_id in worker._running
-        assert active_slot_count(queue_root) == 1
+        assert len(list_slots(queue_root)) == 1
         [pending_replay] = list_queue(queue_root)
         assert isinstance(pending_replay.metadata.get("orca_terminal_replay"), dict)
         with pytest.raises(DuplicateEntryError):
@@ -1963,7 +1962,7 @@ def test_publication_repair_failure_withholds_only_its_row_and_later_recovers(
         assert worker._fill_slots() == "processed"
         assert list(worker._running) == [other.queue_id]
         assert [started.entry.queue_id for started in child_starter.started] == [other.queue_id]
-        assert active_slot_count(queue_root) == 1
+        assert len(list_slots(queue_root)) == 1
         assert queue_statuses(queue_root) == {
             row.queue_id: QueueStatus.PENDING,
             other.queue_id: QueueStatus.RUNNING,
@@ -1990,7 +1989,7 @@ def test_publication_repair_failure_withholds_only_its_row_and_later_recovers(
         other.queue_id,
         row.queue_id,
     ]
-    assert active_slot_count(queue_root) == 2
+    assert len(list_slots(queue_root)) == 2
 
 
 def test_failed_publication_fence_and_diagnostic_write_withhold_only_unsafe_row(
@@ -2211,7 +2210,7 @@ def test_finalize_clears_active_engine_record_before_mark_and_release(
     def mark(*args: Any, **kwargs: Any) -> TerminalQueueMarkResult:
         current = get_slot(queue_root, token)
         seen_at_mark.append(
-            (current.engine_process_state if current else None, active_slot_count(queue_root))
+            (current.engine_process_state if current else None, len(list_slots(queue_root)))
         )
         return real_mark(*args, **kwargs)
 
@@ -2220,7 +2219,7 @@ def test_finalize_clears_active_engine_record_before_mark_and_release(
 
     # At mark time the engine record was already idle and the slot still held.
     assert seen_at_mark == [("idle", 1)]
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
 
 
@@ -2248,7 +2247,7 @@ def test_finalize_does_not_publish_without_persisted_marker_after_mark(
     assert not (rxn / "job_state.json").exists()
     assert job_record(queue_root, "task-b") is None
     assert list_queue(queue_root) == []
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
 
 
 def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(
@@ -2270,7 +2269,7 @@ def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(
     worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
     assert not (rxn / "job_state.json").exists()
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert list_queue(queue_root) == [closed]
     assert closed.metadata.get("orca_terminal_replay") is None
 
@@ -2302,7 +2301,7 @@ def test_finalize_completed_job_recovers_once_and_releases_on_benign_mark_noop(
 
     assert not moved.exists()
     assert job_record(queue_root, "task-moved") is None
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
 
 
 def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
@@ -2339,7 +2338,7 @@ def test_finalize_finished_job_clears_pending_launch_left_by_dead_child(
     record = job_record(queue_root, "task-pending-launch")
     assert record is not None and record["status"] == "failed"
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert get_slot(queue_root, token) is None
 
 
@@ -2360,7 +2359,7 @@ def test_finalize_finished_job_marks_completed_and_releases_slot(
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
     record = job_record(queue_root, entry.task_id)
     assert record is not None and record["status"] == "completed"
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
 
 
 def test_finalize_finished_job_sends_parent_terminal_notification_when_unmarked(
@@ -2447,13 +2446,13 @@ def test_child_publishes_and_parent_releases_slot_while_terminal_sender_is_block
             assert not started.is_set(), "completion delivery must belong to the parent"
             reports = {path: path.read_bytes() for path in generation.iterdir() if path.is_file()}
             assert generation / "machine.json" in reports
-            assert active_slot_count(queue_root) == 1
+            assert len(list_slots(queue_root)) == 1
             job = running_job(worker, entry, rxn, fake_children.spawn(exited=return_code), token)
             worker._running[entry.queue_id] = job
             finalizing = pool.submit(worker._check_completed_jobs)
             finalizing.result(timeout=2)
             assert started.wait(1)
-            assert active_slot_count(queue_root) == 0
+            assert len(list_slots(queue_root)) == 0
             assert entry.queue_id not in worker._running
             [terminal] = list_queue(queue_root)
             expected = QueueStatus.COMPLETED if return_code == 0 else QueueStatus.FAILED
@@ -2505,7 +2504,7 @@ def test_finalize_finished_job_releases_slot_when_terminal_notification_fails(
     [completed] = list_queue(queue_root)
     assert completed.status == QueueStatus.COMPLETED
     assert completed.metadata.get("orca_terminal_replay") is None
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert entry.queue_id not in worker._running
     saved = load_state(rxn)
     assert saved is not None
@@ -2647,7 +2646,7 @@ def test_finalize_finished_job_marks_cancelled_when_cancel_requested(
     assert final_result["status"] == STATUS_CANCELLED
     record = job_record(queue_root, entry.task_id)
     assert record is not None and record["status"] == "cancelled"
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -2749,7 +2748,7 @@ def test_cancel_releases_prepared_execution_before_terminal_side_effects(
 
     def side_effects(cfg: AppConfig, item: TerminalReplayWorkItem) -> None:
         [row] = list_queue(queue_root)
-        seen_at_finalize.append((child.poll_result, row.status, active_slot_count(queue_root)))
+        seen_at_finalize.append((child.poll_result, row.status, len(list_slots(queue_root))))
         real_side_effects(cfg, item)
 
     with patch.object(
@@ -2760,7 +2759,7 @@ def test_cancel_releases_prepared_execution_before_terminal_side_effects(
     # By the time the terminal side effects ran, the child had been stopped,
     # the row was durably cancelled and execution capacity was already free.
     assert seen_at_finalize == [(0, QueueStatus.CANCELLED, 0)]
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     item = finalize_cancelled.call_args.args[1]
     assert (item.queue_id, item.task_id, item.state_prepared) == (
         entry.queue_id,
@@ -2785,7 +2784,7 @@ def test_cancel_mark_failure_retains_queue_slot_and_skips_finalization(
 
     assert worker._cancel_running_job(entry.queue_id, job) is False
 
-    assert active_slot_count(queue_root) == 1
+    assert len(list_slots(queue_root)) == 1
     [still_running] = list_queue(queue_root)
     assert (still_running.status, still_running.task_id) == (QueueStatus.RUNNING, "task-b")
     assert not (rxn / "job_state.json").exists()
@@ -2812,12 +2811,12 @@ def test_cancel_mark_false_completion_retry_keeps_running_entry_slot(
     ):
         worker._check_cancel_requests()
         assert entry.queue_id in worker._running
-        assert active_slot_count(queue_root) == 1
+        assert len(list_slots(queue_root)) == 1
 
         worker._check_completed_jobs()
 
     assert entry.queue_id in worker._running
-    assert active_slot_count(queue_root) == 1
+    assert len(list_slots(queue_root)) == 1
     [still_running] = list_queue(queue_root)
     assert (still_running.status, still_running.cancel_requested) == (QueueStatus.RUNNING, True)
 
@@ -2849,7 +2848,7 @@ def test_cancel_mark_false_releases_after_concurrent_terminal_transition(
     assert written is not None
     assert (written["job_id"], written["status"]) == (entry.task_id, STATUS_CANCELLED)
     assert entry.queue_id not in worker._running
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.CANCELLED}
 
 
@@ -2870,14 +2869,14 @@ def test_cancel_mark_exception_isolated_and_retried_by_completion(
     with read_only(queue_root):
         worker._check_cancel_requests()
         assert entry.queue_id in worker._running
-        assert active_slot_count(queue_root) == 1
+        assert len(list_slots(queue_root)) == 1
         [still_running] = list_queue(queue_root)
         assert still_running.status == QueueStatus.RUNNING
 
     worker._check_completed_jobs()
 
     assert entry.queue_id not in worker._running
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.CANCELLED}
     written = load_state(rxn)
     assert written is not None
@@ -2903,7 +2902,7 @@ def test_cancel_state_failure_retains_slot_after_terminal_mark(
     # The cancelled run state cannot be written while another instance owns the directory.
     with held_run_lock(rxn):
         assert worker._cancel_running_job(entry.queue_id, job) is False
-        assert active_slot_count(queue_root) == 1
+        assert len(list_slots(queue_root)) == 1
         assert job_record(queue_root, entry.task_id) is None
         assert recording_channel.sends == []
         [cancelled_entry] = list_queue(queue_root)
@@ -2912,7 +2911,7 @@ def test_cancel_state_failure_retains_slot_after_terminal_mark(
 
     worker._check_completed_jobs()
 
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert entry.queue_id not in worker._running
     written = load_state(rxn)
     assert written is not None
@@ -2940,7 +2939,7 @@ def test_cancel_side_effect_failure_withholds_its_directory_until_strict_replay(
         worker._check_cancel_requests()
 
         assert entry.queue_id in worker._running
-        assert active_slot_count(queue_root) == 1
+        assert len(list_slots(queue_root)) == 1
         [pending_replay] = list_queue(queue_root)
         assert pending_replay.status == QueueStatus.CANCELLED
         assert isinstance(pending_replay.metadata.get("orca_terminal_replay"), dict)
@@ -2952,7 +2951,7 @@ def test_cancel_side_effect_failure_withholds_its_directory_until_strict_replay(
     worker._check_completed_jobs()
 
     assert entry.queue_id not in worker._running
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert queue_row(queue_root, entry.queue_id).metadata.get("orca_terminal_replay") is None
     record = job_record(queue_root, "task-cancel-a")
     assert record is not None and record["status"] == "cancelled"
@@ -2975,7 +2974,7 @@ def test_cancel_recovery_failure_retains_queue_slot_and_skips_mark(
     assert worker._cancel_running_job(entry.queue_id, job) is False
 
     assert child.poll_result == 0
-    assert active_slot_count(queue_root) == 1
+    assert len(list_slots(queue_root)) == 1
     [still_running] = list_queue(queue_root)
     assert (still_running.status, still_running.cancel_requested) == (QueueStatus.RUNNING, True)
     assert not (rxn / "job_state.json").exists()
@@ -3220,7 +3219,7 @@ def test_shutdown_leaves_a_self_requeued_child_pending(
     worker._shutdown_all()
 
     assert entry.queue_id not in worker._running
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
 
 
@@ -3429,7 +3428,7 @@ def test_shutdown_tolerated_cancel_read_still_honors_a_pending_cancel(
         worker._shutdown_all()
 
     assert entry.queue_id not in worker._running
-    assert active_slot_count(queue_root) == 0
+    assert len(list_slots(queue_root)) == 0
     row = queue_row(queue_root, entry.queue_id)
     assert (row.status, row.cancel_requested) == (QueueStatus.CANCELLED, False)
     assert terminal_replay_marker_from_entry(row) is not None
