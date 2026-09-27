@@ -29,10 +29,11 @@ from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.run_snapshot import RunSnapshot, collect_run_snapshots
 from orca_auto.orca.run_status import (
-    STALE_SNAPSHOT_STATUSES,
     snapshot_is_superseded,
+    snapshot_reaction_dir,
     superseded_snapshot_dirs,
 )
+from orca_auto.orca.statuses import ACTIVE_RUN_STATUS_VALUES
 
 from . import _orca
 
@@ -191,8 +192,9 @@ def _store_group(
     for snapshot in snapshots:
         if snapshot.key in represented:
             continue
-        suppressed = str(snapshot.reaction_dir.resolve()) in superseded
-        if snapshot.status in STALE_SNAPSHOT_STATUSES or suppressed:
+        suppressed = snapshot_reaction_dir(snapshot) in superseded
+        # An active snapshot needs its run lock rechecked on every refresh.
+        if snapshot.status in ACTIVE_RUN_STATUS_VALUES or suppressed:
             payload = {"snapshot": _snapshot_payload(snapshot), "superseded": suppressed}
             connection.execute(
                 "INSERT OR REPLACE INTO watches VALUES ('snapshot', ?, ?)",

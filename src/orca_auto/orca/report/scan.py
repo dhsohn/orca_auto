@@ -28,7 +28,7 @@ from .attempts import (
     terminal_actions_html,
     with_details,
 )
-from .frequencies import mode_section_html
+from .modes import mode_section_html
 from .render import (
     ChartSeries,
     ReportComponent,

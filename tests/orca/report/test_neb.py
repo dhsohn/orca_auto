@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.composer import collect_html_report_parts
 from orca_auto.orca.report.neb import (
     NebPathPoint,
@@ -15,6 +14,7 @@ from orca_auto.orca.report.neb import (
     _parse_ts_refinement_steps,
     _path_plot_x,
 )
+from orca_auto.orca.report.publication import write_job_html_report
 from orca_auto.orca.report.render import ChartSeries, line_chart_svg
 from tests.engine_artifact_helpers import report_generation_target
 from tests.orca_output_helpers import (

@@ -148,6 +148,15 @@ def attempt_detail_text(path_points: Sequence[PathPoint], *parts: str) -> str:
     return ", ".join(cells)
 
 
+def path_endpoints(points: Sequence[P]) -> tuple[P | None, P | None]:
+    """First and last point; the second is ``None`` for a one-point path."""
+    if not points:
+        return None, None
+    if len(points) == 1:
+        return points[0], None
+    return points[0], points[-1]
+
+
 def path_marker_index(points: Sequence[PathPoint], marker: str) -> int | None:
     """Index of the first point whose ``marker`` or ``label`` equals ``marker``."""
     marker = marker.upper()
@@ -230,6 +239,7 @@ __all__ = [
     "attempt_detail_text",
     "iter_phase_table_rows",
     "parse_path_summary",
+    "path_endpoints",
     "path_marker_index",
     "path_marker_point",
     "path_profile_chart_svg",

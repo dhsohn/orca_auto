@@ -1,4 +1,4 @@
-"""IRC job report: path profile, endpoint summary, and validation SI block."""
+"""IRC job report: path profile, endpoint summary and iterations."""
 
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from ..evidence import final_out_path, parsed_final_output, parsed_output_facts
 from ..frequencies import ModeSummary, mode_summaries
 from ..out_analyzer import IRC_PATH_FOUND_NEEDLES
 from ..parser import OrcaResult
-from ..statuses import RunStatus
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
@@ -28,13 +27,14 @@ from .attempts import (
     terminal_actions_html,
     with_details,
 )
-from .frequencies import mode_section_html
+from .modes import mode_section_html
 from .path import (
     IrcPathPoint,
     PathPoint,
     attempt_detail_text,
     iter_phase_table_rows,
     parse_path_summary,
+    path_endpoints,
     path_marker_index,
     path_marker_point,
     path_profile_chart_svg,
@@ -113,20 +113,6 @@ class IrcReportData:
     mode_summaries: tuple[ModeSummary, ...]
 
 
-@dataclass(frozen=True)
-class IrcSiBlock:
-    name: str
-    route_line: str
-    orca_version: str
-    settings: tuple[ReportSetting, ...]
-    path_points: tuple[IrcPathPoint, ...]
-    last_out_name: str
-
-
-class IrcReportError(Exception):
-    """The IRC report cannot be assembled because required artifacts are missing."""
-
-
 def parse_irc_output_text(text: str) -> IrcParsedOutput:
     """IRC facts of decoded output text; ``parse_irc_output`` memoizes this per file."""
     upper = text.upper()
@@ -197,72 +183,6 @@ def collect_irc_report_data(
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
     )
-
-
-def collect_irc_si_block(
-    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
-) -> IrcSiBlock | None:
-    """The IRC validation block of an IRC route (``route.is_irc``); ``None`` until completed."""
-    if str(state.get("status") or "") != RunStatus.COMPLETED.value:
-        return None
-    out_path = final_out_path(state)
-    if out_path is None:
-        raise IrcReportError(f"no output file found for {reaction_dir}")
-    parsed = parse_irc_output(out_path)
-    try:
-        result, _analysis = parsed_final_output(out_path)
-    except OSError:
-        result = None
-    return IrcSiBlock(
-        name=reaction_dir.name,
-        route_line=" ".join(route.route_lines),
-        orca_version=result.orca_version if result is not None else "",
-        settings=parsed.settings,
-        path_points=parsed.path_points,
-        last_out_name=out_path.name,
-    )
-
-
-def render_irc_si_block_md(block: IrcSiBlock) -> str:
-    version_note = f"        (ORCA {block.orca_version})" if block.orca_version else ""
-    lines = [
-        f"== {block.name} ==",
-        f"{block.route_line}{version_note}",
-        "IRC validation summary",
-    ]
-    ts = path_marker_point(block.path_points, "TS")
-    endpoint_1, endpoint_2 = _path_endpoints(block.path_points)
-    if block.path_points:
-        lines.append(f"Parsed IRC path points = {len(block.path_points)}")
-    if ts is not None:
-        lines.append(
-            f"TS step = {ts.label}; E = {ts.energy_hartree:.6f} Eh; "
-            f"relative ΔE = {ts.relative_kcal:+.2f} kcal mol⁻¹"
-        )
-    for label, point in (("path endpoint 1", endpoint_1), ("path endpoint 2", endpoint_2)):
-        if point is None:
-            continue
-        endpoint_text = (
-            f"{label}: step {point.label}; E = {point.energy_hartree:.6f} Eh; "
-            f"relative ΔE = {point.relative_kcal:+.2f} kcal mol⁻¹"
-        )
-        if ts is not None:
-            endpoint_text += f"; from TS = {point.relative_kcal - ts.relative_kcal:+.2f} kcal mol⁻¹"
-        lines.append(endpoint_text)
-
-    trajectory_settings = [
-        setting for setting in block.settings if "trajectory" in setting.label.lower()
-    ]
-    for setting in trajectory_settings:
-        lines.append(f"{setting.label}: {setting.value}")
-    if block.last_out_name:
-        lines.append(f"Last output: {block.last_out_name}")
-    lines.append(
-        "⚠ IRC endpoints are path endpoints, not fully optimized stationary structures; "
-        "optimize endpoints before publishing endpoint coordinates."
-    )
-    lines.append("")
-    return "\n".join(lines)
 
 
 def _irc_badges(data: IrcReportData) -> tuple[tuple[str, str], ...]:
@@ -404,16 +324,6 @@ def _path_x(point: IrcPathPoint) -> float:
     return float(point.step if point.step is not None else point.order)
 
 
-def _path_endpoints(
-    points: Sequence[IrcPathPoint],
-) -> tuple[IrcPathPoint | None, IrcPathPoint | None]:
-    if not points:
-        return None, None
-    if len(points) == 1:
-        return points[0], None
-    return points[0], points[-1]
-
-
 # IRC-specific chart highlights (endpoints + TS) and metric cards; the NEB
 # report has its own versions in neb.py with different labels and cards.
 def _irc_path_chart_svg(data: IrcReportData) -> str:
@@ -502,7 +412,7 @@ def _irc_metric_cards(
                 f"step {ts.label}, dE {ts.relative_kcal:+.2f} kcal/mol",
             )
         )
-    endpoint_1, endpoint_2 = _path_endpoints(data.path_points)
+    endpoint_1, endpoint_2 = path_endpoints(data.path_points)
     for label, endpoint in (("Endpoint 1", endpoint_1), ("Endpoint 2", endpoint_2)):
         if endpoint is None:
             continue
@@ -576,12 +486,8 @@ __all__ = [
     "IrcParsedOutput",
     "IrcPathPoint",
     "IrcReportData",
-    "IrcReportError",
-    "IrcSiBlock",
     "collect_irc_report_data",
-    "collect_irc_si_block",
     "irc_report_component",
     "parse_irc_output",
     "parse_irc_output_text",
-    "render_irc_si_block_md",
 ]

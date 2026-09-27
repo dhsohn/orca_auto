@@ -21,14 +21,12 @@ from orca_auto.orca.queue.terminal_marker import (
 )
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.run_status import (
-    queue_entry_status,
-    snapshot_display_status,
+    observed_queue_status,
+    observed_snapshot_status,
     snapshot_is_superseded,
     snapshot_reaction_dir,
     superseded_snapshot_dirs,
 )
-
-_ORCA_ACTIVE_QUEUE_STATUSES = ACTIVE_STATUSES
 
 
 def snapshot_matches_entry(
@@ -39,7 +37,7 @@ def snapshot_matches_entry(
     run_id = normalize_text(queue_entries.queue_entry_run_id(entry))
     if run_id:
         return snapshot_by_run_id.get(run_id)
-    if normalize_text(queue_entries.queue_entry_status(entry)) not in _ORCA_ACTIVE_QUEUE_STATUSES:
+    if normalize_text(queue_entries.queue_entry_status(entry)) not in ACTIVE_STATUSES:
         return None
     reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
     if not reaction_dir:
@@ -64,7 +62,7 @@ def queue_represents_snapshot(entry: Any, snapshot: RunSnapshot | None) -> bool:
     run_id = normalize_text(queue_entries.queue_entry_run_id(entry))
     if run_id and run_id == normalize_text(snapshot.run_id):
         return True
-    if normalize_text(queue_entries.queue_entry_status(entry)) not in _ORCA_ACTIVE_QUEUE_STATUSES:
+    if normalize_text(queue_entries.queue_entry_status(entry)) not in ACTIVE_STATUSES:
         return False
     reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
     try:
@@ -111,7 +109,7 @@ def queue_record(
         if snapshot is not None and queue_represents_snapshot(entry, snapshot)
         else ""
     )
-    status = queue_entry_status(entry, snapshot)
+    status = observed_queue_status(entry, snapshot)
     blocker = entry_metadata.get(QUEUE_RECORD_SYNC_BLOCKED_KEY)
     if not isinstance(blocker, dict) or status != STATUS_PENDING or entry.cancel_requested:
         blocker = {}
@@ -206,7 +204,7 @@ def snapshot_record(snapshot: RunSnapshot, *, allowed_root: Path) -> ActivityRec
         activity_id=run_id or label,
         kind="job",
         engine=ORCA_ENGINE,
-        status=snapshot_display_status(snapshot),
+        status=observed_snapshot_status(snapshot),
         label=label,
         source=ORCA_AUTO_ORCA_SOURCE,
         submitted_at=started_at,

@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.artifacts import RUN_REPORT_JSON_FILE
 from orca_auto.core.indexing import JobLocationRecord, upsert_job_location
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.orca.config import AppConfig, CommonResourceConfig, OrcaRuntimeConfig, PathsConfig
@@ -26,13 +27,12 @@ from orca_auto.orca.job_locations import (
     resolve_record_job_dir,
     upsert_job_record,
 )
-from orca_auto.orca.machine_observation import machine_json_bytes
-from orca_auto.orca.report import publication as orca_publication
-from orca_auto.orca.state_reading import (
-    REPORT_JSON_NAME,
+from orca_auto.orca.machine_observation import (
+    build_machine_observation,
+    machine_json_bytes,
     report_json_path,
-    state_path,
 )
+from orca_auto.orca.state_reading import state_path
 from tests.conftest import make_app_cfg, write_fake_orca
 from tests.engine_artifact_helpers import orca_artifact_payload
 
@@ -94,14 +94,14 @@ def _write_json(path: Path, payload: object) -> None:
             normalized.append(row)
         payload = normalized
     if (
-        path.name == REPORT_JSON_NAME
+        path.name == RUN_REPORT_JSON_FILE
         and is_visible_generation_name(path.parent.name)
         and isinstance(payload, dict)
         and payload.get("contract") is None
     ):
-        payload = orca_publication._machine_observation(path.parent, payload)
+        payload = build_machine_observation(path.parent, payload)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.name == REPORT_JSON_NAME and isinstance(payload, dict) and payload.get("contract"):
+    if path.name == RUN_REPORT_JSON_FILE and isinstance(payload, dict) and payload.get("contract"):
         path.write_bytes(machine_json_bytes(payload))
     else:
         path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")

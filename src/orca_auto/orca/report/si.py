@@ -7,15 +7,16 @@ coordinates — as plain fixed-width text that pastes cleanly into Word or a
 LaTeX source. Lint warnings (``⚠`` lines) flag what a reviewer would: a
 minimum with imaginary modes, a TS without exactly one, missing
 thermochemistry. Non-stationary relaxed scans still get no block; IRC gets a
-summary-only validation block with no coordinates. Like the HTML report,
-generation must never break run
-finalization: every error is logged and swallowed.
+summary-only validation block with no coordinates, also rendered here. Like the
+HTML report, generation must never break run finalization: every error is
+logged and swallowed.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,10 +24,13 @@ from orca_auto.core.artifacts import SI_BLOCK_MD_FILE
 from orca_auto.core.confined_io import atomic_write_confined_bytes
 
 from .. import evidence
-from ..completion_rules import route_facts
+from ..completion_rules import RouteFacts, route_facts
 from ..frequencies import ModeSummary, mode_summaries
 from ..parser import OrcaResult
-from .irc import collect_irc_si_block, render_irc_si_block_md
+from ..statuses import RunStatus
+from .irc import parse_irc_output
+from .path import IrcPathPoint, path_endpoints, path_marker_point
+from .settings import ReportSetting
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +126,86 @@ def render_si_block_md(block: evidence.OrcaStructureEvidence) -> str:
     return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class IrcSiBlock:
+    name: str
+    route_line: str
+    orca_version: str
+    settings: tuple[ReportSetting, ...]
+    path_points: tuple[IrcPathPoint, ...]
+    last_out_name: str
+
+
+class IrcReportError(Exception):
+    """The IRC SI block cannot be assembled because the completed run recorded no output."""
+
+
+def collect_irc_si_block(
+    reaction_dir: Path, state: Mapping[str, Any], route: RouteFacts
+) -> IrcSiBlock | None:
+    """The IRC validation block of an IRC route (``route.is_irc``); ``None`` until completed."""
+    if str(state.get("status") or "") != RunStatus.COMPLETED.value:
+        return None
+    out_path = evidence.final_out_path(state)
+    if out_path is None:
+        raise IrcReportError(f"no output file found for {reaction_dir}")
+    parsed = parse_irc_output(out_path)
+    try:
+        result, _analysis = evidence.parsed_final_output(out_path)
+    except OSError:
+        result = None
+    return IrcSiBlock(
+        name=reaction_dir.name,
+        route_line=" ".join(route.route_lines),
+        orca_version=result.orca_version if result is not None else "",
+        settings=parsed.settings,
+        path_points=parsed.path_points,
+        last_out_name=out_path.name,
+    )
+
+
+def render_irc_si_block_md(block: IrcSiBlock) -> str:
+    version_note = f"        (ORCA {block.orca_version})" if block.orca_version else ""
+    lines = [
+        f"== {block.name} ==",
+        f"{block.route_line}{version_note}",
+        "IRC validation summary",
+    ]
+    ts = path_marker_point(block.path_points, "TS")
+    endpoint_1, endpoint_2 = path_endpoints(block.path_points)
+    if block.path_points:
+        lines.append(f"Parsed IRC path points = {len(block.path_points)}")
+    if ts is not None:
+        lines.append(
+            f"TS step = {ts.label}; E = {ts.energy_hartree:.6f} Eh; "
+            f"relative ΔE = {ts.relative_kcal:+.2f} kcal mol⁻¹"
+        )
+    for label, point in (("path endpoint 1", endpoint_1), ("path endpoint 2", endpoint_2)):
+        if point is None:
+            continue
+        endpoint_text = (
+            f"{label}: step {point.label}; E = {point.energy_hartree:.6f} Eh; "
+            f"relative ΔE = {point.relative_kcal:+.2f} kcal mol⁻¹"
+        )
+        if ts is not None:
+            endpoint_text += f"; from TS = {point.relative_kcal - ts.relative_kcal:+.2f} kcal mol⁻¹"
+        lines.append(endpoint_text)
+
+    trajectory_settings = [
+        setting for setting in block.settings if "trajectory" in setting.label.lower()
+    ]
+    for setting in trajectory_settings:
+        lines.append(f"{setting.label}: {setting.value}")
+    if block.last_out_name:
+        lines.append(f"Last output: {block.last_out_name}")
+    lines.append(
+        "⚠ IRC endpoints are path endpoints, not fully optimized stationary structures; "
+        "optimize endpoints before publishing endpoint coordinates."
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def si_block_path(reaction_dir: Path) -> Path:
     return reaction_dir / SI_BLOCK_MD_FILE
 
@@ -179,6 +263,10 @@ def write_si_block(
 
 
 __all__ = [
+    "IrcReportError",
+    "IrcSiBlock",
+    "collect_irc_si_block",
+    "render_irc_si_block_md",
     "render_si_block_md",
     "si_block_path",
     "write_si_block",

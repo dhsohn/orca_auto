@@ -17,6 +17,7 @@ from orca_auto.orca import run_lock
 from orca_auto.orca import state as state_module
 from orca_auto.orca import state_reading as state_reading_module
 from orca_auto.orca.file_identity import file_content_identity
+from orca_auto.orca.machine_observation import report_json_path
 from orca_auto.orca.report import publication as publication_module
 from orca_auto.orca.report.publication import write_report_files, write_report_json
 from orca_auto.orca.run_lock import acquire_run_lock
@@ -215,7 +216,7 @@ def test_state_and_reports_are_written_without_tmp_leaks(tmp_path: Path) -> None
     assert isinstance(loaded, dict)
 
     write_report_files(tmp_path, state)
-    assert state_reading_module.report_json_path(generation).exists()
+    assert report_json_path(generation).exists()
     assert not (tmp_path / "job_report.json").exists()
 
     assert list(tmp_path.glob("*.tmp.*")) == []
@@ -316,14 +317,14 @@ def test_execution_state_is_recorded_in_root_and_visible_generation(tmp_path: Pa
 
 def test_generation_report_leaves_root_copies_untouched(tmp_path: Path) -> None:
     generation, state = _bound_state(tmp_path, token="state-mirror-owner-token-0002")
-    state_reading_module.report_json_path(tmp_path).write_text("{}", encoding="utf-8")
+    report_json_path(tmp_path).write_text("{}", encoding="utf-8")
 
     write_report_files(tmp_path, state)
 
     # Unbound root files are left untouched; the writer publishes only
     # into the verified generation.
-    assert state_reading_module.report_json_path(tmp_path).exists()
-    assert state_reading_module.report_json_path(generation).is_file()
+    assert report_json_path(tmp_path).exists()
+    assert report_json_path(generation).is_file()
 
 
 def test_replaced_visible_generation_never_receives_state_or_report(tmp_path: Path) -> None:
@@ -377,7 +378,7 @@ def test_state_module_keeps_write_helpers_available(tmp_path: Path) -> None:
     }
     assert write_report_json(
         tmp_path, normalized_payload_from_state(tmp_path, report_payload)
-    ) == state_reading_module.report_json_path(generation)
+    ) == report_json_path(generation)
     written_report = load_report_json(generation)
     assert written_report is not None
     assert written_report["engine"] == "orca"
@@ -480,7 +481,7 @@ def test_write_report_files_rejects_unsafe_machine_links_before_artifact_writers
     foreign_machine = tmp_path / "foreign-machine.json"
     if target_exists:
         foreign_machine.write_text("{}", encoding="utf-8")
-    machine_path = state_reading_module.report_json_path(generation)
+    machine_path = report_json_path(generation)
     if link_kind == "hardlink":
         os.link(foreign_machine, machine_path)
     else:
@@ -543,7 +544,7 @@ def test_terminal_machine_observation_is_immutable(tmp_path: Path) -> None:
 def test_load_report_json_returns_none_for_missing_invalid_and_non_dict(tmp_path: Path) -> None:
     assert load_report_json(tmp_path) is None
 
-    report_path = state_reading_module.report_json_path(tmp_path)
+    report_path = report_json_path(tmp_path)
     report_path.write_text("not valid json!!!", encoding="utf-8")
     assert load_report_json(tmp_path) is None
 

@@ -1,3 +1,27 @@
+"""Every field of a generation's ``machine.json`` and where it comes from.
+
+:func:`build_machine_observation` assembles the factory v1 envelope and its
+``chemistry/results-bundle`` payload from the normalized job state and the
+generation's files:
+
+- ``contract``, ``producer`` (with the package version), ``operation.kind``,
+  ``lineage`` and the payload's contract, ``result_kind`` and ``engine`` are
+  constants of this module.
+- ``operation.id`` is the job ID, else the run ID.
+- ``lifecycle`` maps the run status through :func:`machine_lifecycle`; its
+  failure code comes from the final reason.
+- ``artifacts`` holds one receipt (:func:`artifact_receipt`) per file: the
+  selected input, the last ORCA output, the published HTML report and SI block,
+  and ``execution_provenance.json``, each with its role and media type from
+  :data:`ARTIFACT_ROLES`.
+- ``delivery`` and ``handoff`` follow from the lifecycle and whether every
+  required receipt is available.
+- ``payload.data.summary`` and ``results`` are :func:`report_result_fields`.
+
+``report/publication.py`` writes these bytes once and keeps a terminal
+observation immutable; ``tests/contracts/report_verifier.py`` re-derives them.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,10 +32,32 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import IO, Any
 
+from orca_auto import __version__
+from orca_auto.core.artifacts import EXECUTION_PROVENANCE_FILE, RUN_REPORT_JSON_FILE
+from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
+from orca_auto.core.utils import copy_dict_or_empty as _dict
+from orca_auto.core.utils import normalize_text
+
+from .state_reading import normalized_text
+from .statuses import ACTIVE_RUN_STATUS_VALUES, RunStatus
+
 MACHINE_CONTRACT_NAME = "factory/machine-observation"
 MACHINE_CONTRACT_VERSION = 1
 RESULTS_PAYLOAD_CONTRACT_NAME = "chemistry/results-bundle"
 RESULTS_PAYLOAD_CONTRACT_VERSION = 1
+PRODUCER_NAME = "orca_auto"
+OPERATION_KIND = "chemistry/orca-run"
+RESULT_KIND = "engine-run"
+ENGINE_NAME = "orca"
+EXECUTION_PROVENANCE_ARTIFACT_ID = "execution-provenance"
+# Role and media type of each receipt, by artifact ID.
+ARTIFACT_ROLES: dict[str, tuple[str, str]] = {
+    "input": ("source", "text/plain"),
+    "orca-output": ("log", "text/plain"),
+    "human-report": ("human-report", "text/html"),
+    "supporting-information": ("supporting-information", "text/markdown"),
+    EXECUTION_PROVENANCE_ARTIFACT_ID: ("supporting-information", "application/json"),
+}
 
 _CODE_TOKEN_RE = re.compile(r"[^a-z0-9._-]+")
 _MAX_CODE_LENGTH = 200
@@ -163,14 +209,178 @@ def required_delivery_complete(artifacts: Mapping[str, Mapping[str, Any]]) -> bo
     )
 
 
+def report_json_path(generation_dir: Path) -> Path:
+    return generation_dir / RUN_REPORT_JSON_FILE
+
+
+def machine_lifecycle(status: str) -> tuple[str, str]:
+    """Map a run/queue status to the report ``(phase, outcome)`` pair."""
+
+    normalized = status.strip().lower()
+    if normalized in {RunStatus.CREATED.value, STATUS_PENDING, STATUS_QUEUED}:
+        return "queued", "pending"
+    if normalized in ACTIVE_RUN_STATUS_VALUES:
+        return "running", "pending"
+    if normalized == RunStatus.COMPLETED.value:
+        return "finished", "succeeded"
+    if normalized == RunStatus.CANCELLED.value:
+        return "finished", "cancelled"
+    if normalized == RunStatus.FAILED.value:
+        return "finished", "failed"
+    return "finished", "uncertain"
+
+
+def report_result_fields(
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The ``summary`` and ``results`` of the results bundle, from the normalized job state."""
+    status = _dict(payload.get("status"))
+    engine = _dict(payload.get("engine_payload"))
+    final = _dict(engine.get("final_result"))
+    attempts = engine.get("attempts")
+    common = {
+        "reason": normalize_text(final.get("reason") or status.get("reason") or ""),
+        "analyzer_status": normalize_text(final.get("analyzer_status") or ""),
+        "attempt_count": len(attempts) if isinstance(attempts, list) else 0,
+    }
+    summary = {"status": normalize_text(status.get("state") or ""), **common}
+    results = {
+        "run_id": normalize_text(engine.get("run_id") or ""),
+        **common,
+        "resumed": bool(final.get("resumed", False)),
+        "skipped_execution": bool(final.get("skipped_execution", False)),
+        "runner_error": normalize_text(final.get("runner_error") or ""),
+    }
+    if _dict(engine.get("execution_provenance")).get("source_inputs"):
+        results["execution_provenance_artifact"] = EXECUTION_PROVENANCE_ARTIFACT_ID
+    return summary, results
+
+
+def _receipt(
+    generation_dir: Path, artifact_id: str, candidate: Path | None, *, required: bool
+) -> dict[str, Any]:
+    role, media_type = ARTIFACT_ROLES[artifact_id]
+    return artifact_receipt(
+        generation_dir, candidate, required=required, role=role, media_type=media_type
+    )
+
+
+def build_machine_observation(
+    generation_dir: Path,
+    report_payload: Mapping[str, Any],
+    *,
+    html_path: Path | None = None,
+    si_path: Path | None = None,
+) -> dict[str, Any]:
+    """The ``machine.json`` document of the generation at ``generation_dir``.
+
+    ``report_payload`` is the normalized job state; ``html_path`` and
+    ``si_path`` are the report and SI block published in the generation.
+    """
+    job = _dict(report_payload.get("job"))
+    input_payload = _dict(report_payload.get("input"))
+    engine_payload = _dict(report_payload.get("engine_payload"))
+    final_result = _dict(engine_payload.get("final_result"))
+    summary, result_details = report_result_fields(report_payload)
+    status = summary["status"]
+    reason = summary["reason"]
+    phase, outcome = machine_lifecycle(status)
+    operation_id = normalized_text(job.get("id")) or normalized_text(engine_payload.get("run_id"))
+
+    primary_path = normalized_text(input_payload.get("primary_path"))
+    artifacts: dict[str, dict[str, Any]] = {
+        "input": _receipt(
+            generation_dir, "input", Path(primary_path) if primary_path else None, required=True
+        )
+    }
+    last_out_path = normalized_text(final_result.get("last_out_path"))
+    if last_out_path or outcome == "succeeded":
+        artifacts["orca-output"] = _receipt(
+            generation_dir,
+            "orca-output",
+            Path(last_out_path) if last_out_path else None,
+            required=outcome == "succeeded",
+        )
+    for artifact_id, path in (("human-report", html_path), ("supporting-information", si_path)):
+        if path is not None:
+            artifacts[artifact_id] = _receipt(generation_dir, artifact_id, path, required=False)
+    if result_details.get("execution_provenance_artifact"):
+        artifacts[EXECUTION_PROVENANCE_ARTIFACT_ID] = _receipt(
+            generation_dir,
+            EXECUTION_PROVENANCE_ARTIFACT_ID,
+            generation_dir / EXECUTION_PROVENANCE_FILE,
+            required=True,
+        )
+
+    complete = required_delivery_complete(artifacts)
+    if phase != "finished":
+        handoff_status = "pending"
+        delivery_status = "pending"
+        handoff_codes: list[str] = []
+        delivery_codes: list[str] = []
+    else:
+        delivery_status = "complete" if complete else "incomplete"
+        delivery_codes = [] if complete else ["orca_auto/required_artifact_unavailable"]
+        if outcome == "succeeded" and complete:
+            handoff_status = "ready"
+            handoff_codes = []
+        else:
+            handoff_status = "blocked"
+            handoff_codes = [
+                machine_code(
+                    PRODUCER_NAME,
+                    reason if outcome != "succeeded" else "required_artifact_unavailable",
+                    fallback="operation_not_ready",
+                )
+            ]
+    lifecycle_codes = (
+        []
+        if outcome in {"pending", "succeeded"}
+        else [machine_code(PRODUCER_NAME, reason or outcome, fallback="operation_failed")]
+    )
+    return {
+        "contract": {"name": MACHINE_CONTRACT_NAME, "version": MACHINE_CONTRACT_VERSION},
+        "producer": {"name": PRODUCER_NAME, "version": __version__},
+        "operation": {"id": operation_id, "kind": OPERATION_KIND},
+        "lifecycle": {"phase": phase, "outcome": outcome, "codes": lifecycle_codes},
+        "handoff": {"status": handoff_status, "codes": handoff_codes},
+        "delivery": {"status": delivery_status, "codes": delivery_codes},
+        "artifacts": artifacts,
+        "lineage": {"trace_id": None, "upstream": []},
+        "payload": {
+            "contract": {
+                "name": RESULTS_PAYLOAD_CONTRACT_NAME,
+                "version": RESULTS_PAYLOAD_CONTRACT_VERSION,
+            },
+            "data": {
+                "result_kind": RESULT_KIND,
+                "engine": ENGINE_NAME,
+                "summary": summary,
+                "results": result_details,
+                "artifact_refs": sorted(artifacts),
+            },
+        },
+    }
+
+
 __all__ = [
+    "ARTIFACT_ROLES",
+    "ENGINE_NAME",
+    "EXECUTION_PROVENANCE_ARTIFACT_ID",
     "MACHINE_CONTRACT_NAME",
     "MACHINE_CONTRACT_VERSION",
+    "OPERATION_KIND",
+    "PRODUCER_NAME",
     "RESULTS_PAYLOAD_CONTRACT_NAME",
     "RESULTS_PAYLOAD_CONTRACT_VERSION",
+    "RESULT_KIND",
     "ReceiptDigest",
     "artifact_receipt",
+    "build_machine_observation",
     "machine_code",
     "machine_json_bytes",
+    "machine_lifecycle",
+    "report_json_path",
+    "report_result_fields",
     "required_delivery_complete",
 ]

@@ -23,7 +23,7 @@ from .attempts import (
     latest_optimization_progress,
     terminal_actions_html,
 )
-from .frequencies import mode_section_html
+from .modes import mode_section_html
 from .render import (
     ReportComponent,
     ReportHeader,

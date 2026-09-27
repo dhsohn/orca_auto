@@ -64,19 +64,19 @@ def _snapshot(rxn: Path, status: str) -> RunSnapshot:
 
 
 def test_dead_running_row_lists_as_pending_until_a_worker_reconciles_it(tmp_path: Path) -> None:
-    from orca_auto.orca.run_status import queue_entry_status
+    from orca_auto.orca.run_status import observed_queue_status
 
     rxn, entry = _running_row(tmp_path, "rxn")
 
     # Running row, no run.lock, no worker: the listing does not claim it is running.
-    assert queue_entry_status(entry, None) == STATUS_PENDING
-    assert queue_entry_status(entry, _snapshot(rxn, STATUS_RUNNING)) == STATUS_PENDING
+    assert observed_queue_status(entry, None) == STATUS_PENDING
+    assert observed_queue_status(entry, _snapshot(rxn, STATUS_RUNNING)) == STATUS_PENDING
     # The row itself is left for the worker; the listing did not rewrite it.
     assert _row(tmp_path, entry.queue_id).status is QueueStatus.RUNNING
 
     # A child that holds run.lock is genuinely running.
     with acquire_run_lock(rxn):
-        assert queue_entry_status(entry, None) == STATUS_RUNNING
+        assert observed_queue_status(entry, None) == STATUS_RUNNING
 
 
 def test_submission_never_sweeps_running_rows_of_other_directories(tmp_path: Path) -> None:

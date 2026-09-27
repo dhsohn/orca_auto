@@ -7,9 +7,8 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.composer import collect_html_report_parts
-from orca_auto.orca.report.publication import write_report_files
+from orca_auto.orca.report.publication import write_job_html_report, write_report_files
 from orca_auto.orca.report.sp import SpReportData
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 from tests.orca_output_helpers import sp_out_text

@@ -21,6 +21,7 @@ from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.pid_file import write_worker_pid_file
 from orca_auto.core.utils import persistence as persistence_utils
 from orca_auto.orca import run_cleanup
+from orca_auto.orca.machine_observation import report_json_path
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue import orphans as queue_orphans
@@ -48,7 +49,7 @@ from orca_auto.orca.queue.entries import (
 from orca_auto.orca.queue.orphans import reconcile_orphaned_running_entries
 from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.run_cleanup import clear_terminal_queue_entries
-from orca_auto.orca.state_reading import load_state, report_json_path
+from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.statuses import RunStatus
 from tests.conftest import claim_next_entry, make_app_cfg, write_run_state
 from tests.engine_artifact_helpers import orca_artifact_payload

@@ -17,6 +17,7 @@ from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
 from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.config import load_config
 from orca_auto.orca.evidence import collect_structure_evidence, parsed_frequency_analysis
+from orca_auto.orca.machine_observation import report_json_path
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
@@ -28,7 +29,7 @@ from orca_auto.orca.queue.entries import (
 )
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.report.composer import collect_html_report_parts
-from orca_auto.orca.state_reading import load_state, report_json_path
+from orca_auto.orca.state_reading import load_state
 from tests.conftest import write_fake_orca
 from tests.contracts.report_verifier import load_report_json
 from tests.machine_contract_helpers import validate_common_machine

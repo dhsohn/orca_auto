@@ -33,7 +33,7 @@ from .attempts import (
     latest_frequency_analysis,
     terminal_actions_html,
 )
-from .frequencies import mode_section_html
+from .modes import mode_section_html
 from .render import (
     ReportComponent,
     ReportHeader,

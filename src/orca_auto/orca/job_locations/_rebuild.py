@@ -22,7 +22,8 @@ from orca_auto.core.statuses import TERMINAL_STATUSES
 from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
-from ..state_reading import STATE_FILE_NAME, report_json_path, state_from_normalized_payload
+from ..machine_observation import report_json_path
+from ..state_reading import STATE_FILE_NAME, state_from_normalized_payload
 from ._artifacts_to_records import first_artifact_text, record_from_artifacts
 from ._records import build_job_location_record
 

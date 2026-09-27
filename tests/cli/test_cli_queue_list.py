@@ -11,13 +11,14 @@ import pytest
 
 from orca_auto.cli import main
 from orca_auto.core.admission import activate_reserved_slot, reserve_slot
+from orca_auto.orca.machine_observation import report_json_path
 from orca_auto.orca.queue.adapter import (
     enqueue,
     mark_completed,
     update_metadata,
 )
 from orca_auto.orca.run_lock import acquire_run_lock
-from orca_auto.orca.state_reading import report_json_path, state_path
+from orca_auto.orca.state_reading import state_path
 from tests.conftest import claim_next_entry, write_run_state
 from tests.engine_artifact_helpers import orca_artifact_payload
 
