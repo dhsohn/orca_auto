@@ -36,6 +36,7 @@ from orca_auto.orca.engine_artifacts import (
 )
 
 from . import state_reading as _state_reading
+from .app_ids import ORCA_AUTO_ORCA_APP_NAME
 from .statuses import (
     ACTIVE_RUN_STATUS_VALUES,
     TERMINAL_RUN_STATUSES,
@@ -237,7 +238,7 @@ def normalized_payload_from_state(reaction_dir: Path, state: Mapping[str, Any]) 
             queue_id=_state_reading.normalized_text(state.get("queue_id")),
             dir=_state_reading.normalized_text(state.get("reaction_dir"))
             or str(reaction_dir.resolve()),
-            app_name="orca_auto_orca",
+            app_name=ORCA_AUTO_ORCA_APP_NAME,
             task_id=job_id,
             generation=_state_reading.normalized_text(state.get("queue_generation")),
         ),

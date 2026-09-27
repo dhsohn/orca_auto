@@ -16,22 +16,25 @@ import os
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 
 from orca_auto.core.admission import (
+    admission_dir,
     list_all_slots,
     recover_slot_engine_process,
     release_slot,
     reserve_slot,
     update_slot_metadata,
 )
-from orca_auto.core.config.schema import resolved_admission_limit
+from orca_auto.core.admission.records import (
+    ENGINE_PROCESS_IDLE,
+    SLOT_STATE_ACTIVE,
+    SLOT_STATE_RESERVED,
+)
 from orca_auto.core.queue.deferral import queue_entry_admission_deferral_reason
 from orca_auto.core.queue.engine.snapshot_intent import (
     finalize_queued_snapshot_intent,
     reconcile_orphaned_snapshot_generations,
-    snapshot_runtime_roots_for_cfg,
 )
 from orca_auto.core.queue.processes import ManagedProcess
 from orca_auto.core.queue.store import QueueLockTimeoutError
@@ -43,7 +46,6 @@ from orca_auto.core.queue.worker import (
     ReserveStatus,
     admission_has_capacity,
     remove_worker_pid_file,
-    reserve_dequeued_entry,
     start_background_process,
     terminate_process_group,
     worker_pid_file_path,
@@ -51,23 +53,26 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING
 from orca_auto.core.utils.lock import file_lock
-from orca_auto.orca.engine_catalog import get_engine_catalog_entry
 from orca_auto.orca.worker_execution import build_worker_child_command
 
+from ..app_ids import ORCA_ADMISSION_SOURCE, ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE_LAUNCH_GATED
 from ..config import AppConfig
 from . import publication_repair, replay, roots, worker_tracking
 from .adapter import (
     cancel_requested_ids,
     get_cancel_requested,
+    get_entry_by_id,
     mark_cancelled,
     mark_failed,
+    requeue_running_entry,
+    worker_log_path,
+)
+from .entries import (
     queue_entry_app_name,
     queue_entry_id,
     queue_entry_metadata,
     queue_entry_reaction_dir,
     queue_entry_task_id,
-    requeue_running_entry,
-    worker_log_path,
 )
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .notifications import notify_queued_jobs
@@ -75,29 +80,25 @@ from .terminal_replay import terminal_replay_marker_from_entry
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_CONCURRENT = 4
 POLL_INTERVAL_SECONDS = 5
 _SNAPSHOT_INTENT_RECONCILE_INTERVAL_SECONDS = 300.0
 _WORKER_STATE_RECONCILE_INTERVAL_SECONDS = 60.0
-# Slot state from reservation until the child is attached.
-_RESERVED_SLOT_STATE = "reserved"
 
 
-def _try_reserve_admission_slot(cfg: AppConfig) -> str | None:
-    catalog_entry = get_engine_catalog_entry("orca")
+def _try_reserve_admission_slot(admission_root: Path, limit: int) -> str | None:
     admission_token = reserve_slot(
-        Path(cfg.runtime.resolved_admission_root),
-        cfg.runtime.resolved_admission_limit,
-        source=catalog_entry.admission_source,
-        app_name=catalog_entry.app_id,
-        state=_RESERVED_SLOT_STATE,
-        engine_process_state="idle",
-        engine_launch_gated=catalog_entry.engine_launch_gated,
+        admission_root,
+        limit,
+        source=ORCA_ADMISSION_SOURCE,
+        app_name=ORCA_AUTO_ORCA_APP_NAME,
+        state=SLOT_STATE_RESERVED,
+        engine_process_state=ENGINE_PROCESS_IDLE,
+        engine_launch_gated=ORCA_ENGINE_LAUNCH_GATED,
     )
     if admission_token is None:
         logger.debug(
             "Queue worker admission paused: admission slots are full (admission_limit=%d)",
-            cfg.runtime.resolved_admission_limit,
+            limit,
         )
     return admission_token
 
@@ -107,22 +108,6 @@ def _host_core_count() -> int | None:
         return len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
         return os.cpu_count()
-
-
-def _worker_admission_limit(cfg: AppConfig, fallback_max_concurrent: int) -> int:
-    raw_limit = cfg.runtime.admission_limit
-    if raw_limit in (None, "", 0):
-        raw_limit = fallback_max_concurrent
-    return resolved_admission_limit(raw_limit, fallback_max_concurrent)
-
-
-def _worker_config_with_effective_concurrency(
-    cfg: AppConfig,
-    configured_max: int,
-) -> AppConfig:
-    if cfg.runtime.admission_limit not in (None, "", 0):
-        return cfg
-    return replace(cfg, runtime=replace(cfg.runtime, max_concurrent=configured_max))
 
 
 class OrcaQueueWorker(QueueWorkerLoop):
@@ -137,41 +122,39 @@ class OrcaQueueWorker(QueueWorkerLoop):
         cfg: AppConfig,
         config_path: str,
         *,
-        max_concurrent: int = DEFAULT_MAX_CONCURRENT,
         sleep_fn: Callable[[float], None] | None = None,
     ) -> None:
-        configured_max = max(1, int(max_concurrent))
-        worker_cfg = _worker_config_with_effective_concurrency(cfg, configured_max)
+        # One number is both the concurrency and the admission limit.
         super().__init__(
-            max_concurrent=configured_max,
+            max_concurrent=cfg.runtime.max_concurrent,
             poll_interval_seconds=POLL_INTERVAL_SECONDS,
             sleep_fn=sleep_fn,
         )
-        self.cfg = worker_cfg
+        self.cfg = cfg
         self.config_path = str(config_path or "").strip()
-        self.allowed_root = Path(str(worker_cfg.runtime.allowed_root)).expanduser().resolve()
-        self.admission_root = (
-            Path(str(worker_cfg.runtime.resolved_admission_root)).expanduser().resolve()
-        )
-        self.admission_limit = _worker_admission_limit(worker_cfg, self.max_concurrent)
+        self.queue_root = roots.queue_root(cfg)
+        self.admission_root = admission_dir(cfg.runtime.allowed_root)
         self.replay_state = OrcaWorkerReplayState()
         self._worker_state_last_reconcile: float | None = None
         self._snapshot_intent_last_reconcile: float | None = None
+        # Both kept current by ``_admit_next`` before every claim; ``_skip_entry``
+        # reads them inside that claim.
+        self._admission_withheld_keys: frozenset[str] = frozenset()
         self._publication_withheld_ids: frozenset[str] = frozenset()
 
     # -- pid file and singleton lock ----------------------------------------
 
     def _pid_file_path(self) -> Path:
-        return worker_pid_file_path(self.allowed_root, self.worker_pid_file_name)
+        return worker_pid_file_path(self.queue_root, self.worker_pid_file_name)
 
     def _lock_file_path(self) -> Path:
         return self._pid_file_path().with_name(f"{self.worker_pid_file_name}.lock")
 
     def _write_pid_file(self) -> None:
-        write_worker_pid_file(self.allowed_root, self.worker_pid_file_name)
+        write_worker_pid_file(self.queue_root, self.worker_pid_file_name)
 
     def _remove_pid_file(self) -> None:
-        remove_worker_pid_file(self.allowed_root, self.worker_pid_file_name)
+        remove_worker_pid_file(self.queue_root, self.worker_pid_file_name)
 
     def _acquire_worker_lock(self, stack: contextlib.ExitStack) -> bool:
         lock_path = self._lock_file_path()
@@ -217,7 +200,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             os.getpid(),
             self.max_concurrent,
             self.admission_root,
-            self.admission_limit,
+            self.max_concurrent,
         )
         self._warn_if_concurrency_exceeds_host_cores()
 
@@ -295,14 +278,14 @@ class OrcaQueueWorker(QueueWorkerLoop):
 
         A pass that fails after reserving a slot releases it, and that release
         can fail on the same held admission lock. The slot's owner is this live
-        process, so the dead-owner reconcile keeps it and the shared pool loses
-        that capacity until the worker exits. Attach gives a slot its queue id
-        and hands it to the child, and this runs between passes, when no
+        process, so the dead-owner reconcile keeps it and the admission store
+        loses that capacity until the worker exits. Attach gives a slot its queue
+        id and hands it to the child, and this runs between passes, when no
         reservation of this process is in flight.
         """
         worker_pid = os.getpid()
         for slot in list_all_slots(self.admission_root):
-            if slot.owner_pid != worker_pid or slot.state != _RESERVED_SLOT_STATE or slot.queue_id:
+            if slot.owner_pid != worker_pid or slot.state != SLOT_STATE_RESERVED or slot.queue_id:
                 continue
             if self._release_admission_slot(slot.token):
                 logger.warning(
@@ -321,9 +304,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             return
         self._snapshot_intent_last_reconcile = now
         try:
-            removed = reconcile_orphaned_snapshot_generations(
-                snapshot_runtime_roots_for_cfg(self.cfg)
-            )
+            removed = reconcile_orphaned_snapshot_generations((self.queue_root,))
         except Exception:
             logger.exception("Snapshot orphan reconciliation failed; retaining all candidates")
         else:
@@ -332,23 +313,17 @@ class OrcaQueueWorker(QueueWorkerLoop):
 
     # -- admission ----------------------------------------------------------
 
-    def _admission_has_capacity(self) -> bool:
-        return admission_has_capacity(self.cfg)
-
-    def _peek_next_entry(self) -> tuple[Path, QueueEntry] | None:
-        return roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
-
-    def _dequeue_next_entry(self) -> tuple[Path, QueueEntry] | None:
-        return roots.dequeue_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
-
-    def _reserve_admission_slot(self) -> str | None:
-        return _try_reserve_admission_slot(self.cfg)
-
     def _release_admission_slot(self, admission_token: str) -> object:
         released: object = release_slot(self.admission_root, admission_token)
         return released
 
-    def _reserve_next_entry(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
+    def _admit_next(self) -> tuple[ReserveStatus, ReservedQueueEntry | None]:
+        """Admit one row: the whole reserve-before-claim sequence, in order.
+
+        Withheld directories, publication repair, queued notification, capacity,
+        preview, slot reservation, claim by id, and slot release when the claim
+        is lost.
+        """
         # Pending publication retains its replay snapshot and durable queue marker.
         # Until it is replayed, no new generation may start in that reaction
         # directory: max_concurrent > 1 could otherwise start a forced successor in
@@ -362,8 +337,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 "cannot be tied to a reaction directory"
             )
             return "blocked", None
-        replay_state = self.replay_state
-        if withheld != replay_state.admission_withheld_keys:
+        if withheld != self._admission_withheld_keys:
             if withheld:
                 logger.warning(
                     "ORCA admission withheld for reaction dir(s) until terminal replay completes: %s",
@@ -371,19 +345,40 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 )
             else:
                 logger.info("ORCA admission is no longer withheld for any reaction dir")
-            replay_state.admission_withheld_keys = withheld
+            self._admission_withheld_keys = withheld
         publication_withheld_ids = publication_repair.repair_queue_publications(self.cfg)
         if publication_withheld_ids is None:
             logger.warning("Queue admission paused: ORCA queue could not be inspected")
             return "blocked", None
         self._publication_withheld_ids = publication_withheld_ids
+        # Load-bearing, not a duplicate of the poll-sleep call: a row the repair
+        # above just published and the claim below takes in this same pass is
+        # never pending at a later sleep, so it would never be notified.
         notify_queued_jobs(self.cfg)
-        return reserve_dequeued_entry(
-            has_capacity_fn=self._admission_has_capacity,
-            peek_next_fn=self._peek_next_entry,
-            reserve_slot_fn=self._reserve_admission_slot,
-            dequeue_next_fn=self._dequeue_next_entry,
-            release_slot_fn=self._release_admission_slot,
+        # Read before writing, and read the cheap thing first: a full pool is one
+        # lock-free admission read, and an empty queue is a queue listing, while
+        # an admission reservation is a durable write to the shared slot file that
+        # an idle worker must not pay (twice, with the release) on every poll. The
+        # slot still comes before the dequeue so a claimed row always holds
+        # capacity; a preview that loses the race simply releases the slot again.
+        if not admission_has_capacity(self.admission_root, self.max_concurrent):
+            return "blocked", None
+        if roots.peek_next_entry(self.cfg, skip_entry_fn=self._skip_entry) is None:
+            return "idle", None
+        admission_token = _try_reserve_admission_slot(self.admission_root, self.max_concurrent)
+        if admission_token is None:
+            return "blocked", None
+        try:
+            dequeued = roots.dequeue_next_entry(self.cfg, skip_entry_fn=self._skip_entry)
+        except Exception:
+            self._release_admission_slot(admission_token)
+            raise
+        if dequeued is None:
+            self._release_admission_slot(admission_token)
+            return "idle", None
+        queue_root, entry = dequeued
+        return "processed", ReservedQueueEntry(
+            queue_root=queue_root, entry=entry, admission_token=admission_token
         )
 
     def _unresolved_terminal_reaction_keys(self) -> frozenset[str] | None:
@@ -420,7 +415,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
 
     def _entry_waits_for_terminal_replay(self, entry: QueueEntry) -> bool:
         """Whether claiming *entry* would start a generation in a withheld directory."""
-        withheld = self.replay_state.admission_withheld_keys
+        withheld = self._admission_withheld_keys
         if not withheld:
             return False
         try:
@@ -608,7 +603,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         attached = update_slot_metadata(
             self.admission_root,
             admission_token,
-            state="active",
+            state=SLOT_STATE_ACTIVE,
             queue_id=queue_id,
             app_name=queue_entry_app_name(entry),
             task_id=queue_entry_task_id(entry),
@@ -644,7 +639,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             return
         # The queue marker survives a restart. This in-memory handoff also fences
         # same-directory admission before the next periodic reconciliation.
-        self.replay_state.pending_replays[prepared.key] = prepared
+        self.replay_state.pending_replays[prepared.queue_id] = prepared
         self._release_terminal_job(job)
         try:
             replay.finish_terminal_replay(self.cfg, prepared)
@@ -654,7 +649,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 prepared.queue_id,
             )
         else:
-            self.replay_state.pending_replays.pop(prepared.key, None)
+            self.replay_state.pending_replays.pop(prepared.queue_id, None)
 
     def _finalize_completed_job(self, queue_id: str, job: OrcaRunningJob, rc: int) -> None:
         # A child can exit while its engine process is still recorded as active.  Do
@@ -671,7 +666,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         mark_result = replay.mark_terminal_queue_entry(queue_id, job, rc=rc)
         # A no-op is benign only when another actor already moved or removed the
         # queue row. Re-read the pre-mark snapshot before giving up ownership.
-        current_after_mark = replay.queue_entry_by_id(mark_result.queue_root, queue_id)
+        current_after_mark = get_entry_by_id(mark_result.queue_root, queue_id)
         if replay.normalized_entry_status(current_after_mark) == STATUS_RUNNING:
             raise RuntimeError(
                 "terminal queue mark did not update the running entry; "
@@ -719,26 +714,22 @@ class OrcaQueueWorker(QueueWorkerLoop):
     # -- cancellation -------------------------------------------------------
 
     def _check_cancel_requests(self) -> None:
-        jobs_by_root: dict[Path, list[tuple[str, OrcaRunningJob]]] = {}
-        for queue_id, job in self._running_jobs():
-            # Reaped children retained for completion retry must never be signalled.
-            if job.process.poll() is not None:
-                continue
-            root = replay.job_queue_root(job)
-            jobs_by_root.setdefault(root, []).append((queue_id, job))
-        for root, jobs in jobs_by_root.items():
-            expected_tasks = {
-                queue_id: getattr(job, "task_id", None) or None for queue_id, job in jobs
-            }
-            try:
-                requested = cancel_requested_ids(root, expected_tasks)
-            except QueueLockTimeoutError:
-                # Retry next pass; other queue roots still get their cancellation pass.
-                continue
-            for queue_id, job in jobs:
-                if queue_id in requested and job.process.poll() is None:
-                    if self._cancel_running_job(queue_id, job) is True:
-                        self._discard_running_job(queue_id)
+        # Reaped children retained for completion retry must never be signalled.
+        jobs = [
+            (queue_id, job) for queue_id, job in self._running_jobs() if job.process.poll() is None
+        ]
+        if not jobs:
+            return
+        try:
+            requested = cancel_requested_ids(
+                self.queue_root, {queue_id: job.task_id or None for queue_id, job in jobs}
+            )
+        except QueueLockTimeoutError:
+            return  # Retry next pass.
+        for queue_id, job in jobs:
+            if queue_id in requested and job.process.poll() is None:
+                if self._cancel_running_job(queue_id, job) is True:
+                    self._discard_running_job(queue_id)
 
     def _cancel_running_job(self, queue_id: str, job: OrcaRunningJob) -> bool:
         """Stop *job*, mark its row cancelled and finish the durable cancellation replay.
@@ -746,7 +737,6 @@ class OrcaQueueWorker(QueueWorkerLoop):
         Returns ``True`` only when the job's queue and admission ownership has
         been transferred to durable replay and its slot released; otherwise retry.
         """
-        queue_root = replay.job_queue_root(job)
         logger.info("Cancelling running job: %s", queue_id)
         try:
             terminated = terminate_process_group(job.process)
@@ -771,9 +761,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
             )
             return False
         try:
-            current = replay.queue_entry_by_id(queue_root, queue_id)
+            current = get_entry_by_id(self.queue_root, queue_id)
             if current is None or not mark_cancelled(
-                queue_root,
+                self.queue_root,
                 queue_id,
                 expected_entry=current,
                 expected_task_id=job.task_id or None,
@@ -785,7 +775,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 queue_id,
             )
             return False
-        terminal_entry = replay.queue_entry_by_id(queue_root, queue_id)
+        terminal_entry = get_entry_by_id(self.queue_root, queue_id)
         if replay.normalized_entry_status(terminal_entry) == STATUS_RUNNING:
             logger.error(
                 "Cancellation returned without a durable terminal queue transition: %s",
@@ -809,7 +799,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
             logger.error("Durable cancellation marker has no reaction identity: %s", queue_id)
             return False
         replay_item = replay.new_terminal_replay_work_item(
-            queue_root,
+            self.queue_root,
             terminal_entry,
             reaction_dir=reaction_dir,
             reaction_key=reaction_key,
@@ -832,7 +822,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
     def _shutdown_running_job(self, queue_id: str, job: OrcaRunningJob) -> None:
         try:
             cancel_requested = get_cancel_requested(
-                replay.job_queue_root(job),
+                self.queue_root,
                 queue_id,
                 expected_task_id=job.task_id,
             )
@@ -884,11 +874,10 @@ class OrcaQueueWorker(QueueWorkerLoop):
                 )
             return
         try:
-            queue_root = replay.job_queue_root(job)
-            current = replay.queue_entry_by_id(queue_root, queue_id)
+            current = get_entry_by_id(self.queue_root, queue_id)
             if current is not None:
                 requeue_running_entry(
-                    queue_root,
+                    self.queue_root,
                     queue_id,
                     expected_entry=current,
                     expected_task_id=job.task_id or None,

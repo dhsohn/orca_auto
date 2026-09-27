@@ -80,9 +80,10 @@ directory only after confirming its ownership and that no service uses it.
 
 ## Switch during an idle maintenance window
 
-Keep configuration, `runs_root`, admission state, logs, and scratch outside the
-prepared runtime. Preserve the currently deployed configuration and state during
-the switch. Configure the chemical engine executables separately.
+Keep configuration, `runs_root` (whose `.admission` directory holds the admission
+state), logs, and scratch outside the prepared runtime. Preserve the currently
+deployed configuration and state during the switch. Configure the chemical
+engine executables separately.
 
 1. Check the current installation's `queue list --json` and wait for
    `active_simulations: 0`. Keep the existing source, environment, and configuration
@@ -106,10 +107,10 @@ the switch. Configure the chemical engine executables separately.
    "$RUNTIME_ROOT/.venv/bin/python" -I -B -m orca_auto.cli service status --json
    ```
 
-   The restart holds the shared admission lock and refuses active or unresolved
-   engine reservations. Initial `queue list` output is an observation; this guard
-   checks again at the actual restart. Installing unit files or restarting only a
-   target does not replace an already running member worker.
+   The restart holds the lock of `<runs_root>/.admission` and refuses active or
+   unresolved engine reservations. Initial `queue list` output is an observation;
+   this guard checks again at the actual restart. Installing unit files or
+   restarting only a target does not replace an already running member worker.
 
 For a running managed worker, status reports `runtime_build_id`, `runtime_version`,
 and `source_root`, and compares them with the installed unit's

@@ -68,7 +68,7 @@ graph TD
 ### 2. 디큐 및 자원 할당
 - 백그라운드 상주 워커 데몬이 큐를 주기적으로 확인합니다.
 - 발행 복구는 디스크 큐 항목을 원본으로 대기 작업의 위치 기록을 만듭니다. 다른 발행자가 잠금을 잡고 있거나 인덱스 저장이 실패하면 해당 항목을 보류하고, 준비된 다른 작업에 가용 슬롯을 할당합니다. 발행 상태가 `complete`여도 경로 검증이나 안전 차단 기록이 실패한 항목은 이번 할당에서 제외합니다. 다음 할당 시 다시 검사·복구하며, 큐 원본을 읽을 수 없으면 실행을 보류합니다.
-- 실행 가능한 작업이 발견되면 워커가 공유 슬롯(`scheduler.max_active_simulations`)을 확인해 하나를 예약하고 계산 자식 프로세스를 실행합니다.
+- 실행 가능한 작업이 발견되면 워커가 하나뿐인 실행권 저장소 `<runs_root>/.admission`([ADR 0007](adr/0007-one-admission-store-under-runs-root.md))의 슬롯(`scheduler.max_active_simulations`)을 확인해 하나를 예약하고 계산 자식 프로세스를 실행합니다.
 - RAM Scratch를 사용하면 자식이 실행 상태를 기록하기 전에 scratch 워크스페이스를 예약하며, 이때 호스트 메모리와 tmpfs 여유분을 검사합니다([ADR 0004](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)). 여유가 일시적으로 부족하면 작업을 실패 처리하지 않고 대기(`pending`) 상태로 되돌리며, `queue list`에는 자원 대기로 표시됩니다. 그렇지 않으면 격리된 실행 디렉터리(`generation`)에서 ORCA를 구동합니다.
 
 ### 3. 실행 감독 및 복구
@@ -106,7 +106,9 @@ graph TD
 `OrcaQueueWorker`(`orca/queue/worker.py`)가 유일한 큐 워커다. PID 파일과 단일
 실행 잠금의 생명주기, 실행 슬롯 예약(행을 ID로 인수하기 전에 슬롯을 먼저 예약하며,
 미리 읽은 행을 `expected_entry`로 사용), 자식 시작과 슬롯 연결, 종료 확정, 취소,
-셧다운, 고아 행 정리를 모두 소유한다. 기반 클래스 `core.queue.worker.QueueWorkerLoop`는
+셧다운, 고아 행 정리를 모두 소유한다. `_admit_next`가 한 번의 수용을 순서대로
+적는다. 보류 디렉터리, 발행 복구, 제출 알림, 여유 확인, 미리 보기, 슬롯 예약,
+ID 기준 인수, 인수를 놓치면 슬롯 해제 순이다. 기반 클래스 `core.queue.worker.QueueWorkerLoop`는
 패스 순서(회수, 취소, 수용, 대기), 셧다운 sweep, 시그널 핸들러만 담당하며 작업을
 프로세스가 딸린 레코드로만 안다. 한 패스에서 일반 예외가 나면 기록한 뒤 폴링 간격
 후 그 패스를 다시 시도하며, 실행 중인 자식은 계속 감독한다. KeyboardInterrupt,
@@ -120,9 +122,18 @@ SystemExit, 시작 실패는 이전처럼 워커를 끝낸다. 주기적 워커 
 
 취소 관찰은 변경되지 않은 큐 스냅샷을 재사용한다. 자식은 종료 상태와 보고서를 발행한 뒤 종료합니다. 부모가 큐의 종료 처리를 정리하고 작업·실행 ID가 일치하는 상태에서 완료 알림의 전송권을 기록합니다. 동시 전송 수가 제한된 백그라운드 전송기는 확보한 메시지만 전달하며, 실행 슬롯을 붙잡거나 전송 후 상태를 다시 쓰지 않습니다. 종료 처리를 반복해도 이미 전송권을 기록한 알림은 건너뛰며, 과거 전송 완료 표식도 인식합니다. 알림은 참고용이므로 전송권 기록 뒤 프로세스가 중단되거나 전송 실패·용량 부족이 발생하면 유실될 수 있고, 이를 재시도하거나 계산 결과를 변경하지 않습니다. 제출은 디스크 큐 항목에 `orca_queued_notification_pending`을 기록합니다. 위치 기록 발행 후 부모 워커가 큐 잠금 안에서 전송권을 확보하고 제출 알림을 별도로 전달하므로 CLI가 종료돼도 전송 전의 의도는 남습니다. 이 표시가 없는 과거 항목의 알림을 소급 전송하지 않습니다. 자식은 시도 시작을 기록한 뒤 시작 알림을 캡처해 별도로 전달하고 계산을 진행합니다. 세 알림은 같은 전송기를 사용하며 동시 전송 수는 프로세스당 4개입니다. 전송 실패·용량 부족·프로세스 종료로 참고용 메시지가 유실될 수 있고, 전송기는 실행 상태를 쓰지 않습니다. 제출 알림의 전송권 기록이 실패하면 전송을 건너뛰되 실행권 할당은 보류하지 않습니다.
 
-워커 CLI는 설정 로드, PID 확인(`orca/queue/orphans.py`의 `read_worker_pid`),
-ORCA 워커 생성·실행을 직접 수행한다. `orca/queue/roots.py`가 루트 선택, 행 나열,
-ID 기준 fenced 인수를 소유하며 큐 선두 위치로 행을 인수하는 일은 없다.
+워커 CLI는 설정 로드, PID 확인(`core/queue/worker/pid_file.py`의 `read_worker_pid_file`),
+ORCA 워커 생성·실행을 직접 수행한다. `orca/queue/roots.py`가 하나뿐인 큐 루트
+(`runtime.allowed_root`)를 해석하고 행 나열과 ID 기준 fenced 인수를 소유하며 큐 선두
+위치로 행을 인수하는 일은 없다.
+`orca/queue/entries.py`가 ORCA 행 식별과 하나뿐인 generation 식별을 소유한다. 쓰기
+fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 비교하고 각자 자기
+상태 조건만 더한다. 생명주기 메타데이터(대기 연기, 실행 ID, 재처리 표식과 fence,
+제출 알림 전송권, 발행 임대)는 식별에 들지 않으며, `job_state.json`의
+`queue_generation`은 그 해시다.
+`queue.json`은 `core/queue/store.py`의 `mutate_entries`만 쓰고, 재대기·종료 행은 모두
+`core/queue/transitions.py`의 `requeued_entry`·`terminal_entry`가 만든다.
+`tests/core/queue/test_ownership_guards.py`가 둘 다 강제한다.
 `queue/replay.py`는 재처리 엔진(작업 항목, 종료 준비와 발행, 정리 파이프라인,
 generation 소유자 결정)만 담당하며 상태를 인자로 명시적으로 받고,
 `queue/run_state_replay.py`는 `run.lock` 아래에서 종료 `job_state.json`을
@@ -156,3 +167,5 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0003: workflow를 폐기하고 단독 ORCA 작업에 집중한다](adr/0003-retire-workflows-for-standalone-orca-jobs.md)
 - [ADR 0004: 메모리 합산 제한 아래의 RAM scratch 동시 실행](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)
 - [ADR 0005: 폐기된 workflow 지원 코드를 제거한다](adr/0005-remove-retired-workflow-support.md)
+- [ADR 0006: 저장되는 토큰과 모든 큐 행 fence가 하나의 generation 식별을 쓴다](adr/0006-one-generation-identity-for-token-and-fences.md)
+- [ADR 0007: 설치마다 `<runs_root>/.admission` 하나의 실행권 저장소](adr/0007-one-admission-store-under-runs-root.md)

@@ -14,9 +14,9 @@ from unittest.mock import patch
 
 import pytest
 
-from orca_auto.core.admission import get_slot, list_slots
+from orca_auto.core.admission import admission_dir, get_slot, list_slots
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.processes import ManagedProcess, terminate_process_group
-from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
@@ -273,7 +273,7 @@ def test_shutdown_leaves_a_self_requeued_child_pending(
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
     claim_next_entry(queue_root)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
 
     def requeue_own_row() -> None:
         queue_worker_mod.requeue_running_entry(queue_root, entry.queue_id)
@@ -289,7 +289,7 @@ def test_shutdown_leaves_a_self_requeued_child_pending(
     worker._shutdown_all()
 
     assert entry.queue_id not in worker._running
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.PENDING}
 
 
@@ -312,7 +312,9 @@ def test_shutdown_continues_with_the_next_job_when_finalizing_one_fails(
         "completed",
         {"status": "completed", "reason": "normal_termination", "analyzer_status": "completed"},
     )
-    done_token = reserve_job_slot(queue_root, worker.max_concurrent, done_entry, rxn_done)
+    done_token = reserve_job_slot(
+        admission_dir(queue_root), worker.max_concurrent, done_entry, rxn_done
+    )
     (queue_root / "job_locations.json").mkdir()
     done_child = fake_children.spawn(exit_code=0)
     live_child = fake_children.spawn()
@@ -332,7 +334,7 @@ def test_shutdown_continues_with_the_next_job_when_finalizing_one_fails(
     # but releases execution capacity; the live one is requeued for resume.
     assert statuses[done_entry.queue_id] == QueueStatus.COMPLETED
     assert terminal_replay_marker_from_entry(queue_row(queue_root, done_entry.queue_id))
-    assert get_slot(queue_root, done_token) is None
+    assert get_slot(admission_dir(queue_root), done_token) is None
     assert statuses[live_entry.queue_id] == QueueStatus.PENDING
 
 
@@ -485,7 +487,7 @@ def test_shutdown_tolerated_cancel_read_still_honors_a_pending_cancel(
     entry = enqueue(queue_root, str(rxn))
     claim_next_entry(queue_root)
     cancel(queue_root, entry.queue_id)
-    token = reserve_job_slot(queue_root, worker.max_concurrent, entry, rxn)
+    token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     worker._running[entry.queue_id] = running_job(
         worker, entry, rxn, fake_children.spawn(), token, task_id=None
     )
@@ -498,7 +500,7 @@ def test_shutdown_tolerated_cancel_read_still_honors_a_pending_cancel(
         worker._shutdown_all()
 
     assert entry.queue_id not in worker._running
-    assert len(list_slots(queue_root)) == 0
+    assert len(list_slots(admission_dir(queue_root))) == 0
     row = queue_row(queue_root, entry.queue_id)
     assert (row.status, row.cancel_requested) == (QueueStatus.CANCELLED, False)
     assert terminal_replay_marker_from_entry(row) is not None

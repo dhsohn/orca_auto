@@ -549,7 +549,7 @@ def test_service_help_describes_idle_only_restart(capsys: pytest.CaptureFixture[
 
     assert exc_info.value.code == 0
     output = " ".join(capsys.readouterr().out.split())
-    assert "Restart services only when their calculation admission pools are idle." in output
+    assert "Restart services only when the calculation admission store is idle." in output
     assert "queue worker service" not in output
 
 

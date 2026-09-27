@@ -5,13 +5,14 @@ from __future__ import annotations
 import os
 import subprocess
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from orca_auto.core.admission import store as admission_store
 from orca_auto.core.queue import processes as queue_processes
+from orca_auto.core.utils import process as process_utils
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from tests.process_helpers import FakeManagedProcess
@@ -25,12 +26,12 @@ from tests.queue_worker_helpers import ChildStarter, FakeChildren, SpawnCall
 @pytest.fixture
 def fake_children(monkeypatch: pytest.MonkeyPatch) -> FakeChildren:
     children = FakeChildren()
-    real_start_ticks = admission_store._process_start_ticks
+    real_start_ticks = process_utils.process_start_ticks
 
-    def start_ticks(pid: int) -> int | None:
+    def start_ticks(pid: int, **kwargs: Any) -> int | None:
         # A fake pid has no /proc entry; give it a stable identity so the
         # admission store can attach it as a slot owner. Real pids stay real.
-        return pid if pid in children.by_pid else real_start_ticks(pid)
+        return pid if pid in children.by_pid else real_start_ticks(pid, **kwargs)
 
     real_kill = os.kill
 
@@ -45,7 +46,7 @@ def fake_children(monkeypatch: pytest.MonkeyPatch) -> FakeChildren:
     monkeypatch.setattr(os, "kill", kill)
     monkeypatch.setattr(os, "killpg", children.killpg)
     monkeypatch.setattr(queue_processes, "_pid_exists", children.pid_exists)
-    monkeypatch.setattr(admission_store, "_process_start_ticks", start_ticks)
+    monkeypatch.setattr(process_utils, "process_start_ticks", start_ticks)
     return children
 
 
@@ -112,9 +113,11 @@ def make_worker(
         start: ChildStarter | None = None,
         sleep: Callable[[float], None] | None = None,
     ) -> OrcaQueueWorker:
-        config_path = str(queue_root / "config.yaml")
+        base = cfg or worker_cfg
         worker = OrcaQueueWorker(
-            cfg or worker_cfg, config_path, max_concurrent=max_concurrent, sleep_fn=sleep
+            replace(base, runtime=replace(base.runtime, max_concurrent=max_concurrent)),
+            str(queue_root / "config.yaml"),
+            sleep_fn=sleep,
         )
         if start is not None:
             monkeypatch.setattr(worker, "_start_background_process", start)

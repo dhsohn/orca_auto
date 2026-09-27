@@ -1,187 +1,150 @@
 {
   "base": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata.orca_terminal_replay_fence_only": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": false
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata.orca_terminal_replay": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata.candidate_count": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": false
+    "generation_token": "64c178784dceabe7a2b80f207d3ad87f434895abb73058569d8420043848e475",
+    "same_generation": false
   },
   "metadata.retained_conformer_count": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": false
+    "generation_token": "0e8a065c7d9ba6fa440ad4bc1e257f3715540523e3cd4aeb80a2f30e3e5a64e6",
+    "same_generation": false
   },
   "metadata.attempt": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": false
+    "generation_token": "d0551e83bae5b4a251b1c0f619f9cc28471fc0bdc497888e7d40e60489808f3e",
+    "same_generation": false
   },
   "metadata.execution_dir": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": false
+    "generation_token": "5ed6faf63e4639a77bc289e51851c835a059bf9e00bae7b6af04ca2bbab3c917",
+    "same_generation": false
   },
   "metadata.run_id": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata.terminal_artifacts": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": false
+    "generation_token": "8f8ca127925116d5039a8ca194826cbf86158892a78d70308e78fa1f6b95be8b",
+    "same_generation": false
   },
   "metadata.terminal_repair_blocked_reason": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": false
+    "generation_token": "56d06a077f708f1f5dc8b85e069afcd3be3621b8ebd1d10ff0c344b22b5fc2b5",
+    "same_generation": false
   },
   "metadata.admission_deferral": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata._orca_auto_queued_record_sync": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata._orca_auto_queued_record_sync_updated_at": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata._orca_auto_queued_record_sync_owner_pid": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata._orca_auto_queued_record_sync_owner_start": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata._orca_auto_queued_record_sync_token": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata._orca_auto_queued_record_sync_blocked": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata.orca_queued_notification_pending=True": {
-    "generation_token": "3bd47153cc3da4f19caf9787ec3ade85a563287e4457e64d9f91e0606998bc7c",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "metadata.reaction_dir": {
-    "generation_token": "0ab96306cd48e8bb7c016d6e9f2cd206e2dcaf3d2412419c57c22b1ccf54e295",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "b2ba32f9a8660fcf7b73eb2eb5f52daac65d084ddef362c917b56058c917ed48",
+    "same_generation": false
   },
   "metadata.force": {
-    "generation_token": "aab5cb3150107998e4c8a70f939fafb3ebfaadf75344857fc3186e43c3184264",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "39637ca4fc744f1e39333aa2f47f64a4a6c4bdfe1d8ab1200c2048b8c4b4ace0",
+    "same_generation": false
   },
   "metadata.selected_inp": {
-    "generation_token": "e9fc94f725c6331972c3df7fb0bd93b3bb2d7eb1439fc4fca73891098acdc2df",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "90a92f8a296a448617ba3a685fb27db41a5684e2f678c8f9269be21418bd8297",
+    "same_generation": false
   },
   "metadata.worker_log": {
-    "generation_token": "9dcfdd9700eed1f1b82fc143ad31bcb51510240d870760b66cdacf0ef1727ac4",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "3b2bff51df5821f6fc46bfb97430d81d819c915b62ee3c819eee5dd9c566cb9b",
+    "same_generation": false
   },
   "metadata.execution_snapshot": {
-    "generation_token": "7d6347ac900ae31a1ad55681fa249b67f6af152c84af570ae545317301b64964",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "d9ca0f090d03948dc93d1146c2aa06c0d4383871d483fe7536004cd2a71e547b",
+    "same_generation": false
   },
   "metadata.unknown_future_key": {
-    "generation_token": "2d411a626f33396e194514c2cd87560d065ab9c10025583603b5fd1d5a433cb0",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "5d6b2dac11cbd279c134a7d870df50ae780596dbcbf2be2e2cd85576979f0d0c",
+    "same_generation": false
   },
   "metadata.orca_queued_notification_pending=absent": {
     "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "same_generation": true
   },
   "field.queue_id": {
-    "generation_token": "03a9da3fec1b7e5285d67bebf931adabbcf16bf189bfc6bb06e50d7855ef8f86",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "d9861730433319b19dc4a017b9283dfca20cf612377e6b5b8c406ed32b9bc396",
+    "same_generation": false
   },
   "field.app_name": {
-    "generation_token": "c81afa8557dffa216c861a1aeb4aba3adbc96c4b8e9d947abb7826a0da5f01f2",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "807277da62f39dddc4bf3fc75085b9aa6501809f16903a76055106045768bc6a",
+    "same_generation": false
   },
   "field.task_id": {
-    "generation_token": "924f2bba557c6a400da89a04ace45bab46354769a159c07caeceb1345d694b34",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "22abdecde5f5d49770a2ae7a09147fa948219c5e4d580186beeb3d2a671215e0",
+    "same_generation": false
   },
   "field.task_kind": {
-    "generation_token": "39843a4a13e624670af4d569081465b8d738aa8de8e142a7d51929b0af6520f0",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "7a089e74fbbd9313f6ad5028ddacbe3049571448930966ea765790755d0a10d8",
+    "same_generation": false
   },
   "field.engine": {
-    "generation_token": "208ee9a2ffbab32ca4265cb83ac2214c2374dfa74459af8554b705aa36475bc8",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "20e56a06da51361b885507bd92ed1d467c5c658a9091590f0a71364755b2e1f3",
+    "same_generation": false
   },
   "field.priority": {
-    "generation_token": "5063ad2fb2cc5aaedfa9381c8d483a09fd306a588626edccd63fa87228c60ced",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": false
+    "generation_token": "f6914fd1ce05532ac91763c87357eecf0b89b124b0a3fcd1afcda97dbafc3aab",
+    "same_generation": false
   },
   "field.enqueued_at": {
-    "generation_token": "be7cda0e6ccfedcb630a0d731772cdc83d7f9b3832cd41cb872bdcc19dc71660",
-    "core_same_generation": false,
-    "adapter_same_publication_generation": true
+    "generation_token": "975ee1bfb9329bdaa182a5de0bc397f9cab3f3f452ab4ffa1e471bd3e50709d0",
+    "same_generation": false
   },
   "field.status": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "field.started_at": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "field.finished_at": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "field.cancel_requested": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   },
   "field.error": {
-    "generation_token": "463b06171daebf32fca2c79d471eb35d4fe1dbc093dbb9f9aa7cad4cd3473296",
-    "core_same_generation": true,
-    "adapter_same_publication_generation": true
+    "generation_token": "acd7eeac8b339504701e7dcf1e3214267a755275e71c99b1f86ad58e347c8109",
+    "same_generation": true
   }
 }

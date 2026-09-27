@@ -21,14 +21,14 @@ from ..state_reading import load_state, state_path, state_payload_job_id
 from ..statuses import TERMINAL_RUN_STATUS_VALUES
 from ..types import RunState
 from .entries import (
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    TERMINAL_REPLAY_METADATA_KEY,
     TERMINAL_STATUSES,
     queue_entry_metadata,
     queue_entry_reaction_dir,
     queue_entry_task_id,
 )
 
-TERMINAL_REPLAY_METADATA_KEY = "orca_terminal_replay"
-TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY = "orca_terminal_replay_fence_only"
 TERMINAL_REPLAY_MARKER_VERSION = 1
 
 

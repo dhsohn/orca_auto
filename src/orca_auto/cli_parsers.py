@@ -381,7 +381,7 @@ def add_service_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
 
     restart_parser = service_subparsers.add_parser(
         "restart",
-        help="Restart services only when their calculation admission pools are idle.",
+        help="Restart services only when the calculation admission store is idle.",
     )
     restart_parser.add_argument(
         "--force",

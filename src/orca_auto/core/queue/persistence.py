@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -16,7 +16,6 @@ from ..utils.persistence import (
 from .priority import normalize_queue_priority
 from .types import QueueEntry, QueueStatus
 
-QUEUE_FILE_NAME = QUEUE_FILE
 QUEUE_LOCK_NAME = "queue.lock"
 _QUEUE_ENTRY_FIELDS = frozenset(
     {
@@ -41,23 +40,19 @@ class QueueStoreCorruptError(RuntimeError):
     """Raised when the queue file exists but cannot be safely loaded."""
 
 
-def _validate_queue_ids(
-    entries: Sequence[QueueEntry],
-    *,
-    corrupt_error: type[Exception] = QueueStoreCorruptError,
-) -> None:
+def _validate_queue_ids(entries: Sequence[QueueEntry]) -> None:
     seen: set[str] = set()
     for index, entry in enumerate(entries):
         queue_id = str(getattr(entry, "queue_id", "") or "").strip()
         if not queue_id:
-            raise corrupt_error(f"Queue file entry at index {index} has a blank queue_id")
+            raise QueueStoreCorruptError(f"Queue file entry at index {index} has a blank queue_id")
         if queue_id in seen:
-            raise corrupt_error(f"Queue file has duplicate queue_id {queue_id!r}")
+            raise QueueStoreCorruptError(f"Queue file has duplicate queue_id {queue_id!r}")
         seen.add(queue_id)
 
 
 def queue_path(root: Path) -> Path:
-    return root / QUEUE_FILE_NAME
+    return root / QUEUE_FILE
 
 
 def queue_lock_path(root: Path) -> Path:
@@ -71,7 +66,7 @@ def entry_to_dict(entry: QueueEntry) -> dict[str, Any]:
     return data
 
 
-def _entry_from_dict(raw: dict[str, Any]) -> QueueEntry:
+def entry_from_dict(raw: dict[str, Any]) -> QueueEntry:
     missing = _QUEUE_ENTRY_FIELDS - set(raw)
     unknown = set(raw) - _QUEUE_ENTRY_FIELDS
     if missing or unknown:
@@ -131,51 +126,35 @@ def _entry_from_dict(raw: dict[str, Any]) -> QueueEntry:
     )
 
 
-def entry_from_dict(raw: dict[str, Any]) -> QueueEntry:
-    return _entry_from_dict(raw)
-
-
-def load_entries(
-    root: str | Path,
-    *,
-    entry_from_dict_fn: Callable[[dict[str, Any]], QueueEntry] = entry_from_dict,
-    corrupt_error: type[Exception] = QueueStoreCorruptError,
-) -> list[QueueEntry]:
+def load_entries(root: str | Path) -> list[QueueEntry]:
     resolved_root = resolve_root_path(root)
     raw = load_json_list_file(
         queue_path(resolved_root),
-        corrupt_error=corrupt_error,
+        corrupt_error=QueueStoreCorruptError,
         description="Queue file",
     )
     entries: list[QueueEntry] = []
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
-            raise corrupt_error(f"Queue file entry at index {index} must be a JSON object")
+            raise QueueStoreCorruptError(f"Queue file entry at index {index} must be a JSON object")
         try:
-            entries.append(entry_from_dict_fn(item))
-        except QueueStoreCorruptError as exc:
-            if isinstance(exc, corrupt_error):
-                raise
-            raise corrupt_error(str(exc)) from exc
+            entries.append(entry_from_dict(item))
         except (TypeError, ValueError) as exc:
-            raise corrupt_error(f"Queue file entry at index {index} is invalid: {exc}") from exc
-    _validate_queue_ids(entries, corrupt_error=corrupt_error)
+            raise QueueStoreCorruptError(
+                f"Queue file entry at index {index} is invalid: {exc}"
+            ) from exc
+    _validate_queue_ids(entries)
     return entries
 
 
-def save_entries(
-    root: str | Path,
-    entries: Sequence[QueueEntry],
-    *,
-    entry_to_dict_fn: Callable[[QueueEntry], dict[str, Any]] = entry_to_dict,
-) -> None:
+def save_entries(root: str | Path, entries: Sequence[QueueEntry]) -> None:
     resolved_root = resolve_root_path(root)
     _validate_queue_ids(entries)
-    records = [entry_to_dict_fn(item) for item in entries]
+    records = [entry_to_dict(item) for item in entries]
     atomic_write_json(
         queue_path(resolved_root),
         records,
         ensure_ascii=True,
         indent=2,
     )
-    published_source(resolved_root, "queue", QUEUE_FILE_NAME, records)
+    published_source(resolved_root, "queue", QUEUE_FILE, records)

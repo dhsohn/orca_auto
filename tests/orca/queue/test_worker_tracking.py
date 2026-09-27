@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.messaging.channel import SendResult
 from orca_auto.core.queue.worker.loop import QueueWorkerLoop
 from orca_auto.orca import notifications
@@ -188,6 +189,7 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
     from unittest.mock import MagicMock
 
     from orca_auto.core.admission import list_slots, reserve_slot
+    from orca_auto.core.queue.types import QueueStatus
     from orca_auto.orca.config import OrcaRuntimeConfig
     from orca_auto.orca.queue import adapter
     from orca_auto.orca.queue.models import OrcaRunningJob as _RunningJob
@@ -209,15 +211,15 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
     monkeypatch.setattr(
         worker_tracking, "upsert_terminal_job_record", lambda *_args, **_kwargs: True
     )
-    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path)))
-    worker = OrcaQueueWorker(cfg, str(tmp_path / "config.yaml"), max_concurrent=2)
+    cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path), max_concurrent=2))
+    worker = OrcaQueueWorker(cfg, str(tmp_path / "config.yaml"))
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     write_completed_run_state(job_dir)
     entry = adapter.enqueue(tmp_path, str(job_dir), task_id="task_terminal_123")
     claim_next_entry(tmp_path)
     token = reserve_slot(
-        tmp_path,
+        admission_dir(tmp_path),
         2,
         work_dir=str(job_dir),
         queue_id=entry.queue_id,
@@ -238,9 +240,9 @@ def test_real_finalizer_releases_admission_slot_while_delivery_is_blocked(
         try:
             assert entered.wait(5)
             future.result(timeout=5)
-            assert len(list_slots(tmp_path)) == 0
+            assert len(list_slots(admission_dir(tmp_path))) == 0
             [completed] = adapter.list_queue(tmp_path)
-            assert completed.status == adapter.QueueStatus.COMPLETED
+            assert completed.status == QueueStatus.COMPLETED
             assert completed.metadata.get("orca_terminal_replay") is None
         finally:
             release.set()

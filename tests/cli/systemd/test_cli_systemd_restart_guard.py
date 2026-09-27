@@ -15,10 +15,10 @@ from typing import Any
 import pytest
 
 from orca_auto import cli_systemd_restart, cli_systemd_restart_guard
-from orca_auto.core.admission import store
+from orca_auto.core.admission import admission_dir, store
+from orca_auto.core.utils import process as process_utils
 
 WORKER = "orca_auto-queue-worker@alice.service"
-OTHER_WORKER = "orca_auto-queue-worker@carol.service"
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ def _site(tmp_path: Path, name: str = "service", *, lock: bool = True, slots: bo
     base = tmp_path / name
     base.mkdir(parents=True)
     (base / "runs").mkdir()
-    admission = base / "admission"
+    admission = admission_dir(base / "runs")
     admission.mkdir()
     if lock:
         (admission / "admission.lock").touch(mode=0o600)
@@ -43,7 +43,7 @@ def _site(tmp_path: Path, name: str = "service", *, lock: bool = True, slots: bo
             {
                 "runs_root": str(base / "runs"),
                 "orca": {"paths": {"orca_executable": "/usr/bin/true"}},
-                "scheduler": {"admission_root": str(admission), "max_active_simulations": 4},
+                "scheduler": {"max_active_simulations": 4},
             }
         ),
         encoding="utf-8",
@@ -92,8 +92,9 @@ class _Evidence:
         return _proc_stat()
 
     def guard(self) -> Any:
+        [unit] = self.units
         return cli_systemd_restart_guard.guard_service_restart(
-            tuple(self.units), run=self.run, read_process_file=self.read_process_file
+            unit, run=self.run, read_process_file=self.read_process_file
         )
 
 
@@ -182,9 +183,9 @@ def test_unknown_slot_liveness_blocks_without_pruning(
     site = _site(tmp_path)
     _reserve(site)
     if unknown == "boot":
-        monkeypatch.setattr(store, "_linux_boot_id", lambda: None)
+        monkeypatch.setattr(process_utils, "linux_boot_id", lambda **_kwargs: None)
     else:
-        monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: None)
+        monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid, **_kwargs: None)
     with pytest.raises(ValueError, match="1 active or reserved"), _Evidence({WORKER: site}).guard():
         pytest.fail("unreadable process identity must not look idle")
 
@@ -266,7 +267,7 @@ def test_unreadable_systemd_evidence_refuses_restart(tmp_path: Path, failure: st
     with (
         pytest.raises(ValueError, match="Cannot read service configuration binding"),
         cli_systemd_restart_guard.guard_service_restart(
-            (WORKER,), run=run, read_process_file=evidence.read_process_file
+            WORKER, run=run, read_process_file=evidence.read_process_file
         ),
     ):
         pytest.fail("a successful-looking property value cannot hide a failed query")
@@ -336,7 +337,7 @@ def test_process_identity_changes_during_check_refuse_restart(tmp_path: Path, ta
     with (
         pytest.raises(ValueError, match="Cannot verify unchanged running configuration"),
         cli_systemd_restart_guard.guard_service_restart(
-            (WORKER,), run=run, read_process_file=read_process_file
+            WORKER, run=run, read_process_file=read_process_file
         ),
     ):
         pytest.fail("changing process identity is not trustworthy idle evidence")
@@ -387,7 +388,7 @@ def test_unreadable_process_environment_is_not_silently_ignored(tmp_path: Path) 
     with (
         pytest.raises(ValueError, match="Cannot verify unchanged running configuration"),
         cli_systemd_restart_guard.guard_service_restart(
-            (WORKER,), run=evidence.run, read_process_file=read_process_file
+            WORKER, run=evidence.run, read_process_file=read_process_file
         ),
     ):
         pytest.fail("unreadable process evidence cannot authorize restart")
@@ -412,30 +413,6 @@ def test_config_is_rechecked_after_lock_acquisition(
     ):
         pytest.fail("a configuration race must be caught before restart")
     _assert_unlocked(site.admission)
-
-
-def test_multiple_service_roots_are_sorted_and_deduplicated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    high = _site(tmp_path, "z-root")
-    low = _site(tmp_path, "a-root")
-    evidence = _Evidence(
-        {WORKER: high, OTHER_WORKER: low, "orca_auto-queue-worker@bob.service": high}
-    )
-    original_lock = cli_systemd_restart_guard.admission_lock
-    acquired: list[Path] = []
-
-    @contextmanager
-    def record_lock(root: str | Path) -> Iterator[None]:
-        acquired.append(Path(root))
-        with original_lock(root):
-            yield
-
-    monkeypatch.setattr(cli_systemd_restart_guard, "admission_lock", record_lock)
-    with evidence.guard():
-        _assert_locked(low.admission)
-        _assert_locked(high.admission)
-    assert acquired == [low.admission, high.admission]
 
 
 def test_guard_releases_lock_when_guarded_operation_raises(tmp_path: Path) -> None:
@@ -483,9 +460,9 @@ def test_reservation_waits_through_entire_restart_and_resumes_after_exit(
         mutations.append(argv[1])
         return subprocess.CompletedProcess(argv, 5 if len(mutations) - 1 == failure_index else 0)
 
-    def guard(worker_units: tuple[str, ...], *, run: Any) -> Any:
+    def guard(worker_unit: str, *, run: Any) -> Any:
         return cli_systemd_restart_guard.guard_service_restart(
-            worker_units, run=run, read_process_file=evidence.read_process_file
+            worker_unit, run=run, read_process_file=evidence.read_process_file
         )
 
     try:

@@ -265,9 +265,8 @@ def _prompt_init_values(
 
 
 def _init_config_payload(values: _PromptedInitValues) -> dict[str, object]:
-    # scheduler.admission_root is intentionally omitted: the shared admission
-    # directory defaults to <runs_root>/.admission. Resource defaults are the
-    # schema's own so the wizard cannot drift from the loader.
+    # Resource defaults are the schema's own so the wizard cannot drift from
+    # the loader.
     resources = CommonResourceConfig()
     return {
         "runs_root": str(values.orca_runtime["runs_root"]),

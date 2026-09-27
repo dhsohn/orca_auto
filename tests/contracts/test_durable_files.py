@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.messaging import Message
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.scratch_config import ScratchConfig
@@ -58,7 +59,7 @@ def assert_durable_goldens(scenario: str, h: Harness, *jobs: Path) -> None:
         assert_golden(f"{scenario}/{name}", value)
 
     golden("queue.json", n(_json_or_none(h.runs / "queue.json")))
-    golden("admission_slots.json", n(_json_or_none(h.tmp / "admission" / "admission_slots.json")))
+    golden("admission_slots.json", n(_json_or_none(admission_dir(h.runs) / "admission_slots.json")))
     golden("job_locations.json", n(_json_or_none(h.runs / "job_locations.json")))
     intents = h.runs / ".orca_auto_snapshot_intents"
     golden(
@@ -90,7 +91,7 @@ def _running_goldens(scenario: str, h: Harness, job: Path) -> None:
     assert_golden(f"{scenario}/running.queue.json", n(read_json(h.runs / "queue.json")))
     assert_golden(
         f"{scenario}/running.admission_slots.json",
-        n(read_json(h.tmp / "admission" / "admission_slots.json")),
+        n(read_json(admission_dir(h.runs) / "admission_slots.json")),
     )
     assert_golden(f"{scenario}/running.root_job_state.json", n(read_json(job / "job_state.json")))
 

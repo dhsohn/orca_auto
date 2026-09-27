@@ -10,7 +10,6 @@ from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.indexing.roots import runtime_roots_for_cfg
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue.engine.input_snapshot import (
     bind_direct_generation_owner,
@@ -520,6 +519,12 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
 
 
 def _owner_is_alive(marker: Mapping[str, Any]) -> bool:
+    """The intent owner's policy: only proof of death releases the intent.
+
+    It probes the pid first, and a missing pid, an unreadable boot id or start
+    ticks and any ``kill`` error but ESRCH keep the owner, so it does not share
+    :func:`process_utils.owner_identity_state`'s boot-first order.
+    """
     try:
         owner_pid = int(marker.get("owner_pid") or 0)
     except (TypeError, ValueError):
@@ -697,10 +702,6 @@ def reconcile_orphaned_snapshot_generations(
     return removed
 
 
-def snapshot_runtime_roots_for_cfg(cfg: Any) -> tuple[Path, ...]:
-    return runtime_roots_for_cfg(cfg)
-
-
 __all__ = [
     "INPUT_SNAPSHOT_NAMESPACE_INTENT_KIND",
     "SNAPSHOT_INTENT_QUEUE_ROOT_KEY",
@@ -714,6 +715,5 @@ __all__ = [
     "discard_snapshot_intent_if_generations_absent",
     "finalize_queued_snapshot_intent",
     "reconcile_orphaned_snapshot_generations",
-    "snapshot_runtime_roots_for_cfg",
     "transition_snapshot_intent",
 ]

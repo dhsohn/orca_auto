@@ -9,7 +9,6 @@ from unittest.mock import patch
 import pytest
 
 from orca_auto.core.engine_scratch import scratch_provenance_from_exception
-from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import worker_execution
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
@@ -19,6 +18,7 @@ from orca_auto.orca.execution_binding import (
 )
 from orca_auto.orca.orca_runner import OrcaRunner, WorkerShutdownInterrupt
 from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.queue.entries import queue_entry_generation_token
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state
@@ -65,7 +65,7 @@ def _worker_config(tmp_path: Path, queue_root: Path) -> Path:
         write_fake_orca(executable)
     return write_config_file(
         tmp_path / "orca_auto.yaml",
-        make_app_cfg(queue_root, orca_executable=executable, admission_root=tmp_path / "admission"),
+        make_app_cfg(queue_root, orca_executable=executable),
     )
 
 
@@ -108,7 +108,7 @@ def test_run_worker_child_job_loads_queue_entry_and_preserves_exit_code(
     )
     calls: dict[str, Any] = {}
 
-    monkeypatch.setattr(worker_execution, "_queue_entry_by_id", lambda _root, _queue_id: entry)
+    monkeypatch.setattr(worker_execution, "get_entry_by_id", lambda _root, _queue_id: entry)
     monkeypatch.setattr(
         worker_execution, "install_shutdown_signal_handlers", lambda _callback: None
     )
@@ -376,7 +376,7 @@ def test_run_worker_child_job_refuses_entry_that_is_not_running(
 
     monkeypatch.setattr(
         worker_execution,
-        "_queue_entry_by_id",
+        "get_entry_by_id",
         lambda _root, _queue_id: QueueEntry(
             queue_id="queue-1",
             app_name="orca_auto_orca",

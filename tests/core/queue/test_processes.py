@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import Any
 
-from orca_auto.core.queue.processes import (
-    ManagedProcess,
-    ProcessGroupTerminationDeps,
-    terminate_process_group,
-)
+import pytest
+
+from orca_auto.core.queue import processes
+from orca_auto.core.queue.processes import terminate_process_group
 from tests.process_helpers import FakeManagedProcess, missing_process_group
 
 
@@ -30,34 +30,35 @@ class SequencedPollProcess(FakeManagedProcess):
 # terminate_process_group
 # ---------------------------------------------------------------------------
 
-_NO_LIVE_PIDS = ProcessGroupTerminationDeps(pid_exists=lambda _pid: False)
 
-
-def _terminate(process: ManagedProcess, deps: ProcessGroupTerminationDeps = _NO_LIVE_PIDS) -> bool:
-    return terminate_process_group(process, killpg_fn=missing_process_group, deps=deps)
+@pytest.fixture(autouse=True)
+def _missing_groups_and_pids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os, "killpg", missing_process_group)
+    monkeypatch.setattr(processes, "_pid_exists", lambda _pid: False)
 
 
 def test_already_terminated() -> None:
     process = FakeManagedProcess(poll_result=0)
-    assert _terminate(process) is True
+    assert terminate_process_group(process) is True
     assert process.terminate_calls == 0
 
 
 def test_terminate_success() -> None:
     process = SequencedPollProcess([None, 0, 0], pid=1234)
-    assert _terminate(process) is True
+    assert terminate_process_group(process) is True
     assert (process.terminate_calls, process.kill_calls) == (1, 0)
 
 
 def test_terminate_ignores_errors() -> None:
     process = SequencedPollProcess([None, 0, 0], pid=1234, terminate_error=RuntimeError("nope"))
-    assert _terminate(process) is True
+    assert terminate_process_group(process) is True
     assert process.terminate_calls == 1
 
 
-def test_terminate_does_not_signal_reused_pid() -> None:
+def test_terminate_does_not_signal_reused_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     process = SequencedPollProcess([None, 0], pid=1234)
-    assert _terminate(process, ProcessGroupTerminationDeps(pid_exists=lambda _pid: True)) is True
+    monkeypatch.setattr(processes, "_pid_exists", lambda _pid: True)
+    assert terminate_process_group(process) is True
     assert (process.terminate_calls, process.kill_calls) == (0, 0)
 
 
@@ -69,5 +70,5 @@ def test_escalate_to_kill() -> None:
             subprocess.TimeoutExpired(cmd="worker", timeout=5),
         ],
     )
-    assert _terminate(process) is False
+    assert terminate_process_group(process) is False
     assert (process.terminate_calls, process.kill_calls) == (1, 1)

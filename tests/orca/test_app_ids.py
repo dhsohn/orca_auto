@@ -11,7 +11,8 @@ import pytest
 
 from orca_auto import cli
 from orca_auto.activity import _cancel as activity_cancel
-from orca_auto.orca.engine_catalog import find_engine_catalog_entry, get_engine_catalog_entry
+from orca_auto.core.admission import admission_dir
+from orca_auto.orca import app_ids
 
 
 def _subparser(
@@ -28,12 +29,12 @@ def _subparser(
     return action.choices[name]
 
 
-def test_engine_catalog_is_import_safe() -> None:
+def test_app_ids_are_import_safe() -> None:
     script = """
 import sys
-from orca_auto.orca.engine_catalog import get_engine_catalog_entry
-assert get_engine_catalog_entry("orca").engine_id == "orca"
-allowed = {'orca_auto.orca', 'orca_auto.orca.engine_catalog'}
+from orca_auto.orca.app_ids import ORCA_ENGINE
+assert ORCA_ENGINE == "orca"
+allowed = {'orca_auto.orca', 'orca_auto.orca.app_ids'}
 assert not any(
     name.startswith(('orca_auto.flow', 'orca_auto.orca')) and name not in allowed
     for name in sys.modules
@@ -75,27 +76,17 @@ def test_engine_entrypoint_module_runs_without_eager_import_warning(module_name:
     assert "RuntimeWarning" not in result.stderr
 
 
-def test_catalog_holds_exactly_the_orca_identity() -> None:
-    entry = get_engine_catalog_entry("orca")
-    assert entry.engine_id == "orca"
-    assert entry.app_id == "orca_auto_orca"
-    assert entry.source_id == "orca_auto_orca"
-    assert entry.task_kinds == ("orca_run_inp",)
+def test_app_ids_hold_the_persisted_orca_identity() -> None:
+    assert app_ids.ORCA_ENGINE == "orca"
+    assert app_ids.ORCA_AUTO_ORCA_APP_NAME == "orca_auto_orca"
+    assert app_ids.ORCA_AUTO_ORCA_SOURCE == "orca_auto_orca"
+    assert app_ids.ORCA_TASK_KIND == "orca_run_inp"
     # Persisted ``source`` label in admission_slots.json; not a module path.
-    assert entry.admission_source == "orca_auto.orca.queue_worker"
-    assert entry.engine_launch_gated is True
+    assert app_ids.ORCA_ADMISSION_SOURCE == "orca_auto.orca.queue_worker"
+    assert app_ids.ORCA_ENGINE_LAUNCH_GATED is True
 
 
-def test_catalog_lookup_normalizes_and_rejects_unknown_engines() -> None:
-    assert find_engine_catalog_entry(" ORCA ") is get_engine_catalog_entry("orca")
-    assert find_engine_catalog_entry("other") is None
-    with pytest.raises(ValueError, match=r"unsupported engine: other \(supported: orca\)"):
-        get_engine_catalog_entry("other")
-    with pytest.raises(ValueError, match="unsupported engine: <blank>"):
-        get_engine_catalog_entry(None)
-
-
-def test_orca_worker_reservation_uses_catalog_identity(
+def test_orca_worker_reservation_uses_the_persisted_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -112,15 +103,18 @@ def test_orca_worker_reservation_uses_catalog_identity(
     from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig
 
     cfg = AppConfig(runtime=OrcaRuntimeConfig(allowed_root=str(tmp_path), max_concurrent=2))
-    assert orca_worker._try_reserve_admission_slot(cfg) == "slot-1"
-    orca_entry = get_engine_catalog_entry("orca")
-    assert captured[0]["source"] == orca_entry.admission_source
-    assert captured[0]["app_name"] == orca_entry.app_id
+    admission_root = admission_dir(cfg.runtime.allowed_root)
+    assert (
+        orca_worker._try_reserve_admission_slot(admission_root, cfg.runtime.max_concurrent)
+        == "slot-1"
+    )
+    assert captured[0]["source"] == "orca_auto.orca.queue_worker"
+    assert captured[0]["app_name"] == "orca_auto_orca"
     assert captured[0]["engine_launch_gated"] is True
     assert captured[0]["engine_process_state"] == "idle"
     assert captured[0]["state"] == "reserved"
-    assert captured[0]["root"] == Path(cfg.runtime.resolved_admission_root)
-    assert captured[0]["limit"] == cfg.runtime.resolved_admission_limit
+    assert captured[0]["root"] == admission_root
+    assert captured[0]["limit"] == 2
 
 
 def test_queue_list_and_worker_have_no_engine_selection_options() -> None:

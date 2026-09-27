@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.admission import reserve_slot
+from orca_auto.core.admission import admission_dir, reserve_slot
 from orca_auto.orca import execution, output_adoption
 from orca_auto.orca.config import AppConfig, load_config
 from orca_auto.orca.execution import execute_orca_run
 from orca_auto.orca.orca_runner import OrcaRunner
-from orca_auto.orca.run_context import RunExecutionContext, configured_admission_root
+from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state import save_state
 from orca_auto.orca.state_reading import load_state
 from tests.conftest import write_run_state
@@ -288,7 +288,7 @@ def test_crash_recovery_finalizes_recorded_failure_without_rerunning(
             cfg=cfg,
             reaction_dir=reaction,
             selected_inp=inp,
-            admission_root=configured_admission_root(cfg),
+            admission_root=admission_dir(cfg.runtime.allowed_root),
             reservation_token=token,
         ),
     )

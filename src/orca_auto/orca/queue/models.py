@@ -29,10 +29,6 @@ class TerminalReplayWorkItem:
     state_prepared: bool = False
     observed_state: StateGenerationFingerprint | None = None
 
-    @property
-    def key(self) -> tuple[str, str]:
-        return (str(self.queue_root), self.queue_id)
-
 
 @dataclass
 class OrcaRunningJob:
@@ -57,14 +53,12 @@ class OrcaWorkerReplayState:
     than a fresh active-to-terminal transition.
     """
 
-    pending_replays: dict[tuple[str, str], TerminalReplayWorkItem] = field(default_factory=dict)
-    reconcile_statuses: dict[tuple[str, str], str] | None = None
-    blocked_marker_keys: set[tuple[str, str]] = field(default_factory=set)
-    generation_owners: dict[str, tuple[str, str]] = field(default_factory=dict)
+    # Every map is keyed by queue_id; ``generation_owners`` maps a reaction key to one.
+    pending_replays: dict[str, TerminalReplayWorkItem] = field(default_factory=dict)
+    reconcile_statuses: dict[str, str] | None = None
+    blocked_marker_keys: set[str] = field(default_factory=set)
+    generation_owners: dict[str, str] = field(default_factory=dict)
     generation_owner_active: dict[str, bool] = field(default_factory=dict)
-    # Kept current by the reserve gate, which runs before every reservation;
-    # read by the row filter inside that reservation.
-    admission_withheld_keys: frozenset[str] = frozenset()
 
 
 __all__ = ["OrcaRunningJob", "OrcaWorkerReplayState", "TerminalReplayWorkItem"]

@@ -69,44 +69,29 @@ def test_engine_runtime_paths_validates_complete_shared_config(
         engine_runtime.engine_runtime_paths(str(config_path))
 
 
-def test_engine_runtime_paths_uses_scheduler_admission_root(tmp_path: Path) -> None:
-    runs_root = tmp_path / "runs"
-    admission_root = tmp_path / "admission"
+def test_engine_runtime_paths_rejects_the_removed_admission_root(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
-        "\n".join(
-            [
-                f"runs_root: {runs_root}",
-                "scheduler:",
-                "  max_active_simulations: 4",
-                f"  admission_root: {admission_root}",
-                "",
-            ]
-        ),
+        f"runs_root: {tmp_path / 'runs'}\nscheduler:\n  admission_root: {tmp_path / 'pool'}\n",
         encoding="utf-8",
     )
 
-    paths = engine_runtime.engine_runtime_paths(str(config_path))
-    assert paths["allowed_root"] == runs_root.resolve()
-    assert paths["admission_root"] == admission_root.resolve()
+    with pytest.raises(ValueError, match=r"scheduler\.admission_root was removed"):
+        engine_runtime.engine_runtime_paths(str(config_path))
 
 
 def test_engine_runtime_paths_rejects_engine_scoped_scheduler_override(
     tmp_path: Path,
 ) -> None:
     runs_root = tmp_path / "runs"
-    shared_admission = tmp_path / "shared-admission"
-    orca_admission = tmp_path / "orca-admission"
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         "\n".join(
             [
                 f"runs_root: {runs_root}",
-                "scheduler:",
-                f"  admission_root: {shared_admission}",
                 "orca:",
                 "  scheduler:",
-                f"    admission_root: {orca_admission}",
+                "    max_active_simulations: 2",
                 "",
             ]
         ),

@@ -6,13 +6,17 @@ import os
 import signal
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from orca_auto.core.utils import process as process_utils
 
-from .records import AdmissionSlot
+from .records import (
+    ENGINE_PROCESS_ACTIVE,
+    ENGINE_PROCESS_IDLE,
+    ENGINE_PROCESS_PENDING,
+    AdmissionSlot,
+)
 from .store import (
     clear_slot_engine_process,
     complete_slot_engine_process,
@@ -38,27 +42,7 @@ class EngineProcessRecordPendingError(EngineProcessRecordError):
     """
 
 
-@dataclass(frozen=True)
-class EngineProcessRecoveryDeps:
-    killpg: Callable[[int, int], None] = os.killpg
-    kill: Callable[[int, int], None] = os.kill
-    secure_signal: Callable[[int, int, int, int], bool] = process_utils.signal_process_group_stable
-    process_start_ticks: Callable[[int], int | None] = lambda pid: (
-        process_utils.process_start_ticks(pid, proc_root=Path("/proc"))
-    )
-    boot_id: Callable[[], str | None] = lambda: process_utils.linux_boot_id(proc_root=Path("/proc"))
-    monotonic: Callable[[], float] = time.monotonic
-    sleep: Callable[[float], None] = time.sleep
-    sigterm: int = signal.SIGTERM
-    sigkill: int = signal.SIGKILL
-    logger: logging.Logger = LOGGER
-
-
-def _recorded_engine_identity_status(
-    slot: AdmissionSlot,
-    *,
-    deps: EngineProcessRecoveryDeps,
-) -> Literal["matching", "stale"]:
+def _recorded_engine_identity_status(slot: AdmissionSlot) -> Literal["matching", "stale"]:
     pid = slot.engine_pid
     expected_ticks = slot.engine_process_start_ticks
     expected_boot_id = slot.engine_process_boot_id
@@ -70,7 +54,7 @@ def _recorded_engine_identity_status(
         raise EngineProcessRecordError(
             f"Admission slot {slot.token} has no boot-scoped engine identity"
         )
-    observed_boot_id = deps.boot_id()
+    observed_boot_id = process_utils.linux_boot_id()
     if observed_boot_id is None:
         raise EngineProcessRecordError("Cannot verify the current Linux boot identity")
     if observed_boot_id != expected_boot_id:
@@ -79,7 +63,7 @@ def _recorded_engine_identity_status(
         # receive a signal.
         return "stale"
     try:
-        deps.kill(pid, 0)
+        os.kill(pid, 0)
     except ProcessLookupError as exc:
         raise EngineProcessRecordError(
             f"Recorded engine leader pid={pid} is gone while its process group remains"
@@ -94,7 +78,7 @@ def _recorded_engine_identity_status(
                 f"Recorded engine leader pid={pid} is gone while its process group remains"
             ) from exc
         raise EngineProcessRecordError(f"Cannot verify recorded engine leader pid={pid}") from exc
-    observed_ticks = deps.process_start_ticks(pid)
+    observed_ticks = process_utils.process_start_ticks(pid)
     if observed_ticks is None:
         raise EngineProcessRecordError(
             f"Cannot verify recorded engine leader pid={pid}: start ticks unavailable"
@@ -102,38 +86,21 @@ def _recorded_engine_identity_status(
     return "stale" if observed_ticks != expected_ticks else "matching"
 
 
-def _process_group_exists(pgid: int, *, deps: EngineProcessRecoveryDeps) -> bool:
-    try:
-        deps.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError as exc:
-        # Only ESRCH proves absence. Unknown probe failures retain ownership.
-        return exc.errno != errno.ESRCH
-    return True
-
-
-def _matching_engine_group_exists(
-    slot: AdmissionSlot,
-    *,
-    deps: EngineProcessRecoveryDeps,
-) -> bool:
+def _matching_engine_group_exists(slot: AdmissionSlot) -> bool:
     if slot.engine_pgid is None:
         raise EngineProcessRecordError(
             f"Admission slot {slot.token} has no recorded engine process group"
         )
-    if not _process_group_exists(slot.engine_pgid, deps=deps):
+    if not process_utils.process_group_exists(slot.engine_pgid):
         return False
-    return _recorded_engine_identity_status(slot, deps=deps) == "matching"
+    return _recorded_engine_identity_status(slot) == "matching"
 
 
 def _clear_record(
     root: str | Path,
     slot: AdmissionSlot,
     *,
-    next_state: str = "idle",
+    next_state: str = ENGINE_PROCESS_IDLE,
 ) -> None:
     cleared = clear_slot_engine_process(
         root,
@@ -145,7 +112,7 @@ def _clear_record(
     )
     if cleared is None:
         current = get_slot(root, slot.token)
-        if current is None or current.engine_process_state == "idle":
+        if current is None or current.engine_process_state == ENGINE_PROCESS_IDLE:
             return
         current_identity = (
             current.engine_pid,
@@ -159,7 +126,10 @@ def _clear_record(
             slot.engine_process_start_ticks,
             slot.engine_process_boot_id,
         )
-        if current.engine_process_state == "active" and current_identity == expected_identity:
+        if (
+            current.engine_process_state == ENGINE_PROCESS_ACTIVE
+            and current_identity == expected_identity
+        ):
             retried = clear_slot_engine_process(
                 root,
                 slot.token,
@@ -179,27 +149,24 @@ def register_slot_engine_process(
     root: str | Path,
     token: str,
     running: Any | None,
-    *,
-    deps: EngineProcessRecoveryDeps | None = None,
 ) -> None:
-    """Publish or clear the currently active engine group for a child worker.
+    """Publish or clear the engine process group recorded on the child's slot.
 
-    The callback is intentionally compatible with ``register_running_job`` so
-    ranking sub-jobs update the same top-level admission slot for every launch.
+    ``OrcaRunner`` calls it with the launched process once the launch gate holds
+    the engine back, and with ``None`` after the group has exited.
     """
-    active_deps = deps or EngineProcessRecoveryDeps()
     if running is None:
         slot = get_slot(root, token)
         if slot is None:
             raise EngineProcessRecordError(f"Admission slot disappeared: {token}")
-        if slot.engine_process_state == "idle":
+        if slot.engine_process_state == ENGINE_PROCESS_IDLE:
             return
-        if slot.engine_process_state == "pending":
+        if slot.engine_process_state == ENGINE_PROCESS_PENDING:
             completed = complete_slot_engine_process(root, token)
             if completed is None:
                 raise EngineProcessRecordError(f"Admission slot disappeared: {token}")
             return
-        if _matching_engine_group_exists(slot, deps=active_deps):
+        if _matching_engine_group_exists(slot):
             raise EngineProcessRecordError(
                 f"Engine process group is still active for admission slot {token}"
             )
@@ -210,14 +177,14 @@ def register_slot_engine_process(
     pid = getattr(process, "pid", None)
     if not isinstance(pid, int) or pid <= 0:
         raise EngineProcessRecordError("Running engine job has no valid process PID")
-    process_start_ticks = active_deps.process_start_ticks(pid)
+    process_start_ticks = process_utils.process_start_ticks(pid)
     if process_start_ticks is None:
         # The slot remains in its pre-launch pending state. If this child is
         # killed before cleanup completes, capacity therefore remains fenced.
         raise EngineProcessRecordError(
             f"Cannot identify launched engine process pid={pid}: start ticks unavailable"
         )
-    process_boot_id = active_deps.boot_id()
+    process_boot_id = process_utils.linux_boot_id()
     if process_boot_id is None:
         raise EngineProcessRecordError(
             f"Cannot identify launched engine process pid={pid}: boot ID unavailable"
@@ -263,12 +230,7 @@ def build_slot_engine_process_preparer(
     return prepare
 
 
-def _signal_group(
-    slot: AdmissionSlot,
-    signum: int,
-    *,
-    deps: EngineProcessRecoveryDeps,
-) -> None:
+def _signal_group(slot: AdmissionSlot, signum: int) -> None:
     pgid = slot.engine_pgid
     pid = slot.engine_pid
     process_start_ticks = slot.engine_process_start_ticks
@@ -277,40 +239,32 @@ def _signal_group(
             f"Admission slot {slot.token} has an incomplete engine process identity"
         )
     try:
-        group_scoped = deps.secure_signal(pid, pgid, process_start_ticks, signum)
+        group_scoped = process_utils.signal_process_group_stable(
+            pid, pgid, process_start_ticks, signum
+        )
     except process_utils.StableProcessSignalError as exc:
         raise EngineProcessRecordError(
             f"Cannot securely signal engine process group pgid={pgid}"
         ) from exc
     if not group_scoped:
-        deps.logger.warning(
+        LOGGER.warning(
             "Kernel lacks stable process-group pidfd signalling; "
             "signalled only leader pid=%s and will retain the slot if descendants remain",
             pid,
         )
 
 
-def _wait_for_group_exit(
-    slot: AdmissionSlot,
-    timeout_seconds: float,
-    *,
-    deps: EngineProcessRecoveryDeps,
-) -> bool:
-    deadline = deps.monotonic() + max(0.0, float(timeout_seconds))
+def _wait_for_group_exit(slot: AdmissionSlot, timeout_seconds: float) -> bool:
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
     while True:
-        if not _matching_engine_group_exists(slot, deps=deps):
+        if not _matching_engine_group_exists(slot):
             return True
-        if deps.monotonic() >= deadline:
+        if time.monotonic() >= deadline:
             return False
-        deps.sleep(0.1)
+        time.sleep(0.1)
 
 
-def _clear_dead_owner_pending_launch(
-    root: str | Path,
-    slot: AdmissionSlot,
-    *,
-    deps: EngineProcessRecoveryDeps,
-) -> str | None:
+def _clear_dead_owner_pending_launch(root: str | Path, slot: AdmissionSlot) -> str | None:
     """Clear one pending launch whose owner is dead, or say why it must stay.
 
     A launch-gated record proves no engine ran: the gate wrapper execs the
@@ -319,7 +273,7 @@ def _clear_dead_owner_pending_launch(
     cannot describe a live engine either.  Any other pending record may hide an
     unidentified engine and is retained.
     """
-    current_boot_id = deps.boot_id()
+    current_boot_id = process_utils.linux_boot_id()
     cross_boot = (
         slot.owner_boot_id is not None
         and current_boot_id is not None
@@ -354,21 +308,14 @@ def recover_slot_engine_process(
     *,
     graceful_timeout: float = 3.0,
     kill_timeout: float = 5.0,
-    deps: EngineProcessRecoveryDeps | None = None,
 ) -> bool:
     """Reap one dead child's recorded engine group before releasing its slot."""
-    active_deps = deps or EngineProcessRecoveryDeps()
     slot = get_slot(root, token)
-    if slot is None or slot.engine_process_state == "idle":
+    if slot is None or slot.engine_process_state == ENGINE_PROCESS_IDLE:
         return False
-    if slot.engine_process_state == "pending":
+    if slot.engine_process_state == ENGINE_PROCESS_PENDING:
         if process_utils.process_identity_alive(
-            slot.owner_pid,
-            slot.process_start_ticks,
-            slot.owner_boot_id,
-            kill_fn=active_deps.kill,
-            process_start_ticks_fn=active_deps.process_start_ticks,
-            boot_id_fn=active_deps.boot_id,
+            slot.owner_pid, slot.process_start_ticks, slot.owner_boot_id
         ):
             raise EngineProcessRecordPendingError(
                 f"Admission slot {token} is pending under a live owner"
@@ -376,10 +323,10 @@ def recover_slot_engine_process(
         # The owner died with its launch pending.  Resolving that here, and not
         # only in the periodic orphan sweep, matters because a parent that
         # retries this recovery for a finished child suspends that sweep.
-        error = _clear_dead_owner_pending_launch(root, slot, deps=active_deps)
+        error = _clear_dead_owner_pending_launch(root, slot)
         if error is not None:
             raise EngineProcessRecordPendingError(error)
-        active_deps.logger.warning(
+        LOGGER.warning(
             "Cleared pending engine launch left by a dead slot owner: token=%s",
             token,
         )
@@ -388,27 +335,27 @@ def recover_slot_engine_process(
         raise EngineProcessRecordError(
             f"Admission slot {token} has no recorded engine process group"
         )
-    if not _process_group_exists(slot.engine_pgid, deps=active_deps):
+    if not process_utils.process_group_exists(slot.engine_pgid):
         _clear_record(root, slot)
         return False
-    identity_status = _recorded_engine_identity_status(slot, deps=active_deps)
+    identity_status = _recorded_engine_identity_status(slot)
     if identity_status == "stale":
-        active_deps.logger.info(
+        LOGGER.info(
             "Clearing stale engine process record after process identity reuse: token=%s pid=%s",
             token,
             slot.engine_pid,
         )
         _clear_record(root, slot)
         return False
-    active_deps.logger.warning(
+    LOGGER.warning(
         "Recovering orphaned engine process group: token=%s pgid=%s",
         token,
         slot.engine_pgid,
     )
-    _signal_group(slot, active_deps.sigterm, deps=active_deps)
-    if not _wait_for_group_exit(slot, graceful_timeout, deps=active_deps):
-        _signal_group(slot, active_deps.sigkill, deps=active_deps)
-        if not _wait_for_group_exit(slot, kill_timeout, deps=active_deps):
+    _signal_group(slot, signal.SIGTERM)
+    if not _wait_for_group_exit(slot, graceful_timeout):
+        _signal_group(slot, signal.SIGKILL)
+        if not _wait_for_group_exit(slot, kill_timeout):
             raise EngineProcessRecordError(
                 f"Engine process group is still active: pgid={slot.engine_pgid}"
             )
@@ -416,30 +363,13 @@ def recover_slot_engine_process(
     return True
 
 
-def recover_orphaned_engine_slots(
-    root: str | Path,
-    *,
-    source: str | tuple[str, ...] | None = None,
-    deps: EngineProcessRecoveryDeps | None = None,
-    strict: bool = True,
-) -> int:
+def recover_orphaned_engine_slots(root: str | Path, *, strict: bool) -> int:
     """Recover dead-owner engine groups before generic stale-slot cleanup."""
-    active_deps = deps or EngineProcessRecoveryDeps()
-    allowed_sources = (
-        None if source is None else {source} if isinstance(source, str) else set(source)
-    )
     recovered = 0
     orphaned: list[AdmissionSlot] = []
     for slot in list_all_slots(root):
-        if allowed_sources is not None and slot.source not in allowed_sources:
-            continue
         if process_utils.process_identity_alive(
-            slot.owner_pid,
-            slot.process_start_ticks,
-            slot.owner_boot_id,
-            kill_fn=active_deps.kill,
-            process_start_ticks_fn=active_deps.process_start_ticks,
-            boot_id_fn=active_deps.boot_id,
+            slot.owner_pid, slot.process_start_ticks, slot.owner_boot_id
         ):
             continue
         orphaned.append(slot)
@@ -448,17 +378,17 @@ def recover_orphaned_engine_slots(
     # Recover every trustworthy active record first. One ambiguous pending
     # launch must not leave unrelated, fully identified engine groups running.
     for slot in orphaned:
-        if slot.engine_process_state != "active":
+        if slot.engine_process_state != ENGINE_PROCESS_ACTIVE:
             continue
         try:
-            recover_slot_engine_process(root, slot.token, deps=active_deps)
+            recover_slot_engine_process(root, slot.token)
         except EngineProcessRecordError as exc:
             errors.append(str(exc))
         else:
             recovered += 1
     for slot in orphaned:
-        if slot.engine_process_state == "pending":
-            error = _clear_dead_owner_pending_launch(root, slot, deps=active_deps)
+        if slot.engine_process_state == ENGINE_PROCESS_PENDING:
+            error = _clear_dead_owner_pending_launch(root, slot)
             if error is not None:
                 errors.append(error)
             else:
@@ -467,7 +397,7 @@ def recover_orphaned_engine_slots(
         message = "; ".join(errors)
         if strict:
             raise EngineProcessRecordError(message)
-        active_deps.logger.error(
+        LOGGER.error(
             "Retaining unrecovered admission engine slot(s): %s",
             message,
         )
@@ -477,7 +407,6 @@ def recover_orphaned_engine_slots(
 __all__ = [
     "EngineProcessRecordError",
     "EngineProcessRecordPendingError",
-    "EngineProcessRecoveryDeps",
     "build_slot_engine_process_preparer",
     "build_slot_engine_process_registrar",
     "recover_orphaned_engine_slots",

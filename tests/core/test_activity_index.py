@@ -411,7 +411,7 @@ def test_live_rerun_poll_does_not_rematerialize_shared_path_history(
     original = _orca.queue_record
 
     def record(*args, **kwargs):
-        calls.append(args[1].queue_id)
+        calls.append(args[0].queue_id)
         return original(*args, **kwargs)
 
     monkeypatch.setattr(_orca, "queue_record", record)

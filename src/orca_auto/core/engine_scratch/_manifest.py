@@ -43,7 +43,7 @@ def _write_workspace_manifest(
     workspace_dir_fd: int,
     max_task_memory_bytes: int,
 ) -> None:
-    boot_id = process_utils.linux_boot_id(proc_root=Path("/proc"))
+    boot_id = process_utils.linux_boot_id()
     owner_ticks = process_utils.current_process_start_ticks()
     if not boot_id or owner_ticks is None:
         raise EngineScratchError("Cannot bind engine scratch ownership to this boot and process")
@@ -77,17 +77,7 @@ def _manifest_owner_state(payload: dict[str, Any]) -> str:
         return "unknown"
     if type(owner_ticks) is not int or owner_ticks <= 0 or not isinstance(owner_boot, str):
         return "unknown"
-    current_boot = process_utils.linux_boot_id(proc_root=Path("/proc"))
-    if not current_boot:
-        return "unknown"
-    if current_boot != owner_boot:
-        return "stale"
-    if not process_utils.is_process_alive(owner_pid):
-        return "stale"
-    observed_ticks = process_utils.process_start_ticks(owner_pid)
-    if observed_ticks is None:
-        return "unknown"
-    return "live" if observed_ticks == owner_ticks else "stale"
+    return process_utils.owner_identity_state(owner_pid, owner_ticks, owner_boot)
 
 
 def _read_workspace_manifest_at(workspace_fd: int, workspace: Path) -> dict[str, Any] | None:

@@ -7,6 +7,7 @@ from typing import Any
 from orca_auto.core import statuses as _s
 from orca_auto.core.statuses import QUEUE_ACTIVE_STATUSES
 from orca_auto.core.utils import normalize_text, parse_iso_utc
+from orca_auto.orca.app_ids import ORCA_TASK_KIND
 
 # Status glyphs for the queue table and CLI summaries. Keyed by the same
 # ``core.statuses`` constants as ``terminal``'s colour map so a status is
@@ -108,7 +109,7 @@ def queue_task_label(task_kind: Any) -> str:
 def infer_orca_detail_from_metadata(metadata: dict[str, Any]) -> str:
     task_kind = normalize_text(metadata.get("task_kind")).lower()
     task_label = queue_task_label(task_kind)
-    if task_label and task_kind not in {"orca_run_inp", "run_inp"}:
+    if task_label and task_kind not in {ORCA_TASK_KIND, "run_inp"}:
         return task_label
 
     job_type = normalize_text(metadata.get("job_type")).lower()

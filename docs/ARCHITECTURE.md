@@ -68,7 +68,7 @@ Normal submission and publication repair both call `queue/job_records.py` with t
 ### 2. Dequeue & Admission
 - The background resident worker polls the queue for pending jobs.
 - Publication repair derives each queued location record from its durable queue row. A busy publisher or failed index write withholds that row while other eligible rows can use available slots. The worker keeps per-row refusals for the current admission pass even when a lease says `complete` but path validation or persisting its safety fence fails. It inspects and repairs again on the next pass; an unreadable queue stops admission because the source cannot be verified.
-- When an eligible job is found, the worker checks the available execution slots (`scheduler.max_active_simulations`), claims one and launches the calculation child.
+- When an eligible job is found, the worker checks the available execution slots (`scheduler.max_active_simulations`) in the one admission store, `<runs_root>/.admission` ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)), claims one and launches the calculation child.
 - When RAM Scratch is enabled, the child reserves its scratch workspace before it writes any run state; the reservation checks host memory and tmpfs capacity ([ADR 0004](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)). If capacity is temporarily short, the job returns to `pending` without failing, and `queue list` shows it as waiting for resources. Otherwise the calculation runs in an isolated generation workspace.
 
 ### 3. Supervision & Clean Exit
@@ -107,7 +107,9 @@ The worker separates supervision from execution.
 PID-file and singleton-lock lifecycle, admission (a slot is reserved before the
 row is claimed by id, with the previewed row as `expected_entry`), child start
 and attach, terminal finalization, cancellation, shutdown and orphan
-reconciliation. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
+reconciliation. `_admit_next` spells out one admission in order: withheld
+directories, publication repair, queued notification, capacity, preview, slot
+reservation, claim by id, and slot release when the claim is lost. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
 (reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
 and knows a job only as a process-backed record. An ordinary exception from one
 pass is logged and the pass is retried after the poll interval while running
@@ -122,10 +124,18 @@ bag. The parent entry point is `python -m orca_auto.orca.commands.queue
 
 Cancellation observations reuse unchanged queue snapshots. The child publishes its terminal state and reports before exiting. The parent settles the queue entry and claims a completion notification from the matching job/run state. A bounded background sender delivers that captured message without holding the execution slot or writing state afterward. Replayed completion skips an already claimed notification (and recognizes historical sent markers). Delivery is best effort: a crash, a failed send or exhausted sender capacity after the claim can lose the message, without retrying or changing the calculation result. Submission records `orca_queued_notification_pending` on the durable row. After its location record is published, the parent worker claims that intent under the queue lock before dispatching a queued message; CLI exit does not discard the intent. Historical rows without the intent are not notified retroactively. The child captures its started event after recording the attempt and dispatches it before proceeding with the runner. All three lifecycle sends use the same bounded sender (four concurrent sends per process). Transport failure, saturation or process exit can lose advisory delivery, and no send writes execution state. A queued delivery claim failure skips delivery without withholding admission.
 
-The worker CLI loads config, checks the PID file (`read_worker_pid` in
-`orca/queue/orphans.py`), then constructs and runs the ORCA worker directly.
-`orca/queue/roots.py` owns root selection, listing and the fenced by-id claim;
-rows are never claimed by head-of-queue position.
+The worker CLI loads config, checks the PID file (`read_worker_pid_file` in
+`core/queue/worker/pid_file.py`), then constructs and runs the ORCA worker directly.
+`orca/queue/roots.py` resolves the one queue root (`runtime.allowed_root`) and owns
+listing and the fenced by-id claim; rows are never claimed by head-of-queue position.
+`orca/queue/entries.py` owns the ORCA row identity and the one generation identity:
+the writer fences, the publication fence, the cancellation probes and the claim all
+compare `generation_identity`, and each adds only its own status rule. Lifecycle
+metadata (deferral, run id, replay marker and fence, queued-notification claim,
+publication lease) is outside it; `queue_generation` in `job_state.json` is its digest.
+`mutate_entries` in `core/queue/store.py` is the only writer of `queue.json`, and
+`core/queue/transitions.py` builds every requeued and terminal row (`requeued_entry`,
+`terminal_entry`); `tests/core/queue/test_ownership_guards.py` enforces both.
 `queue/replay.py` is only the replay engine (work items, preparation and publication, the
 reconcile pipeline and generation owners) and takes its state explicitly, and
 `queue/run_state_replay.py` synthesizes terminal `job_state.json` under
@@ -161,3 +171,5 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0003: Retire workflows for standalone ORCA jobs](adr/0003-retire-workflows-for-standalone-orca-jobs.md)
 - [ADR 0004: Concurrent RAM scratch under a summed memory guard](adr/0004-concurrent-ram-scratch-under-a-summed-memory-guard.md)
 - [ADR 0005: Remove retired workflow support](adr/0005-remove-retired-workflow-support.md)
+- [ADR 0006: One generation identity for the persisted token and every queue-row fence](adr/0006-one-generation-identity-for-token-and-fences.md)
+- [ADR 0007: One admission store per installation under `<runs_root>/.admission`](adr/0007-one-admission-store-under-runs-root.md)

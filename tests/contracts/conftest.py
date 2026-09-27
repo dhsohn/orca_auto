@@ -1,6 +1,6 @@
 """Shared runtime for the contract tests: a fake ORCA, an isolated config and the effect log.
 
-``harness`` gives each test its own runs root, admission root, ``orca_auto.yaml``
+``harness`` gives each test its own runs root (with its admission store), ``orca_auto.yaml``
 and fake ORCA, records parent notifications in a ``RecordingChannel`` and
 installs the effect log and the causal clock in this process and in every
 worker child it spawns.
@@ -115,7 +115,7 @@ _SCENARIO_TIMEOUT_SECONDS = 60.0
 
 @dataclasses.dataclass
 class Harness:
-    """One isolated runtime: config, runs root, admission root and effect log."""
+    """One isolated runtime: config, runs root (with its admission store) and effect log."""
 
     tmp: Path
     runs: Path
@@ -151,7 +151,6 @@ class Harness:
                 self.runs,
                 orca_executable=self.fake_orca,
                 max_concurrent=1,
-                admission_root=self.tmp / "admission",
                 **kwargs,
             ),
         )
@@ -163,9 +162,7 @@ class Harness:
         return rc, captured.out, captured.err
 
     def run_worker(self, sleep_fn: Callable[[float], None] | None = None) -> int:
-        worker = OrcaQueueWorker(
-            load_config(str(self.config)), str(self.config), max_concurrent=1, sleep_fn=sleep_fn
-        )
+        worker = OrcaQueueWorker(load_config(str(self.config)), str(self.config), sleep_fn=sleep_fn)
         worker.poll_interval_seconds = 0.05
         rc = worker.run_once(idle_message=None, blocked_message=None)
         _join_notification_senders()

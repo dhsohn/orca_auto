@@ -19,8 +19,9 @@ from typing import Any, cast
 import pytest
 
 from orca_auto.core.admission import release_slot, reserve_slot
+from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.messaging.channel import SendResult
-from orca_auto.core.queue.store import save_entries as save_entries_core
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.statuses import (
     STATUS_CANCELLED,
@@ -33,12 +34,15 @@ from orca_auto.orca.job_locations import list_job_location_records
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
 from orca_auto.orca.queue.adapter import (
-    QUEUE_FILE_NAME,
     cancel,
     enqueue,
     list_queue,
     mark_failed,
     requeue_running_entry,
+)
+from orca_auto.orca.queue.entries import (
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    TERMINAL_REPLAY_METADATA_KEY,
 )
 from orca_auto.orca.queue.models import OrcaRunningJob, OrcaWorkerReplayState
 from orca_auto.orca.queue.run_state_replay import (
@@ -48,8 +52,6 @@ from orca_auto.orca.queue.run_state_replay import (
     record_failed_run_state as _record_failed_run_state,
 )
 from orca_auto.orca.queue.terminal_replay import (
-    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
-    TERMINAL_REPLAY_METADATA_KEY,
     StateGenerationFingerprint,
     terminal_replay_marker,
 )
@@ -165,14 +167,10 @@ def _row(root: Path, queue_id: str) -> QueueEntry:
     return next(entry for entry in list_queue(root) if entry.queue_id == queue_id)
 
 
-def _key(root: Path, entry: QueueEntry) -> tuple[str, str]:
-    return (str(root.resolve()), entry.queue_id)
-
-
-def _seed_cursor(worker: Any, root: Path, entry: QueueEntry, status: str) -> None:
+def _seed_cursor(worker: Any, entry: QueueEntry, status: str) -> None:
     """Record what the previous poll of this long-running worker saw for ``entry``."""
     statuses = dict(worker.replay_state.reconcile_statuses or {})
-    statuses[_key(root, entry)] = status
+    statuses[entry.queue_id] = status
     worker.replay_state.reconcile_statuses = statuses
 
 
@@ -277,13 +275,11 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
         metadata={"run_id": "run-original", TERMINAL_REPLAY_METADATA_KEY: replay_marker},
     )
     _store(queue_root, entry)
-    queue_file = queue_root / QUEUE_FILE_NAME
+    queue_file = queue_root / QUEUE_FILE
     queue_bytes = queue_file.read_bytes()
     worker = _replay_worker(replay_cfg, queue_root)
     if existing_cursor:
-        worker.replay_state.reconcile_statuses = {
-            (str(queue_root.resolve()), "other-queue"): STATUS_RUNNING
-        }
+        worker.replay_state.reconcile_statuses = {"other-queue": STATUS_RUNNING}
 
     _reconcile(worker)
 
@@ -294,7 +290,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
     assert not state_path(reaction_dir).exists()
     assert list_job_location_records(queue_root) == []
     assert recording_channel.sends == []
-    assert _reconcile_statuses(worker)[_key(queue_root, entry)] == terminal_status.value
+    assert _reconcile_statuses(worker)[entry.queue_id] == terminal_status.value
     assert worker.replay_state.pending_replays == {}
 
 
@@ -312,7 +308,7 @@ def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
         metadata={"run_id": "run-original", TERMINAL_REPLAY_METADATA_KEY: None},
     )
     _store(queue_root, entry)
-    queue_file = queue_root / QUEUE_FILE_NAME
+    queue_file = queue_root / QUEUE_FILE
     queue_bytes = queue_file.read_bytes()
     queue_mtime_ns = queue_file.stat().st_mtime_ns
 
@@ -549,17 +545,17 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
         )
     entry = _entry(reaction_dir, QueueStatus.FAILED, metadata=metadata)
     _store(queue_root, entry)
-    queue_bytes = (queue_root / QUEUE_FILE_NAME).read_bytes()
+    queue_bytes = (queue_root / QUEUE_FILE).read_bytes()
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+    _seed_cursor(worker, entry, STATUS_RUNNING)
 
     _reconcile(worker)
 
-    assert (queue_root / QUEUE_FILE_NAME).read_bytes() == queue_bytes
+    assert (queue_root / QUEUE_FILE).read_bytes() == queue_bytes
     assert not state_path(reaction_dir).exists()
     assert list_job_location_records(queue_root) == []
     assert recording_channel.sends == []
-    assert _reconcile_statuses(worker)[_key(queue_root, entry)] == STATUS_FAILED
+    assert _reconcile_statuses(worker)[entry.queue_id] == STATUS_FAILED
     assert worker.replay_state.pending_replays == {}
 
 
@@ -603,13 +599,13 @@ def test_terminal_replay_completes_when_the_notification_fails(
     entry = _entry(reaction_dir, QueueStatus.COMPLETED)
     _store(queue_root, entry)
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+    _seed_cursor(worker, entry, STATUS_RUNNING)
 
     _reconcile(worker)
 
     assert len(recording_channel.sends) == 1
     assert _claimed_at(reaction_dir)
-    assert _reconcile_statuses(worker)[_key(queue_root, entry)] == STATUS_COMPLETED
+    assert _reconcile_statuses(worker)[entry.queue_id] == STATUS_COMPLETED
     assert worker.replay_state.pending_replays == {}
     [record] = list_job_location_records(queue_root)
     assert record.status == STATUS_COMPLETED
@@ -632,7 +628,7 @@ def test_terminal_replay_completes_when_the_notifier_raises(
     entry = _entry(reaction_dir, QueueStatus.COMPLETED)
     _store(queue_root, entry)
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+    _seed_cursor(worker, entry, STATUS_RUNNING)
     resolutions: list[str] = []
 
     def channel_resolution_fails_once(*_args: object, **_kwargs: object) -> RecordingChannel:
@@ -650,7 +646,7 @@ def test_terminal_replay_completes_when_the_notifier_raises(
     assert resolutions == ["resolve"]
     assert recording_channel.sends == []
     assert _claimed_at(reaction_dir) == ""
-    assert _reconcile_statuses(worker)[_key(queue_root, entry)] == STATUS_COMPLETED
+    assert _reconcile_statuses(worker)[entry.queue_id] == STATUS_COMPLETED
     assert worker.replay_state.pending_replays == {}
     [record] = list_job_location_records(queue_root)
     assert record.status == STATUS_COMPLETED
@@ -673,7 +669,7 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
     entry = _entry(reaction_dir, QueueStatus.COMPLETED)
     _store(queue_root, entry)
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+    _seed_cursor(worker, entry, STATUS_RUNNING)
 
     # A completed row whose child has not published its state yet: no index
     # row can be built, so the transition stays pending and nothing is sent.
@@ -681,8 +677,8 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
 
     assert recording_channel.sends == []
     assert list_job_location_records(queue_root) == []
-    assert _reconcile_statuses(worker)[_key(queue_root, entry)] == STATUS_RUNNING
-    assert _key(queue_root, entry) in worker.replay_state.pending_replays
+    assert _reconcile_statuses(worker)[entry.queue_id] == STATUS_RUNNING
+    assert entry.queue_id in worker.replay_state.pending_replays
 
     write_run_state(reaction_dir, status=RunStatus.COMPLETED, job_id="task-replay")
     _reconcile(worker)
@@ -690,7 +686,7 @@ def test_terminal_replay_retries_when_job_record_artifacts_are_not_ready(
     [record] = list_job_location_records(queue_root)
     assert record.status == STATUS_COMPLETED
     assert len(recording_channel.sends) == 1
-    assert _reconcile_statuses(worker)[_key(queue_root, entry)] == STATUS_COMPLETED
+    assert _reconcile_statuses(worker)[entry.queue_id] == STATUS_COMPLETED
     assert worker.replay_state.pending_replays == {}
 
 
@@ -708,7 +704,7 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(
     entry = _entry(reaction_dir, QueueStatus.CANCELLED)
     _store(queue_root, entry)
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+    _seed_cursor(worker, entry, STATUS_RUNNING)
 
     _reconcile(worker)
 
@@ -731,7 +727,7 @@ def test_terminal_replay_finalizes_cancelled_state_before_side_effects(
     assert record.status == STATUS_CANCELLED
     assert len(recording_channel.sends) == 1
     assert _claimed_at(reaction_dir)
-    assert _reconcile_statuses(worker)[_key(queue_root, entry)] == STATUS_CANCELLED
+    assert _reconcile_statuses(worker)[entry.queue_id] == STATUS_CANCELLED
 
 
 def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
@@ -744,7 +740,7 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
     entry = _entry(reaction_dir, QueueStatus.CANCELLED)
     _store(queue_root, entry)
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+    _seed_cursor(worker, entry, STATUS_RUNNING)
 
     _reconcile(worker)
 
@@ -759,7 +755,7 @@ def test_terminal_replay_corrects_cancelled_queue_to_existing_completed_state(
     [record] = list_job_location_records(queue_root)
     assert record.status == STATUS_COMPLETED
     assert len(recording_channel.sends) == 1
-    assert _reconcile_statuses(worker)[_key(queue_root, entry)] == STATUS_COMPLETED
+    assert _reconcile_statuses(worker)[entry.queue_id] == STATUS_COMPLETED
 
 
 def test_terminal_replay_observes_pending_to_cancelled_transition(
@@ -790,7 +786,7 @@ def test_terminal_replay_observes_pending_to_cancelled_transition(
     assert written is not None
     assert written["job_id"] == pending.task_id
     assert written["status"] == STATUS_CANCELLED
-    assert _reconcile_statuses(worker)[_key(queue_root, pending)] == STATUS_CANCELLED
+    assert _reconcile_statuses(worker)[pending.queue_id] == STATUS_CANCELLED
 
 
 # ---------------------------------------------------------------------------
@@ -885,21 +881,21 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
         error="lock failed",
     )
     _store(queue_root, active_a, failed_b)
-    owner_a = _key(queue_root, active_a)
-    owner_b = _key(queue_root, failed_b)
+    owner_a = active_a.queue_id
+    owner_b = failed_b.queue_id
     reaction_key = str(reaction_dir.resolve())
     worker = _replay_worker(replay_cfg, queue_root)
     worker.replay_state.generation_owners = {reaction_key: owner_b}
     worker.replay_state.generation_owner_active = {reaction_key: True}
     worker.replay_state.reconcile_statuses = {owner_a: STATUS_RUNNING, owner_b: STATUS_RUNNING}
-    queue_bytes = (queue_root / QUEUE_FILE_NAME).read_bytes()
+    queue_bytes = (queue_root / QUEUE_FILE).read_bytes()
 
     with acquire_run_lock(reaction_dir):
         _reconcile(worker)
 
     assert worker.replay_state.generation_owners[reaction_key] == owner_a
     assert worker.replay_state.generation_owner_active[reaction_key] is True
-    assert (queue_root / QUEUE_FILE_NAME).read_bytes() == queue_bytes
+    assert (queue_root / QUEUE_FILE).read_bytes() == queue_bytes
     assert not state_path(reaction_dir).exists()
     assert list_job_location_records(queue_root) == []
     assert recording_channel.sends == []
@@ -940,7 +936,7 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     _store(queue_root, old_cancelled, new_cancelled)
     worker = _replay_worker(replay_cfg, queue_root)
     for entry in (old_cancelled, new_cancelled):
-        _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+        _seed_cursor(worker, entry, STATUS_RUNNING)
     old_row_before = _row(queue_root, "queue-old")
 
     _reconcile(worker)
@@ -957,8 +953,8 @@ def test_terminal_owner_uses_current_state_over_future_or_blank_timestamps(
     assert record.status == STATUS_CANCELLED
     assert len(recording_channel.sends) == 1
     reaction_key = str(reaction_dir.resolve())
-    assert worker.replay_state.generation_owners[reaction_key] == _key(queue_root, new_cancelled)
-    assert _reconcile_statuses(worker)[_key(queue_root, old_cancelled)] == STATUS_RUNNING
+    assert worker.replay_state.generation_owners[reaction_key] == new_cancelled.queue_id
+    assert _reconcile_statuses(worker)[old_cancelled.queue_id] == STATUS_RUNNING
 
 
 def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
@@ -978,7 +974,7 @@ def test_ambiguous_terminal_generations_retry_when_state_identity_appears(
     _store(queue_root, cancelled_a, cancelled_b)
     worker = _replay_worker(replay_cfg, queue_root)
     for entry in (cancelled_a, cancelled_b):
-        _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+        _seed_cursor(worker, entry, STATUS_RUNNING)
     row_a_before = _row(queue_root, "queue-a")
 
     _reconcile(worker)
@@ -1038,13 +1034,8 @@ def test_live_finalized_owner_is_not_replayed_over_newer_generation_state(
     assert len(recording_channel.sends) == 2
     assert worker.replay_state.pending_replays == {}
     assert worker._unresolved_terminal_reaction_keys() == frozenset()
-    assert worker.replay_state.generation_owners[reaction_key] == (
-        str(queue_root.resolve()),
-        new.queue_id,
-    )
-    assert _reconcile_statuses(worker)[(str(queue_root.resolve()), old.queue_id)] == (
-        old_status.value
-    )
+    assert worker.replay_state.generation_owners[reaction_key] == new.queue_id
+    assert _reconcile_statuses(worker)[old.queue_id] == (old_status.value)
 
     _poll(worker)
     assert state_path(reaction_dir).read_bytes() == state_bytes
@@ -1101,7 +1092,7 @@ def test_terminal_replay_snapshot_survives_entry_disappearance(
     entry = _entry(reaction_dir, QueueStatus.CANCELLED)
     _store(queue_root, entry)
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+    _seed_cursor(worker, entry, STATUS_RUNNING)
 
     # State synthesis and the run_id binding succeed; the index write fails.
     _corrupt_index(queue_root)
@@ -1136,7 +1127,7 @@ def test_terminal_replay_snapshot_retries_state_preparation_after_disappearance(
     entry = _entry(reaction_dir, QueueStatus.CANCELLED)
     _store(queue_root, entry)
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, entry, STATUS_RUNNING)
+    _seed_cursor(worker, entry, STATUS_RUNNING)
 
     # The state cannot be synthesized while the run lock is still held, and the
     # row is cleared before the lock is released.
@@ -1203,9 +1194,7 @@ def test_unprepared_terminal_replay_keeps_transition_evidence_while_entry_remain
     assert len(recording_channel.sends) == 1
     assert _claimed_at(reaction_dir)
     assert worker.replay_state.pending_replays == {}
-    assert worker.replay_state.generation_owners[str(reaction_dir.resolve())] == _key(
-        queue_root, running
-    )
+    assert worker.replay_state.generation_owners[str(reaction_dir.resolve())] == running.queue_id
 
 
 def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
@@ -1241,7 +1230,7 @@ def test_prepared_terminal_replay_is_dropped_when_entry_state_is_superseded(
 
     # The prepared snapshot is dropped, not replayed onto the newer generation.
     assert worker.replay_state.pending_replays == {}
-    assert _reconcile_statuses(worker)[_key(queue_root, running)] == STATUS_CANCELLED
+    assert _reconcile_statuses(worker)[running.queue_id] == STATUS_CANCELLED
     assert list_job_location_records(queue_root) == []
     assert recording_channel.sends == []
     written = load_state(reaction_dir)
@@ -1311,7 +1300,7 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
     )
     _store(queue_root, old_cancelled)
     worker = _replay_worker(replay_cfg, queue_root)
-    _seed_cursor(worker, queue_root, old_cancelled, STATUS_RUNNING)
+    _seed_cursor(worker, old_cancelled, STATUS_RUNNING)
 
     _corrupt_index(queue_root)
     _reconcile(worker)
@@ -1333,8 +1322,8 @@ def test_new_active_generation_supersedes_disappeared_terminal_replay(
         _reconcile(worker)
 
     assert worker.replay_state.pending_replays == {}
-    assert worker.replay_state.generation_owners[str(reaction_dir.resolve())] == _key(
-        queue_root, new_running
+    assert (
+        worker.replay_state.generation_owners[str(reaction_dir.resolve())] == new_running.queue_id
     )
     assert list_job_location_records(queue_root) == []
     assert recording_channel.sends == []

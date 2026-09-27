@@ -10,12 +10,8 @@ from pathlib import Path
 import pytest
 
 from orca_auto.cli import main as cli_main
-from orca_auto.core.admission import list_slots
+from orca_auto.core.admission import admission_dir, list_slots
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, SI_BLOCK_MD_FILE
-from orca_auto.core.queue.generation import (
-    immutable_generation_metadata,
-    queue_entry_generation_token,
-)
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
 from orca_auto.orca.config import load_config
@@ -24,7 +20,12 @@ from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
-from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
+from orca_auto.orca.queue.adapter import list_queue
+from orca_auto.orca.queue.entries import (
+    queue_entry_generation_token,
+    queue_entry_reaction_dir,
+    same_generation,
+)
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.report.irc import collect_irc_report_data
 from orca_auto.orca.report.opt import collect_opt_report_data
@@ -87,7 +88,6 @@ def _write_orca_worker_config(
     path: Path,
     *,
     allowed_root: Path,
-    admission_root: Path,
     orca_executable: Path,
     scratch_root: Path | None = None,
 ) -> None:
@@ -103,10 +103,7 @@ def _write_orca_worker_config(
         json.dumps(
             {
                 "runs_root": str(allowed_root),
-                "scheduler": {
-                    "max_active_simulations": 1,
-                    "admission_root": str(admission_root),
-                },
+                "scheduler": {"max_active_simulations": 1},
                 "resources": {
                     "max_cores_per_task": 1,
                     "max_memory_gb_per_task": 1,
@@ -139,7 +136,7 @@ def _queue_entry_for_reaction(root: Path, reaction_dir: Path):
 
 def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path: Path) -> None:
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     bin_dir = tmp_path / "bin"
     reaction_dir = allowed_root / "project_a" / "rxn_worker_lifecycle"
     for path in (allowed_root, admission_root, bin_dir, reaction_dir):
@@ -152,7 +149,6 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=fake_orca,
     )
 
@@ -164,11 +160,7 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
     assert queued.status == QueueStatus.PENDING
     assert not counter_path.exists()
 
-    worker = OrcaQueueWorker(
-        load_config(str(config_path)),
-        str(config_path),
-        max_concurrent=1,
-    )
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -208,9 +200,7 @@ def test_orca_queue_worker_run_once_executes_fake_orca_child_lifecycle(tmp_path:
         (generation_dir / "job_state.json").read_text(encoding="utf-8")
     )
     expected_generation = queue_entry_generation_token(completed)
-    assert immutable_generation_metadata(completed.metadata) == immutable_generation_metadata(
-        queued.metadata
-    )
+    assert same_generation(completed, queued)
     for raw_state in (raw_root_state, raw_generation_state):
         assert raw_state["job"]["queue_id"] == completed.queue_id
         assert raw_state["job"]["generation"] == expected_generation
@@ -248,7 +238,7 @@ def test_orca_queue_worker_runs_fake_orca_in_dev_shm_and_publishes_attempt(
     scratch_root = Path(tempfile.mkdtemp(prefix="orca-auto-test-", dir=shm))
     try:
         allowed_root = tmp_path / "orca_runs"
-        admission_root = tmp_path / "admission"
+        admission_root = admission_dir(allowed_root)
         bin_dir = tmp_path / "bin"
         reaction_dir = allowed_root / "project_a" / "ram_scratch"
         for path in (allowed_root, admission_root, bin_dir, reaction_dir):
@@ -261,7 +251,6 @@ def test_orca_queue_worker_runs_fake_orca_in_dev_shm_and_publishes_attempt(
         _write_orca_worker_config(
             config_path,
             allowed_root=allowed_root,
-            admission_root=admission_root,
             orca_executable=fake_orca,
             scratch_root=scratch_root,
         )
@@ -272,7 +261,7 @@ def test_orca_queue_worker_runs_fake_orca_in_dev_shm_and_publishes_attempt(
         )
 
         assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-        worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+        worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
         worker.poll_interval_seconds = 0.05
         assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -303,7 +292,7 @@ def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_genera
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     bin_dir = tmp_path / "bin"
     reaction_dir = allowed_root / "project_a" / "reusable_job"
     for path in (allowed_root, admission_root, bin_dir, reaction_dir):
@@ -316,16 +305,13 @@ def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_genera
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=fake_orca,
     )
     selected_inp = reaction_dir / "rxn.inp"
     selected_inp.write_text("! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
 
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-    first_worker = OrcaQueueWorker(
-        load_config(str(config_path)), str(config_path), max_concurrent=1
-    )
+    first_worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     first_worker.poll_interval_seconds = 0.05
     assert first_worker.run_once(idle_message=None, blocked_message=None) == 0
     [first_entry] = list_queue(allowed_root)
@@ -345,9 +331,7 @@ def test_orca_queue_worker_reuses_job_directory_without_overwriting_prior_genera
     second_generation = Path(second_entry.metadata["execution_snapshot"]["execution_dir"])
     assert second_generation != first_generation
 
-    second_worker = OrcaQueueWorker(
-        load_config(str(config_path)), str(config_path), max_concurrent=1
-    )
+    second_worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     second_worker.poll_interval_seconds = 0.05
     assert second_worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -371,7 +355,7 @@ def test_orca_worker_preflight_failure_publishes_generation_reports(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     bin_dir = tmp_path / "bin"
     reaction_dir = allowed_root / "project_a" / "preflight_failure"
     for path in (allowed_root, admission_root, bin_dir, reaction_dir):
@@ -384,7 +368,6 @@ def test_orca_worker_preflight_failure_publishes_generation_reports(
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=fake_orca,
     )
     (reaction_dir / "rxn.inp").write_text(
@@ -401,7 +384,7 @@ def test_orca_worker_preflight_failure_publishes_generation_reports(
         bound_input.read_text(encoding="utf-8") + "# corrupt\n", encoding="utf-8"
     )
 
-    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -427,7 +410,7 @@ def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
     tmp_path: Path,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     bin_dir = tmp_path / "bin"
     reaction_dir = allowed_root / "project_a" / "replaced_generation"
     for path in (allowed_root, admission_root, bin_dir, reaction_dir):
@@ -440,7 +423,6 @@ def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=fake_orca,
     )
     (reaction_dir / "rxn.inp").write_text(
@@ -456,7 +438,7 @@ def test_orca_worker_generation_replacement_never_receives_synthetic_artifacts(
     generation.mkdir()
     (generation / "sentinel").write_text("replacement", encoding="utf-8")
 
-    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -501,7 +483,7 @@ def test_orca_queue_worker_rejects_incomplete_or_conflicting_termination_evidenc
     reason: str,
 ) -> None:
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     bin_dir = tmp_path / "bin"
     reaction_dir = allowed_root / "project_a" / "rxn_false_success"
     for path in (allowed_root, admission_root, bin_dir, reaction_dir):
@@ -516,7 +498,6 @@ def test_orca_queue_worker_rejects_incomplete_or_conflicting_termination_evidenc
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=fake_orca,
     )
 
@@ -528,11 +509,7 @@ def test_orca_queue_worker_rejects_incomplete_or_conflicting_termination_evidenc
     assert queued.status == QueueStatus.PENDING
     assert not counter_path.exists()
 
-    worker = OrcaQueueWorker(
-        load_config(str(config_path)),
-        str(config_path),
-        max_concurrent=1,
-    )
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -597,7 +574,7 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
         pytest.fail(f"ORCA_REAL_EXECUTABLE is not executable: {executable}")
 
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     reaction_dir = allowed_root / "real_orca_h2_sp"
     for path in (allowed_root, admission_root, reaction_dir):
         path.mkdir(parents=True, exist_ok=True)
@@ -606,7 +583,6 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=executable,
     )
     geometry = reaction_dir / "h2.xyz"
@@ -621,11 +597,7 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     queued = _queue_entry_for_reaction(allowed_root, reaction_dir)
     assert queued.status == QueueStatus.PENDING
 
-    worker = OrcaQueueWorker(
-        load_config(str(config_path)),
-        str(config_path),
-        max_concurrent=1,
-    )
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -704,14 +676,13 @@ def test_real_orca_electronic_state_and_input_echo_acceptance_when_configured(
         pytest.fail(f"ORCA_REAL_EXECUTABLE is not executable: {executable}")
 
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     reaction_dir = allowed_root / "helium_cation"
     reaction_dir.mkdir(parents=True)
     config_path = tmp_path / "orca_auto.yaml"
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=executable,
     )
     comment = "# Previous trial: SCF NOT CONVERGED\n" if diagnostic_comment else ""
@@ -722,7 +693,7 @@ def test_real_orca_electronic_state_and_input_echo_acceptance_when_configured(
         encoding="utf-8",
     )
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -764,14 +735,13 @@ def test_real_orca_water_optimization_acceptance_when_configured(
         pytest.fail(f"ORCA_REAL_EXECUTABLE is not executable: {executable}")
 
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     reaction_dir = allowed_root / "real_orca_water_opt"
     reaction_dir.mkdir(parents=True)
     config_path = tmp_path / "orca_auto.yaml"
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=executable,
     )
     freq = " Freq" if converged else ""
@@ -782,7 +752,7 @@ def test_real_orca_water_optimization_acceptance_when_configured(
         encoding="utf-8",
     )
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 
@@ -838,14 +808,13 @@ def test_real_orca_ammonia_ts_irc_acceptance_when_configured(
         pytest.fail(f"ORCA_REAL_EXECUTABLE is not executable: {executable}")
 
     allowed_root = tmp_path / "orca_runs"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(allowed_root)
     reaction_dir = allowed_root / "real_orca_nh3_inversion"
     reaction_dir.mkdir(parents=True)
     config_path = tmp_path / "orca_auto.yaml"
     _write_orca_worker_config(
         config_path,
         allowed_root=allowed_root,
-        admission_root=admission_root,
         orca_executable=executable,
     )
     # Public planar NH3 provides a small inversion TS and two IRC directions.
@@ -862,7 +831,7 @@ def test_real_orca_ammonia_ts_irc_acceptance_when_configured(
         encoding="utf-8",
     )
     assert cli_main(["run-dir", str(reaction_dir), "--config", str(config_path)]) == 0
-    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
     worker.poll_interval_seconds = 0.05
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
 

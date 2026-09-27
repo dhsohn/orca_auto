@@ -58,10 +58,6 @@ class RunSubmissionContext:
     allowed_root: Path
 
 
-def configured_admission_root(cfg: AppConfig) -> Path:
-    return Path(cfg.runtime.resolved_admission_root).expanduser().resolve()
-
-
 def reaction_dir_arg(args: Any) -> str | None:
     raw = getattr(args, "path", None) or getattr(args, "reaction_dir", None)
     if not isinstance(raw, str) or not raw.strip():
@@ -135,7 +131,6 @@ __all__ = [
     "RunExecutionContext",
     "RunSubmissionContext",
     "WorkerStatusInfo",
-    "configured_admission_root",
     "reaction_dir_arg",
     "resolve_run_target",
     "resolve_run_target_or_log",

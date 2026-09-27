@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.admission import list_slots
+from orca_auto.core.admission import admission_dir, list_slots
 from orca_auto.orca import execution
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.execution import execute_orca_run
-from orca_auto.orca.run_context import RunExecutionContext, configured_admission_root
+from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.state_reading import state_path
 
 
@@ -38,7 +38,7 @@ def test_internal_run_rejects_without_queue_reservation(
             cfg=cfg,
             reaction_dir=reaction_dir,
             selected_inp=reaction_dir / "rxn.inp",
-            admission_root=configured_admission_root(cfg),
+            admission_root=admission_dir(cfg.runtime.allowed_root),
         )
     )
 

@@ -44,6 +44,35 @@ directory, and a queue row's `workflow_id` metadata is ignored.
 - 8.x never writes `workflow_id` into `admission_slots.json`, and the new version
   rejects a slot row that carries it. Upgrading directly from 7.0.x therefore
   needs an idle window with no reserved or active slots.
+- The `queue_generation` value in `job_state.json` is computed from the new
+  queue generation identity, which leaves out the queued-notification flag
+  (`orca_queued_notification_pending`) that 8.x counted. Every row that carries
+  the flag, nearly every row 8.x wrote, therefore gets a new token, and nothing
+  rewrites the values 8.x recorded
+  ([ADR 0006](adr/0006-one-generation-identity-for-token-and-fences.md)). A job
+  still running across an upgrade outside an idle window keeps its 8.x value:
+  `queue list` shows it twice (its queue row and a run-state row),
+  `queue cancel <run ID>` cannot find it and `queue cancel <job directory>`
+  fails as ambiguous, while `queue cancel <queue ID>` still works. All of this
+  clears when the job finishes. Upgrade only in an idle window
+  (`active_simulations: 0` in `queue list --json`). Rolling back to 8.x needs
+  an idle window too: 8.x counts the flag again, so a job the new version
+  started that is still running shows the same effects in reverse.
+- `scheduler.admission_root` is removed: admission state always lives in
+  `<runs_root>/.admission` and its limit is `scheduler.max_active_simulations`
+  ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)). A config that
+  still sets the key, including one that followed the 7.0 steps below with a
+  separate root, no longer loads. In the idle window, when `admission_slots.json`
+  holds no reserved or active slot (as `service restart` already requires),
+  delete the key before running the new `systemd install`, which loads the
+  config and stops with a one-line hint while the key is present. The old
+  directory may then be deleted. `ReadWritePaths` in the rendered unit names
+  only `runs_root`. `service restart` may then refuse, because the edited config
+  is newer than the worker's start or because
+  `<runs_root>/.admission/admission.lock` does not exist yet. After confirming
+  the host is idle, run `orca_auto service restart --force`, or stop and start
+  the service. Rolling back to 8.x needs no config change: 8.x uses the same
+  `<runs_root>/.admission` when the key is absent.
 
 ## Upgrading to 8.0
 

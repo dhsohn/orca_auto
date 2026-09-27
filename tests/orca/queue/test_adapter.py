@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -8,21 +9,23 @@ from unittest.mock import patch
 
 import pytest
 
+from orca_auto.core.artifacts import QUEUE_FILE
+from orca_auto.core.queue import persistence as queue_persistence
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
+    QUEUE_RECORD_SYNC_PREPARING,
     queue_record_sync_metadata,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.pid_file import write_worker_pid_file
+from orca_auto.core.utils import persistence as persistence_utils
 from orca_auto.orca import run_cleanup
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue import orphans as queue_orphans
 from orca_auto.orca.queue import roots as queue_roots_mod
 from orca_auto.orca.queue.adapter import (
-    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
-    TERMINAL_REPLAY_METADATA_KEY,
     DuplicateEntryError,
     cancel,
     enqueue,
@@ -32,13 +35,17 @@ from orca_auto.orca.queue.adapter import (
     mark_cancelled,
     mark_completed,
     mark_failed,
-    queue_entry_force,
-    queue_entry_reaction_dir,
-    queue_entry_run_id,
-    reconcile_orphaned_running_entries,
     requeue_running_entry,
     update_metadata,
 )
+from orca_auto.orca.queue.entries import (
+    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
+    TERMINAL_REPLAY_METADATA_KEY,
+    queue_entry_force,
+    queue_entry_reaction_dir,
+    queue_entry_run_id,
+)
+from orca_auto.orca.queue.orphans import reconcile_orphaned_running_entries
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.run_cleanup import clear_terminal_queue_entries
 from orca_auto.orca.state_reading import load_state, report_json_path
@@ -127,7 +134,7 @@ def test_enqueue_retries_generated_queue_and_task_id_collisions(
     def next_token(prefix: str) -> str:
         return next(generated[prefix])
 
-    monkeypatch.setattr(queue_adapter, "timestamped_token", next_token)
+    monkeypatch.setattr(persistence_utils, "timestamped_token", next_token)
     first = enqueue(queue_root, str(queue_root / "mol_A"))
     second = enqueue(queue_root, str(queue_root / "mol_B"))
 
@@ -142,7 +149,7 @@ def test_enqueue_retries_generated_queue_and_task_id_collisions(
 def test_enqueue_permanent_generated_id_collision_preserves_queue(
     queue_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(queue_adapter, "timestamped_token", lambda prefix: f"{prefix}_same")
+    monkeypatch.setattr(persistence_utils, "timestamped_token", lambda prefix: f"{prefix}_same")
     first = enqueue(queue_root, str(queue_root / "mol_A"))
     queue_path = queue_root / "queue.json"
     original = queue_path.read_bytes()
@@ -544,7 +551,7 @@ def test_orca_engine_dequeue_skips_foreign_engine_entries(queue_root: Path) -> N
         priority=1,  # higher priority than the ORCA entry -> claimed first if unfiltered
         metadata={**orca_entry.metadata, "reaction_dir": str(queue_root / "other_job")},
     )
-    queue_store.save_entries(queue_root, [foreign, orca_entry])
+    queue_persistence.save_entries(queue_root, [foreign, orca_entry])
 
     cfg = make_app_cfg(queue_root)
 
@@ -694,19 +701,11 @@ def _entry(
     }
     if run_id is not None:
         entry["metadata"]["run_id"] = run_id
-    return queue_store.entry_from_dict(entry)
-
-
-def _load_entries(root: Path) -> list[QueueEntry]:
-    return queue_store.load_entries(
-        root,
-        entry_from_dict_fn=queue_store.entry_from_dict,
-        corrupt_error=queue_store.QueueStoreCorruptError,
-    )
+    return queue_persistence.entry_from_dict(entry)
 
 
 def _save_entries(root: Path, entries: list[QueueEntry]) -> None:
-    queue_store.save_entries(root, entries)
+    queue_persistence.save_entries(root, entries)
 
 
 def _assert_terminal_replay_marker(
@@ -757,16 +756,16 @@ def _foreign_entry(
 
 
 def test_load_entries_cover_edge_cases(tmp_path: Path) -> None:
-    assert _load_entries(tmp_path) == []
+    assert queue_persistence.load_entries(tmp_path) == []
 
-    queue_path = tmp_path / queue_adapter.QUEUE_FILE_NAME
+    queue_path = tmp_path / QUEUE_FILE
     queue_path.write_text("{not-json", encoding="utf-8")
     with pytest.raises(queue_store.QueueStoreCorruptError):
-        _load_entries(tmp_path)
+        queue_persistence.load_entries(tmp_path)
 
     queue_path.write_text(json.dumps({"status": "bad"}), encoding="utf-8")
     with pytest.raises(queue_store.QueueStoreCorruptError):
-        _load_entries(tmp_path)
+        queue_persistence.load_entries(tmp_path)
 
     queue_path.write_text(
         json.dumps(
@@ -793,7 +792,7 @@ def test_load_entries_cover_edge_cases(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(queue_store.QueueStoreCorruptError, match="must be a JSON object"):
-        _load_entries(tmp_path)
+        queue_persistence.load_entries(tmp_path)
 
 
 def test_enqueue_overwrites_worker_log_metadata_with_safe_queue_log(tmp_path: Path) -> None:
@@ -806,7 +805,7 @@ def test_enqueue_overwrites_worker_log_metadata_with_safe_queue_log(tmp_path: Pa
         metadata={"worker_log": "/tmp/unsafe-worker.log"},
     )
 
-    metadata = queue_adapter.queue_entry_metadata(entry)
+    metadata = queue_entries.queue_entry_metadata(entry)
     assert metadata["worker_log"] == str((tmp_path / "logs" / f"{entry.queue_id}.log").resolve())
 
 
@@ -831,7 +830,7 @@ def test_apply_terminal_reconciliation_updates_fields_and_clears_completed_error
 
     assert completed_entry.status == QueueStatus.COMPLETED
     assert completed_entry.finished_at == "2026-03-10T06:00:00+00:00"
-    assert queue_adapter.queue_entry_run_id(completed_entry) == "run_done"
+    assert queue_entries.queue_entry_run_id(completed_entry) == "run_done"
     assert completed_entry.error == ""
 
     failed_entry = _entry(
@@ -922,7 +921,7 @@ def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> No
     assert queue_adapter.cancel(tmp_path, foreign_pending.queue_id) is None
     assert run_cleanup.clear_terminal_queue_entries(tmp_path) == (0, 0)
 
-    durable = _load_entries(tmp_path)
+    durable = queue_persistence.load_entries(tmp_path)
     assert [(entry.queue_id, entry.status) for entry in durable] == [
         (foreign_pending.queue_id, QueueStatus.PENDING),
         (foreign_terminal.queue_id, QueueStatus.COMPLETED),
@@ -933,7 +932,7 @@ def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> No
 
 
 def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) -> None:
-    entry = queue_store.entry_from_dict(
+    entry = queue_persistence.entry_from_dict(
         {
             "queue_id": "q_meta",
             "app_name": "orca_auto_orca",
@@ -954,14 +953,14 @@ def test_queue_entry_accessors_read_common_fields_from_metadata(tmp_path: Path) 
         }
     )
 
-    assert queue_adapter.queue_entry_id(entry) == "q_meta"
-    assert queue_adapter.queue_entry_task_id(entry) == "task_meta"
-    assert queue_adapter.queue_entry_status(entry) == QueueStatus.PENDING.value
-    assert queue_adapter.queue_entry_priority(entry) == 7
-    assert queue_adapter.queue_entry_force(entry) is True
-    assert queue_adapter.queue_entry_app_name(entry) == "orca_auto_orca"
-    assert queue_adapter.queue_entry_reaction_dir(entry) == str(tmp_path / "rxn")
-    assert queue_adapter.queue_entry_metadata(entry)["reaction_dir"] == str(tmp_path / "rxn")
+    assert queue_entries.queue_entry_id(entry) == "q_meta"
+    assert queue_entries.queue_entry_task_id(entry) == "task_meta"
+    assert queue_entries.queue_entry_status(entry) == QueueStatus.PENDING.value
+    assert queue_entries.queue_entry_priority(entry) == 7
+    assert queue_entries.queue_entry_force(entry) is True
+    assert queue_entries.queue_entry_app_name(entry) == "orca_auto_orca"
+    assert queue_entries.queue_entry_reaction_dir(entry) == str(tmp_path / "rxn")
+    assert queue_entries.queue_entry_metadata(entry)["reaction_dir"] == str(tmp_path / "rxn")
 
 
 def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> None:
@@ -971,7 +970,7 @@ def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> 
     _save_entries(
         root,
         [
-            queue_store.entry_from_dict(
+            queue_persistence.entry_from_dict(
                 {
                     "queue_id": "q_backend",
                     "app_name": "orca_auto_orca",
@@ -995,7 +994,7 @@ def test_save_entries_uses_core_queue_entry_as_storage_model(tmp_path: Path) -> 
         ],
     )
 
-    payload = json.loads((root / queue_adapter.QUEUE_FILE_NAME).read_text(encoding="utf-8"))
+    payload = json.loads((root / QUEUE_FILE).read_text(encoding="utf-8"))
     assert payload[0]["app_name"] == "orca_auto_orca"
     assert payload[0]["task_id"] == "task_backend"
     assert payload[0]["task_kind"] == "orca_run_inp"
@@ -1069,7 +1068,7 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
         return None
 
     with (
-        patch("orca_auto.orca.queue.orphans.read_worker_pid", return_value=None),
+        patch("orca_auto.orca.queue.orphans.read_worker_pid_file", return_value=None),
         patch(
             "orca_auto.orca.queue.orphans.run_lock_is_held",
             return_value=False,
@@ -1084,7 +1083,7 @@ def test_reconcile_orphaned_running_entries_covers_state_terminal_paths_and_pend
     assert changed == 3
     entries = {entry.queue_id: entry for entry in queue_adapter.list_queue(root)}
     assert entries["q_done"].status == QueueStatus.COMPLETED
-    assert queue_adapter.queue_entry_run_id(entries["q_done"]) == "run_done"
+    assert queue_entries.queue_entry_run_id(entries["q_done"]) == "run_done"
     _assert_terminal_replay_marker(
         entries["q_done"],
         status=QueueStatus.COMPLETED,
@@ -1118,7 +1117,7 @@ def test_reconcile_orphaned_running_entries_skips_blank_dirs_and_active_locks(
     )
 
     with (
-        patch("orca_auto.orca.queue.orphans.read_worker_pid", return_value=None),
+        patch("orca_auto.orca.queue.orphans.read_worker_pid_file", return_value=None),
         patch(
             "orca_auto.orca.queue.orphans.run_lock_is_held",
             side_effect=lambda reaction_dir, **_kwargs: reaction_dir == locked_dir,
@@ -1255,7 +1254,7 @@ def test_administrative_failed_mark_rejects_side_effect_marker(tmp_path: Path) -
     reaction_dir = root / "administrative_fence"
     reaction_dir.mkdir(parents=True)
     entry = queue_adapter.enqueue(root, str(reaction_dir), task_id="task-fence")
-    before = (root / queue_adapter.QUEUE_FILE_NAME).read_bytes()
+    before = (root / QUEUE_FILE).read_bytes()
 
     with pytest.raises(ValueError, match="cannot carry a side-effect replay marker"):
         queue_adapter.mark_failed(
@@ -1267,7 +1266,7 @@ def test_administrative_failed_mark_rejects_side_effect_marker(tmp_path: Path) -
             expected_entry=entry,
         )
 
-    assert (root / queue_adapter.QUEUE_FILE_NAME).read_bytes() == before
+    assert (root / QUEUE_FILE).read_bytes() == before
     [unchanged] = queue_adapter.list_queue(root)
     assert unchanged.status == QueueStatus.PENDING
 
@@ -1453,9 +1452,9 @@ def _driver_recovery_spec(root: Path) -> Any:
         publish=lambda _entry: None,
         enqueue_fn=lambda *_args, **_kwargs: pytest.fail("recovery never enqueues"),
         mark_failed_fn=queue_adapter.mark_failed,
-        same_generation=queue_adapter.queue_entries_same_publication_generation,
+        same_generation=queue_entries.same_generation,
         job_dir_metadata_key="reaction_dir",
-        ambiguous_fence_metadata={queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
+        ambiguous_fence_metadata={queue_entries.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
     )
 
 
@@ -1483,7 +1482,7 @@ def test_enqueue_recovery_never_matches_a_foreign_row(tmp_path: Path) -> None:
         metadata=dict(metadata),
     )
     _save_entries(root, [foreign])
-    queue_path = root / queue_adapter.QUEUE_FILE_NAME
+    queue_path = root / QUEUE_FILE
     before = queue_path.read_bytes()
 
     spec = _driver_recovery_spec(root)
@@ -1539,7 +1538,7 @@ def test_ambiguous_enqueue_recovery_is_durable_fence_only_history(
     # The administrative fence-only marker keeps a successor generation for
     # the same reaction_dir blocked until the ambiguous rows are cleared.
     assert all(
-        entry.metadata.get(queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY) is True
+        entry.metadata.get(queue_entries.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY) is True
         for entry in fenced
     )
 
@@ -1585,6 +1584,75 @@ def test_orca_adapter_expected_generation_rejects_replaced_queue_id(tmp_path: Pa
         )
         is False
     )
+    assert update_metadata(root, stale.queue_id, {"stale": True}, expected_entry=stale) is False
+    assert get_cancel_requested(root, stale.queue_id, expected_entry=stale) is False
 
     [current] = queue_adapter.list_queue(root)
     assert current == replacement
+
+
+def test_orca_dequeue_rejects_a_replaced_queue_id(tmp_path: Path) -> None:
+    stale = _entry("same-id", str(tmp_path / "old"), QueueStatus.PENDING.value)
+    replacement = replace(stale, task_id="replacement-task")
+    _save_entries(tmp_path, [replacement])
+
+    assert queue_adapter.dequeue_entry_if_pending(tmp_path, "same-id", expected_entry=stale) is None
+    assert queue_adapter.list_queue(tmp_path) == [replacement]
+
+
+def test_orca_adapter_expected_task_rejects_another_task(tmp_path: Path) -> None:
+    failed = _entry("q-failed", str(tmp_path / "job"), QueueStatus.FAILED.value)
+    _save_entries(tmp_path, [failed])
+
+    assert (
+        queue_adapter.update_terminal(
+            tmp_path, failed.queue_id, QueueStatus.COMPLETED.value, expected_task_id="other-task"
+        )
+        is False
+    )
+    assert queue_adapter.list_queue(tmp_path) == [failed]
+
+
+def test_orca_adapter_fence_ignores_publication_lease_changes(tmp_path: Path) -> None:
+    job = tmp_path / "job"
+    selected = replace(
+        _entry("q-lease", str(job), QueueStatus.PENDING.value),
+        metadata={
+            "reaction_dir": str(job),
+            "force": False,
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_PREPARING, token="publication-token", owner_pid=os.getpid()
+            ),
+        },
+    )
+    published = replace(
+        selected,
+        metadata={
+            **selected.metadata,
+            **queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_COMPLETE, token="publication-token", owner_pid=0
+            ),
+        },
+    )
+    _save_entries(tmp_path, [published])
+
+    cancelled = cancel(tmp_path, selected.queue_id, expected_entry=selected)
+
+    assert cancelled is not None
+    assert cancelled.status == QueueStatus.CANCELLED
+
+
+def test_orca_update_metadata_refuses_a_writer_behind_an_identity_change(tmp_path: Path) -> None:
+    submitted = _entry("q-meta", str(tmp_path / "job"), QueueStatus.PENDING.value)
+    _save_entries(tmp_path, [submitted])
+
+    assert update_metadata(
+        tmp_path, submitted.queue_id, {"attached": True}, expected_entry=submitted
+    )
+    assert (
+        update_metadata(tmp_path, submitted.queue_id, {"stale": True}, expected_entry=submitted)
+        is False
+    )
+    [current] = queue_adapter.list_queue(tmp_path)
+    assert current.metadata["attached"] is True
+    assert "stale" not in current.metadata

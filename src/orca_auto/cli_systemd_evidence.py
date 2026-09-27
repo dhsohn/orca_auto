@@ -18,6 +18,7 @@ from typing import Any
 from orca_auto import cli_systemd_units
 from orca_auto._process_evidence import PROCESS_IMPORT_SOURCE_ENV
 from orca_auto.core.runtime_bundle import PROCESS_RUNTIME_BUILD_ENV
+from orca_auto.core.utils import process as process_utils
 
 
 def read_process_file(path: str) -> bytes:
@@ -76,18 +77,8 @@ def unit_start_epoch(
 
 def parse_process_start_ticks(raw_stat: bytes, *, pid: int) -> int:
     """Field 22 (starttime) of ``/proc/<pid>/stat``: the kernel process identity."""
-    # Linux proc(5) makes comm parenthesized and permits spaces (and closing
-    # parentheses) inside it. Split after the final ')' so field 22 remains the
-    # twentieth token in the remainder (which starts at field 3).
-    closing_paren = raw_stat.rfind(b")")
-    fields = raw_stat[closing_paren + 1 :].split() if closing_paren >= 0 else []
-    if len(fields) <= 19:
-        raise ValueError(f"invalid /proc/{pid}/stat process identity")
-    try:
-        start_ticks = int(fields[19])
-    except ValueError as exc:
-        raise ValueError(f"invalid /proc/{pid}/stat process identity") from exc
-    if start_ticks <= 0:
+    start_ticks = process_utils.parse_stat_start_ticks(raw_stat.decode("utf-8", errors="ignore"))
+    if start_ticks is None:
         raise ValueError(f"invalid /proc/{pid}/stat process identity")
     return start_ticks
 

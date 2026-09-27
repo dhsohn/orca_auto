@@ -11,7 +11,6 @@ from typing import Any
 import pytest
 
 from orca_auto.core.queue import publication, store
-from orca_auto.core.queue.generation import queue_entries_same_generation
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_COMPLETE,
@@ -32,8 +31,10 @@ from orca_auto.core.queue.store import (
     list_queue,
 )
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
+from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import enqueue_publication as driver
+from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue.enqueue_publication import (
     EnqueuePublicationOutcomeUnknown,
     EnqueuePublicationSpec,
@@ -71,17 +72,17 @@ def _mark_failed_via_adapter(root: Path, queue_id: str, **kwargs: Any) -> Any:
 def _spec(queue_root: Path, **overrides: Any) -> EnqueuePublicationSpec:
     fields: dict[str, Any] = {
         "queue_root": queue_root,
-        "app_name": queue_adapter.QUEUE_APP_NAME,
+        "app_name": ORCA_AUTO_ORCA_APP_NAME,
         "task_id": "task-1",
-        "task_kind": queue_adapter.QUEUE_TASK_KIND,
-        "engine": queue_adapter.QUEUE_ENGINE,
+        "task_kind": ORCA_TASK_KIND,
+        "engine": ORCA_ENGINE,
         "priority": 10,
         "metadata": {"reaction_dir": str(queue_root / "job")},
         "label": "TEST",
         "publish": lambda _entry: None,
         "enqueue_fn": _enqueue_via_adapter,
         "mark_failed_fn": _mark_failed_via_adapter,
-        "same_generation": queue_adapter.queue_entries_same_publication_generation,
+        "same_generation": queue_entries.same_generation,
         "job_dir_metadata_key": "reaction_dir",
     }
     fields.update(overrides)
@@ -243,7 +244,7 @@ def test_repair_publish_failure_parks_with_fresh_token(tmp_path: Path) -> None:
             entry,
             publish=failing_publish,
             label="TEST",
-            same_generation=queue_adapter.queue_entries_same_publication_generation,
+            same_generation=queue_entries.same_generation,
         ).repaired
         is False
     )
@@ -274,7 +275,7 @@ def test_repair_base_exception_parks_then_propagates(tmp_path: Path) -> None:
             entry,
             publish=interrupted_publish,
             label="TEST",
-            same_generation=queue_adapter.queue_entries_same_publication_generation,
+            same_generation=queue_entries.same_generation,
         )
     [row] = list_queue(tmp_path)
     assert row.status == QueueStatus.PENDING
@@ -398,7 +399,7 @@ def test_sigkilled_publisher_row_stays_parked_until_repair_publishes(
         parked,
         publish=lambda current: published.append(current.queue_id),
         label="test",
-        same_generation=queue_entries_same_generation,
+        same_generation=queue_entries.same_generation,
     ).repaired
     assert published == [queue_id]
 

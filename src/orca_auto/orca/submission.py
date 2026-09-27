@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
@@ -30,6 +31,7 @@ from orca_auto.core.queue.persistence import QueueStoreCorruptError
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca.queue.enqueue_publication import (
     EnqueuePublicationOutcome,
@@ -42,6 +44,7 @@ from orca_auto.orca.run_dir_guard import (
     assert_run_dir_publication_allowed,
 )
 
+from .app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from .config import load_config
 from .execution import active_direct_run_error, select_latest_inp
 from .execution_binding import (
@@ -51,10 +54,10 @@ from .execution_binding import (
 from .input_artifacts import OrcaSelectedInputArtifacts, selected_input_artifacts
 from .job_locations import resolve_job_metadata
 from .queue import adapter as queue_adapter
+from .queue import entries as queue_entries
 from .queue.adapter import DuplicateEntryError
 from .queue.job_records import upsert_queued_job_record
-from .queue.notifications import QUEUED_NOTIFICATION_PENDING_KEY
-from .queue.orphans import DeadRunningRowUnjudgeableError, read_worker_pid
+from .queue.orphans import DeadRunningRowUnjudgeableError
 from .resource_directives import (
     PreparedSubmissionResourceInput,
     prepare_submission_resource_request,
@@ -130,21 +133,21 @@ def find_submission_conflict(
     if active_entry is not None:
         return (
             "Job directory already queued: "
-            f"{reaction_dir} (queue_id={queue_adapter.queue_entry_id(active_entry)}, "
-            f"status={queue_adapter.queue_entry_status(active_entry)})"
+            f"{reaction_dir} (queue_id={queue_entries.queue_entry_id(active_entry)}, "
+            f"status={queue_entries.queue_entry_status(active_entry)})"
         )
     return active_direct_run_error(reaction_dir, logger=logger)
 
 
 def worker_status_for_submission(allowed_root: Path) -> WorkerStatusInfo:
-    pid = read_worker_pid(allowed_root)
+    pid = read_worker_pid_file(allowed_root)
     if pid is None:
         return WorkerStatusInfo(status="inactive")
     return WorkerStatusInfo(status="running", pid=pid)
 
 
 def queue_entry_worker_log(entry: Any) -> Any | None:
-    metadata = queue_adapter.queue_entry_metadata(entry)
+    metadata = queue_entries.queue_entry_metadata(entry)
     worker_log = metadata.get("worker_log")
     if isinstance(worker_log, (str, Path)):
         return worker_log
@@ -196,7 +199,7 @@ def build_queue_metadata(
     """Assemble queue values from an already-created snapshot without filesystem work."""
     metadata: dict[str, Any] = {
         "submitted_via": "run_inp",
-        QUEUED_NOTIFICATION_PENDING_KEY: True,
+        queue_entries.QUEUED_NOTIFICATION_PENDING_KEY: True,
         "job_type": job_type,
         "molecule_key": molecule_key,
         "resource_request": dict(resource_request),
@@ -380,15 +383,15 @@ def _publish_submission(
             metadata=kwargs["metadata"],
             before_commit_fn=kwargs.get("before_commit_fn"),
             after_commit_fn=kwargs.get("after_commit_fn"),
-            admission_root=Path(cfg.runtime.resolved_admission_root),
+            admission_root=admission_dir(cfg.runtime.allowed_root),
         )
 
     spec = EnqueuePublicationSpec(
         queue_root=queue_root,
-        app_name=queue_adapter.QUEUE_APP_NAME,
+        app_name=ORCA_AUTO_ORCA_APP_NAME,
         task_id=task_id,
-        task_kind=queue_adapter.QUEUE_TASK_KIND,
-        engine=queue_adapter.QUEUE_ENGINE,
+        task_kind=ORCA_TASK_KIND,
+        engine=ORCA_ENGINE,
         priority=inputs.priority,
         metadata=queue_metadata,
         label="ORCA",
@@ -403,12 +406,12 @@ def _publish_submission(
         mark_failed_fn=mark_failed_via_adapter,
         # Ambiguity-fenced rows keep the administrative fence-only marker so a
         # successor generation stays blocked until the duplicates are cleared.
-        ambiguous_fence_metadata={queue_adapter.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
+        ambiguous_fence_metadata={queue_entries.TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY: True},
         on_compensated_failure=lambda: _cleanup_submission_snapshot(
             reaction_dir, execution_snapshot
         ),
         job_dir_metadata_key="reaction_dir",
-        same_generation=queue_adapter.queue_entries_same_publication_generation,
+        same_generation=queue_entries.same_generation,
     )
     return run_enqueue_publication(spec)
 

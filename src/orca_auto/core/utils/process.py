@@ -4,12 +4,12 @@ import errno
 import json
 import os
 import signal
-from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .coercion import positive_int as _positive_int
+from .persistence import now_utc_iso
 
 PIDFD_SIGNAL_PROCESS_GROUP = 1 << 2
 
@@ -18,27 +18,39 @@ class StableProcessSignalError(RuntimeError):
     """Raised when a process cannot be signalled through a stable pidfd target."""
 
 
-def process_start_ticks(pid: int, *, proc_root: Path = Path("/proc")) -> int | None:
-    if pid <= 0:
-        return None
-    stat_path = proc_root / str(pid) / "stat"
-    try:
-        text = stat_path.read_text(encoding="utf-8", errors="ignore").strip()
-    except OSError:
-        return None
-    if not text:
-        return None
-    right_paren = text.rfind(")")
+def stat_starttime_field(stat_text: str) -> str | None:
+    """Field 22 (starttime) of one ``/proc/<pid>/stat`` line, as written.
+
+    comm is parenthesized and may contain spaces and ')': the fields after the
+    final ')' start at field 3, so starttime is the twentieth of them.
+    """
+    right_paren = stat_text.rfind(")")
     if right_paren < 0:
         return None
-    fields_after_comm = text[right_paren + 2 :].split()
-    if len(fields_after_comm) <= 19:
+    fields = stat_text[right_paren + 1 :].split()
+    return fields[19] if len(fields) > 19 else None
+
+
+def parse_stat_start_ticks(stat_text: str) -> int | None:
+    """The positive start ticks of one ``/proc/<pid>/stat`` line, or ``None``."""
+    field = stat_starttime_field(stat_text)
+    if field is None:
         return None
     try:
-        value = int(fields_after_comm[19])
+        value = int(field)
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+def process_start_ticks(pid: int, *, proc_root: Path = Path("/proc")) -> int | None:
+    if pid <= 0:
+        return None
+    try:
+        text = (proc_root / str(pid) / "stat").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    return parse_stat_start_ticks(text)
 
 
 def linux_boot_id(*, proc_root: Path = Path("/proc")) -> str | None:
@@ -65,28 +77,63 @@ def is_process_alive(pid: int) -> bool:
     return True
 
 
+def process_group_exists(pgid: int) -> bool:
+    """Whether a process group exists; only ESRCH proves absence."""
+    try:
+        os.killpg(int(pgid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as exc:
+        return exc.errno != errno.ESRCH
+    return True
+
+
+OwnerIdentityState = Literal["live", "stale", "unknown"]
+
+
+def owner_identity_state(pid: int, ticks: int, boot_id: str) -> OwnerIdentityState:
+    """Is the process recorded as ``(pid, ticks, boot_id)`` still the one running?
+
+    ``stale`` needs proof: another boot, no such pid, or other start ticks. An
+    unreadable boot id or start ticks is ``unknown``, which each owner record
+    maps to its own policy at the call site.
+    """
+    current_boot_id = linux_boot_id()
+    if current_boot_id is None:
+        return "unknown"
+    if current_boot_id != boot_id:
+        return "stale"
+    if not is_process_alive(pid):
+        return "stale"
+    observed_ticks = process_start_ticks(pid)
+    if observed_ticks is None:
+        return "unknown"
+    return "live" if observed_ticks == ticks else "stale"
+
+
 def process_identity_alive(
     pid: int,
     expected_ticks: int | None,
     expected_boot_id: str | None,
-    *,
-    kill_fn: Callable[[int, int], None],
-    process_start_ticks_fn: Callable[[int], int | None],
-    boot_id_fn: Callable[[], str | None],
 ) -> bool:
-    """Retain a process owner unless the available identity proves it stale."""
+    """The admission slot owner's policy: retain unless the identity proves it stale.
+
+    Unlike :func:`owner_identity_state`, an unreadable boot id or start ticks
+    and an unexpected ``kill`` errno all count as alive, so recovery never
+    advances to process-group signalling on a guess.
+    """
     if pid <= 0:
         return False
     if expected_boot_id is not None:
-        observed_boot_id = boot_id_fn()
+        observed_boot_id = linux_boot_id()
         if observed_boot_id is None:
-            # Unknown boot identity cannot prove the owner stale. Retain the
-            # slot so recovery does not advance to process-group signalling.
             return True
         if observed_boot_id != expected_boot_id:
             return False
     try:
-        kill_fn(pid, 0)
+        os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
@@ -95,16 +142,14 @@ def process_identity_alive(
         return exc.errno != errno.ESRCH
     if expected_ticks is None:
         return True
-    observed_ticks = process_start_ticks_fn(pid)
+    observed_ticks = process_start_ticks(pid)
     if observed_ticks is None:
-        # PID existence is proven but identity is temporarily unknown. Treat
-        # the owner as live so startup never reaps a possibly active child.
         return True
     return observed_ticks == expected_ticks
 
 
 def current_process_start_ticks() -> int | None:
-    return process_start_ticks(os.getpid(), proc_root=Path("/proc"))
+    return process_start_ticks(os.getpid())
 
 
 def _open_proc_pid_directory(pid: int) -> int:
@@ -147,21 +192,11 @@ def _pidfd_send_signal(pidfd: int, signum: int, flags: int) -> None:
     signal.pidfd_send_signal(pidfd, signum, None, flags)
 
 
-@dataclass(frozen=True)
-class StableProcessSignalDeps:
-    open_process: Callable[[int], int] = _open_proc_pid_directory
-    read_identity: Callable[[int], tuple[int, int, int]] = _read_proc_identity_from_directory_fd
-    send_signal: Callable[[int, int, int], None] = _pidfd_send_signal
-    close: Callable[[int], None] = os.close
-
-
 def signal_process_group_stable(
     pid: int,
     pgid: int,
     process_start_ticks: int,
     signum: int,
-    *,
-    deps: StableProcessSignalDeps | None = None,
 ) -> bool:
     """Signal a verified process group through a stable ``/proc/<pid>`` pidfd.
 
@@ -171,14 +206,13 @@ def signal_process_group_stable(
     """
     if any(type(value) is not int or value <= 0 for value in (pid, pgid, process_start_ticks)):
         raise StableProcessSignalError("Invalid expected process identity")
-    active_deps = deps or StableProcessSignalDeps()
     try:
-        process_fd = active_deps.open_process(pid)
+        process_fd = _open_proc_pid_directory(pid)
     except OSError as exc:
         raise StableProcessSignalError(f"Cannot open a stable pidfd for pid={pid}") from exc
     try:
         try:
-            observed_identity = active_deps.read_identity(process_fd)
+            observed_identity = _read_proc_identity_from_directory_fd(process_fd)
         except (OSError, ValueError) as exc:
             raise StableProcessSignalError(
                 f"Cannot verify the stable process identity for pid={pid}"
@@ -190,14 +224,14 @@ def signal_process_group_stable(
                 f"expected={expected_identity} observed={observed_identity}"
             )
         try:
-            active_deps.send_signal(process_fd, signum, PIDFD_SIGNAL_PROCESS_GROUP)
+            _pidfd_send_signal(process_fd, signum, PIDFD_SIGNAL_PROCESS_GROUP)
         except OSError as exc:
             if exc.errno != errno.EINVAL:
                 raise StableProcessSignalError(
                     f"Cannot signal stable process group pgid={pgid}"
                 ) from exc
             try:
-                active_deps.send_signal(process_fd, signum, 0)
+                _pidfd_send_signal(process_fd, signum, 0)
             except OSError as fallback_exc:
                 raise StableProcessSignalError(
                     f"Cannot signal stable process leader pid={pid}"
@@ -205,24 +239,18 @@ def signal_process_group_stable(
             return False
         return True
     finally:
-        active_deps.close(process_fd)
+        os.close(process_fd)
 
 
-def current_pid_payload(
-    *,
-    now_fn: Callable[[], str],
-    process_start_ticks_fn: Callable[[int], int | None],
-    pid_fn: Callable[[], int] = os.getpid,
-    boot_id_fn: Callable[[], str | None] = linux_boot_id,
-) -> dict[str, int | str]:
-    pid = pid_fn()
-    ticks = process_start_ticks_fn(pid)
-    boot_id = boot_id_fn()
+def current_pid_payload() -> dict[str, int | str]:
+    pid = os.getpid()
+    ticks = process_start_ticks(pid)
+    boot_id = linux_boot_id()
     if ticks is None or not isinstance(boot_id, str) or not boot_id.strip():
         raise RuntimeError("Cannot determine the current boot-scoped process identity")
     return {
         "pid": pid,
-        "started_at": now_fn(),
+        "started_at": now_utc_iso(),
         "process_start_ticks": ticks,
         "boot_id": boot_id.strip(),
     }
@@ -255,29 +283,21 @@ def remove_file_silent(path: Path) -> None:
         path.unlink()
 
 
-def read_live_pid_file(
-    pid_path: Path,
-    *,
-    is_process_alive_fn: Callable[[int], bool],
-    process_start_ticks_fn: Callable[[int], int | None],
-    boot_id_fn: Callable[[], str | None] = linux_boot_id,
-    remove_file_fn: Callable[[Path], None] = remove_file_silent,
-) -> int | None:
+def read_live_pid_file(pid_path: Path) -> int | None:
+    """The pid a pid file records while that process still runs; else remove the file.
+
+    The pid file's policy: anything short of a proven live owner, an unknown
+    boot id or start ticks included, removes the file.
+    """
     if not pid_path.exists():
         return None
     pid, expected_ticks, expected_boot_id = read_pid_payload(pid_path)
-    if pid is None or expected_ticks is None or expected_boot_id is None:
-        remove_file_fn(pid_path)
-        return None
-    observed_boot_id = boot_id_fn()
-    if observed_boot_id is None or observed_boot_id.strip() != expected_boot_id:
-        remove_file_fn(pid_path)
-        return None
-    if not is_process_alive_fn(pid):
-        remove_file_fn(pid_path)
-        return None
-    observed_ticks = process_start_ticks_fn(pid)
-    if observed_ticks is None or observed_ticks != expected_ticks:
-        remove_file_fn(pid_path)
+    if (
+        pid is None
+        or expected_ticks is None
+        or expected_boot_id is None
+        or owner_identity_state(pid, expected_ticks, expected_boot_id) != "live"
+    ):
+        remove_file_silent(pid_path)
         return None
     return pid

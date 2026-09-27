@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca_auto.core.config.files import resolved_admission_root, validated_runs_root_text
+from orca_auto.core.admission import admission_dir
+from orca_auto.core.config.files import validated_runs_root_text
 
 from .config import load_orca_shared_config
 
@@ -21,13 +22,7 @@ def engine_runtime_paths(config_path: str) -> dict[str, Path]:
         raise ValueError(f"Missing runs_root in config: {path}")
 
     resolved_root = Path(validated_runs_root_text(shared.runs_root)).expanduser().resolve()
-    resolved: dict[str, Path] = {
-        "allowed_root": resolved_root,
-    }
-    admission_root = resolved_admission_root(shared.scheduler, runs_root=resolved_root)
-    if admission_root is not None:
-        resolved["admission_root"] = admission_root
-    return resolved
+    return {"allowed_root": resolved_root, "admission_root": admission_dir(resolved_root)}
 
 
 __all__ = [

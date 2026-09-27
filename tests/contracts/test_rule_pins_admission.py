@@ -1,9 +1,11 @@
 """Rule pins for admission root/limit resolution and the child's slot outcome.
 
 ``test_admission_resolution`` resolves ``(admission_root, limit)`` from each
-config fixture through every consumer that derives it today: ``load_config``,
-the queue worker as ``queue worker`` builds it, ``engine_runtime_paths`` and
-the systemd unit plan. The table is ``pins/admission_resolution.json``.
+config fixture through every consumer that derives it: a ``load_config``
+consumer (``admission_dir(runs_root)`` and ``max_concurrent``), the queue
+worker as ``queue worker`` builds it, ``engine_runtime_paths`` and the systemd
+unit plan. A config that still names ``scheduler.admission_root`` is rejected
+by all of them. The table is ``pins/admission_resolution.json``.
 
 ``test_child_slot_outcome`` raises each exception type inside the child's
 admission context, with the reserved slot's engine process idle, prepared or
@@ -24,6 +26,7 @@ import pytest
 from orca_auto import systemd_plan
 from orca_auto.core.admission import (
     AdmissionLimitReachedError,
+    admission_dir,
     prepare_slot_engine_process,
     set_slot_engine_process,
 )
@@ -66,8 +69,8 @@ def _answer(call: Callable[[], Any]) -> Any:
 def _load_config_answer(config: Path) -> dict[str, Any]:
     cfg = load_config(str(config))
     return {
-        "admission_root": cfg.runtime.resolved_admission_root,
-        "admission_limit": cfg.runtime.resolved_admission_limit,
+        "admission_root": str(admission_dir(cfg.runtime.allowed_root)),
+        "admission_limit": cfg.runtime.max_concurrent,
         "max_concurrent": cfg.runtime.max_concurrent,
     }
 
@@ -75,12 +78,12 @@ def _load_config_answer(config: Path) -> dict[str, Any]:
 def _queue_worker_answer(config: Path) -> dict[str, Any]:
     # ``queue worker`` (orca.commands.queue.cmd_queue_worker) builds it this way.
     cfg = load_config(str(config))
-    worker = OrcaQueueWorker(cfg, str(config), max_concurrent=max(1, cfg.runtime.max_concurrent))
+    worker = OrcaQueueWorker(cfg, str(config))
     return {
         "admission_root": str(worker.admission_root),
-        "admission_limit": worker.admission_limit,
+        "admission_limit": worker.max_concurrent,
         "max_concurrent": worker.max_concurrent,
-        "reservation_limit": worker.cfg.runtime.resolved_admission_limit,
+        "reservation_limit": worker.cfg.runtime.max_concurrent,
     }
 
 
@@ -101,7 +104,6 @@ def test_admission_resolution(tmp_path: Path, make_fake_orca: Callable[..., Path
     orca = make_fake_orca()
     runs = tmp_path / "runs"
     runs.mkdir()
-    (tmp_path / "admission").mkdir()
     n = Normalizer({tmp_path: "<tmp>"})
     table: dict[str, Any] = {}
     for name, scheduler in _CONFIGS.items():
@@ -164,8 +166,8 @@ def test_child_slot_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     for exc_name, raised in _CHILD_EXCEPTIONS.items():
         for engine_state in _ENGINE_STATES:
             admission = tmp_path / f"admission-{exc_name}-{engine_state}"
-            cfg = make_app_cfg(runs, admission_root=admission)
-            token = queue_worker._try_reserve_admission_slot(cfg)
+            cfg = make_app_cfg(runs)
+            token = queue_worker._try_reserve_admission_slot(admission, cfg.runtime.max_concurrent)
             assert token is not None
 
             monkeypatch.setattr(

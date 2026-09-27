@@ -6,8 +6,9 @@ worker pid file. ``test_owner_liveness_truth_table`` feeds each record the same
 identity facts and host answers (``os.kill``, current boot id, observed start
 ticks) and pins every outcome in ``pins/process_owner_liveness.json``.
 
-Three parsers read field 22 of ``/proc/<pid>/stat``; ``test_proc_stat_parsers``
-pins their answers over one corpus in ``pins/process_stat_parsers.json``.
+Three readers take field 22 of ``/proc/<pid>/stat`` from one parser, each
+with its own conversion; ``test_proc_stat_parsers`` pins their answers over one
+corpus in ``pins/process_stat_parsers.json``.
 """
 
 from __future__ import annotations
@@ -181,7 +182,7 @@ def test_proc_stat_parsers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     stat_path.parent.mkdir(parents=True)
     # ``process_start_token`` reads the fixed ``/proc`` path; point it at the corpus.
     monkeypatch.setattr(publication, "Path", lambda text: proc / Path(text).relative_to("/proc"))
-    monkeypatch.setattr(publication, "_linux_boot_id", lambda: "boot-a")
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda **_kwargs: "boot-a")
 
     table: dict[str, dict[str, Any]] = {}
     for name, raw in _STAT_CORPUS.items():

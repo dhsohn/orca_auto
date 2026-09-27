@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.admission import admission_dir
 from orca_auto.core.config import CommonResourceConfig
 from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
@@ -23,7 +24,6 @@ from orca_auto.core.queue.deferral import (
     queue_entry_admission_deferral_reason,
     queue_entry_admission_is_deferred,
 )
-from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.orca import execution, worker_execution
@@ -33,11 +33,8 @@ from orca_auto.orca.execution_binding import (
     orca_execution_started_evidence,
 )
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult
-from orca_auto.orca.queue.adapter import (
-    enqueue,
-    list_queue,
-    queue_entries_same_publication_generation,
-)
+from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.queue.entries import queue_entry_generation_token, same_generation
 from orca_auto.orca.recovery_rebind import RECOVERY_REBIND_COUNT_METADATA_KEY
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
@@ -99,7 +96,7 @@ def test_deferral_is_lifecycle_metadata_not_generation_identity() -> None:
     deferred = _entry({"reaction_dir": "/runs/rxn", **admission_deferral_update(_REFUSAL)})
 
     assert queue_entry_generation_token(deferred) == queue_entry_generation_token(plain)
-    assert queue_entries_same_publication_generation(deferred, plain)
+    assert same_generation(deferred, plain)
 
 
 # --- claiming -------------------------------------------------------------------------------
@@ -144,7 +141,6 @@ def _child_config(tmp_path: Path, queue_root: Path, **overrides: Any) -> Path:
             queue_root,
             orca_executable=executable,
             max_concurrent=1,
-            admission_root=tmp_path / "admission",
             **overrides,
         ),
     )
@@ -172,12 +168,10 @@ def _run_child_with(
 
 
 def _deferral_is_due(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the deferral count as due at both the selection and the by-id claim."""
+    """Make the deferral count as due; selection and the by-id claim share one predicate."""
     import orca_auto.core.queue.store as store_mod
-    import orca_auto.core.queue.worker.admission as admission_mod
 
-    for module in (store_mod, admission_mod):
-        monkeypatch.setattr(module, "queue_entry_admission_is_deferred", lambda _entry: False)
+    monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
 
 
 def _refuse(*_args: Any, **_kwargs: Any) -> int:
@@ -216,7 +210,7 @@ def test_capacity_refusal_returns_the_row_to_the_queue_without_touching_its_gene
     assert deferred.error == ""
     assert queue_entry_admission_deferral_reason(deferred) == _REFUSAL
     assert queue_entry_generation_token(deferred) == queue_entry_generation_token(running)
-    assert queue_entries_same_publication_generation(deferred, running)
+    assert same_generation(deferred, running)
     # Nothing ran: the generation is pristine, so the next claim reuses it
     # instead of spending the bounded crash-recovery rebind budget.
     assert _generation_listing(rxn) == listing_before
@@ -601,7 +595,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     )
 
     queue_root = tmp_path / "queue"
-    admission_root = tmp_path / "admission"
+    admission_root = admission_dir(queue_root)
     rxn = queue_root / "rxn"
     fake_orca = tmp_path / "fake-orca"
     fake_orca.write_text(
@@ -625,7 +619,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     )
 
     def run_child() -> int:
-        token = _try_reserve_admission_slot(cfg)
+        token = _try_reserve_admission_slot(admission_root, cfg.runtime.max_concurrent)
         assert token is not None
         return worker_execution.run_worker_child_job(
             config_path=str(config),

@@ -3,12 +3,15 @@ from __future__ import annotations
 import errno
 import json
 from dataclasses import replace
-from os import PathLike
 from pathlib import Path
 
 import pytest
 
+from orca_auto.core.admission import persistence as admission_persistence
 from orca_auto.core.admission import store
+from orca_auto.core.admission.records import slot_to_dict
+from orca_auto.core.utils import persistence as persistence_utils
+from orca_auto.core.utils import process as process_utils
 
 
 def _patch_deterministic_liveness(
@@ -31,59 +34,17 @@ def _patch_deterministic_liveness(
             raise ProcessLookupError("process is not alive")
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda pid: tick_map.get(pid))
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda pid: tick_map.get(pid))
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "test-boot-id")
     if patch_token:
-        monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_fixed")
+        monkeypatch.setattr(
+            persistence_utils, "timestamped_token", lambda prefix: f"{prefix}_fixed"
+        )
     monkeypatch.setattr(store, "now_utc_iso", lambda: "2026-04-19T00:00:00+00:00")
 
 
 def _read_slots_file(root: Path) -> list[dict[str, object]]:
     return json.loads((root / store.ADMISSION_FILE_NAME).read_text(encoding="utf-8"))
-
-
-def _proc_stat_text(start_ticks: str) -> str:
-    fields = ["S"] + [str(index) for index in range(1, 19)] + [start_ticks]
-    return f"1234 (python) {' '.join(fields)}"
-
-
-def test_process_start_ticks_handles_parse_failures_and_success(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    proc_root = tmp_path / "proc"
-
-    def fake_path(*parts: str | PathLike[str]) -> Path:
-        if parts == ("/proc",):
-            return proc_root
-        return Path(*parts)
-
-    monkeypatch.setattr(store, "Path", fake_path)
-
-    assert store._process_start_ticks(999) is None
-
-    pid = 1234
-    stat_dir = proc_root / str(pid)
-    stat_dir.mkdir(parents=True)
-    stat_file = stat_dir / "stat"
-
-    stat_file.write_text("", encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text("1234 no-right-paren", encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text("1234 (python) S 1 2 3", encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text(_proc_stat_text("not-an-int"), encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text(_proc_stat_text("0"), encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text(_proc_stat_text("54321"), encoding="utf-8")
-    assert store._process_start_ticks(pid) == 54321
 
 
 def test_normalize_work_dir_handles_none_blank_and_resolve_failure(
@@ -125,8 +86,8 @@ def test_slot_owner_alive_handles_dead_pid_and_unreadable_current_ticks(
     )
 
     monkeypatch.setattr(store.os, "kill", lambda pid, sig: None)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda pid: None)
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda pid: None)
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -150,8 +111,8 @@ def test_slot_owner_alive_treats_permission_denied_as_live(
         raise PermissionError("permission denied")
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: None)
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid: None)
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -175,8 +136,8 @@ def test_slot_owner_alive_still_rejects_permission_denied_pid_reuse(
         raise PermissionError("permission denied")
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: 888)
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid: 888)
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -203,7 +164,7 @@ def test_slot_owner_identity_is_scoped_to_the_current_boot(
     slot = store.get_slot(tmp_path, token)
     assert slot is not None and slot.owner_boot_id == "test-boot-id"
 
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "later-boot-id")
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "later-boot-id")
     monkeypatch.setattr(
         store.os,
         "kill",
@@ -255,8 +216,8 @@ def test_admission_cleanup_preserves_conservative_owner_identity_policy(
         if kill_error is not None:
             raise kill_error
 
-    monkeypatch.setattr(store, "_linux_boot_id", observed_boot_id)
-    monkeypatch.setattr(store, "_process_start_ticks", observed_ticks)
+    monkeypatch.setattr(process_utils, "linux_boot_id", observed_boot_id)
+    monkeypatch.setattr(process_utils, "process_start_ticks", observed_ticks)
     monkeypatch.setattr(store.os, "kill", probe_pid)
 
     assert [slot.token for slot in store.list_slots(tmp_path)] == ([token] if retained else [])
@@ -265,34 +226,6 @@ def test_admission_cleanup_preserves_conservative_owner_identity_policy(
         assert path.read_bytes() == recorded
     else:
         assert _read_slots_file(tmp_path) == []
-
-
-@pytest.mark.parametrize(
-    "stat_text",
-    [
-        "",
-        "1 (proc) " + " ".join(str(i) for i in range(19)),
-        "1 (proc) " + " ".join(["0"] * 19 + ["bad"]),
-    ],
-)
-def test_process_start_ticks_returns_none_for_unparseable_stat(
-    monkeypatch: pytest.MonkeyPatch, stat_text: str
-) -> None:
-    def fake_read_text(self: Path, encoding: str = "utf-8", errors: str = "strict") -> str:
-        return stat_text
-
-    monkeypatch.setattr(store.Path, "read_text", fake_read_text)
-
-    assert store._process_start_ticks(1234) is None
-
-
-def test_process_start_ticks_parses_valid_stat(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_read_text(self: Path, encoding: str = "utf-8", errors: str = "strict") -> str:
-        return "1 (proc) " + " ".join(str(i) for i in range(1, 21))
-
-    monkeypatch.setattr(store.Path, "read_text", fake_read_text)
-
-    assert store._process_start_ticks(1234) == 20
 
 
 def test_normalize_work_dir_handles_none_and_oserror_fallback(
@@ -348,7 +281,7 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
     )
 
     slots = [
-        store._slot_to_dict(
+        slot_to_dict(
             store.AdmissionSlot(
                 token="live",
                 owner_pid=1111,
@@ -358,7 +291,7 @@ def test_reconcile_stale_slots_removes_dead_entries_and_keeps_live_ones(
                 acquired_at="2026-04-19T00:00:00+00:00",
             )
         ),
-        store._slot_to_dict(
+        slot_to_dict(
             store.AdmissionSlot(
                 token="dead",
                 owner_pid=2222,
@@ -451,7 +384,7 @@ def test_read_active_slot_count_does_not_prune_or_rewrite(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch, live_pids={4242})
-    store._save_slots(
+    admission_persistence.save_slots(
         tmp_path,
         [
             store.AdmissionSlot(
@@ -490,7 +423,7 @@ def test_reserve_slot_honors_capacity_limit(
     [stored] = _read_slots_file(tmp_path)
     assert stored["owner_pid"] == 5151
     assert stored["process_start_ticks"] == 5151
-    monkeypatch.setattr(store, "timestamped_token", lambda prefix: f"{prefix}_second")
+    monkeypatch.setattr(persistence_utils, "timestamped_token", lambda prefix: f"{prefix}_second")
     assert store.reserve_slot(tmp_path, 2, source="queue-4") == "slot_second"
     assert store.reserve_slot(tmp_path, 1, source="queue-3") is None
 
@@ -501,7 +434,7 @@ def test_reserve_slot_retries_collision_and_mutates_only_selected_owner(
 ) -> None:
     _patch_deterministic_liveness(monkeypatch)
     generated = iter(["slot_same", "slot_same", "slot_unique"])
-    monkeypatch.setattr(store, "timestamped_token", lambda _prefix: next(generated))
+    monkeypatch.setattr(persistence_utils, "timestamped_token", lambda _prefix: next(generated))
 
     first = store.reserve_slot(tmp_path, 2, source="first", state="reserved")
     second = store.reserve_slot(tmp_path, 2, source="second", state="reserved")
@@ -533,7 +466,7 @@ def test_reserve_slot_permanent_collision_preserves_store(
     admission_path = tmp_path / store.ADMISSION_FILE_NAME
     original = admission_path.read_bytes()
 
-    with pytest.raises(RuntimeError, match="unique admission slot token"):
+    with pytest.raises(RuntimeError, match="unique slot token"):
         store.reserve_slot(tmp_path, 2, source="second")
 
     assert admission_path.read_bytes() == original
@@ -554,7 +487,7 @@ def test_save_slots_rejects_duplicate_tokens_before_replace(
     [slot] = store.list_all_slots(tmp_path)
 
     with pytest.raises(store.AdmissionStoreCorruptError, match="duplicate token"):
-        store._save_slots(tmp_path, [slot, replace(slot, source="wrong-owner")])
+        admission_persistence.save_slots(tmp_path, [slot, replace(slot, source="wrong-owner")])
 
     assert admission_path.read_bytes() == original
     [remaining] = store.list_all_slots(tmp_path)
@@ -693,7 +626,7 @@ def test_list_slots_does_not_rewrite_an_unchanged_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch, live_pids={4242})
-    store._save_slots(
+    admission_persistence.save_slots(
         tmp_path,
         [
             store.AdmissionSlot(
@@ -720,7 +653,7 @@ def test_list_slots_still_drops_a_dead_owner_from_the_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch, live_pids={4242})
-    store._save_slots(
+    admission_persistence.save_slots(
         tmp_path,
         [
             store.AdmissionSlot(
@@ -751,7 +684,7 @@ def test_reserve_slot_at_capacity_does_not_rewrite_the_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_deterministic_liveness(monkeypatch, live_pids={4242})
-    store._save_slots(
+    admission_persistence.save_slots(
         tmp_path,
         [
             store.AdmissionSlot(
@@ -780,7 +713,7 @@ def test_slot_row_with_a_field_outside_the_schema_fails_closed(
     token = store.reserve_slot(tmp_path, 1, source="orca_auto.orca.queue_worker")
     assert token is not None
     [current] = store.list_all_slots(tmp_path)
-    raw = {**store._slot_to_dict(current), "workflow_id": "legacy"}
+    raw = {**slot_to_dict(current), "workflow_id": "legacy"}
     (tmp_path / store.ADMISSION_FILE_NAME).write_text(json.dumps([raw]), encoding="utf-8")
     with pytest.raises(store.AdmissionStoreCorruptError):
         store.list_slots(tmp_path)

@@ -6,7 +6,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.coercion import positive_int
 from orca_auto.core.utils.lock import held_file_lock_payload
 from orca_auto.core.utils.persistence import now_utc_iso
@@ -68,13 +67,3 @@ def run_lock_is_held(
         logger=logger,
         lock_file_name=lock_file_name,
     ).held
-
-
-def read_pid_file(pid_path: Path) -> int | None:
-    return process_utils.read_live_pid_file(
-        pid_path,
-        is_process_alive_fn=process_utils.is_process_alive,
-        process_start_ticks_fn=process_utils.process_start_ticks,
-        boot_id_fn=process_utils.linux_boot_id,
-        remove_file_fn=process_utils.remove_file_silent,
-    )

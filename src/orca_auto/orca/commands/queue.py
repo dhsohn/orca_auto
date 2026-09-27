@@ -6,9 +6,10 @@ import argparse
 import logging
 from pathlib import Path
 
+from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
+
 from ..cli_logging import configure_logging
 from ..config import load_config
-from ..queue.orphans import read_worker_pid
 from ..queue.worker import OrcaQueueWorker
 
 logger = logging.getLogger(__name__)
@@ -25,19 +26,14 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_queue_worker(args: argparse.Namespace) -> int:
     cfg = load_config(args.config)
     allowed_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
-    existing_pid = read_worker_pid(allowed_root)
+    existing_pid = read_worker_pid_file(allowed_root)
     if existing_pid is not None:
         logger.error(
             "Worker already running (pid=%d). Check the active systemd service.",
             existing_pid,
         )
         return 1
-    worker = OrcaQueueWorker(
-        cfg,
-        str(args.config),
-        max_concurrent=max(1, int(cfg.runtime.max_concurrent)),
-    )
-    return worker.run()
+    return OrcaQueueWorker(cfg, str(args.config)).run()
 
 
 def main(argv: list[str] | None = None) -> int:

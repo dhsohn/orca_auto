@@ -122,9 +122,8 @@ def isolated(tmp_path: Path, isolated_python: Path) -> _IsolatedInstallation:
 
     runtime = tmp_path / "runtime"
     runs = runtime / "runs"
-    admission = runtime / "admission"
+    admission = runs / ".admission"
     runs.mkdir(parents=True)
-    admission.mkdir()
     counter = runtime / "fake-engine-count"
     executable = runtime / "fake-orca"
     executable.write_text(
@@ -156,10 +155,7 @@ def isolated(tmp_path: Path, isolated_python: Path) -> _IsolatedInstallation:
         json.dumps(
             {
                 "runs_root": str(runs),
-                "scheduler": {
-                    "admission_root": str(admission),
-                    "max_active_simulations": 1,
-                },
+                "scheduler": {"max_active_simulations": 1},
                 "resources": {"max_cores_per_task": 1, "max_memory_gb_per_task": 1},
                 "orca": {"paths": {"orca_executable": str(executable)}},
                 "messenger": {},
@@ -205,7 +201,7 @@ def test_worker_runs_fake_orca_child_from_an_isolated_installation(
         from orca_auto.orca.queue.worker import OrcaQueueWorker
 
         cfg = load_config(sys.argv[1])
-        worker = OrcaQueueWorker(cfg, sys.argv[1], max_concurrent=1)
+        worker = OrcaQueueWorker(cfg, sys.argv[1])
         worker.poll_interval_seconds = 0.01
         assert worker.run_once(idle_message=None, blocked_message=None) == 0
         entries = list_queue(sys.argv[2])

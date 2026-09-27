@@ -27,7 +27,8 @@ from pathlib import Path
 from orca_auto.cli import main as cli_main
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.config import load_config
-from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
+from orca_auto.orca.queue.adapter import list_queue
+from orca_auto.orca.queue.entries import queue_entry_reaction_dir
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_state
 from tests.contracts.report_verifier import load_report_json
@@ -35,11 +36,10 @@ from tests.contracts.report_verifier import load_report_json
 repo_root = Path(sys.argv[1]).resolve()
 workdir = Path(sys.argv[2]).resolve()
 allowed_root = workdir / "orca_runs"
-admission_root = workdir / "admission"
 bin_dir = workdir / "bin"
 reaction_dir = allowed_root / "demo_project" / "water_opt"
 
-for path in (allowed_root, admission_root, bin_dir, reaction_dir):
+for path in (allowed_root, bin_dir, reaction_dir):
     path.mkdir(parents=True, exist_ok=True)
 
 fake_orca = bin_dir / "fake_orca.py"
@@ -67,10 +67,7 @@ config_path.write_text(
     json.dumps(
         {
             "runs_root": str(allowed_root),
-            "scheduler": {
-                "max_active_simulations": 1,
-                "admission_root": str(admission_root),
-            },
+            "scheduler": {"max_active_simulations": 1},
             "orca": {
                 "paths": {"orca_executable": str(fake_orca)},
             },
@@ -103,7 +100,7 @@ if len(matches) != 1:
 if matches[0].status != QueueStatus.PENDING:
     raise SystemExit(f"expected pending queue entry, got {matches[0].status}")
 
-worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path), max_concurrent=1)
+worker = OrcaQueueWorker(load_config(str(config_path)), str(config_path))
 worker.poll_interval_seconds = 0.01
 worker_rc = worker.run_once(idle_message=None, blocked_message=None)
 if worker_rc != 0:

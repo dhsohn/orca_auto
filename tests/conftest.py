@@ -37,16 +37,12 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca import scratch_config as _scratch_config
+from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.queue import worker_tracking
 from orca_auto.orca.queue.adapter import worker_log_path
-from orca_auto.orca.queue.entries import (
-    QUEUE_APP_NAME,
-    QUEUE_ENGINE,
-    QUEUE_TASK_KIND,
-    entry_metadata,
-)
+from orca_auto.orca.queue.entries import entry_metadata
 from orca_auto.orca.queue.roots import dequeue_next_entry
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state import finalize_state, new_state, write_state
@@ -159,21 +155,19 @@ def make_app_cfg(
     *,
     orca_executable: str | Path = "",
     max_concurrent: int | None = None,
-    admission_root: str | Path | None = None,
-    admission_limit: int | None = None,
     resources: CommonResourceConfig | None = None,
     scratch: ScratchConfig | None = None,
     messenger: MessengerConfig | None = None,
 ) -> AppConfig:
-    """Build an ``AppConfig`` from the real dataclasses with test-friendly defaults."""
+    """Build an ``AppConfig`` from the real dataclasses with test-friendly defaults.
+
+    Like ``load_config``, the admission store is ``admission_dir(runs_root)``
+    and ``max_concurrent`` is also the admission limit.
+    """
 
     runtime_fields: dict[str, Any] = {"allowed_root": str(runs_root)}
     if max_concurrent is not None:
         runtime_fields["max_concurrent"] = max_concurrent
-    if admission_root is not None:
-        runtime_fields["admission_root"] = str(admission_root)
-    if admission_limit is not None:
-        runtime_fields["admission_limit"] = admission_limit
     return AppConfig(
         runtime=OrcaRuntimeConfig(**runtime_fields),
         paths=PathsConfig(orca_executable=str(orca_executable)),
@@ -197,9 +191,7 @@ def app_cfg(tmp_path: Path, fake_orca: Path) -> Callable[..., AppConfig]:
 def config_yaml_text(cfg: AppConfig) -> str:
     """Render ``cfg`` as the ``orca_auto.yaml`` text ``load_config`` reads back.
 
-    ``scheduler`` is written whenever ``max_concurrent`` or ``admission_root``
-    leaves its default, which (as in production) pins ``admission_limit`` to
-    ``max_active_simulations`` on reload.
+    ``scheduler`` is written whenever ``max_concurrent`` leaves its default.
     """
 
     payload: dict[str, Any] = {
@@ -212,8 +204,6 @@ def config_yaml_text(cfg: AppConfig) -> str:
     scheduler: dict[str, Any] = {}
     if cfg.runtime.max_concurrent != OrcaRuntimeConfig.max_concurrent:
         scheduler["max_active_simulations"] = cfg.runtime.max_concurrent
-    if cfg.runtime.admission_root:
-        scheduler["admission_root"] = cfg.runtime.admission_root
     if scheduler:
         payload["scheduler"] = scheduler
     orca: dict[str, Any] = {"paths": {"orca_executable": cfg.paths.orca_executable}}
@@ -306,10 +296,10 @@ def make_queue_entry(
         )
     return QueueEntry(
         queue_id=resolved_queue_id,
-        app_name=QUEUE_APP_NAME,
+        app_name=ORCA_AUTO_ORCA_APP_NAME,
         task_id=task_id or timestamped_token("orca"),
-        task_kind=QUEUE_TASK_KIND,
-        engine=QUEUE_ENGINE,
+        task_kind=ORCA_TASK_KIND,
+        engine=ORCA_ENGINE,
         status=status,
         priority=priority,
         metadata=row_metadata,
@@ -434,9 +424,7 @@ class ProcessIdentity:
 def stable_process_identity(monkeypatch: pytest.MonkeyPatch) -> ProcessIdentity:
     """Pin every process-identity seam (start ticks, boot id, liveness) to one ``ProcessIdentity``."""
 
-    from orca_auto.core.admission import store as admission_store
     from orca_auto.core.queue import processes as queue_processes
-    from orca_auto.core.queue import publication as queue_publication
     from orca_auto.core.utils import process as process_utils
 
     identity = ProcessIdentity()
@@ -453,10 +441,7 @@ def stable_process_identity(monkeypatch: pytest.MonkeyPatch) -> ProcessIdentity:
     monkeypatch.setattr(process_utils, "process_start_ticks", start_ticks)
     monkeypatch.setattr(process_utils, "linux_boot_id", boot_id)
     monkeypatch.setattr(process_utils, "is_process_alive", alive)
-    monkeypatch.setattr(admission_store, "_process_start_ticks", start_ticks)
-    monkeypatch.setattr(admission_store, "_linux_boot_id", boot_id)
     monkeypatch.setattr(queue_processes, "_pid_exists", alive)
-    monkeypatch.setattr(queue_publication, "_linux_boot_id", boot_id)
     return identity
 
 

@@ -14,12 +14,15 @@ from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from ..config import AppConfig
 from ..notifications import dispatch_notification, notification_channel, notify_queue_enqueued_event
 from ..types import QueueEnqueuedNotification
-from .entries import queue_entry_force, queue_entry_reaction_dir
-from .identity import entry_matches_engine_identity
-from .roots import queue_roots
+from .entries import (
+    QUEUED_NOTIFICATION_PENDING_KEY,
+    is_orca_queue_entry,
+    queue_entry_force,
+    queue_entry_reaction_dir,
+)
+from .roots import queue_root
 
 logger = logging.getLogger(__name__)
-QUEUED_NOTIFICATION_PENDING_KEY = "orca_queued_notification_pending"
 
 
 def _claim_queued_notifications(root: Path) -> list[QueueEnqueuedNotification]:
@@ -27,7 +30,7 @@ def _claim_queued_notifications(root: Path) -> list[QueueEnqueuedNotification]:
         notifications: list[QueueEnqueuedNotification] = []
         for index, entry in enumerate(entries):
             if (
-                not entry_matches_engine_identity(entry, "orca")
+                not is_orca_queue_entry(entry)
                 or entry.status != QueueStatus.PENDING
                 or entry.cancel_requested
                 or queue_record_sync_state(entry) != QUEUE_RECORD_SYNC_COMPLETE
@@ -59,13 +62,11 @@ def notify_queued_jobs(cfg: AppConfig) -> None:
     channel = notification_channel(cfg)
     if not channel.enabled:
         return
-    for root in queue_roots(cfg):
-        try:
-            notifications = _claim_queued_notifications(root)
-        except Exception:  # An ambiguous claim must never send or gate admission.
-            logger.exception("Queued notification claim failed: %s", root)
-            continue
-        for event in notifications:
-            dispatch_notification(
-                partial(notify_queue_enqueued_event, channel, event), kind="queued"
-            )
+    root = queue_root(cfg)
+    try:
+        notifications = _claim_queued_notifications(root)
+    except Exception:  # An ambiguous claim must never send or gate admission.
+        logger.exception("Queued notification claim failed: %s", root)
+        return
+    for event in notifications:
+        dispatch_notification(partial(notify_queue_enqueued_event, channel, event), kind="queued")

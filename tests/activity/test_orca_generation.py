@@ -8,11 +8,13 @@ import pytest
 from orca_auto.activity._orca import orca_records
 from orca_auto.activity._orca_index import query_listing
 from orca_auto.activity.model import ActivityListRequest, ActivitySourceRequest
-from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.orca.config import load_config
 from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.queue import adapter
-from orca_auto.orca.queue.terminal_replay import TERMINAL_REPLAY_METADATA_KEY
+from orca_auto.orca.queue.entries import (
+    TERMINAL_REPLAY_METADATA_KEY,
+    queue_entry_generation_token,
+)
 from orca_auto.orca.state import new_state, write_state
 from orca_auto.orca.submission import create_queued_submission
 from tests.conftest import claim_next_entry

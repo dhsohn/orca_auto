@@ -14,12 +14,12 @@ from orca_auto.core.queue.child.process import live_queue_slot_keys_for_slots
 from orca_auto.core.queue.types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
 from orca_auto.core.utils.process_tracking import run_lock_is_held
-from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
 from ..job_locations._generation import payload_matches_queue_generation
 from ..state_reading import load_state
 from ..statuses import RunStatus
 from .entries import (
+    is_orca_queue_entry,
     queue_entry_id,
     queue_entry_reaction_dir,
     queue_entry_status,
@@ -30,11 +30,6 @@ from .terminal_replay import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def read_worker_pid(allowed_root: Path) -> int | None:
-    """The live pid recorded by the ORCA queue worker under *allowed_root*, if any."""
-    return read_worker_pid_file(allowed_root)
 
 
 def apply_terminal_reconciliation(
@@ -160,16 +155,15 @@ def reconcile_orphaned_running_entries(
     ``only_reaction_dirs`` (resolved paths) narrows the pass to rows of those
     directories; every other running row is left untouched.
     """
-    if not ignore_worker_pid and read_worker_pid(allowed_root) is not None:
+    if not ignore_worker_pid and read_worker_pid_file(allowed_root) is not None:
         return 0
 
-    changed = 0
-    with _queue_store.queue_lock(allowed_root):
-        entries = _queue_store.load_entries(allowed_root)
-        owned_entries = [entry for entry in entries if entry_matches_engine_identity(entry, "orca")]
+    def reconcile(entries: list[QueueEntry]) -> tuple[int, bool]:
+        changed = 0
+        owned_entries = [entry for entry in entries if is_orca_queue_entry(entry)]
         prior_evidence_by_key = _prior_terminal_generation_evidence(owned_entries)
         for index, entry in enumerate(entries):
-            if not entry_matches_engine_identity(entry, "orca"):
+            if not is_orca_queue_entry(entry):
                 continue
             if queue_entry_status(entry) != QueueStatus.RUNNING.value:
                 continue
@@ -202,10 +196,9 @@ def reconcile_orphaned_running_entries(
                 continue
             entries[index] = updated
             changed += 1
+        return changed, changed > 0
 
-        if changed:
-            _queue_store.save_entries(allowed_root, entries)
-    return changed
+    return _queue_store.mutate_entries(allowed_root, reconcile)
 
 
 class DeadRunningRowUnjudgeableError(ValueError):
@@ -213,10 +206,8 @@ class DeadRunningRowUnjudgeableError(ValueError):
 
 
 def _has_running_row_for_dir(allowed_root: Path, normalized_dir: str) -> bool:
-    with _queue_store.queue_lock(allowed_root):
-        entries = _queue_store.load_entries(allowed_root)
-    for entry in entries:
-        if not entry_matches_engine_identity(entry, "orca"):
+    for entry in _queue_store.list_queue(allowed_root):
+        if not is_orca_queue_entry(entry):
             continue
         if queue_entry_status(entry) != QueueStatus.RUNNING.value:
             continue
@@ -260,7 +251,7 @@ def reconcile_dead_running_rows_for_dir(
     resubmitted until a worker restarted, because its stale RUNNING row rejects
     the new submission as an active duplicate.
     """
-    if read_worker_pid(allowed_root) is not None:
+    if read_worker_pid_file(allowed_root) is not None:
         return 0
     normalized_dir = str(Path(reaction_dir).expanduser().resolve())
     if not _has_running_row_for_dir(allowed_root, normalized_dir):
@@ -347,7 +338,7 @@ def _reconcile_entry(
         logger.info("Reconciled orphaned entry %s -> cancelled (cancel_requested)", queue_id)
         return updated
 
-    updated = replace(entry, status=QueueStatus.PENDING, started_at="")
+    updated = _queue_transitions.requeued_entry(entry, clear_error_and_cancel=False)
     logger.info("Reconciled orphaned entry %s -> pending (re-queue)", queue_id)
     return updated
 

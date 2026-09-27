@@ -23,6 +23,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 - Public contract: an `admission_slots.json` row that carries the retired
   `workflow_id` field is rejected as corrupt instead of being read. 8.x never
   writes it; upgrading directly from 7.0.x needs no reserved or active slots.
+- Public contract: `scheduler.admission_root` is removed
+  ([ADR 0007](docs/adr/0007-one-admission-store-under-runs-root.md)). Admission
+  state always lives in `<runs_root>/.admission` and its limit is always
+  `scheduler.max_active_simulations`. A config that still sets the key is
+  rejected with a one-line hint to delete it, `systemd install` renders
+  `ReadWritePaths` with `runs_root` only and no longer requires an explicit
+  admission directory, and `service restart` locks the one admission store of
+  the worker it restarts. Delete the key in an idle window before installing
+  the new units; see
+  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
 - The worker and recovery rebind no longer check queue-row metadata for the
   pre-4.0 `max_retries` setting. Such rows carry a version-2 execution snapshot
   and are still refused before execution, now with the execution-snapshot error
@@ -130,6 +140,30 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Public contract: one generation identity now decides whether a queue row is
+  still the generation a writer read
+  ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),
+  and the `queue_generation` value that
+  `job_state.json` records is the SHA-256 of that identity. The value is
+  opaque and comparable only within one major version. The identity is the
+  row's queue ID, app, task ID, task kind, engine, priority, submission time
+  and its metadata without the lifecycle keys: admission deferral, run ID,
+  terminal replay marker and fence, queued-notification claim and publication
+  lease. Every writer, the publication repair, the cancellation checks and the
+  worker's claim compare it. `queue cancel` no longer answers "already
+  terminal" when the worker claimed the job's queued notification between
+  reading the row and cancelling it. Metadata keys no current writer sets
+  (`attempt`, `candidate_count`, `retained_conformer_count`, `execution_dir`,
+  `terminal_artifacts`, `terminal_repair_blocked_reason`) now count as
+  identity like any other key. Rows that carry the queued-notification flag,
+  nearly every row 8.x wrote, get a different `queue_generation`, and nothing
+  is rewritten. Only the queue listing compares it, for a running row that has
+  no run ID yet: until a job still running across an upgrade outside an idle
+  window finishes, it is listed twice (its queue row and a run-state row),
+  `queue cancel <run ID>` cannot find it and `queue cancel <job directory>`
+  fails as ambiguous; cancel it by queue ID. Upgrade and roll back only in an
+  idle window (`active_simulations: 0`), where neither sees a difference; see
+  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
 - A job queued under 8.0.1 is verified against the new binding rules when it
   is claimed. Its input fails verification before ORCA starts, and must be
   resubmitted, when it has a file reference the new rules bind or refuse (ESD

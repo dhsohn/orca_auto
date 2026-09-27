@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.queue import publication, store
+from orca_auto.core.queue import persistence, publication, store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from tests.queue_store_helpers import (
@@ -33,7 +33,7 @@ def test_entry_to_dict_serializes_status_value() -> None:
         started_at="2026-04-19T00:00:01+00:00",
     )
 
-    serialized = store.entry_to_dict(entry)
+    serialized = persistence.entry_to_dict(entry)
 
     assert serialized["status"] == "running"
     assert serialized["queue_id"] == "q-1"
@@ -100,45 +100,6 @@ def test_list_queue_rejects_blank_or_duplicate_queue_ids(
         store.list_queue(tmp_path)
 
 
-def test_queue_store_facade_groups_root_and_overrides(tmp_path: Path) -> None:
-    entries = [
-        store.QueueEntry(
-            queue_id="q-1",
-            app_name="app",
-            task_id="task",
-            task_kind="kind",
-            engine="engine",
-        )
-    ]
-    saved: list[tuple[Path, Sequence[store.QueueEntry]]] = []
-    queue_store = store.QueueStore.for_root(
-        tmp_path,
-        load_entries_fn=lambda root: entries,
-        save_entries_fn=lambda root, updated: saved.append((root, list(updated))),
-    )
-
-    def mark_running(
-        entry: store.QueueEntry,
-    ) -> tuple[store.QueueEntry, store.QueueEntry]:
-        updated = store.QueueEntry(
-            queue_id=entry.queue_id,
-            app_name=entry.app_name,
-            task_id=entry.task_id,
-            task_kind=entry.task_kind,
-            engine=entry.engine,
-            status=QueueStatus.RUNNING,
-        )
-        return updated, updated
-
-    assert queue_store.list_entries() == entries
-    updated = queue_store.mutate_entry_by_id("q-1", mark_running, missing_result=None)
-
-    assert updated is not None
-    assert updated.status == QueueStatus.RUNNING
-    assert entries[0].status == QueueStatus.RUNNING
-    assert saved == [(tmp_path.resolve(), entries)]
-
-
 def test_mutate_entries_compensates_row_when_post_commit_contract_rejects(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -146,7 +107,7 @@ def test_mutate_entries_compensates_row_when_post_commit_contract_rejects(
     _install_deterministic_helpers(monkeypatch)
     stages: list[str] = []
     guard_error = RuntimeError("publication target moved")
-    row = store.entry_from_dict(_entry("q-1", task_id="task-1"))
+    row = persistence.entry_from_dict(_entry("q-1", task_id="task-1"))
 
     def append(entries: list[QueueEntry]) -> tuple[QueueEntry, bool]:
         stages.append("before")
@@ -188,12 +149,6 @@ def test_after_commit_error_reports_unrestored_compensation(
             raise rollback_error
         persisted[:] = entries
 
-    queue_store = store.QueueStore.for_root(
-        tmp_path,
-        load_entries_fn=load,
-        save_entries_fn=save,
-    )
-
     def append(entries: list[str]) -> tuple[str, bool]:
         entries.append("provisional")
         return "provisional-result", True
@@ -201,8 +156,11 @@ def test_after_commit_error_reports_unrestored_compensation(
     def reject_after_commit() -> None:
         raise guard_error
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
-        queue_store.mutate_entries(
+        store.mutate_entries(
+            tmp_path,
             append,
             after_commit_fn=reject_after_commit,
         )
@@ -241,12 +199,6 @@ def test_after_commit_error_reports_unknown_compensation_when_reload_fails(
             raise OSError("compensation write failed")
         persisted[:] = entries
 
-    queue_store = store.QueueStore.for_root(
-        tmp_path,
-        load_entries_fn=load,
-        save_entries_fn=save,
-    )
-
     def append(entries: list[str]) -> tuple[str, bool]:
         entries.append("provisional")
         return "provisional-result", True
@@ -254,8 +206,14 @@ def test_after_commit_error_reports_unknown_compensation_when_reload_fails(
     def reject_after_commit() -> None:
         raise RuntimeError("publication target moved")
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
-        queue_store.mutate_entries(append, after_commit_fn=reject_after_commit)
+        store.mutate_entries(
+            tmp_path,
+            append,
+            after_commit_fn=reject_after_commit,
+        )
 
     error = error_info.value
     assert error.compensation_outcome == "unknown"
@@ -283,12 +241,6 @@ def test_after_commit_error_requires_clean_return_to_report_restored_compensatio
         if save_count == 2:
             raise rollback_error
 
-    queue_store = store.QueueStore.for_root(
-        tmp_path,
-        load_entries_fn=load,
-        save_entries_fn=save,
-    )
-
     def append(entries: list[str]) -> tuple[str, bool]:
         entries.append("provisional")
         return "provisional-result", True
@@ -296,8 +248,14 @@ def test_after_commit_error_requires_clean_return_to_report_restored_compensatio
     def reject_after_commit() -> None:
         raise RuntimeError("publication target moved")
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
-        queue_store.mutate_entries(append, after_commit_fn=reject_after_commit)
+        store.mutate_entries(
+            tmp_path,
+            append,
+            after_commit_fn=reject_after_commit,
+        )
 
     error = error_info.value
     assert error.compensation_outcome == "unknown"
@@ -328,12 +286,6 @@ def test_after_commit_base_exception_is_wrapped_after_clean_compensation(
     def save(_root: Path, entries: Sequence[str]) -> None:
         persisted[:] = entries
 
-    queue_store = store.QueueStore.for_root(
-        tmp_path,
-        load_entries_fn=load,
-        save_entries_fn=save,
-    )
-
     def append(entries: list[str]) -> tuple[str, bool]:
         entries.append("provisional")
         return "provisional-result", True
@@ -341,8 +293,14 @@ def test_after_commit_base_exception_is_wrapped_after_clean_compensation(
     def reject_after_commit() -> None:
         raise guard_error
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
-        queue_store.mutate_entries(append, after_commit_fn=reject_after_commit)
+        store.mutate_entries(
+            tmp_path,
+            append,
+            after_commit_fn=reject_after_commit,
+        )
 
     error = error_info.value
     assert error.after_commit_error is guard_error
@@ -382,18 +340,15 @@ def test_compensation_base_exception_is_preserved_and_fails_closed(
             raise compensation_error
         persisted[:] = entries
 
-    queue_store = store.QueueStore.for_root(
-        tmp_path,
-        load_entries_fn=load,
-        save_entries_fn=save,
-    )
-
     def append(entries: list[str]) -> tuple[str, bool]:
         entries.append("provisional")
         return "provisional-result", True
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
-        queue_store.mutate_entries(
+        store.mutate_entries(
+            tmp_path,
             append,
             after_commit_fn=lambda: (_ for _ in ()).throw(guard_error),
         )
@@ -438,18 +393,15 @@ def test_compensation_verification_base_exception_is_preserved_as_unknown(
             raise OSError("compensation write failed")
         persisted[:] = entries
 
-    queue_store = store.QueueStore.for_root(
-        tmp_path,
-        load_entries_fn=load,
-        save_entries_fn=save,
-    )
-
     def append(entries: list[str]) -> tuple[str, bool]:
         entries.append("provisional")
         return "provisional-result", True
 
+    monkeypatch.setattr(store, "load_entries", load)
+    monkeypatch.setattr(store, "save_entries", save)
     with pytest.raises(store.QueueAfterCommitError) as error_info:
-        queue_store.mutate_entries(
+        store.mutate_entries(
+            tmp_path,
             append,
             after_commit_fn=lambda: (_ for _ in ()).throw(RuntimeError("publication target moved")),
         )
@@ -587,7 +539,7 @@ def test_select_next_claimable_entry_accept_entry_fn_skips_other_engine_entries(
     # Skips the higher-priority ORCA entry, selects the other app's one.
     selected = select_next_claimable_entry(store.list_queue(tmp_path), accept_entry_fn=accept_other)
     assert selected is not None and selected.queue_id == "q-other"
-    claimed = store.dequeue_entry_if_pending(tmp_path, selected.queue_id, expected_entry=selected)
+    claimed = store.dequeue_entry_if_pending(tmp_path, selected.queue_id)
     assert claimed is not None and claimed.queue_id == "q-other"
 
     # Only the ORCA entry remains; the other app's filter now selects nothing.
@@ -647,34 +599,6 @@ def test_dequeue_entry_if_pending_ignores_cancel_requested_entry(
     assert entries[0].cancel_requested is True
 
 
-def test_dequeue_entry_if_pending_rejects_replacement_with_same_queue_id(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    _queue_file(tmp_path).write_text(
-        json.dumps([_entry("q-same", task_id="task-a")], indent=2),
-        encoding="utf-8",
-    )
-    [selected] = store.list_queue(tmp_path)
-    _queue_file(tmp_path).write_text(
-        json.dumps([_entry("q-same", task_id="task-b")], indent=2),
-        encoding="utf-8",
-    )
-
-    assert (
-        store.dequeue_entry_if_pending(
-            tmp_path,
-            "q-same",
-            expected_entry=selected,
-        )
-        is None
-    )
-    [replacement] = store.list_queue(tmp_path)
-    assert replacement.task_id == "task-b"
-    assert replacement.status == QueueStatus.PENDING
-
-
 def test_update_metadata_merges_without_changing_lifecycle_fields(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -704,54 +628,6 @@ def test_update_metadata_merges_without_changing_lifecycle_fields(
         "added": 1,
     }
     assert store.update_metadata(tmp_path, "missing", {"sync": "complete"}) is None
-
-
-def test_update_metadata_can_fence_the_exact_queue_generation(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    submitted = _enqueue(
-        tmp_path,
-        app_name="app",
-        task_id="task",
-        task_kind="kind",
-        engine="engine",
-        metadata={"generation": "original"},
-    )
-    current = store.update_metadata(
-        tmp_path,
-        submitted.queue_id,
-        {"attached": True},
-        expected_entry=submitted,
-        expected_task_id=submitted.task_id,
-    )
-
-    assert current is not None
-    assert current.metadata["attached"] is True
-    assert (
-        store.update_metadata(
-            tmp_path,
-            submitted.queue_id,
-            {"stale_writer": True},
-            expected_entry=submitted,
-            expected_task_id=submitted.task_id,
-        )
-        is None
-    )
-    assert (
-        store.update_metadata(
-            tmp_path,
-            submitted.queue_id,
-            {"wrong_task": True},
-            expected_entry=current,
-            expected_task_id="replacement-task",
-        )
-        is None
-    )
-    persisted = store.list_queue(tmp_path)[0]
-    assert "stale_writer" not in persisted.metadata
-    assert "wrong_task" not in persisted.metadata
 
 
 def test_clear_terminal_removes_terminal_entries_and_can_keep_latest(

@@ -335,8 +335,7 @@ def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
     runs = root / "runs"
     job = runs / "public_h2"
     job.mkdir(parents=True)
-    admission = root / "admission"
-    admission.mkdir()
+    admission = runs / ".admission"
     counter = root / "engine-count"
     engine = root / "fake-orca"
     engine.write_text(
@@ -364,7 +363,7 @@ def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
         json.dumps(
             {
                 "runs_root": str(runs),
-                "scheduler": {"admission_root": str(admission), "max_active_simulations": 1},
+                "scheduler": {"max_active_simulations": 1},
                 "resources": {"max_cores_per_task": 1, "max_memory_gb_per_task": 1},
                 "orca": {"paths": {"orca_executable": str(engine)}},
                 "messenger": {},
@@ -382,7 +381,7 @@ def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
     from orca_auto.orca.config import load_config
     from orca_auto.orca.queue.adapter import list_queue
     from orca_auto.orca.queue.worker import OrcaQueueWorker
-    worker = OrcaQueueWorker(load_config(sys.argv[1]), sys.argv[1], max_concurrent=1)
+    worker = OrcaQueueWorker(load_config(sys.argv[1]), sys.argv[1])
     worker.poll_interval_seconds = 0.01
     assert worker.run_once(idle_message=None, blocked_message=None) == 0
     entries = list_queue(sys.argv[2])

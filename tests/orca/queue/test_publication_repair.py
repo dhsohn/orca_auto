@@ -20,9 +20,7 @@ from orca_auto.core.queue.store import update_metadata
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.queue import publication_repair as publication_mod
 from orca_auto.orca.queue.adapter import enqueue, list_queue
-from orca_auto.orca.queue.terminal_replay import (
-    TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
-)
+from orca_auto.orca.queue.entries import TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY
 from tests.conftest import claim_next_entry, enqueue_entry, make_app_cfg
 from tests.queue_worker_helpers import (
     current_orca_queue_metadata as _current_orca_queue_metadata,

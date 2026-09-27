@@ -7,7 +7,7 @@ from dataclasses import replace
 import pytest
 
 from orca_auto.core.messaging.channel import SendResult
-from orca_auto.core.queue import store
+from orca_auto.core.queue import persistence, store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -16,6 +16,7 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import submission
 from orca_auto.orca.queue import adapter, notifications
+from orca_auto.orca.queue.entries import QUEUED_NOTIFICATION_PENDING_KEY
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from tests.conftest import RecordingChannel, make_app_cfg, make_queue_entry
 from tests.orca.test_submission import _real_submission
@@ -55,14 +56,14 @@ def test_slow_queued_delivery_does_not_delay_submission_or_reservation(tmp_path,
     reserved = None
     with ThreadPoolExecutor(max_workers=1) as pool:
         try:
-            future = pool.submit(worker._reserve_next_entry)
+            future = pool.submit(worker._admit_next)
             assert entered.wait(5)
             status, reserved = future.result(timeout=5)
             assert status == "processed" and reserved is not None
             assert not release.is_set()
             current = adapter.list_queue(tmp_path)[0]
             assert current.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
-            assert current.metadata[notifications.QUEUED_NOTIFICATION_PENDING_KEY] is False
+            assert current.metadata[QUEUED_NOTIFICATION_PENDING_KEY] is False
             notifications.notify_queued_jobs(cfg)  # A replacement owner cannot claim it twice.
             assert len(sends) == 1
         finally:
@@ -77,10 +78,10 @@ def test_ambiguous_queued_claim_never_sends(tmp_path, monkeypatch, after_commit)
     entry = make_queue_entry(
         reaction_dir=tmp_path / "job",
         metadata={
-            notifications.QUEUED_NOTIFICATION_PENDING_KEY: True,
+            QUEUED_NOTIFICATION_PENDING_KEY: True,
         },
     )
-    store.save_entries(tmp_path, [entry])
+    persistence.save_entries(tmp_path, [entry])
     channel = RecordingChannel()
     monkeypatch.setattr(notifications, "notification_channel", lambda _cfg: channel)
 
@@ -106,7 +107,7 @@ def test_queued_delivery_waits_for_publication_and_ignores_cancelled_or_old_rows
     ready = make_queue_entry(
         reaction_dir=tmp_path / "ready",
         metadata={
-            notifications.QUEUED_NOTIFICATION_PENDING_KEY: True,
+            QUEUED_NOTIFICATION_PENDING_KEY: True,
         },
     )
     waiting = replace(
@@ -119,7 +120,7 @@ def test_queued_delivery_waits_for_publication_and_ignores_cancelled_or_old_rows
     )
     cancelled = replace(ready, queue_id="cancelled", status=QueueStatus.CANCELLED)
     old = make_queue_entry(reaction_dir=tmp_path / "old")
-    store.save_entries(tmp_path, [ready, waiting, cancelled, old])
+    persistence.save_entries(tmp_path, [ready, waiting, cancelled, old])
     cfg = make_app_cfg(tmp_path)
     notifications.notify_queued_jobs(cfg)
     _join_senders()

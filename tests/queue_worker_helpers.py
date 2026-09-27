@@ -26,15 +26,16 @@ from unittest.mock import patch
 
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.messaging.channel import SendResult
+from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.processes import ManagedProcess
-from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, load_config
 from orca_auto.orca.queue import replay as replay_mod
-from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
+from orca_auto.orca.queue.adapter import list_queue
+from orca_auto.orca.queue.entries import queue_entry_reaction_dir
 from orca_auto.orca.queue.models import OrcaRunningJob, OrcaWorkerReplayState
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
@@ -132,7 +133,7 @@ def write_completed_run_state(reaction_dir: Path) -> None:
     )
 
 
-def reconcile_statuses(worker: ReplayStateOwner) -> dict[tuple[str, str], str]:
+def reconcile_statuses(worker: ReplayStateOwner) -> dict[str, str]:
     statuses = worker.replay_state.reconcile_statuses
     assert statuses is not None
     return statuses
@@ -140,7 +141,6 @@ def reconcile_statuses(worker: ReplayStateOwner) -> dict[tuple[str, str], str]:
 
 def run_terminal_replay(
     worker: ReplayStateOwner,
-    tmp_path: Path,
     entry: QueueEntry,
     *,
     previous_status: str | None = None,
@@ -148,15 +148,11 @@ def run_terminal_replay(
     if previous_status is not None:
         state = worker.replay_state
         statuses = dict(state.reconcile_statuses or {})
-        statuses[(str(tmp_path.resolve()), entry.queue_id)] = previous_status
+        statuses[entry.queue_id] = previous_status
         state.reconcile_statuses = statuses
     with (
         patch.object(replay_mod, "recover_orphaned_engine_slots"),
-        patch.object(
-            replay_mod.roots,
-            "queue_entries_with_roots",
-            return_value=[(tmp_path, entry)],
-        ),
+        patch.object(replay_mod.roots, "list_orca_rows", return_value=[entry]),
         patch.object(
             replay_mod,
             "live_queue_slot_keys_for_slots",
@@ -319,7 +315,7 @@ def running_job(
     task_id: str | None = None,
 ) -> OrcaRunningJob:
     return OrcaRunningJob(
-        queue_root=worker.allowed_root,
+        queue_root=worker.queue_root,
         queue_id=entry.queue_id,
         reaction_dir=str(reaction_dir),
         process=process,

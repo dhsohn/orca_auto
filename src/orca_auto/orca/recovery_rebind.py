@@ -21,7 +21,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.child.execution import find_queue_entry_by_id
 from orca_auto.core.queue.child.process import entry_status_is_running
 from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
@@ -49,11 +48,11 @@ from .execution_binding._verify import orca_execution_started_evidence
 from .output_adoption import existing_completed_out
 from .queue.adapter import (
     get_cancel_requested,
-    list_queue,
-    queue_entry_reaction_dir,
+    get_entry_by_id,
     requeue_running_entry,
     update_metadata,
 )
+from .queue.entries import queue_entry_reaction_dir
 from .resource_directives import prepare_submission_resource_request
 from .run_lock import acquire_run_lock
 from .submission import mark_orca_snapshot_owned
@@ -86,14 +85,6 @@ def _completed_out_or_none(bound_selected: Path) -> dict[str, Any] | None:
             exc_info=True,
         )
         return None
-
-
-def _queue_entry_by_id(queue_root: Path, queue_id: str) -> QueueEntry | None:
-    return find_queue_entry_by_id(
-        queue_root,
-        queue_id,
-        list_queue_fn=list_queue,
-    )
 
 
 def _validated_recovery_rebind_claim(
@@ -193,7 +184,7 @@ def _reserve_recovery_rebind_claim(
             raise ValueError(
                 "ORCA crash recovery could not reserve its durable rebind claim on the queue row"
             )
-        claimed = _queue_entry_by_id(queue_root, str(entry.queue_id))
+        claimed = get_entry_by_id(queue_root, str(entry.queue_id))
         claimed_metadata = getattr(claimed, "metadata", None)
         if (
             claimed is None
@@ -245,7 +236,7 @@ def _publish_recovery_generation(
         cleanup_unowned_orca_execution_snapshot(reaction_dir, new_snapshot)
         raise
     marker_warning = mark_orca_snapshot_owned(queue_root, intent_token)
-    updated = _queue_entry_by_id(queue_root, str(entry.queue_id))
+    updated = get_entry_by_id(queue_root, str(entry.queue_id))
     updated_metadata = getattr(updated, "metadata", None)
     updated_snapshot = (
         updated_metadata.get("execution_snapshot") if isinstance(updated_metadata, dict) else None
@@ -319,7 +310,7 @@ def maybe_rebind_recovery_generation(
             str(entry.queue_id),
             expected_entry=entry,
         )
-        refreshed = _queue_entry_by_id(queue_root, str(entry.queue_id))
+        refreshed = get_entry_by_id(queue_root, str(entry.queue_id))
         return refreshed if refreshed is not None else entry
     count, pending_claim = _validated_recovery_rebind_claim(metadata, snapshot)
     cfg = cfg_factory()

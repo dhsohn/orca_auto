@@ -24,6 +24,7 @@ from orca_auto.core.statuses import (
 from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.process_tracking import run_lock_is_held
 
+from .queue import entries as queue_entries
 from .run_snapshot import RunSnapshot
 from .statuses import ACTIVE_RUN_STATUS_VALUES
 
@@ -42,14 +43,14 @@ def snapshot_reaction_dir(snapshot: RunSnapshot) -> str:
         return str(snapshot.reaction_dir)
 
 
-def queue_entry_status(queue_adapter: Any, entry: Any, snapshot: RunSnapshot | None) -> str:
+def queue_entry_status(entry: Any, snapshot: RunSnapshot | None) -> str:
     status = effective_queue_status(entry)
     if status != QueueStatus.RUNNING.value:
         return status
     snapshot_status = normalize_text(snapshot.status) if snapshot is not None else ""
     if snapshot_status and snapshot_status not in STALE_SNAPSHOT_STATUSES:
         return snapshot_status
-    reaction_dir = normalize_text(queue_adapter.queue_entry_reaction_dir(entry))
+    reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
     if reaction_dir and not run_lock_is_held(Path(reaction_dir), logger=_LOGGER):
         return STATUS_PENDING
     return snapshot_status or status
@@ -70,8 +71,8 @@ def snapshot_display_status(snapshot: RunSnapshot) -> str:
     return status
 
 
-def _resolved_entry_reaction_dir(queue_adapter: Any, entry: Any) -> str:
-    reaction_dir = normalize_text(queue_adapter.queue_entry_reaction_dir(entry))
+def _resolved_entry_reaction_dir(entry: Any) -> str:
+    reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
     if not reaction_dir:
         return ""
     try:
@@ -80,7 +81,7 @@ def _resolved_entry_reaction_dir(queue_adapter: Any, entry: Any) -> str:
         return reaction_dir
 
 
-def superseded_snapshot_dirs(queue_adapter: Any, entries: list[Any]) -> set[str]:
+def superseded_snapshot_dirs(entries: list[Any]) -> set[str]:
     """Reaction dirs whose only queue state is terminal.
 
     A finished/cancelled queue entry supersedes any run snapshot still parked at
@@ -91,10 +92,10 @@ def superseded_snapshot_dirs(queue_adapter: Any, entries: list[Any]) -> set[str]
     active: set[str] = set()
     terminal: set[str] = set()
     for entry in entries:
-        reaction_dir = _resolved_entry_reaction_dir(queue_adapter, entry)
+        reaction_dir = _resolved_entry_reaction_dir(entry)
         if not reaction_dir:
             continue
-        status = normalize_text(queue_adapter.queue_entry_status(entry))
+        status = normalize_text(queue_entries.queue_entry_status(entry))
         if status in _ORCA_ACTIVE_QUEUE_STATUSES:
             active.add(reaction_dir)
         elif status in _ORCA_TERMINAL_QUEUE_STATUSES:

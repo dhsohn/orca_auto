@@ -19,6 +19,12 @@ from typing import Any
 from orca_auto.core.statuses import STATUS_QUEUED
 
 from .. import submission
+from ..queue.entries import (
+    queue_entry_force,
+    queue_entry_id,
+    queue_entry_priority,
+    queue_entry_task_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +53,13 @@ def _queued_submission_payload(
     payload: dict[str, Any] = {
         "status": STATUS_QUEUED,
         "job_dir": str(reaction_dir),
-        "queue_id": submission.queue_adapter.queue_entry_id(entry),
+        "queue_id": queue_entry_id(entry),
     }
-    task_id = submission.queue_adapter.queue_entry_task_id(entry)
+    task_id = queue_entry_task_id(entry)
     if task_id:
         payload["job_id"] = task_id
-    payload["priority"] = submission.queue_adapter.queue_entry_priority(entry)
-    if submission.queue_adapter.queue_entry_force(entry):
+    payload["priority"] = queue_entry_priority(entry)
+    if queue_entry_force(entry):
         payload["force"] = True
     if worker_status:
         payload["worker"] = worker_status

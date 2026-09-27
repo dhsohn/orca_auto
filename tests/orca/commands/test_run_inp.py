@@ -12,7 +12,8 @@ import pytest
 from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.commands.run_inp import cmd_run_inp
 from orca_auto.orca.queue import notifications as queue_notifications
-from orca_auto.orca.queue.adapter import enqueue, list_queue, queue_entry_metadata
+from orca_auto.orca.queue.adapter import enqueue, list_queue
+from orca_auto.orca.queue.entries import queue_entry_metadata
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.submission import submit_reaction_dir_to_queue
 from tests.conftest import make_queue_entry
@@ -99,7 +100,7 @@ def worker_seams(monkeypatch: pytest.MonkeyPatch) -> _WorkerSeams:
         seams.notifications.append((args, kwargs))
         return True
 
-    monkeypatch.setattr(submission_mod, "read_worker_pid", read_worker_pid)
+    monkeypatch.setattr(submission_mod, "read_worker_pid_file", read_worker_pid)
     monkeypatch.setattr(queue_notifications, "notify_queue_enqueued_event", notify)
     return seams
 

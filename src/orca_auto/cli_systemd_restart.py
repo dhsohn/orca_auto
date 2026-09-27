@@ -23,9 +23,9 @@ def _sudo_available(*, which: Callable[[str], str | None] = shutil.which) -> boo
     return which("sudo") is not None
 
 
-def _restartable_worker_units(target_user: str) -> tuple[str, ...]:
+def _restartable_worker_unit(target_user: str) -> str:
     """Return the ORCA worker that must reload code after a target restart."""
-    return (dict(cli_systemd_units.service_units_for_user(target_user))["worker"],)
+    return dict(cli_systemd_units.service_units_for_user(target_user))["worker"]
 
 
 def _require_current_restart_units(
@@ -101,14 +101,14 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
     )
     try:
         unit = restart_unit_for_user(target_user, run=run)
-        worker_units = _restartable_worker_units(target_user)
+        worker_unit = _restartable_worker_unit(target_user)
     except ValueError as exc:
         emit_error(exc)
         return 1
 
     if use_sudo:
         # Authenticate before blocking admission. Mutation commands must not
-        # prompt while workers are waiting for the shared pool lock.
+        # prompt while the worker is waiting for the admission store lock.
         try:
             authenticated = run(["sudo", "-v"], check=False)
         except OSError as exc:
@@ -129,15 +129,13 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
     guard = (
         nullcontext()
         if force
-        else (deps.restart_guard or guard_service_restart)(worker_units, run=run)
+        else (deps.restart_guard or guard_service_restart)(worker_unit, run=run)
     )
     mutation_started = False
     try:
         with guard:
             mutation_started = True
-            failed = _restart_selected_units(
-                unit, worker_units, use_sudo=use_sudo, run=mutation_run
-            )
+            failed = _restart_selected_units(unit, worker_unit, use_sudo=use_sudo, run=mutation_run)
             if failed is None:
                 return 0
             emit_error(f"{failed} failed. Some services may have changed; check service status.")
@@ -159,7 +157,7 @@ def cmd_service_restart(args: argparse.Namespace, *, deps: ServiceRestartDeps | 
 
 def _restart_selected_units(
     unit: str,
-    worker_units: tuple[str, ...],
+    worker_unit: str,
     *,
     use_sudo: bool,
     run: Callable[..., subprocess.CompletedProcess[Any]],
@@ -167,18 +165,14 @@ def _restart_selected_units(
     """Run the restart steps in order; return the first failed step's description."""
     steps: list[tuple[str, tuple[str, ...]]] = [
         (
-            f"Resetting service failure state for {reset_unit}",
-            ("systemctl", "reset-failed", reset_unit),
-        )
-        for reset_unit in worker_units
+            f"Resetting service failure state for {worker_unit}",
+            ("systemctl", "reset-failed", worker_unit),
+        ),
+        (f"Restarting {unit}", ("systemctl", "restart", unit)),
+        # Restarting a target does not reload its already-running ORCA worker.
+        # Restart the service explicitly so the selected runtime reaches the process.
+        (f"Restarting {worker_unit}", ("systemctl", "restart", worker_unit)),
     ]
-    steps.append((f"Restarting {unit}", ("systemctl", "restart", unit)))
-    # Restarting a target does not reload its already-running ORCA worker.
-    # Restart the service explicitly so the selected runtime reaches the process.
-    steps.extend(
-        (f"Restarting {worker_unit}", ("systemctl", "restart", worker_unit))
-        for worker_unit in worker_units
-    )
     for title, command in steps:
         print(title)
         rc = cli_systemd_units.run_command(command, use_sudo=use_sudo, run=run)
