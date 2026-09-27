@@ -41,6 +41,7 @@ from orca_auto.orca.queue.adapter import (
     list_queue,
     queue_entries_same_publication_generation,
 )
+from orca_auto.orca.recovery_rebind import RECOVERY_REBIND_COUNT_METADATA_KEY
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state_reading import load_state, state_path
@@ -223,7 +224,7 @@ def test_capacity_refusal_returns_the_row_to_the_queue_without_touching_its_gene
     # instead of spending the bounded crash-recovery rebind budget.
     assert _generation_listing(rxn) == listing_before
     assert not orca_execution_started_evidence(rxn, deferred.metadata["execution_snapshot"])
-    assert worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY not in deferred.metadata
+    assert RECOVERY_REBIND_COUNT_METADATA_KEY not in deferred.metadata
 
 
 def test_deferred_row_is_skipped_until_due_and_does_not_block_the_row_behind_it(
@@ -666,7 +667,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     assert run_child() == 0
 
     [finished] = list_queue(queue_root)
-    assert worker_job.RECOVERY_REBIND_COUNT_METADATA_KEY not in finished.metadata
+    assert RECOVERY_REBIND_COUNT_METADATA_KEY not in finished.metadata
     assert finished.metadata["execution_snapshot"] == running.metadata["execution_snapshot"]
     assert len(notifications) == 1
 

@@ -40,7 +40,6 @@ from .notifications import (
 )
 from .orca_runner import OrcaRunner
 from .output_adoption import existing_completed_exit, to_resolved_local
-from .output_adoption import existing_completed_out as existing_completed_out
 from .run_context import RunExecutionContext
 from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy

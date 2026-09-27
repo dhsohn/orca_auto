@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import copy
 import logging
-import os
-import subprocess
 import sys
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -45,11 +43,6 @@ from orca_auto.core.queue.worker import (
 )
 from orca_auto.orca.queue.identity import entry_matches_engine_identity
 
-from .admission_env import (
-    ADMISSION_APP_NAME_ENV_VAR,
-    ADMISSION_TASK_ID_ENV_VAR,
-    ADMISSION_TOKEN_ENV_VAR,
-)
 from .attempt.reporting import build_final_result, last_out_path_from_state
 from .config import AppConfig, load_config
 from .execution import execute_orca_run
@@ -69,20 +62,7 @@ from .queue.adapter import (
     queue_entry_task_id,
     requeue_running_entry,
 )
-
-# The rebind keeps its private worker-facing name: the child looks it up
-# through this module, which is also where tests substitute it. Its metadata
-# keys stay reachable here for the row inspections that predate the split.
-from .recovery_rebind import (
-    RECOVERY_REBIND_CLAIM_METADATA_KEY as RECOVERY_REBIND_CLAIM_METADATA_KEY,
-)
-from .recovery_rebind import (
-    RECOVERY_REBIND_COUNT_METADATA_KEY as RECOVERY_REBIND_COUNT_METADATA_KEY,
-)
-from .recovery_rebind import RECOVERY_REBIND_LIMIT as RECOVERY_REBIND_LIMIT
-from .recovery_rebind import (
-    maybe_rebind_recovery_generation as _maybe_rebind_recovery_generation,
-)
+from .recovery_rebind import maybe_rebind_recovery_generation
 from .run_context import RunExecutionContext, configured_admission_root
 from .run_lock import acquire_run_lock
 from .state import finalize_state
@@ -93,7 +73,6 @@ logger = logging.getLogger(__name__)
 
 # EX_TEMPFAIL: the child returned its row to the queue before ORCA started.
 ADMISSION_DEFERRED_EXIT_CODE = 75
-BackgroundRunJobProcess = subprocess.Popen
 WORKER_JOB_MODULE = "orca_auto.orca.commands.worker_child"
 
 
@@ -158,12 +137,6 @@ class WorkerShutdownRequested(RuntimeError):
     def __init__(self, context: OrcaWorkerExecutionContext) -> None:
         super().__init__("worker_shutdown")
         self.context = context
-
-
-def _explicit_or_env(value: str | None, env_var: str) -> str | None:
-    if value is not None:
-        return value
-    return (os.getenv(env_var, "") or "").strip() or None
 
 
 def _queue_entry_by_id(queue_root: Path, queue_id: str) -> QueueEntry | None:
@@ -332,13 +305,9 @@ def _run_orca_job_for_entry(
             reaction_dir=Path(context.reaction_dir).expanduser().resolve(),
             selected_inp=Path(context.selected_inp).expanduser().resolve(),
             admission_root=configured_admission_root(bound_cfg),
-            reservation_token=_explicit_or_env(context.admission_token, ADMISSION_TOKEN_ENV_VAR),
-            admission_app_name=_explicit_or_env(
-                context.admission_app_name, ADMISSION_APP_NAME_ENV_VAR
-            ),
-            admission_task_id=_explicit_or_env(
-                context.admission_task_id, ADMISSION_TASK_ID_ENV_VAR
-            ),
+            reservation_token=context.admission_token,
+            admission_app_name=context.admission_app_name,
+            admission_task_id=context.admission_task_id,
             execution_provenance=dict(execution_provenance),
             queue_id=queue_entry_id(context.entry) or None,
             queue_generation=queue_entry_generation_token(context.entry) or None,
@@ -521,7 +490,7 @@ def run_worker_child_job(
     entry = _queue_entry_by_id(resolved_queue_root, queue_id)
     if entry is not None and entry_matches_engine_identity(entry, "orca"):
         try:
-            entry = _maybe_rebind_recovery_generation(
+            entry = maybe_rebind_recovery_generation(
                 entry,
                 queue_root=resolved_queue_root,
                 cfg_factory=lambda: load_config(config_path),
@@ -565,7 +534,6 @@ def run_worker_child_job(
 
 
 __all__ = [
-    "BackgroundRunJobProcess",
     "OrcaWorkerExecutionContext",
     "OrcaWorkerExecutionOutcome",
     "WORKER_JOB_MODULE",

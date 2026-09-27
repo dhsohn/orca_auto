@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from orca_auto.core.confined_io import atomic_write_confined_bytes
-
 from .input_blocks import iter_blocks, set_block_key_value
 from .input_syntax import active_orca_directive_text, find_route_idx, orca_route_line
 
@@ -112,32 +110,6 @@ def resource_request_from_lines(lines: list[str]) -> dict[str, int]:
         "max_cores": max_cores,
         "max_memory_gb": total_memory_gb,
     }
-
-
-def read_resource_request_from_input(inp_path: Path) -> dict[str, int]:
-    lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    return resource_request_from_lines(lines)
-
-
-def ensure_submission_resource_request(
-    inp_path: Path,
-    *,
-    default_max_cores: int,
-    default_max_memory_gb: int,
-) -> tuple[dict[str, int], list[str]]:
-    prepared = prepare_submission_resource_request(
-        inp_path,
-        default_max_cores=default_max_cores,
-        default_max_memory_gb=default_max_memory_gb,
-    )
-    if prepared.actions:
-        atomic_write_confined_bytes(
-            inp_path.parent,
-            inp_path,
-            prepared.normalized_payload,
-            label="ORCA resource-normalized input",
-        )
-    return dict(prepared.resource_request), list(prepared.actions)
 
 
 def prepare_submission_resource_request(

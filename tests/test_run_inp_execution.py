@@ -214,7 +214,7 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
         "save_state",
         lambda _reaction_dir, current_state: saved_states.append(dict(current_state)),
     )
-    monkeypatch.setattr(output_adoption, "_exit_with_result", exit_with_result)
+    monkeypatch.setattr(output_adoption, "exit_with_result", exit_with_result)
     context = RunExecutionContext(
         reaction_dir=reaction_dir,
         selected_inp=selected_inp,

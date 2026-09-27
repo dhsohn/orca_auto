@@ -48,7 +48,6 @@ from .execution_binding import (
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
 )
-from .inp_rewriter import prepare_submission_resource_request
 from .input_artifacts import OrcaSelectedInputArtifacts, selected_input_artifacts
 from .job_locations import resolve_job_metadata
 from .queue import adapter as queue_adapter
@@ -56,7 +55,10 @@ from .queue.adapter import DuplicateEntryError
 from .queue.job_records import upsert_queued_job_record
 from .queue.notifications import QUEUED_NOTIFICATION_PENDING_KEY
 from .queue.orphans import DeadRunningRowUnjudgeableError, read_worker_pid
-from .resource_directives import PreparedSubmissionResourceInput
+from .resource_directives import (
+    PreparedSubmissionResourceInput,
+    prepare_submission_resource_request,
+)
 from .run_context import WorkerStatusInfo, resolve_submission_context
 
 logger = logging.getLogger(__name__)

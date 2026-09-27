@@ -29,6 +29,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   instead of "contains a removed execution setting".
 - The package checks and `scripts/prepare_runtime.py` no longer look for the
   former workflows distribution, extra or source tree.
+- The internal worker child no longer falls back to the undocumented
+  `ORCA_AUTO_ORCA_ADMISSION_TOKEN`, `ORCA_AUTO_ORCA_ADMISSION_APP_NAME` and
+  `ORCA_AUTO_ORCA_ADMISSION_TASK_ID` environment variables. Nothing set them:
+  the worker passes the slot token as `--admission-token`, and the app name and
+  task ID come from the claimed queue row.
 
 ### Fixed
 

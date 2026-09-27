@@ -58,16 +58,8 @@ class RunSubmissionContext:
     allowed_root: Path
 
 
-def configured_max_concurrent(cfg: AppConfig) -> int:
-    return cfg.runtime.max_concurrent
-
-
 def configured_admission_root(cfg: AppConfig) -> Path:
     return Path(cfg.runtime.resolved_admission_root).expanduser().resolve()
-
-
-def configured_admission_limit(cfg: AppConfig) -> int:
-    return cfg.runtime.resolved_admission_limit
 
 
 def reaction_dir_arg(args: Any) -> str | None:
@@ -143,9 +135,7 @@ __all__ = [
     "RunExecutionContext",
     "RunSubmissionContext",
     "WorkerStatusInfo",
-    "configured_admission_limit",
     "configured_admission_root",
-    "configured_max_concurrent",
     "reaction_dir_arg",
     "resolve_run_target",
     "resolve_run_target_or_log",

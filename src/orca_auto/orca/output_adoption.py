@@ -18,8 +18,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .attempt.engine import _exit_with_result
-from .attempt.reporting import last_out_path_from_state
+from .attempt.reporting import exit_with_result, last_out_path_from_state
 from .attempt.resume import resume_terminal_decision
 from .completion_rules import detect_completion_mode
 from .out_analyzer import analyze_output
@@ -155,7 +154,7 @@ def existing_completed_exit(
                 state=recorded,
                 resumed=True,
                 last_out_path_from_state=last_out_path_from_state,
-                exit_with_result=_exit_with_result,
+                exit_with_result=exit_with_result,
                 emit=emit,
             )
 
@@ -186,7 +185,7 @@ def existing_completed_exit(
         state_changed = True
     if state_changed:
         save_state(reaction_dir, state)
-    return _exit_with_result(
+    return exit_with_result(
         reaction_dir,
         state,
         selected_inp,

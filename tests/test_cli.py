@@ -24,13 +24,9 @@ from orca_auto.orca.cli_logging import (
 from orca_auto.orca.commands import init as init_command
 from orca_auto.orca.commands import run_inp as run_inp_command
 from orca_auto.orca.config import load_config
-from orca_auto.orca.execution import (
-    _emit,
-    execute_orca_run,
-    existing_completed_out,
-    select_latest_inp,
-)
+from orca_auto.orca.execution import _emit, execute_orca_run, select_latest_inp
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
+from orca_auto.orca.output_adoption import existing_completed_out
 from orca_auto.orca.run_context import RunExecutionContext, configured_admission_root
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state_reading import load_state, state_path

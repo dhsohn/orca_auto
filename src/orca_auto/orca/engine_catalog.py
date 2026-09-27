@@ -50,10 +50,6 @@ if len({entry.source_id for entry in _ENGINE_CATALOG}) != len(_ENGINE_CATALOG):
     raise RuntimeError("duplicate source id in built-in engine catalog")
 
 
-def engine_catalog() -> tuple[EngineCatalogEntry, ...]:
-    return _ENGINE_CATALOG
-
-
 def find_engine_catalog_entry(engine: object) -> EngineCatalogEntry | None:
     engine_id = str(engine or "").strip().lower().replace("-", "_")
     return _ENGINE_BY_ID.get(engine_id)
@@ -70,7 +66,6 @@ def get_engine_catalog_entry(engine: object) -> EngineCatalogEntry:
 
 __all__ = [
     "EngineCatalogEntry",
-    "engine_catalog",
     "find_engine_catalog_entry",
     "get_engine_catalog_entry",
 ]
