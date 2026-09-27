@@ -1,7 +1,8 @@
-"""ORCA terminal-replay engine: preparation, publication, reconciliation and owners.
+"""ORCA terminal-replay engine: preparation, publication, restart replay and owners.
 
-Every function here takes its state explicitly (``cfg``, ``admission_root``,
-``replay_state``); the worker that owns that state lives in ``queue/worker.py``.
+Every function here takes its state explicitly (``cfg``, ``replay_state``);
+the worker that owns that state, and the recovery pass that calls
+``reconcile_terminal_replays`` last, live in ``queue/worker.py``.
 """
 
 from __future__ import annotations
@@ -12,14 +13,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.admission import (
-    list_slots,
-    reconcile_stale_slots,
-    recover_orphaned_engine_slots,
-)
 from orca_auto.core.queue.child.process import entry_status_is_running
 from orca_auto.core.queue.types import QueueEntry
-from orca_auto.core.queue.worker import live_queue_slot_keys_for_slots
 from orca_auto.core.statuses import (
     STATUS_CANCELLED,
     STATUS_COMPLETED,
@@ -47,10 +42,10 @@ from .entries import (
     queue_entry_id,
     queue_entry_metadata,
     queue_entry_reaction_dir,
+    queue_entry_status,
     queue_entry_task_id,
 )
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
-from .orphans import reconcile_orphaned_running_entries
 from .run_state_replay import record_cancelled_run_state, record_failed_run_state
 from .terminal_replay import (
     TerminalReplayMarkerKind,
@@ -601,7 +596,7 @@ def _drop_superseded_terminal_replays(
 
 def _select_replay_generation_owners(
     after_entries: list[QueueEntry],
-    before_by_key: Mapping[str, Any],
+    before_statuses: Mapping[str, str],
     previous_statuses: Mapping[str, str],
     pending_replays: dict[str, TerminalReplayWorkItem],
     replay_state: OrcaWorkerReplayState,
@@ -613,8 +608,7 @@ def _select_replay_generation_owners(
         if reaction_key is None:
             continue
         owner = queue_entry_id(entry)
-        before_entry = before_by_key.get(owner)
-        before_status = normalized_entry_status(before_entry)
+        before_status = before_statuses.get(owner, "")
         pending_item = pending_replays.get(owner)
         pending_replay = isinstance(pending_item, TerminalReplayWorkItem)
         current_generation_keys.add(owner)
@@ -696,13 +690,16 @@ def _replay_current_terminal_entries(
     cfg: AppConfig,
     queue_root: Path,
     after_entries: list[QueueEntry],
-    before_by_key: Mapping[str, Any],
+    before_statuses: Mapping[str, str],
     previous_statuses: Mapping[str, str],
+    previous_retry_keys: set[str],
     pending_replays: dict[str, TerminalReplayWorkItem],
     superseded_replay_keys: set[str],
     latest_generation_by_reaction: Mapping[str, str],
-) -> dict[str, str]:
+) -> tuple[dict[str, str], set[str]]:
+    """Replay each observed terminal row; return the new cursor and the rows to retry."""
     after_statuses: dict[str, str] = {}
+    retry_keys: set[str] = set()
     for entry in after_entries:
         queue_id = queue_entry_id(entry)
         status = normalized_entry_status(entry)
@@ -718,21 +715,20 @@ def _replay_current_terminal_entries(
             pending_replays.pop(queue_id, None)
             continue
         if queue_id in superseded_replay_keys:
-            # The newer generation identity is definitive.  Advance the cursor
-            # to this row's terminal status so it is not reconsidered forever.
+            # The newer generation identity is definitive: the row is not retried.
             pending_replays.pop(queue_id, None)
-            after_statuses[queue_id] = status
             continue
-        before_entry = before_by_key.get(queue_id)
-        before_status = normalized_entry_status(before_entry)
         # Replay requires positive evidence: either a durable replay marker (or
         # an in-memory retry snapshot), an active row terminalized during this
-        # reconciliation, or an active status observed by the prior poll.  A
-        # terminal row first seen after startup is closed history, not proof of a
+        # reconciliation, an active status observed by the prior poll, or a
+        # transition the prior poll observed but could not replay.  A terminal
+        # row first seen after startup is closed history, not proof of a
         # transition; replaying it can rewrite its state/run identity and resend
         # an old notification.
         observed_active_transition = (
-            before_status in ACTIVE_STATUSES or previous_statuses.get(queue_id) in ACTIVE_STATUSES
+            before_statuses.get(queue_id) in ACTIVE_STATUSES
+            or previous_statuses.get(queue_id) in ACTIVE_STATUSES
+            or queue_id in previous_retry_keys
         )
         if queue_id not in pending_replays and not observed_active_transition:
             continue
@@ -749,7 +745,7 @@ def _replay_current_terminal_entries(
             )
             # Ambiguity is retryable: state/report identity may become durable on
             # the next poll without another queue status transition.
-            after_statuses[queue_id] = STATUS_RUNNING
+            retry_keys.add(queue_id)
             if reaction_key in latest_generation_by_reaction:
                 pending_replays.pop(queue_id, None)
             continue
@@ -766,7 +762,6 @@ def _replay_current_terminal_entries(
         ) and _pending_replay_state_is_superseded(existing_item):
             _clear_terminal_replay_marker(existing_item)
             pending_replays.pop(queue_id, None)
-            after_statuses[queue_id] = status
             continue
         item = (
             existing_item
@@ -790,11 +785,11 @@ def _replay_current_terminal_entries(
             )
             # Keep this transition pending so the next periodic reconcile
             # retries the idempotent terminal side effects.
-            after_statuses[queue_id] = STATUS_RUNNING
+            retry_keys.add(queue_id)
         else:
             pending_replays.pop(queue_id, None)
             after_statuses[queue_id] = item.resolved_status
-    return after_statuses
+    return after_statuses, retry_keys
 
 
 def _retry_terminal_replays_without_queue_entries(
@@ -838,46 +833,32 @@ def _retry_terminal_replays_without_queue_entries(
             pending_replays.pop(key, None)
 
 
-def reconcile_worker_state(
+def reconcile_terminal_replays(
     cfg: AppConfig,
-    *,
-    admission_root: str | Path,
     replay_state: OrcaWorkerReplayState,
+    before_rows: list[QueueEntry],
 ) -> None:
-    """Reconcile orphaned running rows, then replay every observed terminal transition.
+    """Replay every observed terminal transition; the last step of the worker's recovery pass.
 
-    ``replay_state`` is the worker's cursor and retry bookkeeping; it is
-    mutated in place so the next pass sees this pass's outcome.
+    ``before_rows`` is the queue as the pass read it before orphaned RUNNING
+    rows were reconciled, so a row that reconciliation terminalized shows its
+    active -> terminal edge here. ``replay_state`` is the worker's cursor and
+    retry bookkeeping; it is mutated in place so the next pass sees this
+    pass's outcome.
     """
-    recover_orphaned_engine_slots(admission_root, strict=False)
     queue_root = roots.queue_root(cfg)
-    before_by_key = {queue_entry_id(entry): entry for entry in roots.list_orca_rows(cfg)}
-    previous_statuses = replay_state.reconcile_statuses
-    if previous_statuses is None:
-        # Process startup has no observed status edge.  Treat the first queue
-        # snapshot as the replay cursor instead of inventing RUNNING origins for
-        # historical terminal rows.  A terminal row that really has unfinished
-        # side effects remains replayable through its durable marker below, while
-        # lifecycle reconciliation can still expose a real active -> terminal edge
-        # between ``before_entries`` and ``after_entries`` in this same poll.
-        previous_statuses = {
-            key: normalized_entry_status(entry) for key, entry in before_by_key.items()
-        }
-    protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
-        admission_root,
-        list_slots_fn=list_slots,
+    before_statuses = {queue_entry_id(entry): queue_entry_status(entry) for entry in before_rows}
+    # Process startup has no observed status edge.  Treat the first queue
+    # snapshot as the replay cursor instead of inventing RUNNING origins for
+    # historical terminal rows.  A terminal row that really has unfinished
+    # side effects remains replayable through its durable marker below, while
+    # lifecycle reconciliation can still expose a real active -> terminal edge
+    # between ``before_rows`` and ``after_entries`` in this same poll.
+    previous_statuses = (
+        before_statuses
+        if replay_state.reconcile_statuses is None
+        else replay_state.reconcile_statuses
     )
-    reconcile_stale_slots(admission_root)
-    reconcile_orphaned_running_entries(
-        queue_root,
-        ignore_worker_pid=True,
-        protected_queue_keys=protected_queue_keys,
-        protected_queue_ids=protected_queue_ids,
-    )
-    # Reconciliation can terminalize a job whose original parent died, and an
-    # old child can also honor cancellation directly. Replay the normal
-    # terminal side effects idempotently so job-location records and one-shot
-    # notifications are not lost with the parent process.
     after_entries = roots.list_orca_rows(cfg)
     pending_replays = dict(replay_state.pending_replays)
     replay_state.blocked_marker_keys = _collect_durable_terminal_replays(
@@ -891,19 +872,20 @@ def reconcile_worker_state(
     current_generation_keys, latest_generation_by_reaction, superseded_generation_keys = (
         _select_replay_generation_owners(
             after_entries,
-            before_by_key,
+            before_statuses,
             previous_statuses,
             pending_replays,
             replay_state,
         )
     )
 
-    after_statuses = _replay_current_terminal_entries(
+    after_statuses, retry_keys = _replay_current_terminal_entries(
         cfg,
         queue_root,
         after_entries,
-        before_by_key,
+        before_statuses,
         previous_statuses,
+        replay_state.retry_keys,
         pending_replays,
         superseded_replay_keys | superseded_generation_keys,
         latest_generation_by_reaction,
@@ -918,6 +900,7 @@ def reconcile_worker_state(
 
     replay_state.pending_replays = pending_replays
     replay_state.reconcile_statuses = after_statuses
+    replay_state.retry_keys = retry_keys
 
 
 __all__ = [
@@ -930,7 +913,7 @@ __all__ = [
     "normalized_entry_status",
     "reaction_generation_key",
     "reaction_key_for_dir",
-    "reconcile_worker_state",
+    "reconcile_terminal_replays",
     "prepare_terminal_replay",
     "finish_terminal_replay",
 ]

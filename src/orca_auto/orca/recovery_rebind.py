@@ -8,16 +8,16 @@ ordinary submission machinery (``build_orca_execution_snapshot`` with
 per-row counter and claim that are consumed before any new generation exists,
 so a crash loop can never mint generations indefinitely.
 
-This module sits above the package's binding stages: it drives queue-row
-mutation and the snapshot-intent ledger, so it is imported by the worker child
-directly and deliberately not re-exported from the package ``__init__``
-(``submission`` imports the package, and this module imports ``submission``).
+This module sits above the ``execution_binding`` package and uses only the
+names its ``__init__`` exports: it drives queue-row mutation and the
+snapshot-intent ledger, so the worker child imports it directly with the
+config it already loaded (``submission`` imports the package, and this module
+imports ``submission``).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -37,15 +37,15 @@ from orca_auto.core.utils.persistence import timestamped_token, timestamped_toke
 
 from .config import AppConfig
 from .execution import recover_crashed_state
-from .execution_binding._build import build_orca_execution_snapshot
-from .execution_binding._cleanup import cleanup_unowned_orca_execution_snapshot
-from .execution_binding._constants import ORCA_EXECUTION_SNAPSHOT_VERSION
-from .execution_binding._snapshot_identity import (
+from .execution_binding import (
+    ORCA_EXECUTION_SNAPSHOT_VERSION,
+    build_orca_execution_snapshot,
+    cleanup_unowned_orca_execution_snapshot,
     orca_execution_snapshot_generation_dir,
+    orca_execution_started_evidence,
     verify_orca_snapshot_executable,
 )
-from .execution_binding._verify import orca_execution_started_evidence
-from .output_adoption import existing_completed_out
+from .output_adoption import completed_out_or_none
 from .queue.adapter import (
     get_cancel_requested,
     get_entry_by_id,
@@ -70,21 +70,6 @@ _RECOVERY_REBIND_INTENT_TOKEN_RE = timestamped_token_pattern(
     _RECOVERY_INTENT_TOKEN_PREFIX,
     token_bytes=_RECOVERY_INTENT_TOKEN_BYTES,
 )
-
-
-def _completed_out_or_none(bound_selected: Path) -> dict[str, Any] | None:
-    try:
-        return existing_completed_out(bound_selected)
-    except Exception:  # noqa: BLE001
-        # The output in a crashed generation is exactly the file most likely
-        # to be truncated or actively racing; a probe failure must degrade to
-        # the recovery path, never abort the claim.
-        logger.debug(
-            "completed-output probe failed for %s; continuing with recovery",
-            bound_selected,
-            exc_info=True,
-        )
-        return None
 
 
 def _validated_recovery_rebind_claim(
@@ -263,7 +248,7 @@ def maybe_rebind_recovery_generation(
     entry: QueueEntry,
     *,
     queue_root: Path,
-    cfg_factory: Callable[[], AppConfig],
+    cfg: AppConfig,
 ) -> QueueEntry:
     """Move a crash-interrupted claim into a fresh generation before execution.
 
@@ -296,7 +281,7 @@ def maybe_rebind_recovery_generation(
     bound_selected_text = str(metadata.get("selected_inp") or "").strip()
     if bound_selected_text:
         bound_selected = Path(bound_selected_text)
-        if bound_selected.is_file() and _completed_out_or_none(bound_selected) is not None:
+        if bound_selected.is_file() and completed_out_or_none(bound_selected) is not None:
             # ORCA finished before the crash reached the queue row. Keep the
             # generation: the ordinary claim path settles it in place (from
             # its recorded attempt verdict, else by adopting the output)
@@ -313,7 +298,6 @@ def maybe_rebind_recovery_generation(
         refreshed = get_entry_by_id(queue_root, str(entry.queue_id))
         return refreshed if refreshed is not None else entry
     count, pending_claim = _validated_recovery_rebind_claim(metadata, snapshot)
-    cfg = cfg_factory()
     recovery_executable = verify_orca_snapshot_executable(
         snapshot,
         expected_executable=cfg.paths.orca_executable,

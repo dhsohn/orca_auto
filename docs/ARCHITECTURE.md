@@ -111,16 +111,29 @@ reconciliation. `_admit_next` spells out one admission in order: withheld
 directories, publication repair, queued notification, capacity, preview, slot
 reservation, claim by id, and slot release when the claim is lost. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
 (reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
-and knows a job only as a process-backed record. An ordinary exception from one
+and knows a job only as a process-backed record. Before each sleep the ORCA
+worker runs `_periodic_upkeep`: the queued notification, then the recovery pass
+when it is due and no reaped job is waiting to retry its finalization. One poll
+pass is therefore reap, cancel, admit, upkeep, sleep. An ordinary exception from one
 pass is logged and the pass is retried after the poll interval while running
 children stay supervised; KeyboardInterrupt, SystemExit and startup failures
-still end the worker. The periodic worker-state reconcile also releases an
-admission slot this worker reserved but never attached to a job, which a failed
-admission pass can leave behind. Tests substitute
+still end the worker. Tests substitute
 `_start_background_process` and `sleep_fn`; there is no injected dependency
 bag. The parent entry point is `python -m orca_auto.orca.commands.queue
 --config …`; the child is `python -m orca_auto.orca.commands.worker_child
 --config … --queue-root … --queue-id … [--admission-token …]`.
+
+The worker owns recovery after a lost parent or child. Its recovery pass,
+`_reconcile_worker_state`, runs at startup and then at most once a minute, and
+lists its steps in order: the sweep of abandoned snapshot intents (when due),
+release of slots this worker reserved but never attached to a job (a failed
+admission pass can leave one), engine records of dead slot owners, one read of
+the queue, stale slots (after collecting the queue ids live slots still hold),
+orphaned RUNNING rows, and last `replay.reconcile_terminal_replays`, which
+replays every terminal transition observed since that queue read or an earlier
+pass. A transition the pass could not replay (an ambiguous generation owner or
+failed side effects) stays in the replay state's `retry_keys` and is retried
+on the next pass; a terminal row first seen already terminal is never replayed.
 
 Cancellation observations reuse unchanged queue snapshots. The child publishes its terminal state and reports before exiting. The parent settles the queue entry and claims a completion notification from the matching job/run state. A bounded background sender delivers that captured message without holding the execution slot or writing state afterward. Replayed completion skips an already claimed notification (and recognizes historical sent markers). Delivery is best effort: a crash, a failed send or exhausted sender capacity after the claim can lose the message, without retrying or changing the calculation result. Submission records `orca_queued_notification_pending` on the durable row. After its location record is published, the parent worker claims that intent under the queue lock before dispatching a queued message; CLI exit does not discard the intent. Historical rows without the intent are not notified retroactively. The child captures its started event after recording the attempt and dispatches it before proceeding with the runner. All three lifecycle sends use the same bounded sender (four concurrent sends per process). Transport failure, saturation or process exit can lose advisory delivery, and no send writes execution state. A queued delivery claim failure skips delivery without withholding admission.
 
@@ -137,7 +150,7 @@ publication lease) is outside it; `queue_generation` in `job_state.json` is its 
 `core/queue/transitions.py` builds every requeued and terminal row (`requeued_entry`,
 `terminal_entry`); `tests/core/queue/test_ownership_guards.py` enforces both.
 `queue/replay.py` is only the replay engine (work items, preparation and publication, the
-reconcile pipeline and generation owners) and takes its state explicitly, and
+restart replay pipeline and generation owners) and takes its state explicitly, and
 `queue/run_state_replay.py` synthesizes terminal `job_state.json` under
 `run.lock`. These paths call concrete adapters with the selected entry and task
 identity. Durable execution preparation precedes admission release; derived publication
@@ -151,6 +164,17 @@ final admission-release ownership on success, shutdown and exceptions. Validated
 inputs, resources and queue identity form one `RunExecutionContext`, which is
 passed directly into execution without reconstructing CLI arguments or installing
 empty lifecycle callbacks.
+
+`recover_crashed_state` closes a root `job_state.json` left `running` by a
+crashed run, and it runs in two places, each under `run.lock`. The crash
+rebind (`recovery_rebind.py`, with the config the child already loaded) calls
+it before it builds the replacement generation, so the frozen attempt is
+recorded as crashed before a new generation exists. `execute_locked_run` calls
+it again right before the launch, for claims that did not rebind (no
+started-execution evidence, or a completed output to adopt); after a rebind it
+finds nothing to recover and writes nothing. Both read, modify and write the
+root state, so each holds `run.lock` against a live ORCA instance and the
+parent's terminal state writers.
 
 ---
 

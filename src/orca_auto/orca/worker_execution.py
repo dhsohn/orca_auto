@@ -478,11 +478,7 @@ def run_worker_child_job(
     entry = get_entry_by_id(resolved_queue_root, queue_id)
     if entry is not None:
         try:
-            entry = maybe_rebind_recovery_generation(
-                entry,
-                queue_root=resolved_queue_root,
-                cfg_factory=lambda: load_config(config_path),
-            )
+            entry = maybe_rebind_recovery_generation(entry, queue_root=resolved_queue_root, cfg=cfg)
         except (ValueError, FileExistsError) as exc:
             _record_worker_rejection(
                 resolved_queue_root,

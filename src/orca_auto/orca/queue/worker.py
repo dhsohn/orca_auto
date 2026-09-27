@@ -2,10 +2,11 @@
 
 ``OrcaQueueWorker`` is the one queue worker: it owns the PID-file lifecycle,
 admission (slot reserved before the row is claimed), child start and attach,
-terminal finalization, cancellation, shutdown and recovery. The poll loop it
-inherits from ``core.queue.worker.loop`` only orders the passes. The replay
-engine in ``queue/replay.py`` is called with explicit state and never reaches
-back into the worker.
+terminal finalization, cancellation, shutdown and the recovery pass. The poll
+loop it inherits from ``core.queue.worker.loop`` only orders the passes (reap,
+cancel, admit, sleep); this worker runs its periodic upkeep before each sleep.
+The replay engine in ``queue/replay.py`` is called with explicit state as the
+last step of the recovery pass.
 """
 
 from __future__ import annotations
@@ -21,6 +22,9 @@ from pathlib import Path
 from orca_auto.core.admission import (
     admission_dir,
     list_all_slots,
+    list_slots,
+    reconcile_stale_slots,
+    recover_orphaned_engine_slots,
     recover_slot_engine_process,
     release_slot,
     reserve_slot,
@@ -45,6 +49,7 @@ from orca_auto.core.queue.worker import (
     ReservedQueueEntry,
     ReserveStatus,
     admission_has_capacity,
+    live_queue_slot_keys_for_slots,
     remove_worker_pid_file,
     start_background_process,
     terminate_process_group,
@@ -76,6 +81,7 @@ from .entries import (
 )
 from .models import OrcaRunningJob, OrcaWorkerReplayState, TerminalReplayWorkItem
 from .notifications import notify_queued_jobs
+from .orphans import reconcile_orphaned_running_entries
 from .terminal_replay import terminal_replay_marker_from_entry
 
 logger = logging.getLogger(__name__)
@@ -231,6 +237,11 @@ class OrcaQueueWorker(QueueWorkerLoop):
             raise
 
     def _sleep(self) -> None:
+        self._periodic_upkeep()
+        super()._sleep()
+
+    def _periodic_upkeep(self) -> None:
+        """Queued notification, then the recovery pass when due; runs before each poll sleep."""
         # Deliver accepted submissions even while every execution slot is occupied.
         notify_queued_jobs(self.cfg)
         # A replacement parent may initially observe a live child from the
@@ -245,7 +256,6 @@ class OrcaQueueWorker(QueueWorkerLoop):
         )
         if not completed_retry_pending:
             self._reconcile_worker_state_if_due()
-        super()._sleep()
 
     def _running_jobs(self) -> list[tuple[str, OrcaRunningJob]]:
         return list(self._running.items())
@@ -265,13 +275,32 @@ class OrcaQueueWorker(QueueWorkerLoop):
             self._reconcile_worker_state_now()
 
     def _reconcile_worker_state(self) -> None:
+        """One recovery pass after a lost parent or child, in this order.
+
+        Snapshot intents (when due), slots reserved but never attached, engine
+        records of dead slot owners, then the queue as it stands before row
+        reconciliation, stale slots (after collecting the queue ids that live
+        slots still hold), orphaned RUNNING rows, and last the terminal replay
+        of every transition observed since that queue read or an earlier pass,
+        so a row terminalized here or by a child whose parent died still gets
+        its location record and notification.
+        """
         self._reconcile_snapshot_intents_if_due()
         self._release_unattached_admission_slots()
-        replay.reconcile_worker_state(
-            self.cfg,
-            admission_root=self.admission_root,
-            replay_state=self.replay_state,
+        recover_orphaned_engine_slots(self.admission_root, strict=False)
+        before_rows = roots.list_orca_rows(self.cfg)
+        protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
+            self.admission_root,
+            list_slots_fn=list_slots,
         )
+        reconcile_stale_slots(self.admission_root)
+        reconcile_orphaned_running_entries(
+            self.queue_root,
+            ignore_worker_pid=True,
+            protected_queue_keys=protected_queue_keys,
+            protected_queue_ids=protected_queue_ids,
+        )
+        replay.reconcile_terminal_replays(self.cfg, self.replay_state, before_rows)
 
     def _release_unattached_admission_slots(self) -> None:
         """Release slots this worker reserved but never attached to a job.

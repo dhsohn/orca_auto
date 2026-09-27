@@ -21,8 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Event
-from typing import Any, Protocol
-from unittest.mock import patch
+from typing import Any
 
 from orca_auto.core.admission import reserve_slot
 from orca_auto.core.messaging.channel import SendResult
@@ -33,10 +32,9 @@ from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, load_config
-from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue.adapter import list_queue
 from orca_auto.orca.queue.entries import queue_entry_reaction_dir
-from orca_auto.orca.queue.models import OrcaRunningJob, OrcaWorkerReplayState
+from orca_auto.orca.queue.models import OrcaRunningJob
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.statuses import AnalyzerStatus, RunStatus
 from orca_auto.orca.submission import create_queued_submission
@@ -48,19 +46,6 @@ from tests.conftest import (
     write_run_state,
 )
 from tests.process_helpers import FakeManagedProcess
-
-
-class ReplayStateOwner(Protocol):
-    """What ``replay.reconcile_worker_state`` needs: an ``OrcaQueueWorker`` or a stand-in."""
-
-    @property
-    def cfg(self) -> AppConfig: ...
-
-    @property
-    def admission_root(self) -> str | Path: ...
-
-    @property
-    def replay_state(self) -> OrcaWorkerReplayState: ...
 
 
 def queued_submission(tmp_path: Path) -> tuple[AppConfig, Path, QueueEntry, Path]:
@@ -133,39 +118,20 @@ def write_completed_run_state(reaction_dir: Path) -> None:
     )
 
 
-def reconcile_statuses(worker: ReplayStateOwner) -> dict[str, str]:
+def reconcile_statuses(worker: OrcaQueueWorker) -> dict[str, str]:
     statuses = worker.replay_state.reconcile_statuses
     assert statuses is not None
     return statuses
 
 
-def run_terminal_replay(
-    worker: ReplayStateOwner,
-    entry: QueueEntry,
-    *,
-    previous_status: str | None = None,
-) -> None:
-    if previous_status is not None:
-        state = worker.replay_state
-        statuses = dict(state.reconcile_statuses or {})
-        statuses[entry.queue_id] = previous_status
-        state.reconcile_statuses = statuses
-    with (
-        patch.object(replay_mod, "recover_orphaned_engine_slots"),
-        patch.object(replay_mod.roots, "list_orca_rows", return_value=[entry]),
-        patch.object(
-            replay_mod,
-            "live_queue_slot_keys_for_slots",
-            return_value=(set(), set()),
-        ),
-        patch.object(replay_mod, "reconcile_stale_slots"),
-        patch.object(replay_mod, "reconcile_orphaned_running_entries"),
-    ):
-        replay_mod.reconcile_worker_state(
-            worker.cfg,
-            admission_root=worker.admission_root,
-            replay_state=worker.replay_state,
-        )
+def run_terminal_replay(worker: OrcaQueueWorker, entry: QueueEntry) -> None:
+    """One real recovery pass of ``worker`` over its queue, whose only row is *entry*.
+
+    Nothing is patched: the pass also runs the slot and orphan steps, so the
+    test's queue and admission files must hold exactly what it set up.
+    """
+    assert [row.queue_id for row in list_queue(worker.queue_root)] == [entry.queue_id]
+    worker._reconcile_worker_state()
 
 
 WORKER_LOGGER = "orca_auto.orca.queue.worker"
@@ -393,7 +359,6 @@ def insert_pending_successor(root: Path, reaction_dir: Path, *, queue_id: str) -
 __all__ = [
     "ChildStarter",
     "FakeChildren",
-    "ReplayStateOwner",
     "SpawnCall",
     "StartedChild",
     "WORKER_LOGGER",
