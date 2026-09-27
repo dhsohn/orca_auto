@@ -169,11 +169,12 @@ def test_opt_report_and_si_share_absent_frequency_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from orca_auto.orca.report.composer import compose_job_report_html
-    from tests.test_opt_report import _state, _write_inp, _write_opt_out
+    from tests.orca_output_helpers import write_opt_inp, write_opt_out
+    from tests.test_opt_report import _state
 
     out = tmp_path / "final.out"
-    _write_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP Opt")
-    _write_opt_out(out)
+    write_opt_inp(tmp_path / "rxn.inp", "! B3LYP def2-SVP Opt")
+    write_opt_out(out)
     state = _state(tmp_path, out, reason="normal_termination")
     reads = _record_output_reads(monkeypatch)
     assert compose_job_report_html(tmp_path, state)

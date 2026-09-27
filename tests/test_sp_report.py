@@ -11,61 +11,7 @@ from orca_auto.orca.report import write_job_html_report
 from orca_auto.orca.report.publication import write_report_files
 from orca_auto.orca.report.sp import collect_sp_report_data
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
-
-
-def _out_text(
-    *,
-    route: str = "wB97M-V def2-TZVPP CPCM(toluene)",
-    energy: float = -1234.567890123456,
-    freq_block: bool = False,
-    thermo: bool = False,
-) -> str:
-    lines = [
-        "                                 Program Version 6.0.1 -  RELEASE  -",
-        f"|  1> ! {route}",
-        "|  2> * xyz 0 1",
-        "|  3> C 0.0 0.0 0.0",
-        "|  4> *",
-        "",
-        "CARTESIAN COORDINATES (ANGSTROEM)",
-        "---------------------------------",
-        "  C      0.000000    1.234567   -0.987654",
-        "  H      0.123456   -0.654321    2.000000",
-        "",
-        f"FINAL SINGLE POINT ENERGY     {energy:.12f}",
-    ]
-    if freq_block:
-        lines += ["", "VIBRATIONAL FREQUENCIES", "-----------------------", ""]
-        lines += ["     0:      -80.50 cm**-1 ***imaginary mode***", "     1:      120.00 cm**-1"]
-        lines += [
-            "",
-            "NORMAL MODES",
-            "------------",
-            "",
-            "                  0          1",
-            "      0       0.700000   0.100000",
-            "      1       0.100000   0.000000",
-            "      2       0.000000   0.000000",
-            "      3       0.500000   0.000000",
-            "      4       0.000000   0.200000",
-            "      5       0.000000   0.100000",
-        ]
-    if thermo:
-        lines += [
-            "--------------------------",
-            "THERMOCHEMISTRY AT 298.15K",
-            "--------------------------",
-            "Zero point energy                ...      0.08843782 Eh",
-            "Total enthalpy                   ...  -1234.40000000 Eh",
-            "Final Gibbs free energy          ...  -1234.45000000 Eh",
-            "G-E(el)                          ...      0.11789012 Eh",
-        ]
-    lines += [
-        "",
-        "                             ****ORCA TERMINATED NORMALLY****",
-        "TOTAL RUN TIME: 0 days 0 hours 1 minutes 2 seconds 3 msec",
-    ]
-    return "\n".join(lines)
+from tests.orca_output_helpers import sp_out_text
 
 
 def _job_dir(
@@ -116,7 +62,7 @@ _FREQ_INP = "! B3LYP def2-SVP Freq\n* xyz 0 1\nC 0 0 0\n*\n"
 
 
 def test_collect_sp_report_parses_energy_and_si_block(tmp_path: Path) -> None:
-    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text())
+    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=sp_out_text())
 
     data = collect_sp_report_data(tmp_path, state)
 
@@ -130,7 +76,7 @@ def test_collect_sp_report_parses_energy_and_si_block(tmp_path: Path) -> None:
 
 
 def test_sp_report_html_renders_energy_and_embedded_si_block(tmp_path: Path) -> None:
-    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text())
+    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=sp_out_text())
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
@@ -152,7 +98,7 @@ def test_sp_report_html_renders_energy_and_embedded_si_block(tmp_path: Path) -> 
 
 
 def test_sp_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
-    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text())
+    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=sp_out_text())
     missing_out = tmp_path / "rxn_retry.out"
     state["attempts"].append({"index": 2, "out_path": str(missing_out)})
     state["final_result"]["last_out_path"] = str(missing_out)
@@ -173,7 +119,7 @@ def test_sp_report_does_not_publish_unverified_electronic_state(tmp_path: Path) 
     state = _job_dir(
         tmp_path,
         inp_text=_SP_INP,
-        out_text=_out_text().replace("|  2> * xyz 0 1", ""),
+        out_text=sp_out_text().replace("|  2> * xyz 0 1", ""),
     )
 
     path = write_job_html_report(
@@ -191,7 +137,7 @@ def test_bare_freq_report_includes_vibrational_summary_and_thermo(tmp_path: Path
     state = _job_dir(
         tmp_path,
         inp_text=_FREQ_INP,
-        out_text=_out_text(route="B3LYP def2-SVP Freq", freq_block=True, thermo=True),
+        out_text=sp_out_text(route="B3LYP def2-SVP Freq", freq_block=True, thermo=True),
     )
 
     path = write_job_html_report(
@@ -209,7 +155,7 @@ def test_bare_freq_report_includes_vibrational_summary_and_thermo(tmp_path: Path
 
 
 def test_failed_sp_report_keeps_attempt_chain_without_si_block(tmp_path: Path) -> None:
-    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text(), status="failed")
+    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=sp_out_text(), status="failed")
 
     path = write_job_html_report(
         tmp_path, state, generation_target=report_generation_target(tmp_path)
@@ -223,7 +169,7 @@ def test_failed_sp_report_keeps_attempt_chain_without_si_block(tmp_path: Path) -
 
 
 def test_write_report_files_emits_html_and_si_for_sp(tmp_path: Path) -> None:
-    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=_out_text())
+    state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=sp_out_text())
     generation = bind_report_generation(tmp_path, state)
 
     reports = write_report_files(tmp_path, state)
@@ -240,11 +186,11 @@ def test_vibrational_summary_prefers_the_final_output(tmp_path: Path) -> None:
     state = _job_dir(
         tmp_path,
         inp_text=_FREQ_INP,
-        out_text=_out_text(route="B3LYP def2-SVP Freq", freq_block=True, thermo=True),
+        out_text=sp_out_text(route="B3LYP def2-SVP Freq", freq_block=True, thermo=True),
     )
     stale = tmp_path / "rxn_stale.out"
     stale.write_text(
-        _out_text(route="B3LYP def2-SVP Freq", freq_block=True).replace("-80.50", "-333.00"),
+        sp_out_text(route="B3LYP def2-SVP Freq", freq_block=True).replace("-80.50", "-333.00"),
         encoding="utf-8",
     )
     # Last attempt points at a stale output; final_result still names rxn.out.
@@ -263,10 +209,10 @@ def test_vibrational_summary_falls_back_to_attempt_outputs(tmp_path: Path) -> No
     state = _job_dir(
         tmp_path,
         inp_text=_FREQ_INP,
-        out_text=_out_text(route="B3LYP def2-SVP Freq"),
+        out_text=sp_out_text(route="B3LYP def2-SVP Freq"),
     )
     earlier = tmp_path / "rxn_attempt1.out"
-    earlier.write_text(_out_text(route="B3LYP def2-SVP Freq", freq_block=True), encoding="utf-8")
+    earlier.write_text(sp_out_text(route="B3LYP def2-SVP Freq", freq_block=True), encoding="utf-8")
     state["attempts"].insert(0, dict(state["attempts"][0], index=1, out_path=str(earlier)))
 
     data = collect_sp_report_data(tmp_path, state)

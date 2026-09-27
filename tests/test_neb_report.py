@@ -16,6 +16,12 @@ from orca_auto.orca.report.neb import (
 )
 from orca_auto.orca.report.render import ChartSeries, line_chart_svg
 from tests.engine_artifact_helpers import report_generation_target
+from tests.orca_output_helpers import (
+    FREQ_TS_BLOCK,
+    write_neb_inp,
+    write_neb_irc_out,
+    write_neb_out,
+)
 
 
 @pytest.mark.parametrize(
@@ -56,189 +62,6 @@ def test_ts_refinement_cycles_keep_last_finite_energy_and_skip_empty_cycles() ->
     )
 
     assert _parse_ts_refinement_steps(text) == ((1, -2.0), (1, -3.0))
-
-
-_COORDS_BLOCK = """
----------------------------------
-CARTESIAN COORDINATES (ANGSTROEM)
----------------------------------
-  H      0.000000    0.000000    0.000000
-  O      1.200000    0.000000    0.000000
-  O      3.000000    0.000000    0.000000
-
-"""
-
-_OPT_CYCLES_BLOCK = """
-                *** Geometry Optimization Cycle   1 ***
-
-FINAL SINGLE POINT ENERGY      -343.99900000
-
-                *** Geometry Optimization Cycle   2 ***
-
-FINAL SINGLE POINT ENERGY      -343.99864000
-
-"""
-
-_NEB_BLOCK = """
-----------------------
-NEB settings
-----------------------
-Method type                             ....  climbing image
-Tangent type                            ....  improved
-Number of intermediate images           ....  8
-Generation of initial path              ....  image dependent pair potential
-Initial path via TS guess               ....  off
-
-Optimization method:
-Method                                  ....  L-BFGS
-Max. iterations                         ....  500
-
-Generation of  the initial path:
-Writing initial trajectory to file      ....  nebts_initial_path_trj.xyz
-
-Starting iterations:
-Optim.  Iteration  HEI  E(HEI)-E(0)  max(|Fp|)   RMS(Fp)    dS
-Switch-on CI threshold               0.020000
-   LBFGS     0      5    0.372340    0.129615   0.029150  12.1839
-   LBFGS     1      5    0.352980    0.104320   0.024586  12.1349
-Image  6 will be converted to a climbing image in the next iteration (max(|Fp|) < 0.0200)
-Optim.  Iteration  CI   E(CI)-E(0)   max(|Fp|)   RMS(Fp)    dS     max(|FCI|)   RMS(FCI)
-Convergence thresholds               0.020000   0.010000            0.002000    0.001000
-   LBFGS    49      6    0.130964    0.016940   0.003526  15.3056    0.017426    0.005167
-   LBFGS    50      6    0.129316    0.045416   0.007419  15.4226    0.040132    0.010358
-
-                    *********************H U R R A Y*********************
-                    ***        THE NEB OPTIMIZATION HAS CONVERGED     ***
-                    *****************************************************
-
-                    ***********************HURRAY************************
-                    ***        THE TS OPTIMIZATION HAS CONVERGED      ***
-                    *****************************************************
----------------------------------------------------------------
-                      PATH SUMMARY FOR NEB-TS
----------------------------------------------------------------
-All forces in Eh/Bohr. Global forces for TS.
-Image     E(Eh)   dE(kcal/mol)  max(|Fp|)  RMS(Fp)
-  0    -344.08225     0.00       0.00014   0.00003
-  1    -344.07675     3.45       0.00232   0.00071
-  2    -344.07387     5.26       0.01427   0.00363
-  3    -344.07067     7.27       0.00282   0.00105
-  4    -344.04841    21.23       0.00130   0.00058
-  5    -344.01506    42.16       0.00124   0.00056
-  6    -343.99728    53.32       0.00150   0.00060 <= CI
- TS    -343.99864    52.47       0.00013   0.00005 <= TS
-  7    -344.03091    32.22       0.00151   0.00061
-  8    -344.06788     9.02       0.00179   0.00073
-  9    -344.07676     3.45       0.00026   0.00009
-
-"""
-
-_FREQ_TS_BLOCK = """
------------------------
-VIBRATIONAL FREQUENCIES
------------------------
-
-     0:       0.00 cm**-1
-     1:       0.00 cm**-1
-     2:       0.00 cm**-1
-     3:       0.00 cm**-1
-     4:       0.00 cm**-1
-     5:       0.00 cm**-1
-     6:    -410.20 cm**-1 ***imaginary mode***
-     7:     120.00 cm**-1
-     8:     300.00 cm**-1
-
-------------
-NORMAL MODES
-------------
-
-                  0          1          2          3          4          5
-      0       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      1       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      2       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      3       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      4       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      5       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      6       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      7       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-      8       0.000000   0.000000   0.000000   0.000000   0.000000   0.000000
-                  6          7          8
-      0       0.800000   0.100000   0.000000
-      1       0.000000   0.000000   0.100000
-      2       0.000000   0.000000   0.000000
-      3      -0.400000   0.200000   0.000000
-      4       0.000000   0.000000   0.300000
-      5       0.000000   0.000000   0.000000
-      6       0.000000   0.500000   0.000000
-      7       0.000000   0.000000   0.700000
-      8       0.000000   0.000000   0.000000
-
-IR SPECTRUM
-"""
-
-_IRC_BLOCK = """
---------------------------------------------------------------------------------
-                   Intrinsic Reaction Coordinate Calculation
---------------------------------------------------------------------------------
-
-Settings:
-Direction                           .... both
-Storing full IRC trajectory in      .... neb_IRC_Full.xyz
-
-----------------------
-IRC PATH SUMMARY
-----------------------
-All gradients are in Eh/Bohr.
-
-Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
-  1    -344.015000    -11.12       0.00160   0.00080
-  2    -343.998640      0.00       0.00200   0.00090 <= TS
-  3    -344.020000    -14.26       0.00150   0.00070
-
-"""
-
-
-def _write_neb_inp(path: Path) -> None:
-    path.write_text(
-        "\n".join(
-            [
-                "! NEB-TS B3LYP def2-SVP Freq",
-                "",
-                "%neb",
-                '  neb_end_xyzfile "product.xyz"',
-                "end",
-                "",
-                "* xyzfile 0 1 reactant.xyz",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-
-def _write_neb_out(path: Path) -> None:
-    path.write_text(
-        "! NEB-TS B3LYP def2-SVP Freq\n"
-        + _COORDS_BLOCK
-        + _NEB_BLOCK
-        + _OPT_CYCLES_BLOCK
-        + _FREQ_TS_BLOCK
-        + "\n****ORCA TERMINATED NORMALLY****\n",
-        encoding="utf-8",
-    )
-
-
-def _write_neb_irc_out(path: Path) -> None:
-    path.write_text(
-        "! NEB-TS B3LYP def2-SVP Freq IRC\n"
-        + _COORDS_BLOCK
-        + _NEB_BLOCK
-        + _OPT_CYCLES_BLOCK
-        + _FREQ_TS_BLOCK
-        + _IRC_BLOCK
-        + "\n****ORCA TERMINATED NORMALLY****\n",
-        encoding="utf-8",
-    )
 
 
 def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
@@ -282,9 +105,9 @@ def _state(reaction_dir: Path, out_path: Path) -> dict[str, Any]:
 def test_neb_report_decodes_each_attempt_output_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tail: str, encoding: str
 ) -> None:
-    _write_neb_inp(tmp_path / "rxn.inp")
+    write_neb_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_neb_out(out_path)
+    write_neb_out(out_path)
     if encoding != "utf-8":
         out_path.write_text(out_path.read_text(encoding="utf-8"), encoding=encoding)
     state = _state(tmp_path, out_path)
@@ -294,7 +117,7 @@ def test_neb_report_decodes_each_attempt_output_once(
     if tail:
         tail_path = tmp_path / "tail.out"
         if tail != "missing":
-            tail_path.write_text(_FREQ_TS_BLOCK if tail == "freq" else "", encoding="utf-8")
+            tail_path.write_text(FREQ_TS_BLOCK if tail == "freq" else "", encoding="utf-8")
             expected_reads[tail_path] = 1
         state["attempts"].append({"index": 2, "out_path": str(tail_path)})
         state["final_result"]["last_out_path"] = str(tail_path)
@@ -321,9 +144,9 @@ def test_neb_report_decodes_each_attempt_output_once(
 def test_neb_report_retains_empty_fallback_for_unreadable_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_neb_inp(tmp_path / "rxn.inp")
+    write_neb_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_neb_out(out_path)
+    write_neb_out(out_path)
     original_open = builtins.open
 
     def unreadable_open(file: Any, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
@@ -343,9 +166,9 @@ def test_neb_report_retains_empty_fallback_for_unreadable_output(
 
 
 def test_collect_neb_report_data_parses_path_and_iterations(tmp_path: Path) -> None:
-    _write_neb_inp(tmp_path / "rxn.inp")
+    write_neb_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_neb_out(out_path)
+    write_neb_out(out_path)
 
     data = collect_neb_report_data(tmp_path, _state(tmp_path, out_path))
 
@@ -374,9 +197,9 @@ def test_collect_neb_report_data_parses_path_and_iterations(tmp_path: Path) -> N
 
 
 def test_collect_neb_report_data_skips_contentless_final_attempt(tmp_path: Path) -> None:
-    _write_neb_inp(tmp_path / "rxn.inp")
+    write_neb_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_neb_out(out_path)
+    write_neb_out(out_path)
     dead_out = tmp_path / "rxn_retry.out"
     dead_out.write_text("ORCA crashed before the NEB driver started\n", encoding="utf-8")
 
@@ -430,9 +253,9 @@ def test_line_chart_svg_uses_marker_legend_for_single_point_series() -> None:
 
 
 def test_neb_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
-    _write_neb_inp(tmp_path / "rxn.inp")
+    write_neb_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_neb_out(out_path)
+    write_neb_out(out_path)
     missing_out = tmp_path / "rxn_retry.out"
     state = _state(tmp_path, out_path)
     state["attempts"].append({"index": 2, "out_path": str(missing_out)})
@@ -451,9 +274,9 @@ def test_neb_report_footer_omits_a_missing_final_output(tmp_path: Path) -> None:
 
 
 def test_neb_ts_report_renders_neb_specific_sections(tmp_path: Path) -> None:
-    _write_neb_inp(tmp_path / "rxn.inp")
+    write_neb_inp(tmp_path / "rxn.inp")
     out_path = tmp_path / "rxn.out"
-    _write_neb_out(out_path)
+    write_neb_out(out_path)
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)
@@ -479,13 +302,13 @@ def test_neb_ts_report_renders_neb_specific_sections(tmp_path: Path) -> None:
 
 
 def test_neb_ts_irc_report_composes_neb_and_irc_sections(tmp_path: Path) -> None:
-    _write_neb_inp(tmp_path / "rxn.inp")
+    write_neb_inp(tmp_path / "rxn.inp")
     (tmp_path / "rxn.inp").write_text(
         (tmp_path / "rxn.inp").read_text(encoding="utf-8").replace("Freq", "Freq IRC"),
         encoding="utf-8",
     )
     out_path = tmp_path / "rxn.out"
-    _write_neb_irc_out(out_path)
+    write_neb_irc_out(out_path)
 
     path = write_job_html_report(
         tmp_path, _state(tmp_path, out_path), generation_target=report_generation_target(tmp_path)

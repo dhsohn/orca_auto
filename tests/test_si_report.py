@@ -24,16 +24,7 @@ from orca_auto.orca.report.si import (
     write_si_block,
 )
 from tests.engine_artifact_helpers import report_generation_target
-
-
-def _frequency_section(freqs: tuple[float, ...]) -> list[str]:
-    return [
-        "-----------------------",
-        "VIBRATIONAL FREQUENCIES",
-        "-----------------------",
-        *(f"{index:4d}:   {freq:10.2f} cm**-1" for index, freq in enumerate(freqs)),
-        "",
-    ]
+from tests.orca_output_helpers import frequency_section, si_out_text
 
 
 def test_frequency_block_before_the_final_energy_is_not_reported(tmp_path: Path) -> None:
@@ -44,7 +35,7 @@ def test_frequency_block_before_the_final_energy_is_not_reported(tmp_path: Path)
         "\n".join(
             [
                 "|  1> ! B3LYP def2-SVP OptTS",
-                *_frequency_section((-650.0, 120.0)),
+                *frequency_section((-650.0, 120.0)),
                 "FINAL SINGLE POINT ENERGY      -100.100000000000",
                 "CARTESIAN COORDINATES (ANGSTROEM)",
                 "---------------------------------",
@@ -68,7 +59,7 @@ def test_frequency_block_after_the_last_final_energy_is_reported(tmp_path: Path)
         "\n".join(
             [
                 "|  1> ! B3LYP def2-SVP OptTS Freq",
-                *_frequency_section((-650.0, -120.0)),
+                *frequency_section((-650.0, -120.0)),
                 "------------",
                 "NORMAL MODES",
                 "------------",
@@ -83,7 +74,7 @@ def test_frequency_block_after_the_last_final_energy_is_reported(tmp_path: Path)
                 "  C      0.000000    0.000000    0.000000",
                 "",
                 "FINAL SINGLE POINT ENERGY      -100.200000000000",
-                *_frequency_section((-420.0, 120.0)),
+                *frequency_section((-420.0, 120.0)),
                 "                             ****ORCA TERMINATED NORMALLY****",
             ]
         ),
@@ -99,62 +90,6 @@ def test_frequency_block_after_the_last_final_energy_is_reported(tmp_path: Path)
     # The superseded Hessian's displacement vectors must not be paired with
     # the final frequencies.
     assert analysis.mode_matrix == {}
-
-
-def _out_text(
-    *,
-    route: str = "wB97X-D3 def2-TZVP CPCM(toluene) OptTS Freq",
-    energy: float = -1234.567890123456,
-    freqs: tuple[float, ...] = (),
-    thermo: bool = False,
-) -> str:
-    lines = [
-        "                                 Program Version 6.0.1 -  RELEASE  -",
-        f"|  1> ! {route}",
-        "|  2> * xyz 0 1",
-        "|  3> C 0.0 0.0 0.0",
-        "|  4> *",
-        "",
-        "CARTESIAN COORDINATES (ANGSTROEM)",
-        "---------------------------------",
-        "  C      0.000000    1.234567   -0.987654",
-        "  H      0.123456   -0.654321    2.000000",
-        "",
-        f"FINAL SINGLE POINT ENERGY     {energy:.12f}",
-        "THE OPTIMIZATION HAS CONVERGED",
-    ]
-    if freqs:
-        lines += ["", "VIBRATIONAL FREQUENCIES", "-----------------------", ""]
-        lines += [f"{index:6d}: {value:12.2f} cm**-1" for index, value in enumerate(freqs)]
-        lines += [
-            "",
-            "NORMAL MODES",
-            "------------",
-            "",
-            "                  0          1",
-            "      0       0.700000   0.100000",
-            "      1       0.100000   0.000000",
-            "      2       0.000000   0.000000",
-            "      3       0.500000   0.000000",
-            "      4       0.000000   0.200000",
-            "      5       0.000000   0.100000",
-        ]
-    if thermo:
-        lines += [
-            "--------------------------",
-            "THERMOCHEMISTRY AT 298.15K",
-            "--------------------------",
-            "Zero point energy                ...      0.08843782 Eh",
-            "Total enthalpy                   ...  -1234.40000000 Eh",
-            "Final Gibbs free energy          ...  -1234.45000000 Eh",
-            "G-E(el)                          ...      0.11789012 Eh",
-        ]
-    lines += [
-        "",
-        "                             ****ORCA TERMINATED NORMALLY****",
-        "TOTAL RUN TIME: 0 days 0 hours 1 minutes 2 seconds 3 msec",
-    ]
-    return "\n".join(lines)
 
 
 def _job_dir(
@@ -202,7 +137,7 @@ def test_si_block_does_not_publish_unverified_electronic_state(
         tmp_path,
         "missing_electronic_state",
         inp_text=_SP_INP,
-        out_text=_out_text().replace("|  2> * xyz 0 1", geometry_line),
+        out_text=si_out_text().replace("|  2> * xyz 0 1", geometry_line),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -219,7 +154,7 @@ def test_si_block_publishes_verified_uppercase_geometry_state(tmp_path: Path) ->
         tmp_path,
         "uppercase_electronic_state",
         inp_text=_SP_INP.replace("* xyz 0 1", "* XYZ -1 2"),
-        out_text=_out_text().replace("* xyz 0 1", "* XYZ -1 2"),
+        out_text=si_out_text().replace("* xyz 0 1", "* XYZ -1 2"),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -248,7 +183,9 @@ def test_final_out_path_never_substitutes_an_earlier_attempt(tmp_path: Path) -> 
 
 
 def test_missing_output_route_does_not_invent_a_single_point_label(tmp_path: Path) -> None:
-    output = "\n".join(line for line in _out_text().splitlines() if not line.startswith("|  1> !"))
+    output = "\n".join(
+        line for line in si_out_text().splitlines() if not line.startswith("|  1> !")
+    )
     reaction_dir, state = _job_dir(
         tmp_path,
         "missing_route",
@@ -270,7 +207,7 @@ def test_ts_block_renders_thermochemistry_mode_and_coordinates(tmp_path: Path) -
         tmp_path,
         "TS_candidate_03",
         inp_text=_TS_INP,
-        out_text=_out_text(freqs=(-512.3, 120.0), thermo=True),
+        out_text=si_out_text(freqs=(-512.3, 120.0), thermo=True),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -303,7 +240,7 @@ def test_minimum_with_imaginary_mode_gets_warning(tmp_path: Path) -> None:
         tmp_path,
         "opt_job",
         inp_text=_OPT_INP,
-        out_text=_out_text(route="B3LYP def2-SVP Opt Freq", freqs=(-512.3, 120.0), thermo=True),
+        out_text=si_out_text(route="B3LYP def2-SVP Opt Freq", freqs=(-512.3, 120.0), thermo=True),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -318,7 +255,7 @@ def test_uncharacterized_stationary_point_gets_warning(tmp_path: Path) -> None:
         tmp_path,
         "opt_no_freq",
         inp_text="! B3LYP def2-SVP Opt\n* xyz 0 1\nC 0 0 0\n*\n",
-        out_text=_out_text(route="B3LYP def2-SVP Opt"),
+        out_text=si_out_text(route="B3LYP def2-SVP Opt"),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -331,7 +268,7 @@ def test_sp_block_has_no_nimag_and_no_warnings(tmp_path: Path) -> None:
         tmp_path,
         "sp_job",
         inp_text=_SP_INP,
-        out_text=_out_text(route="wB97M-V def2-TZVPP"),
+        out_text=si_out_text(route="wB97M-V def2-TZVPP"),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -353,7 +290,7 @@ def test_non_stationary_jobs_get_no_block(tmp_path: Path) -> None:
     )
     for name, inp_text in cases:
         reaction_dir, state = _job_dir(
-            tmp_path, name, inp_text=inp_text, out_text=_out_text(route="B3LYP def2-SVP Opt")
+            tmp_path, name, inp_text=inp_text, out_text=si_out_text(route="B3LYP def2-SVP Opt")
         )
         assert structure_kind(Path(state["selected_inp"])) is None, name
         assert collect_structure_evidence(reaction_dir, state) is None, name
@@ -389,7 +326,7 @@ def test_every_relaxed_scan_form_gets_no_block(tmp_path: Path, geom_block: str) 
         tmp_path,
         "scan_job",
         inp_text="! B3LYP def2-SVP Opt\n" + geom_block + "* xyz 0 1\nC 0 0 0\n*\n",
-        out_text=_out_text(route="B3LYP def2-SVP Opt"),
+        out_text=si_out_text(route="B3LYP def2-SVP Opt"),
     )
 
     assert structure_kind(Path(state["selected_inp"])) is None
@@ -411,7 +348,7 @@ Step     E(Eh)        dE(kcal/mol)  max(|G|)  RMS(G)
         tmp_path,
         "irc_job",
         inp_text=_IRC_INP,
-        out_text=_out_text(route="B3LYP def2-SVP IRC") + irc_summary,
+        out_text=si_out_text(route="B3LYP def2-SVP IRC") + irc_summary,
     )
 
     assert structure_kind(Path(state["selected_inp"])) is None
@@ -435,7 +372,7 @@ def test_scan_functional_optimization_is_a_min_block(tmp_path: Path) -> None:
         tmp_path,
         "scan_functional_job",
         inp_text="! SCAN def2-SVP Opt Freq\n* xyz 0 1\nC 0 0 0\n*\n",
-        out_text=_out_text(route="SCAN def2-SVP Opt Freq", freqs=(30.0, 120.0), thermo=True),
+        out_text=si_out_text(route="SCAN def2-SVP Opt Freq", freqs=(30.0, 120.0), thermo=True),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -449,7 +386,9 @@ def test_neb_ts_route_is_still_a_ts_block(tmp_path: Path) -> None:
         tmp_path,
         "neb_ts_job",
         inp_text="! NEB-TS B3LYP def2-SVP Freq\n* xyz 0 1\nC 0 0 0\n*\n",
-        out_text=_out_text(route="NEB-TS B3LYP def2-SVP Freq", freqs=(-512.3, 120.0), thermo=True),
+        out_text=si_out_text(
+            route="NEB-TS B3LYP def2-SVP Freq", freqs=(-512.3, 120.0), thermo=True
+        ),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -458,7 +397,7 @@ def test_neb_ts_route_is_still_a_ts_block(tmp_path: Path) -> None:
 
 
 def test_incomplete_job_gets_no_block(tmp_path: Path) -> None:
-    reaction_dir, state = _job_dir(tmp_path, "failed_job", inp_text=_TS_INP, out_text=_out_text())
+    reaction_dir, state = _job_dir(tmp_path, "failed_job", inp_text=_TS_INP, out_text=si_out_text())
     state["status"] = "failed"
 
     assert collect_structure_evidence(reaction_dir, state) is None
@@ -466,7 +405,7 @@ def test_incomplete_job_gets_no_block(tmp_path: Path) -> None:
 
 def test_write_si_block_removes_stale_file_for_blockless_job(tmp_path: Path) -> None:
     reaction_dir, state = _job_dir(
-        tmp_path, "reused_dir", inp_text=_TS_INP, out_text=_out_text(freqs=(-512.3, 120.0))
+        tmp_path, "reused_dir", inp_text=_TS_INP, out_text=si_out_text(freqs=(-512.3, 120.0))
     )
 
     generation, identity = report_generation_target(reaction_dir)
@@ -487,7 +426,7 @@ def test_ts_block_parses_frequencies_from_utf16_output(tmp_path: Path) -> None:
     inp = reaction_dir / "job.inp"
     inp.write_text(_TS_INP, encoding="utf-8")
     out = reaction_dir / "job.out"
-    out.write_text(_out_text(freqs=(-512.3, 120.0), thermo=True), encoding="utf-16")
+    out.write_text(si_out_text(freqs=(-512.3, 120.0), thermo=True), encoding="utf-16")
     state: dict[str, Any] = {
         "status": "completed",
         "selected_inp": str(inp),
@@ -508,7 +447,9 @@ def test_tightopt_route_is_a_min_block(tmp_path: Path) -> None:
         tmp_path,
         "tightopt_job",
         inp_text="! B3LYP def2-SVP TightOpt Freq\n* xyz 0 1\nC 0 0 0\n*\n",
-        out_text=_out_text(route="B3LYP def2-SVP TightOpt Freq", freqs=(30.0, 120.0), thermo=True),
+        out_text=si_out_text(
+            route="B3LYP def2-SVP TightOpt Freq", freqs=(30.0, 120.0), thermo=True
+        ),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -557,7 +498,7 @@ def test_relaxed_scan_of_any_optimization_gets_no_block(tmp_path: Path, route: s
     inp_text = _SCAN_INP.replace("! B3LYP def2-SVP Opt\n", f"{route}\n")
     assert inp_text.startswith(f"{route}\n%geom")
     reaction_dir, state = _job_dir(
-        tmp_path, "scan_job", inp_text=inp_text, out_text=_out_text(route=route[2:])
+        tmp_path, "scan_job", inp_text=inp_text, out_text=si_out_text(route=route[2:])
     )
 
     assert structure_kind(Path(state["selected_inp"])) is None
@@ -582,7 +523,7 @@ def test_unreadable_input_is_an_error_not_a_blockless_job(tmp_path: Path) -> Non
         tmp_path,
         "archived_job",
         inp_text=_TS_INP,
-        out_text=_out_text(freqs=(-512.3, 120.0), thermo=True),
+        out_text=si_out_text(freqs=(-512.3, 120.0), thermo=True),
     )
     Path(state["selected_inp"]).unlink()
 
@@ -598,7 +539,7 @@ def test_small_negative_modes_are_noise_not_imaginary(tmp_path: Path) -> None:
         tmp_path,
         "soft_mode_ts",
         inp_text=_TS_INP,
-        out_text=_out_text(freqs=(-512.3, -6.2, 120.0), thermo=True),
+        out_text=si_out_text(freqs=(-512.3, -6.2, 120.0), thermo=True),
     )
 
     block = collect_structure_evidence(reaction_dir, state)
@@ -611,7 +552,7 @@ def test_small_negative_modes_are_noise_not_imaginary(tmp_path: Path) -> None:
 def test_thermo_rows_omit_temperature_the_output_never_stated(tmp_path: Path) -> None:
     # No THERMOCHEMISTRY AT line parsed -> no fabricated "(298.15 K)" label;
     # the job may have run at a different %freq Temp.
-    out_text = _out_text(freqs=(-512.3, 120.0), thermo=True).replace(
+    out_text = si_out_text(freqs=(-512.3, 120.0), thermo=True).replace(
         "THERMOCHEMISTRY AT 298.15K", ""
     )
     reaction_dir, state = _job_dir(
@@ -627,14 +568,14 @@ def test_thermo_rows_omit_temperature_the_output_never_stated(tmp_path: Path) ->
 
 def test_parsed_final_output_caches_by_mtime(tmp_path: Path) -> None:
     out = tmp_path / "job.out"
-    out.write_text(_out_text(energy=-1.0), encoding="utf-8")
+    out.write_text(si_out_text(energy=-1.0), encoding="utf-8")
     os.utime(out, ns=(1_000_000_000, 1_000_000_000))
 
     first, _ = parsed_final_output(out)
     again, _ = parsed_final_output(out)
     assert again is first  # unchanged file -> cache hit, no re-parse
 
-    out.write_text(_out_text(energy=-2.0), encoding="utf-8")
+    out.write_text(si_out_text(energy=-2.0), encoding="utf-8")
     os.utime(out, ns=(2_000_000_000, 2_000_000_000))
     second, _ = parsed_final_output(out)
     assert first.energy_hartree == pytest.approx(-1.0)
