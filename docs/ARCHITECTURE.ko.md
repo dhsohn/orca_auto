@@ -170,11 +170,17 @@ fence, 발행 fence, 취소 확인, 인수는 모두 `generation_identity`를 �
 ORCA 자식은 큐 항목 조회, 중단된 generation 복구, 부모의 실행권 인계 대기,
 해당 generation 실행을 직접 수행한다. 검증한 입력, 제출된 자원 요청, 실행 스냅샷,
 큐 식별자는 인수한 행에서 한 번 만든 `RunExecutionContext` 하나로 실행 단계에 바로
-전달되며, RAM scratch 크기도 그 요청으로 정한다. 자식이 실행권 슬롯을 바꾸는 일은
-모두 `execution._child_admission_slot` 규칙 하나를 거친다. 자식은 슬롯을 활성화하고,
-실행이 정상 반환하면 엔진 프로세스를 완료 처리하며, 예외가 나면 슬롯을 그대로 둔다.
-자식이 해제하는 슬롯은 활성화 시점에 살아 있지 않은 슬롯뿐이다. 성공·중단·예외
-모두 슬롯 해제는 자식이 끝난 뒤 부모가 한다.
+전달되며, RAM scratch 크기도 그 요청으로 정한다. `execute_locked_run`은 이를 한 흐름으로
+실행한다: `run.lock`, `recover_crashed_state`, 아래의 슬롯 규칙, 그다음 generation의
+완료 출력 채택 또는 실행마다 하나뿐인 `OrcaRunner`. 그 생성자가 실행에 쓰는 것을 모두
+밝힌다: 스냅샷의 실행 파일과 그 식별자, generation 디렉터리와 그 식별자, 중지 요청,
+RAM scratch 정책, 슬롯의 엔진 프로세스 준비·등록 함수, 그리고 실행 전후마다 부르는
+스냅샷 검증 함수. runner는 첫 상태 기록 전에 RAM scratch를 예약하고 시도를 실행한다.
+
+자식이 실행권 슬롯을 바꾸는 일은 모두 `execution._child_admission_slot` 규칙 하나를
+거친다. 자식은 슬롯을 활성화하고, 실행이 정상 반환하면 엔진 프로세스를 완료 처리하며,
+예외가 나면 슬롯을 그대로 둔다. 자식이 해제하는 슬롯은 활성화 시점에 살아 있지 않은
+슬롯뿐이다. 성공·중단·예외 모두 슬롯 해제는 자식이 끝난 뒤 부모가 한다.
 `tests/core/queue/test_ownership_guards.py`는 `release_slot`과
 `complete_slot_engine_process`를 이 소유자만 호출하도록 제한한다. 슬롯 하나의 생명주기:
 

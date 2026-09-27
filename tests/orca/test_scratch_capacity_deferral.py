@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -27,7 +27,7 @@ from orca_auto.core.queue.deferral import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.orca import execution, worker_execution
-from orca_auto.orca.config import AppConfig, PathsConfig, load_config
+from orca_auto.orca.config import load_config
 from orca_auto.orca.execution_binding import (
     orca_execution_started_evidence,
 )
@@ -35,14 +35,17 @@ from orca_auto.orca.orca_runner import OrcaRunner, RunResult
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_generation_token, same_generation
 from orca_auto.orca.recovery_rebind import RECOVERY_REBIND_COUNT_METADATA_KEY
+from orca_auto.orca.run_context import RunExecutionContext
+from orca_auto.orca.scratch import OrcaScratchPolicy
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state_reading import load_state, state_path
 from tests.conftest import (
+    bound_run_context,
     build_submitted_snapshot,
     claim_next_entry,
     make_app_cfg,
+    make_orca_runner,
     make_queue_entry,
-    make_run_context,
     write_config_file,
     write_fake_orca,
 )
@@ -352,21 +355,16 @@ def test_other_scratch_failures_still_fail_the_row(
 # --- the run itself -------------------------------------------------------------------------
 
 
-class _ManagedRunner(OrcaRunner):
-    launches: list[Path] = []
+class _ScratchRun(NamedTuple):
+    reaction_dir: Path
+    scratch_root: Path
+    notifications: list[Any]
+    launches: list[Path]
+    context: RunExecutionContext
 
-    def __init__(self, orca_executable: str) -> None:
-        super().__init__(orca_executable)
-        self.set_running_job_registrar(lambda _job: None, prepare=lambda: None)
 
-    def _run_in_place(
-        self, inp_path: Path, *, working_directory_fd: int | None = None
-    ) -> RunResult:
-        assert working_directory_fd is not None
-        type(self).launches.append(inp_path)
-        out = inp_path.with_suffix(".out")
-        out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
-        return RunResult(out_path=str(out), return_code=0)
+def _no_stop() -> bool:
+    return False
 
 
 def _scratch_run(
@@ -375,7 +373,9 @@ def _scratch_run(
     shm: Path,
     *,
     available_memory_bytes: int,
-) -> tuple[Path, Path, list[Any], Any]:
+) -> _ScratchRun:
+    """A bound run with RAM scratch whose launch writes a completed output in the workspace."""
+
     monkeypatch.setattr(
         workspace_mod, "_linux_available_memory_bytes", lambda: available_memory_bytes
     )
@@ -385,10 +385,20 @@ def _scratch_run(
     inp = reaction_dir / "rxn.inp"
     inp.write_text("! SP\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8")
     notifications: list[Any] = []
+    launches: list[Path] = []
 
     @contextmanager
     def passthrough(*_args: object, **_kwargs: object):
         yield
+
+    def run_in_place(
+        _runner: OrcaRunner, inp_path: Path, *, working_directory_fd: int | None = None
+    ) -> RunResult:
+        assert working_directory_fd is not None
+        launches.append(inp_path)
+        out = inp_path.with_suffix(".out")
+        out.write_text("****ORCA TERMINATED NORMALLY****\n", encoding="utf-8")
+        return RunResult(out_path=str(out), return_code=0)
 
     monkeypatch.setattr(execution, "acquire_run_lock", passthrough)
     monkeypatch.setattr(execution, "_child_admission_slot", passthrough)
@@ -397,18 +407,15 @@ def _scratch_run(
         "started_notification_callback",
         lambda _cfg: notifications.append,
     )
-    _ManagedRunner.launches = []
-    context = make_run_context(
-        AppConfig(
-            paths=PathsConfig(orca_executable="/bin/true"),
-            scratch=ScratchConfig(root=str(shm / "orca_auto"), min_free_gb=1),
-            resources=CommonResourceConfig(max_memory_gb_per_task=1),
-        ),
-        reaction_dir,
-        inp,
-        admission_root=reaction_dir.parent / ".admission",
+    monkeypatch.setattr(OrcaRunner, "_run_in_place", run_in_place)
+    cfg = make_app_cfg(
+        tmp_path,
+        orca_executable="/bin/true",
+        scratch=ScratchConfig(root=str(shm / "orca_auto"), min_free_gb=1),
+        resources=CommonResourceConfig(max_memory_gb_per_task=1),
     )
-    return reaction_dir, shm / "orca_auto", notifications, context
+    context = bound_run_context(cfg, inp)
+    return _ScratchRun(reaction_dir, shm / "orca_auto", notifications, launches, context)
 
 
 def test_capacity_refusal_before_launch_writes_no_state_and_sends_no_notification(
@@ -416,19 +423,17 @@ def test_capacity_refusal_before_launch_writes_no_state_and_sends_no_notificatio
     tmp_path: Path,
     fake_shm: Path,
 ) -> None:
-    reaction_dir, scratch_root, notifications, context = _scratch_run(
-        monkeypatch, tmp_path, fake_shm, available_memory_bytes=1
-    )
-    listing_before = _generation_listing(reaction_dir)
+    run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=1)
+    listing_before = _generation_listing(run.reaction_dir)
 
     with pytest.raises(EngineScratchCapacityError, match="RAM headroom"):
-        execution.execute_locked_run(context, runner_cls=_ManagedRunner)
+        execution.execute_locked_run(run.context, stop_requested=_no_stop)
 
-    assert _generation_listing(reaction_dir) == listing_before
-    assert not state_path(reaction_dir).exists()
-    assert notifications == []
-    assert _ManagedRunner.launches == []
-    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+    assert _generation_listing(run.reaction_dir) == listing_before
+    assert not state_path(run.reaction_dir).exists()
+    assert run.notifications == []
+    assert run.launches == []
+    assert [path for path in run.scratch_root.iterdir() if path.name.startswith("attempt-")] == []
 
 
 def test_execute_orca_run_does_not_turn_the_refusal_into_an_ordinary_failure(
@@ -436,12 +441,10 @@ def test_execute_orca_run_does_not_turn_the_refusal_into_an_ordinary_failure(
     tmp_path: Path,
     fake_shm: Path,
 ) -> None:
-    _reaction_dir, _root, _notifications, context = _scratch_run(
-        monkeypatch, tmp_path, fake_shm, available_memory_bytes=1
-    )
+    run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=1)
 
     with pytest.raises(EngineScratchCapacityError):
-        execution.execute_orca_run(context, runner_cls=_ManagedRunner)
+        execution.execute_orca_run(run.context, stop_requested=_no_stop)
 
 
 def test_admitted_run_launches_in_the_workspace_it_reserved_before_writing_state(
@@ -449,26 +452,24 @@ def test_admitted_run_launches_in_the_workspace_it_reserved_before_writing_state
     tmp_path: Path,
     fake_shm: Path,
 ) -> None:
-    reaction_dir, scratch_root, _notifications, context = _scratch_run(
-        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
-    )
+    run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63)
     created: list[bool] = []
     real_create = EngineScratchWorkspace.create.__func__  # type: ignore[attr-defined]
 
     def counting_create(cls: Any, *args: Any, **kwargs: Any) -> Any:
-        created.append(state_path(reaction_dir).exists())
+        created.append(state_path(run.reaction_dir).exists())
         return real_create(cls, *args, **kwargs)
 
     monkeypatch.setattr(EngineScratchWorkspace, "create", classmethod(counting_create))
 
-    exit_code = execution.execute_locked_run(context, runner_cls=_ManagedRunner)
+    exit_code = execution.execute_locked_run(run.context, stop_requested=_no_stop)
 
     assert exit_code == 0
     assert created == [False]  # one workspace, reserved before the first state write
-    assert len(_ManagedRunner.launches) == 1
-    state = load_state(reaction_dir)
+    assert len(run.launches) == 1
+    state = load_state(run.reaction_dir)
     assert state is not None and state["status"] == "completed"
-    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+    assert [path for path in run.scratch_root.iterdir() if path.name.startswith("attempt-")] == []
 
 
 def test_reserved_workspace_is_removed_when_the_run_fails_before_launch(
@@ -478,21 +479,19 @@ def test_reserved_workspace_is_removed_when_the_run_fails_before_launch(
 ) -> None:
     # A workspace left behind by a live owner that then exits would make every
     # later scratch attempt fail closed as stale.
-    _reaction_dir, scratch_root, _notifications, context = _scratch_run(
-        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
-    )
+    run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63)
 
     def unreadable_state(*_args: Any, **_kwargs: Any) -> Any:
-        assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")]
+        assert [path for path in run.scratch_root.iterdir() if path.name.startswith("attempt-")]
         raise OSError("state directory is unreadable")
 
     monkeypatch.setattr(execution, "load_or_create_state", unreadable_state)
 
     with pytest.raises(OSError, match="unreadable"):
-        execution.execute_locked_run(context, runner_cls=_ManagedRunner)
+        execution.execute_locked_run(run.context, stop_requested=_no_stop)
 
-    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
-    assert _ManagedRunner.launches == []
+    assert [path for path in run.scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+    assert run.launches == []
 
 
 def test_workspace_reserved_for_another_input_is_never_used_to_launch(
@@ -500,24 +499,24 @@ def test_workspace_reserved_for_another_input_is_never_used_to_launch(
     tmp_path: Path,
     fake_shm: Path,
 ) -> None:
-    reaction_dir, scratch_root, _notifications, context = _scratch_run(
-        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
-    )
-    derived = reaction_dir / "rxn_resume.inp"
+    run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63)
+    generation = run.context.selected_inp.parent
+    derived = generation / "rxn_resume.inp"
     derived.write_text("! SP\n* xyz 0 1\nHe 0 0 0\n*\n", encoding="utf-8")
-    runner = _ManagedRunner("/bin/true")
-    runner.set_scratch_policy(
-        execution.OrcaScratchPolicy(
-            root=scratch_root, min_free_bytes=1024**3, max_task_memory_bytes=1024**3
-        )
+    runner = make_orca_runner(
+        "/bin/true",
+        generation,
+        scratch_policy=OrcaScratchPolicy(
+            root=run.scratch_root, min_free_bytes=1024**3, max_task_memory_bytes=1024**3
+        ),
     )
 
-    runner.prepare(context.selected_inp)
+    runner.prepare(run.context.selected_inp)
     result = runner.run(derived)
 
-    assert [path.name for path in _ManagedRunner.launches] == ["rxn_resume.inp"]
+    assert [path.name for path in run.launches] == ["rxn_resume.inp"]
     assert Path(result.out_path) == derived.with_suffix(".out")
-    assert [path for path in scratch_root.iterdir() if path.name.startswith("attempt-")] == []
+    assert [path for path in run.scratch_root.iterdir() if path.name.startswith("attempt-")] == []
 
 
 def test_capacity_refusal_after_the_run_started_is_a_failed_attempt_not_a_deferral(
@@ -527,25 +526,22 @@ def test_capacity_refusal_after_the_run_started_is_a_failed_attempt_not_a_deferr
 ) -> None:
     # Once state and the started notification exist, the job has started:
     # waiting again would be an automatic rerun of a recorded attempt.
-    reaction_dir, _root, notifications, context = _scratch_run(
-        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
-    )
+    run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63)
 
-    class RefusedAtLaunch(_ManagedRunner):
-        def prepare(self, inp_path: Path) -> None:
-            return None
+    def refused_at_launch(_runner: OrcaRunner, _inp_path: Path) -> RunResult:
+        raise EngineScratchCapacityError(_REFUSAL)
 
-        def run(self, inp_path: Path) -> RunResult:
-            raise EngineScratchCapacityError(_REFUSAL)
+    monkeypatch.setattr(OrcaRunner, "prepare", lambda _runner, _inp_path: None)
+    monkeypatch.setattr(OrcaRunner, "run", refused_at_launch)
 
-    exit_code = execution.execute_locked_run(context, runner_cls=RefusedAtLaunch)
+    exit_code = execution.execute_locked_run(run.context, stop_requested=_no_stop)
 
     assert exit_code == 1
-    state = load_state(reaction_dir)
+    state = load_state(run.reaction_dir)
     assert state is not None and state["status"] == "failed"
     final_result = state["final_result"]
     assert final_result is not None and final_result["reason"] == "runner_exception"
-    assert len(notifications) == 1
+    assert len(run.notifications) == 1
 
 
 def test_unsafe_scratch_root_still_fails_the_attempt_with_its_state_and_notifications(
@@ -553,21 +549,19 @@ def test_unsafe_scratch_root_still_fails_the_attempt_with_its_state_and_notifica
     tmp_path: Path,
     fake_shm: Path,
 ) -> None:
-    reaction_dir, scratch_root, notifications, context = _scratch_run(
-        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
-    )
-    scratch_root.mkdir()
-    (scratch_root / "attempt-unknown").mkdir()  # no manifest: ownership cannot be verified
+    run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63)
+    run.scratch_root.mkdir()
+    (run.scratch_root / "attempt-unknown").mkdir()  # no manifest: ownership cannot be verified
 
-    exit_code = execution.execute_locked_run(context, runner_cls=_ManagedRunner)
+    exit_code = execution.execute_locked_run(run.context, stop_requested=_no_stop)
 
     assert exit_code == 1
-    state = load_state(reaction_dir)
+    state = load_state(run.reaction_dir)
     assert state is not None and state["status"] == "failed"
     final_result = state["final_result"]
     assert final_result is not None and final_result["reason"] == "runner_exception"
-    assert len(notifications) == 1
-    assert _ManagedRunner.launches == []
+    assert len(run.notifications) == 1
+    assert run.launches == []
 
 
 # --- the whole worker child, with the real runner and a real admission slot ---------------

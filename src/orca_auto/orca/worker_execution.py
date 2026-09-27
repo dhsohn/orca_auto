@@ -1,11 +1,11 @@
 """Worker-child execution of one claimed ORCA queue row.
 
 ``run_worker_child_job`` is the child process entry point: it looks up the
-claimed row, lets ``recovery_rebind`` move a crash-interrupted
-claim into a replacement generation, waits for the parent's admission
-hand-off, and then runs the bound generation through ``execute_orca_run``
-under a shutdown-aware runner that re-verifies the immutable snapshot around
-the engine launch. Pre-launch rejections are recorded on the queue row,
+claimed row, lets ``recovery_rebind`` move a crash-interrupted claim into a
+replacement generation, waits for the parent's admission hand-off, and then
+runs the bound generation through ``execute_orca_run``, whose runner stops on a
+shutdown or cancel request and re-verifies the immutable snapshot around the
+engine launch. Pre-launch rejections are recorded on the queue row,
 RAM-scratch capacity refusals return the row to the queue (exit
 ``ADMISSION_DEFERRED_EXIT_CODE``), and a shutdown or cancel during the run
 returns the row to the queue, or marks it cancelled with its replay marker
@@ -20,12 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from orca_auto.core.admission import admission_dir
-from orca_auto.core.confined_io import require_confined_regular_file
-from orca_auto.core.engine_scratch import (
-    EngineScratchCapacityError,
-    attach_scratch_provenance_mapping_to_exception,
-    scratch_provenance_from_exception,
-)
+from orca_auto.core.engine_scratch import EngineScratchCapacityError
 from orca_auto.core.queue.child import ChildWorkerShutdownController, await_parent_admission_handoff
 from orca_auto.core.queue.processes import install_shutdown_signal_handlers
 from orca_auto.core.queue.store import QueueLockTimeoutError
@@ -38,7 +33,7 @@ from .execution_binding import (
     validated_resource_request,
     verify_orca_execution_snapshot,
 )
-from .orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
+from .orca_runner import WorkerShutdownInterrupt
 from .output_adoption import completed_out_or_none
 from .queue.adapter import (
     cancellation_probe,
@@ -170,67 +165,8 @@ def _run_orca_job_for_entry(
     def stop_requested() -> bool:
         return should_cancel() or (shutdown_requested is not None and shutdown_requested())
 
-    class ShutdownAwareOrcaRunner(OrcaRunner):
-        def __init__(self, _configured_orca_executable: str) -> None:
-            super().__init__(context.orca_executable)
-            self._runtime_outputs_started = False
-            self.set_executable_identity(
-                context.execution_snapshot["executable_identities"]["orca"]
-            )
-            self.set_durable_directory_identity(
-                context.execution_snapshot["execution_dir_identity"]
-            )
-            self.set_shutdown_requested(stop_requested)
-
-        def prepare(self, inp_path: Path) -> None:
-            # Staging reads the generation, so keep run()'s verify-before-stage
-            # order. A snapshot that fails here is left for run() to report.
-            try:
-                context.verify_snapshot(allow_runtime_outputs=False)
-            except Exception:  # noqa: BLE001
-                return
-            super().prepare(inp_path)
-
-        def run(self, inp_path: Path) -> RunResult:
-            current_input = require_confined_regular_file(
-                Path(context.execution_snapshot["execution_dir"]),
-                inp_path,
-                label="ORCA queued execution input",
-            )
-            if (
-                current_input.parent != Path(context.execution_snapshot["execution_dir"]).resolve()
-                or current_input.suffix.lower() != ".inp"
-            ):
-                raise ValueError("ORCA queued execution input must be a private .inp file")
-            context.verify_snapshot(allow_runtime_outputs=self._runtime_outputs_started)
-            try:
-                result = super().run(inp_path)
-            except BaseException as run_exc:
-                self._runtime_outputs_started = True
-                try:
-                    context.verify_snapshot(allow_runtime_outputs=True)
-                except BaseException as verify_exc:
-                    provenance = scratch_provenance_from_exception(run_exc)
-                    if provenance:
-                        attach_scratch_provenance_mapping_to_exception(verify_exc, provenance)
-                    raise
-                raise
-            self._runtime_outputs_started = True
-            try:
-                context.verify_snapshot(allow_runtime_outputs=True)
-            except BaseException as verify_exc:
-                result_provenance = getattr(result, "scratch_provenance", None)
-                if isinstance(result_provenance, dict) and result_provenance:
-                    attach_scratch_provenance_mapping_to_exception(
-                        verify_exc,
-                        result_provenance,
-                    )
-                raise
-            result.execution_provenance = dict(context.execution_provenance)
-            return result
-
     try:
-        return execute_orca_run(context, runner_cls=ShutdownAwareOrcaRunner)
+        return execute_orca_run(context, stop_requested=stop_requested)
     except EngineScratchCapacityError as exc:
         return _defer_admission(entry, queue_root, reason=str(exc))
     except WorkerShutdownInterrupt as exc:

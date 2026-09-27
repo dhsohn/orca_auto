@@ -4,8 +4,9 @@ Tests take the fixtures. Where a fixture does not fit (a helper module, a
 builder called with test-specific arguments, a second root in one test) they
 import the plain builders (``make_app_cfg``, ``write_fake_orca``,
 ``build_submitted_snapshot``, ``write_config_file``, ``make_run_context``,
-``make_queue_entry``, ``enqueue_entry``, ``claim_next_entry``,
-``write_run_state``) directly from this module.
+``bound_run_context``, ``make_orca_runner``, ``make_queue_entry``,
+``enqueue_entry``, ``claim_next_entry``, ``write_run_state``) directly from
+this module.
 
 Two fixtures are autouse: ``no_fsync`` (``@pytest.mark.real_fsync`` opts out)
 and ``isolated_config_discovery``, which keeps every test off the live shared
@@ -40,10 +41,12 @@ from orca_auto.core.queue.publication import (
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.utils.persistence import timestamped_token
 from orca_auto.orca import scratch_config as _scratch_config
+from orca_auto.orca import worker_execution
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TASK_KIND
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution_binding import build_orca_execution_snapshot
+from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import worker_log_path
 from orca_auto.orca.queue.entries import entry_metadata
@@ -342,6 +345,73 @@ def make_run_context(
     }
     values.update(fields)
     return RunExecutionContext(**values)
+
+
+def bound_run_context(
+    cfg: AppConfig,
+    selected_inp: Path,
+    *,
+    admission_token: str = "",
+    task_id: str = "task-1",
+) -> RunExecutionContext:
+    """The worker child's ``RunExecutionContext`` for ``selected_inp`` as ``run-dir`` binds it.
+
+    The input's directory is the job directory, which must lie under ``cfg``'s
+    runs root. The context names the bound copy in a new generation and
+    verifies against the real snapshot, pinned to ``cfg``'s executable.
+    """
+
+    job_dir = Path(selected_inp).parent
+    snapshot = build_submitted_snapshot(
+        job_dir,
+        selected_inp,
+        orca_executable=cfg.paths.orca_executable,
+        resource_request={
+            "max_cores": cfg.resources.max_cores_per_task,
+            "max_memory_gb": cfg.resources.max_memory_gb_per_task,
+        },
+    )
+    entry = make_queue_entry(
+        task_id=task_id,
+        reaction_dir=job_dir,
+        status=QueueStatus.RUNNING,
+        metadata={
+            "source_selected_inp": str(selected_inp),
+            "selected_inp": snapshot["selected_inp"],
+            "selected_input_xyz": "",
+            "resource_request": snapshot["resource_request"],
+            "execution_snapshot": snapshot,
+        },
+    )
+    return worker_execution._build_execution_context(cfg, entry, admission_token=admission_token)
+
+
+def make_orca_runner(
+    orca_executable: str | Path,
+    execution_dir: Path,
+    **fields: Any,
+) -> OrcaRunner:
+    """An ``OrcaRunner`` for inputs in ``execution_dir`` outside a queued snapshot.
+
+    Snapshot verification and the admission callbacks do nothing, the
+    executable identity is unpinned, and there is no stop request and no RAM
+    scratch policy unless ``fields`` sets them.
+    """
+
+    details = execution_dir.stat()
+    values: dict[str, Any] = {
+        "executable_identity": {},
+        "execution_dir": execution_dir,
+        "execution_dir_identity": {"device": details.st_dev, "inode": details.st_ino},
+        "execution_provenance": {},
+        "verify_snapshot": lambda **_kwargs: None,
+        "stop_requested": None,
+        "scratch_policy": None,
+        "prepare_running_job": lambda: None,
+        "register_running_job": lambda _running: None,
+    }
+    values.update(fields)
+    return OrcaRunner(str(orca_executable), **values)
 
 
 # ---------------------------------------------------------------------------

@@ -179,14 +179,23 @@ The ORCA child directly resolves its queue entry, recovers a crashed generation,
 waits for parent admission handoff, and runs that generation. Its validated
 inputs, submitted resource request, execution snapshot and queue identity form
 one `RunExecutionContext`, built once from the claimed row and passed directly
-into execution; RAM scratch is sized from that request. Every admission slot
-mutation of the child goes through one rule, `execution._child_admission_slot`:
-the child activates the slot, completes its engine process when the run returns
-and leaves the slot as it is when the run raises. It releases only a slot that
-activation no longer finds live. The parent releases the slot after the child
-exits, on success, shutdown and exceptions alike.
-`tests/core/queue/test_ownership_guards.py` limits `release_slot` and
-`complete_slot_engine_process` to these owners. One slot's lifecycle:
+into execution; RAM scratch is sized from that request. `execute_locked_run`
+runs it in one body: `run.lock`, `recover_crashed_state`, the slot rule below,
+then either adoption of the generation's completed output or the run's one
+`OrcaRunner`. Its constructor names everything a launch uses: the snapshot's
+executable and identity, the generation directory and its identity, the stop
+request, the RAM scratch policy, the slot's engine-process preparer and
+registrar, and the snapshot verifier it calls around each launch. The runner
+reserves RAM scratch before the first state write, and the attempts run.
+
+Every admission slot mutation of the child goes through one rule,
+`execution._child_admission_slot`: the child activates the slot, completes its
+engine process when the run returns and leaves the slot as it is when the run
+raises. It releases only a slot that activation no longer finds live. The
+parent releases the slot after the child exits, on success, shutdown and
+exceptions alike. `tests/core/queue/test_ownership_guards.py` limits
+`release_slot` and `complete_slot_engine_process` to these owners. One slot's
+lifecycle:
 
 | Step | Writer | `state` | `engine_process_state` |
 |---|---|---|---|

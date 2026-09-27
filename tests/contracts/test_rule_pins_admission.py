@@ -184,7 +184,9 @@ def test_child_slot_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
                 admission_task_id="orca-pin",
                 queue_id="q-pin",
             )
-            result = _answer(partial(execution.execute_orca_run, context))
+            result = _answer(
+                partial(execution.execute_orca_run, context, stop_requested=lambda: False)
+            )
             slots_path = admission / "admission_slots.json"
             n = Normalizer({tmp_path: "<tmp>"})
             table[f"{exc_name}|{engine_state}"] = n(

@@ -1,12 +1,12 @@
 """Run one selected ORCA input to a terminal result under the reaction lock.
 
-``execute_orca_run`` is the single entry point: it takes the reaction lock,
-recovers a crashed resumable state, activates the queue's admission slot
-(``_child_admission_slot``, the child's one slot rule), settles from an already
-completed output when ``output_adoption`` says one exists, reserves RAM
-scratch, and otherwise loads (or creates) ``job_state.json`` and drives
-``attempt.engine.run_attempts`` with a runner built for the configured scratch
-and admission registrars.
+``execute_orca_run`` is the single entry point and maps failures to the exit
+code; ``execute_locked_run`` is the run itself, in order: take the reaction
+lock, recover a crashed resumable state, activate the admission slot
+(``_child_admission_slot``, the child's one slot rule), settle from an already
+completed output when ``output_adoption`` says one exists, and otherwise build
+the one ``OrcaRunner``, reserve RAM scratch, load (or create) and bind
+``job_state.json`` and drive ``attempt.engine.run_attempts``.
 """
 
 from __future__ import annotations
@@ -138,59 +138,10 @@ def started_notification_callback(cfg: Any) -> Callable[[RunStartedNotification]
     return notify_started
 
 
-def _build_runner(context: RunExecutionContext, *, runner_cls: type[Any]) -> Any:
-    cfg = context.cfg
-    runner = runner_cls(cfg.paths.orca_executable)
-    if cfg.scratch.enabled:
-        set_scratch_policy = getattr(runner, "set_scratch_policy", None)
-        if not callable(set_scratch_policy):
-            raise TypeError("Configured ORCA runner does not support RAM scratch execution")
-        set_scratch_policy(
-            OrcaScratchPolicy(
-                root=Path(cfg.scratch.root),
-                min_free_bytes=int(cfg.scratch.min_free_gb) * 1024**3,
-                max_task_memory_bytes=int(context.resource_request["max_memory_gb"]) * 1024**3,
-            )
-        )
-    if context.admission_token:
-        set_registrar = getattr(runner, "set_running_job_registrar", None)
-        if not callable(set_registrar):
-            raise TypeError("Admitted ORCA runner does not support engine-process registration")
-        set_registrar(
-            build_slot_engine_process_registrar(context.admission_root, context.admission_token),
-            prepare=build_slot_engine_process_preparer(
-                context.admission_root, context.admission_token
-            ),
-        )
-    return runner
-
-
-def run_with_state(
-    context: RunExecutionContext,
-    *,
-    runner_cls: type[Any],
-    resumed: bool,
-    state: Any,
-    runner: Any | None,
-) -> int:
-    notify_started = started_notification_callback(context.cfg)
-    if runner is None:
-        runner = _build_runner(context, runner_cls=runner_cls)
-    return run_attempts(
-        context.reaction_dir,
-        context.selected_inp,
-        state,
-        resumed=resumed,
-        runner=runner,
-        emit=_emit,
-        notify_started=notify_started,
-    )
-
-
 def execute_locked_run(
     context: RunExecutionContext,
     *,
-    runner_cls: type[Any],
+    stop_requested: Callable[[], bool],
 ) -> int:
     with acquire_run_lock(context.reaction_dir):
         recover_crashed_state(context.reaction_dir, logger=logger)
@@ -201,61 +152,71 @@ def execute_locked_run(
             if existing_exit is not None:
                 return existing_exit
 
-            with _prepared_scratch_runner(context, runner_cls=runner_cls) as runner:
-                return _load_state_and_run(context, runner_cls=runner_cls, runner=runner)
-
-
-@contextmanager
-def _prepared_scratch_runner(context: RunExecutionContext, *, runner_cls: type[Any]) -> Any:
-    """Reserve RAM scratch before the run writes its first state.
-
-    A capacity refusal raised here leaves no state, attempt record,
-    notification or generation artifact, so the job was never started and may
-    wait for admission again. Once state exists the same refusal is a failed
-    attempt, which is never rerun.
-    """
-    if not getattr(getattr(context.cfg, "scratch", None), "enabled", False):
-        yield None
-        return
-    runner = _build_runner(context, runner_cls=runner_cls)
-    try:
-        runner.prepare(context.selected_inp)
-        yield runner
-    finally:
-        runner.release_prepared()
-
-
-def _load_state_and_run(
-    context: RunExecutionContext,
-    *,
-    runner_cls: type[Any],
-    runner: Any | None,
-) -> int:
-    state, resumed = load_or_create_state(
-        context.reaction_dir,
-        context.selected_inp,
-        to_resolved_local=to_resolved_local,
-    )
-    if bind_queue_identity(state, context):
-        save_state(context.reaction_dir, state)
-    return run_with_state(
-        context, runner_cls=runner_cls, resumed=resumed, state=state, runner=runner
-    )
+            cfg = context.cfg
+            snapshot = context.execution_snapshot
+            runner = OrcaRunner(
+                context.orca_executable,
+                executable_identity=snapshot["executable_identities"]["orca"],
+                execution_dir=Path(snapshot["execution_dir"]),
+                execution_dir_identity=snapshot["execution_dir_identity"],
+                execution_provenance=context.execution_provenance,
+                verify_snapshot=context.verify_snapshot,
+                stop_requested=stop_requested,
+                scratch_policy=(
+                    OrcaScratchPolicy(
+                        root=Path(cfg.scratch.root),
+                        min_free_bytes=int(cfg.scratch.min_free_gb) * 1024**3,
+                        max_task_memory_bytes=int(context.resource_request["max_memory_gb"])
+                        * 1024**3,
+                    )
+                    if cfg.scratch.enabled
+                    else None
+                ),
+                prepare_running_job=build_slot_engine_process_preparer(
+                    context.admission_root, context.admission_token
+                ),
+                register_running_job=build_slot_engine_process_registrar(
+                    context.admission_root, context.admission_token
+                ),
+            )
+            try:
+                # RAM scratch is reserved before the first state write. A
+                # capacity refusal here leaves no state, attempt record,
+                # notification or generation artifact, so the job never started
+                # and may wait for admission again. Once state exists the same
+                # refusal is a failed attempt, which is never rerun.
+                runner.prepare(context.selected_inp)
+                state, resumed = load_or_create_state(
+                    context.reaction_dir,
+                    context.selected_inp,
+                    to_resolved_local=to_resolved_local,
+                )
+                if bind_queue_identity(state, context):
+                    save_state(context.reaction_dir, state)
+                return run_attempts(
+                    context.reaction_dir,
+                    context.selected_inp,
+                    state,
+                    resumed=resumed,
+                    runner=runner,
+                    emit=_emit,
+                    notify_started=started_notification_callback(cfg),
+                )
+            finally:
+                runner.release_prepared()
 
 
 def execute_orca_run(
     context: RunExecutionContext,
     *,
-    runner_cls: type[Any] = OrcaRunner,
-    logger: logging.Logger | None = None,
+    stop_requested: Callable[[], bool],
 ) -> int:
-    logger = logger or logging.getLogger(__name__)
     logger.info("Selected input: %s", context.selected_inp)
 
     try:
         # Run-state recovery stays inside the reaction lock. Engine-process
         # ownership is reconciled independently through the admission store.
-        return execute_locked_run(context, runner_cls=runner_cls)
+        return execute_locked_run(context, stop_requested=stop_requested)
     except EngineScratchCapacityError:
         # Raised only by the preparation that precedes this run's first state
         # write; the queue child decides whether the job waits. It must not

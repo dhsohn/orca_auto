@@ -246,6 +246,14 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   mixed-form duplicate `nprocs`. An input queued with `nprocs = N` was already
   rewritten to the configured default at submission and runs with that core
   count; resubmit it to use `N`.
+- A worker child that cannot read `admission_slots.json` while it activates or
+  completes its slot logs the error from `orca_auto.orca.execution` and exits
+  with 1, as before. It used to end with an uncaught
+  `AdmissionStoreCorruptError` traceback from a second slot lookup whose
+  release could never apply. A RAM scratch reservation skipped because the
+  queued snapshot no longer verifies now leaves the debug line
+  `ORCA scratch preparation failed; run will retry it`; the run still reports
+  the verification failure as before.
 
 ## [8.0.1] - 2026-09-26
 

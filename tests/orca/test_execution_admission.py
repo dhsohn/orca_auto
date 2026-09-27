@@ -43,7 +43,9 @@ def test_internal_run_rejects_without_queue_reservation(
         "! Opt\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n", encoding="utf-8"
     )
 
-    rc = execute_orca_run(make_run_context(cfg, reaction_dir, reaction_dir / "rxn.inp"))
+    rc = execute_orca_run(
+        make_run_context(cfg, reaction_dir, reaction_dir / "rxn.inp"), stop_requested=lambda: False
+    )
 
     assert rc == 1
     assert attempts == []

@@ -94,6 +94,7 @@ def _run_internal_execute(config: Path, reaction_dir: Path) -> int:
             select_latest_inp(reaction_dir),
             admission_token=token,
         ),
+        stop_requested=lambda: False,
     )
 
 

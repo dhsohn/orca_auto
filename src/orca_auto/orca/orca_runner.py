@@ -22,7 +22,9 @@ from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
     EngineScratchWorkspace,
     ScratchPublication,
+    attach_scratch_provenance_mapping_to_exception,
     attach_scratch_provenance_to_exception,
+    scratch_provenance_from_exception,
     scratch_publication_provenance,
 )
 from orca_auto.core.queue.processes import (
@@ -136,40 +138,46 @@ class RunResult:
 
 
 class OrcaRunner:
-    def __init__(self, orca_executable: str) -> None:
-        self.orca_executable = orca_executable
-        self._prepare_running_job: Callable[[], None] | None = None
-        self._register_running_job: Callable[[Any | None], None] | None = None
-        self._shutdown_requested: Callable[[], bool] | None = None
-        self._bound_executable_identity: dict[str, Any] = {}
-        self._bound_durable_directory_identity: tuple[int, int] | None = None
-        self._scratch_policy: OrcaScratchPolicy | None = None
-        self._prepared_workspace: EngineScratchWorkspace | None = None
+    """Launch and supervise one run's ORCA attempts in its bound generation.
 
-    def set_running_job_registrar(
+    The constructor fixes everything a launch uses: the executable and its
+    queued identity, the generation directory and its identity, the snapshot
+    verifier, the stop request, the RAM scratch policy (``None`` runs in place)
+    and the admission slot's engine-process preparer and registrar. With
+    ``stop_requested`` ``None``, Ctrl-C stays a plain ``KeyboardInterrupt``;
+    the worker child always passes its cancel-or-shutdown check.
+    """
+
+    def __init__(
         self,
-        registrar: Callable[[Any | None], None],
+        orca_executable: str,
         *,
-        prepare: Callable[[], None],
+        executable_identity: dict[str, Any],
+        execution_dir: Path,
+        execution_dir_identity: dict[str, Any],
+        execution_provenance: dict[str, Any],
+        verify_snapshot: Callable[..., object],
+        stop_requested: Callable[[], bool] | None,
+        scratch_policy: OrcaScratchPolicy | None,
+        prepare_running_job: Callable[[], None],
+        register_running_job: Callable[[Any | None], None],
     ) -> None:
-        self._register_running_job = registrar
-        self._prepare_running_job = prepare
-
-    def set_shutdown_requested(self, callback: Callable[[], bool]) -> None:
-        self._shutdown_requested = callback
-
-    def set_executable_identity(self, identity: dict[str, Any]) -> None:
-        self._bound_executable_identity = dict(identity)
-
-    def set_scratch_policy(self, policy: OrcaScratchPolicy) -> None:
-        self._scratch_policy = policy
-
-    def set_durable_directory_identity(self, identity: dict[str, Any]) -> None:
-        device = identity.get("device")
-        inode = identity.get("inode")
+        device = execution_dir_identity.get("device")
+        inode = execution_dir_identity.get("inode")
         if type(device) is not int or device < 0 or type(inode) is not int or inode <= 0:
             raise ValueError("ORCA durable directory identity is invalid")
+        self.orca_executable = orca_executable
+        self._bound_executable_identity = dict(executable_identity)
+        self._execution_dir = execution_dir
         self._bound_durable_directory_identity = (device, inode)
+        self._execution_provenance = dict(execution_provenance)
+        self._verify_snapshot = verify_snapshot
+        self._shutdown_requested = stop_requested
+        self._scratch_policy = scratch_policy
+        self._prepare_running_job = prepare_running_job
+        self._register_running_job = register_running_job
+        self._prepared_workspace: EngineScratchWorkspace | None = None
+        self._runtime_outputs_started = False
 
     def _open_pinned_executable(self) -> tuple[int, dict[str, Any]]:
         descriptor, observed = open_pinned_executable(self.orca_executable, label="ORCA executable")
@@ -260,13 +268,16 @@ class OrcaRunner:
     def prepare(self, inp_path: Path) -> None:
         """Reserve the RAM scratch workspace before any run state is written.
 
-        Only a capacity refusal propagates: nothing has started, so the caller
-        may leave the job waiting. Any other failure is left for `run` to raise
-        again, where it is recorded as a failed attempt.
+        Staging reads the generation, so the snapshot is verified first, as in
+        `run`. Only a capacity refusal propagates: nothing has started, so the
+        caller may leave the job waiting. Any other failure, a snapshot that no
+        longer verifies included, is left for `run` to raise again, where it is
+        recorded as a failed attempt.
         """
         if self._scratch_policy is None or self._prepared_workspace is not None:
             return
         try:
+            self._verify_snapshot(allow_runtime_outputs=False)
             durable_input = require_confined_regular_file(
                 inp_path.parent,
                 inp_path,
@@ -311,8 +322,50 @@ class OrcaRunner:
         return workspace
 
     def run(self, inp_path: Path) -> RunResult:
-        if self._prepare_running_job is None or self._register_running_job is None:
-            raise RuntimeError("ORCA execution requires managed admission callbacks")
+        """Run one attempt input with the snapshot verified before and after the launch.
+
+        The input must be a private ``.inp`` in the generation directory. Before
+        the first launch the generation must be pristine; afterwards its runtime
+        outputs are allowed. A failed verification after the launch carries the
+        launch's scratch provenance.
+        """
+        current_input = require_confined_regular_file(
+            self._execution_dir,
+            inp_path,
+            label="ORCA queued execution input",
+        )
+        if (
+            current_input.parent != self._execution_dir.resolve()
+            or current_input.suffix.lower() != ".inp"
+        ):
+            raise ValueError("ORCA queued execution input must be a private .inp file")
+        self._verify_snapshot(allow_runtime_outputs=self._runtime_outputs_started)
+        try:
+            result = self._run_with_scratch(inp_path)
+        except BaseException as run_exc:
+            self._runtime_outputs_started = True
+            try:
+                self._verify_snapshot(allow_runtime_outputs=True)
+            except BaseException as verify_exc:
+                provenance = scratch_provenance_from_exception(run_exc)
+                if provenance:
+                    attach_scratch_provenance_mapping_to_exception(verify_exc, provenance)
+                raise
+            raise
+        self._runtime_outputs_started = True
+        try:
+            self._verify_snapshot(allow_runtime_outputs=True)
+        except BaseException as verify_exc:
+            if result.scratch_provenance:
+                attach_scratch_provenance_mapping_to_exception(
+                    verify_exc, result.scratch_provenance
+                )
+            raise
+        result.execution_provenance = dict(self._execution_provenance)
+        return result
+
+    def _run_with_scratch(self, inp_path: Path) -> RunResult:
+        """Run ``inp_path`` in a RAM scratch workspace when a policy is set, else in place."""
         durable_input = require_confined_regular_file(
             inp_path.parent,
             inp_path,
