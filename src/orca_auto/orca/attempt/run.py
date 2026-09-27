@@ -32,7 +32,7 @@ from .reporting import (
     exit_with_result,
     last_out_path_from_state,
 )
-from .resume import resume_terminal_decision
+from .resume import settle_from_recorded_attempt
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +41,13 @@ def _run_and_record_attempt(
     reaction_dir: Path,
     state: RunState,
     *,
-    current_inp: Path,
+    selected_inp: Path,
     execution_index: int,
     started_at: str,
     runner: OrcaRunner,
 ) -> tuple[Path, OutAnalysis]:
-    logger.info("Attempt %d starting: %s", execution_index, current_inp)
-    run_result = runner.run(current_inp)
+    logger.info("Attempt %d starting: %s", execution_index, selected_inp)
+    run_result = runner.run(selected_inp)
     scratch_provenance = run_result.scratch_provenance
     try:
         out_path = Path(run_result.out_path)
@@ -60,14 +60,14 @@ def _run_and_record_attempt(
             )
         output_identity_before = confined_output_identity(reaction_dir, out_path)
 
-        mode = detect_completion_mode(current_inp)
+        mode = detect_completion_mode(selected_inp)
         analysis = apply_exit_code(analyze_output(out_path, mode), run_result.return_code)
         output_identity = confined_output_identity(reaction_dir, out_path)
         if output_identity != output_identity_before:
             raise RuntimeError(f"ORCA output changed while it was analyzed: {out_path}")
         attempt: AttemptRecord = {
             "index": execution_index,
-            "inp_path": str(current_inp),
+            "inp_path": str(selected_inp),
             "out_path": str(out_path),
             "return_code": run_result.return_code,
             "analyzer_status": analysis.status,
@@ -83,8 +83,6 @@ def _run_and_record_attempt(
         if scratch_provenance:
             attempt["scratch_provenance"] = dict(scratch_provenance)
         attempt["output_identity"] = output_identity
-        if run_result.execution_provenance:
-            state["execution_provenance"] = dict(run_result.execution_provenance)
         state["attempts"].append(attempt)
         save_state(reaction_dir, state)
     except BaseException as exc:
@@ -106,7 +104,7 @@ def _record_exception_scratch_publication(
     state: RunState,
     *,
     execution_index: int,
-    current_inp: Path,
+    selected_inp: Path,
     exc: BaseException,
     outcome: str,
 ) -> None:
@@ -117,7 +115,7 @@ def _record_exception_scratch_publication(
     publications.append(
         {
             "attempt_index": execution_index,
-            "inp_path": str(current_inp),
+            "inp_path": str(selected_inp),
             "outcome": outcome,
             "published_at": now_utc_iso(),
             "publication": provenance,
@@ -163,7 +161,7 @@ def run_attempt(
     reaction_dir = context.reaction_dir
     selected_inp = context.selected_inp
     if resumed:
-        settled = resume_terminal_decision(reaction_dir, selected_inp, state)
+        settled = settle_from_recorded_attempt(reaction_dir, selected_inp, state)
         if settled is not None:
             return settled
 
@@ -189,7 +187,6 @@ def run_attempt(
         started = build_run_started_notification(
             reaction_dir=reaction_dir,
             selected_inp=selected_inp,
-            current_inp=selected_inp,
             state=state,
             execution_index=execution_index,
             status=RunStatus.RUNNING,
@@ -202,7 +199,7 @@ def run_attempt(
         out_path, analysis = _run_and_record_attempt(
             reaction_dir,
             state,
-            current_inp=selected_inp,
+            selected_inp=selected_inp,
             execution_index=execution_index,
             started_at=started_at,
             runner=runner,
@@ -212,7 +209,7 @@ def run_attempt(
             reaction_dir,
             state,
             execution_index=execution_index,
-            current_inp=selected_inp,
+            selected_inp=selected_inp,
             exc=exc,
             outcome="worker_shutdown",
         )
@@ -223,7 +220,7 @@ def run_attempt(
             reaction_dir,
             state,
             execution_index=execution_index,
-            current_inp=selected_inp,
+            selected_inp=selected_inp,
             exc=exc,
             outcome="exception",
         )

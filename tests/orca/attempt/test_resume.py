@@ -9,7 +9,8 @@ from orca_auto.orca.attempt import resume as attempt_resume
 from orca_auto.orca.attempt.resume import (
     is_resumable_state,
     load_or_create_state,
-    resume_terminal_decision,
+    recover_crashed_state,
+    settle_from_recorded_attempt,
     state_matches_selected,
 )
 from orca_auto.orca.state import new_state
@@ -37,6 +38,28 @@ def test_state_matches_selected_handles_blank_unresolvable_and_matching_paths(
     assert not state_matches_selected({"selected_inp": str(tmp_path / "other.inp")}, selected_inp)
     assert state_matches_selected({"selected_inp": str(selected_inp)}, selected_inp)
     assert state_matches_selected({"selected_inp": str(tmp_path / "." / "calc.inp")}, selected_inp)
+
+
+def test_recover_crashed_state_closes_an_active_state_as_crashed_recovery(
+    tmp_path: Path,
+) -> None:
+    # Called under the run lock (exclusive owner), a running/retrying state is
+    # a crash and is reconciled to failed/crashed_recovery.
+    reaction_dir = tmp_path / "rxn"
+    write_run_state(reaction_dir, status="running", run_id="run_active")
+
+    assert recover_crashed_state(reaction_dir) is True
+
+    state = load_state(reaction_dir)
+    assert state is not None
+    assert state["run_id"] == "run_active"
+    assert state["status"] == "failed"
+    assert state["final_result"] == {
+        "status": "failed",
+        "reason": "crashed_recovery",
+        "analyzer_status": "incomplete",
+    }
+    assert recover_crashed_state(reaction_dir) is False
 
 
 def test_only_active_and_crash_recovered_states_are_resumable() -> None:
@@ -133,7 +156,7 @@ def test_load_or_create_state_replaces_a_settled_state(
     assert state["status"] == RunStatus.CREATED.value
 
 
-def test_resume_terminal_decision_settles_from_the_recorded_attempt(tmp_path: Path) -> None:
+def test_settle_from_recorded_attempt_publishes_the_recorded_verdict(tmp_path: Path) -> None:
     selected_inp = tmp_path / "rxn.inp"
     selected_inp.write_text("! Opt\n", encoding="utf-8")
     state = new_state(tmp_path, selected_inp)
@@ -145,7 +168,7 @@ def test_resume_terminal_decision_settles_from_the_recorded_attempt(tmp_path: Pa
         }
     )
 
-    assert resume_terminal_decision(tmp_path, selected_inp, state) == 0
+    assert settle_from_recorded_attempt(tmp_path, selected_inp, state) == 0
 
     final = _saved_final(tmp_path)
     assert final["status"] == "completed"
@@ -160,21 +183,22 @@ def test_attempt_resume_text_helper_covers_existing_and_missing_values() -> None
     assert attempt_resume._as_non_empty_text(123) is None
 
 
-def test_resume_terminal_decision_covers_malformed_and_defaulted_terminal_paths(
+def test_settle_from_recorded_attempt_covers_malformed_and_defaulted_terminal_paths(
     tmp_path: Path,
 ) -> None:
     selected_inp = tmp_path / "calc.inp"
     selected_inp.write_text("! Opt\n", encoding="utf-8")
 
     assert (
-        resume_terminal_decision(tmp_path, selected_inp, new_state(tmp_path, selected_inp)) is None
-    )
-    assert (
-        resume_terminal_decision(tmp_path, selected_inp, cast(RunState, {"attempts": "bad"}))
+        settle_from_recorded_attempt(tmp_path, selected_inp, new_state(tmp_path, selected_inp))
         is None
     )
     assert (
-        resume_terminal_decision(tmp_path, selected_inp, cast(RunState, {"attempts": ["bad"]}))
+        settle_from_recorded_attempt(tmp_path, selected_inp, cast(RunState, {"attempts": "bad"}))
+        is None
+    )
+    assert (
+        settle_from_recorded_attempt(tmp_path, selected_inp, cast(RunState, {"attempts": ["bad"]}))
         is None
     )
 
@@ -182,7 +206,7 @@ def test_resume_terminal_decision_covers_malformed_and_defaulted_terminal_paths(
     incomplete["attempts"] = [
         {"analyzer_status": AnalyzerStatus.INCOMPLETE.value, "analyzer_reason": "still_running"}
     ]
-    assert resume_terminal_decision(tmp_path, selected_inp, incomplete) == 1
+    assert settle_from_recorded_attempt(tmp_path, selected_inp, incomplete) == 1
     assert _saved_final(tmp_path)["reason"] == "still_running"
 
     defaulted = new_state(tmp_path, selected_inp)
@@ -190,7 +214,7 @@ def test_resume_terminal_decision_covers_malformed_and_defaulted_terminal_paths(
         {"index": 1, "analyzer_status": "completed", "out_path": str(tmp_path / "state.out")},
         {"analyzer_status": " ", "analyzer_reason": " ", "out_path": " "},
     ]
-    assert resume_terminal_decision(tmp_path, selected_inp, defaulted) == 1
+    assert settle_from_recorded_attempt(tmp_path, selected_inp, defaulted) == 1
 
     final = _saved_final(tmp_path)
     assert final["status"] == RunStatus.FAILED.value

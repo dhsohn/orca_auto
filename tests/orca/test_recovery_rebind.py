@@ -1864,13 +1864,7 @@ def test_rebind_keeps_a_completed_generation_for_adoption(
     monkeypatch.setattr(OrcaRunner, "run", must_not_launch)
     # The forced row's claim settles the kept generation by adoption instead
     # of rerunning it.
-    exit_code = worker_execution._run_orca_job_for_entry(
-        context,
-        result,
-        queue_root,
-        should_cancel=lambda: False,
-        shutdown_requested=None,
-    )
+    exit_code = execution.execute_orca_run(context, stop_requested=lambda: False)
 
     assert exit_code == 0
     state = load_state(job_dir)
@@ -1878,59 +1872,6 @@ def test_rebind_keeps_a_completed_generation_for_adoption(
     final_result = state["final_result"]
     assert final_result is not None
     assert final_result["reason"] == "existing_out_completed"
-    assert not (generation / "h2.resume.inp").exists()
-
-
-def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> None:
-    import os
-
-    job_dir = tmp_path / "checkpoint_job"
-    job_dir.mkdir()
-    (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
-    selected = job_dir / "ts.inp"
-    selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
-    executable = write_fake_orca(tmp_path / "checkpoint-orca")
-    crashed = build_submitted_snapshot(
-        job_dir,
-        selected,
-        selected_input_xyz="",
-        resource_request={"max_cores": 1, "max_memory_gb": 1},
-        orca_executable=executable,
-    )
-    generation = Path(crashed["execution_dir"])
-    (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
-    (generation / "ts.gbw").write_bytes(b"attempt-base")
-    (generation / "ts.resume.gbw").write_bytes(b"attempt-resume")
-    base_ns = 1_700_000_000_000_000_000
-    os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
-    os.utime(generation / "ts.resume.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
-
-    replacement = build_submitted_snapshot(
-        job_dir,
-        selected,
-        selected_input_xyz="",
-        resource_request={"max_cores": 1, "max_memory_gb": 1},
-        orca_executable=executable,
-        recovery_from=crashed,
-    )
-
-    checkpoint_role = replacement["recovery"]["checkpoint_role"]
-    assert checkpoint_role
-    materialized = replacement["materialized_inputs"][checkpoint_role]
-    private = Path(str(materialized["path"]))
-    assert private.name == "ts.moinp.gbw"
-    assert private.read_bytes() == b"attempt-resume"
-    assert replacement["source_inputs"][checkpoint_role]["source_path"] == str(
-        generation / "ts.resume.gbw"
-    )
-    verify_orca_execution_snapshot(
-        job_dir,
-        replacement,
-        expected_selected_inp=replacement["selected_inp"],
-        expected_source_selected_inp=replacement["source_selected_inp"],
-        expected_selected_input_xyz="",
-        expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-    )
 
 
 def test_marker_finalize_is_quiet_when_worker_already_retired_the_intent(
@@ -1965,8 +1906,6 @@ def test_marker_finalize_is_quiet_when_worker_already_retired_the_intent(
 
 
 def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) -> None:
-    import os
-
     job_dir = tmp_path / "checkpoint_edit_job"
     job_dir.mkdir()
     (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
@@ -1982,9 +1921,7 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
     )
     generation = Path(crashed["execution_dir"])
     (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
-    (generation / "ts.resume.gbw").write_bytes(b"resume-orbitals")
-    base_ns = 1_700_000_000_000_000_000
-    os.utime(generation / "ts.resume.gbw", ns=(base_ns, base_ns))
+    (generation / "ts.gbw").write_bytes(b"scf-orbitals")
     replacement = build_submitted_snapshot(
         job_dir,
         selected,
@@ -2025,55 +1962,3 @@ def test_recovery_checkpoint_skipped_when_zero_filled(tmp_path: Path) -> None:
     assert "MORead" not in bound_text
     assert "%moinp" not in bound_text
     _verify(job_dir, replacement)
-
-
-def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_one(
-    tmp_path: Path,
-) -> None:
-    import os
-
-    job_dir = tmp_path / "checkpoint_job"
-    job_dir.mkdir()
-    (job_dir / "ts.xyz").write_text(_PRISTINE_XYZ, encoding="utf-8")
-    selected = job_dir / "ts.inp"
-    selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
-    executable = write_fake_orca(tmp_path / "checkpoint-orca")
-    crashed = build_submitted_snapshot(
-        job_dir,
-        selected,
-        selected_input_xyz="",
-        resource_request={"max_cores": 1, "max_memory_gb": 1},
-        orca_executable=executable,
-    )
-    generation = Path(crashed["execution_dir"])
-    (generation / "ts.out").write_text("interrupted\n", encoding="utf-8")
-    (generation / "ts.gbw").write_bytes(b"\xff" * 16 + b"attempt-base")
-    (generation / "ts.resume.gbw").write_bytes(b"\x00" * 4096)
-    base_ns = 1_700_000_000_000_000_000
-    os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
-    os.utime(generation / "ts.resume.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
-
-    replacement = build_submitted_snapshot(
-        job_dir,
-        selected,
-        selected_input_xyz="",
-        resource_request={"max_cores": 1, "max_memory_gb": 1},
-        orca_executable=executable,
-        recovery_from=crashed,
-    )
-
-    checkpoint_role = replacement["recovery"]["checkpoint_role"]
-    assert checkpoint_role
-    private = Path(str(replacement["materialized_inputs"][checkpoint_role]["path"]))
-    assert private.read_bytes() == b"\xff" * 16 + b"attempt-base"
-    assert replacement["source_inputs"][checkpoint_role]["source_path"] == str(
-        generation / "ts.gbw"
-    )
-    verify_orca_execution_snapshot(
-        job_dir,
-        replacement,
-        expected_selected_inp=replacement["selected_inp"],
-        expected_source_selected_inp=replacement["source_selected_inp"],
-        expected_selected_input_xyz="",
-        expected_resource_request={"max_cores": 1, "max_memory_gb": 1},
-    )

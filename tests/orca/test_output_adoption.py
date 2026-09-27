@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import os
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -12,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 from orca_auto.orca import execution
+from orca_auto.orca.attempt.resume import recover_crashed_state
 from orca_auto.orca.config import AppConfig, PathsConfig
 from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.scratch_config import ScratchConfig
@@ -219,10 +219,7 @@ def test_output_without_a_recorded_attempt_is_still_adopted(
     reaction_dir = tmp_path / "rxn"
     inp = _write_generation(reaction_dir, status=status, attempt=None)
     if status == "running":
-        assert execution.recover_crashed_state(
-            reaction_dir,
-            logger=logging.getLogger(__name__),
-        )
+        assert recover_crashed_state(reaction_dir)
 
     exit_code = _execute(reaction_dir, inp, monkeypatch)
 

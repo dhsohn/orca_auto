@@ -1,11 +1,11 @@
 """Which run state a claim continues, and settling it from a recorded attempt.
 
 A claim resumes only the root state of its own bound input: a state left active
-by a crash, or one that ``execution.recover_crashed_state`` closed as
+by a crash, or one that ``recover_crashed_state`` closed as
 ``crashed_recovery``. Such a state belongs to a generation that already shows
 started execution, which ``recovery_rebind`` replaces with a fresh generation
-unless its completed output settles the claim (ADR 0002).
-``resume_terminal_decision`` settles a resumed run from its recorded attempt.
+unless its completed output settles the claim (ADR 0009).
+``settle_from_recorded_attempt`` settles a run from its recorded attempt.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from .reporting import decide_attempt_outcome, exit_with_result, last_out_path_f
 
 logger = logging.getLogger(__name__)
 
-RESUMABLE_RUN_STATUSES = ACTIVE_RUN_STATUS_VALUES
 CRASHED_RECOVERY_REASON = "crashed_recovery"
 
 
@@ -46,9 +45,37 @@ def _final_reason(state: RunState) -> str:
     return reason.strip()
 
 
+def recover_crashed_state(reaction_dir: Path) -> bool:
+    """Close a root state a crashed run left active as failed ``crashed_recovery``.
+
+    Called under ``run.lock``, after admission has reconciled engine ownership.
+    """
+    state = load_state(reaction_dir)
+    if not state:
+        return False
+
+    status = str(state.get("status", "")).strip()
+    if status not in ACTIVE_RUN_STATUS_VALUES:
+        return False
+
+    logger.warning(
+        "Detected crashed run in %s (status=%s). Recovering state.",
+        reaction_dir,
+        status,
+    )
+    state["status"] = RunStatus.FAILED.value
+    state["final_result"] = {
+        "status": RunStatus.FAILED.value,
+        "reason": CRASHED_RECOVERY_REASON,
+        "analyzer_status": AnalyzerStatus.INCOMPLETE.value,
+    }
+    save_state(reaction_dir, state)
+    return True
+
+
 def is_resumable_state(state: RunState) -> bool:
     status = str(state.get("status", "")).strip()
-    if status in RESUMABLE_RUN_STATUSES:
+    if status in ACTIVE_RUN_STATUS_VALUES:
         return True
     if status == RunStatus.FAILED.value:
         return _final_reason(state) == CRASHED_RECOVERY_REASON
@@ -81,12 +108,12 @@ def _as_non_empty_text(value: Any) -> str | None:
     return None
 
 
-def resume_terminal_decision(
+def settle_from_recorded_attempt(
     reaction_dir: Path,
     selected_inp: Path,
     state: RunState,
 ) -> int | None:
-    """Settle a resumed run from its recorded attempt, or ``None`` when it has none."""
+    """Settle the run from its recorded attempt, or ``None`` when it has none."""
     attempts = state.get("attempts")
     if not isinstance(attempts, list) or not attempts:
         return None

@@ -167,10 +167,6 @@ def find_route_idx(lines: list[str]) -> int | None:
     return None
 
 
-def route_line_indices(lines: list[str]) -> list[int]:
-    return [idx for idx, line in enumerate(lines) if orca_route_line(line) is not None]
-
-
 def orca_route_lines(lines: list[str]) -> list[str]:
     """All route (``!``) lines of an ORCA input, stripped.
 

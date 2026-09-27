@@ -315,40 +315,34 @@ def test_orca_execution_snapshot_rejects_generation_runtime_name_collisions(
 
 
 @pytest.mark.parametrize(
-    ("route", "dependency_name"),
+    "route",
     [
-        ("! HF STO-3G SP", "h2.resume.inp"),
-        ("! HF STO-3G SP", "h2.resume.out"),
-        ("! HF STO-3G SP", "h2.resume.gbw"),
-        ("! HF STO-3G EnGrad", "h2.engrad"),
-        ("! HF STO-3G EnGrad", "h2.resume.engrad"),
-        ("! HF STO-3G EnergyGrad", "h2.engrad"),
-        ("! HF STO-3G Opt", "h2.engrad"),
-        ("! HF STO-3G SloppyOpt", "h2.engrad"),
-        ("! HF STO-3G CrudeOpt", "h2.engrad"),
-        ("! HF STO-3G OptH", "h2.engrad"),
-        ("! HF STO-3G L-OPT", "h2.engrad"),
-        ("! HF STO-3G L-OPTH", "h2.engrad"),
-        ("! HF STO-3G QMMMOpt", "h2.engrad"),
-        ("! HF STO-3G QMMMOpt/pDynamo", "h2.engrad"),
-        ("! HF STO-3G CI-OPT", "h2.engrad"),
-        ("! HF STO-3G ConicalIntersect-Opt", "h2.engrad"),
-        ("! HF STO-3G SurfCrossOpt", "h2.engrad"),
-        ("! HF STO-3G MECP-Opt", "h2.engrad"),
-        ("! HF STO-3G OptTS", "h2.engrad"),
-        ("! HF STO-3G OptTS(GMF)", "h2.engrad"),
-        ("! XTB GOAT", "h2.engrad"),
-        ("! HF STO-3G IRC", "h2.engrad"),
-        ("! HF STO-3G NumGrad", "h2.engrad"),
-        ("! HF STO-3G Freq", "h2.resume.hess"),
-        ("! HF STO-3G Opt", "h2.resume.xyz"),
+        "! HF STO-3G EnGrad",
+        "! HF STO-3G EnergyGrad",
+        "! HF STO-3G Opt",
+        "! HF STO-3G SloppyOpt",
+        "! HF STO-3G CrudeOpt",
+        "! HF STO-3G OptH",
+        "! HF STO-3G L-OPT",
+        "! HF STO-3G L-OPTH",
+        "! HF STO-3G QMMMOpt",
+        "! HF STO-3G QMMMOpt/pDynamo",
+        "! HF STO-3G CI-OPT",
+        "! HF STO-3G ConicalIntersect-Opt",
+        "! HF STO-3G SurfCrossOpt",
+        "! HF STO-3G MECP-Opt",
+        "! HF STO-3G OptTS",
+        "! HF STO-3G OptTS(GMF)",
+        "! XTB GOAT",
+        "! HF STO-3G IRC",
+        "! HF STO-3G NumGrad",
     ],
 )
-def test_orca_execution_snapshot_rejects_resume_name_collisions(
+def test_orca_execution_snapshot_rejects_engrad_name_collisions_for_gradient_routes(
     tmp_path: Path,
     route: str,
-    dependency_name: str,
 ) -> None:
+    dependency_name = "h2.engrad"
     job_dir = tmp_path / "job"
     job_dir.mkdir()
     dependency = job_dir / dependency_name
@@ -435,7 +429,6 @@ def test_orca_execution_snapshot_rejects_neb_restart_path_named_like_neb_output(
         "nebts.NEB.log",
         "nebts.opt",
         "nebts.hess",
-        "nebts.resume_MEP.allxyz",
         "nebts_MMFTSOpt_trj.xyz",
         "nebts_spline.dat",
     ],
@@ -1808,32 +1801,6 @@ def test_orca_execution_snapshot_rejects_materialized_basename_metadata_tamper(
         _verify(job_dir, selected, snapshot, resources)
 
     assert generation.is_dir()
-
-
-def test_verify_orca_execution_snapshot_rejects_resume_output_name_tamper(
-    tmp_path: Path,
-) -> None:
-
-    job_dir, selected, snapshot, resources = _snapshot(tmp_path)
-    role = "dependency_000000"
-    original_private = Path(snapshot["materialized_inputs"][role]["path"])
-    reserved_source = job_dir / "job.resume.out"
-    reserved_private = Path(snapshot["execution_dir"]) / reserved_source.name
-    original_private.rename(reserved_private)
-    snapshot["dependency_paths"][0] = str(reserved_source.resolve())
-    snapshot["source_inputs"][role]["source_path"] = str(reserved_source.resolve())
-    snapshot["materialized_inputs"][role] = file_content_identity(reserved_private)
-    bound_selected = Path(snapshot["selected_inp"])
-    bound_selected.chmod(0o600)
-    bound_selected.write_text(
-        bound_selected.read_text(encoding="utf-8").replace("charges.pc", reserved_source.name),
-        encoding="utf-8",
-    )
-    bound_selected.chmod(0o400)
-    snapshot["bound_selected_identity"] = file_content_identity(bound_selected)
-
-    with pytest.raises(ValueError, match="runtime/output file: job.resume.out"):
-        _verify(job_dir, selected, snapshot, resources)
 
 
 @pytest.mark.parametrize(

@@ -21,7 +21,7 @@ from .attempt.reporting import exit_with_result, parse_analyzer_status
 from .attempt.resume import (
     is_resumable_state,
     load_or_create_state,
-    resume_terminal_decision,
+    settle_from_recorded_attempt,
     state_matches_selected,
 )
 from .completion_rules import detect_completion_mode
@@ -131,7 +131,7 @@ def existing_completed_exit(context: RunExecutionContext) -> int | None:
                     reaction_dir,
                 )
                 return 1
-            return resume_terminal_decision(reaction_dir, selected_inp, recorded)
+            return settle_from_recorded_attempt(reaction_dir, selected_inp, recorded)
 
     state, resumed = load_or_create_state(reaction_dir, selected_inp)
     if bind_queue_identity(state, context):

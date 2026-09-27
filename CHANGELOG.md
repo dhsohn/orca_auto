@@ -45,15 +45,19 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   the worker passes the slot token as `--admission-token`, and the app name and
   task ID come from the claimed queue row.
 - Attempt-level checkpoint resume is removed
-  ([ADR 0002](docs/adr/0002-no-automatic-retry-of-failed-calculations.md)). A
-  queued job whose generation had started is always rebound into a fresh
-  generation before it runs again, so its `<stem>.resume.inp` restart input
-  (`MORead` from the generation's own `.gbw`) was never written. Ctrl-C in a
-  worker child still stops ORCA as a worker shutdown and requeues the job; the
-  unreachable `interrupted_by_user` result with exit code 130 is gone. A
-  `job_state.json` whose final reason is `interrupted_by_user` or
-  `worker_shutdown` stays readable but is no longer resumed; only
-  `crashed_recovery` is.
+  ([ADR 0009](docs/adr/0009-resume-only-by-rebind.md)). A queued job whose
+  generation had started is always rebound into a fresh generation before it
+  runs again, so its `<stem>.resume.inp` restart input (`MORead` from the
+  generation's own `.gbw`) was never written. Ctrl-C in a worker child still
+  stops ORCA as a worker shutdown and requeues the job; the unreachable
+  `interrupted_by_user` result with exit code 130 is gone. A `job_state.json`
+  whose final reason is `interrupted_by_user` or `worker_shutdown` stays
+  readable but is no longer resumed; only `crashed_recovery` is.
+- Binding no longer reserves the `<stem>.resume.*` names, so a referenced file
+  may use them, and crash recovery no longer seeds `MORead` from a crashed
+  generation's `<stem>.resume.gbw`; it seeds only from its `<stem>.gbw`
+  ([ADR 0009](docs/adr/0009-resume-only-by-rebind.md)). Only the removed
+  attempt-level resume wrote these files, and it could not run.
 - `orca_auto.orca.state_reading.load_report_json` and
   `load_report_json_with_output_receipt` leave the package for the repository
   test tree (`tests/contracts/report_verifier.py`). ORCA_auto never reads
@@ -272,6 +276,9 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `Attempt N finished: …`, `ORCA runner crashed during attempt N: …` and
   `Interrupted by worker shutdown during attempt N`) keep their text but come
   from `orca_auto.orca.attempt.run` instead of `orca_auto.orca.attempt.engine`.
+  The `Detected crashed run in … Recovering state.` warning keeps its text but
+  comes from `orca_auto.orca.attempt.resume` instead of
+  `orca_auto.orca.execution` or `orca_auto.orca.recovery_rebind`.
   A failed content hash of an input or output file reads
   `File changed while it was hashed: …` or `File is not a regular file: …`
   instead of naming the file an `Engine executable`.

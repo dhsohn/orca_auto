@@ -119,7 +119,6 @@ def build_run_started_notification(
     *,
     reaction_dir: Path,
     selected_inp: Path,
-    current_inp: Path,
     state: RunState,
     execution_index: int,
     status: RunStatus | str,
@@ -129,7 +128,7 @@ def build_run_started_notification(
     return {
         "reaction_dir": str(reaction_dir),
         "selected_inp": str(selected_inp),
-        "current_inp": str(current_inp),
+        "current_inp": str(selected_inp),
         "run_id": str(state.get("run_id", "")),
         "attempt_index": execution_index,
         "status": run_status_text(status),
@@ -141,7 +140,6 @@ def build_run_started_notification(
 def _print_run_summary(payload: Mapping[str, Any]) -> None:
     fields = [
         ("status", "status"),
-        ("job_dir", "job_dir"),
         ("reaction_dir", "job_dir"),
         ("selected_inp", "selected_inp"),
         ("attempt_count", "attempt_count"),
@@ -149,12 +147,9 @@ def _print_run_summary(payload: Mapping[str, Any]) -> None:
         ("run_state", "run_state"),
         ("report_json", "report_json"),
     ]
-    printed_labels: set[str] = set()
     for key, label in fields:
-        if key not in payload or label in printed_labels:
-            continue
-        print(f"{label}: {payload[key]}")
-        printed_labels.add(label)
+        if key in payload:
+            print(f"{label}: {payload[key]}")
 
 
 def exit_with_result(

@@ -34,8 +34,8 @@ from orca_auto.core.queue.snapshot_intent import (
 from orca_auto.core.queue.types import QueueEntry, entry_status_is_running
 from orca_auto.core.utils.persistence import timestamped_token, timestamped_token_pattern
 
+from .attempt.resume import recover_crashed_state
 from .config import AppConfig
-from .execution import recover_crashed_state
 from .execution_binding import (
     STALE_RECOVERY_SNAPSHOT_ERROR,
     build_orca_execution_snapshot,
@@ -315,7 +315,7 @@ def maybe_rebind_recovery_generation(
         raise ValueError("ORCA crash recovery requires the submission source input path")
     recorded_request = metadata.get("resource_request")
     with acquire_run_lock(reaction_dir):
-        recover_crashed_state(reaction_dir, logger=logger)
+        recover_crashed_state(reaction_dir)
         # Plain read: build requires the crashed stable-read digest, which bounds size and tearing.
         source_payload = Path(source_selected).read_bytes()
         prepared = prepare_submission_resource_request(

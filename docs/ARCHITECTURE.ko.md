@@ -181,10 +181,10 @@ RAM scratch 정책, 슬롯의 엔진 프로세스 준비·등록 함수, 그리�
 실행 시작을 기록하고 시작 알림을 보낸 뒤 고정된 입력으로 ORCA를 한 번 실행하고, 종료
 코드와 맞춘 분석 판정(`out_analyzer.apply_exit_code`)과 함께 시도를 기록한 다음 종료
 결과, 보고서, 실행 요약을 발행한다(`attempt/reporting.exit_with_result`). 재개는 새
-generation으로의 재바인딩으로만 일어난다: 실행 시작 근거가 있는 generation의 인수는
-완료 출력으로 마무리되지 않는 한 실행 전에 재바인딩되므로, 한 generation에서 ORCA가 두
-번 실행되지 않는다. Ctrl-C를 포함한 워커 종료나 취소는 시도를
-`WorkerShutdownInterrupt`로 멈춘다.
+generation으로의 재바인딩으로만 일어난다([ADR 0009](adr/0009-resume-only-by-rebind.md)):
+실행 시작 근거가 있는 generation의 인수는 완료 출력으로 마무리되지 않는 한 실행 전에
+재바인딩되므로, 한 generation에서 ORCA가 두 번 실행되지 않는다. Ctrl-C를 포함한 워커
+종료나 취소는 시도를 `WorkerShutdownInterrupt`로 멈춘다.
 
 자식이 실행권 슬롯을 바꾸는 일은 모두 `execution._child_admission_slot` 규칙 하나를
 거친다. 자식은 슬롯을 활성화하고, 실행이 정상 반환하면 엔진 프로세스를 완료 처리하며,
@@ -204,8 +204,8 @@ generation으로의 재바인딩으로만 일어난다: 실행 시작 근거가 
 | 실행 반환 뒤 완료 처리 | 자식 | `active` | `idle` |
 | 엔진 기록 복구 후 해제 | 부모 | 삭제 | 삭제 |
 
-`recover_crashed_state`는 중단된 실행이 `running`으로 남긴 루트 `job_state.json`을
-닫으며, 두 곳에서 각각 `run.lock` 아래에서 실행된다. 중단 복구 재바인딩
+`recover_crashed_state`(`attempt/resume.py`)는 중단된 실행이 `running`으로 남긴 루트
+`job_state.json`을 닫으며, 두 곳에서 각각 `run.lock` 아래에서 실행된다. 중단 복구 재바인딩
 (`recovery_rebind.py`, 자식이 이미 읽은 설정을 사용)은 대체 generation을 만들기 전에
 호출해, 새 generation이 생기기 전에 고정된 시도를 중단으로 기록한다.
 `execute_locked_run`은 실행 직전에 다시 호출해 재바인딩하지 않은 인수(실행 시작 근거가
@@ -235,3 +235,4 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0006: 저장되는 토큰과 모든 큐 행 fence가 하나의 generation 식별을 쓴다](adr/0006-one-generation-identity-for-token-and-fences.md)
 - [ADR 0007: 설치마다 `<runs_root>/.admission` 하나의 실행권 저장소](adr/0007-one-admission-store-under-runs-root.md)
 - [ADR 0008: 취소 결과는 워커 부모만 쓴다](adr/0008-parent-writes-the-cancelled-result.md)
+- [ADR 0009: 재개는 새 generation으로의 재바인딩으로만 한다](adr/0009-resume-only-by-rebind.md)

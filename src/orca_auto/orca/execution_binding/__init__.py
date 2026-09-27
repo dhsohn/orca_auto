@@ -14,7 +14,7 @@ from __future__ import annotations
 from ._build import build_orca_execution_snapshot
 from ._cleanup import cleanup_unowned_orca_execution_snapshot
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES, ORCA_EXECUTION_SNAPSHOT_VERSION
-from ._recovery import recovery_checkpoint_private_name, recovery_checkpoint_source_names
+from ._recovery import recovery_checkpoint_private_name
 from ._reservation import retire_snapshot_intent_for_row
 from ._snapshot_identity import (
     STALE_RECOVERY_SNAPSHOT_ERROR,
@@ -37,7 +37,6 @@ __all__ = [
     "orca_execution_snapshot_generation_dir",
     "orca_execution_started_evidence",
     "recovery_checkpoint_private_name",
-    "recovery_checkpoint_source_names",
     "require_current_snapshot_version",
     "retire_snapshot_intent_for_row",
     "same_directory_identity",

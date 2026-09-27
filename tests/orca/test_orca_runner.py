@@ -66,19 +66,13 @@ def _admission_events(events: list[str]) -> Callable[[object | None], None]:
 
 @pytest.fixture(autouse=True)
 def pinned_test_executable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Let ``/opt/orca/orca`` resolve to ``/bin/true`` without touching real paths."""
+    """Let ``/opt/orca/orca`` pin ``/bin/true`` without touching real paths."""
 
     original_open = OrcaRunner._open_pinned_executable
 
-    def open_test_executable(runner: OrcaRunner) -> Any:
+    def open_test_executable(runner: OrcaRunner) -> int:
         if runner.orca_executable == _TEST_EXECUTABLE:
-            descriptor = os.open("/bin/true", os.O_RDONLY)
-            details = os.fstat(descriptor)
-            return descriptor, {
-                "path": runner.orca_executable,
-                "sha256": "test-double",
-                "size_bytes": int(details.st_size),
-            }
+            return os.open("/bin/true", os.O_RDONLY)
         return original_open(runner)
 
     monkeypatch.setattr(OrcaRunner, "_open_pinned_executable", open_test_executable)
@@ -140,6 +134,21 @@ def test_open_pinned_executable_rejects_fifo_without_blocking(tmp_path: Path) ->
 
     runner = make_orca_runner(executable, tmp_path)
     with pytest.raises(ValueError, match="not a regular file"):
+        runner._open_pinned_executable()
+
+
+@pytest.mark.parametrize("bound", ["changed", "empty"])
+def test_open_pinned_executable_refuses_an_executable_that_is_not_the_bound_one(
+    tmp_path: Path, make_fake_orca: Callable[..., Path], bound: str
+) -> None:
+    executable = make_fake_orca()
+    runner = make_orca_runner(
+        executable, tmp_path, **({"executable_identity": {}} if bound == "empty" else {})
+    )
+    if bound == "changed":
+        executable.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="no longer matches its queued identity"):
         runner._open_pinned_executable()
 
 
@@ -330,26 +339,19 @@ def test_run_accepts_only_a_private_inp_in_its_generation(
     mock_popen.assert_not_called()
 
 
-def test_run_verifies_the_snapshot_around_each_launch(mock_popen: MagicMock, inp: Path) -> None:
+def test_run_verifies_the_snapshot_around_the_launch(mock_popen: MagicMock, inp: Path) -> None:
     mock_popen.return_value = _mock_process(wait=0)
     checks: list[bool] = []
     runner = make_orca_runner(
         _TEST_EXECUTABLE,
         inp.parent,
-        execution_provenance={"generation_owner_token": "owner-1"},
         verify_snapshot=lambda *, allow_runtime_outputs: checks.append(allow_runtime_outputs),
     )
 
-    first = runner.run(inp)
-    second = runner.run(inp)
+    runner.run(inp)
 
-    # Pristine before the first launch; runtime outputs allowed after it.
-    assert checks == [False, True, True, True]
-    assert (
-        first.execution_provenance
-        == second.execution_provenance
-        == {"generation_owner_token": "owner-1"}
-    )
+    # Pristine before the launch; runtime outputs allowed after it.
+    assert checks == [False, True]
 
 
 @pytest.mark.parametrize("launch", ["returned", "raised"])

@@ -46,6 +46,7 @@ from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME, ORCA_ENGINE, ORCA_TA
 from orca_auto.orca.attempt.reporting import build_final_result
 from orca_auto.orca.config import AppConfig, OrcaRuntimeConfig, PathsConfig
 from orca_auto.orca.execution_binding import build_orca_execution_snapshot
+from orca_auto.orca.file_identity import file_content_identity
 from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import worker_log_path
@@ -300,6 +301,16 @@ def config_path(tmp_path: Path, app_cfg: Callable[..., AppConfig]) -> Callable[.
 # ---------------------------------------------------------------------------
 
 
+def _test_executable_identity(orca_executable: str | Path) -> dict[str, Any]:
+    """The content identity a snapshot would pin for a test's ORCA executable.
+
+    A test that never launches may name an executable that does not exist;
+    it gets no identity, which the runner refuses to launch.
+    """
+
+    return file_content_identity(orca_executable) if Path(orca_executable).is_file() else {}
+
+
 def make_run_context(
     cfg: AppConfig,
     reaction_dir: Path,
@@ -308,10 +319,11 @@ def make_run_context(
 ) -> RunExecutionContext:
     """A ``RunExecutionContext`` for ``selected_inp`` without a submitted snapshot.
 
-    The snapshot names the input's directory as the generation and nothing
-    else, so snapshot verification fails; use it where the test replaces the
-    runner, its ``run`` or its launch. The request is ``cfg``'s resources and
-    the admission token is empty unless ``fields`` sets them.
+    The snapshot names the input's directory as the generation and pins
+    ``cfg``'s executable by content, nothing else, so snapshot verification
+    fails; use it where the test replaces the runner, its ``run`` or its
+    launch. The request is ``cfg``'s resources and the admission token is empty
+    unless ``fields`` sets them.
     """
 
     execution_dir = Path(selected_inp).parent
@@ -332,7 +344,7 @@ def make_run_context(
                 "device": details.st_dev if details else 0,
                 "inode": details.st_ino if details else 1,
             },
-            "executable_identities": {"orca": {}},
+            "executable_identities": {"orca": _test_executable_identity(cfg.paths.orca_executable)},
         },
         "execution_provenance": {},
         "orca_executable": cfg.paths.orca_executable,
@@ -393,17 +405,15 @@ def make_orca_runner(
 ) -> OrcaRunner:
     """An ``OrcaRunner`` for inputs in ``execution_dir`` outside a queued snapshot.
 
-    Snapshot verification and the admission callbacks do nothing, the
-    executable identity is unpinned, stop is never requested and there is no
+    The executable is pinned by its content identity. Snapshot verification and
+    the admission callbacks do nothing, stop is never requested and there is no
     RAM scratch policy unless ``fields`` sets them.
     """
 
     details = execution_dir.stat()
     values: dict[str, Any] = {
-        "executable_identity": {},
         "execution_dir": execution_dir,
         "execution_dir_identity": {"device": details.st_dev, "inode": details.st_ino},
-        "execution_provenance": {},
         "verify_snapshot": lambda **_kwargs: None,
         "stop_requested": lambda: False,
         "scratch_policy": None,
@@ -411,6 +421,8 @@ def make_orca_runner(
         "register_running_job": lambda _running: None,
     }
     values.update(fields)
+    if "executable_identity" not in values:
+        values["executable_identity"] = _test_executable_identity(orca_executable)
     return OrcaRunner(str(orca_executable), **values)
 
 

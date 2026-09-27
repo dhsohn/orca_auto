@@ -27,7 +27,7 @@ from orca_auto.core.admission import (
 from orca_auto.core.admission.records import ADMISSION_SOURCE_QUEUE_RUN, SLOT_STATE_ACTIVE
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
 
-from .attempt.resume import CRASHED_RECOVERY_REASON, RESUMABLE_RUN_STATUSES, load_or_create_state
+from .attempt.resume import load_or_create_state, recover_crashed_state
 from .attempt.run import run_attempt
 from .orca_runner import OrcaRunner
 from .output_adoption import existing_completed_exit
@@ -35,8 +35,6 @@ from .run_context import RunExecutionContext, bind_queue_identity
 from .run_lock import acquire_run_lock
 from .scratch import OrcaScratchPolicy
 from .state import save_state
-from .state_reading import load_state
-from .statuses import AnalyzerStatus, RunStatus
 
 logger = logging.getLogger(__name__)
 
@@ -78,38 +76,13 @@ def _child_admission_slot(context: RunExecutionContext) -> Iterator[None]:
         raise RuntimeError(f"Admission slot disappeared: {token}")
 
 
-def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool:
-    """Recover resumable run state after admission has reconciled engine ownership."""
-    state = load_state(reaction_dir)
-    if not state:
-        return False
-
-    status = str(state.get("status", "")).strip()
-    if status not in RESUMABLE_RUN_STATUSES:
-        return False
-
-    logger.warning(
-        "Detected crashed run in %s (status=%s). Recovering state.",
-        reaction_dir,
-        status,
-    )
-    state["status"] = RunStatus.FAILED.value
-    state["final_result"] = {
-        "status": RunStatus.FAILED.value,
-        "reason": CRASHED_RECOVERY_REASON,
-        "analyzer_status": AnalyzerStatus.INCOMPLETE.value,
-    }
-    save_state(reaction_dir, state)
-    return True
-
-
 def execute_locked_run(
     context: RunExecutionContext,
     *,
     stop_requested: Callable[[], bool],
 ) -> int:
     with acquire_run_lock(context.reaction_dir):
-        recover_crashed_state(context.reaction_dir, logger=logger)
+        recover_crashed_state(context.reaction_dir)
         with _child_admission_slot(context):
             # The probe reads only the bound input's own generation directory:
             # a crashed generation adopts its own output, a fresh one runs.
@@ -124,7 +97,6 @@ def execute_locked_run(
                 executable_identity=snapshot["executable_identities"]["orca"],
                 execution_dir=Path(snapshot["execution_dir"]),
                 execution_dir_identity=snapshot["execution_dir_identity"],
-                execution_provenance=context.execution_provenance,
                 verify_snapshot=context.verify_snapshot,
                 stop_requested=stop_requested,
                 scratch_policy=(

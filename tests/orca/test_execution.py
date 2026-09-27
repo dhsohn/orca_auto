@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -15,55 +14,10 @@ from orca_auto.core.engine_scratch import _workspace as workspace_mod
 from orca_auto.orca import execution, output_adoption
 from orca_auto.orca.config import AppConfig, PathsConfig, load_config
 from orca_auto.orca.execution import execute_orca_run
-from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.scratch_config import ScratchConfig
-from orca_auto.orca.state import save_state
 from orca_auto.orca.state_reading import load_state
 from tests.conftest import bound_run_context, make_app_cfg, make_run_context, write_run_state
-
-
-def _write_running_state(reaction_dir: Path) -> None:
-    reaction_dir.mkdir(parents=True, exist_ok=True)
-    inp = reaction_dir / "rxn.inp"
-    inp.write_text("! Opt\n", encoding="utf-8")
-    save_state(
-        reaction_dir,
-        {
-            "run_id": "run_active",
-            "reaction_dir": str(reaction_dir),
-            "selected_inp": str(inp),
-            "status": "running",
-            "started_at": "2026-01-01T00:00:00+00:00",
-            "updated_at": "2026-01-01T00:00:00+00:00",
-            "attempts": [],
-            "final_result": None,
-        },
-    )
-
-
-def test_recover_crashed_state_transitions_running_state_to_failed(
-    tmp_path: Path,
-) -> None:
-    # Called under the run lock (exclusive owner), a running/retrying state is
-    # a crash and is reconciled to failed/crashed_recovery.
-    reaction_dir = tmp_path / "rxn"
-    _write_running_state(reaction_dir)
-
-    recovered = execution.recover_crashed_state(
-        reaction_dir,
-        logger=logging.getLogger("test_recover_crashed_state"),
-    )
-
-    assert recovered is True
-    state = load_state(reaction_dir)
-    assert state is not None
-    assert state["status"] == "failed"
-    assert state["final_result"] == {
-        "status": "failed",
-        "reason": "crashed_recovery",
-        "analyzer_status": "incomplete",
-    }
 
 
 def test_execute_locked_run_recovers_state_inside_the_run_lock(
@@ -92,8 +46,7 @@ def test_execute_locked_run_recovers_state_inside_the_run_lock(
         finally:
             events.append("admission_exit")
 
-    def fake_recover(_reaction_dir: Path, *, logger: logging.Logger) -> bool:
-        del logger
+    def fake_recover(_reaction_dir: Path) -> bool:
         events.append("recover")
         return False
 
@@ -160,7 +113,7 @@ def test_existing_completed_exit_stamps_queue_task_id_before_terminal_artifacts(
     monkeypatch.setattr(
         execution,
         "recover_crashed_state",
-        lambda _reaction_dir, *, logger: False,
+        lambda _reaction_dir: False,
     )
     monkeypatch.setattr(execution, "_child_admission_slot", fake_admission)
     monkeypatch.setattr(
@@ -319,7 +272,6 @@ def test_the_run_builds_its_one_runner_from_the_bound_context(
         "executable_identity": snapshot["executable_identities"]["orca"],
         "execution_dir": Path(snapshot["execution_dir"]),
         "execution_dir_identity": snapshot["execution_dir_identity"],
-        "execution_provenance": orca_execution_provenance(snapshot),
         "verify_snapshot": context.verify_snapshot,
         "stop_requested": stop_requested,
     }

@@ -82,11 +82,6 @@ def build_worker_child_command(
     return command
 
 
-class WorkerShutdownRequested(RuntimeError):
-    def __init__(self) -> None:
-        super().__init__("worker_shutdown")
-
-
 def _build_execution_context(
     cfg: AppConfig,
     entry: QueueEntry,
@@ -152,29 +147,6 @@ def _build_execution_context(
         queue_id=queue_entry_id(entry) or None,
         queue_generation=queue_entry_generation_token(entry) or None,
     )
-
-
-def _run_orca_job_for_entry(
-    context: RunExecutionContext,
-    entry: QueueEntry,
-    queue_root: Path,
-    *,
-    should_cancel: Callable[[], bool],
-    shutdown_requested: Callable[[], bool] | None,
-) -> int:
-    def stop_requested() -> bool:
-        return should_cancel() or (shutdown_requested is not None and shutdown_requested())
-
-    try:
-        return execute_orca_run(context, stop_requested=stop_requested)
-    except EngineScratchCapacityError as exc:
-        return _defer_admission(entry, queue_root, reason=str(exc))
-    except WorkerShutdownInterrupt as exc:
-        # The child leaves only attempt and scratch evidence. The parent's
-        # settlement (terminal_state.record_cancelled_run_state) is the one
-        # writer of a cancelled final_result, also for a child killed before
-        # it could write anything (ADR 0008).
-        raise WorkerShutdownRequested from exc
 
 
 def _defer_admission(
@@ -275,14 +247,17 @@ def process_dequeued_entry(
         )
         raise
     if shutdown_requested is not None and shutdown_requested():
-        raise WorkerShutdownRequested
-    return _run_orca_job_for_entry(
-        context,
-        entry,
-        queue_root,
-        should_cancel=lambda: _cancellation_requested(probe),
-        shutdown_requested=shutdown_requested,
-    )
+        raise WorkerShutdownInterrupt
+
+    def stop_requested() -> bool:
+        return _cancellation_requested(probe) or (
+            shutdown_requested is not None and shutdown_requested()
+        )
+
+    try:
+        return execute_orca_run(context, stop_requested=stop_requested)
+    except EngineScratchCapacityError as exc:
+        return _defer_admission(entry, queue_root, reason=str(exc))
 
 
 def run_worker_child_job(
@@ -327,7 +302,11 @@ def run_worker_child_job(
             admission_token=admission_token,
             shutdown_requested=controller.is_requested,
         )
-    except WorkerShutdownRequested:
+    except WorkerShutdownInterrupt:
+        # The child leaves only attempt and scratch evidence. The parent's
+        # settlement (terminal_state.record_cancelled_run_state) is the one
+        # writer of a cancelled final_result, also for a child killed before
+        # it could write anything (ADR 0008).
         requeue_running_entry(
             resolved_queue_root,
             queue_id,

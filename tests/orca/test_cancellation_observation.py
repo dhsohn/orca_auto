@@ -168,19 +168,15 @@ def test_child_execution_reuses_one_probe_for_all_runner_callbacks(
 
     monkeypatch.setattr(store, "load_entries", load)
 
-    def execution(*_args: object, should_cancel: Callable[[], bool], **_kwargs: object) -> int:
-        callback = should_cancel
+    def execution(*_args: object, stop_requested: Callable[[], bool], **_kwargs: object) -> int:
+        callback = stop_requested
         for _ in range(10):
             assert not callback()
         persistence.save_entries(tmp_path, [replace(target, cancel_requested=True)])
         assert callback()
         return 0
 
-    monkeypatch.setattr(
-        worker_execution,
-        "_run_orca_job_for_entry",
-        execution,
-    )
+    monkeypatch.setattr(worker_execution, "execute_orca_run", execution)
     monkeypatch.setattr(
         worker_execution,
         "_build_execution_context",

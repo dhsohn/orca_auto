@@ -37,7 +37,6 @@ from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_generation_token, same_generation
 from orca_auto.orca.recovery_rebind import RECOVERY_REBIND_COUNT_METADATA_KEY
 from orca_auto.orca.run_context import RunExecutionContext
-from orca_auto.orca.scratch import OrcaScratchPolicy
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state_reading import load_state, state_path
 from tests.conftest import (
@@ -46,7 +45,6 @@ from tests.conftest import (
     build_submitted_snapshot,
     claim_next_entry,
     make_app_cfg,
-    make_orca_runner,
     make_queue_entry,
     write_config_file,
     write_fake_orca,
@@ -493,31 +491,6 @@ def test_reserved_workspace_is_removed_when_the_run_fails_before_launch(
 
     assert [path for path in run.scratch_root.iterdir() if path.name.startswith("attempt-")] == []
     assert run.launches == []
-
-
-def test_workspace_reserved_for_another_input_is_never_used_to_launch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    fake_shm: Path,
-) -> None:
-    run = _scratch_run(monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63)
-    generation = run.context.selected_inp.parent
-    derived = generation / "rxn_other.inp"
-    derived.write_text("! SP\n* xyz 0 1\nHe 0 0 0\n*\n", encoding="utf-8")
-    runner = make_orca_runner(
-        "/bin/true",
-        generation,
-        scratch_policy=OrcaScratchPolicy(
-            root=run.scratch_root, min_free_bytes=1024**3, max_task_memory_bytes=1024**3
-        ),
-    )
-
-    runner.prepare(run.context.selected_inp)
-    result = runner.run(derived)
-
-    assert [path.name for path in run.launches] == ["rxn_other.inp"]
-    assert Path(result.out_path) == derived.with_suffix(".out")
-    assert [path for path in run.scratch_root.iterdir() if path.name.startswith("attempt-")] == []
 
 
 def test_capacity_refusal_after_the_run_started_is_a_failed_attempt_not_a_deferral(

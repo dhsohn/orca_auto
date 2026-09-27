@@ -193,9 +193,10 @@ otherwise it marks the run started, sends the started notification, runs ORCA
 once on the bound input, records the attempt with the analyzer verdict
 reconciled with the exit code (`out_analyzer.apply_exit_code`) and publishes the
 terminal result, reports and run summary (`attempt/reporting.exit_with_result`).
-A run resumes only by rebinding into a fresh generation: a claim whose
-generation shows started execution is rebound before it runs, unless its
-completed output settles it, so ORCA never runs twice in one generation. A
+A run resumes only by rebinding into a fresh generation
+([ADR 0009](adr/0009-resume-only-by-rebind.md)): a claim whose generation shows
+started execution is rebound before it runs, unless its completed output
+settles it, so ORCA never runs twice in one generation. A
 worker shutdown or cancel, Ctrl-C included, stops the attempt as
 `WorkerShutdownInterrupt`.
 
@@ -219,16 +220,16 @@ lifecycle:
 | Complete after the run returns | child | `active` | `idle` |
 | Recover any engine record and release | parent | removed | removed |
 
-`recover_crashed_state` closes a root `job_state.json` left `running` by a
-crashed run, and it runs in two places, each under `run.lock`. The crash
-rebind (`recovery_rebind.py`, with the config the child already loaded) calls
-it before it builds the replacement generation, so the frozen attempt is
-recorded as crashed before a new generation exists. `execute_locked_run` calls
-it again right before the launch, for claims that did not rebind (no
-started-execution evidence, or a completed output to adopt); after a rebind it
-finds nothing to recover and writes nothing. Both read, modify and write the
-root state, so each holds `run.lock` against a live ORCA instance and the
-parent's terminal state writers.
+`recover_crashed_state` (`attempt/resume.py`) closes a root `job_state.json`
+left `running` by a crashed run, and it runs in two places, each under
+`run.lock`. The crash rebind (`recovery_rebind.py`, with the config the child
+already loaded) calls it before it builds the replacement generation, so the
+frozen attempt is recorded as crashed before a new generation exists.
+`execute_locked_run` calls it again right before the launch, for claims that
+did not rebind (no started-execution evidence, or a completed output to adopt);
+after a rebind it finds nothing to recover and writes nothing. Both read,
+modify and write the root state, so each holds `run.lock` against a live ORCA
+instance and the parent's terminal state writers.
 
 ---
 
@@ -252,3 +253,4 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0006: One generation identity for the persisted token and every queue-row fence](adr/0006-one-generation-identity-for-token-and-fences.md)
 - [ADR 0007: One admission store per installation under `<runs_root>/.admission`](adr/0007-one-admission-store-under-runs-root.md)
 - [ADR 0008: The worker parent is the one writer of a cancelled result](adr/0008-parent-writes-the-cancelled-result.md)
+- [ADR 0009: Resume only by rebinding into a fresh generation](adr/0009-resume-only-by-rebind.md)

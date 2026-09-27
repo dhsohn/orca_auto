@@ -20,7 +20,7 @@ from orca_auto.core.confined_io import (
 )
 from orca_auto.core.utils.persistence import durable_mkdir
 
-from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES, resume_checkpoint_input_path
+from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 from ._models import _RouteOutputs
 
 _GENERATION_RUNTIME_FILE_NAMES = frozenset(
@@ -140,27 +140,23 @@ def _validate_dependency_basename(
     inline_same_stem_xyz: bool,
 ) -> None:
     name = source.name
-    resume_inputs = [resume_checkpoint_input_path(selected_inp)]
-    runtime_input_variants = [selected_inp, *resume_inputs]
     runtime_owned_names = set(_GENERATION_RUNTIME_FILE_NAMES)
-    runtime_owned_names.update(path.name for path in resume_inputs)
-    for runtime_input in runtime_input_variants:
-        runtime_owned_names.add(runtime_input.with_suffix(".out").name)
-        runtime_owned_names.add(runtime_input.with_suffix(".gbw").name)
-        if routes.engrad_is_output:
-            runtime_owned_names.add(runtime_input.with_suffix(".engrad").name)
-        if routes.hessian_requested:
-            runtime_owned_names.add(runtime_input.with_suffix(".hess").name)
-        if routes.same_stem_xyz_is_output and not inline_same_stem_xyz:
-            runtime_owned_names.add(runtime_input.with_suffix(".xyz").name)
+    runtime_owned_names.add(selected_inp.with_suffix(".out").name)
+    runtime_owned_names.add(selected_inp.with_suffix(".gbw").name)
+    if routes.engrad_is_output:
+        runtime_owned_names.add(selected_inp.with_suffix(".engrad").name)
+    if routes.hessian_requested:
+        runtime_owned_names.add(selected_inp.with_suffix(".hess").name)
+    if routes.same_stem_xyz_is_output and not inline_same_stem_xyz:
+        runtime_owned_names.add(selected_inp.with_suffix(".xyz").name)
     neb_patterns = [_NEB_OUTPUT_STEM_SUFFIX_RE]
     if routes.neb_preopt_ends:
         neb_patterns.append(_NEB_PREOPT_STEM_SUFFIX_RE)
-    neb_output = routes.neb_requested and any(
-        name.startswith(runtime_input.stem)
-        and pattern.fullmatch(name, len(runtime_input.stem)) is not None
-        for runtime_input in runtime_input_variants
-        for pattern in neb_patterns
+    stem = selected_inp.stem
+    neb_output = (
+        routes.neb_requested
+        and name.startswith(stem)
+        and any(pattern.fullmatch(name, len(stem)) is not None for pattern in neb_patterns)
     )
     if neb_output or name in runtime_owned_names:
         raise ValueError(
