@@ -29,7 +29,7 @@ from .entries import (
     queue_entry_task_id,
 )
 from .models import OrcaWorkerReplayState, TerminalReplayWorkItem
-from .terminal_replay import (
+from .terminal_marker import (
     TerminalReplayMarkerKind,
     terminal_replay_is_fence_only,
     terminal_replay_marker_kind,

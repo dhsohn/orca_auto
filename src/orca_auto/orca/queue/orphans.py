@@ -24,7 +24,7 @@ from .entries import (
     queue_entry_reaction_dir,
     queue_entry_status,
 )
-from .terminal_replay import (
+from .terminal_marker import (
     terminal_replay_marker_from_entry,
     terminal_replay_metadata_update_fn,
 )

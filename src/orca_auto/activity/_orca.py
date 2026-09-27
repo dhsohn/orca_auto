@@ -15,7 +15,7 @@ from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE, ORCA_ENGINE
 from orca_auto.orca.engine_runtime import engine_runtime_paths
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
-from orca_auto.orca.queue.terminal_replay import (
+from orca_auto.orca.queue.terminal_marker import (
     TerminalReplayMarkerKind,
     terminal_replay_marker_kind,
 )

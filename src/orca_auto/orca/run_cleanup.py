@@ -31,7 +31,7 @@ from .queue.entries import (
     queue_entry_reaction_dir,
     queue_entry_status,
 )
-from .queue.terminal_replay import (
+from .queue.terminal_marker import (
     TerminalReplayMarkerKind,
     terminal_replay_marker_kind,
 )

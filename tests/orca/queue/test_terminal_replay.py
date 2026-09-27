@@ -47,17 +47,17 @@ from orca_auto.orca.queue.entries import (
 )
 from orca_auto.orca.queue.models import OrcaRunningJob, TerminalReplayWorkItem
 from orca_auto.orca.queue.orphans import reconcile_orphaned_running_entries
-from orca_auto.orca.queue.run_state_replay import (
-    record_cancelled_run_state as _record_cancelled_run_state,
-)
-from orca_auto.orca.queue.run_state_replay import (
-    record_failed_run_state as _record_failed_run_state,
-)
-from orca_auto.orca.queue.terminal_replay import (
+from orca_auto.orca.queue.terminal_marker import (
     StateGenerationFingerprint,
     load_state_generation_fingerprint,
     terminal_replay_marker,
     terminal_replay_marker_from_entry,
+)
+from orca_auto.orca.queue.terminal_state import (
+    record_cancelled_run_state as _record_cancelled_run_state,
+)
+from orca_auto.orca.queue.terminal_state import (
+    record_failed_run_state as _record_failed_run_state,
 )
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.queue.worker_tracking import (

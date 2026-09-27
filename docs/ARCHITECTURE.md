@@ -152,8 +152,9 @@ publication lease) is outside it; `queue_generation` in `job_state.json` is its 
 `queue/settlement.py` holds the terminal settlement steps (work items, mark,
 preparation, binding, publication and marker retirement), `queue/replay.py` only the
 restart replay pipeline (which terminal rows to settle, and one owner generation per
-directory); both take their state explicitly, and
-`queue/run_state_replay.py` synthesizes terminal `job_state.json` under
+directory); both take their state explicitly. `queue/terminal_marker.py` holds the
+durable replay marker format and the state fingerprint it records, and
+`queue/terminal_state.py` synthesizes terminal `job_state.json` under
 `run.lock`. These paths call concrete adapters with the selected entry and task
 identity. Durable execution preparation precedes admission release; derived publication
 can retry afterward while its marker fences the same directory. RUNNING-row

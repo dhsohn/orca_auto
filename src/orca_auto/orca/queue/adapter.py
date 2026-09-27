@@ -37,7 +37,7 @@ from .entries import (
     same_generation,
 )
 from .orphans import reconcile_dead_running_rows_for_dir
-from .terminal_replay import (
+from .terminal_marker import (
     TerminalReplayMarkerKind,
     terminal_replay_is_fence_only,
     terminal_replay_marker_kind,

@@ -18,7 +18,7 @@ from ..state import finalize_state, new_state
 from ..state_reading import load_state, state_path, state_payload_job_id
 from ..statuses import TERMINAL_RUN_STATUS_VALUES, AnalyzerStatus, RunStatus
 from ..types import RunState
-from .terminal_replay import StateGenerationFingerprint, terminal_status_from_run_state
+from .terminal_marker import StateGenerationFingerprint, terminal_status_from_run_state
 
 logger = logging.getLogger(__name__)
 

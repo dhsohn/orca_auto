@@ -7,7 +7,7 @@ from typing import Any
 
 from orca_auto.core.queue.processes import ManagedProcess
 
-from .terminal_replay import StateGenerationFingerprint
+from .terminal_marker import StateGenerationFingerprint
 
 
 @dataclass(frozen=True)

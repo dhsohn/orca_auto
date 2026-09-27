@@ -18,7 +18,7 @@ from orca_auto.orca import worker_execution
 from orca_auto.orca.orca_runner import WorkerShutdownInterrupt
 from orca_auto.orca.queue import adapter
 from orca_auto.orca.queue import entries as queue_entries
-from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state_reading import load_state
 from tests.conftest import claim_next_entry
@@ -396,7 +396,7 @@ def test_cancel_finalization_skips_when_the_run_lock_is_held(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
-    from orca_auto.orca.queue.run_state_replay import record_cancelled_run_state
+    from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
 
     rxn, queue_root, queued, run_child = _run_cancelled_child(tmp_path, monkeypatch)
 

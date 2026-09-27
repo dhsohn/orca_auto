@@ -2,7 +2,7 @@
 
 Two functions decide whether a pending terminal replay still owns the state
 file of its reaction directory: ``settlement.is_superseded`` (the pre-check)
-and ``run_state_replay._load_state_for_terminal_generation``
+and ``terminal_state._load_state_for_terminal_generation``
 (under ``run.lock``). They read different run ids today: the pre-check prefers
 ``item.run_id``, then ``item.recorded_run_id``, then the observed fingerprint's
 run id; the under-lock check reads only the observed fingerprint. The table
@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.orca.queue.models import TerminalReplayWorkItem
-from orca_auto.orca.queue.run_state_replay import _load_state_for_terminal_generation
 from orca_auto.orca.queue.settlement import is_superseded
-from orca_auto.orca.queue.terminal_replay import StateGenerationFingerprint
+from orca_auto.orca.queue.terminal_marker import StateGenerationFingerprint
+from orca_auto.orca.queue.terminal_state import _load_state_for_terminal_generation
 from orca_auto.orca.state_reading import state_path
 from tests.contracts.normalize import assert_pin
 

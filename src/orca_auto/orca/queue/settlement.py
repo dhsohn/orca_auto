@@ -42,12 +42,12 @@ from .entries import (
     queue_entry_task_id,
 )
 from .models import TerminalReplayWorkItem
-from .run_state_replay import record_cancelled_run_state, record_failed_run_state
-from .terminal_replay import (
+from .terminal_marker import (
     load_state_generation_fingerprint,
     state_fingerprint_from_payload,
     terminal_replay_marker_from_entry,
 )
+from .terminal_state import record_cancelled_run_state, record_failed_run_state
 
 logger = logging.getLogger(__name__)
 

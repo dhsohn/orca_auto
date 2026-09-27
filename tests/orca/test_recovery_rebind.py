@@ -1209,7 +1209,7 @@ def test_child_recovery_records_the_rejection_on_the_failed_queue_row(
     queue_root, running, snapshot, _executable = _claimed_mutable_entry(tmp_path)
     old_generation = _crash_generation(snapshot)
     from orca_auto.orca.queue.adapter import update_metadata
-    from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+    from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 
     assert update_metadata(
         queue_root,

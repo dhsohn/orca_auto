@@ -20,7 +20,7 @@ from orca_auto.core.queue.processes import ManagedProcess, terminate_process_gro
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue, mark_failed
-from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state import new_state, save_state
 from orca_auto.orca.state_reading import load_state

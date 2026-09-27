@@ -50,7 +50,7 @@ from orca_auto.orca.queue.adapter import (
     update_terminal,
 )
 from orca_auto.orca.queue.models import OrcaRunningJob, TerminalReplayWorkItem
-from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.queue.worker_tracking import notify_terminal_job_from_state
 from orca_auto.orca.state import finalize_state, new_state, save_state

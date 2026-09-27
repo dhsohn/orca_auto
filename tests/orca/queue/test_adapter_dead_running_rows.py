@@ -19,7 +19,7 @@ from orca_auto.core.queue.worker.pid_file import WORKER_PID_FILE_NAME, write_wor
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_RUNNING
 from orca_auto.orca.queue.adapter import DuplicateEntryError, enqueue, list_queue
 from orca_auto.orca.queue.orphans import reconcile_dead_running_rows_for_dir
-from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.run_snapshot import RunSnapshot
 from orca_auto.orca.state import finalize_state, new_state

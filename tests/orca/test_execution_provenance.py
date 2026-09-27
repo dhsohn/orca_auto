@@ -15,7 +15,7 @@ from orca_auto.orca.execution_binding import (
     orca_execution_provenance,
 )
 from orca_auto.orca.machine_observation import artifact_receipt
-from orca_auto.orca.queue.run_state_replay import record_cancelled_run_state
+from orca_auto.orca.queue.terminal_state import record_cancelled_run_state
 from orca_auto.orca.report.publication import write_report_files, write_report_json
 from orca_auto.orca.state import new_state, normalized_payload_from_state, save_state
 from orca_auto.orca.state_reading import load_state

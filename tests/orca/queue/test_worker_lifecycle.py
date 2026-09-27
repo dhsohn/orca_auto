@@ -30,7 +30,7 @@ from orca_auto.orca.queue import settlement
 from orca_auto.orca.queue import worker as worker_mod
 from orca_auto.orca.queue.adapter import cancel, list_queue
 from orca_auto.orca.queue.models import OrcaRunningJob
-from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
+from orca_auto.orca.queue.terminal_marker import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.statuses import RunStatus
 from tests.conftest import ProcessIdentity, enqueue_entry, make_queue_entry, write_run_state
