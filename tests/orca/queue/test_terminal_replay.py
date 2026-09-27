@@ -32,7 +32,7 @@ from orca_auto.core.statuses import (
 )
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.job_locations import list_job_location_records
-from orca_auto.orca.queue import replay as replay_mod
+from orca_auto.orca.queue import settlement
 from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
 from orca_auto.orca.queue.adapter import (
     cancel,
@@ -45,7 +45,7 @@ from orca_auto.orca.queue.entries import (
     TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY,
     TERMINAL_REPLAY_METADATA_KEY,
 )
-from orca_auto.orca.queue.models import OrcaRunningJob
+from orca_auto.orca.queue.models import OrcaRunningJob, TerminalReplayWorkItem
 from orca_auto.orca.queue.orphans import reconcile_orphaned_running_entries
 from orca_auto.orca.queue.run_state_replay import (
     record_cancelled_run_state as _record_cancelled_run_state,
@@ -55,7 +55,9 @@ from orca_auto.orca.queue.run_state_replay import (
 )
 from orca_auto.orca.queue.terminal_replay import (
     StateGenerationFingerprint,
+    load_state_generation_fingerprint,
     terminal_replay_marker,
+    terminal_replay_marker_from_entry,
 )
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.queue.worker_tracking import (
@@ -383,7 +385,7 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
 
     [terminal] = list_queue(queue_root)
     assert terminal.status.value == expected_status
-    assert replay_mod.terminal_replay_marker_from_entry(terminal) is not None
+    assert terminal_replay_marker_from_entry(terminal) is not None
 
     _reconcile(_replay_worker(replay_cfg))
     _reconcile(_replay_worker(replay_cfg))
@@ -395,7 +397,7 @@ def test_terminal_writer_marker_replays_once_after_fresh_worker_restart(
     assert record.status == expected_status
     assert len(recording_channel.sends) == 1
     [closed] = list_queue(queue_root)
-    assert replay_mod.terminal_replay_marker_from_entry(closed) is None
+    assert terminal_replay_marker_from_entry(closed) is None
     state = load_state(reaction_dir)
     assert state is not None
     assert state["job_id"] == entry.task_id
@@ -420,7 +422,7 @@ def test_terminal_replay_marker_rejects_malformed_version(bad_version: object) -
         },
     )
 
-    assert replay_mod.terminal_replay_marker_from_entry(entry) is None
+    assert terminal_replay_marker_from_entry(entry) is None
 
 
 @pytest.mark.parametrize("bad_observed_state", [None, [], {}, {"present": "yes"}])
@@ -444,7 +446,7 @@ def test_terminal_replay_marker_rejects_malformed_state_fingerprint(
         },
     )
 
-    assert replay_mod.terminal_replay_marker_from_entry(entry) is None
+    assert terminal_replay_marker_from_entry(entry) is None
 
 
 @pytest.mark.parametrize(
@@ -485,7 +487,7 @@ def test_terminal_replay_marker_rejects_unbound_identity_or_nonterminal_status(
         },
     )
 
-    assert replay_mod.terminal_replay_marker_from_entry(entry) is None
+    assert terminal_replay_marker_from_entry(entry) is None
 
 
 def test_terminal_replay_marker_allows_durable_status_correction() -> None:
@@ -517,7 +519,7 @@ def test_terminal_replay_marker_allows_durable_status_correction() -> None:
         },
     )
 
-    assert replay_mod.terminal_replay_marker_from_entry(entry) is not None
+    assert terminal_replay_marker_from_entry(entry) is not None
 
 
 @pytest.mark.parametrize("blocked_kind", ["fence_only", "malformed", "conflict"])
@@ -561,7 +563,7 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
 def test_terminal_replay_with_empty_reaction_dir_never_resolves_workspace(
     tmp_path: Path,
 ) -> None:
-    item = replay_mod.TerminalReplayWorkItem(
+    item = TerminalReplayWorkItem(
         queue_root=tmp_path,
         queue_id="queue-empty-reaction",
         reaction_dir="",
@@ -573,10 +575,10 @@ def test_terminal_replay_with_empty_reaction_dir_never_resolves_workspace(
     )
 
     with pytest.raises(RuntimeError, match="no reaction directory"):
-        replay_mod._prepare_terminal_replay_work_item(item)
+        settlement.prepare(item)
 
     assert list(tmp_path.iterdir()) == []
-    assert replay_mod._pending_replay_state_is_superseded(item)
+    assert settlement.is_superseded(item)
 
 
 # ---------------------------------------------------------------------------
@@ -856,7 +858,7 @@ def test_terminal_replay_skips_superseded_cancelled_generation(
     assert _claimed_at(reaction_dir)
     closed = _row(queue_root, "queue-0")
     assert closed.status is QueueStatus.COMPLETED
-    assert replay_mod.terminal_replay_marker_from_entry(closed) is None
+    assert terminal_replay_marker_from_entry(closed) is None
     assert _row(queue_root, "queue-z").status is QueueStatus.CANCELLED
 
 
@@ -1073,7 +1075,7 @@ def test_observed_transition_replays_over_preceding_generation_state(
     assert written["status"] == STATUS_FAILED
     closed = _row(queue_root, current.queue_id)
     assert closed.metadata["run_id"] == written["run_id"]
-    assert replay_mod.terminal_replay_marker_from_entry(closed) is None
+    assert terminal_replay_marker_from_entry(closed) is None
     [record] = [
         record for record in list_job_location_records(queue_root) if record.job_id == "task-a"
     ]
@@ -1290,7 +1292,7 @@ def test_durable_terminal_replay_drops_old_finalizer_after_newer_terminal_state(
     assert worker.replay_state.pending_replays == {}
     closed = _row(queue_root, old_entry.queue_id)
     assert closed.status is QueueStatus.CANCELLED
-    assert replay_mod.terminal_replay_marker_from_entry(closed) is None
+    assert terminal_replay_marker_from_entry(closed) is None
 
 
 def test_new_active_generation_supersedes_disappeared_terminal_replay(
@@ -1462,7 +1464,7 @@ def test_terminal_state_cas_rejects_changed_terminal_fingerprint(tmp_path: Path)
         status=STATUS_CANCELLED,
         final_result={"status": STATUS_CANCELLED, "reason": "cancel_requested"},
     )
-    observed = replay_mod.load_state_generation_fingerprint(tmp_path)
+    observed = load_state_generation_fingerprint(tmp_path)
 
     state_b = new_state(tmp_path, tmp_path / "b.inp")
     state_b["job_id"] = "task-b"
@@ -1499,7 +1501,7 @@ def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
         run_id="run-old",
         terminal_status=STATUS_COMPLETED,
     )
-    item = replay_mod.TerminalReplayWorkItem(
+    item = TerminalReplayWorkItem(
         queue_root=tmp_path,
         queue_id="queue-unreadable",
         reaction_dir=str(tmp_path),
@@ -1513,10 +1515,10 @@ def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
 
     # The current state file is unreadable: identity cannot be judged.
     state_path(tmp_path).write_text("{unreadable job state", encoding="utf-8")
-    assert replay_mod.load_state_generation_fingerprint(tmp_path) == StateGenerationFingerprint(
+    assert load_state_generation_fingerprint(tmp_path) == StateGenerationFingerprint(
         present=True, readable=False
     )
-    assert not replay_mod._pending_replay_state_is_superseded(item)
+    assert not settlement.is_superseded(item)
 
     # The observed fingerprint was unreadable at mark time: a readable other
     # generation now does not prove supersession either.
@@ -1527,20 +1529,20 @@ def test_terminal_replay_keeps_marker_when_state_identity_is_unreadable(
         item,
         observed_state=StateGenerationFingerprint(present=True, readable=False),
     )
-    assert not replay_mod._pending_replay_state_is_superseded(unreadable_observed)
+    assert not settlement.is_superseded(unreadable_observed)
 
 
 def test_terminal_state_cas_rejects_same_task_new_run_id(tmp_path: Path) -> None:
     first = new_state(tmp_path, tmp_path / "same.inp")
     first["job_id"] = "task-same"
     save_state(tmp_path, first)
-    observed = replay_mod.load_state_generation_fingerprint(tmp_path)
+    observed = load_state_generation_fingerprint(tmp_path)
 
     second = new_state(tmp_path, tmp_path / "same.inp")
     second["job_id"] = "task-same"
     save_state(tmp_path, second)
     before = state_path(tmp_path).read_bytes()
-    item = replay_mod.TerminalReplayWorkItem(
+    item = TerminalReplayWorkItem(
         queue_root=tmp_path,
         queue_id="queue-same-task",
         reaction_dir=str(tmp_path),
@@ -1552,7 +1554,7 @@ def test_terminal_state_cas_rejects_same_task_new_run_id(tmp_path: Path) -> None
         observed_state=observed,
     )
 
-    assert replay_mod._pending_replay_state_is_superseded(item)
+    assert settlement.is_superseded(item)
     with pytest.raises(RuntimeError, match="newer run"):
         _record_failed_run_state(
             tmp_path,
@@ -1579,14 +1581,14 @@ def test_terminal_state_cas_rejects_expected_task_run_after_different_observatio
         status=STATUS_COMPLETED,
         final_result={"status": STATUS_COMPLETED, "reason": "normal_termination"},
     )
-    observed = replay_mod.load_state_generation_fingerprint(tmp_path)
+    observed = load_state_generation_fingerprint(tmp_path)
 
     current = new_state(tmp_path, tmp_path / "current.inp")
     current["job_id"] = "task-b"
     current["status"] = STATUS_RUNNING
     save_state(tmp_path, current)
     before = state_path(tmp_path).read_bytes()
-    item = replay_mod.TerminalReplayWorkItem(
+    item = TerminalReplayWorkItem(
         queue_root=tmp_path,
         queue_id="queue-task-b",
         reaction_dir=str(tmp_path),
@@ -1598,9 +1600,9 @@ def test_terminal_state_cas_rejects_expected_task_run_after_different_observatio
         observed_state=observed,
     )
 
-    assert replay_mod._pending_replay_state_is_superseded(item)
+    assert settlement.is_superseded(item)
     with pytest.raises(RuntimeError, match="new run for the expected task"):
-        replay_mod._prepare_terminal_replay_work_item(item)
+        settlement.prepare(item)
 
     assert state_path(tmp_path).read_bytes() == before
     written = load_state(tmp_path)

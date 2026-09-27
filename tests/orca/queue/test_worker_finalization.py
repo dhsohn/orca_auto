@@ -38,8 +38,7 @@ from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca import execution as execution_mod
 from orca_auto.orca import notifications as lifecycle_notifications
 from orca_auto.orca.config import AppConfig
-from orca_auto.orca.queue import job_records, publication_repair
-from orca_auto.orca.queue import replay as replay_mod
+from orca_auto.orca.queue import job_records, publication_repair, settlement
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import (
     DuplicateEntryError,
@@ -47,9 +46,10 @@ from orca_auto.orca.queue.adapter import (
     enqueue,
     list_queue,
     mark_failed,
+    update_metadata,
+    update_terminal,
 )
 from orca_auto.orca.queue.models import OrcaRunningJob, TerminalReplayWorkItem
-from orca_auto.orca.queue.replay import TerminalQueueMarkResult
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.queue.worker_tracking import notify_terminal_job_from_state
@@ -102,24 +102,36 @@ def replay_item(root: Path, queue_id: str, reaction_dir: Path, *, resolved: bool
 # ---------------------------------------------------------------------------
 
 
-def test_check_completed_jobs_success(
-    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+def test_poll_pass_settles_a_completed_child(
+    make_worker: Callable[..., OrcaQueueWorker],
+    fake_children: FakeChildren,
+    recording_channel: RecordingChannel,
+    queue_root: Path,
 ) -> None:
+    worker = make_worker(sleep=lambda _seconds: None)
     rxn = queue_root / "mol_done"
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
     token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     claim_next_entry(queue_root)
-    write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
+    state = write_run_state(rxn, status=RunStatus.COMPLETED, job_id=entry.task_id)
     worker._running[entry.queue_id] = running_job(
         worker, entry, rxn, fake_children.spawn(exited=0), token, task_id=None
     )
+    delivered = awaited_send(recording_channel)
 
-    worker._check_completed_jobs()
+    worker.run_pass()
 
     assert len(worker._running) == 0
     assert len(list_slots(admission_dir(queue_root))) == 0
-    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.COMPLETED}
+    completed = queue_row(queue_root, entry.queue_id)
+    assert completed.status == QueueStatus.COMPLETED
+    assert completed.metadata["run_id"] == state["run_id"]
+    assert completed.metadata.get("orca_terminal_replay") is None
+    record = job_record(queue_root, str(entry.task_id))
+    assert record is not None and record["status"] == STATUS_COMPLETED
+    assert delivered.wait(1)
+    assert len(recording_channel.sends) == 1
 
 
 def test_check_completed_jobs_leaves_a_deferred_child_pending(
@@ -159,9 +171,10 @@ def test_check_completed_jobs_leaves_a_deferred_child_pending(
     assert not (rxn / "job_state.json").exists()
 
 
-def test_check_completed_jobs_failure(
-    worker: OrcaQueueWorker, fake_children: FakeChildren, queue_root: Path
+def test_poll_pass_settles_a_failed_child_without_terminal_state(
+    make_worker: Callable[..., OrcaQueueWorker], fake_children: FakeChildren, queue_root: Path
 ) -> None:
+    worker = make_worker(sleep=lambda _seconds: None)
     rxn = queue_root / "mol_fail"
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
@@ -170,10 +183,19 @@ def test_check_completed_jobs_failure(
         worker, entry, rxn, fake_children.spawn(exited=1), "slot_fail", task_id=None
     )
 
-    worker._check_completed_jobs()
+    worker.run_pass()
 
     assert len(worker._running) == 0
-    assert queue_statuses(queue_root) == {entry.queue_id: QueueStatus.FAILED}
+    failed = queue_row(queue_root, entry.queue_id)
+    assert (failed.status, failed.error) == (QueueStatus.FAILED, "exit_code=1")
+    assert failed.metadata.get("orca_terminal_replay") is None
+    # The parent synthesized the terminal state the child never wrote.
+    written = load_state(rxn)
+    assert written is not None
+    assert (written["job_id"], written["status"]) == (entry.task_id, STATUS_FAILED)
+    assert failed.metadata["run_id"] == written["run_id"]
+    record = job_record(queue_root, str(entry.task_id))
+    assert record is not None and record["status"] == STATUS_FAILED
 
 
 def test_check_completed_jobs_still_running(
@@ -537,7 +559,7 @@ def test_terminal_slot_release_failure_keeps_retry_owner_before_publication(
     assert job_record(queue_root, entry.task_id) is None
     assert recording_channel.sends == []
 
-    assert replay_mod.update_terminal(
+    assert update_terminal(
         queue_root, entry.queue_id, STATUS_FAILED, expected_task_id=entry.task_id
     )
     delivered = awaited_send(recording_channel)
@@ -570,7 +592,7 @@ def test_pending_publication_rechecks_current_queue_outcome_on_retry(
     assert worker.replay_state.pending_replays
     # A competing terminal projection changed after the work item was prepared.
     # Retry must compare with the current row, not its cached observed status.
-    assert replay_mod.update_terminal(
+    assert update_terminal(
         queue_root, entry.queue_id, STATUS_FAILED, expected_task_id=entry.task_id
     )
     index_path.unlink()
@@ -602,7 +624,7 @@ def test_terminal_marker_clear_noop_retains_replay_without_execution_capacity(
     )
     delivered = awaited_send(recording_channel)
 
-    with patch.object(replay_mod, "_clear_terminal_replay_marker", return_value=False):
+    with patch.object(settlement, "clear_marker", return_value=False):
         worker._check_completed_jobs()
         assert delivered.wait(1)
         assert entry.queue_id not in worker._running
@@ -973,9 +995,9 @@ def test_finalize_clears_active_engine_record_before_mark_and_release(
     )
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=0), token)
     seen_at_mark: list[tuple[str | None, int]] = []
-    real_mark = replay_mod.mark_terminal_queue_entry
+    real_mark = settlement.mark_terminal_row
 
-    def mark(*args: Any, **kwargs: Any) -> TerminalQueueMarkResult:
+    def mark(*args: Any, **kwargs: Any) -> bool:
         current = get_slot(admission_dir(queue_root), token)
         seen_at_mark.append(
             (
@@ -985,7 +1007,7 @@ def test_finalize_clears_active_engine_record_before_mark_and_release(
         )
         return real_mark(*args, **kwargs)
 
-    with patch.object(replay_mod, "mark_terminal_queue_entry", side_effect=mark):
+    with patch.object(settlement, "mark_terminal_row", side_effect=mark):
         worker._finalize_completed_job(entry.queue_id, job, rc=0)
 
     # At mark time the engine record was already idle and the slot still held.
@@ -1003,15 +1025,15 @@ def test_finalize_does_not_publish_without_persisted_marker_after_mark(
     claim_next_entry(queue_root)
     token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
-    real_mark = replay_mod.mark_terminal_queue_entry
+    real_mark = settlement.mark_terminal_row
 
-    def mark_then_lose_the_row(*args: Any, **kwargs: Any) -> TerminalQueueMarkResult:
+    def mark_then_lose_the_row(*args: Any, **kwargs: Any) -> bool:
         result = real_mark(*args, **kwargs)
         # Another actor removed the row right after the mark: no durable marker remains.
         save_entries_core(queue_root, [])
         return result
 
-    with patch.object(replay_mod, "mark_terminal_queue_entry", side_effect=mark_then_lose_the_row):
+    with patch.object(settlement, "mark_terminal_row", side_effect=mark_then_lose_the_row):
         worker._finalize_completed_job(entry.queue_id, job, rc=1)
 
     # Nothing was published for the vanished generation, and the slot is free.
@@ -1031,9 +1053,7 @@ def test_stale_finalizer_does_not_resurrect_cleared_terminal_marker(
     assert running is not None
     token = reserve_job_slot(admission_dir(queue_root), worker.max_concurrent, entry, rxn)
     assert mark_failed(queue_root, entry.queue_id, error="first_owner", expected_entry=running)
-    assert replay_mod.update_queue_metadata(
-        queue_root, entry.queue_id, {"orca_terminal_replay": None}
-    )
+    assert update_metadata(queue_root, entry.queue_id, {"orca_terminal_replay": None})
     [closed] = list_queue(queue_root)
     job = running_job(worker, entry, rxn, fake_children.spawn(exited=1), token)
 

@@ -587,15 +587,15 @@ def update_terminal(
     Recovery-only: the store refuses active rows, which must use the canonical
     mark/cancel APIs so their replay marker is part of the same queue write.
 
-    The replay marker is deliberately NOT rewritten here.  Both callers are the
-    terminal-replay pipeline itself, working from a marker they already hold in
-    memory: ``observed_status`` is re-read from the row, while the marker's
+    The replay marker is deliberately NOT rewritten here.  The caller is
+    ``settlement.bind_row``, working from a marker it already holds in memory:
+    ``observed_status`` is re-read from the row, while the marker's
     ``observed_state`` is the state fingerprint captured at the ORIGINAL
     transition, which ``_load_state_for_terminal_generation`` and
-    ``_pending_replay_state_is_superseded`` compare against the current state
-    file to detect supersession.  ``_prepare_terminal_replay_work_item`` has
-    just synthesized state under ``run.lock``, so a refreshed fingerprint would
-    describe our own write and disarm those checks.  A correction of a row whose
+    ``settlement.is_superseded`` compare against the current state file to
+    detect supersession.  ``settlement.prepare`` has just synthesized state
+    under ``run.lock``, so a refreshed fingerprint would describe our own write
+    and disarm those checks.  A correction of a row whose
     marker was already cleared must likewise not resurrect closed history
     (see ``terminal_replay_metadata_update_fn``).  The pending marker is cleared
     by the caller only after the side effects for the corrected status succeed.

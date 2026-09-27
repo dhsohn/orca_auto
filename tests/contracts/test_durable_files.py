@@ -184,7 +184,7 @@ def test_parent_killed_after_terminal_mark_then_replayed(
     job = harness.job("killed_parent")
     assert harness.cli("run-dir", str(job))[0] == 0
     with monkeypatch.context() as killed:
-        killed.setattr(OrcaQueueWorker, "_finish_terminal_job", _kill_parent)
+        killed.setattr(OrcaQueueWorker, "_settle_live", _kill_parent)
         with pytest.raises(_ParentKilled):
             harness.run_worker()
     assert_golden("08_parent_killed_replay/marked.queue.json", harness.n(harness.rows()))

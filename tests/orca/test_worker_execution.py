@@ -396,7 +396,7 @@ def test_cancel_finalization_skips_when_the_run_lock_is_held(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME
-    from orca_auto.orca.queue.replay import record_cancelled_run_state
+    from orca_auto.orca.queue.run_state_replay import record_cancelled_run_state
 
     rxn, queue_root, queued, run_child = _run_cancelled_child(tmp_path, monkeypatch)
 

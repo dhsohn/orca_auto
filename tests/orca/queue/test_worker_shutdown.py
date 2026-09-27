@@ -18,9 +18,8 @@ from orca_auto.core.admission import admission_dir, get_slot, list_slots
 from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.processes import ManagedProcess, terminate_process_group
 from orca_auto.core.queue.types import QueueStatus
-from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker as queue_worker_mod
-from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue
+from orca_auto.orca.queue.adapter import cancel, enqueue, list_queue, mark_failed
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.state import new_state, save_state
@@ -453,7 +452,7 @@ def test_shutdown_finalizes_a_child_whose_row_is_already_terminal(
     rxn.mkdir()
     entry = enqueue(queue_root, str(rxn))
     claim_next_entry(queue_root)
-    assert replay_mod.mark_failed(
+    assert mark_failed(
         queue_root,
         entry.queue_id,
         error="crash recovery rejected: simulated",

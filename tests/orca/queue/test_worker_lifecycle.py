@@ -26,7 +26,7 @@ from orca_auto.core.queue.persistence import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.job_locations import list_job_location_records
-from orca_auto.orca.queue import replay
+from orca_auto.orca.queue import settlement
 from orca_auto.orca.queue import worker as worker_mod
 from orca_auto.orca.queue.adapter import cancel, list_queue
 from orca_auto.orca.queue.models import OrcaRunningJob
@@ -54,6 +54,13 @@ def _job(root: Path, *, admission_token: str = "slot-1", task_id: str | None = "
     )
 
 
+def _mark(root: Path, *, rc: int) -> bool:
+    job = _job(root)
+    return settlement.mark_terminal_row(
+        root, job.queue_id, task_id=job.task_id, reaction_dir=job.reaction_dir, rc=rc
+    )
+
+
 def _row(root: Path, queue_id: str) -> QueueEntry | None:
     return next((entry for entry in list_queue(root) if entry.queue_id == queue_id), None)
 
@@ -73,27 +80,17 @@ def worker(tmp_path: Path, app_cfg: Callable[..., AppConfig]) -> OrcaQueueWorker
     return OrcaQueueWorker(app_cfg(runs_root=tmp_path), "config.yaml")
 
 
-@pytest.mark.parametrize("metadata_key", ["job_dir", "reaction_dir"])
 def test_attach_preserves_admission_identity_and_work_dir(
     tmp_path: Path,
     worker: OrcaQueueWorker,
     stable_process_identity: ProcessIdentity,
-    metadata_key: str,
 ) -> None:
     # The child pid the slot is handed over to must be verifiable as a process.
     reaction = tmp_path / "reaction"
     reaction.mkdir()
-    chosen = tmp_path / "chosen"
-    chosen.mkdir()
     base = _entry(tmp_path)
-    if metadata_key == "job_dir":
-        # An explicit job_dir wins over the reaction dir as the slot's work dir.
-        metadata = {**base.metadata, "job_dir": f" {chosen} "}
-        expected_work_dir = chosen
-    else:
-        metadata = {**base.metadata, "reaction_dir": f" {reaction} "}
-        expected_work_dir = reaction
-    entry = replace(base, metadata=metadata)
+    # The slot's work dir is the row's reaction dir.
+    entry = replace(base, metadata={**base.metadata, "reaction_dir": f" {reaction} "})
     token = _reserve(admission_dir(tmp_path))
 
     assert worker._on_worker_process_started(
@@ -110,7 +107,7 @@ def test_attach_preserves_admission_identity_and_work_dir(
     assert slot.app_name == "orca_auto_orca"
     assert slot.task_id == "task-1"
     assert slot.owner_pid == 123
-    assert slot.work_dir == str(expected_work_dir.resolve())
+    assert slot.work_dir == str(reaction.resolve())
     [record] = list_job_location_records(tmp_path)
     assert record.job_id == "task-1"
     assert record.status == "running"
@@ -193,7 +190,7 @@ def test_running_record_failure_does_not_untrack_started_child(
         (0, True, QueueStatus.CANCELLED),
     ],
 )
-def test_terminal_mark_result_carries_premark_snapshot_and_run_id(
+def test_terminal_mark_writes_outcome_marker_and_run_id(
     tmp_path: Path,
     rc: int,
     cancel_requested: bool,
@@ -203,16 +200,11 @@ def test_terminal_mark_result_carries_premark_snapshot_and_run_id(
     enqueue_entry(tmp_path, _entry(tmp_path))
     if cancel_requested:
         assert cancel(tmp_path, "queue-1") is not None
-    before = _row(tmp_path, "queue-1")
-    assert before is not None
 
-    result = replay.mark_terminal_queue_entry("queue-1", _job(tmp_path), rc=rc)
+    # Cancellation takes precedence over the exit code; the row records the
+    # run id read for that generation.
+    assert _mark(tmp_path, rc=rc)
 
-    # Cancellation takes precedence over the exit code; the result keeps the
-    # pre-mark row snapshot and the run id read for that generation.
-    assert result == replay.TerminalQueueMarkResult(
-        True, expected_status.value, "task-1", before, tmp_path.resolve(), state["run_id"]
-    )
     after = _row(tmp_path, "queue-1")
     assert after is not None
     assert after.status is expected_status
@@ -239,14 +231,9 @@ def test_terminal_mark_does_not_touch_missing_nonrunning_or_new_generation(
         )
     queue_file = tmp_path / QUEUE_FILE
     queue_bytes = queue_file.read_bytes() if queue_file.exists() else None
-    current = _row(tmp_path, "queue-1")
 
-    result = replay.mark_terminal_queue_entry("queue-1", _job(tmp_path), rc=0)
+    assert not _mark(tmp_path, rc=0)
 
-    assert not result.marked
-    assert result.status is None
-    assert result.expected_job_id == "task-1"
-    assert result.current_entry == current
     assert (queue_file.read_bytes() if queue_file.exists() else None) == queue_bytes
 
 
@@ -254,19 +241,16 @@ def test_terminal_mark_reports_rejected_generation_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = write_run_state(tmp_path / "reaction", status=RunStatus.RUNNING, job_id="task-1")
+    write_run_state(tmp_path / "reaction", status=RunStatus.RUNNING, job_id="task-1")
     enqueue_entry(tmp_path, _entry(tmp_path))
-    current = _row(tmp_path, "queue-1")
+    queue_bytes = (tmp_path / QUEUE_FILE).read_bytes()
     # A fenced write that loses the race between the row read and the mark
     # cannot be produced in one process; the store answer is stubbed.
-    monkeypatch.setattr(replay, "mark_completed", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(settlement, "mark_completed", lambda *_args, **_kwargs: False)
 
-    result = replay.mark_terminal_queue_entry("queue-1", _job(tmp_path), rc=0)
+    assert not _mark(tmp_path, rc=0)
 
-    assert result == replay.TerminalQueueMarkResult(
-        False, None, "task-1", current, tmp_path.resolve(), state["run_id"]
-    )
-    assert _row(tmp_path, "queue-1") == current
+    assert (tmp_path / QUEUE_FILE).read_bytes() == queue_bytes
 
 
 @pytest.mark.parametrize("failure", ["terminate", "surviving", "recover", "mark"])

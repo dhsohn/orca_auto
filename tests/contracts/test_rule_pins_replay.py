@@ -1,8 +1,8 @@
 """Rule pin: terminal replay supersession, before and under ``run.lock``.
 
 Two functions decide whether a pending terminal replay still owns the state
-file of its reaction directory: ``replay._pending_replay_state_is_superseded``
-(the pre-check) and ``run_state_replay._load_state_for_terminal_generation``
+file of its reaction directory: ``settlement.is_superseded`` (the pre-check)
+and ``run_state_replay._load_state_for_terminal_generation``
 (under ``run.lock``). They read different run ids today: the pre-check prefers
 ``item.run_id``, then ``item.recorded_run_id``, then the observed fingerprint's
 run id; the under-lock check reads only the observed fingerprint. The table
@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.orca.queue.models import TerminalReplayWorkItem
-from orca_auto.orca.queue.replay import _pending_replay_state_is_superseded
 from orca_auto.orca.queue.run_state_replay import _load_state_for_terminal_generation
+from orca_auto.orca.queue.settlement import is_superseded
 from orca_auto.orca.queue.terminal_replay import StateGenerationFingerprint
 from orca_auto.orca.state_reading import state_path
 from tests.contracts.normalize import assert_pin
@@ -115,7 +115,6 @@ def test_replay_supersession_truth_table(tmp_path: Path) -> None:
                 f"item_run_id={run_name} recorded_run_id={recorded_name}"
             )
             table[key] = (
-                f"precheck_superseded={_pending_replay_state_is_superseded(item)} "
-                f"under_lock={_under_lock(job_dir, item)}"
+                f"precheck_superseded={is_superseded(item)} under_lock={_under_lock(job_dir, item)}"
             )
     assert_pin("replay_supersession.json", table)

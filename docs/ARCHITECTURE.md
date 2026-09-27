@@ -85,7 +85,7 @@ A result with captured source evidence publishes `execution_provenance.json` bef
 
 The child publishes execution state and generation reports. After the child exits, the parent confirms engine recovery, durably marks the queue generation for replay, prepares missing failure/cancellation evidence, and corrects the queue outcome and run identity from that evidence. A zero exit code also requires a matching terminal run state; it cannot substitute for the recorded result.
 
-The parent then transfers the prepared work item to replay bookkeeping and returns its execution slot. Index publication, the one-shot notification claim and verified replay-marker removal follow through one shared finish function for live completion and restart recovery. An index or marker-clear failure retains the replay and fences the next submission in that directory, while unrelated ready jobs can use the returned capacity. The durable queue marker lets a fresh worker resume; this does not rerun the calculation. Engine recovery, state preparation or slot-release failures retain the supervised job for retry. Publication retry remains periodic, and notification delivery remains best effort.
+The parent then transfers the prepared work item to replay bookkeeping and returns its execution slot. Index publication, the one-shot notification claim and verified replay-marker removal follow. `orca/queue/settlement.py` holds each step as one flat function for one generation, in the order mark (`mark_terminal_row`), prepare, bind (`bind_row`), release slot and finish; the worker's live completion and cancellation call them around its slot release, and the restart pipeline in `replay.py` calls the same steps through `settle`, so the durable write order is the same on both paths. An index or marker-clear failure retains the replay and fences the next submission in that directory, while unrelated ready jobs can use the returned capacity. The durable queue marker lets a fresh worker resume; this does not rerun the calculation. Engine recovery, state preparation or slot-release failures retain the supervised job for retry. Publication retry remains periodic, and notification delivery remains best effort.
 
 A terminal replay marker also appears in the activity projection: the terminal execution status is preserved, while detail says `result publication pending`. `publication_blocked_scope=orca_terminal_publication`, the reason, next action and `publication_owner=orca_queue_worker` explain the unfinished publication. These per-directory blockers remain in `admission_blockers` even when the row is filtered off the page. Invalid markers require inspection rather than promising automatic recovery; clearing a valid marker removes the indication.
 
@@ -149,8 +149,10 @@ publication lease) is outside it; `queue_generation` in `job_state.json` is its 
 `mutate_entries` in `core/queue/store.py` is the only writer of `queue.json`, and
 `core/queue/transitions.py` builds every requeued and terminal row (`requeued_entry`,
 `terminal_entry`); `tests/core/queue/test_ownership_guards.py` enforces both.
-`queue/replay.py` is only the replay engine (work items, preparation and publication, the
-restart replay pipeline and generation owners) and takes its state explicitly, and
+`queue/settlement.py` holds the terminal settlement steps (work items, mark,
+preparation, binding, publication and marker retirement), `queue/replay.py` only the
+restart replay pipeline (which terminal rows to settle, and one owner generation per
+directory); both take their state explicitly, and
 `queue/run_state_replay.py` synthesizes terminal `job_state.json` under
 `run.lock`. These paths call concrete adapters with the selected entry and task
 identity. Durable execution preparation precedes admission release; derived publication
