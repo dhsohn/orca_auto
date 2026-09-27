@@ -336,10 +336,7 @@ def cmd_index_prune(args: argparse.Namespace) -> int:
             json_output=bool(getattr(args, "json", False)),
         )
         return 1
-    try:
-        return _emit_index_prune(result, json_output=bool(getattr(args, "json", False)))
-    except BrokenPipeError:
-        return 0
+    return _emit_index_prune(result, json_output=bool(getattr(args, "json", False)))
 
 
 def _index_row_payload(record: JobLocationRecord) -> dict[str, Any]:
@@ -428,7 +425,4 @@ def cmd_index_rebuild(args: argparse.Namespace) -> int:
             json_output=bool(getattr(args, "json", False)),
         )
         return 1
-    try:
-        return _emit_index_rebuild(result, json_output=bool(getattr(args, "json", False)))
-    except BrokenPipeError:
-        return 0
+    return _emit_index_rebuild(result, json_output=bool(getattr(args, "json", False)))

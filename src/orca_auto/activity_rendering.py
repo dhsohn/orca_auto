@@ -1,79 +1,162 @@
-"""Plain-text rendering of activity rows: the queue table and its trailing notes."""
+"""What ``queue list`` prints in text mode, as one structured table, and the clear lines."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Any
 
-from orca_auto import activity_labels as _activity_labels
-from orca_auto import terminal_table as _terminal_table
+from orca_auto import activity_labels, terminal
 from orca_auto.core import statuses as _s
 from orca_auto.core.utils import normalize_text, safe_int
+from orca_auto.terminal_table import display_width, pad_right, truncate
 
-#: Rows whose worker log is worth a line: a running job an operator may want
-#: to tail, or a failed one whose log explains the failure.
-_WORKER_LOG_STATUSES = frozenset({_s.STATUS_RUNNING, *_s.FAILED_STATUSES})
+EMPTY_QUEUE_MESSAGE = "No matching activities."
+
+# Queue table columns in display order and their headers.
+QUEUE_COLUMNS = ("status", "name", "detail", "id", "elapsed")
+QUEUE_HEADERS = {
+    "status": "Status",
+    "name": "Name",
+    "detail": "Detail",
+    "id": "ID",
+    "elapsed": "Elapsed",
+}
+# Gap rendered between adjacent table columns.
+QUEUE_COLUMN_GAP = "  "
+# Smallest width each flexible column may shrink to under terminal-width
+# pressure, and the order in which columns surrender space (least essential
+# first). ``id`` shrinks last because it doubles as the ``queue cancel`` target.
+QUEUE_MIN_WIDTHS = {"detail": 6, "name": 8, "id": 8}
+QUEUE_SHRINK_ORDER = ("detail", "name", "id")
 
 
-def _prepare_queue_table_rows(
-    rows: Sequence[dict[str, Any]],
-    *,
-    now: datetime | None = None,
-) -> list[dict[str, str]]:
-    prepared: list[dict[str, str]] = []
-    resolved_now = now or _activity_labels.queue_table_now()
-    for item in rows:
-        item_id = normalize_text(item.get("activity_id")) or "-"
-        prepared.append(
-            {
-                "status": _activity_labels.queue_status_icon(item),
-                "name": _activity_labels.queue_name_text(item),
-                "detail": _activity_labels.queue_detail_text(item),
-                "id": item_id,
-                "elapsed": _activity_labels.queue_elapsed_text(item, now=resolved_now),
-            }
+@dataclass(frozen=True)
+class QueueListTable:
+    """Everything ``queue list`` prints in text mode, before TTY or plain styling.
+
+    ``rows`` holds one rendered line per entry of ``activities``, in the same
+    order, so the caller can tint each line by its row's status. ``header`` and
+    ``divider`` are empty when there are no rows. ``notes`` are printed under
+    the table, or under the empty message.
+    """
+
+    active_simulations: int
+    header: str
+    divider: str
+    rows: tuple[str, ...]
+    activities: tuple[dict[str, Any], ...]
+    notes: tuple[str, ...]
+
+    @property
+    def summary(self) -> str:
+        """The byte-stable line piped and scripted consumers parse."""
+        return f"active_simulations: {self.active_simulations}"
+
+
+def _fit_flexible_widths(widths: dict[str, int], *, max_total: int | None) -> dict[str, int]:
+    """Shrink flexible columns so the rendered row fits ``max_total`` columns.
+
+    Columns are reduced in ``QUEUE_SHRINK_ORDER`` down to ``QUEUE_MIN_WIDTHS``;
+    if the row still overflows after every column hits its floor the widths are
+    left at their minimums (the row may wrap, but never silently misaligns).
+    """
+
+    if max_total is None:
+        return widths
+    gaps = QUEUE_COLUMN_GAP * (len(widths) - 1)
+    overflow = sum(widths.values()) + display_width(gaps) - max_total
+    if overflow <= 0:
+        return widths
+    adjusted = dict(widths)
+    for key in QUEUE_SHRINK_ORDER:
+        if overflow <= 0:
+            break
+        reducible = adjusted[key] - QUEUE_MIN_WIDTHS[key]
+        if reducible <= 0:
+            continue
+        width_reduction = min(reducible, overflow)
+        adjusted[key] -= width_reduction
+        overflow -= width_reduction
+    return adjusted
+
+
+def _column_widths(prepared: Sequence[dict[str, str]], *, max_width: int | None) -> dict[str, int]:
+    widths = {
+        key: max(
+            display_width(QUEUE_HEADERS[key]),
+            max((display_width(row[key]) for row in prepared), default=0),
         )
-    return prepared
+        for key in QUEUE_COLUMNS
+    }
+    # Soft caps keep wide values from dominating before terminal-fit shrinking.
+    widths["detail"] = max(display_width(QUEUE_HEADERS["detail"]), min(36, widths["detail"]))
+    widths["name"] = max(display_width(QUEUE_HEADERS["name"]), min(32, widths["name"]))
+
+    # ``status`` and ``elapsed`` are intrinsically narrow and fixed, so the
+    # flexible text columns absorb any terminal-width shortfall.
+    gap_width = display_width(QUEUE_COLUMN_GAP) * (len(QUEUE_COLUMNS) - 1)
+    fixed_width = widths["status"] + widths["elapsed"] + gap_width
+    widths.update(
+        _fit_flexible_widths(
+            {key: widths[key] for key in QUEUE_SHRINK_ORDER},
+            max_total=None if max_width is None else max(0, max_width - fixed_width),
+        )
+    )
+    return widths
 
 
-def queue_table_lines(
-    rows: Sequence[dict[str, Any]],
-    *,
-    now: datetime | None = None,
-    max_width: int | None = None,
-    include_id: bool = True,
-) -> list[str]:
-    prepared = _prepare_queue_table_rows(rows, now=now)
-    return _terminal_table.queue_table_lines(
-        prepared,
-        max_width=max_width,
-        include_id=include_id,
+def _render_row(values: dict[str, str], widths: dict[str, int]) -> str:
+    return QUEUE_COLUMN_GAP.join(
+        pad_right(truncate(values[key], max_width=widths[key]), widths[key])
+        for key in QUEUE_COLUMNS
     )
 
 
-def queue_list_text_lines(
-    rows: Sequence[dict[str, Any]],
-    *,
-    active_simulations: int,
-    now: datetime | None = None,
-    max_width: int | None = None,
-    include_id: bool = True,
-    empty_message: str = "No matching activities.",
-) -> list[str]:
-    lines = [f"active_simulations: {int(active_simulations)}"]
-    if not rows:
-        lines.append(empty_message)
-        return lines
-    lines.extend(
-        queue_table_lines(
-            rows,
-            now=now,
-            max_width=max_width,
-            include_id=include_id,
+def queue_list_table(payload: dict[str, Any], *, max_width: int | None) -> QueueListTable:
+    """The ``queue list`` text for one listing payload, fitted to ``max_width``."""
+
+    activities = tuple(payload.get("activities", []))
+    active_simulations = int(payload.get("active_simulations", 0))
+    blocker_lines = queue_admission_blocker_lines(payload.get("admission_blockers", []))
+    if not activities:
+        return QueueListTable(
+            active_simulations=active_simulations,
+            header="",
+            divider="",
+            rows=(),
+            activities=(),
+            notes=tuple(blocker_lines),
         )
+
+    now = activity_labels.queue_table_now()
+    prepared = [
+        {
+            "status": terminal.status_icon(item.get("status")),
+            "name": activity_labels.queue_name_text(item),
+            "detail": activity_labels.queue_detail_text(item),
+            "id": normalize_text(item.get("activity_id")) or "-",
+            "elapsed": activity_labels.queue_elapsed_text(item, now=now),
+        }
+        for item in activities
+    ]
+    widths = _column_widths(prepared, max_width=max_width)
+    gap_width = display_width(QUEUE_COLUMN_GAP) * (len(QUEUE_COLUMNS) - 1)
+    return QueueListTable(
+        active_simulations=active_simulations,
+        header=_render_row(QUEUE_HEADERS, widths),
+        divider="─" * (sum(widths[key] for key in QUEUE_COLUMNS) + gap_width),
+        rows=tuple(_render_row(row, widths) for row in prepared),
+        activities=activities,
+        # Printed under the table, where no column shrinking can truncate them:
+        # the ``detail`` cell surrenders width first. Empty for every queue
+        # without undrained cancels, a running or failed row's log, or a blocker.
+        notes=(
+            *queue_pending_cancel_lines(activities),
+            *queue_worker_log_lines(activities),
+            *blocker_lines,
+        ),
     )
-    return lines
 
 
 #: At most this many rows are named before the note falls back to a count.
@@ -121,7 +204,7 @@ def queue_worker_log_lines(rows: Sequence[dict[str, Any]]) -> list[str]:
     lines = []
     for item in rows:
         path = normalize_text(item.get("worker_log"))
-        if path and _s.normalize_status(item.get("status")) in _WORKER_LOG_STATUSES:
+        if path and _s.normalize_status(item.get("status")) in _s.WORKER_LOG_STATUSES:
             lines.append(f"worker_log: {normalize_text(item.get('activity_id')) or '-'} {path}")
     return lines
 

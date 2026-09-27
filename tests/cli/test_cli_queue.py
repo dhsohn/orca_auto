@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from orca_auto import activity_labels, cli_handlers, cli_queue, terminal, terminal_table
+from orca_auto.cli import main as cli_main
 from orca_auto.cli_handlers import CommandConfig
 from orca_auto.core.config.files import SharedConfig
 from orca_auto.core.indexing import JobLocationIndexError
@@ -141,10 +142,6 @@ def test_queue_list_stays_plain_under_force_color_pipe(
     assert "orca_auto queue" not in plain  # no summary band
     assert "▎" not in plain  # no rail
     assert "\x1b[" in stdout  # color codes are still emitted
-
-
-def test_repair_blocked_is_counted_as_failed() -> None:
-    assert cli_queue._summary_status_group("repair_blocked") == "failed"
 
 
 def test_queue_header_band_respects_terminal_width() -> None:
@@ -803,36 +800,33 @@ def test_cmd_queue_list_reports_expected_config_and_store_errors_without_traceba
     assert "Traceback" not in captured.err
 
 
-def test_cmd_queue_list_treats_closed_output_pipe_separately_from_state_errors(
+class _ClosedPipe:
+    """A stdout whose reader has gone away: every write and flush raises EPIPE."""
+
+    def write(self, text: str) -> int:
+        raise BrokenPipeError("downstream closed")
+
+    def flush(self) -> None:
+        raise BrokenPipeError("downstream closed")
+
+
+def test_queue_list_treats_a_closed_output_pipe_as_success(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(
-        cli_queue,
-        "list_activities",
-        lambda **_kwargs: {"activities": [], "sources": {}},
-    )
-    monkeypatch.setattr(
-        cli_queue,
-        "_print_queue_list_text",
-        lambda **_kwargs: (_ for _ in ()).throw(BrokenPipeError("downstream closed")),
-    )
+    listed: list[dict[str, Any]] = []
 
-    result = cli_queue.cmd_queue_list(
-        SimpleNamespace(
-            action=None,
-            config=None,
-            limit=0,
-            refresh=False,
-            status=None,
-            json=False,
-        )
-    )
+    def fake_list_activities(**kwargs: Any) -> dict[str, Any]:
+        listed.append(kwargs)
+        return {"activities": [], "sources": {}}
 
-    captured = capsys.readouterr()
-    assert result == 0
-    assert captured.out == ""
-    assert captured.err == ""
+    monkeypatch.setattr(cli_queue, "list_activities", fake_list_activities)
+    monkeypatch.setattr(sys, "stdout", _ClosedPipe())
+
+    # cli.main's stdout guard is the one place a closed pipe is swallowed.
+    assert cli_main(["queue", "list"]) == 0
+    assert len(listed) == 1
+    assert capsys.readouterr().err == ""
 
 
 def test_cmd_queue_cancel_reports_lookup_error(
@@ -860,7 +854,7 @@ def test_cmd_queue_cancel_reports_lookup_error(
     )
 
 
-def test_cmd_queue_cancel_treats_closed_pipe_as_success_after_durable_cancel(
+def test_queue_cancel_treats_a_closed_pipe_as_success_after_a_durable_cancel(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -871,25 +865,11 @@ def test_cmd_queue_cancel_treats_closed_pipe_as_success_after_durable_cancel(
         return {"activity_id": "job-1"}
 
     monkeypatch.setattr(cli_queue, "cancel_activity", fake_cancel_activity)
-    monkeypatch.setattr(
-        cli_queue,
-        "_emit_queue_cancel",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(BrokenPipeError("downstream closed")),
-    )
+    monkeypatch.setattr(sys, "stdout", _ClosedPipe())
 
-    result = cli_queue.cmd_queue_cancel(
-        SimpleNamespace(
-            target="job-1",
-            config=None,
-            json=True,
-        )
-    )
-
-    captured = capsys.readouterr()
-    assert result == 0
+    assert cli_main(["queue", "cancel", "job-1", "--json"]) == 0
     assert len(cancel_calls) == 1
-    assert captured.out == ""
-    assert captured.err == ""
+    assert capsys.readouterr().err == ""
 
 
 def test_cli_main_silences_closed_pipe_before_interpreter_shutdown() -> None:
@@ -1222,7 +1202,7 @@ _STORED_CANCEL_TRANSITION = {
 }
 
 
-def test_cmd_queue_list_clear_treats_closed_output_pipe_after_clearing_as_success(
+def test_queue_list_clear_treats_a_closed_output_pipe_after_clearing_as_success(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1233,25 +1213,8 @@ def test_cmd_queue_list_clear_treats_closed_output_pipe_after_clearing_as_succes
         return {"total_cleared": 1, "cleared": {"orca": 1}, "sources": {}}
 
     monkeypatch.setattr(cli_queue, "clear_activities", fake_clear_activities)
-    monkeypatch.setattr(
-        cli_queue,
-        "_emit_queue_list_clear",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(BrokenPipeError("downstream closed")),
-    )
+    monkeypatch.setattr(sys, "stdout", _ClosedPipe())
 
-    result = cli_queue.cmd_queue_list(
-        SimpleNamespace(
-            action="clear",
-            config=None,
-            limit=0,
-            refresh=False,
-            status=None,
-            json=True,
-        )
-    )
-
-    captured = capsys.readouterr()
+    assert cli_main(["queue", "list", "clear", "--json"]) == 0
     assert len(cleared) == 1
-    assert result == 0
-    assert captured.out == ""
-    assert captured.err == ""
+    assert capsys.readouterr().err == ""

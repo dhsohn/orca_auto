@@ -162,10 +162,7 @@ def cmd_scratch_list(args: argparse.Namespace) -> int:
             json_output=json_output,
         )
         return 1
-    try:
-        return _emit_scratch_list(policy.root, reports, json_output=json_output)
-    except BrokenPipeError:
-        return 0
+    return _emit_scratch_list(policy.root, reports, json_output=json_output)
 
 
 def _clear_targets(
@@ -285,10 +282,7 @@ def cmd_scratch_clear(args: argparse.Namespace) -> int:
             # The workspace changed between listing and the locked re-check
             # (for example its owner became live); nothing was removed.
             refused.append(_refusal(report, failure))
-    try:
-        return _emit_scratch_clear(policy.root, removed, refused, json_output=json_output)
-    except BrokenPipeError:
-        return 0
+    return _emit_scratch_clear(policy.root, removed, refused, json_output=json_output)
 
 
 __all__ = ["cmd_scratch_clear", "cmd_scratch_list"]

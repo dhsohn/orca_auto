@@ -63,26 +63,35 @@ def color_enabled(stream: IO[str] | None = None) -> bool:
         return False
 
 
-_ACTIVITY_STATUS_COLORS = {
-    _s.STATUS_CREATED: DIM,
-    _s.STATUS_PENDING: DIM,
-    _s.STATUS_QUEUED: DIM,
-    _s.STATUS_RUNNING: BLUE,
-    _s.STATUS_RETRYING: YELLOW,
-    _s.STATUS_CANCEL_REQUESTED: YELLOW,
-    _s.STATUS_COMPLETED: GREEN,
-    _s.STATUS_FAILED: RED,
-    _s.STATUS_REPAIR_BLOCKED: RED,
-    _s.STATUS_CANCELLED: MAGENTA,
-    _s.STATUS_ERROR: RED,
+# One icon and one colour per activity status, for every command's output.
+_STATUS_STYLES: dict[str, tuple[str, str]] = {
+    _s.STATUS_CREATED: ("🆕", DIM),
+    _s.STATUS_PENDING: ("⏳", DIM),
+    _s.STATUS_QUEUED: ("⏳", DIM),
+    _s.STATUS_RUNNING: ("▶", BLUE),
+    _s.STATUS_RETRYING: ("🔄", YELLOW),
+    _s.STATUS_CANCEL_REQUESTED: ("⏹", YELLOW),
+    _s.STATUS_COMPLETED: ("✅", GREEN),
+    _s.STATUS_FAILED: ("❌", RED),
+    _s.STATUS_REPAIR_BLOCKED: ("❌", RED),
+    _s.STATUS_CANCELLED: ("⛔", MAGENTA),
+    _s.STATUS_ERROR: ("❌", RED),
 }
+_FALLBACK_STATUS_ICON = "•"
+
+
+def status_icon(status: object) -> str:
+    """Return the icon for an activity status, or a bullet for an unknown one."""
+
+    style = _STATUS_STYLES.get(_s.normalize_status(status))
+    return style[0] if style else _FALLBACK_STATUS_ICON
 
 
 def status_color(status: object) -> str | None:
     """Return the ANSI SGR code for an activity status, or ``None``."""
 
-    normalized = str(status).strip().lower() if status is not None else ""
-    return _ACTIVITY_STATUS_COLORS.get(normalized)
+    style = _STATUS_STYLES.get(_s.normalize_status(status))
+    return style[1] if style else None
 
 
 def paint(text: str, *codes: str, stream: IO[str] | None = None) -> str:
@@ -172,5 +181,6 @@ __all__ = [
     "set_color_override",
     "sgr",
     "status_color",
+    "status_icon",
     "status_text",
 ]

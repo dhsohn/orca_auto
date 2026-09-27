@@ -15,6 +15,12 @@ from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE, ORCA_ENGINE
 from orca_auto.orca.queue import adapter as queue_adapter
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.queue.terminal_marker import (
+    TERMINAL_PUBLICATION_INVALID_ACTION,
+    TERMINAL_PUBLICATION_INVALID_REASON,
+    TERMINAL_PUBLICATION_OWNER,
+    TERMINAL_PUBLICATION_PENDING_ACTION,
+    TERMINAL_PUBLICATION_PENDING_REASON,
+    TERMINAL_PUBLICATION_SCOPE,
     TerminalReplayMarkerKind,
     terminal_replay_marker_kind,
 )
@@ -116,16 +122,13 @@ def queue_record(
     if replay_kind != TerminalReplayMarkerKind.ABSENT:
         invalid = replay_kind == TerminalReplayMarkerKind.INVALID_OR_UNSUPPORTED
         blocker = {
-            "reason": "terminal publication marker invalid"
+            "reason": TERMINAL_PUBLICATION_INVALID_REASON
             if invalid
-            else "terminal publication pending",
-            "scope": "orca_terminal_publication",
-            "next_action": (
-                "Inspect the worker log and repair the invalid replay marker before resubmitting."
-                if invalid
-                else "The queue worker retries result publication automatically. Inspect the worker log "
-                "if it persists; this directory remains fenced until publication finishes."
-            ),
+            else TERMINAL_PUBLICATION_PENDING_REASON,
+            "scope": TERMINAL_PUBLICATION_SCOPE,
+            "next_action": TERMINAL_PUBLICATION_INVALID_ACTION
+            if invalid
+            else TERMINAL_PUBLICATION_PENDING_ACTION,
         }
     label = (
         normalize_text(snapshot_name)
@@ -181,7 +184,7 @@ def queue_record(
             "publication_blocked_reason": normalize_text(blocker.get("reason")),
             "publication_blocked_scope": normalize_text(blocker.get("scope")),
             "publication_blocked_action": normalize_text(blocker.get("next_action")),
-            "publication_owner": "orca_queue_worker" if blocker else "",
+            "publication_owner": TERMINAL_PUBLICATION_OWNER if blocker else "",
             **timestamp_metadata(
                 enqueued_at=submitted_at, started_at=started_at, finished_at=finished_at
             ),

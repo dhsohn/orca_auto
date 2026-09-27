@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.activity.model import (
-    ACTIVE_SIMULATION_STATUSES,
     ActivityListing,
     ActivityListRequest,
     ActivityRecord,
@@ -25,6 +24,7 @@ from orca_auto.core.indexing import store as locations
 from orca_auto.core.queue import persistence as queue
 from orca_auto.core.queue.store import queue_lock
 from orca_auto.core.queue.types import QueueStatus
+from orca_auto.core.statuses import ACTIVE_SIMULATION_STATUSES
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.orca.queue import entries as queue_entries
 from orca_auto.orca.run_snapshot import RunSnapshot, collect_run_snapshots

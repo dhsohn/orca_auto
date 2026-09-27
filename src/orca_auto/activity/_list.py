@@ -10,6 +10,7 @@ from typing import Any
 from orca_auto.activity.model import (
     ActivityListing,
     ActivityListRequest,
+    admission_blocker,
     listing_from_records,
 )
 from orca_auto.core.admission import (
@@ -17,7 +18,7 @@ from orca_auto.core.admission import (
     admission_dir,
     read_active_slot_count,
 )
-from orca_auto.core.utils import normalize_text
+from orca_auto.core.statuses import normalize_status
 from orca_auto.orca.job_locations import rebuild_job_location_records
 
 from . import _orca, _orca_index
@@ -31,7 +32,7 @@ def normalize_activity_filter_values(values: Sequence[str] | None) -> tuple[str,
     normalized: list[str] = []
     seen: set[str] = set()
     for value in values:
-        text = normalize_text(value).lower()
+        text = normalize_status(value)
         if not text or text in seen:
             continue
         seen.add(text)
@@ -54,15 +55,15 @@ def global_active_simulations(
     try:
         return max(0, int(read_active_slot_count(admission_root))), None
     except AdmissionStoreCorruptError as exc:
-        return max(0, int(fallback)), {
-            "queue_id": "*",
-            "allowed_root": str(runs_root),
-            "scope": "admission_store",
-            "reason": str(exc),
-            "next_action": (
+        return max(0, int(fallback)), admission_blocker(
+            queue_id="*",
+            allowed_root=str(runs_root),
+            scope="admission_store",
+            reason=str(exc),
+            next_action=(
                 "Repair or remove the admission slot file; the worker admits no job until it loads."
             ),
-        }
+        )
     except OSError as exc:
         LOGGER.debug(
             "active_simulation_slot_count_failed: admission_root=%s error=%s",

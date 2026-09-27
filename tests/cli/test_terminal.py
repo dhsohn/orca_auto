@@ -5,7 +5,6 @@ import io
 import pytest
 
 from orca_auto import terminal
-from orca_auto.activity_labels import activity_status_icon
 
 
 @pytest.fixture(autouse=True)
@@ -15,16 +14,17 @@ def _reset_color_override():
     terminal.set_color_override(None)
 
 
-def test_activity_status_icon_known_and_fallback() -> None:
-    assert activity_status_icon("completed") == "✅"
-    assert activity_status_icon("RUNNING") == "▶"
-    assert activity_status_icon("cancelled") == "⛔"
-    assert activity_status_icon("failed") == "❌"
-    assert activity_status_icon("error") == "❌"
-    assert activity_status_icon("repair_blocked") == "❌"
-    assert activity_status_icon("submitted") == "•"
-    assert activity_status_icon("mystery") == "•"
-    assert activity_status_icon(None) == "•"
+def test_status_icon_known_and_fallback() -> None:
+    assert terminal.status_icon("completed") == "✅"
+    assert terminal.status_icon("RUNNING") == "▶"
+    assert terminal.status_icon(" queued ") == "⏳"
+    assert terminal.status_icon("cancelled") == "⛔"
+    assert terminal.status_icon("failed") == "❌"
+    assert terminal.status_icon("error") == "❌"
+    assert terminal.status_icon("repair_blocked") == "❌"
+    assert terminal.status_icon("submitted") == "•"
+    assert terminal.status_icon("mystery") == "•"
+    assert terminal.status_icon(None) == "•"
 
 
 def test_color_override_takes_precedence_over_env(monkeypatch) -> None:
@@ -66,7 +66,9 @@ def test_status_color_mapping() -> None:
     assert terminal.status_color("repair_blocked") == terminal.RED
     assert terminal.status_color("error") == terminal.RED
     assert terminal.status_color("running") == terminal.BLUE
+    assert terminal.status_color(" Cancelled ") == terminal.MAGENTA
     assert terminal.status_color("unknown-status") is None
+    assert terminal.status_color(None) is None
 
 
 def test_emit_error_writes_to_stderr_with_optional_hint(capsys) -> None:
