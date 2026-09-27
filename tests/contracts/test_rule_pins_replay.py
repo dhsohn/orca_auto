@@ -3,9 +3,11 @@
 Two functions decide whether a pending terminal replay still owns the state
 file of its reaction directory: ``replay._pending_replay_state_is_superseded``
 (the pre-check) and ``run_state_replay._load_state_for_terminal_generation``
-(under ``run.lock``). They read different run ids today. The table crosses the
-current ``job_state.json`` with the replay item's facts and pins both answers
-in ``pins/replay_supersession.json``.
+(under ``run.lock``). They read different run ids today: the pre-check prefers
+``item.run_id``, then ``item.recorded_run_id``, then the observed fingerprint's
+run id; the under-lock check reads only the observed fingerprint. The table
+crosses the current ``job_state.json`` with replay items whose three run ids
+disagree and pins both answers in ``pins/replay_supersession.json``.
 """
 
 from __future__ import annotations
@@ -34,12 +36,15 @@ _OBSERVED: dict[str, StateGenerationFingerprint | None] = {
     "same_task": StateGenerationFingerprint(
         present=True, readable=True, job_id=_TASK, run_id="run-A"
     ),
+    "same_task_run_b": StateGenerationFingerprint(
+        present=True, readable=True, job_id=_TASK, run_id="run-B"
+    ),
     "other_task": StateGenerationFingerprint(
         present=True, readable=True, job_id="orca-other", run_id="run-A"
     ),
 }
-_ITEM_RUN_IDS: dict[str, str | None] = {"absent": None, "present": "run-A"}
-_ITEM_RECORDED_RUN_IDS = {"absent": "", "present": "run-A"}
+_ITEM_RUN_IDS: dict[str, str | None] = {"absent": None, "present": "run-A", "different": "run-B"}
+_ITEM_RECORDED_RUN_IDS = {"absent": "", "present": "run-A", "different": "run-B"}
 
 
 def _state_payload(job_id: str, run_id: str, terminal: str | None) -> dict[str, Any]:

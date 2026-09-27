@@ -1,0 +1,61 @@
+[
+  {
+    "title": "ORCA started",
+    "severity": "info",
+    "groups": [
+      {
+        "items": [
+          {
+            "label": "Job",
+            "value": [
+              {
+                "text": "error_exit",
+                "style": "plain"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Attempt",
+            "value": [
+              {
+                "text": "#1 (",
+                "style": "plain"
+              },
+              {
+                "text": "running",
+                "style": "code"
+              },
+              {
+                "text": ")",
+                "style": "plain"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Input",
+            "value": [
+              {
+                "text": "h2o.inp",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Directory",
+            "value": [
+              {
+                "text": "<tmp>/runs/error_exit",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          }
+        ]
+      }
+    ],
+    "author": "orca_auto"
+  }
+]

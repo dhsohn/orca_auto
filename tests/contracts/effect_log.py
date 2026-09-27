@@ -7,10 +7,17 @@ process) and worker children interleave in real write order. Children log
 through ``sitecustomize/sitecustomize.py`` when that directory is on
 ``PYTHONPATH``. Production code has no hook: only module attributes are
 replaced, and nothing is logged while the variable is unset.
+
+A worker child loads the real config, whose messenger is disabled, so it would
+build no started notification. In the child, every outbound channel is
+replaced with one that appends each sent message to ``child_messages_path``.
+Delivery runs on a sender thread, so messages go to that side file and the
+synchronous ``notify`` event of the effect log carries the ordering.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import importlib
 import json
@@ -139,10 +146,40 @@ def install(set_attr: Setattr = setattr) -> None:
                     set_attr(loaded, alias, wrapper)
 
 
+def child_messages_path(log: Path) -> Path:
+    """Where worker children record the messages their channels send."""
+    return log.with_name(f"{log.stem}.child_messages.jsonl")
+
+
+class _ChildMessageChannel:
+    """An enabled channel that records each message in ``child_messages_path``."""
+
+    enabled = True
+
+    def send(self, message: Any) -> Any:
+        from orca_auto.core.messaging import SendResult
+
+        line = json.dumps(dataclasses.asdict(message)) + "\n"
+        path = child_messages_path(Path(os.environ[ENV_VAR]))
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, line.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return SendResult(sent=True)
+
+
+def _child_channel(*_args: Any, **_kwargs: Any) -> Any:
+    return _ChildMessageChannel()
+
+
 def install_in_worker_child() -> None:
     """``sitecustomize`` entry: log only from worker children, never the ORCA launch gate."""
     if os.environ.get(ENV_VAR) and _role() == "child":
         install()
+        from orca_auto.orca import notifications
+
+        notifications.build_channel = _child_channel
 
 
 def read(path: Path) -> list[dict[str, Any]]:

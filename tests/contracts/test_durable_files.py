@@ -2,10 +2,11 @@
 
 Each scenario drives only public entry points (``cli.main`` and
 ``OrcaQueueWorker.run_once`` with real worker children running a fake ORCA)
-and compares every public on-disk file, the recorded notifications and the
-effect log (``effect_log.py``) with ``golden/<scenario>/``. A parent that dies
-is simulated by raising ``_ParentKilled`` from the worker method at the point
-of death, so the in-memory worker is abandoned without cleanup.
+and compares every public on-disk file, the notifications recorded in the
+parent and in worker children, and the effect log (``effect_log.py``) with
+``golden/<scenario>/``. A parent that dies is simulated by raising
+``_ParentKilled`` from the worker method at the point of death, so the
+in-memory worker is abandoned without cleanup.
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ def assert_durable_goldens(scenario: str, h: Harness, *jobs: Path) -> None:
     messages = [message for message in h.channel.sends if isinstance(message, Message)]
     assert len(messages) == len(h.channel.sends)
     golden("notifications.json", n([dataclasses.asdict(message) for message in messages]))
+    golden("child_notifications.json", n(effect_log.read(effect_log.child_messages_path(h.log))))
     golden("effects.json", effect_log.read(h.log))
 
 
