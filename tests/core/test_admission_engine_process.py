@@ -683,6 +683,58 @@ def test_orca_popen_failure_clears_only_unambiguous_pending_launch(
     assert admission.get_slot(tmp_path, token).engine_process_state == expected_state  # type: ignore[union-attr]
 
 
+def test_orca_registrar_without_start_ticks_terminates_launch_before_clearing_pending(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_orca: Path,
+) -> None:
+    token = _reserve_managed(tmp_path, monkeypatch)
+    runner = OrcaRunner(str(fake_orca))
+    runner.set_running_job_registrar(
+        admission.build_slot_engine_process_registrar(tmp_path, token),
+        prepare=admission.build_slot_engine_process_preparer(tmp_path, token),
+    )
+    inp = tmp_path / "job.inp"
+    inp.write_text("! SP\n", encoding="utf-8")
+    monkeypatch.setattr(
+        engine_process.process_utils,
+        "process_start_ticks",
+        lambda *_args, **_kwargs: None,
+    )
+
+    class Process:
+        pid = 202
+        exited = False
+
+        def poll(self) -> int | None:
+            return -signal.SIGTERM if self.exited else None
+
+    process = Process()
+    states_at_termination: list[str] = []
+
+    def terminate(proc: Process) -> bool:
+        assert proc is process
+        slot = admission.get_slot(tmp_path, token)
+        assert slot is not None
+        states_at_termination.append(slot.engine_process_state)
+        process.exited = True
+        return True
+
+    monkeypatch.setattr("orca_auto.orca.orca_runner.subprocess.Popen", lambda *_a, **_k: process)
+    monkeypatch.setattr(runner, "_terminate_subprocess_tree", terminate)
+
+    with pytest.raises(
+        engine_process.EngineProcessRecordError,
+        match="pid=202: start ticks unavailable",
+    ):
+        runner.run(inp)
+
+    # The unidentified launch stays fenced as pending until its exit is confirmed.
+    assert states_at_termination == ["pending"]
+    assert process.exited is True
+    assert admission.get_slot(tmp_path, token).engine_process_state == "idle"  # type: ignore[union-attr]
+
+
 def test_parent_handoff_waits_until_slot_owner_matches_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

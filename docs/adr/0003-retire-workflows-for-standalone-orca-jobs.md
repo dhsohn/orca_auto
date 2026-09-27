@@ -1,6 +1,6 @@
 # ADR 0003: Retire workflows for standalone ORCA jobs
 
-- Status: Superseded by ADR 0005
+- Status: Partly superseded by ADR 0005
 - Date: 2026-09-23
 - Recorded: 2026-09-26
 

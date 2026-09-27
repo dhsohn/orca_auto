@@ -176,6 +176,11 @@ def test_normalize_resource_payload_handles_non_dict_and_edge_values() -> None:
     }
 
 
+@pytest.mark.parametrize("path_text", ["", " \t "])
+def test_resolve_candidate_path_blank_text_returns_none(path_text: str) -> None:
+    assert _resolve_candidate_path(path_text) is None
+
+
 def test_resolve_candidate_path_returns_none_when_resolve_raises_oserror(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
