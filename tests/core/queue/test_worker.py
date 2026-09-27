@@ -25,6 +25,7 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
 )
 from orca_auto.core.queue.store import QueueLockTimeoutError, QueueStoreCorruptError
+from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker import loop as loop_mod
 from orca_auto.core.queue.worker import pid_file
 from orca_auto.core.queue.worker.models import ReserveStatus
@@ -48,7 +49,7 @@ def _entry(
     entry_metadata: dict[str, object] = {QUEUE_RECORD_SYNC_KEY: QUEUE_RECORD_SYNC_COMPLETE}
     entry_metadata.update(metadata or {})
     return SimpleNamespace(
-        status=SimpleNamespace(value=status),
+        status=QueueStatus(status),
         priority=priority,
         enqueued_at=enqueued_at,
         queue_id=queue_id,

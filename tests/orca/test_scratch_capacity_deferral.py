@@ -172,12 +172,10 @@ def _run_child_with(
 
 
 def _deferral_is_due(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the deferral count as due at both the selection and the by-id claim."""
+    """Make the deferral count as due; selection and the by-id claim share one predicate."""
     import orca_auto.core.queue.store as store_mod
-    import orca_auto.core.queue.worker.admission as admission_mod
 
-    for module in (store_mod, admission_mod):
-        monkeypatch.setattr(module, "queue_entry_admission_is_deferred", lambda _entry: False)
+    monkeypatch.setattr(store_mod, "queue_entry_admission_is_deferred", lambda _entry: False)
 
 
 def _refuse(*_args: Any, **_kwargs: Any) -> int:

@@ -7,10 +7,9 @@ from typing import Protocol
 from orca_auto.core.admission import read_active_slot_count
 from orca_auto.core.config.schema import RuntimeAdmissionMixin
 
-from ..deferral import queue_entry_admission_is_deferred
 from ..priority import normalize_queue_priority
-from ..publication import queue_entry_is_claimable
-from ..types import QueueEntry, QueueStatus
+from ..store import claimable_pending
+from ..types import QueueEntry
 from .models import ReservedQueueEntry, ReserveStatus
 
 
@@ -53,18 +52,11 @@ def select_next_claimable_entry(
     champion: QueueEntry | None = None
     champion_key: tuple[int, int] | None = None
     for index, entry in enumerate(entries):
-        status_value = getattr(getattr(entry, "status", None), "value", None)
-        status = str(status_value).strip().lower()
-        if status != QueueStatus.PENDING.value or getattr(entry, "cancel_requested", False):
-            continue
-        if not queue_entry_is_claimable(entry):
-            continue
-        if queue_entry_admission_is_deferred(entry):
-            # Waiting for a resource, not for queue order: rows behind it stay eligible.
+        if not claimable_pending(entry):
             continue
         if accept_entry_fn is not None and not accept_entry_fn(entry):
             continue
-        key = (normalize_queue_priority(getattr(entry, "priority", None)), index)
+        key = (normalize_queue_priority(entry.priority), index)
         if champion_key is None or key < champion_key:
             champion_key = key
             champion = entry

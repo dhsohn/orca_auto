@@ -3,7 +3,6 @@ from __future__ import annotations
 from ..child.process import (
     live_queue_slot_keys_for_slots,
     start_background_process,
-    status_matches,
 )
 from ..processes import (
     ManagedProcess,
@@ -58,7 +57,6 @@ __all__ = [
     "resolve_admission_root",
     "select_next_claimable_entry",
     "start_background_process",
-    "status_matches",
     "terminate_process_group",
     "worker_pid_file_path",
     "write_worker_pid_file",

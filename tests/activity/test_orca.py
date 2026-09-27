@@ -19,6 +19,7 @@ from orca_auto.activity import _orca as _activity_orca
 from orca_auto.activity import model as _activity_model
 from orca_auto.core.activity_index import DB_NAME as ACTIVITY_INDEX_DB_NAME
 from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
+from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.queue import store as queue_store
 from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -106,7 +107,7 @@ def test_orca_records_do_not_reconcile_or_mutate_orphaned_running_entries(
         started_at="2026-04-26T00:01:00+00:00",
     )
     queue_store.save_entries(allowed, [entry])
-    queue_path = allowed / queue_store.QUEUE_FILE_NAME
+    queue_path = allowed / QUEUE_FILE
     before = queue_path.read_bytes()
 
     if run_lock_held:
@@ -188,7 +189,7 @@ def test_orca_records_merge_queue_entries_and_snapshots(
         ),
     ]
     queue_store.save_entries(allowed, entries)
-    queue_path = allowed / queue_store.QUEUE_FILE_NAME
+    queue_path = allowed / QUEUE_FILE
     before = queue_path.read_bytes()
 
     by_id = _records_by_id(orca_config)

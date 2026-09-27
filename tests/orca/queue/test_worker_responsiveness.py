@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.queue import store
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_PREPARING,
@@ -33,7 +34,7 @@ def _pending_publication(root: Path) -> QueueEntry:
 
 def test_busy_publication_repair_does_not_wait_or_change_lease(tmp_path: Path) -> None:
     entry = _pending_publication(tmp_path)
-    before = (tmp_path / store.QUEUE_FILE_NAME).read_bytes()
+    before = (tmp_path / QUEUE_FILE).read_bytes()
     published: list[object] = []
     with ThreadPoolExecutor(max_workers=1) as pool:
         with queue_record_publication_lock(tmp_path, entry.queue_id):
@@ -48,7 +49,7 @@ def test_busy_publication_repair_does_not_wait_or_change_lease(tmp_path: Path) -
             )
             assert future.result(timeout=1).reason == "busy"
             assert not published
-            assert (tmp_path / store.QUEUE_FILE_NAME).read_bytes() == before
+            assert (tmp_path / QUEUE_FILE).read_bytes() == before
     assert repair_enqueue_publication_outcome(
         tmp_path,
         entry,

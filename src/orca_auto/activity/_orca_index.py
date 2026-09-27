@@ -19,6 +19,7 @@ from orca_auto.activity.model import (
 )
 from orca_auto.core import activity_index as index
 from orca_auto.core import activity_invalidation as journal
+from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.indexing import store as locations
 from orca_auto.core.queue import persistence as queue
@@ -45,7 +46,7 @@ def _sync_sources(connection: sqlite3.Connection, root: Path) -> None:
                 connection,
                 root,
                 "queue",
-                queue.QUEUE_FILE_NAME,
+                QUEUE_FILE,
                 [queue.entry_to_dict(entry) for entry in entries],
             )
     filename = locations.JOB_LOCATION_INDEX_FILE_NAME

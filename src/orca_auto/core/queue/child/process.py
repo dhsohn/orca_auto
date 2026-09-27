@@ -69,19 +69,12 @@ def _normalized_work_dir(value: Any) -> str:
     return str(Path(text).expanduser().resolve())
 
 
-def status_matches(value: Any, expected: Any) -> bool:
-    actual_value = getattr(value, "value", value)
-    expected_value = getattr(expected, "value", expected)
-    return str(actual_value).strip().lower() == str(expected_value).strip().lower()
-
-
 def entry_status_is_running(entry: QueueEntry | None) -> bool:
-    return status_matches(getattr(entry, "status", None), QueueStatus.RUNNING)
+    return entry is not None and entry.status == QueueStatus.RUNNING
 
 
 __all__ = [
     "entry_status_is_running",
     "live_queue_slot_keys_for_slots",
     "start_background_process",
-    "status_matches",
 ]

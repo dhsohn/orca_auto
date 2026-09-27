@@ -16,13 +16,14 @@ from typing import Any
 import pytest
 
 from orca_auto.core.admission import get_slot, prepare_slot_engine_process, reserve_slot
+from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.job_locations import list_job_location_records
 from orca_auto.orca.queue import replay
 from orca_auto.orca.queue import worker as worker_mod
-from orca_auto.orca.queue.adapter import QUEUE_FILE_NAME, cancel, list_queue
+from orca_auto.orca.queue.adapter import cancel, list_queue
 from orca_auto.orca.queue.models import OrcaRunningJob
 from orca_auto.orca.queue.terminal_replay import terminal_replay_marker_from_entry
 from orca_auto.orca.queue.worker import OrcaQueueWorker
@@ -231,7 +232,7 @@ def test_terminal_mark_does_not_touch_missing_nonrunning_or_new_generation(
                 task_id="task-new" if current_kind == "replacement" else "task-1",
             ),
         )
-    queue_file = tmp_path / QUEUE_FILE_NAME
+    queue_file = tmp_path / QUEUE_FILE
     queue_bytes = queue_file.read_bytes() if queue_file.exists() else None
     current = _row(tmp_path, "queue-1")
 
@@ -280,7 +281,7 @@ def test_cancel_failure_retains_slot_and_retry_owner(
         # slot recovery refuses to run.
         assert prepare_slot_engine_process(tmp_path, token) is not None
     if failure == "mark":
-        (tmp_path / QUEUE_FILE_NAME).write_text("{not a queue", encoding="utf-8")
+        (tmp_path / QUEUE_FILE).write_text("{not a queue", encoding="utf-8")
 
     def terminate(_proc: object) -> bool:
         if failure == "terminate":

@@ -8,7 +8,6 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.artifacts import QUEUE_FILE as QUEUE_FILE_NAME
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue import transitions as _queue_transitions
 from orca_auto.core.queue.deferral import (
@@ -70,7 +69,6 @@ __all__ = [
     "AmbiguousQueueTargetError",
     "QUEUE_APP_NAME",
     "QUEUE_ENGINE",
-    "QUEUE_FILE_NAME",
     "QUEUE_TASK_KIND",
     "TERMINAL_STATUSES",
     "TERMINAL_REPLAY_FENCE_ONLY_METADATA_KEY",
@@ -273,12 +271,7 @@ def enqueue(
         entries.append(entry)
         return entry, True
 
-    entry = _queue_store.mutate_entries(
-        allowed_root,
-        append,
-        save_entries_fn=_queue_store.save_entries,
-        after_commit_fn=after_commit_fn,
-    )
+    entry = _queue_store.mutate_entries(allowed_root, append, after_commit_fn=after_commit_fn)
     logger.info("Enqueued: %s (queue_id=%s, force=%s)", resolved, entry.queue_id, force)
     return entry
 
@@ -313,6 +306,26 @@ def _immutable_publication_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in metadata.items() if key not in lease_keys}
 
 
+def _same_orca_generation(
+    current: QueueEntry,
+    *,
+    expected_entry: QueueEntry | None = None,
+    expected_task_id: str | None = None,
+) -> bool:
+    """The one ORCA fence: may a writer holding this snapshot or task id change ``current``?"""
+    return (
+        is_orca_queue_entry(current)
+        and (
+            expected_entry is None
+            or queue_entries_same_publication_generation(current, expected_entry)
+        )
+        and (
+            expected_task_id is None
+            or normalize_text(current.task_id) == normalize_text(expected_task_id)
+        )
+    )
+
+
 def dequeue_entry_if_pending(
     allowed_root: Path,
     queue_id: str,
@@ -323,7 +336,6 @@ def dequeue_entry_if_pending(
     entry = _queue_store.dequeue_entry_if_pending(
         allowed_root,
         queue_id,
-        save_entries_fn=_queue_store.save_entries,
         accept_entry_fn=is_orca_queue_entry,
         expected_entry=expected_entry,
     )
@@ -394,17 +406,8 @@ def mark_completed(
                 error="",
                 metadata_update=merged_metadata,
             ),
-            save_entries_fn=_queue_store.save_entries,
-            accept_entry_fn=lambda current: (
-                is_orca_queue_entry(current)
-                and (
-                    expected_entry is None
-                    or queue_entries_same_publication_generation(current, expected_entry)
-                )
-                and (
-                    expected_task_id is None
-                    or normalize_text(current.task_id) == normalize_text(expected_task_id)
-                )
+            accept_entry_fn=lambda current: _same_orca_generation(
+                current, expected_entry=expected_entry, expected_task_id=expected_task_id
             ),
         )
         is not None
@@ -454,16 +457,9 @@ def mark_failed(
                 if publish_terminal_side_effects
                 else _administrative_terminal_metadata_update_fn
             ),
-            save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
-                is_orca_queue_entry(current)
-                and (
-                    expected_entry is None
-                    or queue_entries_same_publication_generation(current, expected_entry)
-                )
-                and (
-                    expected_task_id is None
-                    or normalize_text(current.task_id) == normalize_text(expected_task_id)
+                _same_orca_generation(
+                    current, expected_entry=expected_entry, expected_task_id=expected_task_id
                 )
                 and (
                     require_running_started_at is None
@@ -498,18 +494,11 @@ def mark_cancelled(
                 error="cancel_requested",
                 metadata_update=metadata_update,
             ),
-            save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
-                is_orca_queue_entry(current)
+                _same_orca_generation(
+                    current, expected_entry=expected_entry, expected_task_id=expected_task_id
+                )
                 and current.status == QueueStatus.RUNNING
-                and (
-                    expected_entry is None
-                    or queue_entries_same_publication_generation(current, expected_entry)
-                )
-                and (
-                    expected_task_id is None
-                    or normalize_text(current.task_id) == normalize_text(expected_task_id)
-                )
             ),
         )
         is not None
@@ -547,17 +536,8 @@ def requeue_running_entry(
                 error="cancel_requested",
                 allow_terminal_candidate=True,
             ),
-            save_entries_fn=_queue_store.save_entries,
-            accept_entry_fn=lambda current: (
-                is_orca_queue_entry(current)
-                and (
-                    expected_entry is None
-                    or queue_entries_same_publication_generation(current, expected_entry)
-                )
-                and (
-                    expected_task_id is None
-                    or normalize_text(current.task_id) == normalize_text(expected_task_id)
-                )
+            accept_entry_fn=lambda current: _same_orca_generation(
+                current, expected_entry=expected_entry, expected_task_id=expected_task_id
             ),
         )
         is not None
@@ -579,14 +559,9 @@ def cancel(
             error="cancel_requested",
             allow_terminal_candidate=True,
         ),
-        accept_entry_fn=lambda current: (
-            is_orca_queue_entry(current)
-            and (
-                expected_entry is None
-                or queue_entries_same_publication_generation(current, expected_entry)
-            )
+        accept_entry_fn=lambda current: _same_orca_generation(
+            current, expected_entry=expected_entry
         ),
-        save_entries_fn=_queue_store.save_entries,
     )
     if entry is None:
         logger.debug("Cannot cancel missing or terminal entry: %s", queue_id)
@@ -623,43 +598,24 @@ def get_active_entry_for_reaction_dir(allowed_root: Path, reaction_dir: str) -> 
     return find_active_entry(list_queue(allowed_root), resolved)
 
 
-def _cancel_entry_matches(
-    current: QueueEntry,
-    *,
-    expected_entry: QueueEntry | None = None,
-    expected_task_id: str | None = None,
-) -> bool:
-    return (
-        is_orca_queue_entry(current)
-        and (
-            expected_entry is None
-            or queue_entries_same_publication_generation(current, expected_entry)
-        )
-        and (
-            expected_task_id is None
-            or normalize_text(current.task_id) == normalize_text(expected_task_id)
-        )
-    )
-
-
 def cancellation_probe(allowed_root: Path, entry: QueueEntry) -> Callable[[], bool]:
     """One child-owned, generation-fenced observer; unchanged polls need only stat."""
     return _queue_store.QueueCancellationProbe(
-        _queue_store.QueueStore.for_root(allowed_root),
+        allowed_root,
         entry.queue_id,
-        accept_entry_fn=lambda current: _cancel_entry_matches(current, expected_entry=entry),
+        accept_entry_fn=lambda current: _same_orca_generation(current, expected_entry=entry),
     )
 
 
 def cancel_requested_ids(allowed_root: Path, expected_tasks: Mapping[str, str | None]) -> set[str]:
     """Read one snapshot for all live children at this queue root."""
-    entries = _queue_store.QueueStore.for_root(allowed_root).list_entries(timeout_seconds=0.0)
+    entries = _queue_store.list_queue(allowed_root, lock_timeout_seconds=0.0)
     return {
         entry.queue_id
         for entry in entries
         if entry.queue_id in expected_tasks
         and entry.cancel_requested
-        and _cancel_entry_matches(entry, expected_task_id=expected_tasks[entry.queue_id])
+        and _same_orca_generation(entry, expected_task_id=expected_tasks[entry.queue_id])
     }
 
 
@@ -676,7 +632,7 @@ def get_cancel_requested(
         allowed_root,
         queue_id,
         lock_timeout_seconds=lock_timeout_seconds,
-        accept_entry_fn=lambda current: _cancel_entry_matches(
+        accept_entry_fn=lambda current: _same_orca_generation(
             current, expected_entry=expected_entry, expected_task_id=expected_task_id
         ),
     )
@@ -695,13 +651,8 @@ def update_metadata(
             allowed_root,
             queue_id,
             metadata_update,
-            save_entries_fn=_queue_store.save_entries,
             accept_entry_fn=lambda current: (
-                is_orca_queue_entry(current)
-                and (
-                    expected_entry is None
-                    or queue_entries_same_publication_generation(current, expected_entry)
-                )
+                _same_orca_generation(current, expected_entry=expected_entry)
                 and (
                     not require_running_without_cancel_requested
                     or (current.status == QueueStatus.RUNNING and not current.cancel_requested)
@@ -749,17 +700,8 @@ def update_terminal(
         status=QueueStatus(target_status),
         error=error,
         metadata_update={"run_id": run_id} if run_id is not None else None,
-        save_entries_fn=_queue_store.save_entries,
-        accept_entry_fn=lambda current: (
-            is_orca_queue_entry(current)
-            and (
-                expected_entry is None
-                or queue_entries_same_publication_generation(current, expected_entry)
-            )
-            and (
-                expected_task_id is None
-                or normalize_text(current.task_id) == normalize_text(expected_task_id)
-            )
+        accept_entry_fn=lambda current: _same_orca_generation(
+            current, expected_entry=expected_entry, expected_task_id=expected_task_id
         ),
     )
     if updated is None:

@@ -4,13 +4,12 @@ import json
 import os
 from collections.abc import Sequence
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from orca_auto.core.queue import publication, store, transitions
+from orca_auto.core.queue import store, transitions
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_ABORTED,
     QUEUE_RECORD_SYNC_KEY,
@@ -30,65 +29,6 @@ from tests.queue_store_helpers import (
     _queue_file,
     _without_sync_metadata,
 )
-
-
-def test_request_cancel_rejects_replacement_with_same_queue_id(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    _queue_file(tmp_path).write_text(
-        json.dumps([_entry("q-same", task_id="task-a")], indent=2),
-        encoding="utf-8",
-    )
-    [selected] = store.list_queue(tmp_path)
-    _queue_file(tmp_path).write_text(
-        json.dumps([_entry("q-same", task_id="task-b")], indent=2),
-        encoding="utf-8",
-    )
-
-    assert transitions.request_cancel(tmp_path, "q-same", expected_entry=selected) is None
-    [replacement] = store.list_queue(tmp_path)
-    assert replacement.task_id == "task-b"
-    assert replacement.status == QueueStatus.PENDING
-    assert replacement.cancel_requested is False
-
-
-def test_request_cancel_accepts_same_generation_after_publication_transition(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    preparing_metadata = {
-        "job_dir": str(tmp_path / "job"),
-        **publication.queue_record_sync_metadata(
-            publication.QUEUE_RECORD_SYNC_PREPARING,
-            token="publication-token",
-            owner_pid=os.getpid(),
-        ),
-    }
-    _queue_file(tmp_path).write_text(
-        json.dumps([_entry("q-same", metadata=preparing_metadata)], indent=2),
-        encoding="utf-8",
-    )
-    [selected] = store.list_queue(tmp_path)
-    complete_metadata = {
-        **preparing_metadata,
-        **publication.queue_record_sync_metadata(
-            publication.QUEUE_RECORD_SYNC_COMPLETE,
-            token="publication-token",
-            owner_pid=0,
-        ),
-    }
-    _queue_file(tmp_path).write_text(
-        json.dumps([_entry("q-same", metadata=complete_metadata)], indent=2),
-        encoding="utf-8",
-    )
-
-    cancelled = transitions.request_cancel(tmp_path, "q-same", expected_entry=selected)
-
-    assert cancelled is not None
-    assert cancelled.status == QueueStatus.CANCELLED
 
 
 def test_pending_cancel_metadata_callback_failure_aborts_queue_write(
@@ -114,12 +54,13 @@ def test_pending_cancel_metadata_callback_failure_aborts_queue_write(
         nonlocal save_calls
         save_calls += 1
 
+    monkeypatch.setattr(store, "save_entries", count_save)
+
     with pytest.raises(OSError, match="metadata generation failed"):
         transitions.request_cancel(
             tmp_path,
             entry.queue_id,
             pending_metadata_update_fn=reject_metadata,
-            save_entries_fn=count_save,
         )
 
     assert save_calls == 0
@@ -147,7 +88,6 @@ def test_running_cancel_does_not_invoke_pending_metadata_callback(
     requested = transitions.request_cancel(
         tmp_path,
         pending.queue_id,
-        expected_entry=running,
         pending_metadata_update_fn=lambda _candidate: pytest.fail(
             "pending metadata callback must not run for a running cancellation"
         ),
@@ -156,33 +96,6 @@ def test_running_cancel_does_not_invoke_pending_metadata_callback(
     assert requested is not None
     assert requested.status == QueueStatus.RUNNING
     assert requested.cancel_requested is True
-
-
-def test_terminal_mark_rejects_replacement_with_same_queue_id(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    _queue_file(tmp_path).write_text(
-        json.dumps(
-            [_entry("q-same", task_id="task-a", status=QueueStatus.RUNNING)],
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    [selected] = store.list_queue(tmp_path)
-    _queue_file(tmp_path).write_text(
-        json.dumps(
-            [_entry("q-same", task_id="task-b", status=QueueStatus.RUNNING)],
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    assert transitions.mark_completed(tmp_path, "q-same", expected_entry=selected) is None
-    [replacement] = store.list_queue(tmp_path)
-    assert replacement.task_id == "task-b"
-    assert replacement.status == QueueStatus.RUNNING
 
 
 def test_terminal_completion_does_not_overwrite_acknowledged_cancellation(
@@ -199,13 +112,13 @@ def test_terminal_completion_does_not_overwrite_acknowledged_cancellation(
     )
     running = _claim_next(tmp_path)
     assert running is not None
-    assert transitions.request_cancel(tmp_path, entry.queue_id, expected_entry=running) is not None
+    assert transitions.request_cancel(tmp_path, entry.queue_id) is not None
 
-    assert transitions.mark_completed(tmp_path, entry.queue_id, expected_entry=running) is None
+    assert transitions.mark_completed(tmp_path, entry.queue_id) is None
     [cancel_requested] = store.list_queue(tmp_path)
     assert cancel_requested.status == QueueStatus.RUNNING
     assert cancel_requested.cancel_requested is True
-    assert transitions.mark_cancelled(tmp_path, entry.queue_id, expected_entry=running) is not None
+    assert transitions.mark_cancelled(tmp_path, entry.queue_id) is not None
     [cancelled] = store.list_queue(tmp_path)
     assert cancelled.status == QueueStatus.CANCELLED
 
@@ -439,12 +352,13 @@ def test_requeue_cancel_metadata_callback_failure_aborts_queue_write(
         nonlocal save_calls
         save_calls += 1
 
+    monkeypatch.setattr(store, "save_entries", count_save)
+
     with pytest.raises(OSError, match="metadata generation failed"):
         transitions.requeue_running_entry(
             tmp_path,
             entry.queue_id,
             cancel_metadata_update_fn=reject_metadata,
-            save_entries_fn=count_save,
         )
 
     assert save_calls == 0
@@ -590,13 +504,14 @@ def test_mark_metadata_callback_failure_aborts_queue_write(
         nonlocal save_calls
         save_calls += 1
 
+    monkeypatch.setattr(store, "save_entries", count_save)
+
     with pytest.raises(OSError, match="metadata generation failed"):
         transitions.mark_failed(
             tmp_path,
             entry.queue_id,
             error="boom",
             metadata_update_fn=reject_metadata,
-            save_entries_fn=count_save,
         )
 
     assert save_calls == 0
@@ -649,18 +564,16 @@ def test_mark_status_replays_same_terminal_side_effect_under_lock(
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
     _write_single_running_entry(tmp_path)
-    [running] = store.list_queue(tmp_path)
     assert (
         transitions.mark_cancelled(
             tmp_path,
             "q-1",
             metadata_update={"candidate_count": 2},
-            expected_entry=running,
         )
         is not None
     )
 
-    replayed = transitions.mark_cancelled(tmp_path, "q-1", expected_entry=running)
+    replayed = transitions.mark_cancelled(tmp_path, "q-1")
 
     assert replayed is not None
     assert replayed.status == QueueStatus.CANCELLED
@@ -812,42 +725,13 @@ def test_correct_terminal_status_refuses_non_terminal_row(
         )
 
 
-def test_correct_terminal_status_refuses_generation_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    _install_deterministic_helpers(monkeypatch)
-    failed = _failed_row(tmp_path)
-    stale_generation = replace(failed, task_id="replacement-task")
-
-    assert (
-        transitions.correct_terminal_status(
-            tmp_path,
-            failed.queue_id,
-            status=QueueStatus.COMPLETED,
-            expected_entry=stale_generation,
-        )
-        is None
-    )
-    assert store.list_queue(tmp_path) == [failed]
-
-
-def test_correct_terminal_status_refuses_task_mismatch(
+def test_correct_terminal_status_refuses_unaccepted_or_missing_rows(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     _install_deterministic_helpers(monkeypatch)
     failed = _failed_row(tmp_path)
 
-    assert (
-        transitions.correct_terminal_status(
-            tmp_path,
-            failed.queue_id,
-            status=QueueStatus.COMPLETED,
-            expected_task_id="other-task",
-        )
-        is None
-    )
     assert (
         transitions.correct_terminal_status(
             tmp_path,
@@ -895,8 +779,6 @@ def test_correct_terminal_status_rebuilds_the_row_and_merges_metadata_under_the_
         status=QueueStatus.COMPLETED,
         metadata_update={"run_id": "run-1"},
         metadata_update_fn=metadata_update,
-        expected_entry=failed,
-        expected_task_id=failed.task_id,
     )
 
     assert corrected is not None

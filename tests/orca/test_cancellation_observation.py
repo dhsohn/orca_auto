@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.queue import store
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.config import AppConfig
@@ -102,7 +103,7 @@ def test_removed_and_corrupt_queue_are_not_stale_cache_hits(tmp_path: Path) -> N
     store.save_entries(tmp_path, [target])
     probe = adapter.cancellation_probe(tmp_path, target)
     assert probe()
-    path = store.QueueStore.for_root(tmp_path).path
+    path = tmp_path / QUEUE_FILE
     path.unlink()
     assert not probe()
     path.write_text("{bad json")

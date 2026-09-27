@@ -19,6 +19,7 @@ from typing import Any, cast
 import pytest
 
 from orca_auto.core.admission import release_slot, reserve_slot
+from orca_auto.core.artifacts import QUEUE_FILE
 from orca_auto.core.messaging.channel import SendResult
 from orca_auto.core.queue.store import save_entries as save_entries_core
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
@@ -33,7 +34,6 @@ from orca_auto.orca.job_locations import list_job_location_records
 from orca_auto.orca.queue import replay as replay_mod
 from orca_auto.orca.queue import worker_tracking as worker_tracking_mod
 from orca_auto.orca.queue.adapter import (
-    QUEUE_FILE_NAME,
     cancel,
     enqueue,
     list_queue,
@@ -273,7 +273,7 @@ def test_worker_does_not_replay_unobserved_terminal_entry_without_valid_marker(
         metadata={"run_id": "run-original", TERMINAL_REPLAY_METADATA_KEY: replay_marker},
     )
     _store(queue_root, entry)
-    queue_file = queue_root / QUEUE_FILE_NAME
+    queue_file = queue_root / QUEUE_FILE
     queue_bytes = queue_file.read_bytes()
     worker = _replay_worker(replay_cfg, queue_root)
     if existing_cursor:
@@ -306,7 +306,7 @@ def test_repeated_worker_startup_preserves_historical_failed_queue_bytes(
         metadata={"run_id": "run-original", TERMINAL_REPLAY_METADATA_KEY: None},
     )
     _store(queue_root, entry)
-    queue_file = queue_root / QUEUE_FILE_NAME
+    queue_file = queue_root / QUEUE_FILE
     queue_bytes = queue_file.read_bytes()
     queue_mtime_ns = queue_file.stat().st_mtime_ns
 
@@ -543,13 +543,13 @@ def test_repair_blocked_terminal_never_uses_observed_active_edge(
         )
     entry = _entry(reaction_dir, QueueStatus.FAILED, metadata=metadata)
     _store(queue_root, entry)
-    queue_bytes = (queue_root / QUEUE_FILE_NAME).read_bytes()
+    queue_bytes = (queue_root / QUEUE_FILE).read_bytes()
     worker = _replay_worker(replay_cfg, queue_root)
     _seed_cursor(worker, entry, STATUS_RUNNING)
 
     _reconcile(worker)
 
-    assert (queue_root / QUEUE_FILE_NAME).read_bytes() == queue_bytes
+    assert (queue_root / QUEUE_FILE).read_bytes() == queue_bytes
     assert not state_path(reaction_dir).exists()
     assert list_job_location_records(queue_root) == []
     assert recording_channel.sends == []
@@ -886,14 +886,14 @@ def test_terminal_owner_switches_from_terminal_owner_to_seen_active_generation(
     worker.replay_state.generation_owners = {reaction_key: owner_b}
     worker.replay_state.generation_owner_active = {reaction_key: True}
     worker.replay_state.reconcile_statuses = {owner_a: STATUS_RUNNING, owner_b: STATUS_RUNNING}
-    queue_bytes = (queue_root / QUEUE_FILE_NAME).read_bytes()
+    queue_bytes = (queue_root / QUEUE_FILE).read_bytes()
 
     with acquire_run_lock(reaction_dir):
         _reconcile(worker)
 
     assert worker.replay_state.generation_owners[reaction_key] == owner_a
     assert worker.replay_state.generation_owner_active[reaction_key] is True
-    assert (queue_root / QUEUE_FILE_NAME).read_bytes() == queue_bytes
+    assert (queue_root / QUEUE_FILE).read_bytes() == queue_bytes
     assert not state_path(reaction_dir).exists()
     assert list_job_location_records(queue_root) == []
     assert recording_channel.sends == []
