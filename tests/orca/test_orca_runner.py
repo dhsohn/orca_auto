@@ -22,6 +22,7 @@ from orca_auto.core.engine_scratch import (
 )
 from orca_auto.core.engine_scratch import _workspace as workspace_mod
 from orca_auto.core.queue.processes import ProcessCleanupError
+from orca_auto.core.utils import process as process_utils
 from orca_auto.orca import orca_runner
 from orca_auto.orca.orca_runner import (
     OrcaRunner,
@@ -318,7 +319,7 @@ def test_terminate_noop_when_process_already_exited(monkeypatch: pytest.MonkeyPa
     runner = _managed_runner()
     killpg = MagicMock()
     monkeypatch.setattr(orca_runner.os, "killpg", killpg)
-    monkeypatch.setattr(orca_runner, "process_group_exists", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(process_utils, "process_group_exists", lambda *_args, **_kwargs: False)
 
     assert runner._terminate_subprocess_tree(_mock_process(poll=0))
     killpg.assert_not_called()
@@ -839,7 +840,7 @@ def test_terminate_subprocess_tree_falls_back_to_terminate_when_sigterm_group_ki
 
     with (
         patch_missing_process_group("orca_auto.orca.orca_runner.os.killpg"),
-        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=False),
+        patch("orca_auto.core.utils.process.process_group_exists", return_value=False),
     ):
         assert runner._terminate_subprocess_tree(proc)
 
@@ -861,7 +862,7 @@ def test_terminate_subprocess_tree_falls_back_to_proc_kill_when_sigkill_group_ki
             "orca_auto.orca.orca_runner.os.killpg",
             side_effect=[None, ProcessLookupError("no pg kill")],
         ),
-        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=False),
+        patch("orca_auto.core.utils.process.process_group_exists", return_value=False),
     ):
         assert runner._terminate_subprocess_tree(proc)
 
@@ -880,7 +881,7 @@ def test_terminate_subprocess_tree_waits_after_sigkill() -> None:
 
     with (
         patch("orca_auto.orca.orca_runner.os.killpg") as killpg,
-        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=False),
+        patch("orca_auto.core.utils.process.process_group_exists", return_value=False),
     ):
         assert runner._terminate_subprocess_tree(proc)
 
@@ -905,7 +906,7 @@ def test_terminate_subprocess_tree_ignores_terminate_failure_when_sigterm_group_
 
     with (
         patch_missing_process_group("orca_auto.orca.orca_runner.os.killpg"),
-        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=False),
+        patch("orca_auto.core.utils.process.process_group_exists", return_value=False),
     ):
         assert runner._terminate_subprocess_tree(proc)
 
@@ -930,7 +931,7 @@ def test_terminate_subprocess_tree_ignores_proc_kill_failure_when_sigkill_group_
             "orca_auto.orca.orca_runner.os.killpg",
             side_effect=[None, ProcessLookupError("no pg kill")],
         ),
-        patch("orca_auto.orca.orca_runner.process_group_exists", return_value=True),
+        patch("orca_auto.core.utils.process.process_group_exists", return_value=True),
     ):
         assert not runner._terminate_subprocess_tree(proc)
 

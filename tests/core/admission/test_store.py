@@ -3,13 +3,13 @@ from __future__ import annotations
 import errno
 import json
 from dataclasses import replace
-from os import PathLike
 from pathlib import Path
 
 import pytest
 
 from orca_auto.core.admission import store
 from orca_auto.core.utils import persistence as persistence_utils
+from orca_auto.core.utils import process as process_utils
 
 
 def _patch_deterministic_liveness(
@@ -32,8 +32,8 @@ def _patch_deterministic_liveness(
             raise ProcessLookupError("process is not alive")
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda pid: tick_map.get(pid))
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda pid: tick_map.get(pid))
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "test-boot-id")
     if patch_token:
         monkeypatch.setattr(
             persistence_utils, "timestamped_token", lambda prefix: f"{prefix}_fixed"
@@ -43,50 +43,6 @@ def _patch_deterministic_liveness(
 
 def _read_slots_file(root: Path) -> list[dict[str, object]]:
     return json.loads((root / store.ADMISSION_FILE_NAME).read_text(encoding="utf-8"))
-
-
-def _proc_stat_text(start_ticks: str) -> str:
-    fields = ["S"] + [str(index) for index in range(1, 19)] + [start_ticks]
-    return f"1234 (python) {' '.join(fields)}"
-
-
-def test_process_start_ticks_handles_parse_failures_and_success(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    proc_root = tmp_path / "proc"
-
-    def fake_path(*parts: str | PathLike[str]) -> Path:
-        if parts == ("/proc",):
-            return proc_root
-        return Path(*parts)
-
-    monkeypatch.setattr(store, "Path", fake_path)
-
-    assert store._process_start_ticks(999) is None
-
-    pid = 1234
-    stat_dir = proc_root / str(pid)
-    stat_dir.mkdir(parents=True)
-    stat_file = stat_dir / "stat"
-
-    stat_file.write_text("", encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text("1234 no-right-paren", encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text("1234 (python) S 1 2 3", encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text(_proc_stat_text("not-an-int"), encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text(_proc_stat_text("0"), encoding="utf-8")
-    assert store._process_start_ticks(pid) is None
-
-    stat_file.write_text(_proc_stat_text("54321"), encoding="utf-8")
-    assert store._process_start_ticks(pid) == 54321
 
 
 def test_normalize_work_dir_handles_none_blank_and_resolve_failure(
@@ -128,8 +84,8 @@ def test_slot_owner_alive_handles_dead_pid_and_unreadable_current_ticks(
     )
 
     monkeypatch.setattr(store.os, "kill", lambda pid, sig: None)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda pid: None)
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda pid: None)
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -153,8 +109,8 @@ def test_slot_owner_alive_treats_permission_denied_as_live(
         raise PermissionError("permission denied")
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: None)
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid: None)
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -178,8 +134,8 @@ def test_slot_owner_alive_still_rejects_permission_denied_pid_reuse(
         raise PermissionError("permission denied")
 
     monkeypatch.setattr(store.os, "kill", fake_kill)
-    monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: 888)
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "test-boot-id")
+    monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid: 888)
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "test-boot-id")
 
     assert (
         store._slot_owner_alive(
@@ -206,7 +162,7 @@ def test_slot_owner_identity_is_scoped_to_the_current_boot(
     slot = store.get_slot(tmp_path, token)
     assert slot is not None and slot.owner_boot_id == "test-boot-id"
 
-    monkeypatch.setattr(store, "_linux_boot_id", lambda: "later-boot-id")
+    monkeypatch.setattr(process_utils, "linux_boot_id", lambda: "later-boot-id")
     monkeypatch.setattr(
         store.os,
         "kill",
@@ -258,8 +214,8 @@ def test_admission_cleanup_preserves_conservative_owner_identity_policy(
         if kill_error is not None:
             raise kill_error
 
-    monkeypatch.setattr(store, "_linux_boot_id", observed_boot_id)
-    monkeypatch.setattr(store, "_process_start_ticks", observed_ticks)
+    monkeypatch.setattr(process_utils, "linux_boot_id", observed_boot_id)
+    monkeypatch.setattr(process_utils, "process_start_ticks", observed_ticks)
     monkeypatch.setattr(store.os, "kill", probe_pid)
 
     assert [slot.token for slot in store.list_slots(tmp_path)] == ([token] if retained else [])
@@ -268,34 +224,6 @@ def test_admission_cleanup_preserves_conservative_owner_identity_policy(
         assert path.read_bytes() == recorded
     else:
         assert _read_slots_file(tmp_path) == []
-
-
-@pytest.mark.parametrize(
-    "stat_text",
-    [
-        "",
-        "1 (proc) " + " ".join(str(i) for i in range(19)),
-        "1 (proc) " + " ".join(["0"] * 19 + ["bad"]),
-    ],
-)
-def test_process_start_ticks_returns_none_for_unparseable_stat(
-    monkeypatch: pytest.MonkeyPatch, stat_text: str
-) -> None:
-    def fake_read_text(self: Path, encoding: str = "utf-8", errors: str = "strict") -> str:
-        return stat_text
-
-    monkeypatch.setattr(store.Path, "read_text", fake_read_text)
-
-    assert store._process_start_ticks(1234) is None
-
-
-def test_process_start_ticks_parses_valid_stat(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_read_text(self: Path, encoding: str = "utf-8", errors: str = "strict") -> str:
-        return "1 (proc) " + " ".join(str(i) for i in range(1, 21))
-
-    monkeypatch.setattr(store.Path, "read_text", fake_read_text)
-
-    assert store._process_start_ticks(1234) == 20
 
 
 def test_normalize_work_dir_handles_none_and_oserror_fallback(

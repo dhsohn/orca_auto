@@ -57,14 +57,6 @@ def _lock_path(root: Path) -> Path:
     return _admission_persistence.admission_lock_path(root)
 
 
-def _process_start_ticks(pid: int) -> int | None:
-    return process_utils.process_start_ticks(pid, proc_root=Path("/proc"))
-
-
-def _linux_boot_id() -> str | None:
-    return process_utils.linux_boot_id(proc_root=Path("/proc"))
-
-
 def _normalize_work_dir(value: str | Path | None) -> str:
     if value is None:
         return ""
@@ -128,21 +120,10 @@ def _updated_inactive_engine_process_state(
     return state
 
 
-def _slot_owner_process_alive(slot: AdmissionSlot) -> bool:
-    if slot.owner_pid <= 0:
-        return False
-    return process_utils.process_identity_alive(
-        slot.owner_pid,
-        slot.process_start_ticks,
-        slot.owner_boot_id,
-        kill_fn=os.kill,
-        process_start_ticks_fn=_process_start_ticks,
-        boot_id_fn=_linux_boot_id,
-    )
-
-
 def _slot_owner_alive(slot: AdmissionSlot) -> bool:
-    if _slot_owner_process_alive(slot):
+    if process_utils.process_identity_alive(
+        slot.owner_pid, slot.process_start_ticks, slot.owner_boot_id
+    ):
         return True
     if slot.engine_process_state == "pending":
         # A dead child with a pending marker may have died in the tiny
@@ -177,7 +158,7 @@ def _resolved_slot_ownership(
     owner_start_ticks = (
         slot.process_start_ticks
         if resolved_owner_pid == slot.owner_pid
-        else _process_start_ticks(resolved_owner_pid)
+        else process_utils.process_start_ticks(resolved_owner_pid)
     )
     resolved_engine_process_state = _updated_inactive_engine_process_state(
         slot,
@@ -187,7 +168,7 @@ def _resolved_slot_ownership(
     if resolved_owner_pid == slot.owner_pid:
         owner_boot_id = slot.owner_boot_id
     else:
-        owner_boot_id = _linux_boot_id()
+        owner_boot_id = process_utils.linux_boot_id()
     if owner_start_ticks is None or owner_boot_id is None:
         raise ValueError("Cannot verify admission slot owner process identity")
     return resolved_owner_pid, owner_start_ticks, owner_boot_id, resolved_engine_process_state
@@ -365,8 +346,8 @@ def reserve_slot(
         if type(resolved_owner_pid) is not int or resolved_owner_pid <= 0:
             raise ValueError("Admission slot owner PID must be a positive integer")
         inactive_engine_process_state = _inactive_engine_process_state(engine_process_state)
-        owner_start_ticks = _process_start_ticks(resolved_owner_pid)
-        owner_boot_id = _linux_boot_id()
+        owner_start_ticks = process_utils.process_start_ticks(resolved_owner_pid)
+        owner_boot_id = process_utils.linux_boot_id()
         if owner_start_ticks is None or owner_boot_id is None:
             raise ValueError("Cannot verify admission slot owner process identity")
         slots.append(
@@ -469,7 +450,9 @@ def set_slot_engine_process(
     pgid_value = pgid
     ticks_value = process_start_ticks
     boot_id_value = (
-        process_boot_id.strip() if isinstance(process_boot_id, str) else _linux_boot_id() or ""
+        process_boot_id.strip()
+        if isinstance(process_boot_id, str)
+        else process_utils.linux_boot_id() or ""
     )
     if pid_value <= 0 or pgid_value != pid_value or ticks_value <= 0 or not boot_id_value:
         raise ValueError("Invalid engine process identity")
@@ -511,7 +494,7 @@ def set_slot_engine_process(
 def prepare_slot_engine_process(root: str | Path, token: str) -> AdmissionSlot | None:
     """Fence the interval immediately before one engine Popen."""
     admission_store = AdmissionStore.for_root(root)
-    current_boot_id = _linux_boot_id()
+    current_boot_id = process_utils.linux_boot_id()
     if current_boot_id is None:
         raise ValueError("Cannot verify the current boot identity before engine launch")
 

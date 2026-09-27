@@ -29,7 +29,6 @@ from .models import (
 )
 from .pid_file import (
     WORKER_PID_FILE_NAME,
-    current_worker_pid_payload,
     read_worker_pid_file,
     remove_worker_pid_file,
     worker_pid_file_path,
@@ -46,7 +45,6 @@ __all__ = [
     "SlotFillResult",
     "WorkerConfig",
     "admission_has_capacity",
-    "current_worker_pid_payload",
     "fill_worker_slots",
     "install_shutdown_signal_handlers",
     "live_queue_slot_keys_for_slots",

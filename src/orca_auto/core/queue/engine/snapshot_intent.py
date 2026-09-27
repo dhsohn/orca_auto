@@ -519,6 +519,12 @@ def finalize_queued_snapshot_intent(queue_root: str | Path, entry: Any) -> None:
 
 
 def _owner_is_alive(marker: Mapping[str, Any]) -> bool:
+    """The intent owner's policy: only proof of death releases the intent.
+
+    It probes the pid first, and a missing pid, an unreadable boot id or start
+    ticks and any ``kill`` error but ESRCH keep the owner, so it does not share
+    :func:`process_utils.owner_identity_state`'s boot-first order.
+    """
     try:
         owner_pid = int(marker.get("owner_pid") or 0)
     except (TypeError, ValueError):

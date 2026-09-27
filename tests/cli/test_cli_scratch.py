@@ -58,7 +58,7 @@ def _manifest(durable: Path, **overrides: object) -> str:
         "schema_version": 2,
         "owner_pid": os.getpid(),
         "owner_process_start_ticks": process_utils.current_process_start_ticks(),
-        "owner_boot_id": process_utils.linux_boot_id(proc_root=Path("/proc")),
+        "owner_boot_id": process_utils.linux_boot_id(),
         "durable_dir": str(durable.resolve()),
         "max_task_memory_bytes": 1,
     }

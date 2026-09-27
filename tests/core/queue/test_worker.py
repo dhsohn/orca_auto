@@ -609,65 +609,72 @@ def test_terminate_process_group_handles_finished_process() -> None:
     assert worker_common.terminate_process_group(SimpleNamespace(poll=lambda: 0))
 
 
-def test_terminate_process_group_rejects_invalid_active_process_group_id() -> None:
+def _patch_group_host(
+    monkeypatch: pytest.MonkeyPatch,
+    killpg: Any,
+    *,
+    group_exists: bool,
+    pid_exists: Any = None,
+) -> None:
+    monkeypatch.setattr(os, "killpg", killpg)
+    monkeypatch.setattr(
+        process_helpers.process_utils, "process_group_exists", lambda _pgid: group_exists
+    )
+    if pid_exists is not None:
+        monkeypatch.setattr(process_helpers, "_pid_exists", pid_exists)
+
+
+def test_terminate_process_group_rejects_invalid_active_process_group_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proc = MagicMock()
     proc.pid = MagicMock(name="invalid_pid")
     proc.poll.return_value = None
     killpg, killpg_calls = recording_killpg()
+    _patch_group_host(monkeypatch, killpg, group_exists=True)
 
-    assert not worker_common.terminate_process_group(
-        proc,
-        killpg_fn=killpg,
-        deps=process_helpers.ProcessGroupTerminationDeps(
-            process_group_exists=lambda _pgid: True,
-        ),
-    )
+    assert not worker_common.terminate_process_group(proc)
 
     assert killpg_calls == []
     proc.terminate.assert_not_called()
     proc.kill.assert_not_called()
 
 
-def test_terminate_process_group_does_not_signal_reused_reaped_pid() -> None:
+def test_terminate_process_group_does_not_signal_reused_reaped_pid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proc = FakeManagedProcess(pid=321, poll_result=0)
     killpg, killpg_calls = recording_killpg()
+    _patch_group_host(monkeypatch, killpg, group_exists=True, pid_exists=lambda _pid: True)
 
-    assert worker_common.terminate_process_group(
-        proc,
-        killpg_fn=killpg,
-        deps=process_helpers.ProcessGroupTerminationDeps(
-            process_group_exists=lambda _pgid: True,
-            pid_exists=lambda _pid: True,
-        ),
-    )
+    assert worker_common.terminate_process_group(proc)
 
     assert killpg_calls == []
     assert proc.terminate_calls == 0
     assert proc.kill_calls == 0
 
 
-def test_terminate_process_group_refuses_unknown_reaped_pid_identity() -> None:
+def test_terminate_process_group_refuses_unknown_reaped_pid_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proc = FakeManagedProcess(pid=322, poll_result=0)
     killpg, killpg_calls = recording_killpg()
 
     def unknown(_pid: int) -> bool:
         raise OSError("unknown pid probe failure")
 
-    assert not worker_common.terminate_process_group(
-        proc,
-        killpg_fn=killpg,
-        deps=process_helpers.ProcessGroupTerminationDeps(
-            process_group_exists=lambda _pgid: True,
-            pid_exists=unknown,
-        ),
-    )
+    _patch_group_host(monkeypatch, killpg, group_exists=True, pid_exists=unknown)
+
+    assert not worker_common.terminate_process_group(proc)
 
     assert killpg_calls == []
     assert proc.terminate_calls == 0
     assert proc.kill_calls == 0
 
 
-def test_terminate_process_group_falls_back_to_proc_methods() -> None:
+def test_terminate_process_group_falls_back_to_proc_methods(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proc = FakeManagedProcess(
         pid=123,
         wait_side_effects=[
@@ -681,21 +688,14 @@ def test_terminate_process_group_falls_back_to_proc_methods() -> None:
             ProcessLookupError("missing"),
         ],
     )
-
-    assert not worker_common.terminate_process_group(
-        proc,
-        graceful_timeout=1,
-        kill_timeout=2,
-        killpg_fn=killpg,
-        sigterm=15,
-        sigkill=9,
-        deps=process_helpers.ProcessGroupTerminationDeps(
-            process_group_exists=lambda _pgid: True,
-            monotonic=lambda: 0.0,
-        ),
+    _patch_group_host(monkeypatch, killpg, group_exists=True)
+    monkeypatch.setattr(
+        process_helpers, "time", SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _s: None)
     )
 
-    assert killpg_calls == [(123, 15), (123, 9)]
+    assert not worker_common.terminate_process_group(proc, graceful_timeout=1, kill_timeout=2)
+
+    assert killpg_calls == [(123, signal.SIGTERM), (123, signal.SIGKILL)]
     assert proc.terminate_calls == 1
     assert proc.kill_calls == 1
     # A fixed clock makes the remaining-timeout computation deterministic, so the
@@ -704,7 +704,9 @@ def test_terminate_process_group_falls_back_to_proc_methods() -> None:
     assert proc.wait_calls == [1, 2]
 
 
-def test_terminate_process_group_returns_true_after_forced_exit() -> None:
+def test_terminate_process_group_returns_true_after_forced_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     proc = FakeManagedProcess(
         pid=124,
         wait_side_effects=[
@@ -713,20 +715,11 @@ def test_terminate_process_group_returns_true_after_forced_exit() -> None:
         ],
     )
     killpg, killpg_calls = recording_killpg()
+    _patch_group_host(monkeypatch, killpg, group_exists=False)
 
-    assert worker_common.terminate_process_group(
-        proc,
-        graceful_timeout=1,
-        kill_timeout=2,
-        killpg_fn=killpg,
-        sigterm=15,
-        sigkill=9,
-        deps=process_helpers.ProcessGroupTerminationDeps(
-            process_group_exists=lambda _pgid: False,
-        ),
-    )
+    assert worker_common.terminate_process_group(proc, graceful_timeout=1, kill_timeout=2)
 
-    assert killpg_calls == [(124, 15), (124, 9)]
+    assert killpg_calls == [(124, signal.SIGTERM), (124, signal.SIGKILL)]
     assert proc.wait_calls == pytest.approx([1, 2], rel=1e-4)
 
 

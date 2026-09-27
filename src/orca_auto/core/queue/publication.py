@@ -7,6 +7,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from ..utils import process as process_utils
 from ..utils.lock import file_lock
 from ..utils.persistence import resolve_root_path
 
@@ -34,35 +35,22 @@ def queue_record_sync_state(entry: Any) -> str:
     return str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
 
 
-def _linux_boot_id() -> str:
-    try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-
-
 def process_start_token(process_id: int) -> str:
-    """Return a boot-scoped process-start identity when the OS exposes one."""
+    """Return a boot-scoped process-start identity when the OS exposes one.
+
+    The token keeps field 22 as written (not the parsed ticks), so a stored
+    token stays comparable byte for byte.
+    """
     if process_id <= 0:
         return ""
     try:
         stat_text = Path(f"/proc/{process_id}/stat").read_text(encoding="utf-8")
     except OSError:
         return ""
-
-    # The command field is parenthesized and may itself contain spaces or ')'.
-    # Splitting after its final ')' makes index 19 the documented field 22,
-    # starttime (clock ticks since boot).
-    _prefix, separator, fields_text = stat_text.rpartition(")")
-    if not separator:
+    start_ticks = process_utils.stat_starttime_field(stat_text)
+    if start_ticks is None:
         return ""
-    fields = fields_text.strip().split()
-    if len(fields) <= 19:
-        return ""
-    start_ticks = fields[19].strip()
-    if not start_ticks:
-        return ""
-    boot_id = _linux_boot_id()
+    boot_id = process_utils.linux_boot_id()
     return f"{boot_id}:{start_ticks}" if boot_id else ""
 
 

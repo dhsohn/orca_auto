@@ -430,9 +430,7 @@ class ProcessIdentity:
 def stable_process_identity(monkeypatch: pytest.MonkeyPatch) -> ProcessIdentity:
     """Pin every process-identity seam (start ticks, boot id, liveness) to one ``ProcessIdentity``."""
 
-    from orca_auto.core.admission import store as admission_store
     from orca_auto.core.queue import processes as queue_processes
-    from orca_auto.core.queue import publication as queue_publication
     from orca_auto.core.utils import process as process_utils
 
     identity = ProcessIdentity()
@@ -449,10 +447,7 @@ def stable_process_identity(monkeypatch: pytest.MonkeyPatch) -> ProcessIdentity:
     monkeypatch.setattr(process_utils, "process_start_ticks", start_ticks)
     monkeypatch.setattr(process_utils, "linux_boot_id", boot_id)
     monkeypatch.setattr(process_utils, "is_process_alive", alive)
-    monkeypatch.setattr(admission_store, "_process_start_ticks", start_ticks)
-    monkeypatch.setattr(admission_store, "_linux_boot_id", boot_id)
     monkeypatch.setattr(queue_processes, "_pid_exists", alive)
-    monkeypatch.setattr(queue_publication, "_linux_boot_id", boot_id)
     return identity
 
 

@@ -27,9 +27,7 @@ from orca_auto.core.engine_scratch import (
 )
 from orca_auto.core.queue.processes import (
     ProcessCleanupError,
-    ProcessGroupTerminationDeps,
     managed_process_group_has_exited,
-    process_group_exists,
     retain_process_ownership_until_exit,
     terminate_process_group,
 )
@@ -210,21 +208,7 @@ class OrcaRunner:
     def _terminate_subprocess_tree(self, proc: subprocess.Popen[str]) -> bool:
         """Terminate the ORCA process group; True only when it is confirmed gone."""
         logger.warning("Terminating ORCA process tree (pid=%d)", proc.pid)
-        return terminate_process_group(
-            proc,
-            graceful_timeout=3,
-            kill_timeout=5,
-            killpg_fn=os.killpg,
-            sigterm=signal.SIGTERM,
-            sigkill=signal.SIGKILL,
-            deps=ProcessGroupTerminationDeps(
-                logger=logger,
-                process_group_exists=lambda pgid: process_group_exists(
-                    pgid,
-                    killpg_fn=os.killpg,
-                ),
-            ),
-        )
+        return terminate_process_group(proc, graceful_timeout=3, kill_timeout=5, logger=logger)
 
     def _retain_until_subprocess_tree_exits(self, proc: subprocess.Popen[str]) -> None:
         try:
@@ -520,7 +504,7 @@ class OrcaRunner:
                 assert proc is not None
 
                 def _owned_process_group_exists() -> bool:
-                    return not managed_process_group_has_exited(proc, killpg_fn=os.killpg)
+                    return not managed_process_group_has_exited(proc)
 
                 try:
                     while True:

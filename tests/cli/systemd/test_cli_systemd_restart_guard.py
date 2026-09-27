@@ -16,6 +16,7 @@ import pytest
 
 from orca_auto import cli_systemd_restart, cli_systemd_restart_guard
 from orca_auto.core.admission import store
+from orca_auto.core.utils import process as process_utils
 
 WORKER = "orca_auto-queue-worker@alice.service"
 OTHER_WORKER = "orca_auto-queue-worker@carol.service"
@@ -182,9 +183,9 @@ def test_unknown_slot_liveness_blocks_without_pruning(
     site = _site(tmp_path)
     _reserve(site)
     if unknown == "boot":
-        monkeypatch.setattr(store, "_linux_boot_id", lambda: None)
+        monkeypatch.setattr(process_utils, "linux_boot_id", lambda **_kwargs: None)
     else:
-        monkeypatch.setattr(store, "_process_start_ticks", lambda _pid: None)
+        monkeypatch.setattr(process_utils, "process_start_ticks", lambda _pid, **_kwargs: None)
     with pytest.raises(ValueError, match="1 active or reserved"), _Evidence({WORKER: site}).guard():
         pytest.fail("unreadable process identity must not look idle")
 

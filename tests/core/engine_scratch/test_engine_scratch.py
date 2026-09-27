@@ -913,7 +913,7 @@ def _manifest_payload(durable_dir: Path, **overrides: object) -> dict[str, objec
         "schema_version": 2,
         "owner_pid": os.getpid(),
         "owner_process_start_ticks": process_utils.current_process_start_ticks(),
-        "owner_boot_id": process_utils.linux_boot_id(proc_root=Path("/proc")),
+        "owner_boot_id": process_utils.linux_boot_id(),
         "durable_dir": str(durable_dir.resolve()),
         "max_task_memory_bytes": 1,
     }

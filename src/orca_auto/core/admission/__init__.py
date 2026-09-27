@@ -1,7 +1,6 @@
 from .engine_process import (
     EngineProcessRecordError,
     EngineProcessRecordPendingError,
-    EngineProcessRecoveryDeps,
     build_slot_engine_process_preparer,
     build_slot_engine_process_registrar,
     recover_orphaned_engine_slots,
@@ -36,7 +35,6 @@ __all__ = [
     "AdmissionStoreCorruptError",
     "EngineProcessRecordError",
     "EngineProcessRecordPendingError",
-    "EngineProcessRecoveryDeps",
     "admission_lock",
     "activate_reserved_slot",
     "clear_slot_engine_process",
