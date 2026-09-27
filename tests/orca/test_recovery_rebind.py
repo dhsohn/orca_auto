@@ -15,6 +15,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
     discard_snapshot_intent,
+    mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
 from orca_auto.core.queue.generation import is_visible_generation_name
@@ -36,7 +37,6 @@ from orca_auto.orca.execution_binding import _verify as _verify_stage
 from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.state_reading import load_state
-from orca_auto.orca.submission import mark_orca_snapshot_owned
 from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
 
 _PRISTINE_XYZ = "2\nH2\nH 0 0 0\nH 0 0 0.74\n"
@@ -800,7 +800,12 @@ def _claimed_mutable_entry(tmp_path: Path) -> tuple[Path, Any, dict[str, Any], P
         target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
         expected_states={SNAPSHOT_INTENT_STATE_CREATING},
     )
-    assert mark_orca_snapshot_owned(queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY]) is None
+    assert (
+        mark_snapshot_intent_owned(
+            queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY], intent_label="queued ORCA snapshot"
+        )
+        is None
+    )
     metadata = {
         "reaction_dir": str(job_dir),
         "force": True,
@@ -1783,7 +1788,12 @@ def test_rebind_keeps_a_completed_generation_for_adoption(
         target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
         expected_states={SNAPSHOT_INTENT_STATE_CREATING},
     )
-    assert mark_orca_snapshot_owned(queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY]) is None
+    assert (
+        mark_snapshot_intent_owned(
+            queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY], intent_label="queued ORCA snapshot"
+        )
+        is None
+    )
     metadata = {
         "reaction_dir": str(job_dir),
         "force": True,
@@ -1922,7 +1932,10 @@ def test_marker_finalize_is_quiet_when_worker_already_retired_the_intent(
     discard_snapshot_intent(queue_root, token)
 
     with caplog.at_level(logging.INFO, logger="orca_auto.core.queue.engine.snapshot_intent"):
-        assert mark_orca_snapshot_owned(queue_root, token) is None
+        assert (
+            mark_snapshot_intent_owned(queue_root, token, intent_label="queued ORCA snapshot")
+            is None
+        )
 
     records = [
         record

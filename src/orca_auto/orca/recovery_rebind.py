@@ -11,8 +11,7 @@ so a crash loop can never mint generations indefinitely.
 This module sits above the ``execution_binding`` package and uses only the
 names its ``__init__`` exports: it drives queue-row mutation and the
 snapshot-intent ledger, so the worker child imports it directly with the
-config it already loaded (``submission`` imports the package, and this module
-imports ``submission``).
+config it already loaded (``submission`` imports the package the same way).
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
+    mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
 from orca_auto.core.queue.generation import (
@@ -55,7 +55,6 @@ from .queue.adapter import (
 from .queue.entries import queue_entry_reaction_dir
 from .resource_directives import prepare_submission_resource_request
 from .run_lock import acquire_run_lock
-from .submission import mark_orca_snapshot_owned
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +219,9 @@ def _publish_recovery_generation(
     except BaseException:
         cleanup_unowned_orca_execution_snapshot(reaction_dir, new_snapshot)
         raise
-    marker_warning = mark_orca_snapshot_owned(queue_root, intent_token)
+    marker_warning = mark_snapshot_intent_owned(
+        queue_root, intent_token, intent_label="queued ORCA snapshot"
+    )
     updated = get_entry_by_id(queue_root, str(entry.queue_id))
     updated_metadata = getattr(updated, "metadata", None)
     updated_snapshot = (
@@ -316,8 +317,10 @@ def maybe_rebind_recovery_generation(
     recorded_request = metadata.get("resource_request")
     with acquire_run_lock(reaction_dir):
         recover_crashed_state(reaction_dir, logger=logger)
+        source_payload = Path(source_selected).read_bytes()
         prepared = prepare_submission_resource_request(
             Path(source_selected),
+            source_payload,
             default_max_cores=int(cfg.resources.max_cores_per_task),
             default_max_memory_gb=int(cfg.resources.max_memory_gb_per_task),
         )
@@ -335,7 +338,7 @@ def maybe_rebind_recovery_generation(
             snapshot_intent_token=intent_token,
             target_generation_name=target_generation_name,
             normalized_selected_payload=prepared.normalized_payload,
-            source_selected_sha256=prepared.source_sha256,
+            source_selected_payload=source_payload,
             recovery_from=snapshot,
         )
     return _publish_recovery_generation(

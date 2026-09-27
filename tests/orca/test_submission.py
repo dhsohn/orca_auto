@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from dataclasses import replace
 from http.client import IncompleteRead
@@ -42,18 +43,18 @@ def test_submit_without_selectable_inp_fails_cleanly(
 ) -> None:
     # A reaction dir without any .inp used to leak the ValueError from
     # resource-request resolution as a CLI traceback.
-    context = SimpleNamespace(
+    target = SimpleNamespace(
         cfg=None,
         allowed_root=tmp_path,
         reaction_dir=tmp_path / "job",
-        selected_inp=None,
+        selected_inp=tmp_path / "job" / "job.inp",
     )
 
     def raise_value_error(*_args: Any, **_kwargs: Any) -> Any:
         raise ValueError("No .inp file selected for ORCA queue submission.")
 
     monkeypatch.setattr(
-        submission_mod, "resolve_submission_context", lambda *_args, **_kwargs: context
+        submission_mod, "resolve_submission_target", lambda *_args, **_kwargs: target
     )
     monkeypatch.setattr(submission_mod, "find_submission_conflict", lambda *_args: None)
     monkeypatch.setattr(submission_mod, "create_queued_submission", raise_value_error)
@@ -105,6 +106,7 @@ def test_queue_metadata_assembles_supplied_values_without_creating_files(tmp_pat
     snapshot = {"selected_inp": str(tmp_path / "generation" / "sample.inp")}
     requested = {"max_cores": 2, "max_memory_gb": 4}
     metadata = run_inp.build_queue_metadata(
+        reaction_dir=tmp_path,
         artifacts=OrcaSelectedInputArtifacts(
             selected_inp=str(tmp_path / "sample.inp"),
             selected_input_xyz=str(tmp_path / "start.xyz"),
@@ -126,6 +128,7 @@ def test_queue_metadata_assembles_supplied_values_without_creating_files(tmp_pat
         "selected_input_path": str(tmp_path / "start.xyz"),
         "selected_input_xyz": str(tmp_path / "start.xyz"),
         "execution_snapshot": snapshot,
+        "reaction_dir": str(tmp_path.resolve()),
     }
     assert list(tmp_path.iterdir()) == []
     metadata["resource_actual"]["max_cores"] = 99
@@ -171,7 +174,12 @@ def test_submission_cleans_created_snapshot_on_pre_enqueue_failure(
 
         monkeypatch.setattr(run_inp, "timestamped_token", token)
     with pytest.raises(failure_type, match="injected pre-enqueue failure"):
-        run_inp.create_queued_submission(run_inp.load_config(args.config), args, reaction_dir)
+        run_inp.create_queued_submission(
+            run_inp.load_config(args.config),
+            args,
+            reaction_dir,
+            selected_inp=reaction_dir / "rxn.inp",
+        )
     assert len(snapshots) == 1
     assert not Path(snapshots[0]["execution_dir"]).exists()
     assert not list((tmp_path / ".orca_auto_snapshot_intents").glob("*.json"))
@@ -730,11 +738,11 @@ def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
 ) -> None:
     from orca_auto.orca.queue.orphans import DeadRunningRowUnjudgeableError
 
-    context = SimpleNamespace(
+    target = SimpleNamespace(
         cfg=None,
         allowed_root=tmp_path,
         reaction_dir=tmp_path / "job",
-        selected_inp=None,
+        selected_inp=tmp_path / "job" / "job.inp",
     )
     message = (
         f"{tmp_path / 'job'} has a RUNNING queue row left by a dead worker, and whether a "
@@ -747,7 +755,7 @@ def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
         raise DeadRunningRowUnjudgeableError(message)
 
     monkeypatch.setattr(
-        submission_mod, "resolve_submission_context", lambda *_args, **_kwargs: context
+        submission_mod, "resolve_submission_target", lambda *_args, **_kwargs: target
     )
     monkeypatch.setattr(submission_mod, "find_submission_conflict", lambda *_args: None)
     monkeypatch.setattr(submission_mod, "create_queued_submission", raise_unjudgeable)
@@ -781,3 +789,52 @@ def test_unjudgeable_dead_running_row_during_submit_leaves_no_generation(
     assert not [path for path in reaction_dir.iterdir() if is_visible_generation_name(path.name)]
     assert not list((tmp_path / ".orca_auto_snapshot_intents").glob("*.json"))
     assert queue_adapter.list_queue(tmp_path) == [running]
+
+
+def test_an_input_edited_during_submission_yields_one_consistent_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The selected input is read once. Saves that land after that read, where
+    # earlier versions read the file again, reach neither the queue metadata
+    # nor the snapshot digests nor the bound copy.
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    selected = reaction_dir / "rxn.inp"
+    original = b"! Opt\n%pal nprocs 2 end\n%maxcore 1000\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
+    selected.write_bytes(original)
+    edits = iter(
+        [
+            b"! SP\n%pal nprocs 1 end\n%maxcore 500\n* xyz 0 1\nO 0 0 0\nH 0 0 0.96\n*\n",
+            b"! Freq\n%pal nprocs 1 end\n%maxcore 500\n* xyz 0 1\nC 0 0 0\nO 0 0 1.13\n*\n",
+        ]
+    )
+    real_read = run_inp.read_stable_regular_file
+    real_build = run_inp.build_orca_execution_snapshot
+
+    def read_then_edit(path: Path, **kwargs: Any) -> bytes:
+        payload = real_read(path, **kwargs)
+        selected.write_bytes(next(edits))
+        return payload
+
+    def edit_then_build(*build_args: Any, **build_kwargs: Any) -> dict[str, Any]:
+        selected.write_bytes(next(edits))
+        return real_build(*build_args, **build_kwargs)
+
+    monkeypatch.setattr(run_inp, "read_stable_regular_file", read_then_edit)
+    monkeypatch.setattr(run_inp, "build_orca_execution_snapshot", edit_then_build)
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "submitted", result.stderr
+    assert next(edits, None) is None
+    [entry] = queue_adapter.list_queue(tmp_path)
+    metadata = entry.metadata
+    snapshot = metadata["execution_snapshot"]
+    assert (metadata["job_type"], metadata["molecule_key"]) == ("opt", "H2")
+    assert metadata["resource_request"] == {"max_cores": 2, "max_memory_gb": 2}
+    assert snapshot["resource_request"] == metadata["resource_request"]
+    assert snapshot["source_inputs"]["selected_source"]["sha256"] == (
+        hashlib.sha256(original).hexdigest()
+    )
+    assert snapshot["source_inputs"]["selected_source"]["size_bytes"] == len(original)
+    assert Path(metadata["selected_inp"]).read_bytes() == original
+    assert b"Freq" in selected.read_bytes()

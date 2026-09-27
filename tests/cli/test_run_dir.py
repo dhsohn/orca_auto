@@ -22,12 +22,13 @@ from orca_auto.orca.cli_logging import (
 from orca_auto.orca.commands import init as init_command
 from orca_auto.orca.commands import run_inp as run_inp_command
 from orca_auto.orca.config import load_config
-from orca_auto.orca.execution import _emit, execute_orca_run, select_latest_inp
+from orca_auto.orca.execution import _emit, execute_orca_run
 from orca_auto.orca.orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
 from orca_auto.orca.output_adoption import existing_completed_out
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state_reading import load_state, state_path
+from orca_auto.orca.submission import select_latest_inp
 from orca_auto.orca.types import AttemptRecord, RunFinalResult, RunState
 from tests.conftest import write_run_state
 
@@ -174,35 +175,6 @@ def test_error_goes_to_stderr(
     assert "allowed root" not in capsys.readouterr().out
 
 
-def test_select_latest_inp_prefers_base_input(tmp_path: Path) -> None:
-    base = tmp_path / "rxn.inp"
-    retry = tmp_path / "rxn.scfgrad.inp"
-    base.write_text("! Opt\n", encoding="utf-8")
-    retry.write_text("! Opt\n", encoding="utf-8")
-    os.utime(base, ns=(1_000_000_000, 1_000_000_000))
-    os.utime(retry, ns=(2_000_000_000, 2_000_000_000))
-    assert select_latest_inp(tmp_path).name == "rxn.inp"
-
-
-def test_select_latest_inp_warns_when_multiple_base_inputs_exist(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    older = tmp_path / "b.inp"
-    newer = tmp_path / "a.inp"
-    older.write_text("! Opt\n", encoding="utf-8")
-    newer.write_text("! Opt\n", encoding="utf-8")
-    os.utime(older, ns=(1_000_000_000, 1_000_000_000))
-    os.utime(newer, ns=(2_000_000_000, 2_000_000_000))
-
-    with caplog.at_level(logging.WARNING, logger="orca_auto.orca.execution"):
-        selected = select_latest_inp(tmp_path)
-
-    # `a.inp` is the newer file here: stamped against the name order so the
-    # assertion cannot pass on the alphabetical tie-break alone.
-    assert selected.name == "a.inp"
-    assert "Multiple ORCA .inp candidates" in caplog.text
-
-
 def test_existing_completed_out_ignores_stale_output_older_than_selected_input(
     tmp_path: Path,
 ) -> None:
@@ -341,6 +313,26 @@ def test_emit_plain_text_filters_known_keys(capsys: pytest.CaptureFixture[str]) 
     assert "status: completed" in output
     assert "attempt_count: 1" in output
     assert "extra_unknown_key" not in output
+
+
+def test_emit_prints_only_known_keys(capsys: pytest.CaptureFixture[str]) -> None:
+    payload = {
+        "status": "completed",
+        "reaction_dir": "/tmp/rxn",
+        "selected_inp": "rxn.inp",
+        "attempt_count": 2,
+        "reason": "normal_termination",
+        "report_json": "/tmp/report.json",
+        "ignored": "value",
+    }
+
+    _emit(payload)
+
+    output = capsys.readouterr().out
+    assert "status: completed" in output
+    assert "job_dir: /tmp/rxn" in output
+    assert "report_json: /tmp/report.json" in output
+    assert "ignored" not in output
 
 
 # -- logging ----------------------------------------------------------------

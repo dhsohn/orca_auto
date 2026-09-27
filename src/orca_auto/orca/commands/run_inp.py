@@ -124,12 +124,12 @@ def cmd_run_inp(
         return fail(result.stderr.rstrip() if result.stderr else "ORCA queue submission failed.")
 
     queued = result.queued_result
-    context = result.context
-    if queued is None or context is None:
+    target = result.target
+    if queued is None or target is None:
         return fail("ORCA queue submission did not return a queued result.")
     worker_info = queued.worker_info
     _emit_queued_submission(
-        context.reaction_dir,
+        target.reaction_dir,
         queued.entry,
         worker_status=worker_info.status,
         worker_pid=worker_info.pid,

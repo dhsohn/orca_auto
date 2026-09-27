@@ -148,8 +148,8 @@ def route_line_indices(lines: list[str]) -> list[int]:
     return [idx for idx, line in enumerate(lines) if orca_route_line(line) is not None]
 
 
-def file_route_lines(inp_path: Path) -> list[str]:
-    """All route (``!``) lines of an ORCA input, stripped; ``[]`` when unreadable.
+def orca_route_lines(lines: list[str]) -> list[str]:
+    """All route (``!``) lines of an ORCA input, stripped.
 
     ORCA accepts multiple route lines and allows ``%`` blocks before them, so
     callers deciding "does this input request X" must scan every route line,
@@ -157,15 +157,16 @@ def file_route_lines(inp_path: Path) -> list[str]:
     regexes (TS/IRC/OPT/...) run on these lines, and a comment like
     ``# TS guess`` must never reclassify the job.
     """
+    return [route for line in lines if (route := orca_route_line(line)) is not None]
+
+
+def file_route_lines(inp_path: Path) -> list[str]:
+    """:func:`orca_route_lines` of an input file; ``[]`` when unreadable."""
     try:
         lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
         return []
-    return [
-        route
-        for idx in route_line_indices(lines)
-        if (route := orca_route_line(lines[idx])) is not None
-    ]
+    return orca_route_lines(lines)
 
 
 def ensure_route_keywords(lines: list[str], keywords: list[str]) -> bool:

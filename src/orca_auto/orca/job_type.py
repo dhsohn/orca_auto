@@ -13,12 +13,16 @@ FREQ_RE = re.compile(r"\b(Freq|NumFreq|AnFreq)\b", re.IGNORECASE)
 
 
 def detect_job_type(inp_path: Path) -> str:
+    return job_type_from_routes(file_route_lines(inp_path))
+
+
+def job_type_from_routes(route_lines: list[str]) -> str:
     # Scan every route line through the shared keyword regexes so this label
     # can never disagree with completion/report classification (which also
     # means TightOpt/COpt spellings count as "opt" here too). The coarse label
     # includes partial optimizations (OptH, MECP, ...); minimum claims use
     # structure_kind.
-    route_line = " ".join(file_route_lines(inp_path))
+    route_line = " ".join(route_lines)
     if TS_ROUTE_RE.search(route_line):
         return "ts"
     if is_optimization_route(route_line):
@@ -30,4 +34,4 @@ def detect_job_type(inp_path: Path) -> str:
     return "other"
 
 
-__all__ = ["detect_job_type"]
+__all__ = ["detect_job_type", "job_type_from_routes"]

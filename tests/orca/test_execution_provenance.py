@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -40,7 +39,7 @@ def submitted_snapshot(tmp_path: Path) -> dict[str, Any]:
         resource_request={"max_cores": 2, "max_memory_gb": 2},
         orca_executable=write_fake_orca(tmp_path / "orca"),
         normalized_selected_payload=normalized,
-        source_selected_sha256=hashlib.sha256(original).hexdigest(),
+        source_selected_payload=original,
     )
 
 

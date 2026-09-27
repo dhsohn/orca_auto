@@ -46,7 +46,7 @@ def _submitted(reaction_dir: Path, entry: Any, **worker: Any) -> SimpleNamespace
         status="submitted",
         reason="",
         stderr="",
-        context=SimpleNamespace(reaction_dir=reaction_dir),
+        target=SimpleNamespace(reaction_dir=reaction_dir),
         queued_result=SimpleNamespace(entry=entry, worker_info=SimpleNamespace(**worker_info)),
     )
 

@@ -63,23 +63,28 @@ def _load_selected_snapshot_input(
     source_selected: Path,
     *,
     normalized_selected_payload: bytes | None,
-    source_selected_sha256: str | None,
+    source_selected_payload: bytes | None,
     recovery_from: Mapping[str, Any] | None,
     recovery_selected_sha256: str,
     resource_request: Mapping[str, int],
 ) -> _SelectedSnapshotInput:
     source_inputs: dict[str, dict[str, Any]] = {}
-    selected_descriptor, selected_payload, consumed_bytes = _source_with_budget(
-        source_selected,
-        role="selected_source",
-        consumed_bytes=0,
-    )
+    # A caller that normalized the input hands over the bytes it read, so the
+    # recorded digest describes exactly the bytes the bound copy came from.
+    if source_selected_payload is None:
+        selected_descriptor, selected_payload, consumed_bytes = _source_with_budget(
+            source_selected,
+            role="selected_source",
+            consumed_bytes=0,
+        )
+    else:
+        selected_descriptor, selected_payload, consumed_bytes = _payload_with_budget(
+            source_selected,
+            source_selected_payload,
+            role="selected_source",
+            consumed_bytes=0,
+        )
     source_inputs["selected_source"] = selected_descriptor
-    if (
-        source_selected_sha256 is not None
-        and str(selected_descriptor.get("sha256") or "") != source_selected_sha256
-    ):
-        raise ValueError("ORCA selected input changed while submission resources were prepared")
     if recovery_from is not None and (
         str(selected_descriptor.get("sha256") or "").strip().lower() != recovery_selected_sha256
     ):
@@ -387,10 +392,14 @@ def build_orca_execution_snapshot(
     snapshot_intent_token: str | None = None,
     target_generation_name: str | None = None,
     normalized_selected_payload: bytes | None = None,
-    source_selected_sha256: str | None = None,
+    source_selected_payload: bytes | None = None,
     recovery_from: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one visible, immutable ORCA execution generation.
+
+    ``normalized_selected_payload`` and ``source_selected_payload`` come as a
+    pair: the resource-normalized input text and the source bytes it was made
+    from, read once by the caller. Without them the source is read here.
 
     With ``recovery_from`` (the crashed submission's snapshot), runtime-mutable
     geometry inputs are seeded from that frozen generation so the replacement
@@ -403,8 +412,8 @@ def build_orca_execution_snapshot(
         for value in resource_request.values()
     ):
         raise ValueError("ORCA execution snapshot resources must be positive integers")
-    if (normalized_selected_payload is None) != (source_selected_sha256 is None):
-        raise ValueError("ORCA normalized selected input requires its bound source digest")
+    if (normalized_selected_payload is None) != (source_selected_payload is None):
+        raise ValueError("ORCA normalized selected input requires its source payload")
     raw_job_dir = Path(job_dir).expanduser()
     resolved_job_dir = raw_job_dir.resolve()
     if raw_job_dir.is_symlink() or not resolved_job_dir.is_dir():
@@ -446,7 +455,7 @@ def build_orca_execution_snapshot(
     selected = _load_selected_snapshot_input(
         source_selected,
         normalized_selected_payload=normalized_selected_payload,
-        source_selected_sha256=source_selected_sha256,
+        source_selected_payload=source_selected_payload,
         recovery_from=recovery_from,
         recovery_selected_sha256=recovery_selected_sha256,
         resource_request=resource_request,

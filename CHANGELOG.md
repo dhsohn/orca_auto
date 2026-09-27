@@ -179,6 +179,24 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `ORCA: cannot repair queue publication with invalid state …`,
   `ORCA: queued record repair refused a changed queue generation …` and the
   repair's `ORCA: failed to park queued record as repair pending …`.
+- `run-dir` reads the selected `.inp` once. The queue row's `job_type`,
+  `molecule_key`, `selected_input_xyz` and `resource_request`, the execution
+  snapshot's `source_inputs` digest and the bound input copy all describe
+  those bytes, so an edit saved while the submission runs yields one
+  consistent snapshot. Such an edit used to queue a row whose job type and
+  molecule key came from the earlier text while the generation held the
+  edited input, or to fail with
+  `ORCA selected input changed while submission resources were prepared`.
+  A selected `.inp` that cannot be read (for example without read permission)
+  is reported as `Input source is not a readable regular file: …` instead of
+  the raw `PermissionError`. Crash recovery reads the recorded source input
+  once too and still refuses one that differs from the crashed submission.
+  Existing queue rows and generations are untouched.
+- `Multiple ORCA .inp candidates found in …` comes from the
+  `orca_auto.orca.submission` logger instead of `orca_auto.orca.execution`,
+  and the `run-dir` run-lock probe's
+  `Cannot inspect … ownership; treating it as held` warning from
+  `orca_auto.orca.run_lock` instead of `orca_auto.orca.submission`.
 - Public contract: one generation identity now decides whether a queue row is
   still the generation a writer read
   ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),
