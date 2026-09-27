@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.generation_owner import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.orca import input_blocks, input_references, input_syntax
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
@@ -1287,7 +1287,7 @@ def test_orca_cleanup_does_not_follow_substituted_visible_generation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import orca_auto.core.queue.engine.input_snapshot as input_snapshot
+    import orca_auto.core.queue.generation_owner as generation_owner
     import orca_auto.orca.execution_binding as binding
 
     job_dir, _selected, snapshot, _resources = _snapshot(tmp_path)
@@ -1297,7 +1297,7 @@ def test_orca_cleanup_does_not_follow_substituted_visible_generation(
     outside_generation.mkdir()
     sentinel = outside_generation / "sentinel.txt"
     sentinel.write_text("must survive", encoding="utf-8")
-    original_remove = input_snapshot._remove_directory_contents_at
+    original_remove = generation_owner._remove_directory_contents_at
     substituted = False
 
     def substitute_root(directory_fd: int, *, label: str) -> None:
@@ -1308,7 +1308,7 @@ def test_orca_cleanup_does_not_follow_substituted_visible_generation(
             execution_generation.symlink_to(outside_generation, target_is_directory=True)
         original_remove(directory_fd, label=label)
 
-    monkeypatch.setattr(input_snapshot, "_remove_directory_contents_at", substitute_root)
+    monkeypatch.setattr(generation_owner, "_remove_directory_contents_at", substitute_root)
 
     with pytest.raises(ValueError, match="ORCA execution snapshot generation"):
         binding.cleanup_unowned_orca_execution_snapshot(job_dir, snapshot)

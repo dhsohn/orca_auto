@@ -10,7 +10,8 @@ from typing import Any
 import pytest
 
 from orca_auto.core.config import CommonResourceConfig
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
@@ -18,7 +19,6 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
-from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import execution, worker_execution
 from orca_auto.orca import recovery_rebind as _rebind
@@ -1590,7 +1590,7 @@ def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growt
 ) -> None:
     import os
 
-    from orca_auto.core.queue.engine.snapshot_intent import (
+    from orca_auto.core.queue.snapshot_intent import (
         reconcile_orphaned_snapshot_generations,
     )
 
@@ -1648,7 +1648,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
 ) -> None:
     import os
 
-    from orca_auto.core.queue.engine.snapshot_intent import (
+    from orca_auto.core.queue.snapshot_intent import (
         reconcile_orphaned_snapshot_generations,
     )
 
@@ -1931,16 +1931,14 @@ def test_marker_finalize_is_quiet_when_worker_already_retired_the_intent(
     # The worker retires an intent as soon as a committed queue row references it.
     discard_snapshot_intent(queue_root, token)
 
-    with caplog.at_level(logging.INFO, logger="orca_auto.core.queue.engine.snapshot_intent"):
+    with caplog.at_level(logging.INFO, logger="orca_auto.core.queue.snapshot_intent"):
         assert (
             mark_snapshot_intent_owned(queue_root, token, intent_label="queued ORCA snapshot")
             is None
         )
 
     records = [
-        record
-        for record in caplog.records
-        if record.name == "orca_auto.core.queue.engine.snapshot_intent"
+        record for record in caplog.records if record.name == "orca_auto.core.queue.snapshot_intent"
     ]
     assert not [record for record in records if record.levelno >= logging.WARNING]
     assert any("already retired" in record.getMessage() for record in records)

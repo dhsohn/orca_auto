@@ -1,3 +1,5 @@
+"""Worker child processes: spawning each in its own session and stopping its group."""
+
 from __future__ import annotations
 
 import errno
@@ -6,9 +8,11 @@ import os
 import signal
 import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any, Protocol
 
+from ..confined_io import open_confined_log
 from ..utils import process as process_utils
 
 LOGGER = logging.getLogger(__name__)
@@ -36,6 +40,39 @@ def worker_shutdown_budget_seconds(max_concurrent: int) -> float:
         + SHUTDOWN_POLL_LATENCY_SECONDS
         + SHUTDOWN_MARGIN_SECONDS
     )
+
+
+def start_background_process(
+    command: Sequence[str],
+    *,
+    log_path: str | Path | None = None,
+) -> subprocess.Popen[str]:
+    if log_path is None:
+        return subprocess.Popen(
+            list(command),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            text=True,
+        )
+
+    resolved_log_path = Path(log_path).expanduser()
+    resolved_log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open_confined_log(
+        resolved_log_path.parent,
+        resolved_log_path,
+        label="background worker log",
+        append=True,
+    ) as log_handle:
+        return subprocess.Popen(
+            list(command),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            text=True,
+        )
 
 
 class ManagedProcess(Protocol):
@@ -280,6 +317,7 @@ __all__ = [
     "managed_process_group_has_exited",
     "request_process_group_stop",
     "retain_process_ownership_until_exit",
+    "start_background_process",
     "terminate_process_group",
     "worker_shutdown_budget_seconds",
 ]

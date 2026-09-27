@@ -20,19 +20,18 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.child.process import entry_status_is_running
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.generation import (
+    is_visible_generation_name,
+    new_visible_generation_name,
+)
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
     mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
-from orca_auto.core.queue.generation import (
-    is_visible_generation_name,
-    new_visible_generation_name,
-)
-from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.types import QueueEntry, entry_status_is_running
 from orca_auto.core.utils.persistence import timestamped_token, timestamped_token_pattern
 
 from .config import AppConfig

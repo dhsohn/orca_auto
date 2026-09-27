@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
+from orca_auto.core.queue.generation_owner import bind_direct_generation_owner
 from orca_auto.orca import state_reading
 from orca_auto.orca.engine_runner import executable_identity
 

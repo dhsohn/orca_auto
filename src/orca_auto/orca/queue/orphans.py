@@ -7,10 +7,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.admission import AdmissionStore, AdmissionStoreCorruptError
+from orca_auto.core.admission import (
+    AdmissionStore,
+    AdmissionStoreCorruptError,
+    live_queue_slot_keys_for_slots,
+)
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue import transitions as _queue_transitions
-from orca_auto.core.queue.child.process import live_queue_slot_keys_for_slots
 from orca_auto.core.queue.types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
 from orca_auto.core.utils.process_tracking import run_lock_is_held

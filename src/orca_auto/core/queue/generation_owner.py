@@ -1,3 +1,7 @@
+"""The owner marker of a direct generation directory, its pinned no-follow removal,
+and the stable single read of a regular input file.
+"""
+
 from __future__ import annotations
 
 import os

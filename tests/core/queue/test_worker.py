@@ -15,8 +15,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from orca_auto.core.queue import processes as process_helpers
-from orca_auto.core.queue import worker as worker_common
-from orca_auto.core.queue.child import process as child_process_helpers
 from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_COMPLETE,
     QUEUE_RECORD_SYNC_KEY,
@@ -28,6 +26,7 @@ from orca_auto.core.queue.store import QueueLockTimeoutError, QueueStoreCorruptE
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker import loop as loop_mod
 from orca_auto.core.queue.worker import pid_file
+from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.core.queue.worker.models import ReservedQueueEntry, ReserveStatus
 from tests.process_helpers import FakeManagedProcess, recording_killpg
 
@@ -54,7 +53,7 @@ def _entry(
 
 
 def _select(entries: list[Any], accept_entry_fn: Any = None) -> Any:
-    return worker_common.select_next_claimable_entry(entries, accept_entry_fn=accept_entry_fn)
+    return select_next_claimable_entry(entries, accept_entry_fn=accept_entry_fn)
 
 
 def test_select_next_claimable_entry_handles_empty_and_single_pending_listing() -> None:
@@ -143,66 +142,11 @@ def test_select_next_claimable_entry_returns_none_when_only_ineligible_rows_rema
     assert _select([foreign, unpublished, cancelled, running], accept) is None
 
 
-def test_start_background_process_uses_detached_devnull_popen(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, object]] = []
-    expected = object()
-
-    def fake_popen(command: list[str], **kwargs: object) -> object:
-        calls.append({"command": command, **kwargs})
-        return expected
-
-    monkeypatch.setattr(child_process_helpers.subprocess, "Popen", fake_popen)
-
-    assert worker_common.start_background_process(("python", "-m", "worker")) is expected
-    assert calls == [
-        {
-            "command": ["python", "-m", "worker"],
-            "stdout": child_process_helpers.subprocess.DEVNULL,
-            "stderr": child_process_helpers.subprocess.DEVNULL,
-            "stdin": child_process_helpers.subprocess.DEVNULL,
-            "start_new_session": True,
-            "text": True,
-        }
-    ]
-
-
-def test_start_background_process_redirects_output_to_log_file(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    calls: list[dict[str, object]] = []
-    expected = object()
-    log_path = tmp_path / "logs" / "queue-1.log"
-
-    def fake_popen(command: list[str], **kwargs: object) -> object:
-        calls.append({"command": command, **kwargs})
-        stdout = kwargs["stdout"]
-        descriptor = getattr(stdout, "name", None)
-        assert isinstance(descriptor, int)
-        assert Path(f"/proc/self/fd/{descriptor}").resolve() == log_path.resolve()
-        assert not bool(getattr(stdout, "closed", True))
-        return expected
-
-    monkeypatch.setattr(child_process_helpers.subprocess, "Popen", fake_popen)
-
-    assert (
-        worker_common.start_background_process(("python", "-m", "worker"), log_path=log_path)
-        is expected
-    )
-    assert log_path.parent.exists()
-    assert calls[0]["stderr"] == child_process_helpers.subprocess.STDOUT
-    assert calls[0]["stdin"] == child_process_helpers.subprocess.DEVNULL
-    assert calls[0]["start_new_session"] is True
-    assert calls[0]["text"] is True
-
-
 def _reserved(token: str) -> ReservedQueueEntry:
     return ReservedQueueEntry(queue_root=Path("/runs"), entry=_entry(token), admission_token=token)
 
 
-class _ScriptedLoop(worker_common.QueueWorkerLoop):
+class _ScriptedLoop(loop_mod.QueueWorkerLoop):
     """Admits from a script; a started job joins ``_running`` until its rc is set."""
 
     def __init__(
@@ -324,7 +268,7 @@ def test_check_completed_jobs_drops_a_failed_finalize_the_handler_recovered() ->
 def test_queue_worker_loop_survives_finalize_error_and_logs(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    class _Loop(worker_common.QueueWorkerLoop):
+    class _Loop(loop_mod.QueueWorkerLoop):
         def _poll_job(self, job: Any) -> int | None:
             return job.rc
 
@@ -341,7 +285,7 @@ def test_queue_worker_loop_survives_finalize_error_and_logs(
     assert any("finalize failed" in record.getMessage() for record in caplog.records)
 
 
-class _FailingPassLoop(worker_common.QueueWorkerLoop):
+class _FailingPassLoop(loop_mod.QueueWorkerLoop):
     """Admits one job, fails the first cancel pass that sees it running, then lets it exit."""
 
     def __init__(self, cancel_error: BaseException) -> None:
@@ -462,7 +406,7 @@ def test_queue_worker_loop_failed_pass_skips_the_retry_sleep_after_a_stop_reques
 
 
 def test_terminate_process_group_handles_finished_process() -> None:
-    assert worker_common.terminate_process_group(SimpleNamespace(poll=lambda: 0))
+    assert process_helpers.terminate_process_group(SimpleNamespace(poll=lambda: 0))
 
 
 def _patch_group_host(
@@ -489,7 +433,7 @@ def test_terminate_process_group_rejects_invalid_active_process_group_id(
     killpg, killpg_calls = recording_killpg()
     _patch_group_host(monkeypatch, killpg, group_exists=True)
 
-    assert not worker_common.terminate_process_group(proc)
+    assert not process_helpers.terminate_process_group(proc)
 
     assert killpg_calls == []
     proc.terminate.assert_not_called()
@@ -503,7 +447,7 @@ def test_terminate_process_group_does_not_signal_reused_reaped_pid(
     killpg, killpg_calls = recording_killpg()
     _patch_group_host(monkeypatch, killpg, group_exists=True, pid_exists=lambda _pid: True)
 
-    assert worker_common.terminate_process_group(proc)
+    assert process_helpers.terminate_process_group(proc)
 
     assert killpg_calls == []
     assert proc.terminate_calls == 0
@@ -521,7 +465,7 @@ def test_terminate_process_group_refuses_unknown_reaped_pid_identity(
 
     _patch_group_host(monkeypatch, killpg, group_exists=True, pid_exists=unknown)
 
-    assert not worker_common.terminate_process_group(proc)
+    assert not process_helpers.terminate_process_group(proc)
 
     assert killpg_calls == []
     assert proc.terminate_calls == 0
@@ -549,7 +493,7 @@ def test_terminate_process_group_falls_back_to_proc_methods(
         process_helpers, "time", SimpleNamespace(monotonic=lambda: 0.0, sleep=lambda _s: None)
     )
 
-    assert not worker_common.terminate_process_group(proc, graceful_timeout=1, kill_timeout=2)
+    assert not process_helpers.terminate_process_group(proc, graceful_timeout=1, kill_timeout=2)
 
     assert killpg_calls == [(123, signal.SIGTERM), (123, signal.SIGKILL)]
     assert proc.terminate_calls == 1
@@ -573,7 +517,7 @@ def test_terminate_process_group_returns_true_after_forced_exit(
     killpg, killpg_calls = recording_killpg()
     _patch_group_host(monkeypatch, killpg, group_exists=False)
 
-    assert worker_common.terminate_process_group(proc, graceful_timeout=1, kill_timeout=2)
+    assert process_helpers.terminate_process_group(proc, graceful_timeout=1, kill_timeout=2)
 
     assert killpg_calls == [(124, signal.SIGTERM), (124, signal.SIGKILL)]
     assert proc.wait_calls == pytest.approx([1, 2], rel=1e-4)
@@ -630,7 +574,7 @@ def test_install_shutdown_signal_handlers_invokes_callback(
         lambda _signum, handler: handlers.append(handler),
     )
 
-    worker_common.install_shutdown_signal_handlers(lambda: requested.append(True))
+    process_helpers.install_shutdown_signal_handlers(lambda: requested.append(True))
     handlers[0](0, None)
 
     assert requested == [True]
@@ -649,7 +593,9 @@ def test_install_shutdown_signal_handlers_ignores_non_main_thread_error(
     monkeypatch.setattr(signal, "signal", refuse)
 
     with caplog.at_level(logging.DEBUG, logger="orca_auto.core.queue.processes"):
-        worker_common.install_shutdown_signal_handlers(lambda: pytest.fail("should not be called"))
+        process_helpers.install_shutdown_signal_handlers(
+            lambda: pytest.fail("should not be called")
+        )
 
     # The first refusal ends installation; no handler is left half-installed.
     assert attempted == [signal.SIGTERM]

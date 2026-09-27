@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.confined_io import require_confined_regular_file
-from orca_auto.core.queue.engine.input_snapshot import (
+from orca_auto.core.queue.generation_owner import (
     cleanup_unowned_direct_generation_directory,
 )
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_TOKEN_KEY,
     discard_snapshot_intent_if_generations_absent,

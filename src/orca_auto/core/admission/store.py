@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Self, TypeVar
+from typing import Any, Self, TypeVar
 
 from ..utils import process as process_utils
 from ..utils.lock import file_lock
@@ -285,6 +285,32 @@ def read_active_slot_count(root: str | Path) -> int:
 
 def get_slot(root: str | Path, token: str) -> AdmissionSlot | None:
     return next((slot for slot in list_all_slots(root) if slot.token == token), None)
+
+
+def live_queue_slot_keys_for_slots(
+    admission_root: str | Path,
+    *,
+    list_slots_fn: Callable[[str | Path], list[Any]],
+) -> tuple[set[tuple[str, str]], set[str]]:
+    scoped_keys: set[tuple[str, str]] = set()
+    unscoped_ids: set[str] = set()
+    for slot in list_slots_fn(admission_root):
+        queue_id = str(getattr(slot, "queue_id", "")).strip()
+        if not queue_id:
+            continue
+        work_dir = _normalized_work_dir(getattr(slot, "work_dir", ""))
+        if work_dir:
+            scoped_keys.add((queue_id, work_dir))
+        else:
+            unscoped_ids.add(queue_id)
+    return scoped_keys, unscoped_ids
+
+
+def _normalized_work_dir(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return str(Path(text).expanduser().resolve())
 
 
 def reserve_slot(

@@ -14,8 +14,8 @@ from orca_auto.core.artifacts import (
     RUN_STATE_FILE,
 )
 from orca_auto.core.confined_io import read_confined_text
-from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.generation_owner import require_direct_generation_owner
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils.persistence import load_json_mapping_file

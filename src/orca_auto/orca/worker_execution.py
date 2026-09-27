@@ -29,12 +29,10 @@ from orca_auto.core.engine_scratch import (
     attach_scratch_provenance_mapping_to_exception,
     scratch_provenance_from_exception,
 )
-from orca_auto.core.queue.child.execution import ChildWorkerShutdownController
-from orca_auto.core.queue.child.process import entry_status_is_running
-from orca_auto.core.queue.engine.child import await_parent_admission_handoff
+from orca_auto.core.queue.child import ChildWorkerShutdownController, await_parent_admission_handoff
+from orca_auto.core.queue.processes import install_shutdown_signal_handlers
 from orca_auto.core.queue.store import QueueLockTimeoutError
-from orca_auto.core.queue.types import QueueEntry
-from orca_auto.core.queue.worker import install_shutdown_signal_handlers
+from orca_auto.core.queue.types import QueueEntry, entry_status_is_running
 
 from .config import AppConfig, load_config
 from .execution import execute_orca_run

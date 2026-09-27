@@ -179,6 +179,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `ORCA: cannot repair queue publication with invalid state …`,
   `ORCA: queued record repair refused a changed queue generation …` and the
   repair's `ORCA: failed to park queued record as repair pending …`.
+- The snapshot-intent log lines
+  `queued ORCA snapshot intent already retired by the worker; …` and
+  `queued ORCA snapshot ownership marker update failed; …` keep their text but
+  come from `orca_auto.core.queue.snapshot_intent` instead of
+  `orca_auto.core.queue.engine.snapshot_intent`.
 - `run-dir` reads the selected `.inp` once. The queue row's `job_type`,
   `molecule_key`, `selected_input_xyz` and `resource_request`, the execution
   snapshot's `source_inputs` digest and the bound input copy all describe

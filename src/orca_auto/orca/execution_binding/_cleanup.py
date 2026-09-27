@@ -6,15 +6,15 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.engine.input_snapshot import (
+from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.generation_owner import (
     cleanup_unowned_direct_generation_directory,
 )
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_TOKEN_KEY,
     discard_snapshot_intent_if_generations_absent,
 )
-from orca_auto.core.queue.generation import is_visible_generation_name
 
 
 def cleanup_unowned_orca_execution_snapshot(job_dir: str | Path, snapshot: Any) -> None:

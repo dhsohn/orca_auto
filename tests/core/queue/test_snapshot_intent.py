@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from orca_auto.core.queue import snapshot_intent
 from orca_auto.core.queue import store as queue_store
-from orca_auto.core.queue.engine import snapshot_intent
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,

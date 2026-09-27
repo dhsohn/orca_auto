@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.confined_io import require_confined_regular_file
-from orca_auto.core.queue.engine.input_snapshot import (
+from orca_auto.core.queue.generation_owner import (
     MAX_INPUT_SNAPSHOT_BYTES,
     read_stable_regular_file,
 )

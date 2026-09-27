@@ -174,7 +174,7 @@ def report_generation_target(job_dir: Path) -> tuple[Path, tuple[int, int]]:
 
 
 def bind_report_generation(job_dir: Path, state: dict) -> Path:
-    from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
+    from orca_auto.core.queue.generation_owner import bind_direct_generation_owner
     from orca_auto.orca.engine_runner import executable_identity
 
     generation, identity = report_generation_target(job_dir)

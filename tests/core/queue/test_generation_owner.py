@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from orca_auto.core.queue.engine import input_snapshot
+from orca_auto.core.queue import generation_owner
 
 
 def test_stable_read_enforces_cumulative_cap_for_growing_file(
@@ -20,10 +20,10 @@ def test_stable_read_enforces_cumulative_cap_for_growing_file(
         read_sizes.append(size)
         return next(chunks)
 
-    monkeypatch.setattr(input_snapshot.os, "read", growing_read)
+    monkeypatch.setattr(generation_owner.os, "read", growing_read)
 
     with pytest.raises(ValueError, match="exceeds 4 bytes"):
-        input_snapshot.read_stable_regular_file(source, max_bytes=4)
+        generation_owner.read_stable_regular_file(source, max_bytes=4)
 
     assert read_sizes == [5, 2]
 
@@ -37,4 +37,4 @@ def test_snapshot_namespace_rejects_lossy_path_normalization(
     namespace: str,
 ) -> None:
     with pytest.raises(ValueError, match="safe path segment"):
-        input_snapshot.canonical_input_snapshot_namespace(namespace)
+        generation_owner.canonical_input_snapshot_namespace(namespace)

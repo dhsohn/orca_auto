@@ -1,3 +1,11 @@
+"""Durable intents for generation directories that no queue row owns yet.
+
+Submission records the intent before it creates a generation, binds the
+directory inode, and moves it through CREATING, ENQUEUEING and OWNED. The
+worker retires it when the owning row starts, and its recovery pass removes
+the generations of dead owners that never reached the queue.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,11 +19,11 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.queue import store as _queue_store
-from orca_auto.core.queue.engine.input_snapshot import (
+from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.generation_owner import (
     bind_direct_generation_owner,
     cleanup_unowned_direct_generation_directory,
 )
-from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import process as process_utils
 from orca_auto.core.utils.lock import file_lock
 from orca_auto.core.utils.persistence import (

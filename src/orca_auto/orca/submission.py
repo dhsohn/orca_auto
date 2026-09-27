@@ -21,8 +21,10 @@ from typing import Any
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.paths import is_subpath
-from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.generation_owner import read_stable_regular_file
+from orca_auto.core.queue.persistence import QueueStoreCorruptError
+from orca_auto.core.queue.priority import normalize_queue_priority
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
@@ -30,8 +32,6 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
-from orca_auto.core.queue.persistence import QueueStoreCorruptError
-from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.store import QueueAfterCommitError
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
 from orca_auto.core.utils.persistence import timestamped_token

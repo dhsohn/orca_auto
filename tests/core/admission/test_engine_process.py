@@ -17,9 +17,6 @@ import pytest
 from orca_auto.core import admission
 from orca_auto.core.admission import engine_process, store
 from orca_auto.core.admission import persistence as admission_persistence
-from orca_auto.core.queue.engine.child import (
-    await_parent_admission_handoff,
-)
 from orca_auto.core.utils import process as process_utils
 from orca_auto.orca.orca_runner import OrcaRunner
 
@@ -773,30 +770,6 @@ def test_orca_registrar_without_start_ticks_terminates_launch_before_clearing_pe
     assert states_at_termination == ["pending"]
     assert process.exited is True
     assert admission.get_slot(tmp_path, token).engine_process_state == "idle"  # type: ignore[union-attr]
-
-
-def test_parent_handoff_waits_until_slot_owner_matches_child(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    slots = iter(
-        [
-            SimpleNamespace(owner_pid=99),
-            SimpleNamespace(owner_pid=123),
-        ]
-    )
-    sleeps: list[float] = []
-    monkeypatch.setattr("orca_auto.core.queue.engine.child.get_slot", lambda *_args: next(slots))
-    monkeypatch.setattr("orca_auto.core.queue.engine.child.os.getpid", lambda: 123)
-
-    assert await_parent_admission_handoff(
-        tmp_path,
-        "slot",
-        timeout_seconds=1,
-        monotonic_fn=lambda: 0,
-        sleep_fn=sleeps.append,
-    )
-    assert sleeps == [0.01]
 
 
 def test_global_dead_owner_recovery_escalates_term_to_kill(

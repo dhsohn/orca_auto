@@ -23,8 +23,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from orca_auto.core.queue.child.process import entry_status_is_running
-from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.types import QueueEntry, entry_status_is_running
 from orca_auto.core.statuses import STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED
 
 from ..config import AppConfig

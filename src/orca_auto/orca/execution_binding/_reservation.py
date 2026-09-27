@@ -10,10 +10,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.engine.input_snapshot import (
+from orca_auto.core.queue.generation import (
+    is_visible_generation_name,
+    new_visible_generation_name,
+)
+from orca_auto.core.queue.generation_owner import (
     cleanup_unowned_direct_generation_directory,
 )
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_TOKEN_KEY,
     bind_snapshot_intent_generation_identities,
@@ -21,10 +25,6 @@ from orca_auto.core.queue.engine.snapshot_intent import (
     discard_snapshot_intent,
     discard_snapshot_intent_if_generations_absent,
     retire_snapshot_intent,
-)
-from orca_auto.core.queue.generation import (
-    is_visible_generation_name,
-    new_visible_generation_name,
 )
 from orca_auto.core.utils.persistence import fsync_directory
 

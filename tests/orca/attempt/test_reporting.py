@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
+from orca_auto.core.queue.generation_owner import bind_direct_generation_owner
 from orca_auto.orca.attempt.reporting import (
     build_final_result,
     exit_with_result,
