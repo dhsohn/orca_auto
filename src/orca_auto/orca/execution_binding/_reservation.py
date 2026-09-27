@@ -26,6 +26,10 @@ from orca_auto.core.utils.persistence import fsync_directory
 
 from ._cleanup import discard_unowned_generation
 
+# Directory ownership is shared by historical v2 and current v3 snapshots;
+# engine admission separately rejects retired execution contracts.
+_DIRECTORY_IDENTITY_SNAPSHOT_VERSIONS = (2, 3)
+
 
 def _execution_directory(job_dir: Path, generation_name: str) -> Path:
     if not is_visible_generation_name(generation_name):
@@ -122,9 +126,9 @@ def retire_snapshot_intent_for_row(queue_root: str | Path, entry: Any) -> None:
         token,
         intent_queue_root=intent_root,
         execution_dir=str(snapshot.get("execution_dir") or "").strip(),
-        # Directory ownership is shared by historical v2 and current v3;
-        # engine admission separately rejects retired execution contracts.
         execution_dir_identity=(
-            snapshot.get("execution_dir_identity") if snapshot.get("version") in (2, 3) else None
+            snapshot.get("execution_dir_identity")
+            if snapshot.get("version") in _DIRECTORY_IDENTITY_SNAPSHOT_VERSIONS
+            else None
         ),
     )

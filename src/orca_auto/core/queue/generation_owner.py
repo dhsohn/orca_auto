@@ -1,6 +1,4 @@
-"""The owner marker of a direct generation directory, its pinned no-follow removal,
-and the stable single read of a regular input file.
-"""
+"""The owner marker of a direct generation directory and its pinned no-follow removal."""
 
 from __future__ import annotations
 
@@ -14,7 +12,6 @@ from pathlib import Path
 from orca_auto.core.utils import stable_fs
 from orca_auto.core.utils.stable_fs import StableFsError
 
-MAX_INPUT_SNAPSHOT_BYTES = 64 * 1024 * 1024
 _ROLE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _DIRECT_GENERATION_OWNER_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{16,160}")
 _DIRECT_GENERATION_OWNER_XATTR = "user.orca_auto.generation_owner"
@@ -309,46 +306,9 @@ def cleanup_unowned_direct_generation_directory(
         )
 
 
-def read_stable_regular_file(
-    path: str | Path,
-    *,
-    max_bytes: int = MAX_INPUT_SNAPSHOT_BYTES,
-    require_single_link: bool = False,
-) -> bytes:
-    """Read one regular file without following a final symlink or blocking on a FIFO."""
-
-    source_path = Path(path).expanduser()
-    if max_bytes < 1:
-        raise ValueError("Stable file read limit must be positive")
-    effective_max_bytes = int(max_bytes)
-    try:
-        payload, _details = stable_fs.read_stable_regular_file_at(
-            source_path,
-            max_bytes=effective_max_bytes,
-            require_single_link=require_single_link,
-        )
-    except StableFsError as exc:
-        if exc.reason == "not_regular":
-            raise ValueError(f"Input source is not a regular file: {source_path}") from exc
-        if exc.reason == "not_single_link":
-            raise ValueError(
-                f"Input source must be a single-link regular file: {source_path}"
-            ) from exc
-        if exc.reason == "too_large":
-            raise ValueError(
-                f"Input source exceeds {effective_max_bytes} bytes: {source_path}"
-            ) from exc
-        raise ValueError(f"Input source changed while it was read: {source_path}") from exc
-    except OSError as exc:
-        raise ValueError(f"Input source is not a readable regular file: {source_path}") from exc
-    return payload
-
-
 __all__ = [
-    "MAX_INPUT_SNAPSHOT_BYTES",
     "bind_direct_generation_owner",
     "canonical_input_snapshot_namespace",
     "cleanup_unowned_direct_generation_directory",
-    "read_stable_regular_file",
     "require_direct_generation_owner",
 ]

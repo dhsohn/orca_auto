@@ -8,10 +8,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.confined_io import require_confined_regular_file
-from orca_auto.core.queue.generation_owner import (
+from orca_auto.core.confined_io import (
     MAX_INPUT_SNAPSHOT_BYTES,
     read_stable_regular_file,
+    require_confined_regular_file,
 )
 
 from ..inp_rewriter import resume_checkpoint_input_path

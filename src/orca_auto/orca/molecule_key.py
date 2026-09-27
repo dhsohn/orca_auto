@@ -24,19 +24,19 @@ class MoleculeKeyResolution:
 
 def resolve_molecule_key(inp_path: Path) -> MoleculeKeyResolution:
     try:
-        lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        text = inp_path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
-        lines = []
-    return molecule_key_from_lines(lines, inp_path)
+        text = ""
+    return molecule_key_from_text(text, inp_path)
 
 
-def molecule_key_from_lines(lines: list[str], inp_path: Path) -> MoleculeKeyResolution:
-    """The key of an input whose text is ``lines``; ``inp_path`` places its xyzfile and folder."""
-    tag = _find_user_tag(lines)
+def molecule_key_from_text(text: str, inp_path: Path) -> MoleculeKeyResolution:
+    """The key of an input whose text is ``text``; ``inp_path`` places its xyzfile and folder."""
+    tag = _find_user_tag(text)
     if tag is not None:
         return MoleculeKeyResolution(key=tag, source="tag")
 
-    formula = _formula_from_lines(lines, inp_path.parent)
+    formula = _formula_from_lines(text.splitlines(), inp_path.parent)
     if formula is not None:
         return MoleculeKeyResolution(key=formula, source="formula")
 
@@ -46,8 +46,10 @@ def molecule_key_from_lines(lines: list[str], inp_path: Path) -> MoleculeKeyReso
     )
 
 
-def _find_user_tag(lines: list[str]) -> str | None:
-    for line in lines:
+def _find_user_tag(text: str) -> str | None:
+    # A tag line ends only where a text-mode read ends it ("\n", "\r\n" or
+    # "\r"): a form feed or another str.splitlines() break stays in the tag.
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         m = TAG_RE.match(line.strip())
         if m:
             return _sanitize_key(m.group(1).strip())

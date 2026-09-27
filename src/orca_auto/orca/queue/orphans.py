@@ -262,10 +262,7 @@ def reconcile_dead_running_rows_for_dir(
         return 0
     try:
         protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
-            admission_root,
-            list_slots_fn=lambda root: AdmissionStore.for_root(root).list_slots(
-                normalize_file=False
-            ),
+            AdmissionStore.for_root(admission_root).list_slots(normalize_file=False)
         )
     except AdmissionStoreCorruptError as exc:
         raise DeadRunningRowUnjudgeableError(

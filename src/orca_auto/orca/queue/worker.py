@@ -312,8 +312,7 @@ class OrcaQueueWorker(QueueWorkerLoop):
         recover_orphaned_engine_slots(self.admission_root, strict=False)
         before_rows = roots.list_orca_rows(self.cfg)
         protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
-            self.admission_root,
-            list_slots_fn=list_slots,
+            list_slots(self.admission_root)
         )
         reconcile_stale_slots(self.admission_root)
         reconcile_orphaned_running_entries(

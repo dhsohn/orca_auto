@@ -192,11 +192,20 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   molecule key came from the earlier text while the generation held the
   edited input, or to fail with
   `ORCA selected input changed while submission resources were prepared`.
-  A selected `.inp` that cannot be read (for example without read permission)
-  is reported as `Input source is not a readable regular file: …` instead of
-  the raw `PermissionError`. Crash recovery reads the recorded source input
-  once too and still refuses one that differs from the crashed submission.
-  Existing queue rows and generations are untouched.
+  A selected `.inp` that cannot be read, for example without read permission
+  or because it was deleted after `run-dir` selected it, now fails as
+  `invalid_submission_input` with
+  `Input source is not a readable regular file: …` instead of
+  `queue_submission_failed` with the raw `PermissionError: …` or
+  `FileNotFoundError: …`; `run-dir` still exits 1. Crash recovery reads the
+  recorded source input once too and still refuses one that differs from the
+  crashed submission. Existing queue rows and generations are untouched.
+- A queued row whose execution snapshot records a `version` that is not a
+  scalar (a list or mapping) still fails at worker start and keeps its
+  snapshot intent. Its error is now a `ValueError`,
+  `snapshot intent finalization failed: Queued snapshot has no visible generation identity`,
+  instead of a `TypeError`,
+  `snapshot intent finalization failed: unhashable type: …`.
 - `Multiple ORCA .inp candidates found in …` comes from the
   `orca_auto.orca.submission` logger instead of `orca_auto.orca.execution`,
   and the `run-dir` run-lock probe's

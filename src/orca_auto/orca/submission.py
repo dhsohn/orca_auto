@@ -5,7 +5,7 @@ the target (config, job directory, newest input), refuses a directory that is
 already queued or running, and reports every failure as one reason code and
 message. ``create_queued_submission`` runs the staged pipeline: read the
 selected input once and derive the queue metadata and resources from those
-bytes, build the execution snapshot from the same bytes, validate its intent,
+bytes, build the execution snapshot from the same bytes under a fresh intent,
 publish the row with its job record, then own the snapshot.
 """
 
@@ -19,16 +19,13 @@ from pathlib import Path
 from typing import Any
 
 from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
-from orca_auto.core.confined_io import require_confined_regular_file
+from orca_auto.core.confined_io import read_stable_regular_file, require_confined_regular_file
 from orca_auto.core.paths import is_subpath
-from orca_auto.core.queue.generation_owner import read_stable_regular_file
 from orca_auto.core.queue.persistence import QueueStoreCorruptError
 from orca_auto.core.queue.priority import normalize_queue_priority
 from orca_auto.core.queue.snapshot_intent import (
-    SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
-    SNAPSHOT_INTENT_TOKEN_KEY,
     mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
@@ -53,7 +50,7 @@ from .execution_binding import (
 from .input_artifacts import OrcaSelectedInputArtifacts, xyzfile_input_path
 from .input_syntax import orca_route_lines
 from .job_type import job_type_from_routes
-from .molecule_key import molecule_key_from_lines
+from .molecule_key import molecule_key_from_text
 from .queue import adapter as queue_adapter
 from .queue import entries as queue_entries
 from .queue.adapter import DuplicateEntryError
@@ -109,9 +106,6 @@ class SubmissionTarget:
 @dataclass(frozen=True)
 class QueuedSubmissionResult:
     entry: Any
-    reaction_dir: Path
-    selected_inp: Path
-    queue_metadata: dict[str, Any]
     worker_info: WorkerStatusInfo
 
 
@@ -120,8 +114,8 @@ class DirectQueueSubmission:
     status: str
     reason: str = ""
     stderr: str = ""
-    target: Any | None = None
-    queued_result: Any | None = None
+    target: SubmissionTarget | None = None
+    queued_result: QueuedSubmissionResult | None = None
 
 
 class QueuePublicationCancelledError(RuntimeError):
@@ -162,7 +156,7 @@ def resolve_submission_target(args: Any) -> SubmissionTarget | None:
     does not load raises.
     """
     cfg = load_config(args.config)
-    raw = getattr(args, "path", None) or getattr(args, "reaction_dir", None)
+    raw = getattr(args, "path", None)
     if not isinstance(raw, str) or not raw.strip():
         logger.error("job directory path is required")
         return None
@@ -242,14 +236,6 @@ class _PreparedSubmissionInputs:
     force: bool
 
 
-@dataclass(frozen=True)
-class _SnapshotIntent:
-    """The snapshot-intent ledger entry a freshly built snapshot points at."""
-
-    root: Path
-    token: str
-
-
 def _prepare_submission_inputs(
     cfg: Any, args: Any, selected_inp: Path
 ) -> _PreparedSubmissionInputs:
@@ -263,14 +249,15 @@ def _prepare_submission_inputs(
     force = bool(getattr(args, "force", False))
     assert_run_dir_publication_allowed("ORCA target mutation preflight")
     source_payload = read_stable_regular_file(selected_inp)
-    lines = source_payload.decode("utf-8", errors="ignore").splitlines()
+    text = source_payload.decode("utf-8", errors="ignore")
+    lines = text.splitlines()
     inp_path = selected_inp.expanduser().resolve()
     artifacts = OrcaSelectedInputArtifacts(
         selected_inp=str(selected_inp),
         selected_input_xyz=xyzfile_input_path(lines, inp_path.parent),
     )
     job_type = job_type_from_routes(orca_route_lines(lines))
-    molecule_key = molecule_key_from_lines(lines, inp_path).key
+    molecule_key = molecule_key_from_text(text, inp_path).key
     prepared_input = prepare_submission_resource_request(
         selected_inp,
         source_payload,
@@ -301,6 +288,7 @@ def _build_execution_snapshot(
     inputs: _PreparedSubmissionInputs,
     *,
     queue_root: Path,
+    intent_token: str,
 ) -> dict[str, Any]:
     """Stage 2: materialize the immutable generation and its CREATING intent."""
     return build_orca_execution_snapshot(
@@ -310,25 +298,10 @@ def _build_execution_snapshot(
         resource_request=inputs.prepared_input.resource_request,
         orca_executable=cfg.paths.orca_executable,
         queue_root=queue_root,
-        snapshot_intent_token=timestamped_token("snapshot_intent", token_bytes=16),
+        snapshot_intent_token=intent_token,
         normalized_selected_payload=inputs.prepared_input.normalized_payload,
         source_selected_payload=inputs.source_payload,
     )
-
-
-def _validated_snapshot_intent(execution_snapshot: Any, *, queue_root: Path) -> _SnapshotIntent:
-    """Stage 3: the snapshot must name an intent under this queue root."""
-    if not isinstance(execution_snapshot, dict):
-        raise RuntimeError("ORCA submission has no execution snapshot")
-    intent_root = (
-        Path(str(execution_snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or ""))
-        .expanduser()
-        .resolve()
-    )
-    intent_token = str(execution_snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
-    if intent_root != queue_root or not intent_token:
-        raise RuntimeError("ORCA submission snapshot intent does not match its queue root")
-    return _SnapshotIntent(root=intent_root, token=intent_token)
 
 
 def _cleanup_submission_snapshot(reaction_dir: Path, execution_snapshot: Any) -> None:
@@ -348,17 +321,19 @@ def create_queued_submission(
 ) -> QueuedSubmissionResult:
     """Submit one ORCA input directory to the durable queue.
 
-    Stages, in order: prepare inputs, build the execution snapshot, validate
-    its intent, assemble the queue metadata, publish the row and job record,
+    Stages, in order: prepare inputs, build the execution snapshot under a
+    fresh intent, assemble the queue metadata, publish the row and job record,
     then take ownership of the snapshot. The parent worker owns queued delivery.
     A failure between snapshot creation and publication removes the unowned generation;
     a compensated publication failure removes it through the driver.
     """
     queue_root = Path(cfg.runtime.allowed_root).expanduser().resolve()
     inputs = _prepare_submission_inputs(cfg, args, selected_inp)
-    execution_snapshot = _build_execution_snapshot(cfg, reaction_dir, inputs, queue_root=queue_root)
+    intent_token = timestamped_token("snapshot_intent", token_bytes=16)
+    execution_snapshot = _build_execution_snapshot(
+        cfg, reaction_dir, inputs, queue_root=queue_root, intent_token=intent_token
+    )
     try:
-        intent = _validated_snapshot_intent(execution_snapshot, queue_root=queue_root)
         queue_metadata = build_queue_metadata(
             reaction_dir=reaction_dir,
             artifacts=inputs.artifacts,
@@ -369,8 +344,8 @@ def create_queued_submission(
         )
         task_id = timestamped_token("orca", token_bytes=16)
         transition_snapshot_intent(
-            intent.root,
-            intent.token,
+            queue_root,
+            intent_token,
             target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
             expected_states={SNAPSHOT_INTENT_STATE_CREATING},
         )
@@ -390,7 +365,7 @@ def create_queued_submission(
     )
     entry = outcome.entry
     marker_warning = mark_snapshot_intent_owned(
-        intent.root, intent.token, intent_label="queued ORCA snapshot"
+        queue_root, intent_token, intent_label="queued ORCA snapshot"
     )
     if outcome.cancelled:
         raise QueuePublicationCancelledError(
@@ -401,9 +376,6 @@ def create_queued_submission(
     warnings = [warning for warning in (marker_warning, *outcome.warnings) if warning]
     return QueuedSubmissionResult(
         entry=entry,
-        reaction_dir=reaction_dir,
-        selected_inp=inputs.selected_inp,
-        queue_metadata=queue_metadata,
         worker_info=WorkerStatusInfo(
             status="inactive" if worker_pid is None else "running",
             pid=worker_pid,

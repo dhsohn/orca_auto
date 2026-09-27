@@ -119,7 +119,7 @@ def _make_orca_harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harne
     monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", controllable_upsert)
     args = SimpleNamespace(
         config=str(root / "orca_auto.yaml"),
-        reaction_dir=str(reaction_dir),
+        path=str(reaction_dir),
         force=False,
         priority=7,
     )

@@ -12,7 +12,7 @@ import os
 import stat
 from pathlib import Path
 
-from orca_auto.core.queue.generation_owner import MAX_INPUT_SNAPSHOT_BYTES
+from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.utils import stable_fs
 from orca_auto.core.utils.persistence import open_pinned_readonly
 

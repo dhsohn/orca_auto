@@ -95,7 +95,7 @@ def _real_submission(
     monkeypatch.setattr(run_inp, "read_worker_pid_file", lambda _root: None)
     args = SimpleNamespace(
         config=str(config),
-        reaction_dir=str(reaction_dir),
+        path=str(reaction_dir),
         force=False,
         priority=7,
     )
@@ -186,11 +186,12 @@ def test_submission_cleans_created_snapshot_on_pre_enqueue_failure(
     assert (reaction_dir / "rxn.inp").read_bytes() == source
 
 
-@pytest.mark.parametrize("snapshot", [None, {}])
+@pytest.mark.parametrize(("snapshot", "error"), [(None, "TypeError: "), ({}, "KeyError: ")])
 def test_internal_snapshot_failure_is_not_invalid_user_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     snapshot: dict[str, Any] | None,
+    error: str,
 ) -> None:
     reaction_dir, args = _real_submission(tmp_path, monkeypatch)
     source_input = (reaction_dir / "rxn.inp").read_bytes()
@@ -208,7 +209,7 @@ def test_internal_snapshot_failure_is_not_invalid_user_input(
 
     assert result.status == "failed"
     assert result.reason == "queue_submission_failed"
-    assert "RuntimeError: ORCA submission" in result.stderr
+    assert result.stderr.startswith(error)
     assert len(cleanup_calls) == 1
     assert queue_adapter.list_queue(tmp_path) == []
     assert not (tmp_path / "queue.json").exists()
@@ -238,7 +239,7 @@ def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
     assert result.queued_result is not None
     # The recovered row is parked for the worker repair pass instead of being
     # published inline after an unknown enqueue failure.
-    assert "parked for worker repair" in result.queued_result.worker_info.detail
+    assert "parked for worker repair" in (result.queued_result.worker_info.detail or "")
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
 
@@ -446,7 +447,7 @@ def test_complete_transition_after_commit_returns_submitted_with_truthful_warnin
     # the row is durably COMPLETE (the token-gated park refused to touch it)
     # and the submitter defers honestly to the worker repair pass, which will
     # short-circuit on the durable COMPLETE.
-    assert "worker repair will publish" in result.queued_result.worker_info.detail
+    assert "worker repair will publish" in (result.queued_result.worker_info.detail or "")
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
@@ -679,7 +680,7 @@ def test_duplicate_error_after_commit_is_recovered_as_same_submission(
 
     assert result.status == "submitted"
     assert result.queued_result is not None
-    assert "DuplicateEntryError" in result.queued_result.worker_info.detail
+    assert "DuplicateEntryError" in (result.queued_result.worker_info.detail or "")
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
 

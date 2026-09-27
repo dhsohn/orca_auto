@@ -13,12 +13,10 @@ from orca_auto.core.artifacts import (
     RUN_STATE_FILE,
 )
 from orca_auto.core.confined_io import (
-    atomic_write_confined_bytes,
-    require_confined_regular_file,
-)
-from orca_auto.core.queue.generation_owner import (
     MAX_INPUT_SNAPSHOT_BYTES,
+    atomic_write_confined_bytes,
     read_stable_regular_file,
+    require_confined_regular_file,
 )
 from orca_auto.core.utils.persistence import durable_mkdir
 

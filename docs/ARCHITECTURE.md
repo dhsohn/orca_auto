@@ -61,7 +61,7 @@ graph TD
 - `orca_auto run-dir <PATH>` reads the newest eligible `.inp` and resource directives (`%pal`, `%maxcore`).
 - `orca/submission.py` constructs input snapshots, persists the queue entry atomically, and returns immediately.
 
-The submission snapshot records the original paths, SHA-256 hashes and byte counts in `source_inputs`. Submission reads the selected `.inp` once: the queue row's job type, molecule key, geometry path and resource request, the `source_inputs` digest and the bound copy all describe those bytes, even when the file is saved again while the submission runs. Submission owns resource normalization and generation-local reference rewriting; `resource_request` records the resolved resources, while `bound_selected_identity` identifies the actual `.inp` given to ORCA. Referenced files retain the same role keys across `source_inputs` and `materialized_inputs`. These are submission-time identities: `runtime_mutable_input_roles` identifies copies the engine may overwrite, and `recovery` preserves the previous generation and seed identities when recovering a crash. Execution carries detached copies of this evidence in `job_state.json`'s `engine_payload.execution_provenance`; it never reconstructs the original identity from later source files. Build, claim-time verification, crash recovery and cleanup read a snapshot through one rule set in `orca/execution_binding/_snapshot_identity.py`: the version gate, the dependency role names, the content descriptors, the resource request and the directory identity. The three paths therefore accept and refuse the same snapshots.
+The submission snapshot records the original paths, SHA-256 hashes and byte counts in `source_inputs`. Submission reads the selected `.inp` once: the queue row's job type, molecule key, geometry path and resource request, the `source_inputs` digest and the bound copy all describe those bytes, even when the file is saved again while the submission runs. Submission owns resource normalization and generation-local reference rewriting; `resource_request` records the resolved resources, while `bound_selected_identity` identifies the actual `.inp` given to ORCA. Referenced files retain the same role keys across `source_inputs` and `materialized_inputs`. These are submission-time identities: `runtime_mutable_input_roles` identifies copies the engine may overwrite, and `recovery` preserves the previous generation and seed identities when recovering a crash. Execution carries detached copies of this evidence in `job_state.json`'s `engine_payload.execution_provenance`; it never reconstructs the original identity from later source files. Build, claim-time verification, crash recovery and cleanup read a snapshot through one rule set in `orca/execution_binding/_snapshot_identity.py`: the version gate, the dependency role names, the content descriptors, the resource request and the directory identity. The four paths therefore accept and refuse the same snapshots.
 
 Normal submission and publication repair both call `queue/job_records.py` with the durable row, and the worker records a claimed row as running through the same projection (`upsert_row_job_record`); the module also projects the terminal record from the generation's terminal state. Selected-input identity and resources come from captured metadata, with snapshot resources and then configuration defaults used when older rows lack a request. Empty actual resources use that request. Missing captured job labels remain `other`/`unknown`. Neither path rereads the mutable input to rebuild a queued location record.
 
@@ -142,9 +142,11 @@ Cancellation observations reuse unchanged queue snapshots. A child whose run fin
 loop, the capacity check and the PID file) and `processes.py` (spawning a child
 in its own session and stopping its process group) run in the parent worker;
 `child.py` (the shutdown flag and the wait for the parent's slot hand-off) runs
-in the worker child. `snapshot_intent.py` (the pre-enqueue intent ledger) and
-`generation_owner.py` (the owner xattr of a generation directory and its pinned
-removal) serve every process that creates, claims or recovers a generation.
+in the worker child, which also uses `processes.py` to install its shutdown
+signal handlers and stop the ORCA process group. `snapshot_intent.py` (the
+pre-enqueue intent ledger) and `generation_owner.py` (the owner xattr of a
+generation directory and its pinned removal) serve every process that creates,
+claims or recovers a generation.
 
 The worker CLI loads config, checks the PID file (`read_worker_pid_file` in
 `core/queue/worker/pid_file.py`), then constructs and runs the ORCA worker directly.

@@ -11,6 +11,7 @@ from orca_auto.orca.molecule_key import (
     _formula_from_lines,
     _parse_xyz_file,
     _sanitize_key,
+    molecule_key_from_text,
     resolve_molecule_key,
 )
 
@@ -31,21 +32,35 @@ def _xyz(tmp_path: Path, text: str) -> Path:
 
 
 def test_finds_tag() -> None:
-    assert _find_user_tag("# TAG: my_molecule\n! Opt\n* xyz 0 1\nH 0 0 0\n*\n".splitlines()) == (
-        "my_molecule"
-    )
+    assert _find_user_tag("# TAG: my_molecule\n! Opt\n* xyz 0 1\nH 0 0 0\n*\n") == "my_molecule"
 
 
 def test_sanitizes_special_chars() -> None:
-    assert _find_user_tag("# TAG: my molecule/v2\n! Opt\n".splitlines()) == "my_molecule_v2"
+    assert _find_user_tag("# TAG: my molecule/v2\n! Opt\n") == "my_molecule_v2"
 
 
 def test_returns_none_when_no_tag() -> None:
-    assert _find_user_tag("! Opt\n* xyz 0 1\nH 0 0 0\n*\n".splitlines()) is None
+    assert _find_user_tag("! Opt\n* xyz 0 1\nH 0 0 0\n*\n") is None
 
 
 def test_case_insensitive() -> None:
-    assert _find_user_tag("# tag: MyTag\n! Opt\n".splitlines()) == "MyTag"
+    assert _find_user_tag("# tag: MyTag\n! Opt\n") == "MyTag"
+
+
+@pytest.mark.parametrize("separator", ["\x0c", "\u2028"])
+def test_tag_line_ends_only_at_a_newline(tmp_path: Path, separator: str) -> None:
+    # str.splitlines() also breaks at a form feed or a Unicode line separator;
+    # a tag line does not, so the text after it stays in the (sanitized) key.
+    text = f"# TAG: abc{separator}def\n! Opt\n* xyz 0 1\nC 0 0 0\n*\n"
+    inp = tmp_path / "rxn.inp"
+    inp.write_bytes(text.encode("utf-8"))
+    assert _find_user_tag(text) == "abc_def"
+    assert resolve_molecule_key(inp).key == "abc_def"
+    assert molecule_key_from_text(text.replace("\n", "\r\n"), inp).key == "abc_def"
+
+
+def test_tag_line_ends_at_a_bare_carriage_return() -> None:
+    assert _find_user_tag("! Opt\r# TAG: abc\rdef\r") == "abc"
 
 
 # --- formula from input ---------------------------------------------------------------------

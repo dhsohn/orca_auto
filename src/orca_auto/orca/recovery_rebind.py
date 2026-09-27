@@ -316,6 +316,7 @@ def maybe_rebind_recovery_generation(
     recorded_request = metadata.get("resource_request")
     with acquire_run_lock(reaction_dir):
         recover_crashed_state(reaction_dir, logger=logger)
+        # Plain read: build requires the crashed stable-read digest, which bounds size and tearing.
         source_payload = Path(source_selected).read_bytes()
         prepared = prepare_submission_resource_request(
             Path(source_selected),

@@ -7,8 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.confined_io import require_confined_regular_file
-from orca_auto.core.queue.generation_owner import read_stable_regular_file
+from orca_auto.core.confined_io import read_stable_regular_file, require_confined_regular_file
 
 from .. import input_references
 from ..input_validation import validate_supported_xyz_geometry_syntax

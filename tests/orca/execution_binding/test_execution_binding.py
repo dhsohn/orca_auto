@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
+from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.core.queue.generation import is_visible_generation_name
-from orca_auto.core.queue.generation_owner import MAX_INPUT_SNAPSHOT_BYTES
 from orca_auto.orca import input_blocks, input_references, input_syntax
 from orca_auto.orca.execution_binding import (
     retire_snapshot_intent_for_row,

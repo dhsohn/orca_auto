@@ -11,11 +11,11 @@ the liveness-filtered reads).
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Self, TypeVar
+from typing import Self, TypeVar
 
 from ..utils import process as process_utils
 from ..utils.lock import file_lock
@@ -288,17 +288,15 @@ def get_slot(root: str | Path, token: str) -> AdmissionSlot | None:
 
 
 def live_queue_slot_keys_for_slots(
-    admission_root: str | Path,
-    *,
-    list_slots_fn: Callable[[str | Path], list[Any]],
+    slots: Iterable[AdmissionSlot],
 ) -> tuple[set[tuple[str, str]], set[str]]:
     scoped_keys: set[tuple[str, str]] = set()
     unscoped_ids: set[str] = set()
-    for slot in list_slots_fn(admission_root):
-        queue_id = str(getattr(slot, "queue_id", "")).strip()
+    for slot in slots:
+        queue_id = str(slot.queue_id).strip()
         if not queue_id:
             continue
-        work_dir = _normalized_work_dir(getattr(slot, "work_dir", ""))
+        work_dir = _normalized_work_dir(slot.work_dir)
         if work_dir:
             scoped_keys.add((queue_id, work_dir))
         else:
@@ -306,7 +304,8 @@ def live_queue_slot_keys_for_slots(
     return scoped_keys, unscoped_ids
 
 
-def _normalized_work_dir(value: Any) -> str:
+def _normalized_work_dir(value: str) -> str:
+    # Unlike _normalize_work_dir, an unresolvable path raises OSError instead of keeping its text.
     text = str(value or "").strip()
     if not text:
         return ""

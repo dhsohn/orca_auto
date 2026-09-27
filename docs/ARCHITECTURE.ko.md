@@ -61,7 +61,7 @@ graph TD
 - `orca_auto run-dir <PATH>` 실행 시 `orca/submission.py`가 디렉터리 내 최신 `.inp` 파일과 자원 설정(`%pal`, `%maxcore`)을 파싱합니다.
 - 입력 파일 및 종속 파일의 스냅샷을 구성하고, 큐에 작업을 등록한 후 CLI는 즉시 반환됩니다.
 
-제출 스냅샷의 `source_inputs`에는 원본 경로, SHA-256 해시, 바이트 수가 기록됩니다. 제출은 선택한 `.inp`를 한 번만 읽습니다. 큐 항목의 작업 종류, 분자 식별자, 좌표 파일 경로, 자원 요청과 `source_inputs`의 해시, 바인딩된 복사본은 모두 이 바이트를 기준으로 하므로 제출 도중 파일이 다시 저장되어도 서로 어긋나지 않습니다. 제출 계층이 자원 지시어 보완과 generation 내부 참조 경로 변경을 맡습니다. `resource_request`는 확정된 자원 요청을, `bound_selected_identity`는 ORCA에 전달할 실제 `.inp`를 식별합니다. 참조 파일은 `source_inputs`와 `materialized_inputs`에서 같은 역할 키로 연결됩니다. 모두 접수 시점의 정보이며, `runtime_mutable_input_roles`는 엔진이 덮어쓸 수 있는 복사본을 구분하고 장애 복구 시 `recovery`는 이전 generation과 복구에 사용한 파일의 식별 정보를 보존합니다. 실행은 이 근거를 독립된 복사본으로 `job_state.json`의 `engine_payload.execution_provenance`에 전달하며, 나중의 원본 파일을 다시 읽어 당시 출처를 추정하지 않습니다. 생성, 인수 시점 검증, 장애 복구, 정리는 모두 `orca/execution_binding/_snapshot_identity.py`의 한 규칙 집합(버전 확인, 의존 파일 역할 이름, 내용 식별자, 자원 요청, 디렉터리 식별)으로 스냅샷을 읽습니다. 따라서 세 경로는 같은 스냅샷을 받아들이고 같은 스냅샷을 거부합니다.
+제출 스냅샷의 `source_inputs`에는 원본 경로, SHA-256 해시, 바이트 수가 기록됩니다. 제출은 선택한 `.inp`를 한 번만 읽습니다. 큐 항목의 작업 종류, 분자 식별자, 좌표 파일 경로, 자원 요청과 `source_inputs`의 해시, 바인딩된 복사본은 모두 이 바이트를 기준으로 하므로 제출 도중 파일이 다시 저장되어도 서로 어긋나지 않습니다. 제출 계층이 자원 지시어 보완과 generation 내부 참조 경로 변경을 맡습니다. `resource_request`는 확정된 자원 요청을, `bound_selected_identity`는 ORCA에 전달할 실제 `.inp`를 식별합니다. 참조 파일은 `source_inputs`와 `materialized_inputs`에서 같은 역할 키로 연결됩니다. 모두 접수 시점의 정보이며, `runtime_mutable_input_roles`는 엔진이 덮어쓸 수 있는 복사본을 구분하고 장애 복구 시 `recovery`는 이전 generation과 복구에 사용한 파일의 식별 정보를 보존합니다. 실행은 이 근거를 독립된 복사본으로 `job_state.json`의 `engine_payload.execution_provenance`에 전달하며, 나중의 원본 파일을 다시 읽어 당시 출처를 추정하지 않습니다. 생성, 인수 시점 검증, 장애 복구, 정리는 모두 `orca/execution_binding/_snapshot_identity.py`의 한 규칙 집합(버전 확인, 의존 파일 역할 이름, 내용 식별자, 자원 요청, 디렉터리 식별)으로 스냅샷을 읽습니다. 따라서 네 경로는 같은 스냅샷을 받아들이고 같은 스냅샷을 거부합니다.
 
 정상 제출과 발행 복구는 디스크 큐 항목을 같은 `queue/job_records.py`에 전달하고, 워커도 인수한 행을 같은 투영(`upsert_row_job_record`)으로 실행 중 기록에 남깁니다. 이 모듈은 generation의 종료 상태에서 종료 위치 기록도 투영합니다. 선택 입력과 자원은 접수 당시 메타데이터에서 읽고, 과거 항목의 요청 정보가 비었으면 스냅샷의 자원과 설정 기본값 순서로 보완합니다. 실제 자원 정보가 비었으면 확정된 요청을 사용합니다. 접수 당시 작업 종류·분자 식별자가 없으면 `other`/`unknown`으로 표시합니다. 위치 기록을 다시 만들기 위해 변경 가능한 입력 파일을 다시 읽지 않습니다.
 
@@ -138,7 +138,8 @@ ID를 먼저 모은다), 고아 RUNNING 행 정리, 마지막으로 그 큐 읽�
 `core/queue`의 모듈 이름은 그 모듈을 실행하는 프로세스를 따른다. `worker/`(루프,
 여유 확인, PID 파일)와 `processes.py`(자식을 자기 세션으로 띄우고 프로세스 그룹을
 멈춤)는 부모 워커에서, `child.py`(셧다운 표시와 부모의 슬롯 연결 대기)는 워커
-자식에서 실행된다. `snapshot_intent.py`(enqueue 전 의도 기록)와
+자식에서 실행된다. 워커 자식도 `processes.py`로 셧다운 신호 처리기를 설치하고
+ORCA 프로세스 그룹을 멈춘다. `snapshot_intent.py`(enqueue 전 의도 기록)와
 `generation_owner.py`(generation 디렉터리의 소유자 xattr과 고정 핸들을 통한 삭제)는
 generation을 만들거나 인수하거나 복구하는 모든 프로세스가 쓴다.
 

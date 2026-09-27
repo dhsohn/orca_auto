@@ -32,7 +32,7 @@ def _write_inp(reaction_dir: Path, content: str = DEFAULT_INP) -> Path:
 def _make_args(config: Path | str, reaction_dir: Path, **overrides: Any) -> SimpleNamespace:
     defaults: dict[str, Any] = {
         "config": str(config),
-        "reaction_dir": str(reaction_dir),
+        "path": str(reaction_dir),
         "force": False,
         "priority": 10,
     }
