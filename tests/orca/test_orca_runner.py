@@ -20,7 +20,6 @@ from orca_auto.core.engine_scratch import (
     EngineScratchWorkspace,
     scratch_provenance_from_exception,
 )
-from orca_auto.core.engine_scratch import _policy as policy_mod
 from orca_auto.core.engine_scratch import _workspace as workspace_mod
 from orca_auto.core.queue.processes import ProcessCleanupError
 from orca_auto.orca import orca_runner
@@ -115,12 +114,9 @@ def mock_signal(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 
 @pytest.fixture
-def ram_scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def ram_scratch(fake_shm: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A fake ``/dev/shm`` with unlimited memory; returns the scratch root parent."""
 
-    fake_shm = tmp_path / "shm"
-    fake_shm.mkdir()
-    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", fake_shm)
     monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", lambda: 2**63)
     return fake_shm
 

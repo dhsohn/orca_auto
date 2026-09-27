@@ -20,6 +20,7 @@ from orca_auto.core.queue import persistence as queue
 from orca_auto.core.queue.publication import QUEUE_RECORD_SYNC_BLOCKED_KEY
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca import run_snapshot, run_status, state
+from tests.conftest import make_queue_entry
 
 
 def _config(tmp_path: Path) -> tuple[Path, str]:
@@ -31,16 +32,14 @@ def _config(tmp_path: Path) -> tuple[Path, str]:
 
 
 def _entry(root: Path, number: int) -> QueueEntry:
-    return QueueEntry(
+    return make_queue_entry(
         queue_id=f"q-{number:06d}",
-        app_name="orca_auto_orca",
         task_id=f"task-{number}",
-        task_kind="orca_run_inp",
-        engine="orca",
+        reaction_dir=root / f"job-{number}",
         status=QueueStatus.COMPLETED,
+        metadata={"run_id": f"run-{number}"},
         enqueued_at="2026-01-01T00:00:00Z",
         finished_at="2026-01-01T01:00:00Z",
-        metadata={"reaction_dir": str(root / f"job-{number}"), "run_id": f"run-{number}"},
     )
 
 

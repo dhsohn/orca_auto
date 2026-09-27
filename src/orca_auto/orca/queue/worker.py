@@ -240,9 +240,9 @@ class OrcaQueueWorker(QueueWorkerLoop):
         self._remove_pid_file()
         logger.info("Queue worker stopped")
 
-    def _run_iteration(self) -> None:
+    def run_pass(self) -> None:
         try:
-            super()._run_iteration()
+            super().run_pass()
         except KeyboardInterrupt:
             logger.info("Queue worker interrupted")
             raise

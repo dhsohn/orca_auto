@@ -13,13 +13,7 @@ from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.config import discovery
 from orca_auto.orca.commands import run_inp as run_inp_command
 from orca_auto.orca.queue import adapter as queue_adapter
-from tests.config_discovery_helpers import isolate_shared_config_discovery
 from tests.conftest import make_queue_entry
-
-
-@pytest.fixture(autouse=True)
-def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
 def test_discovery_resolves_config_from_explicit_env_and_home_candidate(

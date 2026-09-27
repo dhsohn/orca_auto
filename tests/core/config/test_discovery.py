@@ -15,7 +15,7 @@ from orca_auto.core.queue.persistence import entry_to_dict
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_APP_NAME
 from orca_auto.orca.commands import init
-from tests.config_discovery_helpers import isolate_shared_config_discovery
+from tests.conftest import isolate_shared_config_discovery
 
 
 def test_new_config_default_is_the_home_path_in_every_installation_layout(

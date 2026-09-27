@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 CI_WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+# Read at import, before the autouse config-discovery isolation moves HOME.
+DEFAULT_MACHINE_CONTRACT_REPO = Path.home() / "machine_contracts"
 
 
 def machine_contract_pin() -> str:
@@ -35,9 +37,7 @@ def validate_common_machine(path: Path) -> None:
     fails the test; the check is never skipped.
     """
     pin = machine_contract_pin()
-    repo = Path(
-        os.environ.get("FACTORY_MACHINE_CONTRACT_REPO") or Path.home() / "machine_contracts"
-    )
+    repo = Path(os.environ.get("FACTORY_MACHINE_CONTRACT_REPO") or DEFAULT_MACHINE_CONTRACT_REPO)
     if importlib.util.find_spec("jsonschema") is None:
         pytest.fail(
             f"{sys.executable} cannot import jsonschema, which the machine-contracts validator "

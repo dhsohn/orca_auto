@@ -15,12 +15,6 @@ from orca_auto import (
     cli_systemd_restart,
     cli_systemd_status,
 )
-from tests.config_discovery_helpers import isolate_shared_config_discovery
-
-
-@pytest.fixture(autouse=True)
-def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
 def test_main_without_command_prints_help(capsys) -> None:

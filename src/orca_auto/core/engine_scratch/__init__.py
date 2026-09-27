@@ -30,7 +30,7 @@ from ._inspect import (
     inspect_scratch_root,
     remove_scratch_workspace,
 )
-from ._policy import EngineScratchPolicy
+from ._policy import SCRATCH_ROOT_PARENT, EngineScratchPolicy
 from ._publication import (
     ScratchPublication,
     attach_scratch_provenance_mapping_to_exception,
@@ -53,6 +53,7 @@ __all__ = [
     "EngineScratchWorkspace",
     "PublicationJournalStatus",
     "SCRATCH_REMOVABLE_STATES",
+    "SCRATCH_ROOT_PARENT",
     "SCRATCH_RUNTIME_HOME_DIR_NAME",
     "SCRATCH_STATE_INVALID_MANIFEST",
     "SCRATCH_STATE_LIVE",

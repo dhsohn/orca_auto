@@ -18,29 +18,18 @@ from orca_auto.core.engine_scratch import _constants as constants_mod
 from orca_auto.core.engine_scratch import _policy as policy_mod
 from orca_auto.core.engine_scratch import _workspace as workspace_mod
 from orca_auto.core.utils import process as process_utils
-from orca_auto.orca import scratch_config as config_scratch
 from orca_auto.orca.scratch import OrcaScratchPolicy
-from tests.config_discovery_helpers import isolate_shared_config_discovery
-
-
-@pytest.fixture(autouse=True)
-def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
 @pytest.fixture
-def scratch_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
-    shm = tmp_path / "shm"
-    shm.mkdir()
-    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", shm)
-    monkeypatch.setattr(config_scratch, "_SCRATCH_ROOT_PARENT", shm)
+def scratch_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_shm: Path) -> dict[str, Path]:
     monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", lambda: 2**63)
     runs_root = tmp_path / "runs"
     runs_root.mkdir()
     fake_orca = tmp_path / "fake_orca"
     fake_orca.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_orca.chmod(0o755)
-    scratch_root = shm / "orca_auto"
+    scratch_root = fake_shm / "orca_auto"
     config = tmp_path / "orca_auto.yaml"
     config.write_text(
         json.dumps(
@@ -57,7 +46,7 @@ def scratch_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Pa
     durable = runs_root / "sample" / "gen-1"
     durable.mkdir(parents=True)
     (durable / "sp.inp").write_text("! HF STO-3G SP\n* xyz 0 1\nH 0 0 0\n*\n", encoding="utf-8")
-    return {"config": config, "scratch_root": scratch_root, "durable": durable, "shm": shm}
+    return {"config": config, "scratch_root": scratch_root, "durable": durable, "shm": fake_shm}
 
 
 def _policy(env: dict[str, Path]) -> OrcaScratchPolicy:

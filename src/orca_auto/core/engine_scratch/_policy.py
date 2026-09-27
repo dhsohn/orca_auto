@@ -1,5 +1,5 @@
 """The operator policy for a scratch root and the host probes that gate a launch:
-``EngineScratchPolicy`` confines the root below ``_SCRATCH_ROOT_PARENT``
+``EngineScratchPolicy`` confines the root below ``SCRATCH_ROOT_PARENT``
 (``/dev/shm``), ``_prepare_scratch_root`` creates and verifies each path
 component under that parent, and ``_filesystem_free_bytes`` /
 ``_linux_available_memory_bytes`` read the tmpfs and RAM headroom that
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ._errors import EngineScratchError
 
-_SCRATCH_ROOT_PARENT = Path("/dev/shm")
+SCRATCH_ROOT_PARENT = Path("/dev/shm")
 
 
 @dataclass(frozen=True)
@@ -29,7 +29,7 @@ class EngineScratchPolicy:
 
     def __post_init__(self) -> None:
         root = self.root.expanduser().resolve(strict=False)
-        parent = _SCRATCH_ROOT_PARENT.resolve()
+        parent = SCRATCH_ROOT_PARENT.resolve()
         if root == parent or not root.is_relative_to(parent):
             raise ValueError("Engine scratch root must be a dedicated directory below /dev/shm")
         if self.min_free_bytes < 1:
@@ -57,7 +57,7 @@ def _linux_available_memory_bytes() -> int:
 
 
 def _prepare_scratch_root(policy: EngineScratchPolicy) -> Path:
-    parent = _SCRATCH_ROOT_PARENT
+    parent = SCRATCH_ROOT_PARENT
     if parent.is_symlink() or not parent.is_dir():
         raise EngineScratchError("/dev/shm is unavailable or unsafe")
     resolved_parent = parent.resolve()

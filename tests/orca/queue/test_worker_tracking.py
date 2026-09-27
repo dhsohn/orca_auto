@@ -57,7 +57,7 @@ def test_slow_notification_does_not_block_loop_or_write_successor(
             return "idle"
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(Loop()._run_iteration)
+        future = pool.submit(Loop().run_pass)
         try:
             assert entered.wait(30)
             future.result(timeout=30)

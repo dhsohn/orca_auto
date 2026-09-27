@@ -15,7 +15,6 @@ import yaml
 from orca_auto import activity_labels, cli_queue, terminal, terminal_table
 from orca_auto.core.indexing import JobLocationIndexError
 from orca_auto.core.queue import QueueStoreCorruptError
-from tests.config_discovery_helpers import isolate_shared_config_discovery
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -155,11 +154,6 @@ def test_queue_header_band_respects_terminal_width() -> None:
         label in summary for label in ("running", "queued", "done", "failed", "cancelled", "other")
     )
     assert "3 active" in _strip_ansi(narrow_title)
-
-
-@pytest.fixture(autouse=True)
-def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
 def test_queue_elapsed_prefers_attempt_anchor_metadata() -> None:
@@ -1085,8 +1079,6 @@ def test_cmd_queue_list_fails_when_no_config_is_discoverable(
     tmp_path: Path,
     action: str | None,
 ) -> None:
-    isolate_shared_config_discovery(monkeypatch, tmp_path)
-
     result = cli_queue.cmd_queue_list(
         SimpleNamespace(
             action=action,
@@ -1111,8 +1103,6 @@ def test_cmd_queue_cancel_fails_when_no_config_is_discoverable(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    isolate_shared_config_discovery(monkeypatch, tmp_path)
-
     result = cli_queue.cmd_queue_cancel(
         SimpleNamespace(target="orca-q-1", orca_auto_config=None, json=False)
     )

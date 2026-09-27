@@ -15,7 +15,6 @@ from orca_auto.core.engine_scratch import (
     EngineScratchCapacityError,
     EngineScratchWorkspace,
 )
-from orca_auto.core.engine_scratch import _policy as policy_mod
 from orca_auto.core.engine_scratch import _workspace as workspace_mod
 from orca_auto.core.queue.deferral import (
     ADMISSION_DEFERRAL_INTERVAL_SECONDS,
@@ -28,7 +27,6 @@ from orca_auto.core.queue.generation import queue_entry_generation_token
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.admission import select_next_claimable_entry
 from orca_auto.orca import execution, worker_execution
-from orca_auto.orca import scratch_config as config_scratch_mod
 from orca_auto.orca.config import AppConfig, PathsConfig, load_config
 from orca_auto.orca.execution_binding import (
     build_orca_execution_snapshot,
@@ -44,7 +42,13 @@ from orca_auto.orca.recovery_rebind import RECOVERY_REBIND_COUNT_METADATA_KEY
 from orca_auto.orca.run_context import RunExecutionContext
 from orca_auto.orca.scratch_config import ScratchConfig
 from orca_auto.orca.state_reading import load_state, state_path
-from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
+from tests.conftest import (
+    claim_next_entry,
+    make_app_cfg,
+    make_queue_entry,
+    write_config_file,
+    write_fake_orca,
+)
 
 _REFUSAL = "engine scratch cannot guarantee RAM headroom without swap: available_memory=1"
 
@@ -53,15 +57,7 @@ _REFUSAL = "engine scratch cannot guarantee RAM headroom without swap: available
 
 
 def _entry(metadata: dict[str, Any], *, status: QueueStatus = QueueStatus.PENDING) -> QueueEntry:
-    return QueueEntry(
-        queue_id="q-1",
-        app_name="orca_auto_orca",
-        task_id="task-1",
-        task_kind="orca_run_inp",
-        engine="orca",
-        status=status,
-        metadata=metadata,
-    )
+    return make_queue_entry(queue_id="q-1", task_id="task-1", status=status, metadata=metadata)
 
 
 def test_deferral_holds_a_row_for_one_interval_only() -> None:
@@ -382,12 +378,10 @@ class _ManagedRunner(OrcaRunner):
 def _scratch_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    shm: Path,
     *,
     available_memory_bytes: int,
 ) -> tuple[Path, Path, list[Any], Any]:
-    shm = tmp_path / "shm"
-    shm.mkdir()
-    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", shm)
     monkeypatch.setattr(
         workspace_mod, "_linux_available_memory_bytes", lambda: available_memory_bytes
     )
@@ -429,9 +423,10 @@ def _scratch_run(
 def test_capacity_refusal_before_launch_writes_no_state_and_sends_no_notification(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_shm: Path,
 ) -> None:
     reaction_dir, scratch_root, notifications, context = _scratch_run(
-        monkeypatch, tmp_path, available_memory_bytes=1
+        monkeypatch, tmp_path, fake_shm, available_memory_bytes=1
     )
     listing_before = _generation_listing(reaction_dir)
 
@@ -448,9 +443,10 @@ def test_capacity_refusal_before_launch_writes_no_state_and_sends_no_notificatio
 def test_execute_orca_run_does_not_turn_the_refusal_into_an_ordinary_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_shm: Path,
 ) -> None:
     _reaction_dir, _root, _notifications, context = _scratch_run(
-        monkeypatch, tmp_path, available_memory_bytes=1
+        monkeypatch, tmp_path, fake_shm, available_memory_bytes=1
     )
 
     with pytest.raises(EngineScratchCapacityError):
@@ -460,9 +456,10 @@ def test_execute_orca_run_does_not_turn_the_refusal_into_an_ordinary_failure(
 def test_admitted_run_launches_in_the_workspace_it_reserved_before_writing_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_shm: Path,
 ) -> None:
     reaction_dir, scratch_root, _notifications, context = _scratch_run(
-        monkeypatch, tmp_path, available_memory_bytes=2**63
+        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
     )
     created: list[bool] = []
     real_create = EngineScratchWorkspace.create.__func__  # type: ignore[attr-defined]
@@ -486,11 +483,12 @@ def test_admitted_run_launches_in_the_workspace_it_reserved_before_writing_state
 def test_reserved_workspace_is_removed_when_the_run_fails_before_launch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_shm: Path,
 ) -> None:
     # A workspace left behind by a live owner that then exits would make every
     # later scratch attempt fail closed as stale.
     _reaction_dir, scratch_root, _notifications, context = _scratch_run(
-        monkeypatch, tmp_path, available_memory_bytes=2**63
+        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
     )
 
     def unreadable_state(*_args: Any, **_kwargs: Any) -> Any:
@@ -509,9 +507,10 @@ def test_reserved_workspace_is_removed_when_the_run_fails_before_launch(
 def test_workspace_reserved_for_another_input_is_never_used_to_launch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_shm: Path,
 ) -> None:
     reaction_dir, scratch_root, _notifications, context = _scratch_run(
-        monkeypatch, tmp_path, available_memory_bytes=2**63
+        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
     )
     derived = reaction_dir / "rxn_resume.inp"
     derived.write_text("! SP\n* xyz 0 1\nHe 0 0 0\n*\n", encoding="utf-8")
@@ -533,11 +532,12 @@ def test_workspace_reserved_for_another_input_is_never_used_to_launch(
 def test_capacity_refusal_after_the_run_started_is_a_failed_attempt_not_a_deferral(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_shm: Path,
 ) -> None:
     # Once state and the started notification exist, the job has started:
     # waiting again would be an automatic rerun of a recorded attempt.
     reaction_dir, _root, notifications, context = _scratch_run(
-        monkeypatch, tmp_path, available_memory_bytes=2**63
+        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
     )
 
     class RefusedAtLaunch(_ManagedRunner):
@@ -560,9 +560,10 @@ def test_capacity_refusal_after_the_run_started_is_a_failed_attempt_not_a_deferr
 def test_unsafe_scratch_root_still_fails_the_attempt_with_its_state_and_notifications(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_shm: Path,
 ) -> None:
     reaction_dir, scratch_root, notifications, context = _scratch_run(
-        monkeypatch, tmp_path, available_memory_bytes=2**63
+        monkeypatch, tmp_path, fake_shm, available_memory_bytes=2**63
     )
     scratch_root.mkdir()
     (scratch_root / "attempt-unknown").mkdir()  # no manifest: ownership cannot be verified
@@ -584,13 +585,11 @@ def test_unsafe_scratch_root_still_fails_the_attempt_with_its_state_and_notifica
 def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    fake_shm: Path,
 ) -> None:
     from orca_auto.core.admission import list_slots
     from orca_auto.orca.queue.worker import _try_reserve_admission_slot
 
-    shm = tmp_path / "shm"
-    shm.mkdir()
-    monkeypatch.setattr(policy_mod, "_SCRATCH_ROOT_PARENT", shm)
     monkeypatch.setattr(workspace_mod, "_filesystem_free_bytes", lambda _descriptor: 2 * 1024**3)
     available = {"bytes": 1}
     monkeypatch.setattr(workspace_mod, "_linux_available_memory_bytes", lambda: available["bytes"])
@@ -616,10 +615,8 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
         task_id="task-real-deferral",
         metadata=_bound_orca_metadata(tmp_path, rxn),
     )
-    # The loader confines scratch roots to /dev/shm; relocate that check with the runtime's.
-    monkeypatch.setattr(config_scratch_mod, "_SCRATCH_ROOT_PARENT", shm)
     config = _child_config(
-        tmp_path, queue_root, scratch=ScratchConfig(root=str(shm / "orca_auto"), min_free_gb=1)
+        tmp_path, queue_root, scratch=ScratchConfig(root=str(fake_shm / "orca_auto"), min_free_gb=1)
     )
     cfg = load_config(str(config))
     assert cfg.scratch.enabled
@@ -654,7 +651,7 @@ def test_worker_child_defers_a_real_run_and_the_next_claim_reuses_the_generation
     assert not orca_execution_started_evidence(rxn, deferred.metadata["execution_snapshot"])
     assert not state_path(rxn).exists()
     assert notifications == []
-    assert list(shm.glob("orca_auto/attempt-*")) == []
+    assert list(fake_shm.glob("orca_auto/attempt-*")) == []
 
     # Memory came back. The same generation is claimed again and runs once;
     # no recovery rebind was spent on a job that had never started.

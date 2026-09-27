@@ -11,12 +11,6 @@ import pytest
 from orca_auto import cli_handlers, cli_workers
 from orca_auto import cli_worker_supervision as worker_supervision
 from orca_auto.core.config import discovery
-from tests.config_discovery_helpers import isolate_shared_config_discovery
-
-
-@pytest.fixture(autouse=True)
-def _isolate_shared_config_discovery(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    isolate_shared_config_discovery(monkeypatch, tmp_path)
 
 
 @pytest.mark.parametrize(
