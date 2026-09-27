@@ -8,8 +8,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .input_blocks import percent_directive_header
-from .input_syntax import OrcaLineToken, input_file_lines, orca_line_tokens
+from .input_blocks import scan_coordinate_rows
+from .input_syntax import input_file_lines
 from .parser import KCAL_PER_HARTREE
 from .parser.io import open_orca_text
 
@@ -246,54 +246,3 @@ def first_scan_coordinate_spec(inp_path: Path) -> ScanCoordinateSpec | None:
     if not rows:
         return None
     return parse_scan_coordinate(rows[0])
-
-
-def scan_coordinate_rows(lines: Sequence[str]) -> list[str] | None:
-    """Coordinate texts of the ``%geom`` ``Scan`` sub-blocks; ``None`` when there is none.
-
-    A ``Scan`` sub-block counts even when no coordinate in it can be read.
-    Walks each ``%geom`` header up to the next ``%`` directive, route line, or
-    geometry section, past the block's own closing ``end``: the shared block
-    rule nests only ``scan``/``constraints``, so another end-terminated
-    sub-block (``modify_internal ... end``) closes ``%geom`` there before a
-    later ``Scan``. ``Scan`` may share its row with a coordinate or its ``end``.
-    """
-    rows: list[str] = []
-    found = in_geom = in_scan = False
-    for line in lines:
-        tokens = orca_line_tokens(line)
-        if not tokens:
-            continue
-        header = percent_directive_header(tokens)
-        if header is not None:
-            in_geom = header[0] == "geom"
-            in_scan = False
-            tokens = tokens[header[1] :]
-        elif not tokens[0].quoted and tokens[0].value.startswith(("*", "!")):
-            in_geom = in_scan = False
-        if not in_geom:
-            continue
-        if not in_scan:
-            scan_index = _unquoted_word_index(tokens, "scan")
-            if scan_index is None:
-                continue
-            found = in_scan = True
-            tokens = tokens[scan_index + 1 :]
-        end_index = _unquoted_word_index(tokens, "end")
-        if end_index is not None:
-            in_scan = False
-            tokens = tokens[:end_index]
-        if tokens:
-            rows.append(" ".join(token.value for token in tokens))
-    return rows if found else None
-
-
-def _unquoted_word_index(tokens: Sequence[OrcaLineToken], word: str) -> int | None:
-    return next(
-        (
-            index
-            for index, token in enumerate(tokens)
-            if not token.quoted and token.value.lower() == word
-        ),
-        None,
-    )

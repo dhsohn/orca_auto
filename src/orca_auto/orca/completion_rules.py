@@ -1,9 +1,11 @@
-"""What an ORCA input asks for, read once: :class:`RouteFacts` and the completion mode.
+"""What an ORCA input asks for: :class:`RouteFacts` and the completion mode.
 
-Every route question (the completion analyzer's mode, which report sections
-and which SI block a job gets, whether its geometry is a stationary point) is
-answered from one :func:`route_facts` reading, so no two consumers can
-classify the same input differently.
+The completion analyzer's mode, which report sections and which SI block a job
+gets, and whether its geometry is a stationary point all come from
+:func:`route_facts`, so those answers cannot disagree on one input. Each caller
+reads the input file itself. The job-type label (``job_type``) and the runtime
+outputs an input requests (``execution_binding``) classify route lines on their
+own, from the keyword rules here plus a few of their own.
 """
 
 from __future__ import annotations
@@ -12,8 +14,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .input_blocks import scan_coordinate_rows
 from .input_syntax import input_file_lines, orca_route_lines
-from .relaxed_scan import scan_coordinate_rows
 
 # Only real ORCA TS keywords. No bare `TS` token: ORCA has no `! TS`, so it
 # can only ever match stray text (the SCAN-functional collision class), never

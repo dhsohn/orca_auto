@@ -190,6 +190,65 @@ def test_frequency_analysis_uses_final_vibrational_frequency_block(tmp_path: Pat
     assert analysis.imaginary_count() == 0
 
 
+@pytest.mark.parametrize(
+    ("rows", "symbols"),
+    [
+        (
+            [
+                "  C      0.000000    0.000000    0.000000",
+                "  DA     0.500000    0.000000    0.000000",
+                "  H      1.000000    0.000000    0.000000",
+            ],
+            ("C", "DA", "H"),
+        ),
+        (
+            [
+                "  c      0.000000    0.000000    0.000000",
+                "  H      1.000000    0.000000    0.000000",
+            ],
+            ("c", "H"),
+        ),
+        (
+            [
+                "  C      0.000000    0.000000    0.000000  1",
+                "  H      1.000000    0.000000    0.000000  2",
+            ],
+            (),
+        ),
+        (["  C      0    0    0", "  H      1    0    0"], ()),
+    ],
+    ids=["dummy_atom", "lower_case_symbol", "extra_column", "integer_coordinates"],
+)
+def test_frequency_geometry_keeps_its_own_coordinate_row_rule(
+    tmp_path: Path, rows: list[str], symbols: tuple[str, ...]
+) -> None:
+    # Unlike the result parser's coordinate rows: any one- or two-letter
+    # symbol, but decimal xyz values and nothing after z.
+    out_file = tmp_path / "coords.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                *rows,
+                "",
+                "FINAL SINGLE POINT ENERGY      -100.10",
+                "VIBRATIONAL FREQUENCIES",
+                "   0:         0.00 cm**-1",
+                "   1:      -350.00 cm**-1 ***imaginary mode***",
+                "",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = parsed_frequency_analysis(out_file)
+
+    assert analysis is not None
+    assert tuple(atom[0] for atom in analysis.atoms) == symbols
+
+
 # ---------------------------------------------------------------------------
 # parse_opt_progress_text tests
 # ---------------------------------------------------------------------------

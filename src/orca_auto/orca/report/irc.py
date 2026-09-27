@@ -12,7 +12,7 @@ from typing import Any
 from ..completion_rules import RouteFacts
 from ..evidence import final_out_path, parsed_final_output, parsed_output_facts
 from ..frequencies import ModeSummary, mode_summaries
-from ..out_analyzer import IRC_PATH_FOUND_NEEDLES
+from ..out_analyzer import IRC_DRIVER_NEEDLE, IRC_PATH_SUMMARY_RE
 from ..parser import OrcaResult
 from .attempts import (
     AttemptReportRow,
@@ -66,7 +66,6 @@ _IRC_ITERATION_RE = re.compile(
     r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)"
     r"(?:\s+[-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)*\s*$"
 )
-_IRC_PATH_SUMMARY_HEADER_RE = re.compile(r"\bIRC\s+PATH\s+SUMMARY\b", re.IGNORECASE)
 _IRC_PATH_ROW_RE = path_summary_row_re(r"TS|[-+]?\d+", trailing_columns=True)
 _SECTION_HEADER_RE = re.compile(
     r"\b(?:FORWARD|BACKWARD)\s+IRC\b|\bIRC\s+PATH\s+SUMMARY\b|"
@@ -115,13 +114,13 @@ class IrcReportData:
 
 def parse_irc_output_text(text: str) -> IrcParsedOutput:
     """IRC facts of decoded output text; ``parse_irc_output`` memoizes this per file."""
-    upper = text.upper()
     return IrcParsedOutput(
         settings=_parse_irc_settings(text),
         iterations=_parse_irc_iterations(text),
         path_points=_parse_irc_path_summary(text),
-        # The analyzer's needles over the raw text, input echoes and comments included.
-        irc_marker_found=any(needle in upper for needle in IRC_PATH_FOUND_NEEDLES),
+        irc_marker_found=bool(
+            IRC_PATH_SUMMARY_RE.search(text) or IRC_DRIVER_NEEDLE in text.upper()
+        ),
     )
 
 
@@ -271,7 +270,7 @@ def _irc_phase_of_line(line: str) -> str | None:
     direction_match = _IRC_DIRECTION_RE.search(line)
     if direction_match is not None:
         return direction_match.group(1)
-    if _IRC_PATH_SUMMARY_HEADER_RE.search(line):
+    if IRC_PATH_SUMMARY_RE.search(line):
         return ""
     return None
 
@@ -295,7 +294,7 @@ def _parse_irc_iterations(text: str) -> tuple[IrcIterationPoint, ...]:
 def _parse_irc_path_summary(text: str) -> tuple[IrcPathPoint, ...]:
     return parse_path_summary(
         text,
-        header_re=_IRC_PATH_SUMMARY_HEADER_RE,
+        header_re=IRC_PATH_SUMMARY_RE,
         row_re=_IRC_PATH_ROW_RE,
         point_type=IrcPathPoint,
     )

@@ -7,6 +7,7 @@ from collections.abc import Iterator, Sequence
 from .patterns import (
     _BASIS_KEYWORDS,
     _COORD_SECTION_RE,
+    _COORD_XYZ_LINE_RE,
     _CPCM_TOKEN_RE,
     _INPUT_LINE_RE,
     _METHOD_KEYWORDS,
@@ -15,7 +16,6 @@ from .patterns import (
     _RUNTIME_RE,
     _SMD_SOLVENT_RE,
     _SMD_TRUE_RE,
-    COORD_XYZ_LINE_RE,
     FINAL_SINGLE_POINT_ENERGY_RE,
     final_single_point_energy_value,
 )
@@ -97,7 +97,7 @@ def parse_coordinates(text: str) -> list[AtomRow]:
     last_section = sections[-1].group(1)
     return [
         (match.group(1), float(match.group(2)), float(match.group(3)), float(match.group(4)))
-        for match in COORD_XYZ_LINE_RE.finditer(last_section)
+        for match in _COORD_XYZ_LINE_RE.finditer(last_section)
     ]
 
 

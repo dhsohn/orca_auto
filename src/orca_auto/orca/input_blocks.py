@@ -3,9 +3,11 @@
 Sits on :mod:`.input_syntax` (tokens, comments, route lines) and provides the
 two primitives every input rewriter and scanner shares: locating the single
 ``* xyz`` / ``* xyzfile`` geometry block, and walking ``%name ... end`` blocks
-under the package-wide block-termination rule of :class:`OrcaBlock`. The
-editing helper here (``set_block_key_value``) changes one block at a time and
-never looks at external file references; that is :mod:`.input_references`.
+under the package-wide block-termination rule of :class:`OrcaBlock`. It also
+reads the ``%geom`` ``Scan`` coordinates (``scan_coordinate_rows``) that the
+route classification and the relaxed-scan report share. The editing helper
+here (``set_block_key_value``) changes one block at a time and never looks at
+external file references; that is :mod:`.input_references`.
 """
 
 from __future__ import annotations
@@ -241,6 +243,57 @@ def find_block_range(lines: list[str], block_name: str) -> tuple[int, int, bool]
     if block is None:
         return None
     return block.start, block.end, block.needs_close
+
+
+def scan_coordinate_rows(lines: Sequence[str]) -> list[str] | None:
+    """Coordinate texts of the ``%geom`` ``Scan`` sub-blocks; ``None`` when there is none.
+
+    A ``Scan`` sub-block counts even when no coordinate in it can be read.
+    Walks each ``%geom`` header up to the next ``%`` directive, route line, or
+    geometry section, past the block's own closing ``end``: the shared block
+    rule nests only ``scan``/``constraints``, so another end-terminated
+    sub-block (``modify_internal ... end``) closes ``%geom`` there before a
+    later ``Scan``. ``Scan`` may share its row with a coordinate or its ``end``.
+    """
+    rows: list[str] = []
+    found = in_geom = in_scan = False
+    for line in lines:
+        tokens = orca_line_tokens(line)
+        if not tokens:
+            continue
+        header = percent_directive_header(tokens)
+        if header is not None:
+            in_geom = header[0] == "geom"
+            in_scan = False
+            tokens = tokens[header[1] :]
+        elif not tokens[0].quoted and tokens[0].value.startswith(("*", "!")):
+            in_geom = in_scan = False
+        if not in_geom:
+            continue
+        if not in_scan:
+            scan_index = _unquoted_word_index(tokens, "scan")
+            if scan_index is None:
+                continue
+            found = in_scan = True
+            tokens = tokens[scan_index + 1 :]
+        end_index = _unquoted_word_index(tokens, "end")
+        if end_index is not None:
+            in_scan = False
+            tokens = tokens[:end_index]
+        if tokens:
+            rows.append(" ".join(token.value for token in tokens))
+    return rows if found else None
+
+
+def _unquoted_word_index(tokens: Sequence[OrcaLineToken], word: str) -> int | None:
+    return next(
+        (
+            index
+            for index, token in enumerate(tokens)
+            if not token.quoted and token.value.lower() == word
+        ),
+        None,
+    )
 
 
 def set_block_key_value(lines: list[str], block_name: str, key: str, value: str) -> bool:

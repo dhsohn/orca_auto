@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto.orca import evidence
 from orca_auto.orca.report.composer import collect_html_report_parts
-from orca_auto.orca.report.irc import IrcReportData, parse_irc_output
+from orca_auto.orca.report.irc import IrcReportData, parse_irc_output, parse_irc_output_text
 from orca_auto.orca.report.publication import write_job_html_report, write_report_files
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 from tests.orca_output_helpers import (
@@ -108,6 +108,37 @@ def test_parse_irc_output_accepts_monitored_internal_columns(tmp_path: Path) -> 
     assert parsed.path_points[2].energy_hartree == pytest.approx(-1613.778834)
     assert parsed.path_points[0].relative_kcal == pytest.approx(-0.061075)
     assert parsed.path_points[4].rms_gradient == pytest.approx(0.000128)
+
+
+@pytest.mark.parametrize(
+    ("marker_text", "found"),
+    [
+        ("IRC PATH SUMMARY", True),
+        ("IRC  PATH SUMMARY", True),
+        ("IRC\nPATH SUMMARY", True),
+        ("irc path summary", True),
+        ("|  1> ! IRC  # IRC PATH SUMMARY", True),
+        ("irc-drv", True),
+        ("XIRC PATH SUMMARY", False),
+        ("IRC PATH SUMMARYX", False),
+    ],
+    ids=[
+        "header",
+        "double_space",
+        "newline",
+        "lower_case",
+        "input_echo",
+        "driver_banner",
+        "glued_prefix",
+        "glued_suffix",
+    ],
+)
+def test_irc_path_found_badge_reads_the_summary_header_as_whole_words(
+    marker_text: str, found: bool
+) -> None:
+    text = f"{marker_text}\n****ORCA TERMINATED NORMALLY****\n"
+
+    assert parse_irc_output_text(text).irc_marker_found is found
 
 
 def test_irc_report_with_monitored_internals_renders_path_profile(tmp_path: Path) -> None:

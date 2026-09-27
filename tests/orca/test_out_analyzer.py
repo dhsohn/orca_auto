@@ -614,6 +614,45 @@ def test_verifier_count_is_the_published_frequency_analysis(
         assert not final_section
 
 
+@pytest.mark.parametrize(
+    "final_energy_line",
+    [
+        "FINAL SINGLE POINT ENERGY      -100.20  extra",
+        "FINAL SINGLE POINT ENERGY   ****************",
+        "Final Single Point Energy      -100.20",
+        "\x0cFINAL SINGLE POINT ENERGY      -100.20",
+    ],
+    ids=["trailing_text", "overflow", "lower_case", "form_feed_indent"],
+)
+def test_unreadable_final_energy_line_still_supersedes_the_frequency_section(
+    tmp_path: Path, final_energy_line: str
+) -> None:
+    # The parser reads no energy from these lines, but each still means a later
+    # geometry: the earlier Hessian must neither verify the TS nor be published.
+    out = _write_out(
+        tmp_path,
+        "CARTESIAN COORDINATES (ANGSTROEM)\n"
+        "---------------------------------\n"
+        "  C      0.000000    0.000000    0.000000\n"
+        "  H      1.000000    0.000000    0.000000\n"
+        "\n"
+        "FINAL SINGLE POINT ENERGY      -100.10\n"
+        "VIBRATIONAL FREQUENCIES\n"
+        "   0:         0.00 cm**-1\n"
+        "   1:      -350.00 cm**-1 ***imaginary mode***\n"
+        "\n"
+        f"{final_energy_line}\n{NORMAL}\n",
+    )
+
+    result = analyze_output(out, _TS_FREQ_MODE)
+
+    assert result.status is AnalyzerStatus.TS_NOT_FOUND
+    assert result.reason == "ts_criteria_failed"
+    assert result.markers["imaginary_frequency_count"] == 0
+    assert result.markers["final_frequency_section"] is False
+    assert parsed_frequency_analysis(out) is None
+
+
 def test_utf16_output_gets_the_same_verdict_as_its_utf8_twin(tmp_path: Path) -> None:
     # ORCA can write UTF-16 output; the analyzer used to decode every file as
     # UTF-8 and so saw NUL-riddled text where the parser saw a normal run.

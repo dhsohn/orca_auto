@@ -56,7 +56,7 @@ THERMO_TEMPERATURE_RE = re.compile(r"THERMOCHEMISTRY AT\s+([\d.]+)\s*K")
 _PROGRAM_VERSION_RE = re.compile(r"Program Version\s+([\w.]+)")
 
 # Coordinate line including the xyz values (Å)
-COORD_XYZ_LINE_RE = re.compile(
+_COORD_XYZ_LINE_RE = re.compile(
     r"^\s*([A-Z][a-z]?)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)\s+(-?\d+\.?\d*)",
     re.MULTILINE,
 )

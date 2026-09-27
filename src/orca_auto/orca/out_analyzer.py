@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,9 +61,14 @@ class OutMarkers(TypedDict):
     final_frequency_section: bool
 
 
-# Upper-case needles showing that ORCA's IRC driver ran. The IRC report
-# searches its raw output for the same needles.
-IRC_PATH_FOUND_NEEDLES = ("IRC PATH SUMMARY", "IRC-DRV")
+# Evidence that ORCA's IRC driver ran. The analyzer looks for the upper-case
+# IRC_PATH_FOUND_NEEDLES in each execution output line. The IRC report's badge
+# instead searches its whole raw text, input echoes included, for the driver
+# needle or IRC_PATH_SUMMARY_RE (whole words, any case, any whitespace between
+# them), the header it also reads the path summary table under.
+IRC_DRIVER_NEEDLE = "IRC-DRV"
+IRC_PATH_FOUND_NEEDLES = ("IRC PATH SUMMARY", IRC_DRIVER_NEEDLE)
+IRC_PATH_SUMMARY_RE = re.compile(r"\bIRC\s+PATH\s+SUMMARY\b", re.IGNORECASE)
 
 _MARKER_RULES: tuple[tuple[BooleanMarkerName, tuple[str, ...]], ...] = (
     ("total_run_time_seen", ("TOTAL RUN TIME",)),
