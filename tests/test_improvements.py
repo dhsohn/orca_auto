@@ -31,7 +31,7 @@ from tests.conftest import write_run_state
 def _analyze(tmp_path: Path, text: str) -> AnalyzerStatus:
     out = tmp_path / "calc.out"
     out.write_text(text, encoding="utf-8")
-    result = analyze_output(out, CompletionMode(kind="opt", require_irc=False, route_line="! Opt"))
+    result = analyze_output(out, CompletionMode(kind="opt", require_irc=False))
     return result.status
 
 

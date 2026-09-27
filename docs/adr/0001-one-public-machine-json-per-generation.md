@@ -81,6 +81,10 @@ Later changes:
 - The condensed `docs/PUBLIC_CONTRACTS.md` (`5499b4c1`) no longer states that
   internal state files are never alternate public contracts; section 4 names
   `machine.json` as the artifact for downstream tools.
+- The Unreleased changes drop the unused `MACHINE_OBSERVATION_FILE` constant
+  (`RUN_REPORT_JSON_FILE` is the one name in code) and move the `machine.json`
+  reader `load_report_json` from the package to
+  `tests/contracts/report_verifier.py`, used by the tests and the release smoke.
 
 The contract covers structure and receipts. Completion is not a guarantee
 that every numerical property converged, and scientific acceptance remains

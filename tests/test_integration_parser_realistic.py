@@ -14,7 +14,8 @@ import pytest
 from orca_auto.orca.completion_rules import CompletionMode
 from orca_auto.orca.frequencies import parse_frequency_analysis
 from orca_auto.orca.out_analyzer import analyze_output
-from orca_auto.orca.parser import parse_orca_output
+from orca_auto.orca.parser import parse_orca_output_text
+from orca_auto.orca.parser.io import read_orca_text
 
 # ---------------------------------------------------------------------------
 # Realistic ORCA output fixtures
@@ -341,14 +342,14 @@ FINAL SINGLE POINT ENERGY      -95.720000000
 
 
 class TestParserRealisticOutputs:
-    """Test parse_orca_output with realistic multi-section ORCA outputs."""
+    """Test parse_orca_output_text with realistic multi-section ORCA outputs."""
 
     def test_opt_freq_completed_full_extraction(self, tmp_path: Path) -> None:
         """B3LYP/6-31G(d) Opt Freq — all fields populated."""
         out = tmp_path / "formaldehyde_opt_freq.out"
         out.write_text(_B3LYP_OPT_FREQ_COMPLETED, encoding="utf-8")
 
-        r = parse_orca_output(str(out))
+        r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
         assert r.method == "B3LYP"
         assert r.basis_set == "6-31G(d)"
@@ -373,7 +374,7 @@ class TestParserRealisticOutputs:
         out = tmp_path / "ammonia_sp.out"
         out.write_text(_DLPNO_SP_COMPLETED, encoding="utf-8")
 
-        r = parse_orca_output(str(out))
+        r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
         assert r.method == "DLPNO-CCSD(T)"
         assert r.basis_set == "cc-pVTZ"
@@ -390,7 +391,7 @@ class TestParserRealisticOutputs:
         out = tmp_path / "ts_sn2.out"
         out.write_text(_TS_OPT_WITH_IMAGINARY, encoding="utf-8")
 
-        r = parse_orca_output(str(out))
+        r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
         assert r.method == "B3LYP"
         assert r.basis_set == "def2-TZVP"
@@ -417,20 +418,16 @@ class TestParserRealisticOutputs:
         assert analysis is not None
         assert analysis.imaginary_count() == 1
         assert min(analysis.frequencies) == pytest.approx(-432.15)
-        assert (
-            analyze_output(out, CompletionMode("ts", False, "! OptTS Freq")).status == "completed"
-        )
+        assert analyze_output(out, CompletionMode("ts", False)).status == "completed"
 
     def test_scf_failure(self, tmp_path: Path) -> None:
         """SCF not converged → error termination → SCF-gradient abort verdict."""
         out = tmp_path / "fe_complex_scf_fail.out"
         out.write_text(_SCF_FAILED, encoding="utf-8")
 
-        r = parse_orca_output(str(out))
+        r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
-        assert analyze_output(out, CompletionMode("opt", False, "! Opt")).status == (
-            "error_scfgrad_abort"
-        )
+        assert analyze_output(out, CompletionMode("opt", False)).status == ("error_scfgrad_abort")
         assert r.method == "wB97X-D3"
         assert r.basis_set == "def2-TZVP"
         assert r.charge == -1
@@ -445,11 +442,9 @@ class TestParserRealisticOutputs:
         out = tmp_path / "ethane_opt_fail.out"
         out.write_text(_OPT_NOT_CONVERGED, encoding="utf-8")
 
-        r = parse_orca_output(str(out))
+        r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
-        assert analyze_output(out, CompletionMode("opt", False, "! Opt")).status == (
-            "geom_not_converged"
-        )
+        assert analyze_output(out, CompletionMode("opt", False)).status == ("geom_not_converged")
         assert r.method == "PBE0"
         assert r.basis_set == "def2-SVP"
         assert r.formula == "C2H6"
@@ -463,9 +458,9 @@ class TestParserRealisticOutputs:
         out = tmp_path / "methylamine_running.out"
         out.write_text(_RUNNING_M06_2X, encoding="utf-8")
 
-        r = parse_orca_output(str(out))
+        r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
-        assert analyze_output(out, CompletionMode("opt", False, "! Opt")).status == "incomplete"
+        assert analyze_output(out, CompletionMode("opt", False)).status == "incomplete"
         assert r.method == "M06-2X"
         assert r.basis_set == "6-311+G(d,p)"
         assert r.charge == 1
@@ -480,12 +475,15 @@ class TestParserRealisticOutputs:
         out = tmp_path / "empty.out"
         out.write_text("", encoding="utf-8")
 
-        r = parse_orca_output(str(out))
+        r = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
 
-        assert analyze_output(out, CompletionMode("opt", False, "! Opt")).status == "incomplete"
+        assert analyze_output(out, CompletionMode("opt", False)).status == "incomplete"
         assert r.method == ""
         assert r.energy_hartree is None
 
     def test_nonexistent_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
-            parse_orca_output(str(tmp_path / "does_not_exist.out"))
+            parse_orca_output_text(
+                read_orca_text(str(tmp_path / "does_not_exist.out")),
+                source_path=str(tmp_path / "does_not_exist.out"),
+            )

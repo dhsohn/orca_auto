@@ -79,7 +79,7 @@ Normal submission and publication repair both call `queue/job_records.py` with t
 - Upon calculation exit, `orca/out_analyzer.py` verifies termination banners and scans output lines for error or convergence failures (ignoring comments and input echoes).
 - A verified observation payload (`machine.json` adhering to the v1 envelope contract) and human-readable HTML/SI reports are published.
 
-A result with captured source evidence publishes `execution_provenance.json` before `machine.json`. The report publisher copies the generation's recorded evidence; the machine result references it as the `execution-provenance` artifact alongside `input` and `orca-output`. Readers verify both the artifact receipt and agreement with the generation state. A terminal report and its provenance are immutable; terminal replay preserves existing evidence, including historical reports without a provenance artifact.
+A result with captured source evidence publishes `execution_provenance.json` before `machine.json`. The report publisher copies the generation's recorded evidence; the machine result references it as the `execution-provenance` artifact alongside `input` and `orca-output`. Any reader can verify the receipts; the release smoke checks agreement with the generation state. A terminal report and its provenance are immutable; terminal replay preserves existing evidence, including historical reports without a provenance artifact.
 
 ### Terminal publication and queue completion
 

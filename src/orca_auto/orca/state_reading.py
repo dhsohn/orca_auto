@@ -9,33 +9,20 @@ from pathlib import Path
 from typing import Any, cast
 
 from orca_auto.core.artifacts import (
-    EXECUTION_PROVENANCE_FILE,
     MAX_RUN_ARTIFACT_JSON_BYTES,
     RUN_REPORT_JSON_FILE,
     RUN_STATE_FILE,
 )
-from orca_auto.core.confined_io import read_confined_text, require_confined_regular_file
+from orca_auto.core.confined_io import read_confined_text
 from orca_auto.core.queue.engine.input_snapshot import require_direct_generation_owner
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils.persistence import load_json_mapping_file
-from orca_auto.orca.machine_observation import (
-    ReceiptDigest,
-    VerifiedArtifact,
-    artifact_receipt,
-    machine_json_bytes,
-    read_verified_artifacts,
-    results_payload_from_observation,
-)
 
 from .generation_validation import (
     require_bound_generation_directory,
     require_generation_selected_input,
-)
-from .report_fields import (
-    EXECUTION_PROVENANCE_ARTIFACT_ID,
-    report_result_fields,
 )
 from .statuses import ACTIVE_RUN_STATUS_VALUES, RunStatus
 from .types import RunFinalResult, RunState
@@ -240,260 +227,10 @@ def machine_lifecycle(status: str) -> tuple[str, str]:
     return "finished", "uncertain"
 
 
-def load_report_json(
-    generation_dir: Path,
-    *,
-    require_consumable_success: bool = False,
-) -> dict[str, Any] | None:
-    """Load one provenance-verified ORCA report from an exact visible generation."""
-
-    loaded = load_report_json_with_output_receipt(
-        generation_dir,
-        require_consumable_success=require_consumable_success,
-    )
-    return None if loaded is None else loaded[0]
-
-
-def _report_artifact_receipt(
-    verified: Mapping[str, VerifiedArtifact],
-    artifact_id: str,
-    generation_dir: Path,
-    candidate: Path | None,
-    *,
-    required: bool,
-    role: str,
-    media_type: str,
-) -> dict[str, Any] | None:
-    artifact = verified.get(artifact_id)
-    if artifact is None:
-        return artifact_receipt(
-            generation_dir, candidate, required=required, role=role, media_type=media_type
-        )
-    if candidate is None or generation_dir / candidate != artifact.path:
-        return None
-    return {**artifact.receipt, "required": required, "role": role, "media_type": media_type}
-
-
-def load_report_json_with_output_receipt(
-    generation_dir: Path,
-    *,
-    require_consumable_success: bool = False,
-) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
-    """Load one verified report together with the ``orca-output`` receipt it accepted.
-
-    The second element is the receipt this load re-hashed from disk and found
-    equal to the one the machine observation records, so a reader that must
-    prove it read the observed bytes can compare its own digest against it
-    instead of re-deriving one from a file it opened later. It is ``None`` when
-    the generation records no terminal output, and carries a ``missing`` or
-    ``invalid`` status when the recorded output is not a file the observation
-    could bind — the caller decides what an unavailable receipt means for it.
-    """
-
-    raw_generation_dir = generation_dir.expanduser()
-    if (
-        not raw_generation_dir.is_absolute()
-        or raw_generation_dir.is_symlink()
-        or not is_visible_generation_name(raw_generation_dir.name)
-    ):
-        return None
-    report_path = report_json_path(raw_generation_dir)
-    try:
-        resolved_generation_dir = raw_generation_dir.resolve(strict=True)
-        generation_before = resolved_generation_dir.stat()
-        before = report_path.lstat()
-        observation = json.loads(
-            read_confined_text(
-                resolved_generation_dir,
-                report_path,
-                label="ORCA generation report",
-                max_bytes=MAX_RUN_ARTIFACT_JSON_BYTES,
-            )
-        )
-    except (OSError, RuntimeError, TypeError, ValueError):
-        return None
-    if (
-        raw_generation_dir != resolved_generation_dir
-        or not stat.S_ISDIR(generation_before.st_mode)
-        or not stat.S_ISREG(before.st_mode)
-        or before.st_nlink != 1
-        or not isinstance(observation, dict)
-    ):
-        return None
-    result_data = results_payload_from_observation(observation)
-    if result_data is None:
-        return None
-    if (
-        observation.get("producer", {}).get("name") != "orca_auto"
-        or observation.get("operation", {}).get("kind") != "chemistry/orca-run"
-        or result_data.get("result_kind") != "engine-run"
-        or result_data.get("engine") != "orca"
-    ):
-        return None
-    loaded_state = load_generation_state(resolved_generation_dir)
-    if loaded_state is None:
-        return None
-    payload, _state = loaded_state
-    job = _dict(payload.get("job"))
-    status = _dict(payload.get("status"))
-    input_payload = _dict(payload.get("input"))
-    engine_payload = _dict(payload.get("engine_payload"))
-    final_result = _dict(engine_payload.get("final_result"))
-    summary = _dict(result_data.get("summary"))
-    results = _dict(result_data.get("results"))
-    operation_id = normalized_text(observation.get("operation", {}).get("id"))
-    expected_phase, expected_outcome = machine_lifecycle(normalized_text(status.get("state")))
-    lifecycle = _dict(observation.get("lifecycle"))
-    expected_summary, expected_results = report_result_fields(payload)
-    if (
-        operation_id
-        not in {
-            normalized_text(job.get("id")),
-            normalized_text(engine_payload.get("run_id")),
-        }
-        or lifecycle.get("phase") != expected_phase
-        or lifecycle.get("outcome") != expected_outcome
-        or any(summary.get(key) != value for key, value in expected_summary.items())
-        or any(results.get(key) != value for key, value in expected_results.items())
-        or results.get("max_retries") != engine_payload.get("max_retries")
-        or results.get("execution_provenance_artifact")
-        != expected_results.get("execution_provenance_artifact")
-    ):
-        return None
-    artifacts = observation.get("artifacts")
-    if not isinstance(artifacts, Mapping):
-        return None
-    outcome = expected_outcome
-    if require_consumable_success and outcome == "succeeded":
-        handoff = _dict(observation.get("handoff"))
-        delivery = _dict(observation.get("delivery"))
-        if handoff.get("status") != "ready" or delivery.get("status") != "complete":
-            return None
-    target = verified_generation_artifact_target(resolved_generation_dir.parent, payload)
-    if target is None or target[0] != resolved_generation_dir:
-        return None
-    provenance = _execution_provenance(payload)
-    bound_selected_identity = provenance.get("bound_selected_identity")
-    selected_text = _selected_input_text(payload)
-    if not isinstance(bound_selected_identity, Mapping) or not selected_text:
-        return None
-    try:
-        selected = require_confined_regular_file(
-            resolved_generation_dir,
-            Path(selected_text).expanduser(),
-            label="ORCA report selected input",
-        )
-        # Hash the input after ownership checks and the other artifacts, as the
-        # original final input verification did. Timestamps alone cannot expose
-        # every same-size write within one filesystem clock tick.
-        verified_artifacts = read_verified_artifacts(
-            observation, resolved_generation_dir, last_path=selected
-        )
-        if verified_artifacts is None:
-            return None
-        verified_input = verified_artifacts.get("input")
-        if (
-            verified_input is None
-            or verified_input.path != selected
-            or {
-                "path": str(selected),
-                "sha256": verified_input.receipt["byte_sha256"],
-                "size_bytes": verified_input.receipt["bytes"],
-            }
-            != dict(bound_selected_identity)
-        ):
-            return None
-        if expected_results.get("execution_provenance_artifact"):
-            expected_provenance = _report_artifact_receipt(
-                verified_artifacts,
-                EXECUTION_PROVENANCE_ARTIFACT_ID,
-                resolved_generation_dir,
-                resolved_generation_dir / EXECUTION_PROVENANCE_FILE,
-                required=True,
-                role="supporting-information",
-                media_type="application/json",
-            )
-            # A self-consistent replacement receipt must still match the
-            # submission evidence persisted in this generation's state.
-            expected_digest = ReceiptDigest()
-            expected_digest.update(machine_json_bytes(provenance))
-            if (
-                EXECUTION_PROVENANCE_ARTIFACT_ID not in result_data["artifact_refs"]
-                or artifacts.get(EXECUTION_PROVENANCE_ARTIFACT_ID) != expected_provenance
-                or not expected_digest.matches(expected_provenance)
-            ):
-                return None
-    except (OSError, RuntimeError, TypeError, ValueError):
-        return None
-    expected_input = _report_artifact_receipt(
-        verified_artifacts,
-        "input",
-        resolved_generation_dir,
-        Path(normalized_text(input_payload.get("primary_path"))),
-        required=True,
-        role="source",
-        media_type="text/plain",
-    )
-    if artifacts.get("input") != expected_input:
-        return None
-    last_out_path = normalized_text(final_result.get("last_out_path"))
-    accepted_output_receipt: dict[str, Any] | None = None
-    if last_out_path or outcome == "succeeded":
-        expected_output = _report_artifact_receipt(
-            verified_artifacts,
-            "orca-output",
-            resolved_generation_dir,
-            Path(last_out_path) if last_out_path else None,
-            required=outcome == "succeeded",
-            role="log",
-            media_type="text/plain",
-        )
-        if artifacts.get("orca-output") != expected_output:
-            return None
-        accepted_output_receipt = expected_output
-    try:
-        after = report_path.lstat()
-        generation_details = resolved_generation_dir.stat()
-    except OSError:
-        return None
-    if (
-        (
-            before.st_dev,
-            before.st_ino,
-            before.st_nlink,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        != (
-            after.st_dev,
-            after.st_ino,
-            after.st_nlink,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        or (
-            int(generation_before.st_dev),
-            int(generation_before.st_ino),
-        )
-        != (
-            int(generation_details.st_dev),
-            int(generation_details.st_ino),
-        )
-        or target[1] != (int(generation_details.st_dev), int(generation_details.st_ino))
-        or not all(artifact.is_unchanged() for artifact in verified_artifacts.values())
-    ):
-        return None
-    return payload, accepted_output_receipt
-
-
 __all__ = [
     "REPORT_JSON_NAME",
     "STATE_FILE_NAME",
     "load_generation_state",
-    "load_report_json",
-    "load_report_json_with_output_receipt",
     "load_state",
     "machine_lifecycle",
     "normalized_text",

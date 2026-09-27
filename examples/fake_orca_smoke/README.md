@@ -19,8 +19,9 @@ The script:
 4. submits `water_opt.inp` through `orca_auto run-dir`;
 5. runs one queue-worker poll;
 6. asserts that the queue entry and private `job_state.json` completed and that
-   public `machine.json` reports a consumable completion, then follows the
-   verified result to the confined generation output and checks the
+   public `machine.json` reports a consumable completion, verified by the
+   repository's test-tree reader `tests/contracts/report_verifier.py`, then
+   follows the verified result to the confined generation output and checks the
    normal-termination marker.
 
 Pass an explicit work directory if you want to inspect the generated files after

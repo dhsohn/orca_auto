@@ -11,7 +11,6 @@ from .parser.extractors import (
     parse_input_line,
     parse_optimization_cycles,
 )
-from .parser.io import read_orca_text
 
 
 @dataclass
@@ -32,21 +31,6 @@ class OptProgress:
     basis_set: str = ""
     steps: list[OptStep] = field(default_factory=list)
     is_converged: bool = False
-
-
-def parse_opt_progress(file_path: str) -> OptProgress:
-    """Extract per-cycle energy/convergence data from an ORCA optimization output.
-
-    Args:
-        file_path: Path to the ORCA output file
-
-    Returns:
-        Optimization progress summary
-
-    Raises:
-        FileNotFoundError: If the file does not exist
-    """
-    return parse_opt_progress_text(read_orca_text(file_path), source_path=file_path)
 
 
 def parse_opt_progress_text(text: str, *, source_path: str) -> OptProgress:

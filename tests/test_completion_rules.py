@@ -36,7 +36,6 @@ def test_route_comment_never_reclassifies_the_job(tmp_path: Path) -> None:
     )
     assert mode.kind == "opt"
     assert not mode.require_irc
-    assert mode.route_line == "! B3LYP def2-SVP Opt Freq"
 
 
 def test_detect_opt_without_irc(tmp_path: Path) -> None:
@@ -49,18 +48,15 @@ def test_detect_completion_mode_skips_blank_and_comment_lines(tmp_path: Path) ->
     mode = _detect(tmp_path, "\n\n# comment line\n   \n! NEB-TS IRC TightSCF\n* xyz 0 1\n")
     assert mode.kind == "ts"
     assert mode.require_irc
-    assert mode.route_line == "! NEB-TS IRC TightSCF"
 
 
 def test_detect_completion_mode_defaults_to_opt_when_no_ts_keyword(tmp_path: Path) -> None:
     mode = _detect(tmp_path, "! SP IRC\n* xyz 0 1\n")
     assert mode.kind == "opt"
     assert mode.require_irc
-    assert mode.route_line == "! SP IRC"
 
 
-def test_detect_completion_mode_returns_empty_route_when_no_route_found(tmp_path: Path) -> None:
+def test_detect_completion_mode_without_a_route_line_is_plain_opt(tmp_path: Path) -> None:
     mode = _detect(tmp_path, "\n# comment only\n* xyz 0 1\nH 0 0 0\n")
     assert mode.kind == "opt"
     assert not mode.require_irc
-    assert mode.route_line == ""

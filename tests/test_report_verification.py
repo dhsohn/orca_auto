@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca import machine_observation, state_reading
+from orca_auto.orca import machine_observation
 from orca_auto.orca.report.publication import write_report_json
-from orca_auto.orca.state import new_state, save_state
-from orca_auto.orca.state_reading import load_report_json
+from orca_auto.orca.state import new_state, normalized_payload_from_state, save_state
+from tests.contracts import report_verifier
+from tests.contracts.report_verifier import load_report_json
 from tests.engine_artifact_helpers import bind_report_generation
 
 
@@ -35,7 +36,7 @@ def report_generation(tmp_path: Path) -> tuple[Path, Path]:
         },
     )
     save_state(tmp_path, state)
-    report = write_report_json(tmp_path, state)
+    report = write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state))
     assert report is not None
     assert load_report_json(generation, require_consumable_success=True) is not None
     return generation, report
@@ -149,7 +150,7 @@ def test_report_rejects_artifact_changes_after_hashing(
 ) -> None:
     generation, _ = report_generation
     path = generation / filename
-    original = state_reading.read_verified_artifacts
+    original = report_verifier.read_verified_artifacts
     mutation_ran = False
 
     def mutate_after_hashing(*args: Any, **kwargs: Any) -> Any:
@@ -177,7 +178,7 @@ def test_report_rejects_artifact_changes_after_hashing(
         mutation_ran = True
         return target
 
-    monkeypatch.setattr(state_reading, "read_verified_artifacts", mutate_after_hashing)
+    monkeypatch.setattr(report_verifier, "read_verified_artifacts", mutate_after_hashing)
     assert load_report_json(generation, require_consumable_success=True) is None
     assert mutation_ran
 
@@ -215,7 +216,7 @@ def test_final_input_hash_observes_same_tick_writes(
         report.write_text(json.dumps(observation))
     # WSL can keep identical stat fields across fast same-size writes. The
     # final content binding must not depend solely on a changed timestamp.
-    monkeypatch.setattr(machine_observation.VerifiedArtifact, "is_unchanged", lambda self: True)
+    monkeypatch.setattr(report_verifier.VerifiedArtifact, "is_unchanged", lambda self: True)
     assert load_report_json(generation) is not None
     mutations: list[bytes] = []
 
@@ -226,7 +227,7 @@ def test_final_input_hash_observes_same_tick_writes(
         mutations.append(changed)
 
     if mutation_stage == "ownership":
-        owner = state_reading.verified_generation_artifact_target
+        owner = report_verifier.verified_generation_artifact_target
 
         def after_ownership(*args: Any, **kwargs: Any) -> Any:
             target = owner(*args, **kwargs)
@@ -234,7 +235,7 @@ def test_final_input_hash_observes_same_tick_writes(
             change_input()
             return target
 
-        monkeypatch.setattr(state_reading, "verified_generation_artifact_target", after_ownership)
+        monkeypatch.setattr(report_verifier, "verified_generation_artifact_target", after_ownership)
     else:
         consume = machine_observation.ReceiptDigest.consume
 

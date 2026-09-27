@@ -21,18 +21,16 @@ from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
 from orca_auto.orca.config import load_config
 from orca_auto.orca.evidence import collect_structure_evidence
 from orca_auto.orca.frequencies import parse_frequency_analysis
-from orca_auto.orca.orca_opt_progress import parse_opt_progress
-from orca_auto.orca.parser import parse_orca_output
+from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
+from orca_auto.orca.parser import parse_orca_output_text
+from orca_auto.orca.parser.io import read_orca_text
 from orca_auto.orca.queue.adapter import list_queue, queue_entry_reaction_dir
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from orca_auto.orca.report.irc import collect_irc_report_data
 from orca_auto.orca.report.opt import collect_opt_report_data
-from orca_auto.orca.state_reading import (
-    load_report_json,
-    load_state,
-    report_json_path,
-)
+from orca_auto.orca.state_reading import load_state, report_json_path
 from tests.conftest import write_fake_orca
+from tests.contracts.report_verifier import load_report_json
 from tests.machine_contract_helpers import validate_common_machine
 
 
@@ -656,7 +654,7 @@ def test_real_orca_h2_single_point_acceptance_when_configured(tmp_path: Path) ->
     assert "FINAL SINGLE POINT ENERGY" in raw_output
     assert "****ORCA TERMINATED NORMALLY****" in raw_output
 
-    parsed = parse_orca_output(str(out_path))
+    parsed = parse_orca_output_text(read_orca_text(str(out_path)), source_path=str(out_path))
     assert parsed.energy_hartree is not None and math.isfinite(parsed.energy_hartree)
     assert -2.0 < parsed.energy_hartree < 0.0
     assert parsed.formula == "H2"
@@ -743,7 +741,7 @@ def test_real_orca_electronic_state_and_input_echo_acceptance_when_configured(
     assert "* XYZ 1 2" in text
     if diagnostic_comment:
         assert "# Previous trial: SCF NOT CONVERGED" in text
-    parsed = parse_orca_output(str(output))
+    parsed = parse_orca_output_text(read_orca_text(str(output)), source_path=str(output))
     assert parsed.electronic_state_verified
     assert (parsed.charge, parsed.multiplicity) == (1, 2)
     assert parsed.energy_hartree is not None and math.isfinite(parsed.energy_hartree)
@@ -802,12 +800,15 @@ def test_real_orca_water_optimization_acceptance_when_configured(
     assert isinstance(out_text, str) and out_text
     out = Path(out_text)
     assert "ORCA TERMINATED NORMALLY" in out.read_text(encoding="utf-8")
-    parsed = parse_orca_output(str(out))
+    parsed = parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
     assert parsed.opt_converged is converged
     assert parsed.energy_hartree is not None and math.isfinite(parsed.energy_hartree)
     assert parsed.formula == "H2O" and parsed.n_atoms == 3
     assert parsed.charge == 0 and parsed.multiplicity == 1
-    assert parse_opt_progress(str(out)).is_converged is converged
+    assert (
+        parse_opt_progress_text(read_orca_text(str(out)), source_path=str(out)).is_converged
+        is converged
+    )
     report = collect_opt_report_data(reaction_dir, state, kind="opt")
     assert report is not None and report.opt_converged is converged
     assert report_json_path(generation).is_file()
@@ -884,7 +885,9 @@ def test_real_orca_ammonia_ts_irc_acceptance_when_configured(
     out = Path(attempt["out_path"])
     output = out.read_text(encoding="utf-8")
     assert "ORCA TERMINATED NORMALLY" in output
-    assert parse_opt_progress(str(out)).is_converged is True
+    assert (
+        parse_opt_progress_text(read_orca_text(str(out)), source_path=str(out)).is_converged is True
+    )
     forward, backward = output.split("FORWARD IRC", 1)[1].split("BACKWARD IRC", 1)
     assert "THE IRC HAS CONVERGED" in forward
     assert "THE IRC HAS CONVERGED" in backward.split("IRC PATH SUMMARY", 1)[0]

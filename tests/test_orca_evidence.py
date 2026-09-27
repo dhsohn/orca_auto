@@ -12,8 +12,9 @@ import pytest
 
 from orca_auto.orca import evidence
 from orca_auto.orca.frequencies import parse_frequency_analysis
-from orca_auto.orca.orca_opt_progress import parse_opt_progress
-from orca_auto.orca.parser import parse_orca_output
+from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
+from orca_auto.orca.parser import parse_orca_output_text
+from orca_auto.orca.parser.io import read_orca_text
 
 _ENERGY = "FINAL SINGLE POINT ENERGY -1.0\n"
 _FREQUENCIES = "VIBRATIONAL FREQUENCIES\n0: -410.20 cm**-1\n1: 100.00 cm**-1\n"
@@ -64,8 +65,11 @@ def test_cached_output_reads_once_and_preserves_both_parsers(
     out = tmp_path / "final.out"
     encoded = contents.encode(encoding)
     out.write_bytes(encoded)
-    expected = parse_orca_output(str(out)), parse_frequency_analysis(out)
-    expected_progress = parse_opt_progress(str(out))
+    expected = (
+        parse_orca_output_text(read_orca_text(str(out)), source_path=str(out)),
+        parse_frequency_analysis(out),
+    )
+    expected_progress = parse_opt_progress_text(read_orca_text(str(out)), source_path=str(out))
     reads = _record_output_reads(monkeypatch)
 
     actual = evidence.parsed_final_output(out)
@@ -125,7 +129,7 @@ def test_missing_output_preserves_file_api_errors(tmp_path: Path) -> None:
     out = tmp_path / "missing.out"
 
     with pytest.raises(FileNotFoundError) as result_error:
-        parse_orca_output(str(out))
+        parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
     assert result_error.value.filename == str(out)
     assert parse_frequency_analysis(out) is None
     with pytest.raises(FileNotFoundError) as evidence_error:
@@ -149,7 +153,7 @@ def test_unreadable_output_preserves_errors_and_is_not_cached(
     with monkeypatch.context() as denied:
         denied.setattr(builtins, "open", denied_open)
         with pytest.raises(PermissionError) as result_error:
-            parse_orca_output(str(out))
+            parse_orca_output_text(read_orca_text(str(out)), source_path=str(out))
         assert result_error.value is read_error
         assert parse_frequency_analysis(out) is None
         with pytest.raises(PermissionError) as evidence_error:

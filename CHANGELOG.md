@@ -34,6 +34,12 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   `ORCA_AUTO_ORCA_ADMISSION_TASK_ID` environment variables. Nothing set them:
   the worker passes the slot token as `--admission-token`, and the app name and
   task ID come from the claimed queue row.
+- `orca_auto.orca.state_reading.load_report_json` and
+  `load_report_json_with_output_receipt` leave the package for the repository
+  test tree (`tests/contracts/report_verifier.py`). ORCA_auto never reads
+  `machine.json` back; the release smoke `examples/fake_orca_smoke/run.sh`
+  imports the verifier from the checkout, and external readers verify the
+  receipts themselves. Published reports are unchanged.
 
 ### Fixed
 

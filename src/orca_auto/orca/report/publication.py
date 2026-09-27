@@ -6,7 +6,7 @@ import json
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from orca_auto import __version__
 from orca_auto.core.artifacts import (
@@ -34,7 +34,6 @@ from ..report_fields import (
     report_result_fields,
 )
 from ..state import normalized_payload_from_state, retired_generation, write_generation_bytes
-from ..types import RunFinalResult, RunState
 from .composer import compose_job_report_html
 from .si import write_si_block
 
@@ -220,24 +219,7 @@ def write_report_json(
     generation_target: tuple[Path, tuple[int, int]] | None = None,
     published_artifacts: Mapping[str, tuple[Path, str, str]] | None = None,
 ) -> Path | None:
-    if int(report_payload.get("schema_version", 0) or 0) == 1:
-        payload = report_payload
-    else:
-        state: RunState = {
-            "job_id": _state_reading.normalized_text(report_payload.get("job_id")),
-            "run_id": _state_reading.normalized_text(report_payload.get("run_id")),
-            "reaction_dir": _state_reading.normalized_text(report_payload.get("reaction_dir"))
-            or str(reaction_dir),
-            "selected_inp": _state_reading.normalized_text(report_payload.get("selected_inp")),
-            "status": _state_reading.normalized_text(report_payload.get("status")),
-            "started_at": _state_reading.normalized_text(report_payload.get("started_at")),
-            "updated_at": _state_reading.normalized_text(report_payload.get("updated_at")),
-            "attempts": list(report_payload.get("attempts") or []),
-            "scratch_publications": list(report_payload.get("scratch_publications") or []),
-            "execution_provenance": _dict(report_payload.get("execution_provenance")),
-            "final_result": cast(RunFinalResult | None, report_payload.get("final_result")),
-        }
-        payload = normalized_payload_from_state(reaction_dir, state)
+    payload = report_payload
     if generation_target is None:
         generation_target = _state_reading.verified_generation_artifact_target(
             reaction_dir, payload

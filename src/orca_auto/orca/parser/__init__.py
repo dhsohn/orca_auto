@@ -29,7 +29,6 @@ from .extractors import (
 from .extractors import (
     parse_wall_time as _parse_wall_time,
 )
-from .io import read_orca_text as _read_orca_text
 from .patterns import (
     CHARGE_MULT_RE,
     ENTHALPY_RE,
@@ -54,7 +53,6 @@ __all__ = [
     "KCAL_PER_HARTREE",
     "AtomRow",
     "OrcaResult",
-    "parse_orca_output",
     "parse_orca_output_text",
 ]
 
@@ -98,22 +96,6 @@ class OrcaResult:
 # ---------------------------------------------------------------------------
 # Parser functions
 # ---------------------------------------------------------------------------
-
-
-def parse_orca_output(file_path: str) -> OrcaResult:
-    """Parse an ORCA .out file and return an OrcaResult.
-
-    Args:
-        file_path: Path to the ORCA output file
-
-    Returns:
-        Extracted calculation results
-
-    Raises:
-        FileNotFoundError: If the file does not exist
-        UnicodeDecodeError: If there is a file encoding issue
-    """
-    return parse_orca_output_text(_read_orca_text(file_path), source_path=file_path)
 
 
 def parse_orca_output_text(text: str, *, source_path: str) -> OrcaResult:

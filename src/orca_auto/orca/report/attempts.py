@@ -21,7 +21,6 @@ T = TypeVar("T")
 class AttemptReportRow:
     index: int
     label: str
-    direction: str
     analyzer_status: str
     analyzer_reason: str
     duration_text: str
@@ -48,11 +47,11 @@ def attempt_actions(attempt: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(action) for action in actions)
 
 
-def attempt_role(creating_actions: Sequence[str]) -> tuple[str, str]:
-    """(label, direction) for the attempt created by ``creating_actions``."""
+def attempt_role(creating_actions: Sequence[str]) -> str:
+    """Label for the attempt created by ``creating_actions``."""
     if any(action.startswith("resume_") for action in creating_actions):
-        return "resume", "forward"
-    return "attempt", "forward"
+        return "resume"
+    return "attempt"
 
 
 def attempt_report_rows(
@@ -64,12 +63,11 @@ def attempt_report_rows(
         if position == 0:
             label = initial_label
         else:
-            label, _direction = attempt_role(attempt_actions(attempts[position - 1]))
+            label = attempt_role(attempt_actions(attempts[position - 1]))
         rows.append(
             AttemptReportRow(
                 index=int(attempt.get("index", position + 1) or (position + 1)),
                 label=label,
-                direction="forward",
                 analyzer_status=analyzer_status_text(attempt.get("analyzer_status")),
                 analyzer_reason=str(attempt.get("analyzer_reason") or ""),
                 duration_text=duration_text(attempt.get("started_at"), attempt.get("ended_at")),

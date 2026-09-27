@@ -102,9 +102,9 @@ def collect_scan_report_data(
     forward_energies: list[float] = []
     for position, attempt in enumerate(attempts):
         if position == 0:
-            label, direction = initial_label, "forward"
+            label = initial_label
         else:
-            label, direction = attempt_role(attempt_actions(attempts[position - 1]))
+            label = attempt_role(attempt_actions(attempts[position - 1]))
         out_raw = str(attempt.get("out_path") or "").strip()
         points: tuple[ScanSurfacePoint, ...] = ()
         if out_raw:
@@ -114,7 +114,6 @@ def collect_scan_report_data(
             AttemptReportRow(
                 index=index,
                 label=label,
-                direction=direction,
                 analyzer_status=analyzer_status_text(attempt.get("analyzer_status")),
                 analyzer_reason=str(attempt.get("analyzer_reason") or ""),
                 duration_text=duration_text(attempt.get("started_at"), attempt.get("ended_at")),
@@ -124,8 +123,7 @@ def collect_scan_report_data(
         )
         if points:
             segments.append(ScanSegment(attempt_index=index, role=label, points=points))
-            if direction == "forward":
-                forward_energies.extend(point.energy for point in points)
+            forward_energies.extend(point.energy for point in points)
 
     forward_barrier = scan_profile_interior_barrier_kcal(forward_energies)
     forward_drop = (
@@ -167,12 +165,6 @@ def collect_scan_report_data(
     )
 
 
-_SEGMENT_STYLES = {
-    "initial relaxed scan": ("#2f6fb2", ""),
-    "resume": ("#2f6fb2", ""),
-}
-
-
 def _profile_chart_svg(data: ScanReportData) -> str:
     all_energy = [point.energy for segment in data.segments for point in segment.points]
     if len(all_energy) < 2:
@@ -182,7 +174,6 @@ def _profile_chart_svg(data: ScanReportData) -> str:
     series: list[ChartSeries] = []
     seen_roles: set[str] = set()
     for segment in data.segments:
-        color, dash = _SEGMENT_STYLES.get(segment.role, ("#2f6fb2", ""))
         points = tuple(
             (point.coordinates[0], (point.energy - e_min) * KCAL_PER_HARTREE)
             for point in segment.points
@@ -192,7 +183,7 @@ def _profile_chart_svg(data: ScanReportData) -> str:
             continue
         label = segment.role if segment.role not in seen_roles else ""
         seen_roles.add(segment.role)
-        series.append(ChartSeries(label=label, color=color, dash=dash, points=points))
+        series.append(ChartSeries(label=label, color="#2f6fb2", dash="", points=points))
 
     x_label = "scan coordinate"
     if data.scan_spec is not None:

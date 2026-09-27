@@ -22,12 +22,15 @@ from orca_auto.orca.report.publication import write_report_files, write_report_j
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import (
     new_state,
+    normalized_payload_from_state,
     save_state,
     write_state,
 )
-from orca_auto.orca.state_reading import load_report_json, load_state
+from orca_auto.orca.state_reading import load_state
 from orca_auto.orca.statuses import TERMINAL_RUN_STATUSES, RunStatus
 from orca_auto.orca.types import RunFinalResult, RunState
+from tests.contracts import report_verifier
+from tests.contracts.report_verifier import load_report_json
 from tests.machine_contract_helpers import validate_common_machine
 
 
@@ -85,11 +88,11 @@ def test_generation_state_read_is_bounded(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_generation_report_read_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     generation, state = _bound_state(tmp_path, token="bounded-report-token-0001")
-    report_path = write_report_json(tmp_path, dict(state))
+    report_path = write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state))
     assert report_path is not None
 
     monkeypatch.setattr(
-        state_reading_module, "MAX_RUN_ARTIFACT_JSON_BYTES", report_path.stat().st_size - 1
+        report_verifier, "MAX_RUN_ARTIFACT_JSON_BYTES", report_path.stat().st_size - 1
     )
     assert load_report_json(generation) is None
 
@@ -98,9 +101,9 @@ def test_generation_report_rejects_swap_after_confined_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     generation, state = _bound_state(tmp_path, token="swapped-report-token-0001")
-    report_path = write_report_json(tmp_path, dict(state))
+    report_path = write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state))
     assert report_path is not None
-    original_target = state_reading_module.verified_generation_artifact_target
+    original_target = report_verifier.verified_generation_artifact_target
 
     def replace_after_read(
         reaction_dir: Path,
@@ -113,9 +116,7 @@ def test_generation_report_rejects_swap_after_confined_read(
         )
         return target
 
-    monkeypatch.setattr(
-        state_reading_module, "verified_generation_artifact_target", replace_after_read
-    )
+    monkeypatch.setattr(report_verifier, "verified_generation_artifact_target", replace_after_read)
     assert load_report_json(generation) is None
 
 
@@ -375,9 +376,9 @@ def test_state_module_keeps_write_helpers_available(tmp_path: Path) -> None:
         "execution_provenance": state["execution_provenance"],
         "final_result": None,
     }
-    assert write_report_json(tmp_path, report_payload) == state_reading_module.report_json_path(
-        generation
-    )
+    assert write_report_json(
+        tmp_path, normalized_payload_from_state(tmp_path, report_payload)
+    ) == state_reading_module.report_json_path(generation)
     written_report = load_report_json(generation)
     assert written_report is not None
     assert written_report["engine"] == "orca"
@@ -527,17 +528,17 @@ def test_terminal_machine_observation_is_immutable(tmp_path: Path) -> None:
     state["final_result"] = final_result
     write_state(tmp_path, state)
 
-    path = write_report_json(tmp_path, dict(state))
+    path = write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state))
     assert path is not None
     original_identity = (path.stat().st_dev, path.stat().st_ino)
 
-    assert write_report_json(tmp_path, dict(state)) == path
+    assert write_report_json(tmp_path, normalized_payload_from_state(tmp_path, state)) == path
     assert (path.stat().st_dev, path.stat().st_ino) == original_identity
 
     changed = dict(state)
     changed["final_result"] = {**final_result, "reason": "cancel_requested"}
     with pytest.raises(RuntimeError, match="terminal machine observation is immutable"):
-        write_report_json(tmp_path, changed)
+        write_report_json(tmp_path, normalized_payload_from_state(tmp_path, changed))
 
 
 def test_load_report_json_returns_none_for_missing_invalid_and_non_dict(tmp_path: Path) -> None:

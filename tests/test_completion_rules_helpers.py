@@ -16,7 +16,6 @@ def test_detect_completion_mode_skips_blank_and_comment_lines_before_route(tmp_p
 
     assert mode.kind == "ts"
     assert mode.require_irc is True
-    assert mode.route_line == "! NEB-TS IRC"
 
 
 def test_detect_completion_mode_scans_ts_irc_keywords_on_later_route_lines(
@@ -50,4 +49,3 @@ def test_detect_completion_mode_defaults_to_opt_when_no_route_line_is_present(
 
     assert mode.kind == "opt"
     assert mode.require_irc is False
-    assert mode.route_line == ""
