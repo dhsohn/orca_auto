@@ -1,0 +1,135 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "count": 3,
+    "active_simulations": 0,
+    "activities": [
+      {
+        "activity_id": "<q:1>",
+        "kind": "job",
+        "engine": "orca",
+        "status": "pending",
+        "label": "waiting",
+        "source": "orca_auto_orca",
+        "submitted_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "cancel_target": "<q:1>",
+        "worker_log": "<tmp>/runs/logs/<q:1>.log",
+        "aliases": [
+          "<q:1>",
+          "<orca:1>",
+          "<tmp>/runs/waiting",
+          "waiting"
+        ],
+        "metadata": {
+          "queue_id": "<q:1>",
+          "task_id": "<orca:1>",
+          "task_kind": "orca_run_inp",
+          "run_id": "",
+          "job_type": "opt",
+          "selected_inp": "<tmp>/runs/waiting/<generation:1>/h2o.inp",
+          "reaction_dir": "<tmp>/runs/waiting",
+          "allowed_root": "<tmp>/runs",
+          "priority": 10,
+          "admission_deferral_reason": "",
+          "publication_blocked_reason": "",
+          "publication_blocked_scope": "",
+          "publication_blocked_action": "",
+          "publication_owner": "",
+          "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+          "elapsed_started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>"
+        }
+      },
+      {
+        "activity_id": "<q:2>",
+        "kind": "job",
+        "engine": "orca",
+        "status": "cancelled",
+        "label": "stopped",
+        "source": "orca_auto_orca",
+        "submitted_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "cancel_target": "<q:2>",
+        "worker_log": "<tmp>/runs/logs/<q:2>.log",
+        "aliases": [
+          "<q:2>",
+          "<orca:2>",
+          "<tmp>/runs/stopped",
+          "stopped"
+        ],
+        "metadata": {
+          "queue_id": "<q:2>",
+          "task_id": "<orca:2>",
+          "task_kind": "orca_run_inp",
+          "run_id": "",
+          "job_type": "opt",
+          "selected_inp": "<tmp>/runs/stopped/<generation:2>/h2o.inp",
+          "reaction_dir": "<tmp>/runs/stopped",
+          "allowed_root": "<tmp>/runs",
+          "priority": 10,
+          "admission_deferral_reason": "",
+          "publication_blocked_reason": "terminal publication pending",
+          "publication_blocked_scope": "orca_terminal_publication",
+          "publication_blocked_action": "The queue worker retries result publication automatically. Inspect the worker log if it persists; this directory remains fenced until publication finishes.",
+          "publication_owner": "orca_queue_worker",
+          "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+          "finished_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+          "elapsed_started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>"
+        }
+      },
+      {
+        "activity_id": "<q:3>",
+        "kind": "job",
+        "engine": "orca",
+        "status": "completed",
+        "label": "done",
+        "source": "orca_auto_orca",
+        "submitted_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "cancel_target": "<q:3>",
+        "worker_log": "<tmp>/runs/logs/<q:3>.log",
+        "aliases": [
+          "<q:3>",
+          "<orca:3>",
+          "<run:1>",
+          "<tmp>/runs/done",
+          "done"
+        ],
+        "metadata": {
+          "queue_id": "<q:3>",
+          "task_id": "<orca:3>",
+          "task_kind": "orca_run_inp",
+          "run_id": "<run:1>",
+          "job_type": "opt",
+          "selected_inp": "<tmp>/runs/done/<generation:3>/h2o.inp",
+          "reaction_dir": "<tmp>/runs/done",
+          "allowed_root": "<tmp>/runs",
+          "priority": 10,
+          "admission_deferral_reason": "",
+          "publication_blocked_reason": "",
+          "publication_blocked_scope": "",
+          "publication_blocked_action": "",
+          "publication_owner": "",
+          "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+          "started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+          "finished_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+          "elapsed_started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>"
+        }
+      }
+    ],
+    "sources": {
+      "orca_config": "<tmp>/orca_auto.yaml"
+    },
+    "admission_blockers": [
+      {
+        "queue_id": "<q:2>",
+        "allowed_root": "<tmp>/runs",
+        "scope": "orca_terminal_publication",
+        "reason": "terminal publication pending",
+        "next_action": "The queue worker retries result publication automatically. Inspect the worker log if it persists; this directory remains fenced until publication finishes."
+      }
+    ]
+  },
+  "stderr": ""
+}

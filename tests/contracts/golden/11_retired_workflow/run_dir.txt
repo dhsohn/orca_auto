@@ -1,0 +1,4 @@
+exit=1
+--- stdout
+--- stderr
+error: Workflow directories are retired; submit a standalone ORCA input directory

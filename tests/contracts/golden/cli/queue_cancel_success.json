@@ -1,0 +1,33 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "activity_id": "<q:2>",
+    "kind": "job",
+    "engine": "orca",
+    "source": "orca_auto_orca",
+    "label": "first",
+    "status": "cancelled",
+    "cancel_target": "<q:2>",
+    "result": {
+      "status": "cancelled",
+      "reason": "",
+      "returncode": 0,
+      "command_argv": [
+        "orca_auto.orca.direct_cancel",
+        "config=<tmp>/orca_auto.yaml",
+        "target=<q:2>"
+      ],
+      "stdout": "status: cancelled\nqueue_id: <q:2>\njob_id: <orca:1>",
+      "stderr": "",
+      "parsed_stdout": {
+        "status": "cancelled",
+        "queue_id": "<q:2>",
+        "job_id": "<orca:1>"
+      },
+      "job_id": "<orca:1>",
+      "queue_id": "<q:2>"
+    }
+  },
+  "stderr": ""
+}

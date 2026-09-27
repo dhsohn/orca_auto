@@ -1,0 +1,29 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "root": "<scratch>",
+    "root_exists": true,
+    "workspace_count": 1,
+    "blocking_count": 1,
+    "workspaces": [
+      {
+        "path": "<scratch>/<workspace:1>",
+        "name": "<workspace:1>",
+        "state": "invalid-manifest",
+        "manifest_valid": false,
+        "owner_pid": null,
+        "owner_process_start_ticks": null,
+        "owner_boot_id": null,
+        "durable_dir": null,
+        "max_task_memory_bytes": null,
+        "size_bytes": 0,
+        "size_walk_truncated": false,
+        "blocks_launch": true,
+        "detail": "engine scratch contains an unresolved workspace without valid ownership: <scratch>/<workspace:1>",
+        "publication_journal": null
+      }
+    ]
+  },
+  "stderr": ""
+}

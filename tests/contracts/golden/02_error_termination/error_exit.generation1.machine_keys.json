@@ -1,0 +1,105 @@
+{
+  "artifacts": {
+    "execution-provenance": {
+      "byte_sha256": "str",
+      "bytes": "int",
+      "media_type": "str",
+      "path": "str",
+      "required": "bool",
+      "role": "str",
+      "status": "str"
+    },
+    "human-report": {
+      "byte_sha256": "str",
+      "bytes": "int",
+      "media_type": "str",
+      "path": "str",
+      "required": "bool",
+      "role": "str",
+      "status": "str"
+    },
+    "input": {
+      "byte_sha256": "str",
+      "bytes": "int",
+      "media_type": "str",
+      "path": "str",
+      "required": "bool",
+      "role": "str",
+      "status": "str"
+    },
+    "orca-output": {
+      "byte_sha256": "str",
+      "bytes": "int",
+      "media_type": "str",
+      "path": "str",
+      "required": "bool",
+      "role": "str",
+      "status": "str"
+    }
+  },
+  "contract": {
+    "name": "str",
+    "version": "int"
+  },
+  "delivery": {
+    "codes": [],
+    "status": "str"
+  },
+  "handoff": {
+    "codes": [
+      "str"
+    ],
+    "status": "str"
+  },
+  "lifecycle": {
+    "codes": [
+      "str"
+    ],
+    "outcome": "str",
+    "phase": "str"
+  },
+  "lineage": {
+    "trace_id": "NoneType",
+    "upstream": []
+  },
+  "operation": {
+    "id": "str",
+    "kind": "str"
+  },
+  "payload": {
+    "contract": {
+      "name": "str",
+      "version": "int"
+    },
+    "data": {
+      "artifact_refs": [
+        "str",
+        "str",
+        "str",
+        "str"
+      ],
+      "engine": "str",
+      "result_kind": "str",
+      "results": {
+        "analyzer_status": "str",
+        "attempt_count": "int",
+        "execution_provenance_artifact": "str",
+        "reason": "str",
+        "resumed": "bool",
+        "run_id": "str",
+        "runner_error": "str",
+        "skipped_execution": "bool"
+      },
+      "summary": {
+        "analyzer_status": "str",
+        "attempt_count": "int",
+        "reason": "str",
+        "status": "str"
+      }
+    }
+  },
+  "producer": {
+    "name": "str",
+    "version": "str"
+  }
+}

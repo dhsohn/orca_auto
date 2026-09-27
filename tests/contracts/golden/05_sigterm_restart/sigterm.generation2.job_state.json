@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "engine": "orca",
+  "job": {
+    "id": "<orca:1>",
+    "queue_id": "<q:1>",
+    "dir": "<tmp>/runs/sigterm",
+    "app_name": "orca_auto_orca",
+    "task_id": "<orca:1>",
+    "generation": "<sha256:3>"
+  },
+  "status": {
+    "state": "completed",
+    "reason": "normal_termination",
+    "exit_code": null
+  },
+  "input": {
+    "primary_path": "<tmp>/runs/sigterm/<generation:2>/h2o.inp",
+    "selected_xyz_path": ""
+  },
+  "resources": {
+    "request": {},
+    "actual": {}
+  },
+  "timestamps": {
+    "created_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+    "started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+    "updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+    "finished_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>"
+  },
+  "recovery": {
+    "pending": false,
+    "reason": "",
+    "count": 0,
+    "resumed": false
+  },
+  "process": {
+    "worker_pid": null
+  },
+  "artifacts": {
+    "manifest_path": "",
+    "stdout_log": "",
+    "stderr_log": "",
+    "last_out_path": "<tmp>/runs/sigterm/<generation:2>/h2o.out"
+  },
+  "engine_payload": {
+    "run_id": "<run:1>",
+    "attempts": [
+      {
+        "index": 1,
+        "inp_path": "<tmp>/runs/sigterm/<generation:2>/h2o.inp",
+        "out_path": "<tmp>/runs/sigterm/<generation:2>/h2o.out",
+        "return_code": 0,
+        "analyzer_status": "completed",
+        "analyzer_reason": "normal_termination",
+        "markers": {
+          "out_path": "<tmp>/runs/sigterm/<generation:2>/h2o.out",
+          "terminated_normally": true,
+          "imaginary_frequency_count": 0,
+          "irc_marker_found": false,
+          "opt_converged": true,
+          "scf_error": false,
+          "scfgrad_abort": false,
+          "multiplicity_impossible": false,
+          "disk_io_error": false,
+          "generic_error_termination": false,
+          "ts_failure_marker": false,
+          "memory_error": false,
+          "geometry_zero_distance": false,
+          "geom_not_converged": false,
+          "last_opt_converged": true,
+          "total_run_time_seen": true,
+          "final_frequency_section": false
+        },
+        "patch_actions": [],
+        "started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "ended_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+        "command": [
+          "<tmp>/bin/fake_orca",
+          "h2o.inp"
+        ],
+        "input_identity": {
+          "path": "<tmp>/runs/sigterm/<generation:2>/h2o.inp",
+          "sha256": "<sha256:1>",
+          "size_bytes": 154
+        },
+        "executable_identity": {
+          "path": "<tmp>/bin/fake_orca",
+          "sha256": "<sha256:2>",
+          "size_bytes": 1789
+        },
+        "output_identity": {
+          "path": "<tmp>/runs/sigterm/<generation:2>/h2o.out",
+          "sha256": "<sha256:4>",
+          "size_bytes": 1404
+        }
+      }
+    ],
+    "scratch_publications": [],
+    "execution_provenance": {
+      "execution_dir": "<tmp>/runs/sigterm/<generation:2>",
+      "execution_dir_identity": {
+        "device": "<device:int>",
+        "inode": "<inode:int>"
+      },
+      "generation_owner_token": "<snapshot_intent:2>",
+      "source_selected_inp": "<tmp>/runs/sigterm/h2o.inp",
+      "source_inputs": {
+        "selected_source": {
+          "role": "selected_source",
+          "source_path": "<tmp>/runs/sigterm/h2o.inp",
+          "sha256": "<sha256:1>",
+          "size_bytes": 154
+        }
+      },
+      "resource_request": {
+        "max_cores": 1,
+        "max_memory_gb": 1
+      },
+      "recovery": {
+        "previous_generation_name": "<generation:1>",
+        "previous_execution_dir": "<tmp>/runs/sigterm/<generation:1>",
+        "seeded_roles": {},
+        "checkpoint_role": "",
+        "submitted_dependency_identities": {}
+      },
+      "bound_selected_identity": {
+        "path": "<tmp>/runs/sigterm/<generation:2>/h2o.inp",
+        "sha256": "<sha256:1>",
+        "size_bytes": 154
+      },
+      "materialized_inputs": {},
+      "runtime_mutable_input_roles": [],
+      "executable_identity": {
+        "path": "<tmp>/bin/fake_orca",
+        "sha256": "<sha256:2>",
+        "size_bytes": 1789
+      }
+    },
+    "final_result": {
+      "status": "completed",
+      "analyzer_status": "completed",
+      "reason": "normal_termination",
+      "completed_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "last_out_path": "<tmp>/runs/sigterm/<generation:2>/h2o.out",
+      "resumed": false
+    }
+  }
+}

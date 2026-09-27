@@ -1,0 +1,34 @@
+{
+  "bound_selected_identity": {
+    "path": "<tmp>/runs/resubmit/<generation:2>/h2o.inp",
+    "sha256": "<sha256:1>",
+    "size_bytes": 154
+  },
+  "executable_identity": {
+    "path": "<tmp>/bin/fake_orca",
+    "sha256": "<sha256:2>",
+    "size_bytes": 1789
+  },
+  "execution_dir": "<tmp>/runs/resubmit/<generation:2>",
+  "execution_dir_identity": {
+    "device": "<device:int>",
+    "inode": "<inode:int>"
+  },
+  "generation_owner_token": "<snapshot_intent:2>",
+  "materialized_inputs": {},
+  "recovery": {},
+  "resource_request": {
+    "max_cores": 1,
+    "max_memory_gb": 1
+  },
+  "runtime_mutable_input_roles": [],
+  "source_inputs": {
+    "selected_source": {
+      "role": "selected_source",
+      "sha256": "<sha256:1>",
+      "size_bytes": 154,
+      "source_path": "<tmp>/runs/resubmit/h2o.inp"
+    }
+  },
+  "source_selected_inp": "<tmp>/runs/resubmit/h2o.inp"
+}

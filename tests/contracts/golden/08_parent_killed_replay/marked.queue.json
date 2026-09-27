@@ -1,0 +1,103 @@
+[
+  {
+    "queue_id": "<q:1>",
+    "app_name": "orca_auto_orca",
+    "task_id": "<orca:1>",
+    "task_kind": "orca_run_inp",
+    "engine": "orca",
+    "status": "completed",
+    "priority": 10,
+    "enqueued_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+    "started_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+    "finished_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+    "cancel_requested": false,
+    "error": "",
+    "metadata": {
+      "submitted_via": "run_inp",
+      "orca_queued_notification_pending": false,
+      "job_type": "opt",
+      "molecule_key": "H2O",
+      "resource_request": {
+        "max_cores": 1,
+        "max_memory_gb": 1
+      },
+      "resource_actual": {
+        "max_cores": 1,
+        "max_memory_gb": 1
+      },
+      "source_selected_inp": "<tmp>/runs/killed_parent/h2o.inp",
+      "selected_inp": "<tmp>/runs/killed_parent/<generation:1>/h2o.inp",
+      "selected_input_path": "<tmp>/runs/killed_parent/h2o.inp",
+      "selected_input_xyz": "",
+      "execution_snapshot": {
+        "version": 3,
+        "job_dir_identity": {
+          "device": "<device:int>",
+          "inode": "<inode:int>"
+        },
+        "generation_name": "<generation:1>",
+        "execution_dir_identity": {
+          "device": "<device:int>",
+          "inode": "<inode:int>"
+        },
+        "execution_dir": "<tmp>/runs/killed_parent/<generation:1>",
+        "snapshot_intent_token": "<snapshot_intent:1>",
+        "snapshot_intent_queue_root": "<tmp>/runs",
+        "source_selected_inp": "<tmp>/runs/killed_parent/h2o.inp",
+        "selected_inp": "<tmp>/runs/killed_parent/<generation:1>/h2o.inp",
+        "selected_input_xyz": "",
+        "dependency_paths": [],
+        "source_inputs": {
+          "selected_source": {
+            "role": "selected_source",
+            "source_path": "<tmp>/runs/killed_parent/h2o.inp",
+            "sha256": "<sha256:1>",
+            "size_bytes": 154
+          }
+        },
+        "materialized_inputs": {},
+        "runtime_mutable_input_roles": [],
+        "bound_selected_identity": {
+          "path": "<tmp>/runs/killed_parent/<generation:1>/h2o.inp",
+          "sha256": "<sha256:1>",
+          "size_bytes": 154
+        },
+        "resource_request": {
+          "max_cores": 1,
+          "max_memory_gb": 1
+        },
+        "executable_identities": {
+          "orca": {
+            "path": "<tmp>/bin/fake_orca",
+            "sha256": "<sha256:2>",
+            "size_bytes": 1789
+          }
+        }
+      },
+      "reaction_dir": "<tmp>/runs/killed_parent",
+      "_orca_auto_queued_record_sync": "complete",
+      "_orca_auto_queued_record_sync_updated_at": "<timestamp:YYYY-MM-DDThh:mm:ss.ffffff+00:00>",
+      "_orca_auto_queued_record_sync_owner_pid": "<pid:int>",
+      "_orca_auto_queued_record_sync_owner_start": "",
+      "_orca_auto_queued_record_sync_token": "<record_sync:1>",
+      "force": false,
+      "worker_log": "<tmp>/runs/logs/<q:1>.log",
+      "_orca_auto_queued_record_sync_blocked": null,
+      "run_id": "<run:1>",
+      "orca_terminal_replay": {
+        "version": 1,
+        "task_id": "<orca:1>",
+        "selected_inp": "<tmp>/runs/killed_parent/<generation:1>/h2o.inp",
+        "status": "completed",
+        "error": "",
+        "observed_state": {
+          "present": true,
+          "readable": true,
+          "job_id": "<orca:1>",
+          "run_id": "<run:1>",
+          "terminal_status": "completed"
+        }
+      }
+    }
+  }
+]

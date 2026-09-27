@@ -1,0 +1,22 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "root": "<scratch>",
+    "removed_count": 1,
+    "removed": [
+      {
+        "name": "<workspace:1>",
+        "path": "<scratch>/<workspace:1>",
+        "state": "invalid-manifest",
+        "durable_dir": null,
+        "size_bytes": 0,
+        "removed_durable_entries": [],
+        "publication_journal_removed": false,
+        "durable_note": "manifest names no durable generation; nothing else to clean"
+      }
+    ],
+    "refused": []
+  },
+  "stderr": ""
+}

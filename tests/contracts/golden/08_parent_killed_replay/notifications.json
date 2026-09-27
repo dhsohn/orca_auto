@@ -1,0 +1,134 @@
+[
+  {
+    "title": "ORCA queued",
+    "severity": "info",
+    "groups": [
+      {
+        "items": [
+          {
+            "label": "Job",
+            "value": [
+              {
+                "text": "killed_parent",
+                "style": "plain"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Queue ID",
+            "value": [
+              {
+                "text": "<q:1>",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Priority",
+            "value": [
+              {
+                "text": "10",
+                "style": "plain"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Directory",
+            "value": [
+              {
+                "text": "<tmp>/runs/killed_parent",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          }
+        ]
+      }
+    ],
+    "author": "orca_auto"
+  },
+  {
+    "title": "ORCA completed",
+    "severity": "success",
+    "groups": [
+      {
+        "items": [
+          {
+            "label": "Job",
+            "value": [
+              {
+                "text": "killed_parent",
+                "style": "plain"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Result",
+            "value": [
+              {
+                "text": "completed",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Attempts",
+            "value": [
+              {
+                "text": "1",
+                "style": "plain"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Reason",
+            "value": [
+              {
+                "text": "normal_termination",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Analyzer",
+            "value": [
+              {
+                "text": "completed",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Output",
+            "value": [
+              {
+                "text": "h2o.out",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Directory",
+            "value": [
+              {
+                "text": "<tmp>/runs/killed_parent",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          }
+        ]
+      }
+    ],
+    "author": "orca_auto"
+  }
+]

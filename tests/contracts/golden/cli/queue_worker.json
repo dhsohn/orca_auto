@@ -1,0 +1,23 @@
+{
+  "exit_code": 0,
+  "stdout": {
+    "ok": true,
+    "workers": [
+      {
+        "app": "orca",
+        "argv": [
+          "<python>",
+          "-m",
+          "orca_auto.orca.commands.queue",
+          "--config",
+          "<tmp>/orca_auto.yaml"
+        ],
+        "cwd": "",
+        "env": null,
+        "restart_on_clean_exit": true,
+        "stop_timeout_seconds": 36.0
+      }
+    ]
+  },
+  "stderr": ""
+}

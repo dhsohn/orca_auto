@@ -73,12 +73,29 @@ the development dependencies. Fetch the clone when advancing the CI pin.
 - **Unit & Integration Tests**: Tests use lightweight fake ORCA binaries and isolated temporary fixtures (`tmp_path`). A licensed ORCA installation is not required to run the test suite.
 - **Shared Fixtures**: `tests/conftest.py` provides the fake ORCA executable, `AppConfig`/`orca_auto.yaml`, queue-entry and run-state fixtures and the plain builders behind them; new tests take these instead of rebuilding them.
 - **Markers**: `os.fsync`/`os.fdatasync` are no-ops in every test unless it is marked `@pytest.mark.real_fsync`; `@pytest.mark.slow` marks the tests that stage the package in an isolated interpreter.
+- **Contract Goldens**: `tests/contracts` pins every public on-disk file, the `--json` and plain-text CLI documents, the argparse surface, the rendered systemd units and the order of durable writes across the worker parent and its children (`effect_log.py`, active in children through `tests/contracts/sitecustomize` only while `ORCA_AUTO_TEST_EFFECT_LOG` is set). Scenarios run real worker children against a fake ORCA and compare normalized output with `tests/contracts/golden/`. `ORCA_AUTO_REGEN_GOLDENS=1` rewrites the goldens instead of comparing; it is off by default.
 - **Docs Parity**: `make check` runs `scripts/check_docs_parity.py`, which fails when an `X.md`/`X.ko.md` pair drifts in heading levels, tables, fenced code blocks or relative links; prose may differ.
 - **Real-Engine Acceptance**: If you modify engine execution or scientific output parsing behavior, record a bounded real-engine run according to [VALIDATION.md](VALIDATION.md).
 
 ---
 
-## 4. Release and Runtime References
+## 4. Moving Code and Golden Fixtures
+
+A refactor keeps behavior, and the contract goldens are the proof:
+
+- A move never shares a commit with a logic edit.
+- No forwarding module or alias is left at an old path; every import is updated.
+- A move PR attaches `git diff -M --stat` and an AST-equality report of the moved top-level definitions.
+- A golden diff in a refactor PR means the PR changed behavior and blocks the merge. Only a PR that deliberately changes a public contract regenerates goldens, and it justifies each changed file.
+
+```bash
+ORCA_AUTO_REGEN_GOLDENS=1 .venv/bin/python -m pytest tests/contracts -q
+git diff --stat tests/contracts/golden
+```
+
+---
+
+## 5. Release and Runtime References
 
 - For versioning and publication details, see [RELEASE.md](RELEASE.md).
 - For immutable wheel runtime deployments, see [RUNTIME.md](RUNTIME.md).

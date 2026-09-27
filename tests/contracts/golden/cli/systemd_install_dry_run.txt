@@ -1,0 +1,21 @@
+exit=0
+--- stdout
+systemd install plan:
+  user: alice
+  repo: <tmp>/orca_auto
+  config: <tmp>/orca_auto/config/orca_auto.yaml
+  unit_dir: <tmp>/units
+  enable: orca_auto-runtime@alice.target
+  write:
+    <tmp>/units/orca_auto-engine-workers@.target
+    <tmp>/units/orca_auto-queue-worker@.service
+    <tmp>/units/orca_auto-runtime@.target
+  run:
+    systemctl daemon-reload
+    systemctl enable orca_auto-runtime@alice.target
+    systemctl reset-failed orca_auto-queue-worker@alice.service
+    systemctl restart orca_auto-runtime@alice.target
+    systemctl is-active --quiet orca_auto-queue-worker@alice.service
+    systemctl disable orca_auto-queue-worker@alice.service
+    systemctl disable orca_auto-engine-workers@alice.target
+--- stderr

@@ -1,0 +1,812 @@
+{
+  "prog": "orca_auto",
+  "arguments": [
+    {
+      "options": [
+        "-h",
+        "--help"
+      ],
+      "action": "_HelpAction",
+      "nargs": 0,
+      "choices": null,
+      "default": "==SUPPRESS==",
+      "required": false
+    },
+    {
+      "options": [
+        "--version"
+      ],
+      "action": "_VersionAction",
+      "nargs": 0,
+      "choices": null,
+      "default": "==SUPPRESS==",
+      "required": false,
+      "version": "%(prog)s <version>"
+    },
+    {
+      "options": [
+        "--no-color"
+      ],
+      "action": "_StoreTrueAction",
+      "nargs": 0,
+      "choices": null,
+      "default": false,
+      "required": false
+    },
+    {
+      "subcommand": true,
+      "required": false
+    }
+  ],
+  "subcommands": {
+    "queue": {
+      "prog": "orca_auto queue",
+      "arguments": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "action": "_HelpAction",
+          "nargs": 0,
+          "choices": null,
+          "default": "==SUPPRESS==",
+          "required": false
+        },
+        {
+          "subcommand": true,
+          "required": true
+        }
+      ],
+      "subcommands": {
+        "list": {
+          "prog": "orca_auto queue list",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [],
+              "action": "_StoreAction",
+              "nargs": "?",
+              "choices": [
+                "clear"
+              ],
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--orca_auto-config",
+                "--config"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--limit"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": 0,
+              "required": false
+            },
+            {
+              "options": [
+                "--refresh"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            },
+            {
+              "options": [
+                "--status"
+              ],
+              "action": "_AppendAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--json"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        },
+        "cancel": {
+          "prog": "orca_auto queue cancel",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": true
+            },
+            {
+              "options": [
+                "--orca_auto-config",
+                "--config"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--json"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        },
+        "worker": {
+          "prog": "orca_auto queue worker",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [
+                "--orca_auto-config",
+                "--config"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--json"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        }
+      }
+    },
+    "run-dir": {
+      "prog": "orca_auto run-dir",
+      "arguments": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "action": "_HelpAction",
+          "nargs": 0,
+          "choices": null,
+          "default": "==SUPPRESS==",
+          "required": false
+        },
+        {
+          "options": [
+            "--orca_auto-config",
+            "--config"
+          ],
+          "action": "_StoreAction",
+          "nargs": null,
+          "choices": null,
+          "default": null,
+          "required": false
+        },
+        {
+          "options": [
+            "--verbose",
+            "-v"
+          ],
+          "action": "_StoreTrueAction",
+          "nargs": 0,
+          "choices": null,
+          "default": false,
+          "required": false
+        },
+        {
+          "options": [
+            "--log-file"
+          ],
+          "action": "_StoreAction",
+          "nargs": null,
+          "choices": null,
+          "default": null,
+          "required": false
+        },
+        {
+          "options": [],
+          "action": "_StoreAction",
+          "nargs": null,
+          "choices": null,
+          "default": null,
+          "required": true
+        },
+        {
+          "options": [
+            "--force"
+          ],
+          "action": "_StoreTrueAction",
+          "nargs": 0,
+          "choices": null,
+          "default": false,
+          "required": false
+        },
+        {
+          "options": [
+            "--priority"
+          ],
+          "action": "_StoreAction",
+          "nargs": null,
+          "choices": null,
+          "default": null,
+          "required": false
+        },
+        {
+          "options": [
+            "--json"
+          ],
+          "action": "_StoreTrueAction",
+          "nargs": 0,
+          "choices": null,
+          "default": false,
+          "required": false
+        }
+      ],
+      "subcommands": {}
+    },
+    "init": {
+      "prog": "orca_auto init",
+      "arguments": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "action": "_HelpAction",
+          "nargs": 0,
+          "choices": null,
+          "default": "==SUPPRESS==",
+          "required": false
+        },
+        {
+          "options": [
+            "--orca_auto-config",
+            "--config"
+          ],
+          "action": "_StoreAction",
+          "nargs": null,
+          "choices": null,
+          "default": null,
+          "required": false
+        },
+        {
+          "options": [
+            "--verbose",
+            "-v"
+          ],
+          "action": "_StoreTrueAction",
+          "nargs": 0,
+          "choices": null,
+          "default": false,
+          "required": false
+        },
+        {
+          "options": [
+            "--log-file"
+          ],
+          "action": "_StoreAction",
+          "nargs": null,
+          "choices": null,
+          "default": null,
+          "required": false
+        },
+        {
+          "options": [
+            "--force"
+          ],
+          "action": "_StoreTrueAction",
+          "nargs": 0,
+          "choices": null,
+          "default": false,
+          "required": false
+        }
+      ],
+      "subcommands": {}
+    },
+    "index": {
+      "prog": "orca_auto index",
+      "arguments": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "action": "_HelpAction",
+          "nargs": 0,
+          "choices": null,
+          "default": "==SUPPRESS==",
+          "required": false
+        },
+        {
+          "subcommand": true,
+          "required": true
+        }
+      ],
+      "subcommands": {
+        "prune": {
+          "prog": "orca_auto index prune",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [
+                "--orca_auto-config",
+                "--config"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--apply"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            },
+            {
+              "options": [
+                "--json"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        },
+        "rebuild": {
+          "prog": "orca_auto index rebuild",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [
+                "--orca_auto-config",
+                "--config"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--dry-run"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            },
+            {
+              "options": [
+                "--json"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        }
+      }
+    },
+    "scratch": {
+      "prog": "orca_auto scratch",
+      "arguments": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "action": "_HelpAction",
+          "nargs": 0,
+          "choices": null,
+          "default": "==SUPPRESS==",
+          "required": false
+        },
+        {
+          "subcommand": true,
+          "required": true
+        }
+      ],
+      "subcommands": {
+        "list": {
+          "prog": "orca_auto scratch list",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [
+                "--orca_auto-config",
+                "--config"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--json"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        },
+        "clear": {
+          "prog": "orca_auto scratch clear",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [],
+              "action": "_StoreAction",
+              "nargs": "?",
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--all-stale"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            },
+            {
+              "options": [
+                "--orca_auto-config",
+                "--config"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--json"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        }
+      }
+    },
+    "systemd": {
+      "prog": "orca_auto systemd",
+      "arguments": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "action": "_HelpAction",
+          "nargs": 0,
+          "choices": null,
+          "default": "==SUPPRESS==",
+          "required": false
+        },
+        {
+          "subcommand": true,
+          "required": true
+        }
+      ],
+      "subcommands": {
+        "install": {
+          "prog": "orca_auto systemd install",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [
+                "--user"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": true
+            },
+            {
+              "options": [
+                "--repo"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": true
+            },
+            {
+              "options": [
+                "--config"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": null,
+              "required": false
+            },
+            {
+              "options": [
+                "--unit-dir"
+              ],
+              "action": "_StoreAction",
+              "nargs": null,
+              "choices": null,
+              "default": "/etc/systemd/system",
+              "required": false
+            },
+            {
+              "options": [
+                "--worker-only"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            },
+            {
+              "options": [
+                "--no-enable"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            },
+            {
+              "options": [
+                "--no-start"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            },
+            {
+              "options": [
+                "--dry-run"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            },
+            {
+              "options": [
+                "--no-sudo"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        }
+      }
+    },
+    "service": {
+      "prog": "orca_auto service",
+      "arguments": [
+        {
+          "options": [
+            "-h",
+            "--help"
+          ],
+          "action": "_HelpAction",
+          "nargs": 0,
+          "choices": null,
+          "default": "==SUPPRESS==",
+          "required": false
+        },
+        {
+          "subcommand": true,
+          "required": true
+        }
+      ],
+      "subcommands": {
+        "status": {
+          "prog": "orca_auto service status",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [
+                "--json"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        },
+        "restart": {
+          "prog": "orca_auto service restart",
+          "arguments": [
+            {
+              "options": [
+                "-h",
+                "--help"
+              ],
+              "action": "_HelpAction",
+              "nargs": 0,
+              "choices": null,
+              "default": "==SUPPRESS==",
+              "required": false
+            },
+            {
+              "options": [
+                "--force"
+              ],
+              "action": "_StoreTrueAction",
+              "nargs": 0,
+              "choices": null,
+              "default": false,
+              "required": false
+            }
+          ],
+          "subcommands": {}
+        }
+      }
+    }
+  }
+}

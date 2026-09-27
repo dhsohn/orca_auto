@@ -73,12 +73,29 @@ CI와 릴리스 검사는 클론을 준비하고, `make check`는 개발 의존�
 - **단위/통합 테스트**: 실제 ORCA 대신 가짜 엔진과 격리된 임시 fixture(`tmp_path`)를 활용하므로, 로컬 머신에 ORCA가 없어도 전체 테스트를 실행할 수 있습니다.
 - **공용 fixture**: `tests/conftest.py`가 가짜 ORCA 실행 파일, `AppConfig`/`orca_auto.yaml`, 큐 항목, 실행 상태 fixture와 그 기반 빌더를 제공합니다. 새 테스트는 이를 다시 만들지 않고 가져다 씁니다.
 - **마커**: 모든 테스트에서 `os.fsync`/`os.fdatasync`는 no-op이며 `@pytest.mark.real_fsync`를 붙인 테스트만 예외입니다. `@pytest.mark.slow`는 격리된 인터프리터에 패키지를 스테이징하는 테스트를 표시합니다.
+- **계약 골든**: `tests/contracts`는 모든 공개 디스크 파일, `--json`·일반 텍스트 CLI 출력, argparse 명령 구조, 렌더링된 systemd 유닛, 워커 부모와 자식 프로세스 사이의 영속 쓰기 순서(`effect_log.py`, `ORCA_AUTO_TEST_EFFECT_LOG`가 설정된 동안에만 `tests/contracts/sitecustomize`로 자식에서도 기록)를 고정합니다. 시나리오는 가짜 ORCA로 실제 워커 자식 프로세스를 실행하고, 정규화한 출력을 `tests/contracts/golden/`과 비교합니다. `ORCA_AUTO_REGEN_GOLDENS=1`이면 비교 대신 골든을 다시 씁니다. 기본값은 꺼져 있습니다.
 - **문서 대칭 검사**: `make check`는 `scripts/check_docs_parity.py`를 실행하며, `X.md`/`X.ko.md` 쌍의 제목 수준, 표, 코드 블록, 상대 링크가 어긋나면 실패합니다. 본문 문장은 달라도 됩니다.
 - **실제 엔진 검증**: ORCA 실행 메커니즘이나 물리적 출력 분석 로직을 변경한 경우, [검증 가이드(VALIDATION.md)](VALIDATION.md)에 따라 실제 ORCA를 사용한 별도의 acceptance를 기록합니다.
 
 ---
 
-## 4. 릴리스 및 운영 참고사항
+## 4. 코드 이동과 골든 fixture
+
+리팩터링은 동작을 유지하며, 계약 골든이 그 근거입니다:
+
+- 코드 이동은 로직 변경과 같은 커밋에 섞지 않습니다.
+- 이전 경로에 전달용 모듈이나 별칭을 남기지 않고 모든 import를 갱신합니다.
+- 이동 PR에는 `git diff -M --stat` 결과와 이동한 최상위 정의의 AST 동등성 보고를 첨부합니다.
+- 리팩터링 PR에서 골든이 바뀌면 동작이 바뀐 것이므로 병합할 수 없습니다. 공개 계약을 의도적으로 바꾸는 PR만 골든을 다시 생성하며, 바뀐 파일마다 근거를 적습니다.
+
+```bash
+ORCA_AUTO_REGEN_GOLDENS=1 .venv/bin/python -m pytest tests/contracts -q
+git diff --stat tests/contracts/golden
+```
+
+---
+
+## 5. 릴리스 및 운영 참고사항
 
 - 배포 버전 및 릴리스 절차는 [릴리스 가이드(RELEASE.md)](RELEASE.md)를 따릅니다.
 - 프로덕션 휠 런타임 빌드 및 배포 절차는 [프로덕션 런타임 가이드(RUNTIME.md)](RUNTIME.md)를 참고하세요.

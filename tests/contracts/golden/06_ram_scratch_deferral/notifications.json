@@ -1,0 +1,53 @@
+[
+  {
+    "title": "ORCA queued",
+    "severity": "info",
+    "groups": [
+      {
+        "items": [
+          {
+            "label": "Job",
+            "value": [
+              {
+                "text": "scratch_deferral",
+                "style": "plain"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Queue ID",
+            "value": [
+              {
+                "text": "<q:1>",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Priority",
+            "value": [
+              {
+                "text": "10",
+                "style": "plain"
+              }
+            ],
+            "inline": false
+          },
+          {
+            "label": "Directory",
+            "value": [
+              {
+                "text": "<tmp>/runs/scratch_deferral",
+                "style": "code"
+              }
+            ],
+            "inline": false
+          }
+        ]
+      }
+    ],
+    "author": "orca_auto"
+  }
+]
