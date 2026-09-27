@@ -1,10 +1,14 @@
+"""``queue cancel`` against the queue store: find the entry, cancel it, build the payload.
+
+The payload is embedded as ``result`` in ``orca_auto queue cancel --json``.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.types import QueueStatus, effective_queue_status
+from orca_auto.core.queue.types import QueueEntry, QueueStatus, effective_queue_status
 from orca_auto.core.statuses import STATUS_FAILED
 from orca_auto.core.utils import normalize_text as _normalize_text
 
@@ -15,205 +19,81 @@ from .queue import entries as queue_entries
 _CANCEL_API_NAME = "orca_auto.orca.direct_cancel"
 
 
-@dataclass(frozen=True)
-class InternalEngineCommandResult:
-    """JSON-ready outcome of one internal engine command call."""
-
-    status: str
-    command_argv: list[str]
-    returncode: int
-    reason: str = ""
-    stdout: str = ""
-    stderr: str = ""
-    parsed_stdout: dict[str, str] = field(default_factory=dict)
-    job_id: str = ""
-    queue_id: str = ""
-    job_dir: str = ""
-    extra_fields: dict[str, Any] = field(default_factory=dict)
-
-    def to_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "status": self.status,
-            "reason": self.reason,
-            "returncode": self.returncode,
-            "command_argv": list(self.command_argv),
-            "stdout": self.stdout,
-            "stderr": self.stderr,
-            "parsed_stdout": dict(self.parsed_stdout),
-            "job_id": self.job_id,
-            "queue_id": self.queue_id,
-        }
-        if self.job_dir:
-            payload["job_dir"] = self.job_dir
-        payload.update(self.extra_fields)
-        return payload
-
-
-def internal_call_argv(
-    *,
-    api_name: str,
-    config_path: str,
-    kwargs: dict[str, Any],
-) -> list[str]:
-    return [
-        api_name,
-        f"config={config_path}",
-        *[f"{key}={value}" for key, value in kwargs.items()],
-    ]
-
-
-def _text_fields(fields: dict[str, Any]) -> dict[str, str]:
-    return {key: text for key, value in fields.items() if (text := _normalize_text(value))}
-
-
-@dataclass(frozen=True)
-class _OrcaDirectCancelRequest:
-    command_argv: list[str]
-    config_path: str
-    target: str
-
-
-def _trace_argv(*, api_name: str, config_path: str, kwargs: dict[str, Any]) -> list[str]:
-    return internal_call_argv(
-        api_name=api_name,
-        config_path=config_path,
-        kwargs=kwargs,
-    )
-
-
-def _key_value_stdout(fields: dict[str, Any]) -> str:
-    return "\n".join(f"{key}: {value}" for key, value in _text_fields(fields).items() if value)
-
-
-def _failure_payload(
-    *,
-    command_argv: list[str],
-    stderr: str,
-    reaction_dir: str = "",
-    reason: str = "",
-) -> dict[str, Any]:
-    if stderr and not stderr.endswith("\n"):
+def _failure_payload(command_argv: list[str], stderr: str, *, reason: str = "") -> dict[str, Any]:
+    if not stderr.endswith("\n"):
         stderr += "\n"
-    return InternalEngineCommandResult(
-        status=STATUS_FAILED,
-        reason=reason,
-        returncode=1,
-        command_argv=command_argv,
-        stderr=stderr,
-        extra_fields={
-            "reaction_dir": reaction_dir,
-            "priority": 0,
-            "force": False,
-        },
-    ).to_payload()
+    return {
+        "status": STATUS_FAILED,
+        "reason": reason,
+        "returncode": 1,
+        "command_argv": command_argv,
+        "stdout": "",
+        "stderr": stderr,
+        "parsed_stdout": {},
+        "job_id": "",
+        "queue_id": "",
+        "reaction_dir": "",
+        "priority": 0,
+        "force": False,
+    }
 
 
-def _cancel_request(*, target: str, config_path: str) -> _OrcaDirectCancelRequest:
-    normalized_config = _normalize_text(config_path)
-    normalized_target = _normalize_text(target)
-    return _OrcaDirectCancelRequest(
-        command_argv=_trace_argv(
-            api_name=_CANCEL_API_NAME,
-            config_path=normalized_config,
-            kwargs={"target": normalized_target},
-        ),
-        config_path=normalized_config,
-        target=normalized_target,
-    )
+def _success_payload(command_argv: list[str], updated: QueueEntry) -> dict[str, Any]:
+    fields = {
+        "status": effective_queue_status(updated),
+        "queue_id": queue_entries.queue_entry_id(updated),
+        "job_id": queue_entries.queue_entry_task_id(updated),
+    }
+    parsed_stdout = {key: text for key, value in fields.items() if (text := _normalize_text(value))}
+    return {
+        "status": fields["status"],
+        "reason": "",
+        "returncode": 0,
+        "command_argv": command_argv,
+        "stdout": "\n".join(f"{key}: {value}" for key, value in parsed_stdout.items()),
+        "stderr": "",
+        "parsed_stdout": parsed_stdout,
+        "job_id": parsed_stdout.get("job_id", ""),
+        "queue_id": parsed_stdout.get("queue_id", ""),
+    }
 
 
-def _find_orca_cancel_entry(request: _OrcaDirectCancelRequest) -> tuple[Path, Any] | None:
-    allowed_root = engine_runtime_paths(request.config_path)["allowed_root"]
-    matched = queue_adapter.find_entry_by_target(
-        queue_adapter.list_queue(allowed_root),
-        request.target,
-    )
-    if matched is None:
-        return None
-    return allowed_root, matched
+def cancel_target(*, target: str, config_path: str) -> dict[str, Any]:
+    """Cancel the ORCA queue generation ``target`` names.
 
-
-def _request_orca_cancel(allowed_root: Path, entry: Any) -> Any | None:
-    return queue_adapter.cancel(
-        allowed_root,
-        queue_entries.queue_entry_id(entry),
-        expected_entry=entry,
-    )
-
-
-def _cancel_request_targets_exact_entry(
-    request: _OrcaDirectCancelRequest,
-    entry: Any,
-) -> bool:
-    return bool(
-        queue_entries.is_orca_queue_entry(entry)
-        and queue_entries.queue_entry_matches_target(entry, request.target)
-    )
-
-
-def _cancel_success_payload(
-    *,
-    command_argv: list[str],
-    updated: Any,
-) -> dict[str, Any]:
-    status = effective_queue_status(updated)
-    parsed_stdout = _text_fields(
-        {
-            "status": status,
-            "queue_id": queue_entries.queue_entry_id(updated),
-            "job_id": queue_entries.queue_entry_task_id(updated),
-        }
-    )
-    return InternalEngineCommandResult(
-        status=status,
-        reason="",
-        returncode=0,
-        command_argv=command_argv,
-        stdout=_key_value_stdout(parsed_stdout),
-        parsed_stdout=parsed_stdout,
-        queue_id=parsed_stdout.get("queue_id", ""),
-        job_id=parsed_stdout.get("job_id", ""),
-    ).to_payload()
-
-
-def cancel_target(
-    *,
-    target: str,
-    config_path: str,
-) -> dict[str, Any]:
-    request = _cancel_request(target=target, config_path=config_path)
-    if not request.target:
-        return _failure_payload(
-            command_argv=request.command_argv,
-            stderr="queue cancel requires a target",
-        )
+    Target precedence is :func:`.queue.adapter.find_entry_by_target`'s. When the
+    cancel call returns nothing or raises, a re-read decides whether this
+    generation's cancel is already durable before reporting a failure.
+    """
+    config_path = _normalize_text(config_path)
+    target = _normalize_text(target)
+    command_argv = [_CANCEL_API_NAME, f"config={config_path}", f"target={target}"]
+    if not target:
+        return _failure_payload(command_argv, "queue cancel requires a target")
 
     allowed_root: Path | None = None
-    matched: Any | None = None
+    matched: QueueEntry | None = None
     try:
-        entry_with_root = _find_orca_cancel_entry(request)
-        if entry_with_root is None:
+        allowed_root = engine_runtime_paths(config_path)["allowed_root"]
+        matched = queue_adapter.find_entry_by_target(queue_adapter.list_queue(allowed_root), target)
+        if matched is None:
             return _failure_payload(
-                command_argv=request.command_argv,
-                stderr=f"queue target not found: {request.target}",
-                reason="target_not_found",
+                command_argv, f"queue target not found: {target}", reason="target_not_found"
             )
-        allowed_root, matched = entry_with_root
-        updated = _request_orca_cancel(allowed_root, matched)
+        queue_id = queue_entries.queue_entry_id(matched)
+        updated = queue_adapter.cancel(allowed_root, queue_id, expected_entry=matched)
         if updated is None:
-            current = queue_adapter.get_entry_by_id(
-                allowed_root,
-                queue_entries.queue_entry_id(matched),
-            )
+            current = queue_adapter.get_entry_by_id(allowed_root, queue_id)
             if (
                 current is None
-                or not _cancel_request_targets_exact_entry(request, current)
+                or not queue_entries.is_orca_queue_entry(current)
+                or not queue_entries.queue_entry_matches_target(current, target)
                 or not queue_entries.same_generation(current, matched)
                 or queue_entries.queue_entry_status(current) != QueueStatus.CANCELLED.value
             ):
                 return _failure_payload(
-                    command_argv=request.command_argv,
-                    stderr=f"queue target already terminal: {request.target}",
+                    command_argv,
+                    f"queue target already terminal: {target}",
                     reason="already_terminal",
                 )
             updated = current
@@ -221,10 +101,11 @@ def cancel_target(
         if allowed_root is not None and matched is not None:
             try:
                 current = queue_adapter.get_entry_by_id(
-                    allowed_root,
-                    queue_entries.queue_entry_id(matched),
+                    allowed_root, queue_entries.queue_entry_id(matched)
                 )
-                committed = bool(
+                # The cancel may have committed before the error: a cancelled
+                # row, or an active row flagged for its worker.
+                if (
                     current is not None
                     and queue_entries.same_generation(current, matched)
                     and (
@@ -232,21 +113,15 @@ def cancel_target(
                         or (
                             queue_entries.queue_entry_status(current)
                             in queue_entries.ACTIVE_STATUSES
-                            and bool(getattr(current, "cancel_requested", False))
+                            and current.cancel_requested
                         )
                     )
-                )
-                if committed:
-                    return _cancel_success_payload(
-                        command_argv=request.command_argv,
-                        updated=current,
-                    )
+                ):
+                    return _success_payload(command_argv, current)
             except Exception:  # noqa: BLE001
                 pass
         return _failure_payload(
-            command_argv=request.command_argv,
-            stderr=f"{exc.__class__.__name__}: {exc}",
-            reason="cancel_failed",
+            command_argv, f"{exc.__class__.__name__}: {exc}", reason="cancel_failed"
         )
 
-    return _cancel_success_payload(command_argv=request.command_argv, updated=updated)
+    return _success_payload(command_argv, updated)

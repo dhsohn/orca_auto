@@ -126,7 +126,7 @@ def test_queue_list_and_cancel_use_the_same_discovered_config(
         return {"status": "cancelled"}
 
     # Verify discovery and target selection without cancelling or signalling a job.
-    monkeypatch.setattr(_cancel, "cancel_orca_target", cancel_stub)
+    monkeypatch.setattr(_cancel.direct_cancel, "cancel_target", cancel_stub)
     assert main(["queue", "cancel", target, "--json", *options]) == 0
     cancelled = json.loads(capsys.readouterr().out)
     assert cancelled["activity_id"] == target

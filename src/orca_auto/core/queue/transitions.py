@@ -13,7 +13,10 @@ every transition that ends or interrupts a row's life:
   move an active row to its terminal status under the queue lock.
 * :func:`correct_terminal_status` is the recovery-only terminal -> terminal
   correction; :func:`requeue_running_entry` returns a running row to
-  pending, or honours a pending cancellation instead.
+  pending, or honours a pending cancellation instead. It is the requeue
+  cancel chokepoint: a worker returning a running row, on SIGTERM included,
+  cannot turn a requested cancel into a resume. Orphan reconciliation
+  mirrors the rule for a row whose worker is gone.
 
 Every writer goes through :func:`.store.mutate_entries` or
 :func:`.store.mutate_entry_by_id`, so lock discipline and the on-disk format

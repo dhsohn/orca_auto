@@ -55,7 +55,7 @@ def test_ordinary_activity_uses_index_without_recursive_discovery(
         raise AssertionError("ordinary queue list traversed the run tree")
 
     monkeypatch.setattr(run_snapshot, "iter_production_runs_artifacts", forbidden_scan)
-    result = list_activities(orca_config=str(config), limit=1)
+    result = list_activities(config_path=str(config), limit=1)
     assert [item["activity_id"] for item in result["activities"]] == ["tracked"]
 
 
@@ -67,7 +67,7 @@ def test_explicit_refresh_discovers_and_indexes_unindexed_runs(
     config.write_text(f"runs_root: {root}\n")
     _write_run(root, "tracked", indexed=True)
     _write_run(root, "untracked", indexed=False)
-    result = list_activities(orca_config=str(config), refresh=True)
+    result = list_activities(config_path=str(config), refresh=True)
     assert {item["activity_id"] for item in result["activities"]} == {"tracked", "untracked"}
     # The discovery is now an index row, so the next ordinary list needs no walk.
     assert {row.job_id for row in list_job_locations(root)} == {"tracked", "untracked"}
@@ -76,7 +76,7 @@ def test_explicit_refresh_discovers_and_indexes_unindexed_runs(
         "iter_production_runs_artifacts",
         lambda *args, **kwargs: pytest.fail("ordinary queue list traversed the run tree"),
     )
-    plain = list_activities(orca_config=str(config))
+    plain = list_activities(config_path=str(config))
     assert {item["activity_id"] for item in plain["activities"]} == {"tracked", "untracked"}
 
 
@@ -105,7 +105,7 @@ def test_queue_known_run_does_not_require_an_index_entry(
         metadata={"run_id": "untracked", "reaction_dir": str(root / "untracked")},
     )
     save_entries(root, [entry])
-    result = list_activities(orca_config=str(config))
+    result = list_activities(config_path=str(config))
     assert len(result["activities"]) == 1
     assert result["activities"][0]["status"] == "completed"
     assert result["activities"][0]["updated_at"] == "2026-01-01T01:00:00+00:00"

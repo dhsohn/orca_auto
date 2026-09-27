@@ -7,7 +7,7 @@ import pytest
 
 from orca_auto.activity._orca import orca_records
 from orca_auto.activity._orca_index import query_listing
-from orca_auto.activity.model import ActivityListRequest, ActivitySourceRequest
+from orca_auto.activity.model import ActivityListRequest
 from orca_auto.orca.config import load_config
 from orca_auto.orca.execution_binding import orca_execution_provenance
 from orca_auto.orca.queue import adapter
@@ -84,11 +84,7 @@ def test_activity_borrows_state_only_from_its_queue_generation(
         write_state(job_dir, state)
 
     rows = (
-        list(
-            query_listing(
-                runs_root, ActivityListRequest(ActivitySourceRequest(), indexed=True)
-            ).records
-        )
+        list(query_listing(runs_root, ActivityListRequest(indexed=True)).records)
         if indexed
         else orca_records(config_path=str(config_path))
     )
