@@ -11,13 +11,13 @@ from typing import Any
 import pytest
 
 from orca_auto.orca.completion_rules import CompletionMode
-from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.evidence import parsed_frequency_analysis
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.out_analyzer import analyze_output
 from orca_auto.orca.output_status import last_optimization_convergence
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
-from orca_auto.orca.report.opt import collect_opt_report_data
+from orca_auto.orca.report.composer import collect_html_report_parts
 
 
 def test_optimization_verdict_absence_and_same_line_negative_precedence() -> None:
@@ -57,10 +57,8 @@ def test_last_optimization_verdict_agrees_across_consumers(
     progress = parse_opt_progress_text(read_orca_text(str(out)), source_path=str(out))
     inp = tmp_path / "optimization.inp"
     inp.write_text("! HF STO-3G Opt\n", encoding="utf-8")
-    report = collect_opt_report_data(
-        tmp_path,
-        {"selected_inp": str(inp), "attempts": [{"out_path": str(out)}]},
-        kind="opt",
+    parts = collect_html_report_parts(
+        tmp_path, {"selected_inp": str(inp), "attempts": [{"out_path": str(out)}]}
     )
 
     assert analysis.markers["last_opt_converged"] is converged
@@ -68,8 +66,8 @@ def test_last_optimization_verdict_agrees_across_consumers(
     assert result.opt_converged is converged
     assert progress.is_converged is converged
     assert len(progress.steps) == 2
-    assert report is not None
-    assert report.opt_converged is converged
+    assert parts is not None and parts.opt is not None
+    assert parts.opt.opt_converged is converged
 
 
 def test_annotated_final_energy_is_not_published(tmp_path: Path) -> None:
@@ -185,11 +183,70 @@ def test_frequency_analysis_uses_final_vibrational_frequency_block(tmp_path: Pat
         encoding="utf-8",
     )
 
-    analysis = parse_frequency_analysis(out_file)
+    analysis = parsed_frequency_analysis(out_file)
 
     assert analysis is not None
     assert analysis.frequencies == pytest.approx((-5.0, 130.0))
     assert analysis.imaginary_count() == 0
+
+
+@pytest.mark.parametrize(
+    ("rows", "symbols"),
+    [
+        (
+            [
+                "  C      0.000000    0.000000    0.000000",
+                "  DA     0.500000    0.000000    0.000000",
+                "  H      1.000000    0.000000    0.000000",
+            ],
+            ("C", "DA", "H"),
+        ),
+        (
+            [
+                "  c      0.000000    0.000000    0.000000",
+                "  H      1.000000    0.000000    0.000000",
+            ],
+            ("c", "H"),
+        ),
+        (
+            [
+                "  C      0.000000    0.000000    0.000000  1",
+                "  H      1.000000    0.000000    0.000000  2",
+            ],
+            (),
+        ),
+        (["  C      0    0    0", "  H      1    0    0"], ()),
+    ],
+    ids=["dummy_atom", "lower_case_symbol", "extra_column", "integer_coordinates"],
+)
+def test_frequency_geometry_keeps_its_own_coordinate_row_rule(
+    tmp_path: Path, rows: list[str], symbols: tuple[str, ...]
+) -> None:
+    # Unlike the result parser's coordinate rows: any one- or two-letter
+    # symbol, but decimal xyz values and nothing after z.
+    out_file = tmp_path / "coords.out"
+    out_file.write_text(
+        "\n".join(
+            [
+                "CARTESIAN COORDINATES (ANGSTROEM)",
+                "---------------------------------",
+                *rows,
+                "",
+                "FINAL SINGLE POINT ENERGY      -100.10",
+                "VIBRATIONAL FREQUENCIES",
+                "   0:         0.00 cm**-1",
+                "   1:      -350.00 cm**-1 ***imaginary mode***",
+                "",
+                "****ORCA TERMINATED NORMALLY****",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = parsed_frequency_analysis(out_file)
+
+    assert analysis is not None
+    assert tuple(atom[0] for atom in analysis.atoms) == symbols
 
 
 # ---------------------------------------------------------------------------
@@ -639,7 +696,7 @@ def test_parser_binds_thermochemistry_to_the_final_energy_stage(tmp_path: Path) 
     assert result.gibbs_energy == pytest.approx(-100.30)
     assert result.gibbs_correction == pytest.approx(-0.10)
     assert result.thermo_temperature_k == pytest.approx(350.0)
-    analysis = parse_frequency_analysis(out_file)
+    analysis = parsed_frequency_analysis(out_file)
     assert analysis is not None
     assert analysis.frequencies == pytest.approx((0.0, -420.0))
     assert analysis.imaginary_count() == 1

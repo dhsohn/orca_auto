@@ -6,9 +6,9 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+from orca_auto.orca.machine_observation import report_json_path
 from orca_auto.orca.queue.adapter import enqueue
 from orca_auto.orca.queue.worker import OrcaQueueWorker
-from orca_auto.orca.state_reading import report_json_path
 from tests.conftest import claim_next_entry
 from tests.engine_artifact_helpers import orca_artifact_payload
 

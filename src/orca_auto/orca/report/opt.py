@@ -8,34 +8,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..evidence import (
-    final_out_name,
-    final_out_path,
-    parsed_final_output,
-    parsed_frequency_analysis,
-)
-from ..frequencies import (
-    FrequencyAnalysis,
-    ModeSummary,
-    find_frequency_analysis,
-    mode_summaries,
-)
-from ..input_syntax import file_route_lines
+from ..completion_rules import RouteFacts
+from ..evidence import final_out_path, parsed_final_output
+from ..frequencies import FrequencyAnalysis, ModeSummary, mode_summaries
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
+    attempt_index,
+    attempt_out_path,
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    duration_text,
+    latest_frequency_analysis,
     latest_optimization_progress,
     terminal_actions_html,
 )
-from .frequencies import (
-    mode_section_html,
-)
+from .modes import mode_section_html
 from .render import (
     ReportComponent,
+    ReportHeader,
     job_meta_html,
     metric_card,
     relative_energy_cycle_chart_svg,
@@ -45,18 +36,11 @@ from .render import (
 
 @dataclass(frozen=True)
 class OptReportData:
-    title: str
+    header: ReportHeader
     kind: str
-    job_id: str
-    status: str
-    reason: str
-    route_line: str
     formula: str
     method: str
     basis_set: str
-    started_at: str
-    finished_at: str
-    total_duration_text: str
     attempts: tuple[AttemptReportRow, ...]
     steps: tuple[tuple[int, float], ...]
     opt_converged: bool
@@ -65,23 +49,22 @@ class OptReportData:
     mode_summaries: tuple[ModeSummary, ...]
     frequency_attempt_index: int | None
     frequency_from_earlier_attempt: bool
-    last_out_name: str
 
-    def kind_label(self) -> str:
-        return {"ts": "TS", "partial": "Partial Opt"}.get(self.kind, "Opt")
+
+_KIND_LABELS = {"ts": "TS", "partial": "Partial Opt"}
 
 
 def collect_opt_report_data(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-    *,
-    kind: str,
-) -> OptReportData | None:
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-    route_lines = file_route_lines(selected_inp)
+    state: Mapping[str, Any], route: RouteFacts, header: ReportHeader
+) -> OptReportData:
+    # A partial optimization (OptH, QMMMOpt, MECP-Opt, ...) is still an
+    # optimization, but only a full one may be presented as a minimum.
+    if route.is_ts:
+        kind = "ts"
+    elif route.is_full_opt:
+        kind = "opt"
+    else:
+        kind = "partial"
     attempts = attempt_dicts(state)
 
     rows = attempt_report_rows(attempts, f"initial {'OptTS' if kind == 'ts' else 'Opt'}")
@@ -116,29 +99,15 @@ def collect_opt_report_data(
     if analysis is not None and out_path is not None:
         frequency_attempt_index = _attempt_index_for_output(attempts, out_path)
     else:
-        analysis, frequency_attempt_index = find_frequency_analysis(
-            attempts, parse_analysis_fn=parsed_frequency_analysis
-        )
+        analysis, frequency_attempt_index = latest_frequency_analysis(attempts)
         frequency_from_earlier_attempt = analysis is not None
 
-    final_result = state.get("final_result")
-    final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
-
     return OptReportData(
-        title=reaction_dir.name or str(reaction_dir),
+        header=header,
         kind=kind,
-        job_id=str(state.get("job_id") or ""),
-        status=str(state.get("status") or ""),
-        reason=str(final_payload.get("reason") or ""),
-        route_line=route_lines[0] if route_lines else "",
         formula=formula,
         method=method,
         basis_set=basis_set,
-        started_at=str(state.get("started_at") or ""),
-        finished_at=str(final_payload.get("completed_at") or ""),
-        total_duration_text=duration_text(
-            state.get("started_at"), final_payload.get("completed_at")
-        ),
         attempts=rows,
         steps=steps,
         opt_converged=opt_converged,
@@ -147,7 +116,6 @@ def collect_opt_report_data(
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
         frequency_attempt_index=frequency_attempt_index,
         frequency_from_earlier_attempt=frequency_from_earlier_attempt,
-        last_out_name=final_out_name(state),
     )
 
 
@@ -156,9 +124,9 @@ def _attempt_index_for_output(attempts: Sequence[Mapping[str, Any]], out_path: P
     # the resolved form of the same file. Compare resolved forms.
     target = _resolved_or_self(out_path)
     for position in range(len(attempts) - 1, -1, -1):
-        out_raw = str(attempts[position].get("out_path") or "").strip()
-        if out_raw and _resolved_or_self(Path(out_raw)) == target:
-            return int(attempts[position].get("index", position + 1) or (position + 1))
+        attempt_out = attempt_out_path(attempts[position])
+        if attempt_out is not None and _resolved_or_self(attempt_out) == target:
+            return attempt_index(attempts[position], position)
     return None
 
 
@@ -189,30 +157,10 @@ def _imaginary_note(data: OptReportData) -> str:
     return "; ".join(notes)
 
 
-def opt_report_badges(data: OptReportData) -> tuple[tuple[str, str], ...]:
-    return tuple(status_badges(data.status, data.reason))
-
-
-def opt_report_meta_html(data: OptReportData) -> str:
-    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
-    return job_meta_html(
-        route_line=data.route_line,
-        job_id=data.job_id,
-        started_at=data.started_at,
-        finished_at=data.finished_at,
-        extra_html=formula_text,
-    )
-
-
-def _metric_cards(
-    data: OptReportData,
-    *,
-    include_attempts: bool = True,
-    include_energy: bool = True,
-    include_frequency: bool = True,
-) -> str:
+def _metric_cards(data: OptReportData, *, is_primary: bool, irc_present: bool) -> str:
+    # An IRC facet shows the final energy and frequencies itself.
     cards = []
-    if include_energy and data.final_energy is not None:
+    if not irc_present and data.final_energy is not None:
         cards.append(
             metric_card(
                 "Final energy",
@@ -228,7 +176,7 @@ def _metric_cards(
                 "converged" if data.opt_converged else "not converged",
             )
         )
-    if include_frequency and data.imaginary_count is not None:
+    if not irc_present and data.imaginary_count is not None:
         cards.append(
             metric_card(
                 "Imaginary frequencies",
@@ -236,19 +184,13 @@ def _metric_cards(
                 _imaginary_note(data),
             )
         )
-    if include_attempts:
-        cards.append(attempts_metric_card(data.attempts, data.total_duration_text))
+    if is_primary:
+        cards.append(attempts_metric_card(data.attempts, data.header.total_duration_text))
     return "".join(cards)
 
 
 def opt_report_component(
-    data: OptReportData,
-    *,
-    include_attempt_metric: bool = True,
-    include_attempt_chain: bool = True,
-    include_energy_metric: bool = True,
-    include_frequency_metric: bool = True,
-    include_vibrational: bool = True,
+    data: OptReportData, *, is_primary: bool, irc_present: bool
 ) -> ReportComponent:
     chart = relative_energy_cycle_chart_svg(data.steps) or (
         '<p class="muted">No optimization cycles were parsed from the attempt outputs.</p>'
@@ -257,12 +199,12 @@ def opt_report_component(
         "TS optimization convergence" if data.kind == "ts" else "Optimization convergence"
     )
     sections: list[tuple[str, str]] = [(section_title, chart)]
-    if include_attempt_chain:
+    if is_primary:
         attempts_html = attempts_table_html(data.attempts, "Detail") + terminal_actions_html(
             data.attempts
         )
         sections.append(("Attempt chain", attempts_html))
-    if include_vibrational:
+    if not irc_present:
         sections.append(
             (
                 "Vibrational summary",
@@ -273,12 +215,11 @@ def opt_report_component(
                 ),
             )
         )
+    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
     return ReportComponent(
-        metrics_html=_metric_cards(
-            data,
-            include_attempts=include_attempt_metric,
-            include_energy=include_energy_metric,
-            include_frequency=include_frequency_metric,
-        ),
+        kind_label=_KIND_LABELS.get(data.kind, "Opt"),
+        badges=tuple(status_badges(data.header)),
+        meta_html=job_meta_html(data.header, data.header.first_route_line, formula_text),
+        metrics_html=_metric_cards(data, is_primary=is_primary, irc_present=irc_present),
         sections=tuple(sections),
     )

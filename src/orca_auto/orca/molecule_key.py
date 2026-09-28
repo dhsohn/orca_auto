@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 import re
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from .input_blocks import OrcaGeometryBlock, find_geometry_block
+from .orca_chemistry import build_formula
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,9 @@ def _formula_from_lines(lines: list[str], inp_dir: Path) -> str | None:
         atoms = _parse_xyz_file(xyz_path)
     else:
         atoms = _parse_inline_xyz(block)
-    return _atoms_to_hill_formula(atoms)
+    # Queue rows, job_locations.json and the companion app key on this string.
+    # Molecule keys have always been Hill formulas; build_formula is that rule.
+    return build_formula(atoms) or None
 
 
 def _parse_inline_xyz(block: OrcaGeometryBlock) -> list[str]:
@@ -117,27 +119,6 @@ def _parse_xyz_file(xyz_path: Path) -> list[str]:
             return []
         atoms.append(m.group(1))
     return atoms
-
-
-def _atoms_to_hill_formula(atoms: list[str]) -> str | None:
-    if not atoms:
-        return None
-
-    counts = Counter(atoms)
-    parts: list[str] = []
-
-    if "C" in counts:
-        parts.append("C" + (str(counts["C"]) if counts["C"] > 1 else ""))
-        del counts["C"]
-        if "H" in counts:
-            parts.append("H" + (str(counts["H"]) if counts["H"] > 1 else ""))
-            del counts["H"]
-
-    for elem in sorted(counts.keys()):
-        parts.append(elem + (str(counts[elem]) if counts[elem] > 1 else ""))
-
-    formula = "".join(parts)
-    return formula if formula else None
 
 
 def _sanitize_key(raw: str) -> str:

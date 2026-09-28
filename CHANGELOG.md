@@ -282,6 +282,13 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   A failed content hash of an input or output file reads
   `File changed while it was hashed: …` or `File is not a regular file: …`
   instead of naming the file an `Engine executable`.
+- Chemical formulas in `job_report.html` and `si_block.md` follow the Hill
+  system: C, then H, then the other elements alphabetically, and without
+  carbon every element alphabetically (`C2H4BrCl`, `FeO4`, `ClNa`). The other
+  elements used to follow atomic number, with H first in a carbon-free formula
+  (`C2H4ClBr`, `O4Fe`, `NaCl`). Molecule keys were already Hill formulas and
+  are unchanged, and `machine.json` carries no formula. Reports published
+  earlier are not regenerated.
 
 ## [8.0.1] - 2026-09-26
 

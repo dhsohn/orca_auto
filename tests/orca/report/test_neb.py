@@ -7,13 +7,14 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.report import write_job_html_report
+from orca_auto.orca.report.composer import collect_html_report_parts
 from orca_auto.orca.report.neb import (
     NebPathPoint,
+    NebReportData,
     _parse_ts_refinement_steps,
     _path_plot_x,
-    collect_neb_report_data,
 )
+from orca_auto.orca.report.publication import write_job_html_report
 from orca_auto.orca.report.render import ChartSeries, line_chart_svg
 from tests.engine_artifact_helpers import report_generation_target
 from tests.orca_output_helpers import (
@@ -22,6 +23,12 @@ from tests.orca_output_helpers import (
     write_neb_irc_out,
     write_neb_out,
 )
+
+
+def _neb_data(reaction_dir: Path, state: dict[str, Any]) -> NebReportData:
+    parts = collect_html_report_parts(reaction_dir, state)
+    assert parts is not None and parts.neb is not None
+    return parts.neb
 
 
 @pytest.mark.parametrize(
@@ -131,7 +138,7 @@ def test_neb_report_decodes_each_attempt_output_once(
 
     monkeypatch.setattr(builtins, "open", counted_open)
 
-    data = collect_neb_report_data(tmp_path, state)
+    data = _neb_data(tmp_path, state)
 
     assert data is not None
     assert len(data.path_points) == 11
@@ -156,7 +163,7 @@ def test_neb_report_retains_empty_fallback_for_unreadable_output(
 
     monkeypatch.setattr(builtins, "open", unreadable_open)
 
-    data = collect_neb_report_data(tmp_path, _state(tmp_path, out_path))
+    data = _neb_data(tmp_path, _state(tmp_path, out_path))
 
     assert data is not None
     assert data.path_points == ()
@@ -170,7 +177,7 @@ def test_collect_neb_report_data_parses_path_and_iterations(tmp_path: Path) -> N
     out_path = tmp_path / "rxn.out"
     write_neb_out(out_path)
 
-    data = collect_neb_report_data(tmp_path, _state(tmp_path, out_path))
+    data = _neb_data(tmp_path, _state(tmp_path, out_path))
 
     assert data is not None
     assert data.neb_converged
@@ -218,7 +225,7 @@ def test_collect_neb_report_data_skips_contentless_final_attempt(tmp_path: Path)
             "ended_at": "2026-07-03T04:01:30+00:00",
         }
     )
-    data = collect_neb_report_data(tmp_path, state)
+    data = _neb_data(tmp_path, state)
 
     assert data is not None
     assert len(data.path_points) == 11

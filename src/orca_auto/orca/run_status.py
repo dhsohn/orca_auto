@@ -24,16 +24,11 @@ from orca_auto.core.statuses import (
 from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.process_tracking import run_lock_is_held
 
-from .queue import entries as queue_entries
+from .queue.entries import queue_entry_reaction_dir, queue_entry_status
 from .run_snapshot import RunSnapshot
 from .statuses import ACTIVE_RUN_STATUS_VALUES
 
 _LOGGER = logging.getLogger(__name__)
-_ORCA_ACTIVE_QUEUE_STATUSES = ACTIVE_STATUSES
-_ORCA_TERMINAL_QUEUE_STATUSES = TERMINAL_STATUSES
-# Snapshot run states that imply a live process; without a live run lock the run
-# was cancelled/killed/crashed and must not keep showing as in progress.
-STALE_SNAPSHOT_STATUSES = ACTIVE_RUN_STATUS_VALUES
 
 
 def snapshot_reaction_dir(snapshot: RunSnapshot) -> str:
@@ -43,22 +38,25 @@ def snapshot_reaction_dir(snapshot: RunSnapshot) -> str:
         return str(snapshot.reaction_dir)
 
 
-def queue_entry_status(entry: Any, snapshot: RunSnapshot | None) -> str:
+def observed_queue_status(entry: Any, snapshot: RunSnapshot | None) -> str:
+    """The status a queue row shows: a ``running`` row without a live run lock is pending."""
     status = effective_queue_status(entry)
     if status != QueueStatus.RUNNING.value:
         return status
     snapshot_status = normalize_text(snapshot.status) if snapshot is not None else ""
-    if snapshot_status and snapshot_status not in STALE_SNAPSHOT_STATUSES:
+    # An active run status implies a live process; only the run lock proves one.
+    if snapshot_status and snapshot_status not in ACTIVE_RUN_STATUS_VALUES:
         return snapshot_status
-    reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
+    reaction_dir = normalize_text(queue_entry_reaction_dir(entry))
     if reaction_dir and not run_lock_is_held(Path(reaction_dir), logger=_LOGGER):
         return STATUS_PENDING
     return snapshot_status or status
 
 
-def snapshot_display_status(snapshot: RunSnapshot) -> str:
+def observed_snapshot_status(snapshot: RunSnapshot) -> str:
+    """The status a run snapshot shows: an active one without a live run lock failed."""
     status = normalize_text(snapshot.status).lower() or STATUS_UNKNOWN
-    if status not in STALE_SNAPSHOT_STATUSES:
+    if status not in ACTIVE_RUN_STATUS_VALUES:
         return status
     reaction_dir = snapshot_reaction_dir(snapshot)
     if not reaction_dir:
@@ -72,7 +70,7 @@ def snapshot_display_status(snapshot: RunSnapshot) -> str:
 
 
 def _resolved_entry_reaction_dir(entry: Any) -> str:
-    reaction_dir = normalize_text(queue_entries.queue_entry_reaction_dir(entry))
+    reaction_dir = normalize_text(queue_entry_reaction_dir(entry))
     if not reaction_dir:
         return ""
     try:
@@ -95,10 +93,10 @@ def superseded_snapshot_dirs(entries: list[Any]) -> set[str]:
         reaction_dir = _resolved_entry_reaction_dir(entry)
         if not reaction_dir:
             continue
-        status = normalize_text(queue_entries.queue_entry_status(entry))
-        if status in _ORCA_ACTIVE_QUEUE_STATUSES:
+        status = normalize_text(queue_entry_status(entry))
+        if status in ACTIVE_STATUSES:
             active.add(reaction_dir)
-        elif status in _ORCA_TERMINAL_QUEUE_STATUSES:
+        elif status in TERMINAL_STATUSES:
             terminal.add(reaction_dir)
     return terminal - active
 
@@ -118,9 +116,8 @@ def snapshot_is_superseded(snapshot: RunSnapshot, superseded_dirs: set[str]) -> 
 
 
 __all__ = [
-    "STALE_SNAPSHOT_STATUSES",
-    "queue_entry_status",
-    "snapshot_display_status",
+    "observed_queue_status",
+    "observed_snapshot_status",
     "snapshot_is_superseded",
     "snapshot_reaction_dir",
     "superseded_snapshot_dirs",

@@ -10,13 +10,11 @@ from typing import Any, cast
 
 from orca_auto.core.artifacts import (
     MAX_RUN_ARTIFACT_JSON_BYTES,
-    RUN_REPORT_JSON_FILE,
     RUN_STATE_FILE,
 )
 from orca_auto.core.confined_io import read_confined_text
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.generation_owner import require_direct_generation_owner
-from orca_auto.core.statuses import STATUS_PENDING, STATUS_QUEUED
 from orca_auto.core.utils import copy_dict_or_empty as _dict
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
@@ -24,19 +22,13 @@ from .generation_validation import (
     require_bound_generation_directory,
     require_generation_selected_input,
 )
-from .statuses import ACTIVE_RUN_STATUS_VALUES, RunStatus
 from .types import RunFinalResult, RunState
 
 STATE_FILE_NAME = RUN_STATE_FILE
-REPORT_JSON_NAME = RUN_REPORT_JSON_FILE
 
 
 def state_path(reaction_dir: Path) -> Path:
     return reaction_dir / STATE_FILE_NAME
-
-
-def report_json_path(reaction_dir: Path) -> Path:
-    return reaction_dir / REPORT_JSON_NAME
 
 
 def state_payload_job_id(payload: Any) -> str:
@@ -227,33 +219,13 @@ def load_generation_state(
     return payload, normalized
 
 
-def machine_lifecycle(status: str) -> tuple[str, str]:
-    """Map a run/queue status to the report ``(phase, outcome)`` pair."""
-
-    normalized = status.strip().lower()
-    if normalized in {RunStatus.CREATED.value, STATUS_PENDING, STATUS_QUEUED}:
-        return "queued", "pending"
-    if normalized in ACTIVE_RUN_STATUS_VALUES:
-        return "running", "pending"
-    if normalized == RunStatus.COMPLETED.value:
-        return "finished", "succeeded"
-    if normalized == RunStatus.CANCELLED.value:
-        return "finished", "cancelled"
-    if normalized == RunStatus.FAILED.value:
-        return "finished", "failed"
-    return "finished", "uncertain"
-
-
 __all__ = [
-    "REPORT_JSON_NAME",
     "STATE_FILE_NAME",
     "get_run_id_from_state",
     "load_generation_state",
     "load_state",
-    "machine_lifecycle",
     "normalized_text",
     "payload_matches_expected_job_id",
-    "report_json_path",
     "state_from_normalized_payload",
     "state_path",
     "state_payload_job_id",

@@ -324,7 +324,7 @@ def test_orca_records_keep_live_snapshot_despite_terminal_entry(
     }
 
 
-def test_snapshot_display_status_marks_dead_running_as_failed(tmp_path: Path) -> None:
+def test_observed_snapshot_status_marks_dead_running_as_failed(tmp_path: Path) -> None:
     reaction_dir = tmp_path / "rxn"
     reaction_dir.mkdir()
 
@@ -345,14 +345,14 @@ def test_snapshot_display_status_marks_dead_running_as_failed(tmp_path: Path) ->
     running = _snap("running")
 
     # No live run lock -> the run is gone; show it as failed, not in progress.
-    assert run_status.snapshot_display_status(running) == "failed"
+    assert run_status.observed_snapshot_status(running) == "failed"
 
     # A live run lock -> genuinely running, leave it as running.
     with acquire_run_lock(reaction_dir):
-        assert run_status.snapshot_display_status(running) == "running"
+        assert run_status.observed_snapshot_status(running) == "running"
 
     # Terminal statuses are never reinterpreted, regardless of the lock.
-    assert run_status.snapshot_display_status(_snap("completed")) == "completed"
+    assert run_status.observed_snapshot_status(_snap("completed")) == "completed"
 
 
 def test_match_activity_record_error_edges() -> None:

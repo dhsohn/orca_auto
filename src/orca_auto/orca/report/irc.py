@@ -1,4 +1,4 @@
-"""IRC job report: path profile, endpoint summary, and validation SI block."""
+"""IRC job report: path profile, endpoint summary and iterations."""
 
 from __future__ import annotations
 
@@ -9,54 +9,43 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..completion_rules import IRC_ROUTE_RE
-from ..evidence import (
-    final_out_name,
-    final_out_path,
-    parsed_final_output,
-    parsed_frequency_analysis,
-    parsed_output_facts,
-)
-from ..frequencies import (
-    ModeSummary,
-    find_frequency_analysis,
-    mode_summaries,
-)
-from ..input_syntax import file_route_lines
+from ..completion_rules import RouteFacts
+from ..evidence import final_out_path, parsed_final_output, parsed_output_facts
+from ..frequencies import ModeSummary, mode_summaries
+from ..out_analyzer import IRC_DRIVER_NEEDLE, IRC_PATH_SUMMARY_RE
 from ..parser import OrcaResult
-from ..statuses import RunStatus
 from .attempts import (
     AttemptReportRow,
     attempt_dicts,
     attempt_report_rows,
     attempts_metric_card,
     attempts_table_html,
-    duration_text,
     latest_attempt_with_content,
+    latest_frequency_analysis,
     latest_optimization_progress,
     parse_attempt_output,
     terminal_actions_html,
     with_details,
 )
-from .frequencies import (
-    mode_section_html,
-)
+from .modes import mode_section_html
 from .path import (
     IrcPathPoint,
     PathPoint,
     attempt_detail_text,
     iter_phase_table_rows,
     parse_path_summary,
+    path_endpoints,
     path_marker_index,
+    path_marker_point,
     path_profile_chart_svg,
     path_summary_row_re,
     path_table_html,
 )
 from .render import (
     ReportComponent,
+    ReportHeader,
     job_meta_html,
     metric_card,
-    path_marker_point,
     relative_energy_cycle_chart_svg,
     status_badges,
 )
@@ -77,7 +66,6 @@ _IRC_ITERATION_RE = re.compile(
     r"([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)"
     r"(?:\s+[-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)*\s*$"
 )
-_IRC_PATH_SUMMARY_HEADER_RE = re.compile(r"\bIRC\s+PATH\s+SUMMARY\b", re.IGNORECASE)
 _IRC_PATH_ROW_RE = path_summary_row_re(r"TS|[-+]?\d+", trailing_columns=True)
 _SECTION_HEADER_RE = re.compile(
     r"\b(?:FORWARD|BACKWARD)\s+IRC\b|\bIRC\s+PATH\s+SUMMARY\b|"
@@ -106,18 +94,12 @@ class IrcParsedOutput:
 
 @dataclass(frozen=True)
 class IrcReportData:
-    title: str
-    job_id: str
-    status: str
-    reason: str
-    route_line: str
+    header: ReportHeader
+    ts_route: bool
     formula: str
     method: str
     basis_set: str
     orca_version: str
-    started_at: str
-    finished_at: str
-    total_duration_text: str
     attempts: tuple[AttemptReportRow, ...]
     settings: tuple[ReportSetting, ...]
     iterations: tuple[IrcIterationPoint, ...]
@@ -128,25 +110,6 @@ class IrcReportData:
     result: OrcaResult | None
     imaginary_count: int | None
     mode_summaries: tuple[ModeSummary, ...]
-    last_out_name: str
-
-
-@dataclass(frozen=True)
-class IrcSiBlock:
-    name: str
-    route_line: str
-    orca_version: str
-    settings: tuple[ReportSetting, ...]
-    path_points: tuple[IrcPathPoint, ...]
-    last_out_name: str
-
-
-class IrcReportError(Exception):
-    """The IRC report cannot be assembled because required artifacts are missing."""
-
-
-def input_uses_irc(inp_path: Path) -> bool:
-    return bool(IRC_ROUTE_RE.search(" ".join(file_route_lines(inp_path))))
 
 
 def parse_irc_output_text(text: str) -> IrcParsedOutput:
@@ -156,7 +119,7 @@ def parse_irc_output_text(text: str) -> IrcParsedOutput:
         iterations=_parse_irc_iterations(text),
         path_points=_parse_irc_path_summary(text),
         irc_marker_found=bool(
-            _IRC_PATH_SUMMARY_HEADER_RE.search(text) or "IRC-DRV" in text.upper()
+            IRC_PATH_SUMMARY_RE.search(text) or IRC_DRIVER_NEEDLE in text.upper()
         ),
     )
 
@@ -176,17 +139,8 @@ _EMPTY_IRC_OUTPUT = IrcParsedOutput(
 
 
 def collect_irc_report_data(
-    reaction_dir: Path,
-    state: Mapping[str, Any],
-) -> IrcReportData | None:
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-    if not input_uses_irc(selected_inp):
-        return None
-
-    route_lines = file_route_lines(selected_inp)
+    state: Mapping[str, Any], route: RouteFacts, header: ReportHeader
+) -> IrcReportData:
     attempts = attempt_dicts(state)
     rows = with_details(
         attempt_report_rows(attempts, "initial IRC"),
@@ -208,28 +162,15 @@ def collect_irc_report_data(
             result, _analysis = parsed_final_output(out_path)
         except OSError:
             result = None
-    analysis, _frequency_attempt_index = find_frequency_analysis(
-        attempts, parse_analysis_fn=parsed_frequency_analysis
-    )
-
-    final_result = state.get("final_result")
-    final_payload: Mapping[str, Any] = final_result if isinstance(final_result, Mapping) else {}
+    analysis, _frequency_attempt_index = latest_frequency_analysis(attempts)
 
     return IrcReportData(
-        title=reaction_dir.name or str(reaction_dir),
-        job_id=str(state.get("job_id") or ""),
-        status=str(state.get("status") or ""),
-        reason=str(final_payload.get("reason") or ""),
-        route_line=" ".join(route_lines),
+        header=header,
+        ts_route=route.is_ts,
         formula=result.formula if result is not None else "",
         method=result.method if result is not None else "",
         basis_set=result.basis_set if result is not None else "",
         orca_version=result.orca_version if result is not None else "",
-        started_at=str(state.get("started_at") or ""),
-        finished_at=str(final_payload.get("completed_at") or ""),
-        total_duration_text=duration_text(
-            state.get("started_at"), final_payload.get("completed_at")
-        ),
         attempts=rows,
         settings=parsed.settings,
         iterations=parsed.iterations,
@@ -240,115 +181,31 @@ def collect_irc_report_data(
         result=result,
         imaginary_count=analysis.imaginary_count() if analysis is not None else None,
         mode_summaries=mode_summaries(analysis, None) if analysis is not None else (),
-        last_out_name=final_out_name(state),
     )
 
 
-def collect_irc_si_block(reaction_dir: Path, state: Mapping[str, Any]) -> IrcSiBlock | None:
-    if str(state.get("status") or "") != RunStatus.COMPLETED.value:
-        return None
-    selected_raw = str(state.get("selected_inp") or "").strip()
-    if not selected_raw:
-        return None
-    selected_inp = Path(selected_raw)
-    route_lines = file_route_lines(selected_inp)
-    if not route_lines:
-        raise IrcReportError(f"cannot read route lines from input {selected_inp}")
-    if not IRC_ROUTE_RE.search(" ".join(route_lines)):
-        return None
-
-    out_path = final_out_path(state)
-    if out_path is None:
-        raise IrcReportError(f"no output file found for {reaction_dir}")
-    parsed = parse_irc_output(out_path)
-    try:
-        result, _analysis = parsed_final_output(out_path)
-    except OSError:
-        result = None
-    return IrcSiBlock(
-        name=reaction_dir.name,
-        route_line=" ".join(route_lines),
-        orca_version=result.orca_version if result is not None else "",
-        settings=parsed.settings,
-        path_points=parsed.path_points,
-        last_out_name=out_path.name,
-    )
-
-
-def render_irc_si_block_md(block: IrcSiBlock) -> str:
-    version_note = f"        (ORCA {block.orca_version})" if block.orca_version else ""
-    lines = [
-        f"== {block.name} ==",
-        f"{block.route_line}{version_note}",
-        "IRC validation summary",
-    ]
-    ts = path_marker_point(block.path_points, "TS")
-    endpoint_1, endpoint_2 = _path_endpoints(block.path_points)
-    if block.path_points:
-        lines.append(f"Parsed IRC path points = {len(block.path_points)}")
-    if ts is not None:
-        lines.append(
-            f"TS step = {ts.label}; E = {ts.energy_hartree:.6f} Eh; "
-            f"relative ΔE = {ts.relative_kcal:+.2f} kcal mol⁻¹"
-        )
-    for label, point in (("path endpoint 1", endpoint_1), ("path endpoint 2", endpoint_2)):
-        if point is None:
-            continue
-        endpoint_text = (
-            f"{label}: step {point.label}; E = {point.energy_hartree:.6f} Eh; "
-            f"relative ΔE = {point.relative_kcal:+.2f} kcal mol⁻¹"
-        )
-        if ts is not None:
-            endpoint_text += f"; from TS = {point.relative_kcal - ts.relative_kcal:+.2f} kcal mol⁻¹"
-        lines.append(endpoint_text)
-
-    trajectory_settings = [
-        setting for setting in block.settings if "trajectory" in setting.label.lower()
-    ]
-    for setting in trajectory_settings:
-        lines.append(f"{setting.label}: {setting.value}")
-    if block.last_out_name:
-        lines.append(f"Last output: {block.last_out_name}")
-    lines.append(
-        "⚠ IRC endpoints are path endpoints, not fully optimized stationary structures; "
-        "optimize endpoints before publishing endpoint coordinates."
-    )
-    lines.append("")
-    return "\n".join(lines)
-
-
-def irc_report_badges(data: IrcReportData) -> tuple[tuple[str, str], ...]:
-    badges = status_badges(data.status, data.reason)
+def _irc_badges(data: IrcReportData) -> tuple[tuple[str, str], ...]:
+    badges = status_badges(data.header)
     if data.irc_marker_found:
         badges.append(("IRC path found", "ok"))
     return tuple(badges)
 
 
-def irc_report_meta_html(data: IrcReportData) -> str:
-    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
-    version_text = f" &#183; ORCA {html.escape(data.orca_version)}" if data.orca_version else ""
-    return job_meta_html(
-        route_line=data.route_line,
-        job_id=data.job_id,
-        started_at=data.started_at,
-        finished_at=data.finished_at,
-        extra_html=formula_text + version_text,
-    )
-
-
 def irc_report_component(
-    data: IrcReportData,
-    *,
-    include_attempt_metric: bool = True,
-    include_attempt_chain: bool = True,
-    include_common_metric: bool = True,
-    include_optimization: bool = True,
+    data: IrcReportData, *, is_primary: bool, optimization_elsewhere: bool
 ) -> ReportComponent:
+    """The IRC facet's part of the page.
+
+    Its vibrational summary replaces the other facets' (they drop theirs when
+    an IRC facet is present). Its own optimization trace shows only without
+    ``optimization_elsewhere`` (an Opt, scan or NEB-TS facet), and its final
+    energy card and attempt chain only when it is the primary facet.
+    """
     sections: list[tuple[str, str]] = []
     common_html = _calculation_summary_html(data)
     if common_html:
         sections.append(("Calculation summary", common_html))
-    if include_optimization:
+    if not optimization_elsewhere:
         opt_html = _optimization_section_html(data)
         if opt_html:
             sections.append((_optimization_section_title(data), opt_html))
@@ -366,17 +223,22 @@ def irc_report_component(
     iteration_html = _iterations_table_html(data.iterations)
     if iteration_html:
         sections.append(("IRC iterations", iteration_html))
-    if include_attempt_chain:
+    if is_primary:
         attempts_html = attempts_table_html(data.attempts, "Detail") + terminal_actions_html(
             data.attempts
         )
         sections.append(("Attempt chain", attempts_html))
+    formula_text = f" &#183; {html.escape(data.formula)}" if data.formula else ""
+    version_text = f" &#183; ORCA {html.escape(data.orca_version)}" if data.orca_version else ""
     return ReportComponent(
+        kind_label="IRC",
+        badges=_irc_badges(data),
+        # Unlike the other reports, IRC shows every route line, not just the first.
+        meta_html=job_meta_html(
+            data.header, " ".join(data.header.route_lines), formula_text + version_text
+        ),
         metrics_html=_irc_metric_cards(
-            data,
-            include_attempts=include_attempt_metric,
-            include_common=include_common_metric,
-            include_optimization=include_optimization,
+            data, is_primary=is_primary, optimization_elsewhere=optimization_elsewhere
         ),
         sections=tuple(sections),
     )
@@ -408,7 +270,7 @@ def _irc_phase_of_line(line: str) -> str | None:
     direction_match = _IRC_DIRECTION_RE.search(line)
     if direction_match is not None:
         return direction_match.group(1)
-    if _IRC_PATH_SUMMARY_HEADER_RE.search(line):
+    if IRC_PATH_SUMMARY_RE.search(line):
         return ""
     return None
 
@@ -432,7 +294,7 @@ def _parse_irc_iterations(text: str) -> tuple[IrcIterationPoint, ...]:
 def _parse_irc_path_summary(text: str) -> tuple[IrcPathPoint, ...]:
     return parse_path_summary(
         text,
-        header_re=_IRC_PATH_SUMMARY_HEADER_RE,
+        header_re=IRC_PATH_SUMMARY_RE,
         row_re=_IRC_PATH_ROW_RE,
         point_type=IrcPathPoint,
     )
@@ -461,16 +323,6 @@ def _path_x(point: IrcPathPoint) -> float:
     return float(point.step if point.step is not None else point.order)
 
 
-def _path_endpoints(
-    points: Sequence[IrcPathPoint],
-) -> tuple[IrcPathPoint | None, IrcPathPoint | None]:
-    if not points:
-        return None, None
-    if len(points) == 1:
-        return points[0], None
-    return points[0], points[-1]
-
-
 # IRC-specific chart highlights (endpoints + TS) and metric cards; the NEB
 # report has its own versions in neb.py with different labels and cards.
 def _irc_path_chart_svg(data: IrcReportData) -> str:
@@ -491,16 +343,8 @@ def _irc_path_chart_svg(data: IrcReportData) -> str:
     )
 
 
-def _is_ts_route(route_line: str) -> bool:
-    return bool(re.search(r"\b(?:OPTTS|(?:ZOOM-)?NEB-TS)\b", route_line, re.IGNORECASE))
-
-
 def _optimization_section_title(data: IrcReportData) -> str:
-    return (
-        "TS optimization convergence"
-        if _is_ts_route(data.route_line)
-        else "Optimization convergence"
-    )
+    return "TS optimization convergence" if data.ts_route else "Optimization convergence"
 
 
 def _optimization_section_html(data: IrcReportData) -> str:
@@ -551,11 +395,7 @@ def _calculation_summary_html(data: IrcReportData) -> str:
 
 
 def _irc_metric_cards(
-    data: IrcReportData,
-    *,
-    include_attempts: bool = True,
-    include_common: bool = True,
-    include_optimization: bool = True,
+    data: IrcReportData, *, is_primary: bool, optimization_elsewhere: bool
 ) -> str:
     cards = []
     if data.path_points:
@@ -571,7 +411,7 @@ def _irc_metric_cards(
                 f"step {ts.label}, dE {ts.relative_kcal:+.2f} kcal/mol",
             )
         )
-    endpoint_1, endpoint_2 = _path_endpoints(data.path_points)
+    endpoint_1, endpoint_2 = path_endpoints(data.path_points)
     for label, endpoint in (("Endpoint 1", endpoint_1), ("Endpoint 2", endpoint_2)):
         if endpoint is None:
             continue
@@ -581,23 +421,23 @@ def _irc_metric_cards(
         cards.append(
             metric_card(label, f"{endpoint.relative_kcal:+.2f} <small>kcal/mol</small>", note)
         )
-    if include_common and data.result is not None and data.result.energy_hartree is not None:
+    if is_primary and data.result is not None and data.result.energy_hartree is not None:
         level = "/".join(part for part in (data.method, data.basis_set) if part)
         cards.append(
             metric_card(
                 "Final energy", f"{data.result.energy_hartree:.6f} <small>Eh</small>", level
             )
         )
-    if include_optimization and data.optimization_steps:
+    if not optimization_elsewhere and data.optimization_steps:
         cards.append(
             metric_card(
-                "TS opt cycles" if _is_ts_route(data.route_line) else "Opt cycles",
+                "TS opt cycles" if data.ts_route else "Opt cycles",
                 str(data.optimization_steps[-1][0]),
                 "converged" if data.optimization_converged else "not converged",
             )
         )
     if data.imaginary_count is not None:
-        expected = 1 if _is_ts_route(data.route_line) else 0
+        expected = 1 if data.ts_route else 0
         cards.append(
             metric_card(
                 "Imaginary frequencies",
@@ -605,8 +445,8 @@ def _irc_metric_cards(
                 f"expected {expected}",
             )
         )
-    if include_attempts:
-        cards.append(attempts_metric_card(data.attempts, data.total_duration_text))
+    if is_primary:
+        cards.append(attempts_metric_card(data.attempts, data.header.total_duration_text))
     return "".join(cards)
 
 
@@ -645,15 +485,8 @@ __all__ = [
     "IrcParsedOutput",
     "IrcPathPoint",
     "IrcReportData",
-    "IrcReportError",
-    "IrcSiBlock",
     "collect_irc_report_data",
-    "collect_irc_si_block",
-    "input_uses_irc",
-    "irc_report_badges",
     "irc_report_component",
-    "irc_report_meta_html",
     "parse_irc_output",
     "parse_irc_output_text",
-    "render_irc_si_block_md",
 ]

@@ -76,10 +76,23 @@ Normal submission and publication repair both call `queue/job_records.py` with t
 - Interrupted or failed executions retain their specific failure causes in both the queue entry and generation state.
 
 ### 4. Convergence & Publication
-- Upon calculation exit, `orca/out_analyzer.py` verifies termination banners and scans output lines for error or convergence failures (ignoring comments and input echoes).
-- A verified observation payload (`machine.json` adhering to the v1 envelope contract) and human-readable HTML/SI reports are published.
+- Upon calculation exit, `orca/out_analyzer.py` streams the output once: it verifies termination banners and scans the lines for error or convergence failures (ignoring comments and input echoes), and for a TS route counts the imaginary modes of the final frequency section in the same pass.
+- A verified observation payload (`machine.json` adhering to the v1 envelope contract) and human-readable HTML/SI reports are published. `orca/machine_observation.py` derives every `machine.json` field (envelope, lifecycle, artifact receipts, results summary) from the normalized job state and the generation's files; `report/publication.py` writes it and the HTML and SI files, and `report/si.py` renders every SI block, the IRC validation block included.
 
 A result with captured source evidence publishes `execution_provenance.json` before `machine.json`. The report publisher copies the generation's recorded evidence; the machine result references it as the `execution-provenance` artifact alongside `input` and `orca-output`. Any reader can verify the receipts; the release smoke checks agreement with the generation state. A terminal report and its provenance are immutable; terminal replay preserves existing evidence, including historical reports without a provenance artifact.
+
+One rule decides what kind of job the selected input is. `completion_rules.route_facts` reads the `.inp` and records its route lines and flags: TS, IRC, NEB-TS, optimization (full or partial), relaxed scan (an optimization with a `%geom Scan` block) and non-stationary path or dynamics. The analyzer's completion mode, the HTML report's sections (`report/composer.py`), the structure kind (`evidence.structure_kind`) and the SI writer (`report/si.py`) all derive from that record, so they cannot classify one input differently. Each caller reads the input itself: the completion mode, the HTML writer and the SI writer each call `route_facts`, and the relaxed-scan report reads the input again for its scan coordinate. The job-type label (`job_type.detect_job_type`) and the runtime outputs an input requests (`execution_binding/_inputs.py`) classify route lines on their own, from the same keyword rules plus a few of their own. The composer builds one `ReportHeader` per page from the job state (title, status and reason, route lines, timestamps, last output) and passes it to each facet's collector: Opt, SP, relaxed scan, NEB-TS and IRC. Each facet renders one `ReportComponent` (its kind label, badges, meta line, metric cards and sections) from two facts: whether it is the primary facet, which names the page and alone carries the attempt chain, and whether an IRC facet is present, which then shows the vibrational summary. The IRC facet itself asks instead whether another facet already shows the optimization trace.
+
+| Job kind | HTML report facets (page kind) | SI block (completed jobs) |
+| :--- | :--- | :--- |
+| NEB-TS, ZOOM-NEB-TS | NEB-TS (`NEB-TS`) | TS structure |
+| Relaxed scan: an optimization with a `%geom Scan` block | Relaxed scan (`Relaxed scan`) | None |
+| OptTS | Opt (`TS`) | TS structure |
+| Full optimization: `Opt`, `TightOpt`, `COpt`, ... | Opt (`Opt`) | Minimum structure |
+| Partial optimization: `OptH`, `MECP-Opt`, ... | Opt (`Partial Opt`) | Structure without a minimum or TS claim |
+| Any kind with `IRC`, or `IRC` alone | IRC facet added; it names the page (`IRC`) unless NEB-TS or a relaxed scan does | IRC validation summary instead |
+| Plain NEB / NEB-CI, MD | No report | None |
+| Single point, bare `Freq`, anything else | SP (`SP`) | Structure without a minimum or TS claim |
 
 ### Terminal publication and queue completion
 

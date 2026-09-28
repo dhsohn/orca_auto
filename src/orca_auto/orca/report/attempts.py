@@ -9,7 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
-from ..evidence import parsed_optimization_progress
+from ..evidence import parsed_frequency_analysis, parsed_optimization_progress
+from ..frequencies import FrequencyAnalysis
 from ..orca_opt_progress import OptProgress
 from ..statuses import AnalyzerStatus
 from .render import metric_card
@@ -47,6 +48,11 @@ def attempt_actions(attempt: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(str(action) for action in actions)
 
 
+def attempt_index(attempt: Mapping[str, Any], position: int) -> int:
+    """The attempt's recorded 1-based ``index``; its list position + 1 when absent or zero."""
+    return int(attempt.get("index", position + 1) or (position + 1))
+
+
 def attempt_role(creating_actions: Sequence[str]) -> str:
     """Label for the attempt created by ``creating_actions``."""
     if any(action.startswith("resume_") for action in creating_actions):
@@ -66,7 +72,7 @@ def attempt_report_rows(
             label = attempt_role(attempt_actions(attempts[position - 1]))
         rows.append(
             AttemptReportRow(
-                index=int(attempt.get("index", position + 1) or (position + 1)),
+                index=attempt_index(attempt, position),
                 label=label,
                 analyzer_status=analyzer_status_text(attempt.get("analyzer_status")),
                 analyzer_reason=str(attempt.get("analyzer_reason") or ""),
@@ -127,6 +133,20 @@ def latest_attempt_with_content(
         if fallback is None:
             fallback = parsed
     return fallback
+
+
+def latest_frequency_analysis(
+    attempts: Sequence[Mapping[str, Any]],
+) -> tuple[FrequencyAnalysis | None, int | None]:
+    """Latest attempt output with a final-geometry frequency section, and that attempt's index.
+
+    ``(None, None)`` when no readable attempt output has one.
+    """
+    for position in range(len(attempts) - 1, -1, -1):
+        analysis = parse_attempt_output(attempts[position], parsed_frequency_analysis)
+        if analysis is not None:
+            return analysis, attempt_index(attempts[position], position)
+    return None, None
 
 
 def has_opt_steps(progress: OptProgress) -> bool:

@@ -7,11 +7,17 @@ from typing import Any
 
 import pytest
 
-from orca_auto.orca.report import write_job_html_report
-from orca_auto.orca.report.publication import write_report_files
-from orca_auto.orca.report.sp import collect_sp_report_data
+from orca_auto.orca.report.composer import collect_html_report_parts
+from orca_auto.orca.report.publication import write_job_html_report, write_report_files
+from orca_auto.orca.report.sp import SpReportData
 from tests.engine_artifact_helpers import bind_report_generation, report_generation_target
 from tests.orca_output_helpers import sp_out_text
+
+
+def _sp_data(reaction_dir: Path, state: dict[str, Any]) -> SpReportData:
+    parts = collect_html_report_parts(reaction_dir, state)
+    assert parts is not None and parts.sp is not None
+    return parts.sp
 
 
 def _job_dir(
@@ -64,7 +70,7 @@ _FREQ_INP = "! B3LYP def2-SVP Freq\n* xyz 0 1\nC 0 0 0\n*\n"
 def test_collect_sp_report_parses_energy_and_si_block(tmp_path: Path) -> None:
     state = _job_dir(tmp_path, inp_text=_SP_INP, out_text=sp_out_text())
 
-    data = collect_sp_report_data(tmp_path, state)
+    data = _sp_data(tmp_path, state)
 
     assert data is not None
     assert data.result is not None
@@ -196,7 +202,7 @@ def test_vibrational_summary_prefers_the_final_output(tmp_path: Path) -> None:
     # Last attempt points at a stale output; final_result still names rxn.out.
     state["attempts"][-1]["out_path"] = str(stale)
 
-    data = collect_sp_report_data(tmp_path, state)
+    data = _sp_data(tmp_path, state)
 
     assert data is not None
     assert data.imaginary_count == 1
@@ -215,7 +221,7 @@ def test_vibrational_summary_falls_back_to_attempt_outputs(tmp_path: Path) -> No
     earlier.write_text(sp_out_text(route="B3LYP def2-SVP Freq", freq_block=True), encoding="utf-8")
     state["attempts"].insert(0, dict(state["attempts"][0], index=1, out_path=str(earlier)))
 
-    data = collect_sp_report_data(tmp_path, state)
+    data = _sp_data(tmp_path, state)
 
     assert data is not None
     assert data.imaginary_count == 1

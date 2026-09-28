@@ -32,6 +32,7 @@ from orca_auto.core.statuses import (
 )
 from orca_auto.orca.config import AppConfig
 from orca_auto.orca.job_locations import list_job_location_records
+from orca_auto.orca.machine_observation import report_json_path
 from orca_auto.orca.queue import job_records, settlement
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import (
@@ -64,7 +65,7 @@ from orca_auto.orca.run_cleanup import clear_terminal_queue_entries
 from orca_auto.orca.run_lock import acquire_run_lock
 from orca_auto.orca.state import finalize_state, new_state, save_state
 from orca_auto.orca.state_reading import get_run_id_from_state as _get_run_id_from_state
-from orca_auto.orca.state_reading import load_state, report_json_path, state_path
+from orca_auto.orca.state_reading import load_state, state_path
 from orca_auto.orca.statuses import RunStatus
 from tests.conftest import RecordingChannel, claim_next_entry, make_queue_entry, write_run_state
 from tests.engine_artifact_helpers import orca_artifact_payload

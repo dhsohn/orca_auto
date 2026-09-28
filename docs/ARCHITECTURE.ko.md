@@ -76,10 +76,23 @@ graph TD
 - 작업이 비정상 종료되어도 큐와 실행 상태 파일에 명확한 원인이 영속적으로 기록됩니다.
 
 ### 4. 상태 확정 및 결과 저장
-- ORCA 계산이 끝나면 `orca/out_analyzer.py`가 출력 파일의 정상 종료 배너 및 오류/미수렴 마커를 분석합니다. (입력 echo나 주석에 포함된 오류 문구는 제외)
-- 검증된 계산 데이터(에너지, 수렴 여부, 열역학 데이터 등)를 바탕으로 다운스트림 도구 연동을 위한 표준 `machine.json`(v1 Envelope 규격) 및 HTML 요약본을 생성합니다.
+- ORCA 계산이 끝나면 `orca/out_analyzer.py`가 출력 파일을 한 번 줄 단위로 읽으며 정상 종료 배너 및 오류/미수렴 마커를 분석하고, TS route이면 같은 읽기에서 마지막 진동수 구간의 허수 모드를 셉니다. (입력 echo나 주석에 포함된 오류 문구는 제외)
+- 검증된 계산 데이터(에너지, 수렴 여부, 열역학 데이터 등)를 바탕으로 다운스트림 도구 연동을 위한 표준 `machine.json`(v1 Envelope 규격) 및 HTML 요약본을 생성합니다. `machine.json`의 모든 필드(엔벨로프, lifecycle, artifact 영수증, 결과 요약)는 `orca/machine_observation.py`가 정규화된 작업 상태와 generation 파일에서 만들고, `report/publication.py`는 이를 HTML·SI 파일과 함께 기록하며, IRC 검증 블록을 포함한 모든 SI 블록은 `report/si.py`가 렌더링합니다.
 
 원본 근거가 기록된 결과는 `machine.json`보다 먼저 `execution_provenance.json`을 발행합니다. 보고서 발행자는 generation에 기록된 근거를 복사하고, 기계 결과는 `input`, `orca-output`과 함께 `execution-provenance` artifact로 이를 참조합니다. 영수증은 어느 읽는 쪽이든 검증할 수 있고, generation 상태와의 일치는 릴리스 smoke가 확인합니다. 종료 보고서와 그 출처 파일은 불변이며, 종료 처리를 재실행해도 출처 artifact가 없는 과거 보고서를 포함해 당시의 근거를 유지합니다.
+
+선택된 입력의 작업 종류는 규칙 하나로 정합니다. `completion_rules.route_facts`가 `.inp`를 읽어 route 줄과 플래그(TS, IRC, NEB-TS, 전체·부분 최적화, relaxed scan(`%geom Scan` 블록이 있는 최적화), 비정류 경로·동역학)를 기록합니다. 분석기의 완료 모드, HTML 보고서 구성(`report/composer.py`), 구조 종류(`evidence.structure_kind`), SI 작성(`report/si.py`)이 모두 이 기록에서 나오므로 같은 입력을 서로 다르게 분류할 수 없습니다. 입력은 호출하는 쪽마다 직접 읽습니다. 완료 모드, HTML 작성기, SI 작성기가 각각 `route_facts`를 호출하고, relaxed scan 보고서는 scan 좌표를 얻으려고 입력을 한 번 더 읽습니다. 작업 유형 표시(`job_type.detect_job_type`)와 입력이 요청하는 실행 산출물 판정(`execution_binding/_inputs.py`)은 같은 키워드 규칙에 자체 규칙 몇 개를 더해 route 줄을 따로 분류합니다. 보고서 조립기는 작업 상태로부터 페이지마다 `ReportHeader` 하나(제목, 상태와 사유, route 줄, 시각, 마지막 출력)를 만들어 Opt, SP, relaxed scan, NEB-TS, IRC 각 구성 요소의 수집기에 넘깁니다. 각 구성 요소는 두 가지 사실로 `ReportComponent` 하나(종류 이름, 배지, 메타 줄, 지표 카드, 섹션)를 만듭니다. 하나는 주 구성 요소인지 여부로, 주 구성 요소가 페이지 이름을 정하고 attempt 기록을 혼자 싣습니다. 다른 하나는 IRC 구성 요소가 있는지 여부로, 있으면 진동 요약을 IRC 쪽이 보여 줍니다. IRC 구성 요소 자신은 대신 다른 구성 요소가 최적화 추이를 이미 보여 주는지를 받습니다.
+
+| 작업 종류 | HTML 보고서 구성 요소(페이지 종류) | SI 블록(완료된 작업) |
+| :--- | :--- | :--- |
+| NEB-TS, ZOOM-NEB-TS | NEB-TS (`NEB-TS`) | TS 구조 |
+| Relaxed scan: `%geom Scan` 블록이 있는 최적화 | Relaxed scan (`Relaxed scan`) | 없음 |
+| OptTS | Opt (`TS`) | TS 구조 |
+| 전체 최적화: `Opt`, `TightOpt`, `COpt` 등 | Opt (`Opt`) | 최소점 구조 |
+| 부분 최적화: `OptH`, `MECP-Opt` 등 | Opt (`Partial Opt`) | 최소점·TS 주장이 없는 구조 |
+| `IRC`가 붙은 모든 종류 또는 `IRC` 단독 | IRC 구성 요소 추가. NEB-TS나 relaxed scan이 없으면 IRC가 페이지 이름(`IRC`)을 정함 | 대신 IRC 검증 요약 |
+| 일반 NEB / NEB-CI, MD | 보고서 없음 | 없음 |
+| 단일점, `Freq` 단독, 그 밖의 입력 | SP (`SP`) | 최소점·TS 주장이 없는 구조 |
 
 ### 결과 발행과 큐 종료 처리
 

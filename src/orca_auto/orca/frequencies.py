@@ -24,24 +24,26 @@ from __future__ import annotations
 import logging
 import math
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 
-from .completion_rules import IMAGINARY_FREQ_THRESHOLD_CM1
 from .output_status import is_execution_output_line, iter_output_lines
-from .parser.io import read_orca_text
 
 logger = logging.getLogger(__name__)
 
-# Same noise cutoff the completion analyzer applies: the SI and reports must
-# count a verified TS's modes exactly as the verifier did, or the pipeline
-# publishes a Nimag that contradicts its own COMPLETED verdict.
-FREQ_EPS_CM = IMAGINARY_FREQ_THRESHOLD_CM1
+# Negative modes at or below this magnitude are numerical noise, not a reaction
+# coordinate. The completion analyzer and the SI/report renderers all count
+# through is_imaginary_frequency, so a verified TS can never be re-counted
+# differently in the published SI.
+IMAGINARY_FREQ_THRESHOLD_CM1 = 10.0
 _TOP_ATOM_COUNT = 5
 
 _FREQ_HEADER = "VIBRATIONAL FREQUENCIES"
+# A line that starts with this phrase after its leading whitespace, in any case
+# and whatever follows, ends the frequency sections before it. That is broader
+# than the parser's energy rule on purpose: a final energy line the parser
+# cannot read (an overflowed value, trailing text) still means a later
+# geometry, so a stale Hessian never verifies it.
 _FINAL_ENERGY_HEADER = "FINAL SINGLE POINT ENERGY"
 _MODES_HEADER = "NORMAL MODES"
 _COORDS_HEADER = "CARTESIAN COORDINATES (ANGSTROEM)"
@@ -50,6 +52,7 @@ _COORDS_HEADER = "CARTESIAN COORDINATES (ANGSTROEM)"
 # This is the rule the completion analyzer has always verified a TS by; it
 # also accepts the numbered form ORCA prints.
 FREQUENCY_VALUE_RE = re.compile(r"(?:^|[\s:])(-?\d+(?:\.\d+)?)\s*cm\*\*-1", re.IGNORECASE)
+# Unlike the parser's coordinate row: any symbol (DA, lower case), decimal xyz, nothing after z.
 _COORD_LINE_RE = re.compile(r"^\s*([A-Za-z]{1,2})\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s+(-?\d+\.\d+)\s*$")
 
 
@@ -108,16 +111,6 @@ class ModeSummary:
     imaginary: bool
     top_atoms: tuple[ModeAtomDisplacement, ...]
     scan_alignment: float | None
-
-
-def parse_frequency_analysis(out_path: Path) -> FrequencyAnalysis | None:
-    """Last frequency/mode/geometry blocks of one out file; ``None`` without freqs."""
-    try:
-        # Use the same ORCA-aware decoding as the result parser, including UTF-16.
-        text = read_orca_text(str(out_path))
-    except OSError:
-        return None
-    return parse_frequency_analysis_text(text)
 
 
 def parse_frequency_analysis_text(text: str) -> FrequencyAnalysis | None:
@@ -252,33 +245,6 @@ def _consume_modes_line(
     return True
 
 
-def find_frequency_analysis(
-    attempts: Sequence[Mapping[str, Any]],
-    *,
-    parse_analysis_fn: Callable[[Path], FrequencyAnalysis | None] | None = None,
-) -> tuple[FrequencyAnalysis | None, int | None]:
-    """Latest attempt output containing a frequency block, searched backwards.
-
-    Returns the parsed analysis and the matching attempt's 1-based ``index``
-    field (list position + 1 when absent).
-    """
-    for position in range(len(attempts) - 1, -1, -1):
-        out_raw = str(attempts[position].get("out_path") or "").strip()
-        if not out_raw:
-            continue
-        out_path = Path(out_raw)
-        if not out_path.exists():
-            continue
-        try:
-            analysis = (parse_analysis_fn or parse_frequency_analysis)(out_path)
-        except OSError:
-            continue
-        if analysis is not None:
-            index = int(attempts[position].get("index", position + 1) or (position + 1))
-            return analysis, index
-    return None, None
-
-
 def mode_summaries(
     analysis: FrequencyAnalysis,
     alignment_pair: tuple[int, int] | None,
@@ -291,7 +257,11 @@ def mode_summaries(
         chosen = imaginary
     else:
         lowest_real = next(
-            (idx for idx, freq in enumerate(analysis.frequencies) if freq > FREQ_EPS_CM),
+            (
+                idx
+                for idx, freq in enumerate(analysis.frequencies)
+                if freq > IMAGINARY_FREQ_THRESHOLD_CM1
+            ),
             None,
         )
         chosen = [] if lowest_real is None else [lowest_real]

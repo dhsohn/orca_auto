@@ -14,9 +14,10 @@ from orca_auto.core.admission import admission_dir, list_slots
 from orca_auto.core.artifacts import RUN_REPORT_HTML_FILE, SI_BLOCK_MD_FILE
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.core.queue.worker.pid_file import worker_pid_file_path
+from orca_auto.orca.completion_rules import route_facts
 from orca_auto.orca.config import load_config
-from orca_auto.orca.evidence import collect_structure_evidence
-from orca_auto.orca.frequencies import parse_frequency_analysis
+from orca_auto.orca.evidence import collect_structure_evidence, parsed_frequency_analysis
+from orca_auto.orca.machine_observation import report_json_path
 from orca_auto.orca.orca_opt_progress import parse_opt_progress_text
 from orca_auto.orca.parser import parse_orca_output_text
 from orca_auto.orca.parser.io import read_orca_text
@@ -27,9 +28,8 @@ from orca_auto.orca.queue.entries import (
     same_generation,
 )
 from orca_auto.orca.queue.worker import OrcaQueueWorker
-from orca_auto.orca.report.irc import collect_irc_report_data
-from orca_auto.orca.report.opt import collect_opt_report_data
-from orca_auto.orca.state_reading import load_state, report_json_path
+from orca_auto.orca.report.composer import collect_html_report_parts
+from orca_auto.orca.state_reading import load_state
 from tests.conftest import write_fake_orca
 from tests.contracts.report_verifier import load_report_json
 from tests.machine_contract_helpers import validate_common_machine
@@ -779,12 +779,15 @@ def test_real_orca_water_optimization_acceptance_when_configured(
         parse_opt_progress_text(read_orca_text(str(out)), source_path=str(out)).is_converged
         is converged
     )
-    report = collect_opt_report_data(reaction_dir, state, kind="opt")
-    assert report is not None and report.opt_converged is converged
+    parts = collect_html_report_parts(reaction_dir, state)
+    assert parts is not None and parts.opt is not None
+    assert parts.opt.opt_converged is converged
     assert report_json_path(generation).is_file()
     assert (generation / RUN_REPORT_HTML_FILE).is_file()
     assert load_report_json(generation, require_consumable_success=converged) is not None
-    evidence = collect_structure_evidence(reaction_dir, state)
+    evidence = collect_structure_evidence(
+        reaction_dir, state, route_facts(Path(state["selected_inp"]))
+    )
     if converged:
         assert evidence is not None and evidence.kind == "min"
         assert evidence.imaginary_count == 0
@@ -861,7 +864,7 @@ def test_real_orca_ammonia_ts_irc_acceptance_when_configured(
     assert "THE IRC HAS CONVERGED" in forward
     assert "THE IRC HAS CONVERGED" in backward.split("IRC PATH SUMMARY", 1)[0]
 
-    analysis = parse_frequency_analysis(out)
+    analysis = parsed_frequency_analysis(out)
     assert analysis is not None and analysis.imaginary_count() == 1
     assert len(analysis.frequencies) == 12
     assert all(math.isfinite(value) for value in analysis.frequencies)
@@ -870,7 +873,9 @@ def test_real_orca_ammonia_ts_irc_acceptance_when_configured(
     assert len(analysis.mode_matrix) == 12
     assert all(len(row) == 12 for row in analysis.mode_matrix.values())
 
-    irc = collect_irc_report_data(reaction_dir, state)
+    parts = collect_html_report_parts(reaction_dir, state)
+    assert parts is not None
+    irc = parts.irc
     assert irc is not None and irc.optimization_converged is True
     assert irc.imaginary_count == 1
     assert any(mode.imaginary and mode.top_atoms for mode in irc.mode_summaries)

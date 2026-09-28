@@ -21,23 +21,30 @@ from orca_auto.core.artifacts import EXECUTION_PROVENANCE_FILE, MAX_RUN_ARTIFACT
 from orca_auto.core.confined_io import read_confined_text, require_confined_regular_file
 from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.utils import copy_dict_or_empty as _dict
+from orca_auto.orca.generation_validation import is_retired_generation_marker
 from orca_auto.orca.machine_observation import (
+    ARTIFACT_ROLES,
+    ENGINE_NAME,
+    EXECUTION_PROVENANCE_ARTIFACT_ID,
     MACHINE_CONTRACT_NAME,
     MACHINE_CONTRACT_VERSION,
+    OPERATION_KIND,
+    PRODUCER_NAME,
+    RESULT_KIND,
     RESULTS_PAYLOAD_CONTRACT_NAME,
     RESULTS_PAYLOAD_CONTRACT_VERSION,
     ReceiptDigest,
     artifact_receipt,
     machine_json_bytes,
+    machine_lifecycle,
+    report_json_path,
+    report_result_fields,
 )
-from orca_auto.orca.report_fields import EXECUTION_PROVENANCE_ARTIFACT_ID, report_result_fields
 from orca_auto.orca.state_reading import (
     _execution_provenance,
     _selected_input_text,
     load_generation_state,
-    machine_lifecycle,
     normalized_text,
-    report_json_path,
     verified_generation_artifact_target,
 )
 
@@ -237,9 +244,8 @@ def _report_artifact_receipt(
     candidate: Path | None,
     *,
     required: bool,
-    role: str,
-    media_type: str,
 ) -> dict[str, Any] | None:
+    role, media_type = ARTIFACT_ROLES[artifact_id]
     artifact = verified.get(artifact_id)
     if artifact is None:
         return artifact_receipt(
@@ -248,6 +254,20 @@ def _report_artifact_receipt(
     if candidate is None or generation_dir / candidate != artifact.path:
         return None
     return {**artifact.receipt, "required": required, "role": role, "media_type": media_type}
+
+
+def _retired_retry_budget_matches(
+    results: Mapping[str, Any], engine_payload: Mapping[str, Any]
+) -> bool:
+    """Whether the observation records the retry budget its generation's state carries.
+
+    Only a retired (pre-4.0) generation carries ``max_retries``, and its
+    observation recorded the same value. A current generation and its
+    observation carry none.
+    """
+    if is_retired_generation_marker(engine_payload) or "max_retries" in results:
+        return results.get("max_retries") == engine_payload.get("max_retries")
+    return True
 
 
 def load_report_json_with_output_receipt(
@@ -300,10 +320,10 @@ def load_report_json_with_output_receipt(
     if result_data is None:
         return None
     if (
-        observation.get("producer", {}).get("name") != "orca_auto"
-        or observation.get("operation", {}).get("kind") != "chemistry/orca-run"
-        or result_data.get("result_kind") != "engine-run"
-        or result_data.get("engine") != "orca"
+        observation.get("producer", {}).get("name") != PRODUCER_NAME
+        or observation.get("operation", {}).get("kind") != OPERATION_KIND
+        or result_data.get("result_kind") != RESULT_KIND
+        or result_data.get("engine") != ENGINE_NAME
     ):
         return None
     loaded_state = load_generation_state(resolved_generation_dir)
@@ -331,7 +351,7 @@ def load_report_json_with_output_receipt(
         or lifecycle.get("outcome") != expected_outcome
         or any(summary.get(key) != value for key, value in expected_summary.items())
         or any(results.get(key) != value for key, value in expected_results.items())
-        or results.get("max_retries") != engine_payload.get("max_retries")
+        or not _retired_retry_budget_matches(results, engine_payload)
         or results.get("execution_provenance_artifact")
         != expected_results.get("execution_provenance_artifact")
     ):
@@ -386,8 +406,6 @@ def load_report_json_with_output_receipt(
                 resolved_generation_dir,
                 resolved_generation_dir / EXECUTION_PROVENANCE_FILE,
                 required=True,
-                role="supporting-information",
-                media_type="application/json",
             )
             # A self-consistent replacement receipt must still match the
             # submission evidence persisted in this generation's state.
@@ -407,8 +425,6 @@ def load_report_json_with_output_receipt(
         resolved_generation_dir,
         Path(normalized_text(input_payload.get("primary_path"))),
         required=True,
-        role="source",
-        media_type="text/plain",
     )
     if artifacts.get("input") != expected_input:
         return None
@@ -421,8 +437,6 @@ def load_report_json_with_output_receipt(
             resolved_generation_dir,
             Path(last_out_path) if last_out_path else None,
             required=outcome == "succeeded",
-            role="log",
-            media_type="text/plain",
         )
         if artifacts.get("orca-output") != expected_output:
             return None
