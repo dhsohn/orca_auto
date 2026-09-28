@@ -8,7 +8,7 @@ ORCA_auto connects with neighboring open-source tools:
 
 - **[Chemvas](https://github.com/dhsohn/Chemvas)**: Drawing molecular structures and reaction schemes.
 - **ORCA_auto**: Durable queueing, execution management, and observability for quantum chemical calculations.
-- **[LLMdocx](https://github.com/dhsohn/LLMdocx)**: Generating research reports, Supporting Information, and paper drafts.
+- **[Chemleaf](https://github.com/dhsohn/Chemleaf)**: Generating research reports, Supporting Information, and paper drafts.
 
 These tools share a versioned `machine.json` schema and standardized output bundles, allowing them to connect through local-first research pipelines.
 

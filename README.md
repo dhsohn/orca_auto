@@ -39,7 +39,7 @@ For 6.x or earlier, complete the [7.0 migration](https://github.com/dhsohn/orca_
 
 - [Chemvas](https://github.com/dhsohn/Chemvas) for drawing chemical structures,
 - **ORCA_auto** for calculation execution and queue management, and
-- [LLMdocx](https://github.com/dhsohn/LLMdocx) for drafting research documents.
+- [Chemleaf](https://github.com/dhsohn/Chemleaf) for drafting research documents.
 
 These are independent, local-first companion tools that connect through standard formats (`machine.json`, results bundles, and input files).
 [How the tools connect →](https://github.com/dhsohn/orca_auto/blob/v9.0.0/docs/RELATED_WORK.md#local-first-companion-tools)

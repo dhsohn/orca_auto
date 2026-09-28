@@ -76,7 +76,7 @@ Admission state always lives in `<runs_root>/.admission`, and its limit is `sche
 
 ## 4. Machine Observation (`machine.json`) Schema
 
-Upon completion, each job publishes a structured `machine.json` artifact in its generation directory for downstream tools (such as Chemvas and LLMdocx):
+Upon completion, each job publishes a structured `machine.json` artifact in its generation directory for downstream tools (such as Chemvas and Chemleaf):
 
 - **Envelope Schema**: Conforms to the standard `factory/machine-observation` v1 contract.
 - **Operation & Payload**: Emits `chemistry/orca-run` with a `chemistry/results-bundle` v1 payload.
