@@ -9,7 +9,7 @@ ORCA_auto 설정 생성, 백그라운드 워커 등록, 계산 작업 큐 제출
 
 ## 1. 환경 설정 파일 생성
 
-대화형 마법사 또는 기본 템플릿을 통해 설정 파일(`orca_auto.yaml`)을 생성합니다.
+대화형 마법사나 기본 템플릿으로 설정 파일(`orca_auto.yaml`)을 생성합니다.
 
 ```bash
 # 기본 위치(~/orca_auto/config/orca_auto.yaml 또는 지정 경로)에 설정 파일 생성
@@ -25,7 +25,7 @@ orca_auto init --config ~/orca_auto.yaml
 
 ## 2. 백그라운드 워커 서비스 등록
 
-터미널 세션이 종료되어도 계산이 백그라운드에서 계속 실행되도록 systemd 서비스를 등록하고 상태를 확인합니다.
+터미널 세션이 종료되어도 계산이 백그라운드에서 이어지도록 systemd 서비스를 등록하고 상태를 확인합니다.
 
 ```bash
 # systemd 유닛 등록 (현재 사용자 기준, 소스 체크아웃 또는 런타임 경로 지정)
@@ -71,4 +71,4 @@ journalctl -u "orca_auto-queue-worker@$(id -un)" -f
   ```bash
   orca_auto queue cancel <QUEUE_ID_OR_DIRECTORY> --config ~/orca_auto.yaml
   ```
-- **결과 확인**: 계산이 완료되면 작업 디렉터리 내에 ORCA의 표준 출력 파일(`job.out`)과 함께, 후속 도구 연동 및 결과 분석용 구조화 데이터 파일(`machine.json`)이 생성됩니다.
+- **결과 확인**: 계산이 끝나면 작업 디렉터리에 ORCA 표준 출력 파일(`job.out`)과 함께 후속 도구 연동 및 결과 분석용 구조화 데이터 파일(`machine.json`)이 생성됩니다.

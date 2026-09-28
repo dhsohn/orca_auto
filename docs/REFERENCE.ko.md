@@ -17,7 +17,7 @@ ORCA_auto의 CLI 명령어, 옵션 플래그, 큐 상태 전이 모델 및 산�
 orca_auto init [--config PATH] [--force]
 ```
 - `--config PATH`: 생성할 설정 파일 경로 (기본값: `~/orca_auto/config/orca_auto.yaml`)
-- `--force`: 기존에 설정 파일이 존재할 경우 덮어쓰기
+- `--force`: 기존 설정 파일이 있으면 덮어쓰기
 
 ---
 
@@ -30,7 +30,7 @@ orca_auto run-dir <PATH> [--config PATH] [--force] [--priority N] [--json]
 - `--force`: 이미 완료된 성공 기록이 있더라도 새 generation을 생성하여 강제 재실행
 - `--priority N`: 큐 내 우선순위 지정 (기본값: 10, 낮을수록 먼저 실행 / 높은 우선순위)
 - `--json`: 제출 결과를 JSON 형식으로 출력
-- 설정 파일을 읽을 수 없거나(`invalid_config`) `queue.json`이 손상된 경우(`queue_store_corrupt`) `--log-file`을 지정했더라도 `error:` 한 줄과 종료 코드 1로 보고합니다.
+- 설정 파일을 읽을 수 없거나(`invalid_config`) `queue.json`이 손상되었을 때(`queue_store_corrupt`) `--log-file`을 지정했더라도 `error:` 한 줄과 종료 코드 1로 보고합니다.
 
 ---
 
@@ -48,7 +48,7 @@ orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--json]
 
 ---
 
-종료 복구 표시가 제거될 때까지 실행 상태(`completed`, `failed`, `cancelled`)는 유지하고 상세에 `result publication pending`을 표시합니다. JSON 메타데이터는 `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action`, `publication_owner=orca_queue_worker`를 제공합니다. 해당 폴더의 제한은 행이 필터·페이지 범위 밖이어도 `admission_blockers`에 남습니다. 잘못된 표시는 발행 완료로 간주하지 않고 워커 로그와 복구 표시의 점검을 안내합니다.
+종료 복구 표시가 제거될 때까지 실행 상태(`completed`, `failed`, `cancelled`)는 유지하고 상세에 `result publication pending`을 표시합니다. JSON 메타데이터는 `publication_blocked_reason`, `publication_blocked_scope=orca_terminal_publication`, `publication_blocked_action`, `publication_owner=orca_queue_worker`를 출력합니다. 해당 폴더의 제한은 행이 필터·페이지 범위 밖이어도 `admission_blockers`에 남습니다. 잘못된 표시는 발행 완료로 간주하지 않고 워커 로그와 복구 표시를 확인해야 합니다.
 
 ### `orca_auto queue cancel`
 대기 중이거나 실행 중인 작업을 취소합니다.
@@ -78,7 +78,7 @@ orca_auto queue list clear [--config PATH] [--json]
 orca_auto index rebuild [--config PATH] [--dry-run] [--json]
 ```
 - `runs_root` 아래의 모든 `job_state.json`을 순회하며(식별자는 `report.json`이 상태 파일보다 우선) 작업 ID 기준으로 항목을 추가·갱신합니다. 항목은 삭제되지 않습니다. 작업 ID도 실행 ID도 없는 상태 파일은 건너뛴 항목으로 보고됩니다.
-- 같은 작업 ID가 여러 디렉터리에서 발견되어도 조용히 고르지 않습니다. 기존 항목이 가리키는 디렉터리에 그 작업의 상태 파일이 남아 있으면 그 디렉터리를 유지하고, 완료된(`completed`/`failed`/`cancelled`) 항목은 실행 중 상태로 되돌리지 않으며, 그 외에는 종결 상태가 비종결 상태보다, 그다음은 가장 최근의 `job_state.json`이 우선합니다. 이런 경우마다 유지한 디렉터리와 무시한 디렉터리를 `conflict:` 줄로 출력합니다.
+- 같은 작업 ID가 여러 디렉터리에서 발견되어도 조용히 고르지 않습니다. 기존 항목이 가리키는 디렉터리에 그 작업의 상태 파일이 남아 있으면 그 디렉터리를 유지하고, 완료된(`completed`/`failed`/`cancelled`) 항목은 실행 중 상태로 되돌리지 않으며, 그 외에는 종결 상태가 비종결 상태보다, 그다음은 가장 최근의 `job_state.json`이 우선합니다. 충돌 발생 시 유지한 디렉터리와 무시한 디렉터리를 `conflict:` 줄로 출력합니다.
 - `--dry-run`: 인덱스를 기록하지 않고 추가·갱신될 항목만 출력
 - `--json`: `index_path`, `scanned`, `total`, `added_count`, `updated_count`, `unchanged_count`, `skipped_count`, `applied`, `added`·`updated`·`skipped` 목록과 `conflicts` 목록(`job_id`, `kept_path`, `ignored_paths`)을 출력
 - 변경이 없어도 종료 코드는 0입니다. `runs_root`가 설정되지 않았거나 설정 파일이 손상된 경우, `runs_root`가 없는 경우, 인덱스가 손상된 경우, OS 오류가 발생한 경우 1을 반환하며 아무것도 기록하지 않습니다.
@@ -107,7 +107,7 @@ orca_auto service status [--json]
 orca_auto service restart [--force]
 ```
 - `status`: 실행 중인 워커 프로세스가 체크아웃 HEAD 또는 설치된 런타임 빌드와 일치하는지 검사합니다. 유닛이 비정상이거나 워커가 stale 또는 undetermined이면 종료 코드 1(`--json`에서는 `ok: false`)을 반환합니다.
-- `restart`: 기본적으로 실행 중인 계산이 있을 때는 재시작을 거부하여 데이터 유실을 방지합니다. 즉시 재시작하려면 `--force`를 전달합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다.
+- `restart`: 실행 중인 계산이 있을 때는 재시작을 거부합니다. 즉시 재시작하려면 `--force`를 전달합니다. `sudo`/`systemctl` 단계가 실패하면 해당 명령을 명시한 `error:` 줄과 함께 종료 코드 1을 반환합니다.
 
 ---
 
@@ -144,7 +144,7 @@ water/
 
 ## 4. 실시간 로그 확인
 
-워커의 동작 상태 및 실시간 스케줄링 로그는 systemd 저널을 통해 모니터링할 수 있습니다:
+워커의 동작 상태 및 실시간 스케줄링 로그는 systemd 저널에서 확인합니다:
 ```bash
 journalctl -u "orca_auto-queue-worker@$(id -un)" -f
 ```
