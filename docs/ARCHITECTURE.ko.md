@@ -69,7 +69,7 @@ graph TD
 | `<generation_dir>/machine.json`, `execution_provenance.json` | `run.lock` | `report/publication.write_report_json`(→ `state.write_generation_bytes`). `machine.json`의 모든 필드는 `machine_observation.build_machine_observation`이 만듦 | `publication.write_report_files`. 자식의 `attempt/reporting.exit_with_result`와 부모의 `terminal_state._record_terminal_run_state`가 호출 | 외부 소비자. `publication`이 종료 결과의 불변성을 확인 |
 | `<generation_dir>/job_report.html`, `si_block.md` | `run.lock` | `report/publication.write_job_html_report`, `report/si.write_si_block` | `publication.write_report_files`(같은 두 호출자) | 외부 소비자 |
 | `<reaction_dir>/run.lock` | 잠금 자체 | `orca/run_lock.acquire_run_lock` | 자식: `execution.execute_locked_run`, `recovery_rebind`. 부모: `terminal_state._record_terminal_run_state`, `notifications.claim_and_send_terminal` | `process_tracking.run_lock_status`를 쓰는 공유 확인: `run_status.observed_queue_status`, `orphans`, `run_cleanup`, `submission` |
-| `<runs_root>/queue_worker.pid` | 워커 수명 동안 잡는 `queue_worker.pid.lock` | `core/queue/worker/pid_file.py` | 부모: `OrcaQueueWorker._write_pid_file`과 `_remove_pid_file`. 읽는 쪽(`process.read_live_pid_file`)도 소유자가 살아 있음이 증명되지 않은 파일을 삭제 | `orca/commands/queue.existing_worker_pid`, `submission`, `orphans` |
+| `<runs_root>/queue_worker.pid` | 워커 수명 동안 잡는 `queue_worker.pid.lock` | `core/queue/worker/pid_file.py` | 부모: 수명 잠금 아래의 `OrcaQueueWorker._write_pid_file`과 `_remove_pid_file`. PID 조회는 파일을 변경하지 않음([ADR 0011](adr/0011-read-only-pid-lookups.md)) | `orca/commands/queue.existing_worker_pid`, `submission`, `orphans` |
 | RAM scratch manifest `<scratch_root>/attempt-*/.orca_auto_scratch.json` | `<scratch_root>/.orca_auto_scratch.lock` | `core/engine_scratch/_manifest._write_workspace_manifest` | 자식: `EngineScratchWorkspace.create`(`OrcaRunner.prepare`). CLI: `scratch clear`가 비활성 워크스페이스를 제거 | `engine_scratch/_inspect`(실행 전 점검, `scratch list`) |
 | `<generation_dir>`로의 scratch 회수와 `.orca_auto_scratch_publication.json` 저널 | `run.lock` | `core/engine_scratch/_publication._publish_workspace` | 자식: `EngineScratchWorkspace.publish`를 거치는 `OrcaRunner` | 다음 실행의 `_recover_incomplete_publication` |
 | `<runs_root>/logs/<queue_id>.log` | 없음 | `core/queue/processes.start_background_process`(자식의 stdout·stderr) | 부모: `OrcaQueueWorker._start_background_process`. CLI: `queue list clear`가 제거 | `queue list`가 경로를 표시 |
@@ -346,3 +346,4 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0008: 취소 결과는 워커 부모만 쓴다](adr/0008-parent-writes-the-cancelled-result.md)
 - [ADR 0009: 재개는 새 generation으로의 재바인딩으로만 한다](adr/0009-resume-only-by-rebind.md)
 - [ADR 0010: 큐 명령은 큐 행을 직접 읽는다](adr/0010-queue-commands-read-queue-rows.md)
+- [ADR 0011: PID 조회는 읽기 전용](adr/0011-read-only-pid-lookups.md)

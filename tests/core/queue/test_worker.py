@@ -619,7 +619,7 @@ def test_worker_pid_file_handles_live_stale_dead_missing_and_invalid_pids(
     pid_path.write_text(payload, encoding="utf-8")
     monkeypatch.setattr(pid_file.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 222)
     assert pid_file.read_worker_pid_file(tmp_path) is None
-    assert not pid_path.exists()
+    assert pid_path.read_text(encoding="utf-8") == payload
 
     pid_path.write_text(payload, encoding="utf-8")
     monkeypatch.setattr(pid_file.process_utils, "process_start_ticks", lambda _pid, **_kwargs: 111)
@@ -629,12 +629,14 @@ def test_worker_pid_file_handles_live_stale_dead_missing_and_invalid_pids(
         lambda _pid, _signal: (_ for _ in ()).throw(ProcessLookupError()),
     )
     assert pid_file.read_worker_pid_file(tmp_path) is None
-    assert not pid_path.exists()
+    assert pid_path.read_text(encoding="utf-8") == payload
 
+    pid_path.unlink()
     assert pid_file.read_worker_pid_file(tmp_path) is None
 
     pid_path.write_text("not-a-pid\n", encoding="utf-8")
     assert pid_file.read_worker_pid_file(tmp_path) is None
+    assert pid_path.read_text(encoding="utf-8") == "not-a-pid\n"
 
 
 def test_run_once_reports_startup_failure_and_removes_pid_file(
@@ -662,3 +664,38 @@ def test_run_once_reports_startup_failure_and_removes_pid_file(
     assert [r.getMessage() for r in caplog.records] == [
         "Queue worker startup failed: admission lock held by service restart"
     ]
+
+
+@pytest.mark.parametrize(
+    "old_contents",
+    [
+        json.dumps({"pid": 123, "process_start_ticks": 111, "boot_id": "previous-boot"}),
+        "not-a-pid",
+    ],
+)
+def test_pid_lookup_preserves_worker_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    old_contents: str,
+) -> None:
+    pid_path = pid_file.worker_pid_file_path(tmp_path)
+    pid_path.write_text(old_contents, encoding="utf-8")
+    read_payload = pid_file.process_utils.read_pid_payload
+    replacement = b""
+
+    def read_then_publish(path: Path) -> tuple[int | None, int | None, str | None]:
+        nonlocal replacement
+        old_payload = read_payload(path)
+        # Deterministically schedule worker startup after the reader captured A.
+        # Use the production atomic writer and the current process identity for B.
+        pid_file.write_worker_pid_file(tmp_path)
+        replacement = path.read_bytes()
+        return old_payload
+
+    with monkeypatch.context() as patch:
+        patch.setattr(pid_file.process_utils, "read_pid_payload", read_then_publish)
+        assert pid_file.read_worker_pid_file(tmp_path) is None
+
+    assert pid_path.exists(), "PID lookup deleted the new worker's file"
+    assert pid_path.read_bytes() == replacement
+    assert pid_file.read_worker_pid_file(tmp_path) == os.getpid()

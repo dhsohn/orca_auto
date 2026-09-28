@@ -284,13 +284,11 @@ def remove_file_silent(path: Path) -> None:
 
 
 def read_live_pid_file(pid_path: Path) -> int | None:
-    """The pid a pid file records while that process still runs; else remove the file.
+    """Return the recorded PID only for a proven live owner, without mutation.
 
-    The pid file's policy: anything short of a proven live owner, an unknown
-    boot id or start ticks included, removes the file.
+    A worker can replace the file after this read. Only the worker holding its
+    lifetime lock may replace or remove it; stale or unknown owners return None.
     """
-    if not pid_path.exists():
-        return None
     pid, expected_ticks, expected_boot_id = read_pid_payload(pid_path)
     if (
         pid is None
@@ -298,6 +296,5 @@ def read_live_pid_file(pid_path: Path) -> int | None:
         or expected_boot_id is None
         or owner_identity_state(pid, expected_ticks, expected_boot_id) != "live"
     ):
-        remove_file_silent(pid_path)
         return None
     return pid

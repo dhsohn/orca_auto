@@ -202,7 +202,7 @@ def test_boot_scoped_pid_payload_and_reader_reject_cross_boot_reuse(
     _host_identity(monkeypatch, boot_id="boot-b", alive=record_alive_probe)
     assert process_utils.read_live_pid_file(pid_path) is None
     assert alive_calls == []
-    assert not pid_path.exists()
+    assert json.loads(pid_path.read_text(encoding="utf-8")) == payload
 
 
 def test_pid_reader_rejects_incomplete_or_unverifiable_identity(
@@ -216,7 +216,10 @@ def test_pid_reader_rejects_incomplete_or_unverifiable_identity(
         encoding="utf-8",
     )
     assert process_utils.read_live_pid_file(incomplete_path) is None
-    assert not incomplete_path.exists()
+    assert json.loads(incomplete_path.read_text(encoding="utf-8")) == {
+        "pid": 123,
+        "process_start_ticks": 456,
+    }
 
     _host_identity(monkeypatch, boot_id=None)
     scoped_path = tmp_path / "scoped.pid"
@@ -225,4 +228,8 @@ def test_pid_reader_rejects_incomplete_or_unverifiable_identity(
         encoding="utf-8",
     )
     assert process_utils.read_live_pid_file(scoped_path) is None
-    assert not scoped_path.exists()
+    assert json.loads(scoped_path.read_text(encoding="utf-8")) == {
+        "pid": 123,
+        "process_start_ticks": 456,
+        "boot_id": "boot-a",
+    }
