@@ -8,6 +8,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## [Unreleased]
 
+The next release is a major release, 9.0. The entries marked *public contract*
+change configuration, CLI output, on-disk state and the upgrade and rollback
+procedure; upgrading needs an idle window (`active_simulations: 0`). See
+[Upgrading to 9.0](docs/RELEASE.md#upgrading-to-90).
+
 ### Removed
 
 - Public contract: the remaining workflow handling is removed
@@ -19,10 +24,16 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   row's `workflow_id` metadata is ignored. Cancel or clear rows that belong to
   old workflow work, and move workflow trees that must stay untouched out of
   `runs_root`, before upgrading; see
-  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
+  [RELEASE](docs/RELEASE.md#upgrading-to-90).
 - Public contract: an `admission_slots.json` row that carries the retired
   `workflow_id` field is rejected as corrupt instead of being read. 8.x never
   writes it; upgrading directly from 7.0.x needs no reserved or active slots.
+- The worker and recovery rebind no longer check queue-row metadata for the
+  pre-4.0 `max_retries` setting. Such rows carry a version-2 execution snapshot
+  and are still refused before execution, now with the execution-snapshot error
+  instead of "contains a removed execution setting".
+- The package checks and `scripts/prepare_runtime.py` no longer look for the
+  former workflows distribution, extra or source tree.
 - Public contract: `scheduler.admission_root` is removed
   ([ADR 0007](docs/adr/0007-one-admission-store-under-runs-root.md)). Admission
   state always lives in `<runs_root>/.admission` and its limit is always
@@ -32,7 +43,7 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   admission directory, and `service restart` locks the one admission store of
   the worker it restarts. Delete the key in an idle window before installing
   the new units; see
-  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
+  [RELEASE](docs/RELEASE.md#upgrading-to-90).
 - Public contract: `queue list --refresh` is removed
   ([ADR 0010](docs/adr/0010-queue-commands-read-queue-rows.md)). It ran the
   same rebuild as `index rebuild` before listing; run
@@ -41,26 +52,17 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   row. Rows are the jobs in `queue.json`, each read with its own directory's
   root `job_state.json`; `job_locations.json` and other directories are no
   longer read. `index rebuild` still records such runs in `job_locations.json`.
-- The SQLite activity projection is removed. `queue list` and `queue cancel`
-  read `queue.json` and the queue rows' states directly, so
+- Public contract: the SQLite activity projection is removed
+  ([ADR 0010](docs/adr/0010-queue-commands-read-queue-rows.md)). `queue list`
+  and `queue cancel` read `queue.json` and the queue rows' states directly, so
   `<runs_root>/.activity.sqlite3`, `.activity-query.lock` and `.activity-dirty/`
   are no longer read or written, queue and index saves no longer mirror their
   rows into it, and a state save no longer writes an invalidation ticket inside
   its lock, where a failed ticket write failed the save. The files may be
-  deleted after the upgrade; see
-  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
-- The worker and recovery rebind no longer check queue-row metadata for the
-  pre-4.0 `max_retries` setting. Such rows carry a version-2 execution snapshot
-  and are still refused before execution, now with the execution-snapshot error
-  instead of "contains a removed execution setting".
-- The package checks and `scripts/prepare_runtime.py` no longer look for the
-  former workflows distribution, extra or source tree.
-- The internal worker child no longer falls back to the undocumented
-  `ORCA_AUTO_ORCA_ADMISSION_TOKEN`, `ORCA_AUTO_ORCA_ADMISSION_APP_NAME` and
-  `ORCA_AUTO_ORCA_ADMISSION_TASK_ID` environment variables. Nothing set them:
-  the worker passes the slot token as `--admission-token`, and the app name and
-  task ID come from the claimed queue row.
-- Attempt-level checkpoint resume is removed
+  deleted after the upgrade. A rollback to 8.x first deletes every
+  `.activity.sqlite3*` file so that 8.x rebuilds the projection from disk; see
+  [RELEASE](docs/RELEASE.md#upgrading-to-90).
+- Public contract: attempt-level checkpoint resume is removed
   ([ADR 0009](docs/adr/0009-resume-only-by-rebind.md)). A queued job whose
   generation had started is always rebound into a fresh generation before it
   runs again, so its `<stem>.resume.inp` restart input (`MORead` from the
@@ -74,6 +76,15 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   generation's `<stem>.resume.gbw`; it seeds only from its `<stem>.gbw`
   ([ADR 0009](docs/adr/0009-resume-only-by-rebind.md)). Only the removed
   attempt-level resume wrote these files, and it could not run.
+- The worker child takes its admission slot token only from
+  `--admission-token`, which the worker passes to every child it starts. It no
+  longer falls back to the undocumented `ORCA_AUTO_ORCA_ADMISSION_TOKEN`,
+  `ORCA_AUTO_ORCA_ADMISSION_APP_NAME` and `ORCA_AUTO_ORCA_ADMISSION_TASK_ID`
+  environment variables, which nothing set; the app name and task ID come from
+  the claimed queue row. A child started without the option refuses to run
+  with `ORCA execution requires a queue admission reservation.`, as it did when
+  the variables were unset. The upgrade's idle window keeps a child started by
+  an 8.x worker from running under a 9.0 worker.
 - `orca_auto.orca.state_reading.load_report_json` and
   `load_report_json_with_output_receipt` leave the package for the repository
   test tree (`tests/contracts/report_verifier.py`). ORCA_auto never reads
@@ -174,6 +185,41 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Public contract: one generation identity now decides whether a queue row is
+  still the generation a writer read
+  ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),
+  and the `queue_generation` value that
+  `job_state.json` records is the SHA-256 of that identity. The value is
+  opaque and comparable only within one major version. The identity is the
+  row's queue ID, app, task ID, task kind, engine, priority, submission time
+  and its metadata without the lifecycle keys: admission deferral, run ID,
+  terminal replay marker and fence, queued-notification claim and publication
+  lease. Every writer, the publication repair, the cancellation checks and the
+  worker's claim compare it. `queue cancel` no longer answers "already
+  terminal" when the worker claimed the job's queued notification between
+  reading the row and cancelling it. Metadata keys no current writer sets
+  (`attempt`, `candidate_count`, `retained_conformer_count`, `execution_dir`,
+  `terminal_artifacts`, `terminal_repair_blocked_reason`) now count as
+  identity like any other key. Rows that carry the queued-notification flag,
+  nearly every row 8.x wrote, get a different `queue_generation`, and nothing
+  is rewritten. Only the queue listing compares it, for a running row that has
+  no run ID yet: until a job still running across an upgrade outside an idle
+  window finishes, it is listed without its run ID and
+  `queue cancel <run ID>` cannot find it; cancel it by queue ID or directory.
+  Upgrade and roll back only in an idle window (`active_simulations: 0`),
+  where neither sees a difference; see
+  [RELEASE](docs/RELEASE.md#upgrading-to-90).
+- Public contract: a cancelled running job's `job_state.json` gets its
+  `cancelled` result only from the worker parent, when it settles the
+  cancelled queue row
+  ([ADR 0008](docs/adr/0008-parent-writes-the-cancelled-result.md)). The
+  worker child no longer writes that result before it exits, and its
+  `Skipping cancel finalization of …; run lock is held` warning is gone. Until
+  the parent settles the row, normally right after the child exits and after a
+  parent crash on the next worker start, the state still says `running` behind
+  a cancelled row whose result publication is pending. The result's
+  `completed_at` is the time the parent settled the row. States that already
+  record a cancelled result are not rewritten.
 - Public contract: `queue cancel --json` reports its outcome in
   `result.status` and `result.reason`
   ([ADR 0010](docs/adr/0010-queue-commands-read-queue-rows.md)). `result` is
@@ -184,9 +230,11 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   row or several rows now prints the whole document with empty row fields
   instead of only `ok` and `error`. The top-level keys, the exit codes and the
   text output are unchanged.
-- `queue cancel` resolves its target once, over the same rows `queue list`
-  shows, instead of matching a second time in the queue. The target is also
-  resolved against the working directory, so a job directory given relative to
+- Public contract: `queue cancel` resolves its target once, over the same rows
+  `queue list` shows
+  ([ADR 0010](docs/adr/0010-queue-commands-read-queue-rows.md)), instead of
+  matching a second time in the queue. The target is also resolved against
+  the working directory, so a job directory given relative to
   it (`./water`, `../batch/water`), or given with a trailing slash as an
   absolute or working-directory path, now names the job too; it used to be
   reported as not found. A path relative to `runs_root` and a bare name are
@@ -197,10 +245,124 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   own, such as `queue cancel foo` inside `runs/x` next to `runs/x/foo`, is
   refused as ambiguous with that directory among the matches; it never cancels
   another directory's job of that name.
-- `queue list --json` lists `admission_blockers` in `queue.json` row order,
-  followed by the `admission_store` entry when the admission store is corrupt.
+- Public contract: `queue list --json` lists `admission_blockers` in
+  `queue.json` row order, followed by the `admission_store` entry when the
+  admission store is corrupt.
   The SQLite projection returned them in its storage order, so only a listing
   with several blocked rows can see a different order.
+- Log lines carry the logger name of the module that now emits them, so a
+  journal filter on a logger name must use the new name. Modules were merged,
+  moved or renamed; the package's Python modules are not a public API:
+  `core.queue.engine.snapshot_intent` is `core.queue.snapshot_intent`,
+  `core.queue.engine.input_snapshot` is `core.queue.generation_owner`, and
+  `core.queue.engine.child` and the `core.queue.child` package are
+  `core.queue.child` and `core.queue.processes`; `orca.queue.run_state_replay`
+  is `orca.queue.terminal_state`, `orca.queue.terminal_replay` is
+  `orca.queue.terminal_marker`, the settlement steps of `orca.queue.replay`
+  form `orca.queue.settlement`, `orca.queue.identity` joined
+  `orca.queue.entries` and `orca.queue.worker_tracking` joined
+  `orca.queue.job_records` and `orca.queue.notifications`;
+  `orca.attempt.engine` and `orca.attempt.notifications` are
+  `orca.attempt.run`; `orca.engine_runner` is `orca.file_identity`;
+  `orca.report.frequencies` is `orca.report.modes` and `orca.report_fields`
+  joined `orca.machine_observation`; `orca.config_validation` joined
+  `orca.config`; `activity_view` joined `activity._list`;
+  `core.config.discovery` joined `core.config.files`; and the `run-dir` and
+  `index` handlers left `cli_handlers` for `cli_run_dir` and `cli_index`. These
+  lines keep their text under a new logger:
+  - `orca_auto.orca.attempt.run` (was `orca_auto.orca.attempt.engine`):
+    `Attempt N starting: …`, `Attempt N finished: …`,
+    `ORCA runner crashed during attempt N: …` and
+    `Interrupted by worker shutdown during attempt N`.
+  - `orca_auto.orca.attempt.resume` (was `orca_auto.orca.execution` or
+    `orca_auto.orca.recovery_rebind`):
+    `Detected crashed run in … Recovering state.`
+  - `orca_auto.orca.output_adoption` (was also `orca_auto.orca.recovery_rebind`):
+    the crash rebind's debug line `completed-output probe failed …`.
+  - `orca_auto.orca.queue.settlement` (was `orca_auto.orca.queue.replay`):
+    `Job completed: … (rc=…)`, `Job failed: … (rc=…)`,
+    `Job cancelled: … (rc=…)`, `Skipping terminal mark …`,
+    `Skipping terminal finalization …`,
+    `Queue entry disappeared after terminal state preparation …` and
+    `Terminal notification raised …`.
+  - `orca_auto.orca.queue.terminal_state` (was
+    `orca_auto.orca.queue.run_state_replay`):
+    `Ignoring previous-generation terminal ORCA state: …`.
+  - `orca_auto.orca.queue.publication_repair` (was
+    `orca_auto.orca.queue.enqueue_publication`):
+    `ORCA: repaired queued record publication …`,
+    `ORCA: queued record repair failed …` and `… claim failed …`,
+    `ORCA: cannot repair queue publication with invalid state …`,
+    `ORCA: queued record repair refused a changed queue generation …` and the
+    repair's `ORCA: failed to park queued record as repair pending …`.
+  - `orca_auto.core.queue.snapshot_intent` (was
+    `orca_auto.core.queue.engine.snapshot_intent`):
+    `queued ORCA snapshot intent already retired by the worker; …` and
+    `queued ORCA snapshot ownership marker update failed; …`.
+  - `orca_auto.orca.submission` (was `orca_auto.orca.execution`):
+    `Multiple ORCA .inp candidates found in …`.
+  - `orca_auto.orca.run_lock` (was `orca_auto.orca.submission`): the `run-dir`
+    run-lock probe's `Cannot inspect … ownership; treating it as held`.
+  - `orca_auto.activity._list` (was `orca_auto.activity_view`):
+    `active_simulation_slot_count_failed: …`.
+- Some worker log lines changed their text. The two warnings for an unreadable
+  `job_state.json` during replay (`Failed to read ORCA state generation for …`
+  and `Failing closed on unreadable ORCA state generation: <state file>`) are
+  one warning, `Failing closed on unreadable ORCA state generation: <reaction dir>`,
+  which names the job directory instead of the state file and no longer
+  includes the read error. The worker's
+  `Durable cancellation marker has no reaction identity` error is removed; that
+  case is now logged as `Failed to settle or release cancelled job …` with a
+  `terminal replay marker has no durable reaction identity` traceback, and the
+  job is still retained. `Failed to prepare or release cancelled job …` reads
+  `Failed to settle or release cancelled job …`. `queue worker` loads its
+  config once and logs one debug line, `failed to load the ORCA worker config`,
+  where it logged `failed to inspect existing ORCA worker config` and
+  `failed to read the ORCA worker concurrency for its stop budget`.
+- A failed content hash of an input or output file reads
+  `File changed while it was hashed: …` or `File is not a regular file: …`
+  instead of naming the file an `Engine executable`.
+- `run-dir` reads the selected `.inp` once. The queue row's `job_type`,
+  `molecule_key`, `selected_input_xyz` and `resource_request`, the execution
+  snapshot's `source_inputs` digest and the bound input copy all describe
+  those bytes, so an edit saved while the submission runs yields one
+  consistent snapshot. Such an edit used to queue a row whose job type and
+  molecule key came from the earlier text while the generation held the
+  edited input, or to fail with
+  `ORCA selected input changed while submission resources were prepared`.
+  A selected `.inp` that cannot be read, for example without read permission
+  or because it was deleted after `run-dir` selected it, now fails as
+  `invalid_submission_input` with
+  `Input source is not a readable regular file: …` instead of
+  `queue_submission_failed` with the raw `PermissionError: …` or
+  `FileNotFoundError: …`; `run-dir` still exits 1. Crash recovery reads the
+  recorded source input once too and still refuses one that differs from the
+  crashed submission. Existing queue rows and generations are untouched.
+- A queued row whose execution snapshot records a `version` that is not a
+  scalar (a list or mapping) still fails at worker start and keeps its
+  snapshot intent. Its error is now a `ValueError`,
+  `snapshot intent finalization failed: Queued snapshot has no visible generation identity`,
+  instead of a `TypeError`,
+  `snapshot intent finalization failed: unhashable type: …`.
+- A job queued under 8.0.1 is verified against the new binding rules when it
+  is claimed. Its input fails verification before ORCA starts, and must be
+  resubmitted, when it has a file reference the new rules bind or refuse (ESD
+  Hessian inputs, `Product_XYZFile`, an unrecognized quoted file path, a
+  `%plots` or `%md` output name given as a path), an NEB output-name collision,
+  a same-basename `* xyzfile` geometry or a referenced `<stem>.engrad` on a
+  newly recognized optimization route (`SloppyOpt`, `CrudeOpt`, `OptH`,
+  `L-OptH`, `QMMMOpt`, `SurfCrossOpt`, GOAT, `OptTS(GMF)` and similar), or
+  mixed-form duplicate `nprocs`. An input queued with `nprocs = N` was already
+  rewritten to the configured default at submission and runs with that core
+  count; resubmit it to use `N`.
+- A worker child that cannot read `admission_slots.json` while it activates or
+  completes its slot logs the error from `orca_auto.orca.execution` and exits
+  with 1, as before. It used to end with an uncaught
+  `AdmissionStoreCorruptError` traceback from a second slot lookup whose
+  release could never apply. A RAM scratch reservation skipped because the
+  queued snapshot no longer verifies now leaves the debug line
+  `ORCA scratch preparation failed; run will retry it`; the run still reports
+  the verification failure as before.
 - `service restart` and `service status` read the worker unit's properties,
   its `Environment=` values and the worker's `/proc/<pid>/environ` through the
   same readers, and their decisions are unchanged. Some explanations changed.
@@ -238,129 +400,6 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   and `queue cancel` printed the raw `No such file or directory` error for a
   missing config file, and `queue worker` said
   `Could not discover orca_auto.yaml`.
-- A cancelled running job's `job_state.json` gets its `cancelled` result only
-  from the worker parent, when it settles the cancelled queue row
-  ([ADR 0008](docs/adr/0008-parent-writes-the-cancelled-result.md)). The
-  worker child no longer writes that result before it exits, and its
-  `Skipping cancel finalization of …; run lock is held` warning is gone. Until
-  the parent settles the row, normally right after the child exits and after a
-  parent crash on the next worker start, the state still says `running` behind
-  a cancelled row whose result publication is pending. The result's
-  `completed_at` is the time the parent settled the row. States that already
-  record a cancelled result are not rewritten.
-- Worker log lines about terminal settlement moved or changed. The logger
-  `orca_auto.orca.queue.run_state_replay` is now
-  `orca_auto.orca.queue.terminal_state`
-  (`Ignoring previous-generation terminal ORCA state: …`).
-  `Job completed: … (rc=…)`, `Job failed: … (rc=…)`, `Job cancelled: … (rc=…)`,
-  `Skipping terminal mark …`, `Skipping terminal finalization …`,
-  `Queue entry disappeared after terminal state preparation …` and
-  `Terminal notification raised …` keep their text but come from
-  `orca_auto.orca.queue.settlement` instead of `orca_auto.orca.queue.replay`.
-  The two warnings for an unreadable `job_state.json` during replay
-  (`Failed to read ORCA state generation for …` and
-  `Failing closed on unreadable ORCA state generation: <state file>`) are one
-  warning, `Failing closed on unreadable ORCA state generation: <reaction dir>`,
-  which names the job directory instead of the state file and no longer includes
-  the read error. The worker's
-  `Durable cancellation marker has no reaction identity` error is removed; that
-  case is now logged as `Failed to settle or release cancelled job …` with a
-  `terminal replay marker has no durable reaction identity` traceback, and the
-  job is still retained. `Failed to prepare or release cancelled job …` reads
-  `Failed to settle or release cancelled job …`. The crash rebind's debug line
-  `completed-output probe failed …` comes from `orca_auto.orca.output_adoption`.
-- The queued-record repair log lines keep their text but come from
-  `orca_auto.orca.queue.publication_repair` instead of
-  `orca_auto.orca.queue.enqueue_publication`:
-  `ORCA: repaired queued record publication …`,
-  `ORCA: queued record repair failed …` and `… claim failed …`,
-  `ORCA: cannot repair queue publication with invalid state …`,
-  `ORCA: queued record repair refused a changed queue generation …` and the
-  repair's `ORCA: failed to park queued record as repair pending …`.
-- The snapshot-intent log lines
-  `queued ORCA snapshot intent already retired by the worker; …` and
-  `queued ORCA snapshot ownership marker update failed; …` keep their text but
-  come from `orca_auto.core.queue.snapshot_intent` instead of
-  `orca_auto.core.queue.engine.snapshot_intent`.
-- `run-dir` reads the selected `.inp` once. The queue row's `job_type`,
-  `molecule_key`, `selected_input_xyz` and `resource_request`, the execution
-  snapshot's `source_inputs` digest and the bound input copy all describe
-  those bytes, so an edit saved while the submission runs yields one
-  consistent snapshot. Such an edit used to queue a row whose job type and
-  molecule key came from the earlier text while the generation held the
-  edited input, or to fail with
-  `ORCA selected input changed while submission resources were prepared`.
-  A selected `.inp` that cannot be read, for example without read permission
-  or because it was deleted after `run-dir` selected it, now fails as
-  `invalid_submission_input` with
-  `Input source is not a readable regular file: …` instead of
-  `queue_submission_failed` with the raw `PermissionError: …` or
-  `FileNotFoundError: …`; `run-dir` still exits 1. Crash recovery reads the
-  recorded source input once too and still refuses one that differs from the
-  crashed submission. Existing queue rows and generations are untouched.
-- A queued row whose execution snapshot records a `version` that is not a
-  scalar (a list or mapping) still fails at worker start and keeps its
-  snapshot intent. Its error is now a `ValueError`,
-  `snapshot intent finalization failed: Queued snapshot has no visible generation identity`,
-  instead of a `TypeError`,
-  `snapshot intent finalization failed: unhashable type: …`.
-- `Multiple ORCA .inp candidates found in …` comes from the
-  `orca_auto.orca.submission` logger instead of `orca_auto.orca.execution`,
-  and the `run-dir` run-lock probe's
-  `Cannot inspect … ownership; treating it as held` warning from
-  `orca_auto.orca.run_lock` instead of `orca_auto.orca.submission`.
-- Public contract: one generation identity now decides whether a queue row is
-  still the generation a writer read
-  ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),
-  and the `queue_generation` value that
-  `job_state.json` records is the SHA-256 of that identity. The value is
-  opaque and comparable only within one major version. The identity is the
-  row's queue ID, app, task ID, task kind, engine, priority, submission time
-  and its metadata without the lifecycle keys: admission deferral, run ID,
-  terminal replay marker and fence, queued-notification claim and publication
-  lease. Every writer, the publication repair, the cancellation checks and the
-  worker's claim compare it. `queue cancel` no longer answers "already
-  terminal" when the worker claimed the job's queued notification between
-  reading the row and cancelling it. Metadata keys no current writer sets
-  (`attempt`, `candidate_count`, `retained_conformer_count`, `execution_dir`,
-  `terminal_artifacts`, `terminal_repair_blocked_reason`) now count as
-  identity like any other key. Rows that carry the queued-notification flag,
-  nearly every row 8.x wrote, get a different `queue_generation`, and nothing
-  is rewritten. Only the queue listing compares it, for a running row that has
-  no run ID yet: until a job still running across an upgrade outside an idle
-  window finishes, it is listed without its run ID and
-  `queue cancel <run ID>` cannot find it; cancel it by queue ID or directory. Upgrade and roll back only in an
-  idle window (`active_simulations: 0`), where neither sees a difference; see
-  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
-- A job queued under 8.0.1 is verified against the new binding rules when it
-  is claimed. Its input fails verification before ORCA starts, and must be
-  resubmitted, when it has a file reference the new rules bind or refuse (ESD
-  Hessian inputs, `Product_XYZFile`, an unrecognized quoted file path, a
-  `%plots` or `%md` output name given as a path), an NEB output-name collision,
-  a same-basename `* xyzfile` geometry or a referenced `<stem>.engrad` on a
-  newly recognized optimization route (`SloppyOpt`, `CrudeOpt`, `OptH`,
-  `L-OptH`, `QMMMOpt`, `SurfCrossOpt`, GOAT, `OptTS(GMF)` and similar), or
-  mixed-form duplicate `nprocs`. An input queued with `nprocs = N` was already
-  rewritten to the configured default at submission and runs with that core
-  count; resubmit it to use `N`.
-- A worker child that cannot read `admission_slots.json` while it activates or
-  completes its slot logs the error from `orca_auto.orca.execution` and exits
-  with 1, as before. It used to end with an uncaught
-  `AdmissionStoreCorruptError` traceback from a second slot lookup whose
-  release could never apply. A RAM scratch reservation skipped because the
-  queued snapshot no longer verifies now leaves the debug line
-  `ORCA scratch preparation failed; run will retry it`; the run still reports
-  the verification failure as before.
-- The worker child's attempt log lines (`Attempt N starting: …`,
-  `Attempt N finished: …`, `ORCA runner crashed during attempt N: …` and
-  `Interrupted by worker shutdown during attempt N`) keep their text but come
-  from `orca_auto.orca.attempt.run` instead of `orca_auto.orca.attempt.engine`.
-  The `Detected crashed run in … Recovering state.` warning keeps its text but
-  comes from `orca_auto.orca.attempt.resume` instead of
-  `orca_auto.orca.execution` or `orca_auto.orca.recovery_rebind`.
-  A failed content hash of an input or output file reads
-  `File changed while it was hashed: …` or `File is not a regular file: …`
-  instead of naming the file an `Engine executable`.
 - Chemical formulas in `job_report.html` and `si_block.md` follow the Hill
   system: C, then H, then the other elements alphabetically, and without
   carbon every element alphabetically (`C2H4BrCl`, `FeO4`, `ClNa`). The other

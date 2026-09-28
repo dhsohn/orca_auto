@@ -33,6 +33,11 @@ for IRC/NEB. A zero process exit or terminal queue row alone is insufficient.
 Do not invent missing evidence or run expensive calculations merely to broaden a
 source-only change. State what ran, what did not, and why the chosen acceptance applies.
 
+`tests/integration/test_orca_worker_smoke.py` holds bounded real-ORCA cases: an H2
+single point, electronic-state and input-echo checks, a water optimization and an
+ammonia TS/IRC. They run through a real worker only when `ORCA_REAL_EXECUTABLE`
+names an ORCA executable, and are skipped otherwise.
+
 Earlier real-engine evidence remains available in the
 [concurrent RAM scratch acceptance record](https://github.com/dhsohn/orca_auto/pull/346).
 It covers the named ORCA 6.1.1 cases at source revision `2d6cfa7a`, with its stated
