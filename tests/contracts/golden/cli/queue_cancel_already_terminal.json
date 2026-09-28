@@ -12,20 +12,9 @@
     "result": {
       "status": "failed",
       "reason": "already_terminal",
-      "returncode": 1,
-      "command_argv": [
-        "orca_auto.orca.direct_cancel",
-        "config=<tmp>/orca_auto.yaml",
-        "target=<q:1>"
-      ],
-      "stdout": "",
-      "stderr": "queue target already terminal: <q:1>\n",
-      "parsed_stdout": {},
-      "job_id": "",
-      "queue_id": "",
-      "reaction_dir": "",
-      "priority": 0,
-      "force": false
+      "queue_id": "<q:1>",
+      "job_id": "<orca:1>",
+      "reaction_dir": "<tmp>/runs/done"
     },
     "error": "queue target already terminal: <q:1>"
   },

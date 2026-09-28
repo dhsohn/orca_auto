@@ -11,11 +11,9 @@ import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from orca_auto import cli_systemd_freshness, cli_systemd_units, terminal
-from orca_auto.core.utils.coercion import normalize_text
 from orca_auto.terminal import emit_error, emit_json
 
 _SERVICE_ACTIVE_COLORS = {
@@ -97,10 +95,6 @@ def _required_services_active(statuses: Sequence[cli_systemd_units.ServiceUnitSt
     )
 
 
-def _epoch_iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 @dataclass(frozen=True)
 class ServiceStatusDeps:
     """Optional overrides for service-status system effects."""
@@ -111,7 +105,9 @@ class ServiceStatusDeps:
     collect_service_status: (
         Callable[..., tuple[cli_systemd_units.ServiceUnitStatus, ...]] | None
     ) = None
-    collect_worker_staleness: Callable[..., dict[str, Any] | None] | None = None
+    collect_worker_staleness: (
+        Callable[..., tuple[dict[str, Any] | None, tuple[str, ...]]] | None
+    ) = None
 
 
 def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | None = None) -> int:
@@ -131,12 +127,12 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
     except ValueError as exc:
         emit_error(exc, json_output=json_output)
         return 1
-    staleness = (deps.collect_worker_staleness or cli_systemd_freshness.collect_worker_staleness)(
-        statuses, run=deps.run or subprocess.run
-    )
+    staleness, failures = (
+        deps.collect_worker_staleness or cli_systemd_freshness.collect_worker_staleness
+    )(statuses, run=deps.run or subprocess.run)
     payload = _service_status_payload(target_user, statuses, staleness)
     services_ok = _required_services_active(statuses)
-    staleness_ok = staleness is None or not (staleness["stale"] or staleness["undetermined"])
+    staleness_ok = not failures
     if json_output:
         # ``ok`` mirrors the exit code: a stale or unreadable worker fails the
         # status just as an inactive required unit does.
@@ -154,51 +150,8 @@ def cmd_service_status(args: argparse.Namespace, *, deps: ServiceStatusDeps | No
                 print(
                     f"runtime_build: {entry['unit']} {entry['runtime_build_id']} ({entry['source_root']})"
                 )
-    if staleness is not None:
-        for entry in staleness["stale"]:
-            if entry.get("expected_runtime_build_id"):
-                emit_error(
-                    f"{entry['unit']} (pid {entry['pid']}) runs "
-                    f"{entry.get('runtime_build_id') or entry.get('source_root', 'another source')}; "
-                    f"installed unit requires runtime {entry['expected_runtime_build_id']} "
-                    f"in {entry['expected_runtime_root']}",
-                    hint="restart the workers in an idle window: orca_auto service restart",
-                )
-                continue
-            # The collector dates every stale checkout worker by its own
-            # checkout's HEAD update. An entry without that field cannot be
-            # explained as a deploy-time comparison; say so instead of
-            # rendering a 1970 timestamp.
-            head_update_epoch = entry.get("head_update_epoch")
-            if head_update_epoch is None:
-                emit_error(
-                    f"cannot judge worker code freshness for {entry['unit']}: "
-                    "stale verdict carries no checkout update time",
-                    hint="restart the workers in an idle window: orca_auto service restart",
-                )
-                continue
-            source_detail = (
-                f" in {entry['source_root']}" if normalize_text(entry.get("source_root")) else ""
-            )
-            sha_detail = (
-                f" ({normalize_text(entry.get('head_sha'))[:12]})"
-                if normalize_text(entry.get("head_sha"))
-                else ""
-            )
-            emit_error(
-                f"{entry['unit']} (pid {entry['pid']}) started "
-                f"{_epoch_iso(entry['started_epoch'])}, before checkout HEAD{sha_detail}{source_detail} "
-                f"was updated {_epoch_iso(float(head_update_epoch))}; the process still runs "
-                "pre-deploy code",
-                hint="restart the workers in an idle window: orca_auto service restart",
-            )
-        for entry in staleness["undetermined"]:
-            emit_error(
-                "cannot judge worker code freshness"
-                + (f" for {entry['unit']}" if entry["unit"] else "")
-                + f": {entry['detail']}",
-                hint="restart the workers in an idle window: orca_auto service restart",
-            )
+    for failure in failures:
+        emit_error(failure, hint="restart the workers in an idle window: orca_auto service restart")
     return 0 if services_ok and staleness_ok else 1
 
 

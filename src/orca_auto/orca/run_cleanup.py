@@ -13,7 +13,6 @@ import stat
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from orca_auto.core import activity_invalidation as _activity_invalidation
 from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
@@ -268,9 +267,6 @@ def clear_terminal_run_states(allowed_root: Path) -> int:
                         continue
                     if not _snapshot_state_is_current(snapshot, directory_fd):
                         continue
-                    _activity_invalidation.invalidate_state(
-                        snapshot.reaction_dir, root=allowed_root
-                    )
                     os.unlink(STATE_FILE_NAME, dir_fd=directory_fd)
                     run_count += 1
         except FileNotFoundError:

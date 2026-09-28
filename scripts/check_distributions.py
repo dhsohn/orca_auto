@@ -208,7 +208,7 @@ def _wheel_config_default(python: Path, home: Path, *, cwd: Path) -> None:
     import sys
     from pathlib import Path
     from types import SimpleNamespace
-    from orca_auto.core.config.discovery import resolve_shared_config_path
+    from orca_auto.core.config.files import discover_shared_config_path
     from orca_auto.orca.commands.init import _resolve_init_config_path
 
     home = Path(sys.argv[1])
@@ -216,7 +216,7 @@ def _wheel_config_default(python: Path, home: Path, *, cwd: Path) -> None:
     os.environ["HOME"] = str(home)
     expected = home / "orca_auto" / "config" / "orca_auto.yaml"
     assert _resolve_init_config_path(SimpleNamespace()) == expected
-    assert resolve_shared_config_path(None) is None
+    assert discover_shared_config_path(None) is None
     """
     _run(
         [str(python), "-I", "-c", textwrap.dedent(code), str(home)],

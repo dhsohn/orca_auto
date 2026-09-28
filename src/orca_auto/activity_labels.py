@@ -4,29 +4,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from orca_auto.core import statuses as _s
-from orca_auto.core.statuses import QUEUE_ACTIVE_STATUSES
+from orca_auto.core.statuses import is_queue_active_status
 from orca_auto.core.utils import normalize_text, parse_iso_utc
 from orca_auto.orca.app_ids import ORCA_TASK_KIND
-
-# Status glyphs for the queue table and CLI summaries. Keyed by the same
-# ``core.statuses`` constants as ``terminal``'s colour map so a status is
-# always drawn with one icon and one colour.
-_ACTIVITY_STATUS_ICONS = {
-    _s.STATUS_CREATED: "🆕",
-    _s.STATUS_PENDING: "⏳",
-    _s.STATUS_QUEUED: "⏳",
-    _s.STATUS_RUNNING: "▶",
-    _s.STATUS_RETRYING: "🔄",
-    _s.STATUS_CANCEL_REQUESTED: "⏹",
-    _s.STATUS_COMPLETED: "✅",
-    _s.STATUS_FAILED: "❌",
-    _s.STATUS_REPAIR_BLOCKED: "❌",
-    _s.STATUS_CANCELLED: "⛔",
-    _s.STATUS_ERROR: "❌",
-}
-
-_FALLBACK_ICON = "•"
+from orca_auto.orca.queue.terminal_marker import TERMINAL_PUBLICATION_SCOPE
 
 _ORCA_SELECTED_INP_HINTS = (
     ("neb", "NEB"),
@@ -59,19 +40,14 @@ def queue_elapsed_started_at(item: dict[str, Any]) -> datetime | None:
     return None
 
 
-def queue_elapsed_text(
-    item: dict[str, Any],
-    *,
-    now: datetime | None = None,
-) -> str:
+def queue_elapsed_text(item: dict[str, Any], *, now: datetime) -> str:
     started_at = queue_elapsed_started_at(item)
     if started_at is None:
         return "--:--:--"
 
-    status = normalize_text(item.get("status")).lower()
     end_at = parse_iso_utc(item.get("updated_at"))
-    if status in QUEUE_ACTIVE_STATUSES or end_at is None:
-        end_at = now or queue_table_now()
+    if is_queue_active_status(item.get("status")) or end_at is None:
+        end_at = now
     if end_at < started_at:
         end_at = started_at
     total_seconds = max(0, int((end_at - started_at).total_seconds()))
@@ -79,17 +55,6 @@ def queue_elapsed_text(
     minutes = (total_seconds % 3600) // 60
     seconds = total_seconds % 60
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-def activity_status_icon(status: object) -> str:
-    """Return the canonical icon for a queue activity status."""
-
-    normalized = str(status).strip().lower() if status is not None else ""
-    return _ACTIVITY_STATUS_ICONS.get(normalized, _FALLBACK_ICON)
-
-
-def queue_status_icon(item: dict[str, Any]) -> str:
-    return activity_status_icon(item.get("status"))
 
 
 def queue_task_label(task_kind: Any) -> str:
@@ -134,7 +99,7 @@ def queue_detail_text(item: dict[str, Any]) -> str:
     if engine == "orca":
         detail = infer_orca_detail_from_metadata(metadata)
         if normalize_text(metadata.get("publication_blocked_reason")):
-            if metadata.get("publication_blocked_scope") == "orca_terminal_publication":
+            if metadata.get("publication_blocked_scope") == TERMINAL_PUBLICATION_SCOPE:
                 return f"{detail} (result publication pending)"
             return f"{detail} (waiting for publication repair)"
         if normalize_text(metadata.get("admission_deferral_reason")):
@@ -196,10 +161,8 @@ def queue_name_text(item: dict[str, Any]) -> str:
 
 
 __all__ = [
-    "activity_status_icon",
     "queue_detail_text",
     "queue_elapsed_text",
     "queue_name_text",
-    "queue_status_icon",
     "queue_table_now",
 ]

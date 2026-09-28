@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
-from orca_auto import cli_queue
 from orca_auto.activity import list_activities
 from orca_auto.core.indexing import JobLocationRecord, list_job_locations, upsert_job_location
 from orca_auto.core.queue.persistence import save_entries
@@ -42,7 +40,7 @@ def _write_run(root: Path, name: str, *, indexed: bool) -> None:
         )
 
 
-def test_ordinary_activity_uses_index_without_recursive_discovery(
+def test_listing_reads_neither_the_location_index_nor_the_run_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "runs"
@@ -50,42 +48,30 @@ def test_ordinary_activity_uses_index_without_recursive_discovery(
     config.write_text(f"runs_root: {root}\n")
     _write_run(root, "tracked", indexed=True)
     _write_run(root, "untracked", indexed=False)
-
-    def forbidden_scan(*args: object, **kwargs: object) -> None:
-        raise AssertionError("ordinary queue list traversed the run tree")
-
-    monkeypatch.setattr(run_snapshot, "iter_production_runs_artifacts", forbidden_scan)
-    result = list_activities(config_path=str(config), limit=1)
-    assert [item["activity_id"] for item in result["activities"]] == ["tracked"]
-
-
-def test_explicit_refresh_discovers_and_indexes_unindexed_runs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    root = tmp_path / "runs"
-    config = tmp_path / "config.yaml"
-    config.write_text(f"runs_root: {root}\n")
-    _write_run(root, "tracked", indexed=True)
-    _write_run(root, "untracked", indexed=False)
-    result = list_activities(config_path=str(config), refresh=True)
-    assert {item["activity_id"] for item in result["activities"]} == {"tracked", "untracked"}
-    # The discovery is now an index row, so the next ordinary list needs no walk.
-    assert {row.job_id for row in list_job_locations(root)} == {"tracked", "untracked"}
-    monkeypatch.setattr(
-        run_snapshot,
-        "iter_production_runs_artifacts",
-        lambda *args, **kwargs: pytest.fail("ordinary queue list traversed the run tree"),
+    save_entries(
+        root,
+        [
+            QueueEntry(
+                queue_id="queue-id",
+                app_name="orca_auto_orca",
+                task_id="task-id",
+                task_kind="orca_run_inp",
+                engine="orca",
+                status=QueueStatus.COMPLETED,
+                metadata={"run_id": "untracked", "reaction_dir": str(root / "untracked")},
+            )
+        ],
     )
-    plain = list_activities(config_path=str(config))
-    assert {item["activity_id"] for item in plain["activities"]} == {"tracked", "untracked"}
 
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("queue list read beyond the queue rows' own states")
 
-def test_refresh_request_has_no_status_or_engine_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cli_queue.discovery, "resolve_shared_config_path", lambda path: path)
-
-    request = cli_queue._queue_list_request(Namespace(refresh=True))
-    assert request.status_values == ()
-    assert not hasattr(request, "engine_values")
+    monkeypatch.setattr(run_snapshot, "iter_production_runs_artifacts", forbidden)
+    monkeypatch.setattr(run_snapshot, "list_job_location_records", forbidden)
+    result = list_activities(config_path=str(config), runs_root=root)
+    # The indexed run has no queue row, so it is not listed.
+    assert [item["activity_id"] for item in result["activities"]] == ["queue-id"]
+    assert [row.job_id for row in list_job_locations(root)] == ["tracked"]
 
 
 def test_queue_known_run_does_not_require_an_index_entry(
@@ -105,7 +91,7 @@ def test_queue_known_run_does_not_require_an_index_entry(
         metadata={"run_id": "untracked", "reaction_dir": str(root / "untracked")},
     )
     save_entries(root, [entry])
-    result = list_activities(config_path=str(config))
+    result = list_activities(config_path=str(config), runs_root=root)
     assert len(result["activities"]) == 1
     assert result["activities"][0]["status"] == "completed"
     assert result["activities"][0]["updated_at"] == "2026-01-01T01:00:00+00:00"

@@ -1,4 +1,4 @@
-"""Activity catalog models: the list request, the ``ActivityRecord`` row and one page of it."""
+"""Activity catalog models: the ``ActivityRecord`` row and one page of it."""
 
 from __future__ import annotations
 
@@ -8,18 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.statuses import STATUS_CANCEL_REQUESTED, STATUS_RETRYING, STATUS_RUNNING
+from orca_auto.core.statuses import ACTIVE_SIMULATION_STATUSES, normalize_status
 from orca_auto.core.utils import normalize_text, parse_iso_utc
-
-ACTIVE_SIMULATION_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING, STATUS_CANCEL_REQUESTED})
-
-
-@dataclass(frozen=True)
-class ActivityListRequest:
-    refresh: bool = False
-    limit: int = 0
-    indexed: bool = False
-    statuses: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -35,8 +25,12 @@ class ActivityRecord:
     cancel_target: str
     aliases: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)
-    #: The per-job worker log (``<runs_root>/logs/<queue_id>.log``) for a
-    #: queue-backed row; empty for a row known only through its state file.
+    #: The queue ID and run IDs among ``aliases``; a cancel target equal to one
+    #: of them names this row before any job ID or directory alias. Not part
+    #: of ``to_dict``.
+    ids: tuple[str, ...] = ()
+    #: The per-job worker log (``<runs_root>/logs/<queue_id>.log``) the queue
+    #: row names; empty when it names none.
     worker_log: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -71,6 +65,8 @@ class ActivityListing:
     ``records`` is already status-filtered, newest first and cut to the
     requested limit; nobody downstream filters or slices again. ``blockers``
     and ``active_count`` describe the whole catalog regardless of the page.
+    ``blockers`` keeps the order the catalog is given in, which for the queue
+    catalog is ``queue.json`` row order.
     """
 
     records: tuple[ActivityRecord, ...] = ()
@@ -78,24 +74,37 @@ class ActivityListing:
     active_count: int = 0
 
 
+def admission_blocker(
+    *, queue_id: Any, allowed_root: Any, scope: Any, reason: Any, next_action: Any
+) -> dict[str, Any]:
+    """One ``admission_blockers`` entry of ``queue list``."""
+    return {
+        "queue_id": queue_id,
+        "allowed_root": allowed_root,
+        "scope": scope,
+        "reason": reason,
+        "next_action": next_action,
+    }
+
+
 def blocker_payload(record: ActivityRecord) -> dict[str, Any] | None:
     metadata = record.metadata
     reason = normalize_text(metadata.get("publication_blocked_reason"))
     if not reason:
         return None
-    return {
-        "queue_id": metadata.get("queue_id", record.activity_id),
-        "allowed_root": metadata.get("allowed_root", ""),
-        "scope": metadata.get("publication_blocked_scope", ""),
-        "reason": reason,
-        "next_action": metadata.get("publication_blocked_action", ""),
-    }
+    return admission_blocker(
+        queue_id=metadata.get("queue_id", record.activity_id),
+        allowed_root=metadata.get("allowed_root", ""),
+        scope=metadata.get("publication_blocked_scope", ""),
+        reason=reason,
+        next_action=metadata.get("publication_blocked_action", ""),
+    )
 
 
 def is_active_simulation(record: ActivityRecord) -> bool:
     return (
         normalize_text(record.kind).lower() == "job"
-        and normalize_text(record.status).lower() in ACTIVE_SIMULATION_STATUSES
+        and normalize_status(record.status) in ACTIVE_SIMULATION_STATUSES
     )
 
 
@@ -106,19 +115,16 @@ def listing_from_records(
     limit: int = 0,
 ) -> ActivityListing:
     """Filter, order and page an in-memory catalog exactly once."""
-    ordered = sorted(records, key=sort_key, reverse=True)
-    wanted = {normalize_text(status).lower() for status in statuses if normalize_text(status)}
-    page = [
-        record
-        for record in ordered
-        if not wanted or normalize_text(record.status).lower() in wanted
-    ]
+    catalog = list(records)
+    ordered = sorted(catalog, key=sort_key, reverse=True)
+    wanted = {normalize_status(status) for status in statuses} - {""}
+    page = [record for record in ordered if not wanted or normalize_status(record.status) in wanted]
     if limit > 0:
         page = page[:limit]
     return ActivityListing(
         records=tuple(page),
         blockers=tuple(
-            payload for record in ordered if (payload := blocker_payload(record)) is not None
+            payload for record in catalog if (payload := blocker_payload(record)) is not None
         ),
         active_count=sum(1 for record in ordered if is_active_simulation(record)),
     )

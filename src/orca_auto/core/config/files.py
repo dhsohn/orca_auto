@@ -9,7 +9,6 @@ from typing import Any
 
 import yaml
 
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR as _ORCA_AUTO_CONFIG_ENV_VAR
 from orca_auto.core.paths.validation import (
     validated_absolute_linux_path_text as _validated_absolute_linux_path_text,
 )
@@ -27,6 +26,7 @@ from .schema import (
 )
 
 DEFAULT_CONFIG_FILENAME = "orca_auto.yaml"
+ORCA_AUTO_CONFIG_ENV_VAR = "ORCA_AUTO_CONFIG"
 SECURE_CONFIG_FILE_MODE = 0o600
 # The one engine section. Its contents are the engine's own schema, validated
 # by ``orca_auto.orca.config``; this loader only checks that it is a mapping.
@@ -73,8 +73,8 @@ UniqueKeySafeLoader.add_constructor(
 )
 
 
-def config_env_value(env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR) -> str:
-    return os.getenv(env_var, "").strip()
+def config_env_value() -> str:
+    return os.getenv(ORCA_AUTO_CONFIG_ENV_VAR, "").strip()
 
 
 def secure_config_file_permissions(
@@ -97,32 +97,30 @@ def home_default_config_path() -> Path:
     return Path.home() / "orca_auto" / "config" / DEFAULT_CONFIG_FILENAME
 
 
-def default_config_path(*, env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR) -> str:
+def default_config_path() -> str:
     """Where a new config is written when no explicit path is given."""
 
-    env_path = config_env_value(env_var)
+    env_path = config_env_value()
     if env_path:
         return env_path
     return str(home_default_config_path())
 
 
-def discover_shared_config_path(
-    explicit: str | Path | None,
-    *,
-    env_var: str = _ORCA_AUTO_CONFIG_ENV_VAR,
-) -> str | None:
-    """Discovery order: explicit path, ``ORCA_AUTO_CONFIG``, then the home default.
+def discover_shared_config_path(explicit: str | Path | None) -> str | None:
+    """Discovery order: explicit ``--config``, ``ORCA_AUTO_CONFIG``, then the home default.
 
     An explicit or environment path is returned even when the file is missing
     so the caller reports that path; the home default is used only when it
-    exists.
+    exists. No checkout-relative location is probed: the package can live in a
+    source tree, a wheel, or a prepared runtime, and only the operator's home is
+    the same in all three.
     """
 
     explicit_text = str(explicit or "").strip()
     if explicit_text:
         return str(Path(explicit_text).expanduser().resolve())
 
-    env_path = config_env_value(env_var)
+    env_path = config_env_value()
     if env_path:
         return str(Path(env_path).expanduser().resolve())
 

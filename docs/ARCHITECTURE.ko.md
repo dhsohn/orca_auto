@@ -19,14 +19,14 @@ ORCA_auto를 변경할 때 아래 책임 표를 기준으로 동작을 따라갑
 | 계산 | generation에 고정된 입력과 ORCA 실행 파일 | 자식 워커의 단일 시도(`attempt/run.py`) | 출력 파일과 기록된 실행 근거 |
 | 결과 발행 | 실행 근거와 종료 판정 | 정상 종료는 attempt 보고 계층, 중단·취소 뒤에는 실시간이든 재시작 재처리든 부모의 종료 정리(`queue/settlement.py`) | 종료 상태와 `machine.json`을 포함한 generation 보고서 |
 | 완료 알림 | 작업·실행 ID가 일치하는 루트의 종료 `job_state.json`과 최종 결과 | 부모 큐 워커가 실행 잠금 안에서 상태 저장 계층을 통해 한 번 전송권을 기록하고, 전송기는 확보한 메시지만 전달 | 루트의 알림 처리 기록; generation 실행 상태와 보고서는 변경하지 않음 |
-| 조회 | 큐·상태 파일과 작업 위치 기록 | 인덱스 발행자가 조회용 파생 데이터를 갱신 | CLI 목록과 activity 화면 |
+| 조회 | `queue.json` 행과 각 행 자신의 루트 `job_state.json` | 없음. `queue list`와 `queue cancel`이 둘을 직접 읽음([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)) | CLI 목록과 `queue cancel`이 처리하는 한 행 |
 
 변경을 검토할 때는 해당 동작의 원래 근거, 상태를 바꾸는 주체, 사용자가 확인할 결과를 짚습니다. 완료 알림은 한 주체가 맡고, 발행 복구를 기다리는 큐 항목만 실행권 할당에서 보류합니다. 접수 당시의 입력 출처는 실행 기록을 거쳐 결과 파일까지 이어집니다. 종료 근거 확정, 실행권 반환, 재시도 가능한 발행은 아래 책임 순서를 따릅니다.
 
 1. **디스크 큐 기반 영속 실행**: 작업 제출 시점에 디스크에 원자적으로 기록되어 터미널 세션이 끊기거나 시스템이 재부팅되어도 작업이 유실되지 않습니다.
 2. **독립된 실행 디렉터리 격리 (`generation`)**: 동일한 작업 디렉터리에 재제출하더라도 이전 실행 기록을 덮어쓰지 않고 새로운 타임스탬프 기반 디렉터리(`generation`)에 분리하여 저장합니다.
 3. **명시적 장애 기록 및 복구**: 계산 실패 시 원본 입력을 임의 수정하거나 자동으로 재시도하지 않으며, 구체적인 실패 원인을 진단하여 기록합니다.
-4. **디스크 파일 중심 상태 관리**: 모든 상태와 결과의 기준 데이터는 디스크에 저장된 JSON 파일(`job_state.json`, `queue.json`)입니다. 빠른 조회를 위한 SQLite 인덱스는 원본 데이터로부터 언제든 결정론적으로 다시 생성할 수 있습니다.
+4. **디스크 파일 중심 상태 관리**: 모든 상태와 결과의 기준 데이터는 디스크에 저장된 JSON 파일(`job_state.json`, `queue.json`)입니다. 조회는 이 파일을 직접 읽으며 별도의 파생 조회 저장소를 두지 않습니다.
 
 ---
 
@@ -47,9 +47,9 @@ graph TD
 
 | 패키지/모듈 | 주요 역할 및 책임 |
 | :--- | :--- |
-| **`cli*.py`, `activity/`, `terminal.py`** | 사용자 명령어 파싱, 텍스트/JSON 포맷팅 및 ANSI 스타일링, activity 레코드 모델, 큐 및 서비스 상태 조회, 작업 취소 인터페이스 |
+| **`cli*.py`, `activity/`, `terminal.py`** | 사용자 명령어 파싱, 텍스트/JSON 포맷팅 및 ANSI 스타일링, activity 레코드 모델, 큐 및 서비스 상태 조회, 작업 취소 인터페이스. 명령이 설정 파일과 `runs_root`를 찾고 (한 번) 읽고 확인하며 빠진 것을 알리는 곳은 `cli_handlers.resolve_command_config` 하나이고, activity 함수는 확인된 설정 경로와 `runs_root`를 받습니다. `activity_rendering.queue_list_table`이 `queue list` 텍스트 출력 전체(요약 줄, 머리글, 구분선, 행, 아래 안내 줄)를 돌려주고 `cli_queue`는 TTY용과 일반용 스타일만 고릅니다. 상태 묶음은 `core/statuses.py`에, 상태별 아이콘과 색 하나씩은 `terminal.py`에 있습니다. 닫힌 stdout 파이프는 `cli.main` 한 곳에서만 처리합니다 |
 | **`orca/`** | ORCA 전용 로직: 입력 파일(`.inp`) 파싱 및 자원 판별, 실행 준비, 큐 워커 및 프로세스 구동, 출력 로그 분석 및 수렴 판정, 결과 보고서(`machine.json`) 생성 |
-| **`core/`** | 공용 인프라: 디스크 큐 저장소, 동시 실행 슬롯(Admission) 관리, 프로세스 감독 및 PID 파일 관리, 파일 I/O 및 설정 로더, SQLite 인덱스, 파일시스템 잠금 |
+| **`core/`** | 공용 인프라: 디스크 큐 저장소, 동시 실행 슬롯(Admission) 관리, 프로세스 감독 및 PID 파일 관리, 파일 I/O 및 설정 로더, 인덱스 저장소, 파일시스템 잠금 |
 
 > **아키텍처 특징**: 엔진은 ORCA 하나이며, 작업 하나는 독립된 ORCA 입력 디렉터리 하나입니다. 워크플로우 계층은 없습니다([ADR 0005](adr/0005-remove-retired-workflow-support.md)).
 
@@ -100,7 +100,7 @@ graph TD
 
 부모는 준비된 항목을 복구 담당 목록에 넘긴 뒤 실행 슬롯을 반환합니다. 그다음 위치 인덱스 발행, 한 번의 알림 전송권 확보, 복구 표식 제거 확인을 수행합니다. `orca/queue/settlement.py`가 generation 하나에 대한 각 단계를 평평한 함수 하나로 두며, 순서는 종료 표시(`mark_terminal_row` 또는 위의 취소 표시), 준비, 결합(`bind_row`), 슬롯 반환, 마무리입니다. 정상 셧다운이 멈춘 취소를 포함해 워커의 실시간 종료·취소는 작업을 놓기 전에 슬롯 반환 앞뒤로 이 함수들을 호출하고, `replay.py`의 재시작 파이프라인은 워커가 죽기 전에 표시된 행에 대해 `settle`로 준비, 결합, 마무리를 호출하므로 두 경로의 디스크 쓰기 순서가 같습니다. 인덱스 저장이나 표식 제거가 실패하면 복구 항목을 남겨 같은 폴더의 다음 제출을 보류하고, 준비된 다른 작업은 반환된 슬롯을 사용할 수 있습니다. 디스크의 큐 표식으로 새 워커도 이어받으며 계산을 다시 실행하지 않습니다. 엔진 복구·상태 확정·슬롯 반환이 실패하면 감독 중인 작업을 유지해 재시도합니다. 발행 복구는 주기적으로 재시도하고, 알림 전달은 best-effort 방식입니다.
 
-종료 복구 표시는 activity 조회에도 반영됩니다. 실행의 종료 상태는 유지하고 상세에 `result publication pending`을 표시합니다. `publication_blocked_scope=orca_terminal_publication`, 사유·다음 조치, `publication_owner=orca_queue_worker`가 남은 발행 책임을 설명합니다. 행이 필터로 숨겨져도 해당 폴더의 차단 근거는 `admission_blockers`에 남습니다. 잘못된 표시는 자동 복구를 약속하지 않고 점검을 안내하며, 유효한 복구 표시가 제거되면 발행 대기 표시도 사라집니다.
+종료 복구 표시는 `queue list`에도 반영됩니다. 실행의 종료 상태는 유지하고 상세에 `result publication pending`을 표시합니다. `publication_blocked_scope=orca_terminal_publication`, 사유·다음 조치, `publication_owner=orca_queue_worker`가 남은 발행 책임을 설명하며, 이 값들은 `orca/queue/terminal_marker.py`가 정의합니다. 행이 필터로 숨겨져도 해당 폴더의 차단 근거는 `admission_blockers`에 남습니다. 잘못된 표시는 자동 복구를 약속하지 않고 점검을 안내하며, 유효한 복구 표시가 제거되면 발행 대기 표시도 사라집니다.
 
 ### 상태 파일의 책임
 
@@ -156,8 +156,12 @@ ORCA 프로세스 그룹을 멈춘다. `snapshot_intent.py`(enqueue 전 의도 �
 `generation_owner.py`(generation 디렉터리의 소유자 xattr과 고정 핸들을 통한 삭제)는
 generation을 만들거나 인수하거나 복구하는 모든 프로세스가 쓴다.
 
-워커 CLI는 설정 로드, PID 확인(`core/queue/worker/pid_file.py`의 `read_worker_pid_file`),
-ORCA 워커 생성·실행을 직접 수행한다. `orca/queue/roots.py`가 하나뿐인 큐 루트
+워커 CLI는 설정 로드, PID 확인(`core/queue/worker/pid_file.py`의 `read_worker_pid_file`을
+쓰는 `existing_worker_pid`), ORCA 워커 생성·실행을 직접 수행한다. `orca_auto queue worker`도
+같은 `existing_worker_pid`로 두 번째 워커를 거부한 뒤, `cli_worker_supervision.py`가 그 워커
+프로세스 하나를 감독한다. 종료할 때마다 다시 시작하고, 시작 후 5초 안의 실패 종료가 두 번
+이어지거나 300초 안에 세 번 종료하면 멈추며, SIGTERM을 받으면 `worker_stop_budget_seconds`
+만큼 기다린 뒤 강제 종료한다. `systemd install`은 같은 예산으로 `TimeoutStopSec`을 렌더링한다. `orca/queue/roots.py`가 하나뿐인 큐 루트
 (`runtime.allowed_root`)를 해석하고 행 나열과 ID 기준 fenced 인수를 소유하며 큐 선두
 위치로 행을 인수하는 일은 없다.
 `orca/queue/entries.py`가 ORCA 행 식별과 하나뿐인 generation 식별을 소유한다. 쓰기
@@ -230,7 +234,7 @@ generation으로의 재바인딩으로만 일어난다([ADR 0009](adr/0009-resum
 
 ## 4. 운영 아키텍처
 
-- **SQLite 조회 캐시**: 대량의 계산 이력이 쌓여도 빠른 조회가 가능하도록 SQLite 기반 activity 인덱스를 운영합니다. 이 캐시는 위치 항목을 작업 ID 기준으로 관리하며, `job_locations.json` 자체는 디스크의 실행 상태에서 `index rebuild`로 재구성할 수 있고 `--refresh`는 같은 재구성으로 미등록 실행을 기록합니다. 목록이 적용하는 실행 상태·스냅샷 대체 규칙은 CLI 계층이 아니라 `orca/run_status.py`에 있습니다. `index rebuild`는 디스크에서 유도한 위치 기록을 병합하며 SQLite activity DB 재생성 명령은 아니다.
+- **큐 카탈로그**: `queue list`와 `queue cancel`은 카탈로그 하나(`activity/_orca.catalog`)를 함께 씁니다. `queue.json`의 ORCA 행마다 자기 디렉터리의 루트 `job_state.json`이 그 행의 실행이나 generation에 속할 때만 붙입니다. 재귀 스캔도 `job_locations.json` 읽기도 없으며, 큐 행이 없는 실행 상태는 목록에 나오지 않습니다. `queue cancel`은 이 카탈로그에서 대상을 한 번만 해석합니다(`activity/_cancel.target_rows`). 살아 있는 run lock이 없는 `running` 행을 `pending`으로 보이는 규칙은 CLI 계층이 아니라 `orca/run_status.py`에 있습니다. `job_locations.json`은 디스크의 실행 상태에서 `index rebuild`로 재구성할 수 있습니다([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)).
 - **Scratch 운영 명령**: `orca_auto scratch list`와 `scratch clear`로 비활성(non-live) RAM scratch 워크스페이스를 점검·제거합니다. stale, unverifiable, invalid-manifest 워크스페이스가 하나라도 남아 있으면 이후의 모든 scratch 실행이 차단(fail-closed)됩니다.
 - **불변 휠 런타임 (Prepared Wheel Runtime)**: 프로덕션 서버 환경에서는 Git 체크아웃 대신 검증된 불변 wheel 런타임을 배포하여, 체크아웃 변경이나 의존성 혼선 없이 운영 환경을 격리합니다 ([docs/RUNTIME.md](RUNTIME.md)).
 
@@ -249,3 +253,4 @@ ADR을 언제 쓰는지, 작성 규칙과 템플릿은 [ADR 안내](adr/README.m
 - [ADR 0007: 설치마다 `<runs_root>/.admission` 하나의 실행권 저장소](adr/0007-one-admission-store-under-runs-root.md)
 - [ADR 0008: 취소 결과는 워커 부모만 쓴다](adr/0008-parent-writes-the-cancelled-result.md)
 - [ADR 0009: 재개는 새 generation으로의 재바인딩으로만 한다](adr/0009-resume-only-by-rebind.md)
+- [ADR 0010: 큐 명령은 큐 행을 직접 읽는다](adr/0010-queue-commands-read-queue-rows.md)

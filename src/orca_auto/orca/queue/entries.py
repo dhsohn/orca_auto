@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from typing import Any, TypeVar
 
 from orca_auto.core.queue import store as _core_queue
@@ -176,40 +175,6 @@ def queue_entry_priority(entry: QueueEntry) -> int:
 
 def queue_entry_app_name(entry: QueueEntry) -> str:
     return normalize_text(entry.app_name)
-
-
-def _resolved_path_text(value: str) -> str:
-    text = normalize_text(value)
-    if not text:
-        return ""
-    try:
-        return str(Path(text).expanduser().resolve())
-    except (OSError, RuntimeError):
-        return ""
-
-
-def queue_entry_target_aliases(entry: QueueEntry) -> set[str]:
-    aliases = {
-        queue_entry_id(entry),
-        queue_entry_task_id(entry) or "",
-        queue_entry_run_id(entry) or "",
-        queue_entry_reaction_dir(entry),
-    }
-    reaction_dir_path = _resolved_path_text(queue_entry_reaction_dir(entry))
-    if reaction_dir_path:
-        aliases.add(reaction_dir_path)
-    return {alias for alias in aliases if alias}
-
-
-def queue_entry_matches_target(entry: QueueEntry, target: str) -> bool:
-    normalized_target = normalize_text(target)
-    if not normalized_target:
-        return False
-    aliases = queue_entry_target_aliases(entry)
-    if normalized_target in aliases:
-        return True
-    resolved_target = _resolved_path_text(normalized_target)
-    return bool(resolved_target and resolved_target in aliases)
 
 
 def find_active_entry(entries: Sequence[_QueueEntryT], reaction_dir: str) -> _QueueEntryT | None:

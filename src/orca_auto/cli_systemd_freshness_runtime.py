@@ -10,24 +10,24 @@ pending cutover.
 
 from __future__ import annotations
 
-import shlex
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from orca_auto import cli_systemd_units
 from orca_auto.cli_systemd_evidence import (
     WorkerImportEvidence,
     WorkerVerdict,
+    environment_values,
     process_identity_race_detail,
+    refuse_environment_overrides,
+    strict_unit_property,
 )
 from orca_auto.core.runtime_bundle import (
     PROCESS_RUNTIME_BUILD_ENV,
     runtime_root_for_import_source,
     verify_runtime_bundle,
 )
-from orca_auto.core.utils.coercion import normalize_text
 
 _RUNTIME_ERRORS = (OSError, ValueError, RuntimeError)
 
@@ -99,18 +99,6 @@ def judge_runtime_worker(
     )
 
 
-def installed_unit_property(
-    unit: str,
-    name: str,
-    *,
-    run: Callable[..., subprocess.CompletedProcess[Any]],
-) -> str:
-    completed = cli_systemd_units.show_unit_property(unit, name, run=run)
-    if completed.returncode != 0 or normalize_text(completed.stderr):
-        raise ValueError(f"cannot read installed unit {name}")
-    return str(completed.stdout or "").strip()
-
-
 def judge_installed_runtime(
     verdict: WorkerVerdict,
     *,
@@ -128,32 +116,26 @@ def judge_installed_runtime(
     row = verdict.row
     unit = row["unit"]
     try:
-        environment = installed_unit_property(unit, "Environment", run=run)
-        prefix = f"{PROCESS_RUNTIME_BUILD_ENV}="
-        values = [
-            item[len(prefix) :] for item in shlex.split(environment) if item.startswith(prefix)
-        ]
+        environment = strict_unit_property(unit, "Environment", run=run)
+        values = environment_values(environment, PROCESS_RUNTIME_BUILD_ENV, unit=unit)
         if not values:
             if row.get("runtime_build_id"):
                 raise ValueError("installed unit has no pinned runtime build")
             return verdict
         if len(values) != 1 or not values[0]:
             raise ValueError("installed unit runtime build is missing or ambiguous")
-        if any(
-            installed_unit_property(unit, prop, run=run)
-            for prop in ("EnvironmentFiles", "UnsetEnvironment")
-        ):
-            raise ValueError("installed unit has unsupported environment overrides")
-        directory = installed_unit_property(unit, "WorkingDirectory", run=run)
+        refuse_environment_overrides(unit, run=run)
+        directory = strict_unit_property(unit, "WorkingDirectory", run=run)
         root = Path(directory)
         if not root.is_absolute() or root.resolve(strict=True) != root:
             raise ValueError("installed unit runtime root must be an absolute resolved path")
         manifest = verify_runtime_bundle(root)
         if manifest["build_id"] != values[0]:
             raise ValueError("installed unit pin differs from its prepared runtime")
+        # Any change to Environment, not only to the pin, voids the reading.
         if (
-            installed_unit_property(unit, "Environment", run=run) != environment
-            or installed_unit_property(unit, "WorkingDirectory", run=run) != directory
+            strict_unit_property(unit, "Environment", run=run) != environment
+            or strict_unit_property(unit, "WorkingDirectory", run=run) != directory
         ):
             raise ValueError("installed unit runtime changed during freshness inspection")
         detail = process_identity_race_detail(
@@ -165,13 +147,20 @@ def judge_installed_runtime(
         )
         if detail:
             raise ValueError(detail)
+        stale = (
+            bool(verdict.stale_explanation)
+            or row.get("runtime_build_id") != values[0]
+            or row.get("source_root") != str(root)
+        )
         return WorkerVerdict(
             "worker",
             {**row, "expected_runtime_build_id": values[0], "expected_runtime_root": str(root)},
-            stale=(
-                verdict.stale
-                or row.get("runtime_build_id") != values[0]
-                or row.get("source_root") != str(root)
+            stale_explanation=(
+                f"{unit} (pid {row['pid']}) runs "
+                f"{row.get('runtime_build_id') or row.get('source_root', 'another source')}; "
+                f"installed unit requires runtime {values[0]} in {root}"
+                if stale
+                else ""
             ),
         )
     except _RUNTIME_ERRORS as exc:
@@ -180,4 +169,4 @@ def judge_installed_runtime(
         )
 
 
-__all__ = ["installed_unit_property", "judge_installed_runtime", "judge_runtime_worker"]
+__all__ = ["judge_installed_runtime", "judge_runtime_worker"]

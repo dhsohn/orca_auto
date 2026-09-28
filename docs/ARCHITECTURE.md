@@ -19,14 +19,14 @@ Use the following ownership map when changing ORCA_auto. Keep the job ID and run
 | Execute | Bound generation inputs and ORCA executable | Worker child through its one attempt (`attempt/run.py`) | Output files and recorded attempt evidence |
 | Publish | Attempt evidence and terminal decision | Attempt reporting on normal exit; the parent's settlement (`queue/settlement.py`) after an interruption or a cancellation, live or on restart replay | Terminal state and generation reports, including `machine.json` |
 | Notify completion | Matching terminal root `job_state.json` and final result | Parent queue worker claims once through the state writer under the run lock; sender only delivers the captured message | Root notification bookkeeping; generation execution state and reports remain unchanged |
-| Query | Queue/state files and job location records | Index publisher updates derived query data | CLI rows and activity views |
+| Query | `queue.json` rows and each row's own root `job_state.json` | None; `queue list` and `queue cancel` read both directly ([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)) | CLI rows, and the one row `queue cancel` acts on |
 
 A review should identify the original evidence, each state writer and the observable result for the changed action. Completion delivery has one owner, and admission withholds individual rows awaiting publication repair. Submission provenance now follows the execution into its result artifacts. Terminal preparation, capacity release and repairable publication follow the ownership order below.
 
 1. **Durable Queueing**: Submissions are committed atomically to disk. Calculation state is preserved across terminal disconnects and host reboots.
 2. **Generation Isolation**: Resubmitting within a job directory creates a fresh, isolated generation directory instead of overwriting prior attempts.
 3. **Explicit Recovery**: Calculation failures are diagnosed and permanently recorded. ORCA_auto never modifies inputs or automatically retries failed quantum calculations.
-4. **Authoritative On-Disk State**: Persistent JSON files (`job_state.json`, `queue.json`) on disk serve as the source of truth. The SQLite activity index is a projection that can be rebuilt deterministically from disk at any time.
+4. **Authoritative On-Disk State**: Persistent JSON files (`job_state.json`, `queue.json`) on disk serve as the source of truth. Queries read them directly; no derived query store is kept.
 
 ---
 
@@ -47,7 +47,7 @@ graph TD
 
 | Component | Responsibility |
 | :--- | :--- |
-| **`cli*.py`, `activity/`, `terminal.py`** | Command parsing, terminal formatting and ANSI styling, activity record models, queue/service status queries, and job cancellation interfaces |
+| **`cli*.py`, `activity/`, `terminal.py`** | Command parsing, terminal formatting and ANSI styling, activity record models, queue/service status queries, and job cancellation interfaces. `cli_handlers.resolve_command_config` is the one place a command finds, loads (once) and checks its config and `runs_root`, and names what is missing; the activity functions take the resolved config path and `runs_root`. `activity_rendering.queue_list_table` returns everything `queue list` prints as text (summary line, header, divider, row lines and notes), and `cli_queue` only chooses TTY or plain styling; status groupings live in `core/statuses.py`, and `terminal.py` holds the one icon and colour per status. `cli.main` is the one guard for a closed stdout pipe |
 | **`orca/`** | ORCA-specific domain logic: input parsing, resource extraction, execution setup, queue worker and runner execution, output log analysis, convergence verification, and result reporting (`machine.json`) |
 | **`core/`** | Shared infrastructure: disk queue store, concurrency admission slots, process supervision and PID management, confined file I/O, configuration loader, index store, and filesystem locks |
 
@@ -100,7 +100,7 @@ The child publishes execution state and generation reports. After the child exit
 
 The parent then transfers the prepared work item to replay bookkeeping and returns its execution slot. Index publication, the one-shot notification claim and verified replay-marker removal follow. `orca/queue/settlement.py` holds each step as one flat function for one generation, in the order mark (`mark_terminal_row`, or the cancel mark above), prepare, bind (`bind_row`), release slot and finish; the worker's live completion and cancellation, including a cancel that a graceful shutdown stops, call them around its slot release before the worker lets the job go, and the restart pipeline in `replay.py` calls prepare, bind and finish through `settle` for a row marked before its worker died, so the durable write order is the same on both paths. An index or marker-clear failure retains the replay and fences the next submission in that directory, while unrelated ready jobs can use the returned capacity. The durable queue marker lets a fresh worker resume; this does not rerun the calculation. Engine recovery, state preparation or slot-release failures retain the supervised job for retry. Publication retry remains periodic, and notification delivery remains best effort.
 
-A terminal replay marker also appears in the activity projection: the terminal execution status is preserved, while detail says `result publication pending`. `publication_blocked_scope=orca_terminal_publication`, the reason, next action and `publication_owner=orca_queue_worker` explain the unfinished publication. These per-directory blockers remain in `admission_blockers` even when the row is filtered off the page. Invalid markers require inspection rather than promising automatic recovery; clearing a valid marker removes the indication.
+A terminal replay marker also appears in `queue list`: the terminal execution status is preserved, while detail says `result publication pending`. `publication_blocked_scope=orca_terminal_publication`, the reason, next action and `publication_owner=orca_queue_worker` explain the unfinished publication; `orca/queue/terminal_marker.py` defines these values. These per-directory blockers remain in `admission_blockers` even when the row is filtered off the page. Invalid markers require inspection rather than promising automatic recovery; clearing a valid marker removes the indication.
 
 ### State ownership
 
@@ -161,8 +161,14 @@ pre-enqueue intent ledger) and `generation_owner.py` (the owner xattr of a
 generation directory and its pinned removal) serve every process that creates,
 claims or recovers a generation.
 
-The worker CLI loads config, checks the PID file (`read_worker_pid_file` in
-`core/queue/worker/pid_file.py`), then constructs and runs the ORCA worker directly.
+The worker CLI loads config, checks the PID file (`existing_worker_pid`, over
+`read_worker_pid_file` in `core/queue/worker/pid_file.py`), then constructs and runs
+the ORCA worker directly. `orca_auto queue worker` refuses through the same
+`existing_worker_pid`, then `cli_worker_supervision.py` supervises that one worker
+process: it restarts the worker after each exit, stops after two failing exits
+within 5 s of a start or three exits within 300 s, and on SIGTERM gives the worker
+`worker_stop_budget_seconds` before a kill. `systemd install` renders
+`TimeoutStopSec` from the same budget.
 `orca/queue/roots.py` resolves the one queue root (`runtime.allowed_root`) and owns
 listing and the fenced by-id claim; rows are never claimed by head-of-queue position.
 `orca/queue/entries.py` owns the ORCA row identity and the one generation identity:
@@ -248,7 +254,7 @@ instance and the parent's terminal state writers.
 
 ## 4. Operational Architecture
 
-- **SQLite Activity Projection**: Routine queries are served by a rebuildable SQLite index, avoiding recursive disk scans for routine commands. The projection keys location rows by job id; `job_locations.json` itself is rebuildable from the run states on disk with `index rebuild`, and `--refresh` persists unindexed runs through the same rebuild. The run-status and snapshot-supersession rules the listing applies live in `orca/run_status.py`, not in the CLI layer. `index rebuild` merges disk-derived location rows; it does not rebuild the SQLite activity database.
+- **Queue Catalog**: `queue list` and `queue cancel` share one catalog, `activity/_orca.catalog`: the ORCA rows of `queue.json`, each joined with its own directory's root `job_state.json` when that state belongs to the row's run or generation. No recursive scan and no `job_locations.json` read is involved, and a run state without a queue row is not listed. `queue cancel` resolves its target once over that catalog (`activity/_cancel.target_rows`). The rule that a `running` row without a live run lock shows as `pending` lives in `orca/run_status.py`, not in the CLI layer. `job_locations.json` is rebuildable from the run states on disk with `index rebuild` ([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)).
 - **Scratch Operator Surface**: `orca_auto scratch list` and `scratch clear` inspect and remove non-live RAM-scratch workspaces; one stale, unverifiable or invalid-manifest workspace otherwise blocks every later scratch launch (fail-closed).
 - **Prepared Wheel Runtimes**: For production servers, ORCA_auto can be deployed as an immutable, offline wheel installation, isolating runtime execution from development checkouts ([docs/RUNTIME.md](RUNTIME.md)).
 
@@ -267,3 +273,4 @@ When to write an ADR, its rules and its template are in [the ADR guide](adr/READ
 - [ADR 0007: One admission store per installation under `<runs_root>/.admission`](adr/0007-one-admission-store-under-runs-root.md)
 - [ADR 0008: The worker parent is the one writer of a cancelled result](adr/0008-parent-writes-the-cancelled-result.md)
 - [ADR 0009: Resume only by rebinding into a fresh generation](adr/0009-resume-only-by-rebind.md)
+- [ADR 0010: Queue commands read queue rows directly](adr/0010-queue-commands-read-queue-rows.md)

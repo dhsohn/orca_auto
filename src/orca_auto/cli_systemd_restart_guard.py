@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import shlex
 import stat
@@ -13,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from orca_auto import cli_systemd_evidence, cli_systemd_units
+from orca_auto import cli_systemd_evidence
 from orca_auto.core.admission import (
     AdmissionStoreCorruptError,
     admission_dir,
@@ -21,8 +20,7 @@ from orca_auto.core.admission import (
     read_active_slot_count,
 )
 from orca_auto.core.admission.persistence import ADMISSION_LOCK_NAME
-from orca_auto.core.app_ids import ORCA_AUTO_CONFIG_ENV_VAR
-from orca_auto.core.config.files import YAML_CONFIG_LOAD_EXCEPTIONS
+from orca_auto.core.config.files import ORCA_AUTO_CONFIG_ENV_VAR, YAML_CONFIG_LOAD_EXCEPTIONS
 from orca_auto.orca.config import load_config
 
 
@@ -37,34 +35,13 @@ class _WorkerBinding:
     started_epoch: float | None
 
 
-def _property(
-    unit: str,
-    name: str,
-    *,
-    run: Callable[..., subprocess.CompletedProcess[Any]],
-) -> str:
-    try:
-        completed = cli_systemd_units.show_unit_property(unit, name, run=run)
-    except OSError:
-        raise ValueError(f"Cannot inspect {name} for {unit}.") from None
-    if completed.returncode != 0 or str(completed.stderr or "").strip():
-        raise ValueError(f"Cannot inspect {name} for {unit}.")
-    return str(completed.stdout or "").strip()
-
-
 def _installed_config(
     unit: str,
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]],
 ) -> Path:
-    if _property(unit, "EnvironmentFiles", run=run) or _property(unit, "UnsetEnvironment", run=run):
-        raise ValueError(f"Cannot verify overridden service configuration for {unit}.")
-    try:
-        environment = shlex.split(_property(unit, "Environment", run=run))
-    except ValueError:
-        raise ValueError(f"Cannot read service configuration binding for {unit}.") from None
-    prefix = f"{ORCA_AUTO_CONFIG_ENV_VAR}="
-    values = [item[len(prefix) :] for item in environment if item.startswith(prefix)]
+    cli_systemd_evidence.refuse_environment_overrides(unit, run=run)
+    values = cli_systemd_evidence.unit_environment_values(unit, ORCA_AUTO_CONFIG_ENV_VAR, run=run)
     if len(values) != 1 or not values[0]:
         raise ValueError(f"Missing or ambiguous service configuration binding for {unit}.")
     config = Path(values[0])
@@ -78,7 +55,7 @@ def _installed_config(
             f"Service configuration must be an existing absolute regular file for {unit}."
         ) from None
 
-    command = _property(unit, "ExecStart", run=run)
+    command = cli_systemd_evidence.strict_unit_property(unit, "ExecStart", run=run)
     argv_matches = re.findall(r"\bargv\[\]=(.*?)\s*;", command)
     executable_matches = re.findall(r"\bpath=(.*?)\s*;", command)
     if len(argv_matches) != 1 or len(executable_matches) != 1:
@@ -121,7 +98,7 @@ def _worker_binding(
             raise ValueError
     except (*YAML_CONFIG_LOAD_EXCEPTIONS, RuntimeError):
         raise ValueError(f"Cannot verify current configuration for {unit}.") from None
-    pid_text = _property(unit, "MainPID", run=run)
+    pid_text = cli_systemd_evidence.strict_unit_property(unit, "MainPID", run=run)
     if not pid_text.isdecimal():
         raise ValueError(f"Cannot verify worker process identity for {unit}.")
     pid = int(pid_text)
@@ -132,12 +109,10 @@ def _worker_binding(
             ticks = cli_systemd_evidence.read_process_start_ticks(
                 pid, read_process_file=read_process_file
             )
-            environment = read_process_file(f"/proc/{pid}/environ")
-            prefix = f"{ORCA_AUTO_CONFIG_ENV_VAR}=".encode()
-            values = [
-                item[len(prefix) :] for item in environment.split(b"\0") if item.startswith(prefix)
-            ]
-            if values != [os.fsencode(str(config))]:
+            values = cli_systemd_evidence.process_environ(
+                pid, read_process_file=read_process_file
+            ).get(ORCA_AUTO_CONFIG_ENV_VAR, [])
+            if values != [str(config)]:
                 raise ValueError
             if (
                 cli_systemd_evidence.read_process_start_ticks(
@@ -159,7 +134,7 @@ def _worker_binding(
             # Operating policy still forbids reconfiguring running workers.
             if max(identity[3:]) > int(started * 1_000_000_000):
                 raise ValueError
-            if _property(unit, "MainPID", run=run) != pid_text:
+            if cli_systemd_evidence.strict_unit_property(unit, "MainPID", run=run) != pid_text:
                 raise ValueError
         except (OSError, ValueError):
             raise ValueError(f"Cannot verify unchanged running configuration for {unit}.") from None

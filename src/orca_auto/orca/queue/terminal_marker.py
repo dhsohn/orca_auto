@@ -32,6 +32,21 @@ from .entries import (
 
 TERMINAL_REPLAY_MARKER_VERSION = 1
 
+# How ``queue list`` reports a row whose marker is still present: the blocker
+# scope, the process that finishes the publication, and the reason and next
+# action for a valid and for an invalid marker.
+TERMINAL_PUBLICATION_SCOPE = "orca_terminal_publication"
+TERMINAL_PUBLICATION_OWNER = "orca_queue_worker"
+TERMINAL_PUBLICATION_PENDING_REASON = "terminal publication pending"
+TERMINAL_PUBLICATION_PENDING_ACTION = (
+    "The queue worker retries result publication automatically. Inspect the worker log "
+    "if it persists; this directory remains fenced until publication finishes."
+)
+TERMINAL_PUBLICATION_INVALID_REASON = "terminal publication marker invalid"
+TERMINAL_PUBLICATION_INVALID_ACTION = (
+    "Inspect the worker log and repair the invalid replay marker before resubmitting."
+)
+
 
 class TerminalReplayMarkerKind(str, Enum):
     """Classification shared by replay admission and queue retention."""

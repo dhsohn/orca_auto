@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import Any
 
 from orca_auto import activity_labels, terminal_table
 from orca_auto import activity_rendering as rendering
@@ -14,7 +16,10 @@ def test_queue_elapsed_uses_attempt_metadata_and_clamps_negative_durations() -> 
         "metadata": {"elapsed_started_at": "2026-05-20T00:01:00+00:00"},
     }
 
-    assert activity_labels.queue_elapsed_text(item) == "00:00:00"
+    assert (
+        activity_labels.queue_elapsed_text(item, now=datetime(2026, 5, 21, tzinfo=UTC))
+        == "00:00:00"
+    )
 
     running = {
         "status": "running",
@@ -47,7 +52,16 @@ def test_queue_name_falls_back_to_label_without_workspace() -> None:
     )
 
 
-def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypatch) -> None:
+def _table_lines(
+    rows: Sequence[dict[str, Any]], *, max_width: int | None = None, active: int = 0
+) -> list[str]:
+    table = rendering.queue_list_table(
+        {"activities": rows, "active_simulations": active}, max_width=max_width
+    )
+    return [table.header, table.divider, *table.rows]
+
+
+def test_queue_list_table_truncates_wide_unicode_without_column_drift(monkeypatch) -> None:
     monkeypatch.setattr(
         activity_labels,
         "queue_table_now",
@@ -77,7 +91,7 @@ def test_queue_table_lines_truncates_wide_unicode_without_column_drift(monkeypat
         },
     ]
 
-    lines = rendering.queue_table_lines(rows)
+    lines = _table_lines(rows)
     widths = [terminal_table.display_width(line) for line in lines]
 
     assert len(set(widths)) == 1
@@ -99,39 +113,63 @@ def _basic_rows() -> list[dict[str, object]]:
     ]
 
 
-def test_queue_table_lines_omits_id_column_when_disabled(monkeypatch) -> None:
+def test_queue_list_table_keeps_one_row_line_per_activity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        activity_labels,
+        "queue_table_now",
+        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
+    )
+    rows = [*_basic_rows(), {**_basic_rows()[0], "activity_id": "orca_b", "status": "failed"}]
+
+    table = rendering.queue_list_table(
+        {"activities": rows, "active_simulations": 3}, max_width=None
+    )
+
+    assert table.summary == "active_simulations: 3"
+    assert table.activities == tuple(rows)
+    assert len(table.rows) == 2
+    assert table.rows[1].startswith("❌")
+    assert all(name in table.header for name in ("Status", "Name", "Detail", "ID", "Elapsed"))
+    assert table.notes == ()
+
+
+def test_queue_list_table_without_rows_keeps_the_blocker_notes() -> None:
+    blocker = {
+        "queue_id": "*",
+        "allowed_root": "/runs",
+        "scope": "admission_store",
+        "reason": "Admission slot file is not valid JSON",
+        "next_action": "Repair it.",
+    }
+
+    table = rendering.queue_list_table(
+        {"activities": [], "active_simulations": 0, "admission_blockers": [blocker]},
+        max_width=80,
+    )
+
+    assert (table.header, table.divider, table.rows) == ("", "", ())
+    assert table.notes == (
+        "admission_blocked: ORCA queue /runs (queue_id=*)",
+        "  Admission slot file is not valid JSON",
+        "  Repair it.",
+    )
+
+
+def test_queue_list_table_fits_within_max_width(monkeypatch) -> None:
     monkeypatch.setattr(
         activity_labels,
         "queue_table_now",
         lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
     )
 
-    lines = rendering.queue_table_lines(_basic_rows(), include_id=False)
-    joined = "\n".join(lines)
-    widths = [terminal_table.display_width(line) for line in lines]
-
-    assert len(set(widths)) == 1
-    assert "ID" not in lines[0]
-    assert "orca_a_very_long_activity_identifier_value" not in joined
-    # Other columns still render.
-    assert "Status" in lines[0] and "Name" in lines[0] and "Elapsed" in lines[0]
-
-
-def test_queue_table_lines_fits_within_max_width(monkeypatch) -> None:
-    monkeypatch.setattr(
-        activity_labels,
-        "queue_table_now",
-        lambda: datetime(2026, 5, 20, 0, 10, 0, tzinfo=UTC),
-    )
-
-    lines = rendering.queue_table_lines(_basic_rows(), max_width=50)
+    lines = _table_lines(_basic_rows(), max_width=50)
     widths = [terminal_table.display_width(line) for line in lines]
 
     assert len(set(widths)) == 1
     assert widths[0] <= 50
 
 
-def test_queue_table_lines_shrinks_detail_before_id(monkeypatch) -> None:
+def test_queue_list_table_shrinks_detail_before_id(monkeypatch) -> None:
     monkeypatch.setattr(
         activity_labels,
         "queue_table_now",
@@ -152,12 +190,12 @@ def test_queue_table_lines_shrinks_detail_before_id(monkeypatch) -> None:
 
     # Tight enough to force the name column to shrink, but the ID — which doubles
     # as the `queue cancel` target — is the last column to give up space.
-    lines = rendering.queue_table_lines(rows, max_width=60)
+    lines = _table_lines(rows, max_width=60)
 
     assert "orca_keep_this_id" in "\n".join(lines)
 
 
-def test_queue_table_lines_keeps_elapsed_of_one_hundred_hours_or_more() -> None:
+def test_queue_list_table_keeps_elapsed_of_one_hundred_hours_or_more(monkeypatch) -> None:
     rows = [
         {
             "activity_id": "orca_long_job",
@@ -169,10 +207,12 @@ def test_queue_table_lines_keeps_elapsed_of_one_hundred_hours_or_more() -> None:
             "metadata": {"elapsed_started_at": "2026-05-15T00:00:00+00:00"},
         }
     ]
-    now = datetime(2026, 5, 20, 12, 5, 7, tzinfo=UTC)
+    monkeypatch.setattr(
+        activity_labels, "queue_table_now", lambda: datetime(2026, 5, 20, 12, 5, 7, tzinfo=UTC)
+    )
 
     for max_width in (None, 50):
-        lines = rendering.queue_table_lines(rows, now=now, max_width=max_width)
+        lines = _table_lines(rows, max_width=max_width)
         widths = [terminal_table.display_width(line) for line in lines]
 
         assert lines[2].endswith("132:05:07")

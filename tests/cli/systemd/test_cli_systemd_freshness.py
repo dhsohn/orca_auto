@@ -15,6 +15,14 @@ from orca_auto import (
 )
 
 
+def _collect(statuses: Any, **kwargs: Any) -> dict[str, Any] | None:
+    """The collector's payload; its explanations name every stale and undetermined worker."""
+    payload, failures = cli_systemd_freshness.collect_worker_staleness(statuses, **kwargs)
+    expected = 0 if payload is None else len(payload["stale"]) + len(payload["undetermined"])
+    assert len(failures) == expected
+    return payload
+
+
 def _make_fake_git_checkout(source_root: Path) -> None:
     (source_root / ".git").mkdir(parents=True)
 
@@ -144,7 +152,7 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
         ),
     )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         statuses,
         run=_fake_run,
         read_process_file=_process_file_reader({41: import_source, 42: import_source}),
@@ -165,6 +173,17 @@ def test_collect_worker_staleness_uses_head_update_not_old_commit_timestamp(
     assert verdict["stale"][0]["started_epoch"] > head_commit_epoch
     assert verdict["stale"][0]["head_update_epoch"] == head_update_epoch
     assert {entry["source_root"] for entry in verdict["workers"]} == {str(source_root)}
+    # The verdict explains itself; ``service status`` prints the sentence as is.
+    _payload, failures = cli_systemd_freshness.collect_worker_staleness(
+        statuses,
+        run=_fake_run,
+        read_process_file=_process_file_reader({41: import_source, 42: import_source}),
+    )
+    assert failures == (
+        "orca_auto-queue-worker@alice.service (pid 41) started 2026-08-03T08:02:30Z, "
+        f"before checkout HEAD (aaaaaaaaaaaa) in {source_root} was updated "
+        "2026-08-03T09:02:30Z; the process still runs pre-deploy code",
+    )
 
 
 def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
@@ -234,7 +253,7 @@ def test_collect_worker_staleness_refreshes_shared_checkout_head_per_worker(
         )
     )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         statuses,
         run=_fake_run,
         read_process_file=_process_file_reader({41: import_source, 42: import_source}),
@@ -329,14 +348,15 @@ def test_collect_worker_staleness_observes_the_active_process_checkout(tmp_path:
         observed_proc_paths.append(path)
         return read_process_file(path)
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         statuses,
         run=_fake_run,
         read_process_file=_read_process_file,
     )
 
     assert verdict is not None
-    assert "/proc/77/environ" in observed_proc_paths
+    # The worker's environ is read once for both its import source and build.
+    assert observed_proc_paths.count("/proc/77/environ") == 1
     assert all(not path.endswith("/cwd") for path in observed_proc_paths)
     assert verdict["source_root"] == str(unit_checkout)
     assert verdict["head_sha"] == head_sha
@@ -405,7 +425,7 @@ def test_collect_worker_staleness_refuses_dirty_import_package(tmp_path: Path) -
             stderr="",
         )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -453,7 +473,7 @@ def test_collect_worker_staleness_returns_none_for_active_wheel_worker(tmp_path:
             stderr="",
         )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -506,7 +526,7 @@ def test_collect_worker_staleness_treats_wheel_inside_git_cwd_as_uncompared(
         assert argv[:4] == ["systemctl", "show", "--property=MainPID", "--value"]
         return subprocess.CompletedProcess(argv, 0, stdout="93\n", stderr="")
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -539,7 +559,7 @@ def test_collect_worker_staleness_fails_closed_when_process_identity_changes(
     def _fake_run(argv: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 0, stdout="94\n", stderr="")
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -584,7 +604,7 @@ def test_collect_worker_staleness_does_not_require_start_time_for_wheel_worker(
             return subprocess.CompletedProcess(argv, 0, stdout="91\n", stderr="")
         pytest.fail("a non-git worker has no checkout timestamp to compare")
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -626,7 +646,7 @@ def test_collect_worker_staleness_rechecks_pid_before_accepting_wheel_worker(
             )
         pytest.fail("a raced non-git worker must not be inspected as stable")
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -713,7 +733,7 @@ def test_collect_worker_staleness_skips_wheel_worker_in_mixed_deployment(
             return subprocess.CompletedProcess(argv, 0, stdout=f"{pids[argv[4]]}\n", stderr="")
         return subprocess.CompletedProcess(argv, 0, stdout=f"{starts[argv[5]]}\n", stderr="")
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -793,7 +813,7 @@ def test_collect_worker_staleness_fails_closed_without_checkout_update_evidence(
             stderr="",
         )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -858,7 +878,7 @@ def test_collect_worker_staleness_skips_inactive_workers_and_reports_unreadable_
         ),
     )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         statuses,
         run=_fake_run,
         read_process_file=_process_file_reader({41: import_source}),
@@ -890,7 +910,7 @@ def test_collect_worker_staleness_returns_none_without_active_workers() -> None:
         ),
     )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         statuses,
         run=lambda *args, **kwargs: pytest.fail("no process to inspect"),
         read_process_file=lambda path: pytest.fail("no process to inspect"),
@@ -923,7 +943,7 @@ def test_collect_worker_staleness_fails_closed_on_unreadable_history(tmp_path: P
             argv, 0, stdout="Mon 2026-08-03 10:02:30 UTC\n", stderr=""
         )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         (
             cli_systemd_units.ServiceUnitStatus(
                 label="worker",
@@ -1006,7 +1026,7 @@ def test_collect_worker_staleness_counts_a_same_sha_checkout_as_an_update(tmp_pa
         ),
     )
 
-    verdict = cli_systemd_freshness.collect_worker_staleness(
+    verdict = _collect(
         statuses,
         run=_fake_run,
         read_process_file=_process_file_reader({41: import_source}),

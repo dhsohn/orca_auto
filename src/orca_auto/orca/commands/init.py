@@ -12,11 +12,9 @@ from typing import Any, TypedDict
 
 import yaml
 
-from orca_auto.core.config.discovery import (
-    default_shared_config_path as default_config_path,
-)
 from orca_auto.core.config.files import (
     YAML_CONFIG_LOAD_EXCEPTIONS,
+    default_config_path,
     messenger_mapping_from_root,
     secure_config_file_permissions,
 )

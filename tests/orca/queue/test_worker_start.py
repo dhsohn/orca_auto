@@ -27,7 +27,7 @@ from orca_auto.core.queue.processes import (
 from orca_auto.core.queue.store import QueueLockTimeoutError
 from orca_auto.core.queue.types import QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.models import ReservedQueueEntry
-from orca_auto.orca.config import AppConfig, load_config
+from orca_auto.orca.config import AppConfig, load_config, load_orca_shared_config
 from orca_auto.orca.queue import worker as queue_worker_mod
 from orca_auto.orca.queue.adapter import enqueue
 from orca_auto.orca.queue.models import OrcaRunningJob
@@ -65,12 +65,13 @@ def test_worker_roots_and_limit_match_the_rendered_unit(
     config = write_config_file(tmp_path / "orca_auto.yaml", cfg)
 
     worker = OrcaQueueWorker(load_config(str(config)), str(config))
+    _path, shared, _orca_sections = load_orca_shared_config(config)
 
-    assert systemd_plan._configured_read_write_paths(config) == (worker.queue_root,)
+    assert systemd_plan._configured_read_write_path(shared) == worker.queue_root
     assert worker.admission_root == worker.queue_root / ".admission"
     assert worker.max_concurrent == (max_active or SchedulerConfig.max_active_simulations)
     budget = worker_shutdown_budget_seconds(worker.max_concurrent)
-    assert systemd_plan._configured_stop_timeout_seconds(config) == (
+    assert systemd_plan._configured_stop_timeout_seconds(shared) == (
         math.ceil(budget + KILL_TIMEOUT_SECONDS) + 1
     )
 

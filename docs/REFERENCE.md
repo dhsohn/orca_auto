@@ -9,6 +9,8 @@ For formal runtime guarantees, refer to [Public Contracts (PUBLIC_CONTRACTS.md)]
 
 ## 1. CLI Commands
 
+`queue list`, `queue list clear`, `queue cancel`, `index prune`/`rebuild` and `scratch list`/`clear` read one config (`--config`, then `ORCA_AUTO_CONFIG`, then `~/orca_auto/config/orca_auto.yaml`), load it once and need an existing `runs_root`. A missing config, a config that does not load, a missing or invalid `runs_root` and a `runs_root` that is not a directory print the same `error:` line in each of them (for example `runs_root does not exist: PATH`) and exit 1 without creating anything. `queue worker` finds its config the same way.
+
 ### `orca_auto init`
 Creates or updates the shared configuration file (`orca_auto.yaml`).
 ```bash
@@ -35,14 +37,14 @@ orca_auto run-dir <PATH> [--config PATH] [--force] [--priority N] [--json]
 ### `orca_auto queue list`
 Inspects queued jobs, worker activity, and global active simulation counts.
 ```bash
-orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--refresh] [--json]
+orca_auto queue list [--config PATH] [--status STATUS] [--limit N] [--json]
 ```
 - `--status STATUS`: Filter by state (`pending`, `running`, `completed`, `failed`, `cancelled`).
 - `--limit N`: Limit the number of returned entries.
-- `--refresh`: Scan the filesystem for unindexed calculation directories and record them in `job_locations.json` (the same rebuild as `index rebuild`).
 - `--json`: Structured JSON output for downstream automation and tooling.
 - Each row carries `worker_log` (`<runs_root>/logs/<queue_id>.log`); the text view lists it under the table for running and failed rows.
-- Exits 1 without a discoverable config or an existing `runs_root`, creating nothing. A corrupt `admission_slots.json` is reported as an `admission_blockers` entry (scope `admission_store`, queue id `*`) while `active_simulations` falls back to the listing's count.
+- Rows are the jobs in `queue.json`, each read with its own directory's root `job_state.json`. A run state without a queue row is not listed; `index rebuild` records such runs in `job_locations.json`.
+- Exits 1 without a discoverable config or an existing `runs_root`, creating nothing. A corrupt `admission_slots.json` is reported as an `admission_blockers` entry (scope `admission_store`, queue id `*`) while `active_simulations` falls back to the listing's count. `admission_blockers` lists blocked rows in `queue.json` order, then that entry.
 
 ---
 
@@ -53,7 +55,9 @@ Cancels a pending or running job.
 ```bash
 orca_auto queue cancel <TARGET> [--config PATH] [--json]
 ```
-- `<TARGET>`: Queue ID (`q_...`), Run ID (`run_...`, including a running job's), or job directory path or name. A directory resolves to its active generation even when older finished rows of it remain.
+- `<TARGET>`: Queue ID (`q_...`), Run ID (`run_...`, including a running job's), or job directory path or name. A directory resolves to its active generation even when older finished rows of it remain. A queue ID or run ID wins over a directory name. A path is also resolved from the working directory, and a name that is an existing directory there without a queue row of its own is refused as ambiguous instead of naming another directory's job.
+- `--json`: Prints `activity_id`, `kind`, `engine`, `source`, `label`, `status` and `cancel_target` of the resolved row and `result` (`status`, `reason`, `queue_id`, `job_id`, `reaction_dir`). A failure exits 1 with `reason` `target_not_found`, `ambiguous`, `already_terminal` or `cancel_failed` and an `error` message; the row fields are empty when the target names no single row.
+- Exits 1 without a discoverable config or an existing `runs_root`, with the same `error:` line as `queue list`.
 
 ---
 

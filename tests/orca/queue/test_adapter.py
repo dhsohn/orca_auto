@@ -863,50 +863,6 @@ def test_find_active_entry_matches_first_active_for_reaction_dir() -> None:
     assert queue_entries.find_active_entry(entries, "/tmp/missing") is None
 
 
-def test_find_entry_by_target_matches_orca_cancel_aliases(tmp_path: Path) -> None:
-    reaction_dir = tmp_path / "rxn"
-    entry = _entry(
-        "q_running",
-        str(reaction_dir),
-        QueueStatus.RUNNING.value,
-        run_id="run_done",
-    )
-
-    entries = [entry]
-
-    assert queue_adapter.find_entry_by_target(entries, "q_running") == entry
-    assert queue_adapter.find_entry_by_target(entries, "run_done") == entry
-    assert queue_adapter.find_entry_by_target(entries, str(reaction_dir)) == entry
-    assert queue_adapter.find_entry_by_target(entries, str(reaction_dir.resolve())) == entry
-    assert queue_adapter.find_entry_by_target(entries, "missing") is None
-
-
-def test_find_entry_by_target_prefers_active_orca_generation_and_rejects_ambiguity(
-    tmp_path: Path,
-) -> None:
-    reaction_dir = str(tmp_path / "rxn")
-    old = _entry(
-        "q_old",
-        reaction_dir,
-        QueueStatus.COMPLETED.value,
-        finished_at="2026-03-10T00:01:00+00:00",
-    )
-    active = _entry("q_active", reaction_dir, QueueStatus.PENDING.value)
-
-    assert queue_adapter.find_entry_by_target([old, active], reaction_dir) == active
-    assert (
-        queue_adapter.find_entry_by_target(
-            [old, _foreign_entry("q_foreign", reaction_dir=reaction_dir)],
-            reaction_dir,
-        )
-        == old
-    )
-
-    second_active = _entry("q_active_2", reaction_dir, QueueStatus.RUNNING.value)
-    with pytest.raises(queue_adapter.AmbiguousQueueTargetError, match="multiple active"):
-        queue_adapter.find_entry_by_target([active, second_active], reaction_dir)
-
-
 def test_orca_queue_view_and_mutations_ignore_foreign_rows(tmp_path: Path) -> None:
     reaction_dir = str(tmp_path / "rxn")
     foreign_pending = _foreign_entry("q_foreign_pending", reaction_dir=reaction_dir)

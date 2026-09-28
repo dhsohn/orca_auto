@@ -42,6 +42,26 @@ QUEUE_ACTIVE_STATUSES = frozenset(
     }
 )
 
+# ``queue list`` counts these rows as active simulations when the admission
+# store cannot be read; the slot count is the rule otherwise.
+ACTIVE_SIMULATION_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING, STATUS_CANCEL_REQUESTED})
+# Rows whose worker log ``queue list`` names: a running job an operator may want
+# to tail, or a failed one whose log explains the failure.
+WORKER_LOG_STATUSES = frozenset({STATUS_RUNNING, *FAILED_STATUSES})
+
+# ``queue list`` summary buckets in display order: key, label, and the status
+# whose icon and colour draw the bucket. ``pending`` gathers every active status
+# but running (created, pending, queued, retrying, cancel_requested) under the
+# queued glyph, so a bucket glyph illustrates its group rather than every row.
+SUMMARY_BUCKETS = (
+    ("running", "running", STATUS_RUNNING),
+    ("pending", "queued", STATUS_QUEUED),
+    ("done", "done", STATUS_COMPLETED),
+    ("failed", "failed", STATUS_FAILED),
+    ("cancelled", "cancelled", STATUS_CANCELLED),
+    ("other", "other", STATUS_UNKNOWN),
+)
+
 
 def normalize_status(value: object) -> str:
     return str(value or "").strip().lower()
@@ -51,7 +71,24 @@ def is_queue_active_status(value: object) -> bool:
     return normalize_status(value) in QUEUE_ACTIVE_STATUSES
 
 
+def summary_bucket(value: object) -> str:
+    """The ``SUMMARY_BUCKETS`` key one row counts under."""
+    status = normalize_status(value)
+    if status == STATUS_RUNNING:
+        return "running"
+    if status in QUEUE_ACTIVE_STATUSES:
+        return "pending"
+    if status == STATUS_COMPLETED:
+        return "done"
+    if status in FAILED_STATUSES:
+        return "failed"
+    if status == STATUS_CANCELLED:
+        return "cancelled"
+    return "other"
+
+
 __all__ = [
+    "ACTIVE_SIMULATION_STATUSES",
     "ACTIVE_STATUSES",
     "FAILED_STATUSES",
     "QUEUE_ACTIVE_STATUSES",
@@ -67,7 +104,10 @@ __all__ = [
     "STATUS_RETRYING",
     "STATUS_RUNNING",
     "STATUS_UNKNOWN",
+    "SUMMARY_BUCKETS",
     "TERMINAL_STATUSES",
+    "WORKER_LOG_STATUSES",
     "is_queue_active_status",
     "normalize_status",
+    "summary_bucket",
 ]

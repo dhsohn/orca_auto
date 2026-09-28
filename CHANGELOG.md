@@ -33,6 +33,22 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   the worker it restarts. Delete the key in an idle window before installing
   the new units; see
   [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
+- Public contract: `queue list --refresh` is removed
+  ([ADR 0010](docs/adr/0010-queue-commands-read-queue-rows.md)). It ran the
+  same rebuild as `index rebuild` before listing; run
+  `orca_auto index rebuild` and then `queue list`.
+- Public contract: `queue list` no longer lists a run state that has no queue
+  row. Rows are the jobs in `queue.json`, each read with its own directory's
+  root `job_state.json`; `job_locations.json` and other directories are no
+  longer read. `index rebuild` still records such runs in `job_locations.json`.
+- The SQLite activity projection is removed. `queue list` and `queue cancel`
+  read `queue.json` and the queue rows' states directly, so
+  `<runs_root>/.activity.sqlite3`, `.activity-query.lock` and `.activity-dirty/`
+  are no longer read or written, queue and index saves no longer mirror their
+  rows into it, and a state save no longer writes an invalidation ticket inside
+  its lock, where a failed ticket write failed the save. The files may be
+  deleted after the upgrade; see
+  [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
 - The worker and recovery rebind no longer check queue-row metadata for the
   pre-4.0 `max_retries` setting. Such rows carry a version-2 execution snapshot
   and are still refused before execution, now with the execution-snapshot error
@@ -158,6 +174,70 @@ in [docs/RELEASE.md](docs/RELEASE.md).
 
 ### Changed
 
+- Public contract: `queue cancel --json` reports its outcome in
+  `result.status` and `result.reason`
+  ([ADR 0010](docs/adr/0010-queue-commands-read-queue-rows.md)). `result` is
+  `{status, reason, queue_id, job_id, reaction_dir}`; the emulated command
+  fields `returncode`, `command_argv`, `stdout`, `stderr`, `parsed_stdout`,
+  `priority` and `force` are gone. A failure's `reason` is `target_not_found`,
+  `ambiguous`, `already_terminal` or `cancel_failed`. A target that names no
+  row or several rows now prints the whole document with empty row fields
+  instead of only `ok` and `error`. The top-level keys, the exit codes and the
+  text output are unchanged.
+- `queue cancel` resolves its target once, over the same rows `queue list`
+  shows, instead of matching a second time in the queue. The target is also
+  resolved against the working directory, so a job directory given relative to
+  it (`./water`, `../batch/water`), or given with a trailing slash as an
+  absolute or working-directory path, now names the job too; it used to be
+  reported as not found. A path relative to `runs_root` and a bare name are
+  still matched as written unless they also resolve from the working directory,
+  so `batch/water/` given elsewhere is still not found. A queue ID names its
+  row before any directory alias, as before, and so does a run ID. A name that
+  is an existing directory in the working directory without a queue row of its
+  own, such as `queue cancel foo` inside `runs/x` next to `runs/x/foo`, is
+  refused as ambiguous with that directory among the matches; it never cancels
+  another directory's job of that name.
+- `queue list --json` lists `admission_blockers` in `queue.json` row order,
+  followed by the `admission_store` entry when the admission store is corrupt.
+  The SQLite projection returned them in its storage order, so only a listing
+  with several blocked rows can see a different order.
+- `service restart` and `service status` read the worker unit's properties,
+  its `Environment=` values and the worker's `/proc/<pid>/environ` through the
+  same readers, and their decisions are unchanged. Some explanations changed.
+  `service restart` refuses a worker unit whose `Environment` cannot be read
+  with `Cannot inspect Environment for <unit>.` and one whose `Environment`
+  cannot be parsed with `Cannot parse Environment for <unit>.`, both formerly
+  `Cannot read service configuration binding for <unit>.`. In `service status`,
+  an undetermined prepared-runtime worker whose unit property cannot be read
+  says `Cannot inspect <property> for <unit>.` instead of
+  `cannot read installed unit <property>` or the raw `systemctl` error, an
+  unparsable `Environment` says `Cannot parse Environment for <unit>.`
+  instead of the raw parser error, and an `EnvironmentFiles=` or
+  `UnsetEnvironment=` override says
+  `Cannot verify overridden service configuration for <unit>.` instead of
+  `installed unit has unsupported environment overrides`.
+- `queue cancel` without an existing `runs_root` now prints
+  `runs_root does not exist: PATH`, as `queue list` does, instead of the raw
+  `No such file or directory` error. It still exits 1.
+- `queue list`, `queue list clear`, `queue cancel`, `index prune`/`rebuild`,
+  `scratch list`/`clear` and `queue worker` find the config the same way and
+  load it once, and they print the same error for the same problem. When no
+  config is found the error is `No orca_auto.yaml found: pass --config, set
+  ORCA_AUTO_CONFIG, or create ~/orca_auto/config/orca_auto.yaml.`. A
+  `--config` or `ORCA_AUTO_CONFIG` path that does not exist is
+  `Config file not found: PATH.` followed by the `orca_auto init --config PATH`
+  guidance that `scratch` printed. A missing `runs_root` is
+  `runs_root is missing or invalid in CONFIG`, and an invalid one adds the rule
+  it breaks, for example
+  `runs_root is missing or invalid in CONFIG: runs_root must be an absolute Linux path.`.
+  A `runs_root` that does not exist is `runs_root does not exist: PATH` and
+  one that is not a directory is `runs_root is not a directory: PATH`; a config
+  that does not load names the loader's own error. Exit codes are unchanged.
+  `index` used to say `runs_root is not configured`, `scratch` said
+  `shared config is not configured` or the worker's config error, `queue list`
+  and `queue cancel` printed the raw `No such file or directory` error for a
+  missing config file, and `queue worker` said
+  `Could not discover orca_auto.yaml`.
 - A cancelled running job's `job_state.json` gets its `cancelled` result only
   from the worker parent, when it settles the cancelled queue row
   ([ADR 0008](docs/adr/0008-parent-writes-the-cancelled-result.md)). The
@@ -248,9 +328,8 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   nearly every row 8.x wrote, get a different `queue_generation`, and nothing
   is rewritten. Only the queue listing compares it, for a running row that has
   no run ID yet: until a job still running across an upgrade outside an idle
-  window finishes, it is listed twice (its queue row and a run-state row),
-  `queue cancel <run ID>` cannot find it and `queue cancel <job directory>`
-  fails as ambiguous; cancel it by queue ID. Upgrade and roll back only in an
+  window finishes, it is listed without its run ID and
+  `queue cancel <run ID>` cannot find it; cancel it by queue ID or directory. Upgrade and roll back only in an
   idle window (`active_simulations: 0`), where neither sees a difference; see
   [RELEASE](docs/RELEASE.md#upgrading-past-80x-unreleased).
 - A job queued under 8.0.1 is verified against the new binding rules when it

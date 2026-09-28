@@ -51,13 +51,24 @@ directory, and a queue row's `workflow_id` metadata is ignored.
   rewrites the values 8.x recorded
   ([ADR 0006](adr/0006-one-generation-identity-for-token-and-fences.md)). A job
   still running across an upgrade outside an idle window keeps its 8.x value:
-  `queue list` shows it twice (its queue row and a run-state row),
-  `queue cancel <run ID>` cannot find it and `queue cancel <job directory>`
-  fails as ambiguous, while `queue cancel <queue ID>` still works. All of this
-  clears when the job finishes. Upgrade only in an idle window
+  `queue list` shows it without its run ID and `queue cancel <run ID>` cannot
+  find it, while `queue cancel <queue ID>` and `queue cancel <job directory>`
+  still work. This clears when the job finishes. Upgrade only in an idle window
   (`active_simulations: 0` in `queue list --json`). Rolling back to 8.x needs
   an idle window too: 8.x counts the flag again, so a job the new version
   started that is still running shows the same effects in reverse.
+- `queue list` and `queue cancel` read `queue.json` and each row's own
+  `job_state.json` directly ([ADR 0010](adr/0010-queue-commands-read-queue-rows.md)).
+  Replace `queue list --refresh` with `orca_auto index rebuild` followed by
+  `queue list`; a run state without a queue row is no longer listed. Scripts
+  that parse `queue cancel --json` read the outcome from `result.status` and
+  `result.reason`. After `service status --json` shows the new worker, the
+  unused `<runs_root>/.activity.sqlite3*` files,
+  `<runs_root>/.activity-query.lock` and `<runs_root>/.activity-dirty/` may be
+  removed by hand. Before rolling back to 8.x, delete every
+  `<runs_root>/.activity.sqlite3*` file, the database and its
+  `.activity.sqlite3-journal` alike, so that 8.x rebuilds the projection from
+  disk instead of trusting one this version did not update.
 - `scheduler.admission_root` is removed: admission state always lives in
   `<runs_root>/.admission` and its limit is `scheduler.max_active_simulations`
   ([ADR 0007](adr/0007-one-admission-store-under-runs-root.md)). A config that

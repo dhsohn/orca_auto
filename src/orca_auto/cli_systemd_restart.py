@@ -28,22 +28,17 @@ def _restartable_worker_unit(target_user: str) -> str:
     return dict(cli_systemd_units.service_units_for_user(target_user))["worker"]
 
 
-def _require_current_restart_units(
+def _require_current_restart_unit(
     target_user: str,
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> None:
-    required_units = (dict(cli_systemd_units.service_units_for_user(target_user))["engines"],)
-    missing = tuple(
-        unit
-        for unit in required_units
-        if cli_systemd_units.unit_load_state(unit, run=run) == "not-found"
-    )
-    if not missing:
+    required_unit = dict(cli_systemd_units.service_units_for_user(target_user))["engines"]
+    if cli_systemd_units.unit_load_state(required_unit, run=run) != "not-found":
         return
     raise ValueError(
         "required systemd units are not installed: "
-        f"{', '.join(missing)}. Rerun the installer for this checkout: "
+        f"{required_unit}. Rerun the installer for this checkout: "
         f"orca_auto systemd install --user {target_user} --repo <repo>"
     )
 
@@ -53,7 +48,7 @@ def _restart_unit_for_user(
     *,
     run: Callable[..., subprocess.CompletedProcess[Any]] = subprocess.run,
 ) -> str:
-    _require_current_restart_units(target_user, run=run)
+    _require_current_restart_unit(target_user, run=run)
     units_by_role = dict(cli_systemd_units.service_units_for_user(target_user))
 
     def enabled_state(label: str) -> str | None:

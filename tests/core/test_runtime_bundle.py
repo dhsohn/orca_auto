@@ -155,15 +155,67 @@ def test_status_binds_runtime_build_to_active_process(bundle: Path, correct_iden
             f"{PROCESS_RUNTIME_BUILD_ENV}={build_id}\0"
         ).encode()
 
-    payload = cli_systemd_freshness.collect_worker_staleness(
+    payload, failures = cli_systemd_freshness.collect_worker_staleness(
         [status], run=run, read_process_file=read
     )
     assert payload is not None
+    assert len(failures) == (0 if correct_identity else 1)
     if correct_identity:
         assert payload["workers"][0]["runtime_build_id"] == build_id
         assert payload["undetermined"] == []
     else:
         assert "mismatched" in payload["undetermined"][0]["detail"]
+
+
+@pytest.mark.parametrize("changed", ["ORCA_AUTO_CONFIG=/b.yaml", "PYTHONPATH=/elsewhere"])
+def test_status_is_undetermined_when_unit_environment_changes_during_inspection(
+    bundle: Path, changed: str
+) -> None:
+    build_id = verify_runtime_bundle(bundle)["build_id"]
+    status = cli_systemd_units.ServiceUnitStatus(
+        label="worker",
+        unit="orca_auto-queue-worker@testuser.service",
+        active="active",
+        enabled="enabled",
+    )
+    environments = iter(
+        [f"{PROCESS_RUNTIME_BUILD_ENV}={build_id} ORCA_AUTO_CONFIG=/a.yaml"]
+        + [f"{PROCESS_RUNTIME_BUILD_ENV}={build_id} {changed}"] * 2
+    )
+
+    def run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        prop = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--property="))
+        values = {
+            "MainPID": "41",
+            "WorkingDirectory": str(bundle),
+            "EnvironmentFiles": "",
+            "UnsetEnvironment": "",
+        }
+        value = next(environments) if prop == "Environment" else values[prop]
+        return subprocess.CompletedProcess(argv, 0, stdout=value + "\n", stderr="")
+
+    def read(path: str) -> bytes:
+        if path.endswith("/stat"):
+            fields = ["S", *("0" for _ in range(18)), "123456"]
+            return f"41 (worker) {' '.join(fields)}".encode()
+        return (
+            f"{_process_evidence.PROCESS_IMPORT_SOURCE_ENV}={_source(bundle)}\0"
+            f"{PROCESS_RUNTIME_BUILD_ENV}={build_id}\0"
+        ).encode()
+
+    payload, failures = cli_systemd_freshness.collect_worker_staleness(
+        [status], run=run, read_process_file=read
+    )
+
+    # The pin itself did not change, but a unit whose Environment moved while
+    # it was read is not trusted as fresh.
+    assert payload is not None
+    assert len(failures) == 1
+    assert payload["workers"] == []
+    assert payload["undetermined"][0]["detail"] == (
+        "cannot verify installed runtime: "
+        "installed unit runtime changed during freshness inspection"
+    )
 
 
 def test_worker_reexec_publishes_verified_build_evidence(
@@ -270,10 +322,12 @@ def test_status_detects_installed_unit_cutover_before_worker_restart(
         return f"{_process_evidence.PROCESS_IMPORT_SOURCE_ENV}={source}\0{PROCESS_RUNTIME_BUILD_ENV}={build}\0".encode()
 
     try:
-        payload = cli_systemd_freshness.collect_worker_staleness(
+        collected = cli_systemd_freshness.collect_worker_staleness(
             [status], run=run, read_process_file=read
         )
+        payload, failures = collected
         assert payload is not None
+        assert len(failures) == 1
         assert payload["undetermined"] == []
         assert payload["stale"][0]["expected_runtime_build_id"] == desired_build
         assert payload["stale"][0]["expected_runtime_root"] == str(desired)
@@ -283,7 +337,7 @@ def test_status_detects_installed_unit_cutover_before_worker_restart(
                 deps=cli_systemd_status.ServiceStatusDeps(
                     which=lambda command: command,
                     collect_service_status=lambda *args, **kwargs: (status,),
-                    collect_worker_staleness=lambda *args, **kwargs: payload,
+                    collect_worker_staleness=lambda *args, **kwargs: collected,
                 ),
             )
             == 1

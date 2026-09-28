@@ -3,9 +3,11 @@
 ``test_admission_resolution`` resolves ``(admission_root, limit)`` from each
 config fixture through every consumer that derives it: a ``load_config``
 consumer (``admission_dir(runs_root)`` and ``max_concurrent``), the queue
-worker as ``queue worker`` builds it, ``engine_runtime_paths`` and the systemd
-unit plan. A config that still names ``scheduler.admission_root`` is rejected
-by all of them. The table is ``pins/admission_resolution.json``.
+worker as ``queue worker`` builds it, the CLI's ``resolve_command_config``
+(the ``engine_runtime_paths`` column, named after the function it replaced)
+and the systemd unit plan. A config that still names
+``scheduler.admission_root`` is rejected by all of them. The table is
+``pins/admission_resolution.json``.
 
 ``test_child_slot_outcome`` raises each exception type inside the child's
 admission context, with the reserved slot's engine process idle, prepared or
@@ -15,6 +17,7 @@ registered, and pins the resulting ``admission_slots.json`` in
 
 from __future__ import annotations
 
+import argparse
 import os
 from collections.abc import Callable
 from functools import partial
@@ -24,6 +27,7 @@ from typing import Any
 import pytest
 
 from orca_auto import systemd_plan
+from orca_auto.cli_handlers import CommandConfigError, resolve_command_config
 from orca_auto.core.admission import (
     AdmissionLimitReachedError,
     admission_dir,
@@ -33,8 +37,7 @@ from orca_auto.core.admission import (
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
 from orca_auto.core.utils import process as process_utils
 from orca_auto.orca import execution
-from orca_auto.orca.config import load_config
-from orca_auto.orca.engine_runtime import engine_runtime_paths
+from orca_auto.orca.config import load_config, load_orca_shared_config
 from orca_auto.orca.queue import worker as queue_worker
 from orca_auto.orca.queue.worker import OrcaQueueWorker
 from tests.conftest import make_app_cfg, make_run_context
@@ -86,16 +89,25 @@ def _queue_worker_answer(config: Path) -> dict[str, Any]:
     }
 
 
-def _engine_runtime_answer(config: Path) -> dict[str, Any]:
-    return {key: str(value) for key, value in engine_runtime_paths(str(config)).items()}
+def _command_config_answer(config: Path) -> dict[str, Any]:
+    try:
+        loaded = resolve_command_config(argparse.Namespace(config=str(config)))
+    except CommandConfigError as exc:
+        # The pinned answer names the loader's own error.
+        raise (exc.__cause__ or exc) from None
+    return {
+        "allowed_root": str(loaded.runs_root),
+        "admission_root": str(admission_dir(loaded.runs_root)),
+    }
 
 
 def _systemd_plan_answer(config: Path) -> dict[str, Any]:
+    _path, shared, _orca_sections = load_orca_shared_config(config)
     return {
         "read_write_paths": [
-            str(path) for path in systemd_plan._configured_read_write_paths(config)
+            str(path) for path in [systemd_plan._configured_read_write_path(shared)] if path
         ],
-        "stop_timeout_seconds": systemd_plan._configured_stop_timeout_seconds(config),
+        "stop_timeout_seconds": systemd_plan._configured_stop_timeout_seconds(shared),
     }
 
 
@@ -117,7 +129,7 @@ def test_admission_resolution(tmp_path: Path, make_fake_orca: Callable[..., Path
             {
                 "load_config": _answer(partial(_load_config_answer, config)),
                 "queue_worker": _answer(partial(_queue_worker_answer, config)),
-                "engine_runtime_paths": _answer(partial(_engine_runtime_answer, config)),
+                "engine_runtime_paths": _answer(partial(_command_config_answer, config)),
                 "systemd_plan": _answer(partial(_systemd_plan_answer, config)),
             }
         )

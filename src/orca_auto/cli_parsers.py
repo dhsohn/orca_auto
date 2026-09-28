@@ -17,7 +17,7 @@ import difflib
 import re
 from typing import NoReturn, cast
 
-from orca_auto import cli_handlers, cli_queue, cli_scratch, cli_workers
+from orca_auto import cli_handlers, cli_index, cli_queue, cli_run_dir, cli_scratch, cli_workers
 from orca_auto._version import package_version
 from orca_auto.cli_systemd_apply import cmd_systemd_install
 from orca_auto.cli_systemd_restart import cmd_service_restart
@@ -60,7 +60,7 @@ class OrcaAutoArgumentParser(argparse.ArgumentParser):
         self.exit(2)
 
 
-def add_engine_config_argument(parser: argparse.ArgumentParser) -> None:
+def add_config_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--orca_auto-config",
         "--config",
@@ -98,7 +98,7 @@ def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         "run-dir",
         help="Submit an ORCA input directory.",
     )
-    add_engine_config_argument(run_dir_parser)
+    add_config_argument(run_dir_parser)
     add_orca_logging_arguments(run_dir_parser)
     run_dir_parser.add_argument("path", help="ORCA input directory")
     run_dir_parser.add_argument(
@@ -113,7 +113,7 @@ def add_run_dir_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         help="Queue priority when submission is enqueued (lower = higher)",
     )
     add_json_argument(run_dir_parser, help_text="Print JSON submission output")
-    run_dir_parser.set_defaults(func=cli_handlers.cmd_run_dir)
+    run_dir_parser.set_defaults(func=cli_run_dir.cmd_run_dir)
 
 
 def add_init_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -121,7 +121,7 @@ def add_init_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPars
         "init",
         help="Interactively create or update the shared orca_auto.yaml config.",
     )
-    add_engine_config_argument(init_parser)
+    add_config_argument(init_parser)
     add_orca_logging_arguments(init_parser)
     init_parser.add_argument(
         "--force", action="store_true", help="Overwrite existing config without confirmation"
@@ -139,22 +139,12 @@ def _add_queue_list_parser(
         choices=["clear"],
         help="Remove completed/failed/cancelled entries from the unified activity list",
     )
-    list_parser.add_argument(
-        "--orca_auto-config",
-        "--config",
-        dest="orca_auto_config",
-        help="Path to shared orca_auto.yaml",
-    )
+    add_config_argument(list_parser)
     list_parser.add_argument(
         "--limit",
         type=_non_negative_limit,
         default=0,
         help="Optional non-negative maximum number of activities to print",
-    )
-    list_parser.add_argument(
-        "--refresh",
-        action="store_true",
-        help="Discover unindexed ORCA runs",
     )
     list_parser.add_argument(
         "--status", action="append", help="Filter by status; may be passed more than once"
@@ -168,24 +158,13 @@ def _add_queue_cancel_parser(
 ) -> None:
     cancel_parser = queue_subparsers.add_parser("cancel", help="Cancel an ORCA job.")
     cancel_parser.add_argument("target", help="Activity id, queue id, run id, or known path alias")
-    cancel_parser.add_argument(
-        "--orca_auto-config",
-        "--config",
-        dest="orca_auto_config",
-        help="Path to shared orca_auto.yaml",
-    )
+    add_config_argument(cancel_parser)
     add_json_argument(cancel_parser)
     cancel_parser.set_defaults(func=cli_queue.cmd_queue_cancel)
 
 
 def _add_queue_worker_options(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--orca_auto-config",
-        "--config",
-        dest="orca_auto_config",
-        default=None,
-        help="Path to shared orca_auto.yaml",
-    )
+    add_config_argument(parser)
     add_json_argument(parser, help_text="Print worker commands as JSON without starting them")
 
 
@@ -221,19 +200,14 @@ def add_index_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             "List, and with --apply remove, index rows whose recorded paths are all gone from disk."
         ),
     )
-    prune_parser.add_argument(
-        "--orca_auto-config",
-        "--config",
-        dest="orca_auto_config",
-        help="Path to shared orca_auto.yaml",
-    )
+    add_config_argument(prune_parser)
     prune_parser.add_argument(
         "--apply",
         action="store_true",
         help="Rewrite the index without the listed rows; nothing is written without it",
     )
     add_json_argument(prune_parser)
-    prune_parser.set_defaults(func=cli_handlers.cmd_index_prune)
+    prune_parser.set_defaults(func=cli_index.cmd_index_prune)
 
     rebuild_parser = index_subparsers.add_parser(
         "rebuild",
@@ -242,19 +216,14 @@ def add_index_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentPar
             "rows are added or updated by job id, never removed."
         ),
     )
-    rebuild_parser.add_argument(
-        "--orca_auto-config",
-        "--config",
-        dest="orca_auto_config",
-        help="Path to shared orca_auto.yaml",
-    )
+    add_config_argument(rebuild_parser)
     rebuild_parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Report the rows that would be added or updated without writing the index",
     )
     add_json_argument(rebuild_parser)
-    rebuild_parser.set_defaults(func=cli_handlers.cmd_index_rebuild)
+    rebuild_parser.set_defaults(func=cli_index.cmd_index_rebuild)
 
 
 def add_scratch_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -268,12 +237,7 @@ def add_scratch_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         "list",
         help="List scratch workspaces and whether they block new scratch launches.",
     )
-    list_parser.add_argument(
-        "--orca_auto-config",
-        "--config",
-        dest="orca_auto_config",
-        help="Path to shared orca_auto.yaml",
-    )
+    add_config_argument(list_parser)
     add_json_argument(list_parser)
     list_parser.set_defaults(func=cli_scratch.cmd_scratch_list)
 
@@ -295,12 +259,7 @@ def add_scratch_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         action="store_true",
         help="Remove every stale, unverifiable, or invalid-manifest workspace",
     )
-    clear_parser.add_argument(
-        "--orca_auto-config",
-        "--config",
-        dest="orca_auto_config",
-        help="Path to shared orca_auto.yaml",
-    )
+    add_config_argument(clear_parser)
     add_json_argument(clear_parser)
     clear_parser.set_defaults(func=cli_scratch.cmd_scratch_clear)
 
