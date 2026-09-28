@@ -340,9 +340,8 @@ def _fake_orca(python: Path, root: Path, *, package: Path) -> Path:
     engine = root / "fake-orca"
     engine.write_text(
         f"#!{python}\n"
-        "from pathlib import Path\nimport importlib.util\nimport orca_auto\n"
+        "from pathlib import Path\nimport orca_auto\n"
         f"assert Path(orca_auto.__file__).resolve().parent == Path({str(package)!r})\n"
-        "assert importlib.util.find_spec('orca_auto.flow') is None\n"
         f"Path({str(counter)!r}).write_text('1')\n"
         "print('Program Version 6.0.1 - RELEASE -')\n"
         "print('CARTESIAN COORDINATES (ANGSTROEM)')\n"

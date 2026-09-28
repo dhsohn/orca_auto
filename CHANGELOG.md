@@ -33,7 +33,13 @@ procedure; upgrading needs an idle window (`active_simulations: 0`). See
   and are still refused before execution, now with the execution-snapshot error
   instead of "contains a removed execution setting".
 - The package checks and `scripts/prepare_runtime.py` no longer look for the
-  former workflows distribution, extra or source tree.
+  former workflows distribution, extra, source tree or `orca_auto.flow`
+  package.
+- Snapshot intents of the kinds `input_snapshot_namespace` and
+  `orca_execution_pair`, which releases before 7.0 wrote for generations under
+  `.orca_auto_input_snapshots/` and `.orca_auto_orca_executions/`, are no
+  longer read. Such an intent file is invalid: the worker's reconcile leaves it
+  and its directories in place, as it did before.
 - Public contract: `scheduler.admission_root` is removed
   ([ADR 0007](docs/adr/0007-one-admission-store-under-runs-root.md)). Admission
   state always lives in `<runs_root>/.admission` and its limit is always
@@ -182,6 +188,10 @@ procedure; upgrading needs an idle window (`active_simulations: 0`). See
   itself the value of a file key (`%moinp %base "x.gbw"`). The reference
   scanner exempted that path from its checks although `%base` binds no file;
   both of its passes now read file keys by one rule.
+- `run-dir` without a config to read (no `--config`, no `ORCA_AUTO_CONFIG` and
+  no `~/orca_auto/config/orca_auto.yaml`) prints one
+  `error: No orca_auto.yaml found: …` line with the `orca_auto init` hint and
+  exits 1, like the other commands, instead of a `TypeError` traceback.
 
 ### Changed
 
@@ -319,6 +329,8 @@ procedure; upgrading needs an idle window (`active_simulations: 0`). See
   config once and logs one debug line, `failed to load the ORCA worker config`,
   where it logged `failed to inspect existing ORCA worker config` and
   `failed to read the ORCA worker concurrency for its stop budget`.
+  `Config loaded: …` and `Queue worker started (…)` print the slot limit once,
+  as `max_concurrent=N`; the repeated `admission_limit=N` is gone.
 - A failed content hash of an input or output file reads
   `File changed while it was hashed: …` or `File is not a regular file: …`
   instead of naming the file an `Engine executable`.

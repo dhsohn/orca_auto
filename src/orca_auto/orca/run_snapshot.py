@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import RUN_STATE_FILE
 from orca_auto.core.indexing import JobLocationRecord
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
@@ -16,7 +17,7 @@ from orca_auto.core.utils.persistence import load_json_mapping_file
 from orca_auto.core.utils.stable_fs import StableFsError, open_pinned_directory
 
 from .job_locations import list_job_location_records, resolve_record_job_dir
-from .state_reading import STATE_FILE_NAME, state_from_normalized_payload
+from .state_reading import state_from_normalized_payload
 
 StateFileIdentity = tuple[int, int, int, int]
 
@@ -87,7 +88,7 @@ def load_pinned_state(
 ) -> tuple[dict[str, Any], StateFileIdentity] | None:
     flags = os.O_RDONLY | os.O_NOFOLLOW
     try:
-        state_fd = os.open(STATE_FILE_NAME, flags, dir_fd=directory_fd)
+        state_fd = os.open(RUN_STATE_FILE, flags, dir_fd=directory_fd)
     except OSError:
         return None
 
@@ -97,7 +98,7 @@ def load_pinned_state(
         if payload is None:
             return None
         current_identity = _state_file_identity(
-            os.stat(STATE_FILE_NAME, dir_fd=directory_fd, follow_symlinks=False)
+            os.stat(RUN_STATE_FILE, dir_fd=directory_fd, follow_symlinks=False)
         )
         if current_identity != opened_identity:
             return None
@@ -145,7 +146,7 @@ def _snapshot_directory_is_still_production_visible(
     return not (
         should_exclude_from_production_runs_scan(reaction_dir, allowed_root)
         or should_exclude_from_production_runs_scan(
-            reaction_dir / STATE_FILE_NAME,
+            reaction_dir / RUN_STATE_FILE,
             allowed_root,
         )
         or (
@@ -204,7 +205,7 @@ def _candidate_snapshot_dirs(
         if (
             should_exclude_from_production_runs_scan(reaction_dir, allowed_root)
             or should_exclude_from_production_runs_scan(
-                reaction_dir / STATE_FILE_NAME,
+                reaction_dir / RUN_STATE_FILE,
                 allowed_root,
             )
             or (
@@ -223,9 +224,9 @@ def _candidate_snapshot_dirs(
         candidates.append((reaction_dir, original_run_dir, identity))
 
     state_paths = (
-        iter_production_runs_artifacts(allowed_root, STATE_FILE_NAME)
+        iter_production_runs_artifacts(allowed_root, RUN_STATE_FILE)
         if known_dirs is None
-        else (directory / STATE_FILE_NAME for directory in known_dirs)
+        else (directory / RUN_STATE_FILE for directory in known_dirs)
     )
     for state_path in state_paths:
         if should_exclude_from_production_runs_scan(state_path, allowed_root):

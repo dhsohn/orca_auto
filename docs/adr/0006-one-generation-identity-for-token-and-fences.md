@@ -1,6 +1,6 @@
 # ADR 0006: One generation identity for the persisted token and every queue-row fence
 
-- Status: Accepted
+- Status: Partly superseded by ADR 0010
 - Date: 2026-09-27
 
 ## Problem

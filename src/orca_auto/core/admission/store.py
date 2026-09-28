@@ -54,7 +54,8 @@ class AdmissionLimitReachedError(RuntimeError):
 AdmissionStoreCorruptError = _admission_persistence.AdmissionStoreCorruptError
 
 
-def _normalize_work_dir(value: str | Path | None) -> str:
+def _normalize_work_dir_lenient(value: str | Path | None) -> str:
+    """Resolve a work_dir, keeping its stripped text when it cannot be resolved."""
     if value is None:
         return ""
     text = str(value).strip()
@@ -296,7 +297,7 @@ def live_queue_slot_keys_for_slots(
         queue_id = str(slot.queue_id).strip()
         if not queue_id:
             continue
-        work_dir = _normalized_work_dir(slot.work_dir)
+        work_dir = _normalize_work_dir_strict(slot.work_dir)
         if work_dir:
             scoped_keys.add((queue_id, work_dir))
         else:
@@ -304,8 +305,8 @@ def live_queue_slot_keys_for_slots(
     return scoped_keys, unscoped_ids
 
 
-def _normalized_work_dir(value: str) -> str:
-    # Unlike _normalize_work_dir, an unresolvable path raises OSError instead of keeping its text.
+def _normalize_work_dir_strict(value: str) -> str:
+    """Resolve a work_dir; an unresolvable path raises OSError instead of keeping its text."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -354,7 +355,7 @@ def reserve_slot(
                 app_name=app_name.strip(),
                 task_id=task_id.strip(),
                 state=state.strip() or SLOT_STATE_ACTIVE,
-                work_dir=_normalize_work_dir(work_dir),
+                work_dir=_normalize_work_dir_lenient(work_dir),
                 queue_id=queue_id.strip(),
                 engine_process_state=inactive_engine_process_state,
                 engine_launch_gated=engine_launch_gated,
@@ -393,7 +394,7 @@ def activate_reserved_slot(
         updated = replace(
             slot,
             state=state.strip() or slot.state or SLOT_STATE_ACTIVE,
-            work_dir=slot.work_dir if work_dir is None else _normalize_work_dir(work_dir),
+            work_dir=slot.work_dir if work_dir is None else _normalize_work_dir_lenient(work_dir),
             queue_id=slot.queue_id if queue_id is None else queue_id.strip(),
             owner_pid=resolved_owner_pid,
             process_start_ticks=owner_start_ticks,
@@ -709,7 +710,7 @@ def update_slot_metadata(
             queue_id=slot.queue_id if queue_id is None else queue_id.strip(),
             app_name=slot.app_name if app_name is None else app_name.strip(),
             task_id=slot.task_id if task_id is None else task_id.strip(),
-            work_dir=slot.work_dir if work_dir is None else _normalize_work_dir(work_dir),
+            work_dir=slot.work_dir if work_dir is None else _normalize_work_dir_lenient(work_dir),
             owner_pid=resolved_owner_pid,
             process_start_ticks=owner_start_ticks,
             owner_boot_id=owner_boot_id,

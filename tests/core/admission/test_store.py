@@ -50,8 +50,8 @@ def _read_slots_file(root: Path) -> list[dict[str, object]]:
 def test_normalize_work_dir_handles_none_blank_and_resolve_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert store._normalize_work_dir(None) == ""
-    assert store._normalize_work_dir("   ") == ""
+    assert store._normalize_work_dir_lenient(None) == ""
+    assert store._normalize_work_dir_lenient("   ") == ""
 
     class ExplodingPath:
         def __init__(self, value: str) -> None:
@@ -65,7 +65,7 @@ def test_normalize_work_dir_handles_none_blank_and_resolve_failure(
 
     monkeypatch.setattr(store, "Path", ExplodingPath)
 
-    assert store._normalize_work_dir(" relative/run ") == "relative/run"
+    assert store._normalize_work_dir_lenient(" relative/run ") == "relative/run"
 
 
 def test_slot_owner_alive_handles_dead_pid_and_unreadable_current_ticks(
@@ -236,8 +236,8 @@ def test_normalize_work_dir_handles_none_and_oserror_fallback(
 
     monkeypatch.setattr(store.Path, "resolve", fake_resolve)
 
-    assert store._normalize_work_dir(None) == ""
-    assert store._normalize_work_dir("relative/path") == "relative/path"
+    assert store._normalize_work_dir_lenient(None) == ""
+    assert store._normalize_work_dir_lenient("relative/path") == "relative/path"
 
 
 def test_slot_owner_alive_handles_non_positive_pid(

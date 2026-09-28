@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from orca_auto.core.artifacts import RUN_STATE_FILE
 from orca_auto.core.indexing import JobLocationRecord, merge_job_locations
 from orca_auto.core.paths import (
     iter_production_runs_artifacts,
@@ -23,7 +24,7 @@ from orca_auto.core.utils import normalize_text
 from orca_auto.core.utils.persistence import load_json_mapping_file
 
 from ..machine_observation import report_json_path
-from ..state_reading import STATE_FILE_NAME, state_from_normalized_payload
+from ..state_reading import state_from_normalized_payload
 from ._artifacts_to_records import first_artifact_text, record_from_artifacts
 from ._records import build_job_location_record
 
@@ -94,7 +95,7 @@ def _iter_state_dirs(root: Path) -> list[Path]:
     # Sorted so the walk, and the path-order tie break of ``_rank_discovery``,
     # are the same on every rebuild.
     directories: list[Path] = []
-    for state_path in sorted(iter_production_runs_artifacts(root, STATE_FILE_NAME)):
+    for state_path in sorted(iter_production_runs_artifacts(root, RUN_STATE_FILE)):
         if should_exclude_from_production_runs_scan(state_path, root):
             continue
         directories.append(state_path.parent)
@@ -121,7 +122,7 @@ class _DiscoveredState:
 
 def _discover_state(job_dir: Path) -> _DiscoveredState | None:
     """Read ``job_dir``'s artifacts; ``None`` when there is no usable ORCA state."""
-    state_file = job_dir / STATE_FILE_NAME
+    state_file = job_dir / RUN_STATE_FILE
     state = load_json_mapping_file(state_file)
     if state is None or state_from_normalized_payload(state) is None:
         return None

@@ -80,7 +80,7 @@ graph TD
 
 | 동작 | 프로세스 | 호출 경로 | 디스크 결과 |
 | :--- | :--- | :--- | :--- |
-| 제출 | CLI | `cli_run_dir.cmd_run_dir` → `commands/run_inp.cmd_run_inp` → `submission.create_queued_submission`(`execution_binding.build_orca_execution_snapshot`) → `enqueue_publication.run_enqueue_publication`(`adapter.enqueue`) → `job_records.upsert_row_job_record` → `snapshot_intent.mark_snapshot_intent_owned` | 바인딩된 입력과 소유자 xattr가 있는 generation 디렉터리, 발행 임대가 붙은 `queue.json` 행, 대기 상태의 `job_locations.json` 기록. 행이 확정되면 스냅숏 의도는 폐기됨. 발행이 실패하면 행을 복구 대기로 두고 워커가 복구 |
+| 제출 | CLI | `cli_run_dir.cmd_run_dir` → `commands/run_inp.cmd_run_inp` → `submission.submit_reaction_dir_to_queue` → `submission.create_queued_submission`(`execution_binding.build_orca_execution_snapshot`) → `enqueue_publication.run_enqueue_publication`(`adapter.enqueue`) → `job_records.upsert_row_job_record` → `snapshot_intent.mark_snapshot_intent_owned` | 바인딩된 입력과 소유자 xattr가 있는 generation 디렉터리, 발행 임대가 붙은 `queue.json` 행, 대기 상태의 `job_locations.json` 기록. 행이 확정되면 스냅숏 의도는 폐기됨. 발행이 실패하면 행을 복구 대기로 두고 워커가 복구 |
 | 실행권 할당 | 부모 | `QueueWorkerLoop._fill_slots` → `OrcaQueueWorker._admit_next`(`repair_queue_publications`, `notify_queued_jobs`, `admission_has_capacity`, `roots.peek_next_entry`, `_try_reserve_admission_slot`, `roots.dequeue_next_entry`) → `_start_reserved`(`retire_snapshot_intent_for_row`) → `_start_job`(`_start_background_process`) → `_on_worker_process_started`(`update_slot_metadata`, `upsert_row_job_record`) | 슬롯이 `reserved`에서 자식 pid를 가진 `active`로, 행은 RUNNING, 의도 폐기, 실행 중 위치 기록. 인수를 놓치면 슬롯 해제 |
 | 계산 | 자식 | `commands/worker_child.main` → `worker_execution.run_worker_child_job`(`maybe_rebind_recovery_generation`, `await_parent_admission_handoff`) → `process_dequeued_entry` → `execution.execute_orca_run` → `execute_locked_run`(`run.lock`, `recover_crashed_state`, `_child_admission_slot`) → `attempt/run.run_attempt`(`OrcaRunner.run`, `out_analyzer.analyze_output`) → `attempt/reporting.exit_with_result`(`write_report_files`) | 루트와 generation의 `job_state.json`, ORCA 출력, 보고서. 슬롯 활성화와 완료. scratch 용량이 부족하면 행을 `pending`으로 되돌리고, 중지되면 다시 대기시키거나 취소가 요청된 경우 재처리 표식과 함께 취소로 표시 |
 | 종료 정리 | 부모 | `QueueWorkerLoop._check_completed_jobs` → `OrcaQueueWorker._finalize_completed_job`(`recover_slot_engine_process`, `settlement.mark_terminal_row`) → `_hand_off_terminal_row`(`settlement.work_item_for_row`) → `_settle_live`(`settlement.is_superseded`) → `settlement.prepare`(`terminal_state.record_failed_run_state`, `record_cancelled_run_state`) → `settlement.bind_row` → `_release_terminal_job`(`release_slot`) → `settlement.finish`(`_publish`, `retire_marker`) | 표식이 붙은 종료 행, 빠진 실패·취소 `job_state.json`과 보고서, 슬롯 삭제, 종료 위치 기록, 알림 전송권, 표식 제거. 한 단계가 실패하면 작업이나 재처리 항목을 남겨 재시도 |
@@ -160,7 +160,7 @@ graph TD
 
 ### 3. 실행 감독 및 복구
 - 워커는 자식 프로세스의 상태를 추적하며, 외부 시그널(SIGTERM) 수신 시 프로세스를 정리하고 정상 종료합니다.
-- 작업이 비정상 종료되어도 큐와 실행 상태 파일에 명확한 원인이 영속적으로 기록됩니다.
+- 워커 종료나 워커 유실로 중단된 실행은 큐 행이 `pending`으로 돌아가고, 다음 인수는 완료 출력으로 마무리되지 않는 한 실행 전에 새 generation으로 재바인딩됩니다([ADR 0009](adr/0009-resume-only-by-rebind.md)). 실패한 실행은 큐 항목과 generation 상태 모두에 구체적인 실패 원인을 남깁니다.
 
 ### 4. 상태 확정 및 결과 저장
 - ORCA 계산이 끝나면 `orca/out_analyzer.py`가 출력 파일을 한 번 줄 단위로 읽으며 정상 종료 배너 및 오류/미수렴 마커를 분석하고, TS route이면 같은 읽기에서 마지막 진동수 구간의 허수 모드를 셉니다. (입력 echo나 주석에 포함된 오류 문구는 제외)

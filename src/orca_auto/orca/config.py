@@ -235,11 +235,10 @@ def load_config(config_path: str) -> AppConfig:
     )
     cfg = worker_config(path, shared, orca_sections)
     logger.info(
-        "Config loaded: allowed_root=%s, admission_root=%s, orca_executable=%s, max_concurrent=%d, admission_limit=%d",
+        "Config loaded: allowed_root=%s, admission_root=%s, orca_executable=%s, max_concurrent=%d",
         cfg.runtime.allowed_root,
         admission_dir(cfg.runtime.allowed_root),
         cfg.paths.orca_executable,
-        cfg.runtime.max_concurrent,
         cfg.runtime.max_concurrent,
     )
     return cfg

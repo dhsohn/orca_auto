@@ -13,7 +13,7 @@ import stat
 from pathlib import Path
 from typing import Literal, NamedTuple
 
-from orca_auto.core.artifacts import STATE_MUTATION_LOCK_FILE_NAME
+from orca_auto.core.artifacts import RUN_STATE_FILE, STATE_MUTATION_LOCK_FILE_NAME
 from orca_auto.core.paths import should_exclude_from_production_runs_scan
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue.persistence import load_entries
@@ -40,13 +40,9 @@ from .run_snapshot import (
     load_pinned_state,
     state_publication_identity,
 )
-from .state_reading import STATE_FILE_NAME
 from .statuses import ACTIVE_RUN_STATUS_VALUES, TERMINAL_RUN_STATUS_VALUES
 
 logger = logging.getLogger(__name__)
-
-_TERMINAL_RUN_STATUSES = TERMINAL_RUN_STATUS_VALUES
-_STALE_ACTIVE_RUN_STATUSES = ACTIVE_RUN_STATUS_VALUES
 
 
 def _resolved_path_text(path_text: str) -> str:
@@ -133,9 +129,9 @@ def _should_clear_snapshot(
     reaction_dir = _resolved_path_text(str(snapshot.reaction_dir))
     if reaction_dir in active_queue_reaction_dirs or reaction_dir in pending_replay_reaction_dirs:
         return False
-    if status in _TERMINAL_RUN_STATUSES:
+    if status in TERMINAL_RUN_STATUS_VALUES:
         return True
-    if status not in _STALE_ACTIVE_RUN_STATUSES:
+    if status not in ACTIVE_RUN_STATUS_VALUES:
         return False
     if reaction_dir not in terminal_queue_reaction_dirs:
         return False
@@ -230,7 +226,7 @@ def clear_terminal_run_states(allowed_root: Path) -> int:
         ):
             continue
 
-        state_path = snapshot.reaction_dir / STATE_FILE_NAME
+        state_path = snapshot.reaction_dir / RUN_STATE_FILE
         state_key = _resolved_path_text(str(state_path))
         if state_key in cleared_state_paths:
             continue
@@ -267,7 +263,7 @@ def clear_terminal_run_states(allowed_root: Path) -> int:
                         continue
                     if not _snapshot_state_is_current(snapshot, directory_fd):
                         continue
-                    os.unlink(STATE_FILE_NAME, dir_fd=directory_fd)
+                    os.unlink(RUN_STATE_FILE, dir_fd=directory_fd)
                     run_count += 1
         except FileNotFoundError:
             continue

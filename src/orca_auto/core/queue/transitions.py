@@ -45,8 +45,6 @@ from .publication import (
 from .store import mutate_entries, mutate_entry_by_id
 from .types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 
-_TERMINAL_STATUSES = TERMINAL_QUEUE_STATUSES
-
 _MetadataUpdateFn = Callable[[QueueEntry], Mapping[str, Any] | None]
 _AcceptEntryFn = Callable[[QueueEntry], bool]
 
@@ -94,7 +92,7 @@ def terminal_entry(
     * ``metadata`` ``None`` keeps the row's metadata; a mapping replaces it.
     """
     target = QueueStatus(status)
-    if target not in _TERMINAL_STATUSES:
+    if target not in TERMINAL_QUEUE_STATUSES:
         raise ValueError(f"terminal_entry requires a terminal status, got {target.value!r}")
     if cancel_requested is None:
         cancel_requested = False if target == QueueStatus.CANCELLED else entry.cancel_requested
@@ -319,7 +317,7 @@ def _mark_status(
             # failed writer must not overwrite it; its owner can retry and take
             # the cancelled branch against the durable flag.
             return None, None
-        if entry.status in _TERMINAL_STATUSES:
+        if entry.status in TERMINAL_QUEUE_STATUSES:
             # Idempotent replays of the authoritative terminal status must
             # still repair artifacts/indexes under the same generation lock.
             # A conflicting terminal writer is rejected and can reconcile to
@@ -372,13 +370,13 @@ def correct_terminal_status(
     the same queue lock.
     """
     target = QueueStatus(status)
-    if target not in _TERMINAL_STATUSES:
+    if target not in TERMINAL_QUEUE_STATUSES:
         raise ValueError(
             f"correct_terminal_status requires a terminal status, got {target.value!r}"
         )
 
     def update(entry: QueueEntry) -> tuple[QueueEntry | None, QueueEntry | None]:
-        if entry.status not in _TERMINAL_STATUSES:
+        if entry.status not in TERMINAL_QUEUE_STATUSES:
             return None, None
         if accept_entry_fn is not None and not accept_entry_fn(entry):
             return None, None

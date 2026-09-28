@@ -35,7 +35,7 @@ from orca_auto.orca.app_ids import ORCA_ENGINE
 assert ORCA_ENGINE == "orca"
 allowed = {'orca_auto.orca', 'orca_auto.orca.app_ids'}
 assert not any(
-    name.startswith(('orca_auto.flow', 'orca_auto.orca')) and name not in allowed
+    name.startswith('orca_auto.orca') and name not in allowed
     for name in sys.modules
 )
 """

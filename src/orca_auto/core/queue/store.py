@@ -31,8 +31,6 @@ from .persistence import (
 from .publication import queue_entry_is_claimable, queue_record_publication_lock_path
 from .types import ACTIVE_QUEUE_STATUSES, TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 
-_ACTIVE_STATUSES = ACTIVE_QUEUE_STATUSES
-_TERMINAL_STATUSES = TERMINAL_QUEUE_STATUSES
 _QueueEntryT = TypeVar("_QueueEntryT", bound=QueueEntry)
 _MutationResultT = TypeVar("_MutationResultT")
 
@@ -117,8 +115,8 @@ def reject_duplicate_entry_key(
     key: str,
     key_fn: Callable[[QueueEntry], str],
     force: bool = False,
-    active_statuses: Collection[QueueStatus | str] = _ACTIVE_STATUSES,
-    terminal_statuses: Collection[QueueStatus | str] = _TERMINAL_STATUSES,
+    active_statuses: Collection[QueueStatus | str] = ACTIVE_QUEUE_STATUSES,
+    terminal_statuses: Collection[QueueStatus | str] = TERMINAL_QUEUE_STATUSES,
     error_factory: DuplicateErrorFactory | None = None,
 ) -> None:
     """Reject duplicate active entries and, unless forced, terminal entries.
@@ -280,7 +278,7 @@ def clear_terminal(
         terminal_entries = [
             entry
             for entry in entries
-            if entry.status in _TERMINAL_STATUSES
+            if entry.status in TERMINAL_QUEUE_STATUSES
             and (select_entry_fn is None or select_entry_fn(entry))
         ]
         if not terminal_entries:
@@ -302,7 +300,7 @@ def clear_terminal(
         kept_entries = [
             entry
             for entry in entries
-            if entry.status not in _TERMINAL_STATUSES
+            if entry.status not in TERMINAL_QUEUE_STATUSES
             or (select_entry_fn is not None and not select_entry_fn(entry))
             or entry.queue_id in kept_terminal_ids
         ]

@@ -62,8 +62,10 @@ Before the maintenance window:
 In the idle window:
 
 3. Wait until `queue list --json` shows `active_simulations: 0` and
-   `<runs_root>/.admission/admission_slots.json` holds no reserved or active
-   slot; `service restart` checks again under the admission lock. A job still
+   `admission_slots.json` in the configured admission store
+   (`scheduler.admission_root` if still set, else `<runs_root>/.admission`)
+   holds no reserved or active slot; `service restart` checks again under the
+   admission lock. A job still
    running across the switch keeps its 8.x `queue_generation`: `queue list`
    shows it without its run ID and `queue cancel <run ID>` cannot find it
    until it finishes. Upgrading directly from 7.0.x also needs the empty slot
