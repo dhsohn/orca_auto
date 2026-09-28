@@ -1,4 +1,4 @@
-"""Activity catalog models: requests, the ``ActivityRecord`` row and one page of it."""
+"""Activity catalog models: the list request, the ``ActivityRecord`` row and one page of it."""
 
 from __future__ import annotations
 
@@ -15,29 +15,11 @@ ACTIVE_SIMULATION_STATUSES = frozenset({STATUS_RUNNING, STATUS_RETRYING, STATUS_
 
 
 @dataclass(frozen=True)
-class ActivitySourceRequest:
-    orca_config: str | None = None
-    shared_config: str | None = None
-
-
-@dataclass(frozen=True)
 class ActivityListRequest:
-    sources: ActivitySourceRequest
     refresh: bool = False
     limit: int = 0
     indexed: bool = False
     statuses: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class ActivityCancelRequest:
-    target: str
-    sources: ActivitySourceRequest
-
-
-@dataclass(frozen=True)
-class ResolvedActivitySources:
-    orca_config: str | None
 
 
 @dataclass(frozen=True)

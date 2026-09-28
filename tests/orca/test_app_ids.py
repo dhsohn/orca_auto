@@ -10,7 +10,6 @@ from typing import Any
 import pytest
 
 from orca_auto import cli
-from orca_auto.activity import _cancel as activity_cancel
 from orca_auto.core.admission import admission_dir
 from orca_auto.orca import app_ids
 
@@ -126,4 +125,3 @@ def test_queue_list_and_worker_have_no_engine_selection_options() -> None:
     assert "--kind" not in list_parser._option_string_actions
     assert "--status" in list_parser._option_string_actions
     assert "--app" not in worker_parser._option_string_actions
-    assert callable(activity_cancel.cancel_orca_target)

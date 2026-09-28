@@ -110,12 +110,12 @@ _TARGETS: tuple[tuple[str, str, Callable[..., dict[str, Any]], bool], ...] = (
     ("orca_auto.orca.report.publication", "atomic_write_confined_bytes", _confined_event, False),
     ("orca_auto.orca.report.si", "atomic_write_confined_bytes", _confined_event, False),
     (
-        "orca_auto.core.queue.engine.snapshot_intent",
+        "orca_auto.core.queue.snapshot_intent",
         "atomic_write_json",
         _intent_write_event,
         False,
     ),
-    ("orca_auto.core.queue.engine.snapshot_intent", "_unlink_intent", _intent_unlink_event, True),
+    ("orca_auto.core.queue.snapshot_intent", "_unlink_intent", _intent_unlink_event, True),
     ("orca_auto.orca.notifications", "dispatch_notification", _notify_event, True),
 )
 

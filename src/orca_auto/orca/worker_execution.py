@@ -29,17 +29,16 @@ from orca_auto.core.engine_scratch import (
     attach_scratch_provenance_mapping_to_exception,
     scratch_provenance_from_exception,
 )
-from orca_auto.core.queue.child.execution import ChildWorkerShutdownController
-from orca_auto.core.queue.child.process import entry_status_is_running
-from orca_auto.core.queue.engine.child import await_parent_admission_handoff
+from orca_auto.core.queue.child import ChildWorkerShutdownController, await_parent_admission_handoff
+from orca_auto.core.queue.processes import install_shutdown_signal_handlers
 from orca_auto.core.queue.store import QueueLockTimeoutError
-from orca_auto.core.queue.types import QueueEntry
-from orca_auto.core.queue.worker import install_shutdown_signal_handlers
+from orca_auto.core.queue.types import QueueEntry, entry_status_is_running
 
 from .config import AppConfig, load_config
 from .execution import execute_orca_run
 from .execution_binding import (
     orca_execution_provenance,
+    validated_resource_request,
     verify_orca_execution_snapshot,
 )
 from .orca_runner import OrcaRunner, RunResult, WorkerShutdownInterrupt
@@ -154,16 +153,9 @@ def _build_execution_context(
         raise ValueError(
             "Queued ORCA entry predates immutable execution snapshots; drain or resubmit it"
         )
-    resource_request = metadata.get("resource_request")
-    if (
-        not isinstance(resource_request, dict)
-        or set(resource_request) != {"max_cores", "max_memory_gb"}
-        or any(
-            isinstance(value, bool) or not isinstance(value, int) or value <= 0
-            for value in resource_request.values()
-        )
-    ):
-        raise ValueError("Queued ORCA entry has no resource request")
+    resource_request = validated_resource_request(
+        metadata.get("resource_request"), error="Queued ORCA entry has no resource request"
+    )
     # A generation whose bound input already has a completed, analyzer-verified
     # output legitimately carries runtime files: allow them so the run can
     # settle the finished generation in place instead of dying on the pristine

@@ -10,14 +10,15 @@ from typing import Any
 import pytest
 
 from orca_auto.core.config import CommonResourceConfig
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_STATE_CREATING,
     SNAPSHOT_INTENT_STATE_ENQUEUEING,
     SNAPSHOT_INTENT_TOKEN_KEY,
     discard_snapshot_intent,
+    mark_snapshot_intent_owned,
     transition_snapshot_intent,
 )
-from orca_auto.core.queue.generation import is_visible_generation_name
 from orca_auto.core.queue.types import QueueStatus
 from orca_auto.orca import execution, worker_execution
 from orca_auto.orca import recovery_rebind as _rebind
@@ -28,7 +29,6 @@ from orca_auto.orca.execution_binding import (
     _reservation,
     _rewrite,
     _snapshot_identity,
-    build_orca_execution_snapshot,
     orca_execution_started_evidence,
     verify_orca_execution_snapshot,
 )
@@ -36,8 +36,13 @@ from orca_auto.orca.execution_binding import _verify as _verify_stage
 from orca_auto.orca.orca_runner import OrcaRunner
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.state_reading import load_state
-from orca_auto.orca.submission import mark_orca_snapshot_owned
-from tests.conftest import claim_next_entry, make_app_cfg, write_config_file, write_fake_orca
+from tests.conftest import (
+    build_submitted_snapshot,
+    claim_next_entry,
+    make_app_cfg,
+    write_config_file,
+    write_fake_orca,
+)
 
 _PRISTINE_XYZ = "2\nH2\nH 0 0 0\nH 0 0 0.74\n"
 _CRASHED_XYZ = "2\noptimizing\nH 0 0 0\nH 0 0 0.80\n"
@@ -86,7 +91,7 @@ def _build(
     executable: Path,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    return build_orca_execution_snapshot(
+    return build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -800,7 +805,12 @@ def _claimed_mutable_entry(tmp_path: Path) -> tuple[Path, Any, dict[str, Any], P
         target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
         expected_states={SNAPSHOT_INTENT_STATE_CREATING},
     )
-    assert mark_orca_snapshot_owned(queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY]) is None
+    assert (
+        mark_snapshot_intent_owned(
+            queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY], intent_label="queued ORCA snapshot"
+        )
+        is None
+    )
     metadata = {
         "reaction_dir": str(job_dir),
         "force": True,
@@ -1585,7 +1595,7 @@ def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growt
 ) -> None:
     import os
 
-    from orca_auto.core.queue.engine.snapshot_intent import (
+    from orca_auto.core.queue.snapshot_intent import (
         reconcile_orphaned_snapshot_generations,
     )
 
@@ -1617,7 +1627,7 @@ def test_rebind_prebind_crash_reuses_one_durable_target_without_generation_growt
         assert waited_pid == child_pid
         exit_code = os.waitstatus_to_exitcode(wait_status)
         assert exit_code == (73 if iteration == 0 else 74)
-        reconcile_orphaned_snapshot_generations([queue_root])
+        reconcile_orphaned_snapshot_generations(queue_root)
         visible_generations = sorted(
             child.name
             for child in reaction_dir.iterdir()
@@ -1643,7 +1653,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
 ) -> None:
     import os
 
-    from orca_auto.core.queue.engine.snapshot_intent import (
+    from orca_auto.core.queue.snapshot_intent import (
         reconcile_orphaned_snapshot_generations,
     )
 
@@ -1688,7 +1698,7 @@ def test_rebind_replay_after_process_exit_reuses_claim_after_orphan_reconcile(
         == 2
     )
 
-    assert reconcile_orphaned_snapshot_generations([queue_root]) == 1
+    assert reconcile_orphaned_snapshot_generations(queue_root) == 1
     assert not intent_dir.exists() or not any(intent_dir.glob("*.json"))
     assert [
         child
@@ -1783,7 +1793,12 @@ def test_rebind_keeps_a_completed_generation_for_adoption(
         target_state=SNAPSHOT_INTENT_STATE_ENQUEUEING,
         expected_states={SNAPSHOT_INTENT_STATE_CREATING},
     )
-    assert mark_orca_snapshot_owned(queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY]) is None
+    assert (
+        mark_snapshot_intent_owned(
+            queue_root, snapshot[SNAPSHOT_INTENT_TOKEN_KEY], intent_label="queued ORCA snapshot"
+        )
+        is None
+    )
     metadata = {
         "reaction_dir": str(job_dir),
         "force": True,
@@ -1860,7 +1875,7 @@ def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> N
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
     executable = write_fake_orca(tmp_path / "checkpoint-orca")
-    crashed = build_orca_execution_snapshot(
+    crashed = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1875,7 +1890,7 @@ def test_recovery_checkpoint_prefers_the_newest_attempt_gbw(tmp_path: Path) -> N
     os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
     os.utime(generation / "ts.resume.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
 
-    replacement = build_orca_execution_snapshot(
+    replacement = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1921,13 +1936,14 @@ def test_marker_finalize_is_quiet_when_worker_already_retired_the_intent(
     # The worker retires an intent as soon as a committed queue row references it.
     discard_snapshot_intent(queue_root, token)
 
-    with caplog.at_level(logging.INFO, logger="orca_auto.core.queue.engine.snapshot_intent"):
-        assert mark_orca_snapshot_owned(queue_root, token) is None
+    with caplog.at_level(logging.INFO, logger="orca_auto.core.queue.snapshot_intent"):
+        assert (
+            mark_snapshot_intent_owned(queue_root, token, intent_label="queued ORCA snapshot")
+            is None
+        )
 
     records = [
-        record
-        for record in caplog.records
-        if record.name == "orca_auto.core.queue.engine.snapshot_intent"
+        record for record in caplog.records if record.name == "orca_auto.core.queue.snapshot_intent"
     ]
     assert not [record for record in records if record.levelno >= logging.WARNING]
     assert any("already retired" in record.getMessage() for record in records)
@@ -1942,7 +1958,7 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
     executable = write_fake_orca(tmp_path / "checkpoint-edit-orca")
-    crashed = build_orca_execution_snapshot(
+    crashed = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -1954,7 +1970,7 @@ def test_checkpoint_verify_is_independent_of_later_source_edits(tmp_path: Path) 
     (generation / "ts.resume.gbw").write_bytes(b"resume-orbitals")
     base_ns = 1_700_000_000_000_000_000
     os.utime(generation / "ts.resume.gbw", ns=(base_ns, base_ns))
-    replacement = build_orca_execution_snapshot(
+    replacement = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -2007,7 +2023,7 @@ def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_o
     selected = job_dir / "ts.inp"
     selected.write_text("! HF STO-3G Opt\n* xyzfile 0 1 ts.xyz\n", encoding="utf-8")
     executable = write_fake_orca(tmp_path / "checkpoint-orca")
-    crashed = build_orca_execution_snapshot(
+    crashed = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",
@@ -2022,7 +2038,7 @@ def test_recovery_checkpoint_prefers_an_intact_older_attempt_over_a_torn_newer_o
     os.utime(generation / "ts.gbw", ns=(base_ns, base_ns))
     os.utime(generation / "ts.resume.gbw", ns=(base_ns + 5_000_000_000, base_ns + 5_000_000_000))
 
-    replacement = build_orca_execution_snapshot(
+    replacement = build_submitted_snapshot(
         job_dir,
         selected,
         selected_input_xyz="",

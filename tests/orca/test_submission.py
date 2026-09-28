@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import threading
 from dataclasses import replace
 from http.client import IncompleteRead
@@ -12,6 +13,7 @@ from typing import Any, Literal, Self
 import pytest
 
 import orca_auto.orca.submission as submission_mod
+from orca_auto.core.admission import AdmissionStore, admission_dir
 from orca_auto.core.config import DiscordConfig, MessengerConfig
 from orca_auto.core.messaging import discord_bot as discord_bot_mod
 from orca_auto.core.queue import store as queue_store
@@ -41,18 +43,18 @@ def test_submit_without_selectable_inp_fails_cleanly(
 ) -> None:
     # A reaction dir without any .inp used to leak the ValueError from
     # resource-request resolution as a CLI traceback.
-    context = SimpleNamespace(
+    target = SimpleNamespace(
         cfg=None,
         allowed_root=tmp_path,
         reaction_dir=tmp_path / "job",
-        selected_inp=None,
+        selected_inp=tmp_path / "job" / "job.inp",
     )
 
     def raise_value_error(*_args: Any, **_kwargs: Any) -> Any:
         raise ValueError("No .inp file selected for ORCA queue submission.")
 
     monkeypatch.setattr(
-        submission_mod, "resolve_submission_context", lambda *_args, **_kwargs: context
+        submission_mod, "resolve_submission_target", lambda *_args, **_kwargs: target
     )
     monkeypatch.setattr(submission_mod, "find_submission_conflict", lambda *_args: None)
     monkeypatch.setattr(submission_mod, "create_queued_submission", raise_value_error)
@@ -93,7 +95,7 @@ def _real_submission(
     monkeypatch.setattr(run_inp, "read_worker_pid_file", lambda _root: None)
     args = SimpleNamespace(
         config=str(config),
-        reaction_dir=str(reaction_dir),
+        path=str(reaction_dir),
         force=False,
         priority=7,
     )
@@ -104,6 +106,7 @@ def test_queue_metadata_assembles_supplied_values_without_creating_files(tmp_pat
     snapshot = {"selected_inp": str(tmp_path / "generation" / "sample.inp")}
     requested = {"max_cores": 2, "max_memory_gb": 4}
     metadata = run_inp.build_queue_metadata(
+        reaction_dir=tmp_path,
         artifacts=OrcaSelectedInputArtifacts(
             selected_inp=str(tmp_path / "sample.inp"),
             selected_input_xyz=str(tmp_path / "start.xyz"),
@@ -125,6 +128,7 @@ def test_queue_metadata_assembles_supplied_values_without_creating_files(tmp_pat
         "selected_input_path": str(tmp_path / "start.xyz"),
         "selected_input_xyz": str(tmp_path / "start.xyz"),
         "execution_snapshot": snapshot,
+        "reaction_dir": str(tmp_path.resolve()),
     }
     assert list(tmp_path.iterdir()) == []
     metadata["resource_actual"]["max_cores"] = 99
@@ -154,7 +158,7 @@ def test_submission_cleans_created_snapshot_on_pre_enqueue_failure(
 
     monkeypatch.setattr(run_inp, "build_orca_execution_snapshot", build)
     monkeypatch.setattr(
-        run_inp, "run_enqueue_publication", lambda *_args: pytest.fail("must not enqueue")
+        run_inp, "run_enqueue_publication", lambda *_a, **_k: pytest.fail("must not enqueue")
     )
     if failure_stage == "metadata":
         monkeypatch.setattr(run_inp, "build_queue_metadata", fail)
@@ -170,18 +174,24 @@ def test_submission_cleans_created_snapshot_on_pre_enqueue_failure(
 
         monkeypatch.setattr(run_inp, "timestamped_token", token)
     with pytest.raises(failure_type, match="injected pre-enqueue failure"):
-        run_inp.create_queued_submission(run_inp.load_config(args.config), args, reaction_dir)
+        run_inp.create_queued_submission(
+            run_inp.load_config(args.config),
+            args,
+            reaction_dir,
+            selected_inp=reaction_dir / "rxn.inp",
+        )
     assert len(snapshots) == 1
     assert not Path(snapshots[0]["execution_dir"]).exists()
     assert not list((tmp_path / ".orca_auto_snapshot_intents").glob("*.json"))
     assert (reaction_dir / "rxn.inp").read_bytes() == source
 
 
-@pytest.mark.parametrize("snapshot", [None, {}])
+@pytest.mark.parametrize(("snapshot", "error"), [(None, "TypeError: "), ({}, "KeyError: ")])
 def test_internal_snapshot_failure_is_not_invalid_user_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     snapshot: dict[str, Any] | None,
+    error: str,
 ) -> None:
     reaction_dir, args = _real_submission(tmp_path, monkeypatch)
     source_input = (reaction_dir / "rxn.inp").read_bytes()
@@ -199,7 +209,7 @@ def test_internal_snapshot_failure_is_not_invalid_user_input(
 
     assert result.status == "failed"
     assert result.reason == "queue_submission_failed"
-    assert "RuntimeError: ORCA submission" in result.stderr
+    assert result.stderr.startswith(error)
     assert len(cleanup_calls) == 1
     assert queue_adapter.list_queue(tmp_path) == []
     assert not (tmp_path / "queue.json").exists()
@@ -229,7 +239,7 @@ def test_enqueue_save_after_commit_recovers_exact_row_and_submits(
     assert result.queued_result is not None
     # The recovered row is parked for the worker repair pass instead of being
     # published inline after an unknown enqueue failure.
-    assert "parked for worker repair" in result.queued_result.worker_info.detail
+    assert "parked for worker repair" in (result.queued_result.worker_info.detail or "")
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
 
@@ -437,7 +447,7 @@ def test_complete_transition_after_commit_returns_submitted_with_truthful_warnin
     # the row is durably COMPLETE (the token-gated park refused to touch it)
     # and the submitter defers honestly to the worker repair pass, which will
     # short-circuit on the durable COMPLETE.
-    assert "worker repair will publish" in result.queued_result.worker_info.detail
+    assert "worker repair will publish" in (result.queued_result.worker_info.detail or "")
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_COMPLETE
 
@@ -582,7 +592,7 @@ def test_orca_compensation_failure_fences_row_without_publication(
 
     monkeypatch.setattr(queue_store, "save_entries", fail_compensation_before_replace)
     monkeypatch.setattr(enqueue_publication, "_recover_committed_enqueue", reject_normal_recovery)
-    monkeypatch.setattr(submission_mod, "upsert_row_job_record", reject_publication)
+    monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", reject_publication)
 
     with use_run_dir_publication_guard(reject_after_commit):
         result = run_inp.submit_reaction_dir_to_queue(args)
@@ -670,7 +680,7 @@ def test_duplicate_error_after_commit_is_recovered_as_same_submission(
 
     assert result.status == "submitted"
     assert result.queued_result is not None
-    assert "DuplicateEntryError" in result.queued_result.worker_info.detail
+    assert "DuplicateEntryError" in (result.queued_result.worker_info.detail or "")
     [entry] = queue_adapter.list_queue(tmp_path)
     assert entry.metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
 
@@ -688,7 +698,7 @@ def test_cancellation_waits_for_publication_boundary(
     publication_started = threading.Event()
     allow_publication = threading.Event()
     cancel_finished = threading.Event()
-    original_upsert = submission_mod.upsert_row_job_record
+    original_upsert = enqueue_publication.upsert_row_job_record
     submission_result: list[Any] = []
     cancellation_result: list[Any] = []
 
@@ -697,7 +707,7 @@ def test_cancellation_waits_for_publication_boundary(
         assert allow_publication.wait(timeout=5)
         original_upsert(*upsert_args, **upsert_kwargs)
 
-    monkeypatch.setattr(submission_mod, "upsert_row_job_record", blocking_upsert)
+    monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", blocking_upsert)
 
     submit_thread = threading.Thread(
         target=lambda: submission_result.append(run_inp.submit_reaction_dir_to_queue(args))
@@ -729,11 +739,11 @@ def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
 ) -> None:
     from orca_auto.orca.queue.orphans import DeadRunningRowUnjudgeableError
 
-    context = SimpleNamespace(
+    target = SimpleNamespace(
         cfg=None,
         allowed_root=tmp_path,
         reaction_dir=tmp_path / "job",
-        selected_inp=None,
+        selected_inp=tmp_path / "job" / "job.inp",
     )
     message = (
         f"{tmp_path / 'job'} has a RUNNING queue row left by a dead worker, and whether a "
@@ -746,7 +756,7 @@ def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
         raise DeadRunningRowUnjudgeableError(message)
 
     monkeypatch.setattr(
-        submission_mod, "resolve_submission_context", lambda *_args, **_kwargs: context
+        submission_mod, "resolve_submission_target", lambda *_args, **_kwargs: target
     )
     monkeypatch.setattr(submission_mod, "find_submission_conflict", lambda *_args: None)
     monkeypatch.setattr(submission_mod, "create_queued_submission", raise_unjudgeable)
@@ -756,3 +766,76 @@ def test_submit_reports_an_unjudgeable_dead_running_row_as_a_conflict(
     assert result.status == "failed"
     assert result.reason == "submission_conflict"
     assert result.stderr == message
+
+
+def test_unjudgeable_dead_running_row_during_submit_leaves_no_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The directory's RUNNING row appears after the conflict check; its dead
+    # worker's slot protection cannot be read, so the enqueue fails closed.
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    queue_adapter.enqueue(tmp_path, str(reaction_dir), task_id="task-dead-worker")
+    running = claim_next_entry(tmp_path)
+    assert running is not None and running.status == QueueStatus.RUNNING
+    admission_file = AdmissionStore.for_root(admission_dir(tmp_path)).path
+    admission_file.parent.mkdir(parents=True, exist_ok=True)
+    admission_file.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(run_inp, "find_submission_conflict", lambda *_args: None)
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "failed"
+    assert result.reason == "submission_conflict"
+    assert str(admission_file) in result.stderr
+    assert not [path for path in reaction_dir.iterdir() if is_visible_generation_name(path.name)]
+    assert not list((tmp_path / ".orca_auto_snapshot_intents").glob("*.json"))
+    assert queue_adapter.list_queue(tmp_path) == [running]
+
+
+def test_an_input_edited_during_submission_yields_one_consistent_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The selected input is read once. Saves that land after that read, where
+    # earlier versions read the file again, reach neither the queue metadata
+    # nor the snapshot digests nor the bound copy.
+    reaction_dir, args = _real_submission(tmp_path, monkeypatch)
+    selected = reaction_dir / "rxn.inp"
+    original = b"! Opt\n%pal nprocs 2 end\n%maxcore 1000\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n"
+    selected.write_bytes(original)
+    edits = iter(
+        [
+            b"! SP\n%pal nprocs 1 end\n%maxcore 500\n* xyz 0 1\nO 0 0 0\nH 0 0 0.96\n*\n",
+            b"! Freq\n%pal nprocs 1 end\n%maxcore 500\n* xyz 0 1\nC 0 0 0\nO 0 0 1.13\n*\n",
+        ]
+    )
+    real_read = run_inp.read_stable_regular_file
+    real_build = run_inp.build_orca_execution_snapshot
+
+    def read_then_edit(path: Path, **kwargs: Any) -> bytes:
+        payload = real_read(path, **kwargs)
+        selected.write_bytes(next(edits))
+        return payload
+
+    def edit_then_build(*build_args: Any, **build_kwargs: Any) -> dict[str, Any]:
+        selected.write_bytes(next(edits))
+        return real_build(*build_args, **build_kwargs)
+
+    monkeypatch.setattr(run_inp, "read_stable_regular_file", read_then_edit)
+    monkeypatch.setattr(run_inp, "build_orca_execution_snapshot", edit_then_build)
+
+    result = run_inp.submit_reaction_dir_to_queue(args)
+
+    assert result.status == "submitted", result.stderr
+    assert next(edits, None) is None
+    [entry] = queue_adapter.list_queue(tmp_path)
+    metadata = entry.metadata
+    snapshot = metadata["execution_snapshot"]
+    assert (metadata["job_type"], metadata["molecule_key"]) == ("opt", "H2")
+    assert metadata["resource_request"] == {"max_cores": 2, "max_memory_gb": 2}
+    assert snapshot["resource_request"] == metadata["resource_request"]
+    assert snapshot["source_inputs"]["selected_source"]["sha256"] == (
+        hashlib.sha256(original).hexdigest()
+    )
+    assert snapshot["source_inputs"]["selected_source"]["size_bytes"] == len(original)
+    assert Path(metadata["selected_inp"]).read_bytes() == original
+    assert b"Freq" in selected.read_bytes()

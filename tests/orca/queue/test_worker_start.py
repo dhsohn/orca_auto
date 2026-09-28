@@ -372,11 +372,11 @@ def _plain_entry(queue_id: str) -> QueueEntry:
 def test_start_reserved_finalizes_snapshot_intent_before_start(
     worker: OrcaQueueWorker, queue_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    reconciled: list[tuple[Path, ...]] = []
+    reconciled: list[Path] = []
     events: list[str] = []
 
-    def reconcile_snapshots(roots: tuple[Path, ...]) -> int:
-        reconciled.append(roots)
+    def reconcile_snapshots(root: Path) -> int:
+        reconciled.append(root)
         return 0
 
     def start_job(*_args: Any, **_kwargs: Any) -> bool:
@@ -387,7 +387,7 @@ def test_start_reserved_finalizes_snapshot_intent_before_start(
         queue_worker_mod, "reconcile_orphaned_snapshot_generations", reconcile_snapshots
     )
     monkeypatch.setattr(
-        queue_worker_mod, "finalize_queued_snapshot_intent", lambda *_args: events.append("intent")
+        queue_worker_mod, "retire_snapshot_intent_for_row", lambda *_args: events.append("intent")
     )
     monkeypatch.setattr(worker, "_start_job", start_job)
 
@@ -397,7 +397,7 @@ def test_start_reserved_finalizes_snapshot_intent_before_start(
     # then at most once per interval.
     worker._reconcile_worker_state()
     worker._reconcile_worker_state()
-    assert reconciled == [(queue_root,)]
+    assert reconciled == [queue_root]
 
 
 def test_idle_state_reconciliation_is_throttled(

@@ -19,6 +19,7 @@ from ..completion_rules import (
 from ..input_blocks import find_geometry_block, iter_blocks
 from ..input_syntax import orca_route_line, orca_route_tokens
 from ..job_type import FREQ_RE
+from ._models import _RouteOutputs
 
 _NEB_ROUTE_RE = re.compile(r"\b(?:ZOOM-)?NEB(?:-(?:TS|CI))?\b", re.IGNORECASE)
 # ORCA 6.1 %neb spellings of the end-point preoptimization switch (default off)
@@ -66,16 +67,6 @@ def _inline_geometry_atom_count(selected_text: str) -> int | None:
     return atom_count
 
 
-def _route_requests_hessian(lines: list[str]) -> bool:
-    route_text = " ".join(route for line in lines if (route := orca_route_line(line)) is not None)
-    return bool(FREQ_RE.search(route_text))
-
-
-def _route_requests_neb(lines: list[str]) -> bool:
-    route_text = " ".join(route for line in lines if (route := orca_route_line(line)) is not None)
-    return bool(_NEB_ROUTE_RE.search(route_text))
-
-
 def _neb_preoptimizes_end_points(lines: list[str]) -> bool:
     """Whether ``%neb`` enables end-point preoptimization; an unreadable value counts as on."""
 
@@ -119,11 +110,20 @@ def _route_writes_engrad(lines: list[str]) -> bool:
     return False
 
 
-def _route_writes_same_stem_xyz(lines: list[str]) -> bool:
+def _route_outputs(lines: list[str]) -> _RouteOutputs:
+    """The runtime outputs one input's routes request; build and verify both read it here."""
+
     route_text = " ".join(route for line in lines if (route := orca_route_line(line)) is not None)
-    return is_optimization_route(route_text) or any(
-        pattern.search(route_text) is not None
-        for pattern in (TS_ROUTE_RE, IRC_ROUTE_RE, _NEB_ROUTE_RE, _GOAT_ROUTE_RE)
+    return _RouteOutputs(
+        engrad_is_output=_route_writes_engrad(lines),
+        hessian_requested=bool(FREQ_RE.search(route_text)),
+        neb_requested=bool(_NEB_ROUTE_RE.search(route_text)),
+        neb_preopt_ends=_neb_preoptimizes_end_points(lines),
+        same_stem_xyz_is_output=is_optimization_route(route_text)
+        or any(
+            pattern.search(route_text) is not None
+            for pattern in (TS_ROUTE_RE, IRC_ROUTE_RE, _NEB_ROUTE_RE, _GOAT_ROUTE_RE)
+        ),
     )
 
 

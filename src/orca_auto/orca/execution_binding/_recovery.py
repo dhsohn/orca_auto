@@ -8,26 +8,27 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.confined_io import require_confined_regular_file
-from orca_auto.core.queue.engine.input_snapshot import (
+from orca_auto.core.confined_io import (
     MAX_INPUT_SNAPSHOT_BYTES,
     read_stable_regular_file,
+    require_confined_regular_file,
 )
 
 from ..inp_rewriter import resume_checkpoint_input_path
 from ..input_references import checkpoint_file_looks_intact
 from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
 from ._inputs import _inline_geometry_atom_signature, _strict_xyz_atom_row, _xyz_atom_lines
+from ._models import _RecoveryPlan
 from ._snapshot_identity import (
     _verified_identity_payload,
+    dependency_role,
+    is_canonical_source_path,
     orca_execution_snapshot_generation_dir,
+    validated_content_descriptor,
 )
 
 
-def _recovery_seed_plan(
-    job_dir: Path,
-    recovery_from: Mapping[str, Any],
-) -> tuple[Path, str, set[str], tuple[str, ...] | None, dict[str, dict[str, Any]]]:
+def _recovery_seed_plan(job_dir: Path, recovery_from: Mapping[str, Any]) -> _RecoveryPlan:
     """Validate a crashed snapshot and plan seeding from its frozen generation."""
 
     seed_dir = orca_execution_snapshot_generation_dir(job_dir, recovery_from)
@@ -64,7 +65,14 @@ def _recovery_seed_plan(
         job_dir,
         recovery_from,
     )
-    return seed_dir, selected_sha256, seed_basenames, seed_atom_signature, submitted_identities
+    return _RecoveryPlan(
+        previous_generation_name=str(recovery_from.get("generation_name") or ""),
+        seed_dir=seed_dir,
+        selected_sha256=selected_sha256,
+        seed_basenames=seed_basenames,
+        seed_atom_signature=seed_atom_signature,
+        submitted_dependency_identities=submitted_identities,
+    )
 
 
 def _validated_submitted_dependency_identity(
@@ -72,32 +80,15 @@ def _validated_submitted_dependency_identity(
     source_text: str,
     identity: Any,
 ) -> dict[str, Any]:
-    try:
-        source = Path(source_text)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise ValueError("ORCA recovery dependency identity has an invalid source path") from exc
     if (
         not source_text
-        or not source.is_absolute()
-        or source_text != str(source)
-        or ".." in source.parts
-        or "\x00" in source_text
-        or not source.is_relative_to(job_dir)
+        or not is_canonical_source_path(source_text)
+        or not Path(source_text).is_relative_to(job_dir)
     ):
         raise ValueError("ORCA recovery dependency identity has an invalid source path")
-    if not isinstance(identity, Mapping):
-        raise ValueError(f"ORCA recovery dependency identity is invalid: {source_text}")
-    digest = str(identity.get("sha256") or "").strip().lower()
-    size = identity.get("size_bytes")
-    if (
-        len(digest) != 64
-        or any(character not in "0123456789abcdef" for character in digest)
-        or isinstance(size, bool)
-        or not isinstance(size, int)
-        or size < 0
-    ):
-        raise ValueError(f"ORCA recovery dependency identity is invalid: {source_text}")
-    return {"sha256": digest, "size_bytes": size}
+    return validated_content_descriptor(
+        identity, error=f"ORCA recovery dependency identity is invalid: {source_text}"
+    )
 
 
 def _recovery_submitted_dependency_identities(
@@ -128,7 +119,7 @@ def _recovery_submitted_dependency_identities(
     for index, raw_source in enumerate(dependency_paths):
         if not isinstance(raw_source, str):
             raise ValueError("ORCA recovery snapshot has invalid dependency identities")
-        role = f"dependency_{index:06d}"
+        role = dependency_role(index)
         descriptor = source_inputs.get(role)
         if (
             not isinstance(descriptor, Mapping)

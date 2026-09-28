@@ -1,9 +1,10 @@
-"""``orca_auto.core.queue.processes``: process-group termination."""
+"""``orca_auto.core.queue.processes``: spawning children and process-group termination."""
 
 from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -24,6 +25,66 @@ class SequencedPollProcess(FakeManagedProcess):
         if len(self._polls) > 1:
             return self._polls.pop(0)
         return self._polls[0]
+
+
+# ---------------------------------------------------------------------------
+# start_background_process
+# ---------------------------------------------------------------------------
+
+
+def test_start_background_process_uses_detached_devnull_popen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    expected = object()
+
+    def fake_popen(command: list[str], **kwargs: object) -> object:
+        calls.append({"command": command, **kwargs})
+        return expected
+
+    monkeypatch.setattr(processes.subprocess, "Popen", fake_popen)
+
+    assert processes.start_background_process(("python", "-m", "worker")) is expected
+    assert calls == [
+        {
+            "command": ["python", "-m", "worker"],
+            "stdout": processes.subprocess.DEVNULL,
+            "stderr": processes.subprocess.DEVNULL,
+            "stdin": processes.subprocess.DEVNULL,
+            "start_new_session": True,
+            "text": True,
+        }
+    ]
+
+
+def test_start_background_process_redirects_output_to_log_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[dict[str, object]] = []
+    expected = object()
+    log_path = tmp_path / "logs" / "queue-1.log"
+
+    def fake_popen(command: list[str], **kwargs: object) -> object:
+        calls.append({"command": command, **kwargs})
+        stdout = kwargs["stdout"]
+        descriptor = getattr(stdout, "name", None)
+        assert isinstance(descriptor, int)
+        assert Path(f"/proc/self/fd/{descriptor}").resolve() == log_path.resolve()
+        assert not bool(getattr(stdout, "closed", True))
+        return expected
+
+    monkeypatch.setattr(processes.subprocess, "Popen", fake_popen)
+
+    assert (
+        processes.start_background_process(("python", "-m", "worker"), log_path=log_path)
+        is expected
+    )
+    assert log_path.parent.exists()
+    assert calls[0]["stderr"] == processes.subprocess.STDOUT
+    assert calls[0]["stdin"] == processes.subprocess.DEVNULL
+    assert calls[0]["start_new_session"] is True
+    assert calls[0]["text"] is True
 
 
 # ---------------------------------------------------------------------------

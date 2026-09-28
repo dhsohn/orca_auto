@@ -23,11 +23,20 @@ class MoleculeKeyResolution:
 
 
 def resolve_molecule_key(inp_path: Path) -> MoleculeKeyResolution:
-    tag = _find_user_tag(inp_path)
+    try:
+        text = inp_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        text = ""
+    return molecule_key_from_text(text, inp_path)
+
+
+def molecule_key_from_text(text: str, inp_path: Path) -> MoleculeKeyResolution:
+    """The key of an input whose text is ``text``; ``inp_path`` places its xyzfile and folder."""
+    tag = _find_user_tag(text)
     if tag is not None:
         return MoleculeKeyResolution(key=tag, source="tag")
 
-    formula = _parse_formula_from_inp(inp_path)
+    formula = _formula_from_lines(text.splitlines(), inp_path.parent)
     if formula is not None:
         return MoleculeKeyResolution(key=formula, source="formula")
 
@@ -37,24 +46,17 @@ def resolve_molecule_key(inp_path: Path) -> MoleculeKeyResolution:
     )
 
 
-def _find_user_tag(inp_path: Path) -> str | None:
-    try:
-        with inp_path.open("r", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                m = TAG_RE.match(line.strip())
-                if m:
-                    return _sanitize_key(m.group(1).strip())
-    except OSError:
-        pass
+def _find_user_tag(text: str) -> str | None:
+    # A tag line ends only where a text-mode read ends it ("\n", "\r\n" or
+    # "\r"): a form feed or another str.splitlines() break stays in the tag.
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        m = TAG_RE.match(line.strip())
+        if m:
+            return _sanitize_key(m.group(1).strip())
     return None
 
 
-def _parse_formula_from_inp(inp_path: Path) -> str | None:
-    try:
-        lines = inp_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return None
-
+def _formula_from_lines(lines: list[str], inp_dir: Path) -> str | None:
     # The shared geometry scanner reads the header, the xyzfile reference and
     # the inline atom rows through the ORCA comment tokenizer, so this key
     # sees the same atoms as execution binding does.
@@ -66,7 +68,7 @@ def _parse_formula_from_inp(inp_path: Path) -> str | None:
             return None
         xyz_path = Path(block.reference)
         if not xyz_path.is_absolute():
-            xyz_path = inp_path.parent / xyz_path
+            xyz_path = inp_dir / xyz_path
         atoms = _parse_xyz_file(xyz_path)
     else:
         atoms = _parse_inline_xyz(block)

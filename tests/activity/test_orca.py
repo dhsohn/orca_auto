@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -225,7 +224,7 @@ def test_clear_activities_reports_removed_worker_logs(allowed: Path, orca_config
     log.parent.mkdir(parents=True)
     log.write_text("done\n", encoding="utf-8")
 
-    payload = activity.clear_activities(orca_config=orca_config)
+    payload = activity.clear_activities(config_path=orca_config)
 
     assert payload["cleared"]["orca_queue_entries"] == 1
     assert payload["removed_worker_logs"] == 1
@@ -356,7 +355,7 @@ def test_snapshot_display_status_marks_dead_running_as_failed(tmp_path: Path) ->
     assert run_status.snapshot_display_status(_snap("completed")) == "completed"
 
 
-def test_match_activity_record_and_cancel_error_edges() -> None:
+def test_match_activity_record_error_edges() -> None:
     records = [
         activity.ActivityRecord(
             "a",
@@ -392,32 +391,13 @@ def test_match_activity_record_and_cancel_error_edges() -> None:
     with pytest.raises(LookupError, match="not found"):
         _activity_cancel.match_activity_record(records, "missing")
 
-    def cancel_with(record: activity.ActivityRecord) -> dict[str, Any]:
-        request = activity.ActivityCancelRequest(
-            target=record.cancel_target, sources=activity.ActivitySourceRequest()
-        )
-        return _activity_cancel.cancel_orca_activity(
-            record, activity.ResolvedActivitySources(None), request
-        )
-
-    with pytest.raises(ValueError, match="orca_auto_config"):
-        cancel_with(
-            activity.ActivityRecord(
-                "orca", "job", "orca", "running", "O", ORCA_AUTO_ORCA_SOURCE, "", "", "orca-q"
-            )
-        )
-    with pytest.raises(ValueError, match="Unsupported activity source"):
-        cancel_with(
-            activity.ActivityRecord("bad", "job", "x", "running", "B", "unknown", "", "", "bad-q")
-        )
-
 
 def test_cancel_activity_routes_orca_targets(allowed: Path, orca_config: str) -> None:
     reaction_dir = allowed / "rxn"
     reaction_dir.mkdir()
     entry = enqueue(allowed, str(reaction_dir), task_id="task-cancel")
 
-    orca_payload = activity.cancel_activity(target=entry.queue_id, orca_config=orca_config)
+    orca_payload = activity.cancel_activity(target=entry.queue_id, config_path=orca_config)
 
     assert orca_payload["status"] == "cancelled"
     assert orca_payload["activity_id"] == entry.queue_id
@@ -454,7 +434,7 @@ def test_cancel_activity_path_alias_prefers_active_generation(
         "basename": "water",
     }[alias]
 
-    payload = activity.cancel_activity(target=target, orca_config=orca_config)
+    payload = activity.cancel_activity(target=target, config_path=orca_config)
 
     # Older terminal generations keep the directory aliases; the one active
     # generation is the cancellable target.
@@ -466,7 +446,7 @@ def test_cancel_activity_path_alias_prefers_active_generation(
     }
 
     # A retry with no active generation observes the newest terminal outcome.
-    retry = activity.cancel_activity(target=target, orca_config=orca_config)
+    retry = activity.cancel_activity(target=target, config_path=orca_config)
     assert retry["activity_id"] == "q-resubmitted"
     assert retry["status"] == "cancelled"
 
@@ -545,7 +525,7 @@ def test_cancel_activity_basename_across_directories_stays_ambiguous(
     queue_persistence.save_entries(allowed, [finished, other])
 
     with pytest.raises(ValueError, match="Ambiguous activity target: water. Matches: q-a, q-b$"):
-        activity.cancel_activity(target="water", orca_config=orca_config)
+        activity.cancel_activity(target="water", config_path=orca_config)
 
     assert {entry.queue_id: entry.status for entry in list_queue(allowed)} == {
         "q-b": finished_status,
@@ -589,7 +569,7 @@ def test_cancel_activity_by_state_run_id_of_running_job(
         assert ("run-live" in row.aliases) is current_generation
         if not current_generation:
             return
-        payload = activity.cancel_activity(target="run-live", orca_config=orca_config)
+        payload = activity.cancel_activity(target="run-live", config_path=orca_config)
 
     assert payload["activity_id"] == entry.queue_id
     assert payload["cancel_target"] == entry.queue_id

@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 
 from .input_blocks import iter_blocks, set_block_key_value
@@ -23,7 +22,6 @@ class PreparedSubmissionResourceInput:
     resource_request: dict[str, int]
     actions: tuple[str, ...]
     normalized_payload: bytes
-    source_sha256: str
 
 
 def read_maxcore(lines: list[str]) -> int | None:
@@ -114,13 +112,13 @@ def resource_request_from_lines(lines: list[str]) -> dict[str, int]:
 
 def prepare_submission_resource_request(
     inp_path: Path,
+    source_payload: bytes,
     *,
     default_max_cores: int,
     default_max_memory_gb: int,
 ) -> PreparedSubmissionResourceInput:
-    """Normalize submission resources in memory without changing the public input."""
+    """Normalize the resources of ``source_payload``, the bytes of ``inp_path``, in memory."""
 
-    source_payload = inp_path.read_bytes()
     try:
         source_text = source_payload.decode("utf-8", errors="strict")
     except UnicodeError as exc:
@@ -152,7 +150,6 @@ def prepare_submission_resource_request(
         resource_request=resource_request,
         actions=tuple(actions),
         normalized_payload=normalized_payload,
-        source_sha256=sha256(source_payload).hexdigest(),
     )
 
 

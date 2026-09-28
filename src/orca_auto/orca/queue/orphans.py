@@ -7,10 +7,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.admission import AdmissionStore, AdmissionStoreCorruptError
+from orca_auto.core.admission import (
+    AdmissionStore,
+    AdmissionStoreCorruptError,
+    live_queue_slot_keys_for_slots,
+)
 from orca_auto.core.queue import store as _queue_store
 from orca_auto.core.queue import transitions as _queue_transitions
-from orca_auto.core.queue.child.process import live_queue_slot_keys_for_slots
 from orca_auto.core.queue.types import TERMINAL_QUEUE_STATUSES, QueueEntry, QueueStatus
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file
 from orca_auto.core.utils.process_tracking import run_lock_is_held
@@ -259,10 +262,7 @@ def reconcile_dead_running_rows_for_dir(
         return 0
     try:
         protected_queue_keys, protected_queue_ids = live_queue_slot_keys_for_slots(
-            admission_root,
-            list_slots_fn=lambda root: AdmissionStore.for_root(root).list_slots(
-                normalize_file=False
-            ),
+            AdmissionStore.for_root(admission_root).list_slots(normalize_file=False)
         )
     except AdmissionStoreCorruptError as exc:
         raise DeadRunningRowUnjudgeableError(

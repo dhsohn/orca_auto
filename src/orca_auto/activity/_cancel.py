@@ -1,21 +1,19 @@
+"""``cancel_activity``: find the one catalog row a target names, cancel it, build the payload."""
+
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
-from orca_auto.activity.model import (
-    ActivityCancelRequest,
-    ActivityRecord,
-    ResolvedActivitySources,
-    path_aliases,
-    sort_key,
-)
+from orca_auto.activity.model import ActivityListRequest, ActivityRecord, path_aliases, sort_key
 from orca_auto.core.statuses import is_queue_active_status
 from orca_auto.core.utils import normalize_text
-from orca_auto.orca.app_ids import ORCA_AUTO_ORCA_SOURCE, ORCA_ENGINE
-from orca_auto.orca.direct_cancel import cancel_target as cancel_orca_target
+from orca_auto.orca import direct_cancel
+
+from ._list import collect_activity_listing, resolve_activity_config
 
 
-def match_activity_record(records: list[ActivityRecord], target: str) -> ActivityRecord:
+def match_activity_record(records: Sequence[ActivityRecord], target: str) -> ActivityRecord:
     normalized_target = normalize_text(target)
     if not normalized_target:
         raise ValueError("Cancel target is empty.")
@@ -60,35 +58,19 @@ def match_activity_record(records: list[ActivityRecord], target: str) -> Activit
     raise LookupError(f"Activity target not found: {normalized_target}")
 
 
-def cancel_activity_payload(
-    record: ActivityRecord,
-    result: dict[str, Any],
-    *,
-    fallback_status: str,
-) -> dict[str, Any]:
+def cancel_activity(*, target: str, config_path: str | None = None) -> dict[str, Any]:
+    resolved = resolve_activity_config(config_path)
+    record = match_activity_record(
+        collect_activity_listing(resolved, ActivityListRequest()).records, target
+    )
+    result = direct_cancel.cancel_target(target=record.cancel_target, config_path=resolved)
     return {
         "activity_id": record.activity_id,
         "kind": record.kind,
         "engine": record.engine,
         "source": record.source,
         "label": record.label,
-        "status": normalize_text(result.get("status")) or fallback_status,
+        "status": result["status"],
         "cancel_target": record.cancel_target,
         "result": result,
     }
-
-
-def cancel_orca_activity(
-    record: ActivityRecord,
-    resolved: ResolvedActivitySources,
-    request: ActivityCancelRequest,
-) -> dict[str, Any]:
-    if record.engine != ORCA_ENGINE or record.source != ORCA_AUTO_ORCA_SOURCE:
-        raise ValueError(f"Unsupported activity source: {record.source}")
-    config_path = normalize_text(resolved.orca_config)
-    if not config_path:
-        raise ValueError("orca_auto_config is required to cancel orca_auto ORCA activities.")
-    return cancel_orca_target(
-        target=record.cancel_target,
-        config_path=config_path,
-    )

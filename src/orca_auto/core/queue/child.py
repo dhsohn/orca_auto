@@ -1,11 +1,25 @@
+"""The worker child's side of one job: its shutdown flag and the parent's slot hand-off."""
+
 from __future__ import annotations
 
 import os
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from orca_auto.core.admission import get_slot
+
+
+@dataclass
+class ChildWorkerShutdownController:
+    requested: bool = False
+
+    def request(self) -> None:
+        self.requested = True
+
+    def is_requested(self) -> bool:
+        return self.requested
 
 
 def await_parent_admission_handoff(
@@ -27,3 +41,6 @@ def await_parent_admission_handoff(
         if monotonic_fn() >= deadline:
             return False
         sleep_fn(0.01)
+
+
+__all__ = ["ChildWorkerShutdownController", "await_parent_admission_handoff"]

@@ -26,8 +26,7 @@ from orca_auto import cli_systemd_evidence
 from orca_auto.core.admission import store as admission_store
 from orca_auto.core.admission.records import slot_from_dict
 from orca_auto.core.engine_scratch import _manifest as scratch_manifest
-from orca_auto.core.queue import publication
-from orca_auto.core.queue.engine import snapshot_intent
+from orca_auto.core.queue import publication, snapshot_intent
 from orca_auto.core.queue.worker.pid_file import read_worker_pid_file, worker_pid_file_path
 from orca_auto.core.utils import process as process_utils
 from tests.contracts.normalize import assert_pin

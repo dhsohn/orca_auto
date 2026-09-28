@@ -12,10 +12,14 @@ from orca_auto.core.queue.publication import (
     QUEUE_RECORD_SYNC_OWNER_PID_KEY,
     QUEUE_RECORD_SYNC_OWNER_START_KEY,
     QUEUE_RECORD_SYNC_PREPARING,
+    QUEUE_RECORD_SYNC_REPAIR_PENDING,
     QUEUE_RECORD_SYNC_REPAIRING,
+    QUEUE_RECORD_SYNC_TOKEN_KEY,
     QUEUE_RECORD_SYNC_UPDATED_AT_KEY,
     process_start_token,
+    queue_record_sync_metadata,
 )
+from orca_auto.core.queue.types import QueueEntry
 from tests.queue_store_helpers import _claim_next, _enqueue, _install_deterministic_helpers
 
 
@@ -94,3 +98,71 @@ def test_publication_lock_does_not_create_a_missing_queue_root(tmp_path: Path) -
             pass
 
     assert not missing_root.exists()
+
+
+def test_park_queue_record_repair_pending_preserves_cancel_flag() -> None:
+    entry = QueueEntry(
+        queue_id="queue-1",
+        app_name="test_app",
+        task_id="task-1",
+        task_kind="kind",
+        engine="test_engine",
+        cancel_requested=True,
+        metadata=queue_record_sync_metadata(
+            QUEUE_RECORD_SYNC_PREPARING,
+            token="owned-token",
+            owner_pid=os.getpid(),
+        ),
+    )
+    entries = [entry]
+
+    result, changed = publication.park_queue_record_repair_pending(
+        entries,
+        entry,
+        expected_state=QUEUE_RECORD_SYNC_PREPARING,
+        expected_token="owned-token",
+    )
+
+    assert result is None
+    assert changed is True
+    assert entries[0].cancel_requested is True
+    assert entries[0].metadata[QUEUE_RECORD_SYNC_KEY] == QUEUE_RECORD_SYNC_REPAIR_PENDING
+    assert entries[0].metadata[QUEUE_RECORD_SYNC_TOKEN_KEY] == "owned-token"
+    assert entries[0].metadata[QUEUE_RECORD_SYNC_OWNER_PID_KEY] == 0
+
+
+@pytest.mark.parametrize(
+    ("expected_state", "expected_token"),
+    [
+        (QUEUE_RECORD_SYNC_REPAIRING, "owned-token"),
+        (QUEUE_RECORD_SYNC_PREPARING, "foreign-token"),
+    ],
+)
+def test_park_queue_record_repair_pending_refuses_ownership_mismatch(
+    expected_state: str,
+    expected_token: str,
+) -> None:
+    entry = QueueEntry(
+        queue_id="queue-1",
+        app_name="test_app",
+        task_id="task-1",
+        task_kind="kind",
+        engine="test_engine",
+        metadata=queue_record_sync_metadata(
+            QUEUE_RECORD_SYNC_PREPARING,
+            token="owned-token",
+            owner_pid=os.getpid(),
+        ),
+    )
+    entries = [entry]
+
+    result, changed = publication.park_queue_record_repair_pending(
+        entries,
+        entry,
+        expected_state=expected_state,
+        expected_token=expected_token,
+    )
+
+    assert result is None
+    assert changed is False
+    assert entries == [entry]

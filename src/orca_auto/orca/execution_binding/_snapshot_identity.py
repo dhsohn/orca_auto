@@ -1,20 +1,94 @@
-"""Identity of the files, executable and generation directory pinned by a snapshot."""
+"""Identity of the files, executable and generation directory pinned by a snapshot.
+
+The rules here decide what a snapshot records and accepts. Build writes by
+them, and claim-time verification, crash recovery and cleanup read by them,
+so the three cannot disagree on a snapshot's version, roles, content
+descriptors, resource request or directory identity.
+"""
 
 from __future__ import annotations
 
 import hashlib
+import os
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.confined_io import require_confined_regular_file
-from orca_auto.core.queue.engine.input_snapshot import read_stable_regular_file
-from orca_auto.core.queue.engine.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KEY
+from orca_auto.core.confined_io import read_stable_regular_file, require_confined_regular_file
 from orca_auto.core.queue.generation import is_visible_generation_name
+from orca_auto.core.queue.snapshot_intent import SNAPSHOT_INTENT_TOKEN_KEY
 from orca_auto.orca import engine_runner as _engine_runner
 
-from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES
+from ..generation_validation import is_retired_generation_marker
+from ._constants import MAX_ORCA_AGGREGATE_SNAPSHOT_BYTES, ORCA_EXECUTION_SNAPSHOT_VERSION
+
+# Crash recovery and its rebind refuse a crashed row whose snapshot is not current.
+STALE_RECOVERY_SNAPSHOT_ERROR = (
+    "ORCA recovery requires a current execution snapshot; resubmit the job"
+)
+
+
+def require_current_snapshot_version(snapshot: Any, *, error: str) -> None:
+    """Refuse anything but a current-version snapshot without the retired marker."""
+    if (
+        not isinstance(snapshot, Mapping)
+        or snapshot.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION
+        or is_retired_generation_marker(snapshot)
+    ):
+        raise ValueError(error)
+
+
+def dependency_role(index: int) -> str:
+    """The snapshot role of the dependency at ``index`` in canonical source-path order."""
+    return f"dependency_{index:06d}"
+
+
+def same_directory_identity(details: os.stat_result, identity: Mapping[str, Any]) -> bool:
+    """Whether ``details`` is the directory a snapshot recorded as ``{device, inode}``."""
+    return (int(details.st_dev), int(details.st_ino)) == (
+        int(identity.get("device", -1)),
+        int(identity.get("inode", -1)),
+    )
+
+
+def is_canonical_source_path(text: str) -> bool:
+    """Whether ``text`` is spelled as build records a source: absolute and normalized."""
+    path = Path(text)
+    return (
+        path.is_absolute() and text == str(path) and ".." not in path.parts and "\x00" not in text
+    )
+
+
+def validated_content_descriptor(descriptor: Any, *, error: str) -> dict[str, Any]:
+    """The ``{sha256, size_bytes}`` a source descriptor records; ValueError(error) if malformed."""
+    if not isinstance(descriptor, Mapping):
+        raise ValueError(error)
+    digest = str(descriptor.get("sha256") or "").strip().lower()
+    size = descriptor.get("size_bytes")
+    if (
+        len(digest) != 64
+        or any(character not in "0123456789abcdef" for character in digest)
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or size < 0
+    ):
+        raise ValueError(error)
+    return {"sha256": digest, "size_bytes": size}
+
+
+def validated_resource_request(value: Any, *, error: str) -> dict[str, int]:
+    """A ``{max_cores, max_memory_gb}`` request of positive integers; ValueError(error) if not."""
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"max_cores", "max_memory_gb"}
+        or any(
+            isinstance(item, bool) or not isinstance(item, int) or item <= 0
+            for item in value.values()
+        )
+    ):
+        raise ValueError(error)
+    return dict(value)
 
 
 def _file_identity(path: Path) -> dict[str, Any]:
@@ -100,11 +174,7 @@ def orca_execution_snapshot_generation_dir(
     raw_identity = snapshot.get("execution_dir_identity")
     if not isinstance(raw_identity, Mapping):
         raise ValueError("Queued ORCA generation has no directory identity")
-    details = execution_dir.stat()
-    if (int(details.st_dev), int(details.st_ino)) != (
-        int(raw_identity.get("device", -1)),
-        int(raw_identity.get("inode", -1)),
-    ):
+    if not same_directory_identity(execution_dir.stat(), raw_identity):
         raise ValueError("Queued ORCA generation directory identity changed")
     return execution_dir
 

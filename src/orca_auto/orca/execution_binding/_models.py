@@ -11,15 +11,36 @@ from ..input_references import OrcaFileReference
 
 
 @dataclass(frozen=True)
+class _RouteOutputs:
+    """What the route line and ``%neb`` block make ORCA write next to the input."""
+
+    engrad_is_output: bool
+    hessian_requested: bool
+    neb_requested: bool
+    neb_preopt_ends: bool
+    same_stem_xyz_is_output: bool
+
+
+@dataclass(frozen=True)
+class _RecoveryPlan:
+    """How a replacement generation is seeded from the crashed submission's generation."""
+
+    previous_generation_name: str
+    seed_dir: Path
+    selected_sha256: str
+    seed_basenames: set[str]
+    seed_atom_signature: tuple[str, ...] | None
+    submitted_dependency_identities: dict[str, dict[str, Any]]
+
+
+@dataclass(frozen=True)
 class _SelectedSnapshotInput:
     source_inputs: dict[str, dict[str, Any]]
     selected_payload: bytes
     lines: list[str]
     references: list[OrcaFileReference]
     requests_moread: bool
-    engrad_is_output: bool
-    hessian_requested: bool
-    same_stem_xyz_is_output: bool
+    routes: _RouteOutputs
     consumed_bytes: int
 
 

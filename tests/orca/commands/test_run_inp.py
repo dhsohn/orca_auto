@@ -11,6 +11,7 @@ import pytest
 
 from orca_auto.orca import submission as submission_mod
 from orca_auto.orca.commands.run_inp import cmd_run_inp
+from orca_auto.orca.queue import enqueue_publication
 from orca_auto.orca.queue import notifications as queue_notifications
 from orca_auto.orca.queue.adapter import enqueue, list_queue
 from orca_auto.orca.queue.entries import queue_entry_metadata
@@ -31,7 +32,7 @@ def _write_inp(reaction_dir: Path, content: str = DEFAULT_INP) -> Path:
 def _make_args(config: Path | str, reaction_dir: Path, **overrides: Any) -> SimpleNamespace:
     defaults: dict[str, Any] = {
         "config": str(config),
-        "reaction_dir": str(reaction_dir),
+        "path": str(reaction_dir),
         "force": False,
         "priority": 10,
     }
@@ -45,7 +46,7 @@ def _submitted(reaction_dir: Path, entry: Any, **worker: Any) -> SimpleNamespace
         status="submitted",
         reason="",
         stderr="",
-        context=SimpleNamespace(reaction_dir=reaction_dir),
+        target=SimpleNamespace(reaction_dir=reaction_dir),
         queued_result=SimpleNamespace(entry=entry, worker_info=SimpleNamespace(**worker_info)),
     )
 
@@ -320,7 +321,7 @@ def test_submit_reaction_dir_to_queue_succeeds_when_tracking_side_effect_fails(
         upserts.append((args, kwargs))
         raise RuntimeError("index write failed")
 
-    monkeypatch.setattr(submission_mod, "upsert_row_job_record", failing_upsert)
+    monkeypatch.setattr(enqueue_publication, "upsert_row_job_record", failing_upsert)
 
     submission = submit_reaction_dir_to_queue(_make_args(config, reaction_dir, priority=3))
 

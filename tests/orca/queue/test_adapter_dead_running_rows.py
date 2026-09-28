@@ -1,9 +1,10 @@
 """RUNNING rows left by a dead worker: the worker reconciles them, a submission does not sweep.
 
-``adapter.enqueue`` no longer reconciles every running row of the queue root. It
-recovers at most the rows of the directory being submitted, and only under the
-worker's own protections (no live worker, no live admission slot, no held
-``run.lock``, matching state generation).
+A submission recovers at most the rows of the directory being submitted
+(``reconcile_dead_running_rows_for_dir``, called by the enqueue driver right
+before ``adapter.enqueue``), and only under the worker's own protections (no
+live worker, no live admission slot, no held ``run.lock``, matching state
+generation). ``adapter.enqueue`` itself never touches a RUNNING row.
 """
 
 from __future__ import annotations
@@ -35,6 +36,12 @@ def _running_row(root: Path, name: str) -> tuple[Path, QueueEntry]:
     dequeued = claim_next_entry(root)
     assert dequeued is not None and dequeued.queue_id == entry.queue_id
     return rxn, dequeued
+
+
+def _submit(root: Path, rxn: Path) -> QueueEntry:
+    """The enqueue driver's order: this directory's dead-row reconcile, then the append."""
+    reconcile_dead_running_rows_for_dir(root, str(rxn), admission_root=root)
+    return enqueue(root, str(rxn))
 
 
 def _row(root: Path, queue_id: str) -> QueueEntry:
@@ -78,7 +85,7 @@ def test_submission_never_sweeps_running_rows_of_other_directories(tmp_path: Pat
     fresh = tmp_path / "c"
     fresh.mkdir()
 
-    enqueue(tmp_path, str(fresh), admission_root=tmp_path)
+    _submit(tmp_path, fresh)
 
     assert _row(tmp_path, row_a.queue_id).status is QueueStatus.RUNNING
     assert _row(tmp_path, row_b.queue_id).status is QueueStatus.RUNNING
@@ -89,7 +96,7 @@ def test_resubmitting_a_dead_running_directory_requeues_only_that_row(tmp_path: 
     _rxn_b, row_b = _running_row(tmp_path, "b")
 
     with pytest.raises(DuplicateEntryError, match="status=pending"):
-        enqueue(tmp_path, str(rxn_a), admission_root=tmp_path)
+        _submit(tmp_path, rxn_a)
 
     requeued = _row(tmp_path, row_a.queue_id)
     assert requeued.status is QueueStatus.PENDING
@@ -115,7 +122,7 @@ def test_resubmitting_after_the_child_finished_closes_the_old_row_for_worker_rep
     # marker fences a successor until a worker has replayed them; the user is
     # told that publication, not the calculation, is what is pending.
     with pytest.raises(DuplicateEntryError, match="status=completed"):
-        enqueue(tmp_path, str(rxn), admission_root=tmp_path)
+        _submit(tmp_path, rxn)
 
     closed = _row(tmp_path, row.queue_id)
     assert closed.status is QueueStatus.COMPLETED
@@ -124,7 +131,7 @@ def test_resubmitting_after_the_child_finished_closes_the_old_row_for_worker_rep
     assert [entry.queue_id for entry in list_queue(tmp_path)] == [row.queue_id]
 
 
-def test_submission_without_admission_root_leaves_the_row_to_the_worker(tmp_path: Path) -> None:
+def test_enqueue_alone_leaves_the_running_row_to_the_worker(tmp_path: Path) -> None:
     rxn, row = _running_row(tmp_path, "a")
 
     with pytest.raises(DuplicateEntryError, match="status=running"):
@@ -139,7 +146,7 @@ def test_live_worker_keeps_the_submitter_out_of_running_rows(tmp_path: Path) -> 
 
     assert reconcile_dead_running_rows_for_dir(tmp_path, str(rxn), admission_root=tmp_path) == 0
     with pytest.raises(DuplicateEntryError, match="status=running"):
-        enqueue(tmp_path, str(rxn), admission_root=tmp_path)
+        _submit(tmp_path, rxn)
 
     assert _row(tmp_path, row.queue_id).status is QueueStatus.RUNNING
 
@@ -166,7 +173,7 @@ def test_child_holding_a_slot_but_not_yet_run_lock_is_never_requeued_by_a_submis
 
     assert reconcile_dead_running_rows_for_dir(tmp_path, str(rxn), admission_root=tmp_path) == 0
     with pytest.raises(DuplicateEntryError, match="status=running"):
-        enqueue(tmp_path, str(rxn), admission_root=tmp_path)
+        _submit(tmp_path, rxn)
 
     assert _row(tmp_path, row.queue_id).status is QueueStatus.RUNNING
     # The submitter reads admission state; it never rewrites it.
@@ -179,7 +186,7 @@ def test_child_holding_run_lock_is_never_requeued_by_a_submission(tmp_path: Path
     with acquire_run_lock(rxn):
         assert reconcile_dead_running_rows_for_dir(tmp_path, str(rxn), admission_root=tmp_path) == 0
         with pytest.raises(DuplicateEntryError, match="status=running"):
-            enqueue(tmp_path, str(rxn), admission_root=tmp_path)
+            _submit(tmp_path, rxn)
 
     assert _row(tmp_path, row.queue_id).status is QueueStatus.RUNNING
 
@@ -199,7 +206,7 @@ def test_fresh_directory_enqueues_although_the_admission_file_is_corrupt(tmp_pat
     fresh = tmp_path / "fresh"
     fresh.mkdir()
 
-    entry = enqueue(tmp_path, str(fresh), admission_root=tmp_path)
+    entry = _submit(tmp_path, fresh)
 
     assert entry.status is QueueStatus.PENDING
     assert _row(tmp_path, row.queue_id).status is QueueStatus.RUNNING
@@ -214,7 +221,7 @@ def test_dead_running_row_with_a_corrupt_admission_file_fails_closed_with_a_hint
     corrupt = _corrupt_admission_file(tmp_path)
 
     with pytest.raises(DeadRunningRowUnjudgeableError, match="admission_slots.json") as info:
-        enqueue(tmp_path, str(rxn), admission_root=tmp_path)
+        _submit(tmp_path, rxn)
 
     assert isinstance(info.value, ValueError)
     assert str(corrupt) in str(info.value)

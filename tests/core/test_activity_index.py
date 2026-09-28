@@ -11,7 +11,7 @@ from threading import Event
 import pytest
 
 from orca_auto.activity import _list, _orca, _orca_index, list_activities
-from orca_auto.activity.model import ActivityListRequest, ActivitySourceRequest, sort_key
+from orca_auto.activity.model import ActivityListRequest, sort_key
 from orca_auto.core import activity_index as index
 from orca_auto.core import activity_invalidation as journal
 from orca_auto.core.indexing import JobLocationRecord, upsert_job_location
@@ -66,9 +66,7 @@ def _state(root: Path, path: Path, run_id: str = "run", status: str = "completed
 
 
 def _query(root: Path, *, limit: int = 0, statuses: tuple[str, ...] = ()) -> list[dict]:
-    request = ActivityListRequest(
-        ActivitySourceRequest(), indexed=True, limit=limit, statuses=statuses
-    )
+    request = ActivityListRequest(indexed=True, limit=limit, statuses=statuses)
     # The listing is already filtered, newest first and paged; nothing here
     # may filter or slice again.
     return [row.to_dict() for row in _orca_index.query_listing(root, request).records]
@@ -103,7 +101,7 @@ def test_warm_limited_query_does_not_read_history(
         return connection
 
     monkeypatch.setattr(index, "connect", measured_connect)
-    result = list_activities(orca_config=config, limit=20, statuses=("completed", "failed"))
+    result = list_activities(config_path=config, limit=20, statuses=("completed", "failed"))
     assert [row["activity_id"] for row in result["activities"]] == expected
     assert len(steps) < 100, f"SQLite scanned history: {len(steps) * 100} VM steps"
 
@@ -235,7 +233,7 @@ def test_refresh_persists_discoveries_and_missing_database_rebuilds(tmp_path: Pa
     assert [row["activity_id"] for row in _query(root)] == ["run"]
     assert {
         row["activity_id"]
-        for row in list_activities(orca_config=config, refresh=True)["activities"]
+        for row in list_activities(config_path=config, refresh=True)["activities"]
     } == {"run", "untracked"}
     # The discovery went through the index store, so it is a durable row that
     # every plain query (and a rebuilt projection) sees from now on.
@@ -252,7 +250,7 @@ def test_refresh_never_downgrades_a_finished_row_to_a_stale_copy(tmp_path: Path)
     # A copy taken mid-run, sorting before the finished directory.
     state.save_state(root / "a_copy", {"run_id": "moved", "status": "running", "attempts": []})
 
-    listing = list_activities(orca_config=config, refresh=True)["activities"]
+    listing = list_activities(config_path=config, refresh=True)["activities"]
 
     [row] = [row for row in listing if row["activity_id"] == "moved"]
     assert row["status"] == "completed"
@@ -328,7 +326,7 @@ def test_filtered_page_keeps_catalog_wide_blockers_and_active_count(
     state.save_state(root / "job-1", {"run_id": "run-1", "status": "running", "attempts": []})
     queue.save_entries(root, [blocked, live])
     listing = _orca_index.query_listing(
-        root, ActivityListRequest(ActivitySourceRequest(), indexed=True, statuses=("completed",))
+        root, ActivityListRequest(indexed=True, statuses=("completed",))
     )
     assert [row.activity_id for row in listing.records] == ["run"]
     assert [blocker["queue_id"] for blocker in listing.blockers] == [blocked.queue_id]
@@ -339,7 +337,7 @@ def test_filtered_page_keeps_catalog_wide_blockers_and_active_count(
     monkeypatch.setattr(
         _list, "global_active_simulations", lambda *, config_path, fallback: (fallback, None)
     )
-    payload = list_activities(orca_config=config, statuses=("completed",), limit=1)
+    payload = list_activities(config_path=config, statuses=("completed",), limit=1)
     assert payload["count"] == 1
     assert payload["active_simulations"] == 1
     assert payload["admission_blockers"] == list(listing.blockers)
@@ -481,7 +479,7 @@ def test_refresh_repairs_out_of_band_state_edit(tmp_path: Path) -> None:
         for row in sorted(_orca.orca_records(config_path=config), key=sort_key, reverse=True)
     ]
     assert expected[0]["status"] == "failed"
-    assert list_activities(orca_config=config, refresh=True)["activities"] == expected
+    assert list_activities(config_path=config, refresh=True)["activities"] == expected
 
 
 def test_normalized_metadata_links_follow_state_updates(tmp_path: Path) -> None:

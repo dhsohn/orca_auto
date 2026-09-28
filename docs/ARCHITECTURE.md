@@ -61,7 +61,7 @@ graph TD
 - `orca_auto run-dir <PATH>` reads the newest eligible `.inp` and resource directives (`%pal`, `%maxcore`).
 - `orca/submission.py` constructs input snapshots, persists the queue entry atomically, and returns immediately.
 
-The submission snapshot records the original paths, SHA-256 hashes and byte counts in `source_inputs`. Submission owns resource normalization and generation-local reference rewriting; `resource_request` records the resolved resources, while `bound_selected_identity` identifies the actual `.inp` given to ORCA. Referenced files retain the same role keys across `source_inputs` and `materialized_inputs`. These are submission-time identities: `runtime_mutable_input_roles` identifies copies the engine may overwrite, and `recovery` preserves the previous generation and seed identities when recovering a crash. Execution carries detached copies of this evidence in `job_state.json`'s `engine_payload.execution_provenance`; it never reconstructs the original identity from later source files.
+The submission snapshot records the original paths, SHA-256 hashes and byte counts in `source_inputs`. Submission reads the selected `.inp` once: the queue row's job type, molecule key, geometry path and resource request, the `source_inputs` digest and the bound copy all describe those bytes, even when the file is saved again while the submission runs. Submission owns resource normalization and generation-local reference rewriting; `resource_request` records the resolved resources, while `bound_selected_identity` identifies the actual `.inp` given to ORCA. Referenced files retain the same role keys across `source_inputs` and `materialized_inputs`. These are submission-time identities: `runtime_mutable_input_roles` identifies copies the engine may overwrite, and `recovery` preserves the previous generation and seed identities when recovering a crash. Execution carries detached copies of this evidence in `job_state.json`'s `engine_payload.execution_provenance`; it never reconstructs the original identity from later source files. Build, claim-time verification, crash recovery and cleanup read a snapshot through one rule set in `orca/execution_binding/_snapshot_identity.py`: the version gate, the dependency role names, the content descriptors, the resource request and the directory identity. The four paths therefore accept and refuse the same snapshots.
 
 Normal submission and publication repair both call `queue/job_records.py` with the durable row, and the worker records a claimed row as running through the same projection (`upsert_row_job_record`); the module also projects the terminal record from the generation's terminal state. Selected-input identity and resources come from captured metadata, with snapshot resources and then configuration defaults used when older rows lack a request. Empty actual resources use that request. Missing captured job labels remain `other`/`unknown`. Neither path rereads the mutable input to rebuild a queued location record.
 
@@ -110,7 +110,7 @@ row is claimed by id, with the previewed row as `expected_entry`), child start
 and attach, terminal finalization, cancellation, shutdown and orphan
 reconciliation. `_admit_next` spells out one admission in order: withheld
 directories, publication repair, queued notification, capacity, preview, slot
-reservation, claim by id, and slot release when the claim is lost. Its base `core.queue.worker.QueueWorkerLoop` orders the passes
+reservation, claim by id, and slot release when the claim is lost. Its base `core.queue.worker.loop.QueueWorkerLoop` orders the passes
 (reap, cancel, admit, sleep), runs the shutdown sweep and the signal handlers,
 and knows a job only as a process-backed record. Before each sleep the ORCA
 worker runs `_periodic_upkeep`: the queued notification, then the recovery pass
@@ -137,6 +137,16 @@ failed side effects) stays in the replay state's `retry_keys` and is retried
 on the next pass; a terminal row first seen already terminal is never replayed.
 
 Cancellation observations reuse unchanged queue snapshots. A child whose run finished publishes its terminal state and reports before exiting; a cancelled child leaves its result to the parent. The parent settles the queue entry and claims a completion notification from the matching job/run state. Both parent claims, the queued one on the durable row and the terminal one in `job_state.json`, live in `orca/queue/notifications.py`. A bounded background sender delivers that captured message without holding the execution slot or writing state afterward. Replayed completion skips an already claimed notification (and recognizes historical sent markers). Delivery is best effort: a crash, a failed send or exhausted sender capacity after the claim can lose the message, without retrying or changing the calculation result. Submission records `orca_queued_notification_pending` on the durable row. After its location record is published, the parent worker claims that intent under the queue lock before dispatching a queued message; CLI exit does not discard the intent. Historical rows without the intent are not notified retroactively. The child captures its started event after recording the attempt and dispatches it before proceeding with the runner. All three lifecycle sends use the same bounded sender (four concurrent sends per process). Transport failure, saturation or process exit can lose advisory delivery, and no send writes execution state. A queued delivery claim failure skips delivery without withholding admission.
+
+`core/queue` names each module by the process that runs it. `worker/` (the
+loop, the capacity check and the PID file) and `processes.py` (spawning a child
+in its own session and stopping its process group) run in the parent worker;
+`child.py` (the shutdown flag and the wait for the parent's slot hand-off) runs
+in the worker child, which also uses `processes.py` to install its shutdown
+signal handlers and stop the ORCA process group. `snapshot_intent.py` (the
+pre-enqueue intent ledger) and `generation_owner.py` (the owner xattr of a
+generation directory and its pinned removal) serve every process that creates,
+claims or recovers a generation.
 
 The worker CLI loads config, checks the PID file (`read_worker_pid_file` in
 `core/queue/worker/pid_file.py`), then constructs and runs the ORCA worker directly.

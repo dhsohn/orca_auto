@@ -1,15 +1,42 @@
+"""The queued-record publication lease a queue row carries in its metadata.
+
+One committed queue row must always end up with its queued job artifact
+published exactly once, no matter where the publisher crashes. The lease is
+the row's ``QUEUE_RECORD_SYNC_*`` metadata: the submitting driver
+(``orca.queue.enqueue_publication``) takes and completes it, the worker's
+repair pass (``orca.queue.publication_repair``) re-claims a parked one, and
+cancellation (``transitions.request_cancel``) revokes it.
+
+Protocol invariants:
+
+- A row is enqueued with a PREPARING sync lease owned by the publishing
+  process; the row is unclaimable until the lease is COMPLETE.
+- Publication happens under the per-row publication lock: re-validate
+  ownership, publish, then CAS the lease to COMPLETE. The COMPLETE
+  short-circuit is token-verified — a COMPLETE written by another lease is
+  ownership loss, never this publisher's success.
+- Every failure after the durable commit parks the row as REPAIR_PENDING
+  (owner 0) instead of publishing blind or failing terminally; the worker's
+  pre-claim repair pass republishes it before the row can run.
+- An enqueue whose commit outcome cannot be determined is reported as
+  ``EnqueuePublicationOutcomeUnknown``, never as an ordinary failure.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
 from ..utils import process as process_utils
+from ..utils.coercion import normalize_text
 from ..utils.lock import file_lock
 from ..utils.persistence import resolve_root_path
+from .types import QueueEntry, QueueStatus
 
 QUEUE_RECORD_SYNC_KEY = "_orca_auto_queued_record_sync"
 QUEUE_RECORD_SYNC_UPDATED_AT_KEY = "_orca_auto_queued_record_sync_updated_at"
@@ -24,6 +51,15 @@ QUEUE_RECORD_SYNC_REPAIRING = "repairing"
 QUEUE_RECORD_SYNC_COMPLETE = "complete"
 QUEUE_RECORD_SYNC_ABORTED = "aborted"
 
+# A lease still in flight: a repair may claim it and cancellation revokes it.
+REPAIRABLE_SYNC_STATES = frozenset(
+    {
+        QUEUE_RECORD_SYNC_PREPARING,
+        QUEUE_RECORD_SYNC_REPAIR_PENDING,
+        QUEUE_RECORD_SYNC_REPAIRING,
+    }
+)
+
 QUEUE_RECORD_PUBLICATION_LOCK_TIMEOUT_SECONDS = 300.0
 _QUEUE_RECORD_PUBLICATION_LOCK_DIR = ".queue-publication-locks"
 
@@ -33,6 +69,10 @@ def queue_record_sync_state(entry: Any) -> str:
     if not isinstance(metadata, dict):
         return ""
     return str(metadata.get(QUEUE_RECORD_SYNC_KEY, "")).strip().lower()
+
+
+def queue_record_sync_token(entry: QueueEntry) -> str:
+    return normalize_text(entry.metadata.get(QUEUE_RECORD_SYNC_TOKEN_KEY))
 
 
 def process_start_token(process_id: int) -> str:
@@ -74,6 +114,37 @@ def queue_record_sync_metadata(
     if str(sync_state).strip().lower() in {QUEUE_RECORD_SYNC_COMPLETE, QUEUE_RECORD_SYNC_ABORTED}:
         metadata[QUEUE_RECORD_SYNC_BLOCKED_KEY] = None
     return metadata
+
+
+def park_queue_record_repair_pending(
+    entries: list[QueueEntry],
+    entry: QueueEntry,
+    *,
+    expected_state: str,
+    expected_token: str,
+) -> tuple[None, bool]:
+    """Mutator: token-gated CAS from one owned lease to REPAIR_PENDING (owner 0)."""
+
+    for index, current in enumerate(entries):
+        if current.queue_id != entry.queue_id:
+            continue
+        if (
+            current.status != QueueStatus.PENDING
+            or queue_record_sync_state(current) != expected_state
+            or queue_record_sync_token(current) != expected_token
+        ):
+            return None, False
+        metadata = dict(current.metadata)
+        metadata.update(
+            queue_record_sync_metadata(
+                QUEUE_RECORD_SYNC_REPAIR_PENDING,
+                token=expected_token,
+                owner_pid=0,
+            )
+        )
+        entries[index] = replace(current, metadata=metadata)
+        return None, True
+    return None, False
 
 
 def queue_record_publication_lock_path(root: str | Path, queue_id: str) -> Path:
@@ -124,10 +195,13 @@ __all__ = [
     "QUEUE_RECORD_SYNC_REPAIRING",
     "QUEUE_RECORD_SYNC_TOKEN_KEY",
     "QUEUE_RECORD_SYNC_UPDATED_AT_KEY",
+    "REPAIRABLE_SYNC_STATES",
+    "park_queue_record_repair_pending",
     "process_start_token",
     "queue_entry_is_claimable",
     "queue_record_publication_lock",
     "queue_record_publication_lock_path",
     "queue_record_sync_metadata",
     "queue_record_sync_state",
+    "queue_record_sync_token",
 ]

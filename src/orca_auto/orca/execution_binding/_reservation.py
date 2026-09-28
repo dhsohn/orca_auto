@@ -1,23 +1,34 @@
-"""Reserving one visible generation directory under a durable snapshot intent."""
+"""Reserving one visible generation under a durable snapshot intent, and retiring it.
+
+The intent is created before the generation directory and retired when the
+worker starts the queue row that owns the generation.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
-from orca_auto.core.queue.engine.input_snapshot import (
-    cleanup_unowned_direct_generation_directory,
-)
-from orca_auto.core.queue.engine.snapshot_intent import (
-    bind_snapshot_intent_generation_identities,
-    create_snapshot_intent,
-    discard_snapshot_intent,
-    discard_snapshot_intent_if_generations_absent,
-)
 from orca_auto.core.queue.generation import (
     is_visible_generation_name,
     new_visible_generation_name,
 )
+from orca_auto.core.queue.snapshot_intent import (
+    SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
+    SNAPSHOT_INTENT_TOKEN_KEY,
+    bind_snapshot_intent_generation_identities,
+    create_snapshot_intent,
+    discard_snapshot_intent,
+    retire_snapshot_intent,
+)
 from orca_auto.core.utils.persistence import fsync_directory
+
+from ._cleanup import discard_unowned_generation
+
+# Directory ownership is shared by historical v2 and current v3 snapshots;
+# engine admission separately rejects retired execution contracts.
+_DIRECTORY_IDENTITY_SNAPSHOT_VERSIONS = (2, 3)
 
 
 def _execution_directory(job_dir: Path, generation_name: str) -> Path:
@@ -71,17 +82,15 @@ def _reserve_execution_generation(
         try:
             bind_snapshot_intent_generation_identities(queue_root, intent_token)
         except BaseException:
-            try:
-                cleanup_unowned_direct_generation_directory(
-                    job_dir,
-                    namespace=generation_name,
-                    label="ORCA execution snapshot",
-                    expected_job_identity=job_identity,
-                    expected_generation_identity=generation_identity,
-                    expected_owner_token=intent_token,
-                )
-            finally:
-                discard_snapshot_intent_if_generations_absent(queue_root, intent_token)
+            discard_unowned_generation(
+                job_dir,
+                generation_name=generation_name,
+                job_identity=job_identity,
+                generation_identity=generation_identity,
+                owner_token=intent_token,
+                queue_root=queue_root,
+                discard_on_failure=True,
+            )
             raise
         return generation_name, reserved, generation_identity
     if target_generation_name is not None:
@@ -91,3 +100,35 @@ def _reserve_execution_generation(
             "resubmitting the job"
         )
     raise FileExistsError("Could not reserve a unique visible ORCA generation directory")
+
+
+def retire_snapshot_intent_for_row(queue_root: str | Path, entry: Any) -> None:
+    """Retire a reserved row's snapshot intent before its child starts.
+
+    A row whose snapshot names no intent has nothing to retire. The generation
+    identity is read only from v2 and v3 snapshots; the core refuses a missing
+    one after it has read the intent, so an already retired intent never
+    fails a row.
+    """
+
+    metadata = getattr(entry, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        return
+    snapshot = metadata.get("execution_snapshot")
+    if not isinstance(snapshot, Mapping):
+        return
+    token = str(snapshot.get(SNAPSHOT_INTENT_TOKEN_KEY) or "").strip()
+    intent_root = str(snapshot.get(SNAPSHOT_INTENT_QUEUE_ROOT_KEY) or "").strip()
+    if not token and not intent_root:
+        return
+    retire_snapshot_intent(
+        queue_root,
+        token,
+        intent_queue_root=intent_root,
+        execution_dir=str(snapshot.get("execution_dir") or "").strip(),
+        execution_dir_identity=(
+            snapshot.get("execution_dir_identity")
+            if snapshot.get("version") in _DIRECTORY_IDENTITY_SNAPSHOT_VERSIONS
+            else None
+        ),
+    )

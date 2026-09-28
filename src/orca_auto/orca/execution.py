@@ -7,14 +7,11 @@ reservation, settles from an already completed output when
 loads (or creates) ``job_state.json`` and drives ``attempt.engine.run_attempts``
 with a runner built for the configured scratch and admission registrars.
 Admission-related failures release the reservation before they are reported.
-Input selection (``select_latest_inp``) and the direct-run lock probe
-(``active_direct_run_error``) live here because submission shares them.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Callable
 from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
@@ -30,9 +27,7 @@ from orca_auto.core.admission import (
 )
 from orca_auto.core.admission import activate_reserved_slot as _activate_reserved_slot
 from orca_auto.core.admission.records import ADMISSION_SOURCE_QUEUE_RUN, SLOT_STATE_ACTIVE
-from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.engine_scratch import EngineScratchCapacityError
-from orca_auto.core.utils.process_tracking import RUN_LOCK_FILE_NAME, run_lock_status
 
 from .attempt.engine import run_attempts
 from .notifications import (
@@ -49,40 +44,7 @@ from .state_reading import load_state
 from .statuses import AnalyzerStatus, RunStatus
 from .types import RunStartedNotification
 
-ORCA_GENERATED_INP_RE = re.compile(
-    r"\.(scfgrad|scfhess|cis|autoci|cipsi|mrci|mdci|eprnmr|loc|nbo|compound|hess)"
-    r"$",
-    re.IGNORECASE,
-)
-
 logger = logging.getLogger(__name__)
-
-
-def select_latest_inp(reaction_dir: Path) -> Path:
-    resolved_reaction_dir = reaction_dir.expanduser().resolve()
-    all_candidates = list(reaction_dir.glob("*.inp"))
-    if not all_candidates:
-        raise ValueError(f"No .inp file found in: {reaction_dir}")
-    # Prefer user-authored base inputs over generated intermediate files.
-    candidates = [p for p in all_candidates if not ORCA_GENERATED_INP_RE.search(p.stem)]
-    if not candidates:
-        candidates = all_candidates
-    candidates = [
-        require_confined_regular_file(
-            resolved_reaction_dir,
-            candidate,
-            label="ORCA selected input",
-        )
-        for candidate in candidates
-    ]
-    candidates.sort(key=lambda p: (p.stat().st_mtime_ns, p.name.lower()), reverse=True)
-    if len(candidates) > 1:
-        logging.getLogger(__name__).warning(
-            "Multiple ORCA .inp candidates found in %s; selected newest input %s",
-            reaction_dir,
-            candidates[0].name,
-        )
-    return candidates[0]
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -200,23 +162,6 @@ def recover_crashed_state(reaction_dir: Path, *, logger: logging.Logger) -> bool
     }
     save_state(reaction_dir, state)
     return True
-
-
-def active_direct_run_error(reaction_dir: Path, *, logger: logging.Logger) -> str | None:
-    status = run_lock_status(
-        reaction_dir,
-        logger=logger,
-        lock_file_name=RUN_LOCK_FILE_NAME,
-    )
-    if not status.held:
-        return None
-
-    owner = f"pid={status.pid}" if status.pid is not None else "pid=unknown"
-    started = status.started_at or "unknown"
-    return (
-        "Another orca_auto instance is already running in this directory "
-        f"({owner}, started_at={started}). Lock file: {reaction_dir / RUN_LOCK_FILE_NAME}"
-    )
 
 
 def started_notification_callback(cfg: Any) -> Callable[[RunStartedNotification], bool] | None:

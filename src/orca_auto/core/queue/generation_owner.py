@@ -1,14 +1,17 @@
+"""The owner marker of a direct generation directory and its pinned no-follow removal."""
+
 from __future__ import annotations
 
 import os
 import re
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from orca_auto.core.utils import stable_fs
 from orca_auto.core.utils.stable_fs import StableFsError
 
-MAX_INPUT_SNAPSHOT_BYTES = 64 * 1024 * 1024
 _ROLE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _DIRECT_GENERATION_OWNER_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{16,160}")
 _DIRECT_GENERATION_OWNER_XATTR = "user.orca_auto.generation_owner"
@@ -92,6 +95,47 @@ def _verify_direct_generation_owner(directory_fd: int, token: str) -> None:
         raise ValueError("Visible generation owner identity changed")
 
 
+@contextmanager
+def _pinned_generation(
+    job_dir: Path,
+    namespace: str,
+    *,
+    job_label: str,
+    generation_label: str,
+    expected_job_identity: tuple[int, int],
+    expected_generation_identity: tuple[int, int],
+    missing_ok: bool = False,
+) -> Iterator[tuple[int, int, tuple[int, int]] | None]:
+    """Pin a job directory and one direct generation below it by exact identity.
+
+    Yields the job descriptor, the generation descriptor and the generation
+    identity, or None for an absent generation with ``missing_ok``.
+    """
+    job_fd, _job_identity = _open_stable_directory(
+        job_dir,
+        label=job_label,
+        expected_identity=expected_job_identity,
+    )
+    try:
+        opened = _open_stable_directory_at(
+            job_fd,
+            namespace,
+            label=generation_label,
+            missing_ok=missing_ok,
+            expected_identity=expected_generation_identity,
+        )
+        if opened is None:
+            yield None
+            return
+        generation_fd, generation_identity = opened
+        try:
+            yield job_fd, generation_fd, generation_identity
+        finally:
+            os.close(generation_fd)
+    finally:
+        os.close(job_fd)
+
+
 def bind_direct_generation_owner(
     job_dir: str | Path,
     *,
@@ -104,33 +148,24 @@ def bind_direct_generation_owner(
 
     safe_namespace = canonical_input_snapshot_namespace(namespace)
     resolved_job_dir = Path(job_dir).expanduser().resolve(strict=True)
-    job_fd, _identity = _open_stable_directory(
+    with _pinned_generation(
         resolved_job_dir,
-        label="Generation owner job directory",
-        expected_identity=expected_job_identity,
-    )
-    try:
-        opened = _open_stable_directory_at(
-            job_fd,
-            safe_namespace,
-            label="Generation owner directory",
-            expected_identity=expected_generation_identity,
+        safe_namespace,
+        job_label="Generation owner job directory",
+        generation_label="Generation owner directory",
+        expected_job_identity=expected_job_identity,
+        expected_generation_identity=expected_generation_identity,
+    ) as pinned:
+        assert pinned is not None
+        _job_fd, generation_fd, _generation_identity = pinned
+        os.setxattr(
+            generation_fd,
+            _DIRECT_GENERATION_OWNER_XATTR,
+            _direct_generation_owner_payload(owner_token),
+            flags=os.XATTR_CREATE,
         )
-        assert opened is not None
-        generation_fd, _generation_identity = opened
-        try:
-            os.setxattr(
-                generation_fd,
-                _DIRECT_GENERATION_OWNER_XATTR,
-                _direct_generation_owner_payload(owner_token),
-                flags=os.XATTR_CREATE,
-            )
-            os.fsync(generation_fd)
-            _verify_direct_generation_owner(generation_fd, owner_token)
-        finally:
-            os.close(generation_fd)
-    finally:
-        os.close(job_fd)
+        os.fsync(generation_fd)
+        _verify_direct_generation_owner(generation_fd, owner_token)
 
 
 def require_direct_generation_owner(
@@ -145,26 +180,17 @@ def require_direct_generation_owner(
 
     safe_namespace = canonical_input_snapshot_namespace(namespace)
     resolved_job_dir = Path(job_dir).expanduser().resolve(strict=True)
-    job_fd, _identity = _open_stable_directory(
+    with _pinned_generation(
         resolved_job_dir,
-        label="Generation owner job directory",
-        expected_identity=expected_job_identity,
-    )
-    try:
-        opened = _open_stable_directory_at(
-            job_fd,
-            safe_namespace,
-            label="Generation owner directory",
-            expected_identity=expected_generation_identity,
-        )
-        assert opened is not None
-        generation_fd, _generation_identity = opened
-        try:
-            _verify_direct_generation_owner(generation_fd, owner_token)
-        finally:
-            os.close(generation_fd)
-    finally:
-        os.close(job_fd)
+        safe_namespace,
+        job_label="Generation owner job directory",
+        generation_label="Generation owner directory",
+        expected_job_identity=expected_job_identity,
+        expected_generation_identity=expected_generation_identity,
+    ) as pinned:
+        assert pinned is not None
+        _job_fd, generation_fd, _generation_identity = pinned
+        _verify_direct_generation_owner(generation_fd, owner_token)
 
 
 def _remove_emptied_directory_at(
@@ -258,75 +284,31 @@ def cleanup_unowned_direct_generation_directory(
         resolved_job_dir = raw_job_dir.resolve(strict=True)
     except FileNotFoundError:
         raise ValueError("Generation cleanup job directory identity changed") from None
-    job_fd, _job_identity = _open_stable_directory(
+    with _pinned_generation(
         resolved_job_dir,
-        label="Generation cleanup job directory",
-        expected_identity=expected_job_identity,
-    )
-    try:
-        opened_generation = _open_stable_directory_at(
+        safe_namespace,
+        job_label="Generation cleanup job directory",
+        generation_label=f"{label} generation",
+        expected_job_identity=expected_job_identity,
+        expected_generation_identity=expected_generation_identity,
+        missing_ok=True,
+    ) as pinned:
+        if pinned is None:
+            return
+        job_fd, generation_fd, generation_identity = pinned
+        _verify_direct_generation_owner(generation_fd, expected_owner_token)
+        _remove_emptied_directory_at(
             job_fd,
             safe_namespace,
+            child_fd=generation_fd,
+            child_identity=generation_identity,
             label=f"{label} generation",
-            missing_ok=True,
-            expected_identity=expected_generation_identity,
         )
-        if opened_generation is None:
-            return
-        generation_fd, generation_identity = opened_generation
-        try:
-            _verify_direct_generation_owner(generation_fd, expected_owner_token)
-            _remove_emptied_directory_at(
-                job_fd,
-                safe_namespace,
-                child_fd=generation_fd,
-                child_identity=generation_identity,
-                label=f"{label} generation",
-            )
-        finally:
-            os.close(generation_fd)
-    finally:
-        os.close(job_fd)
-
-
-def read_stable_regular_file(
-    path: str | Path,
-    *,
-    max_bytes: int = MAX_INPUT_SNAPSHOT_BYTES,
-    require_single_link: bool = False,
-) -> bytes:
-    """Read one regular file without following a final symlink or blocking on a FIFO."""
-
-    source_path = Path(path).expanduser()
-    if max_bytes < 1:
-        raise ValueError("Stable file read limit must be positive")
-    effective_max_bytes = int(max_bytes)
-    try:
-        payload, _details = stable_fs.read_stable_regular_file_at(
-            source_path,
-            max_bytes=effective_max_bytes,
-            require_single_link=require_single_link,
-        )
-    except StableFsError as exc:
-        if exc.reason == "not_regular":
-            raise ValueError(f"Input source is not a regular file: {source_path}") from exc
-        if exc.reason == "not_single_link":
-            raise ValueError(
-                f"Input source must be a single-link regular file: {source_path}"
-            ) from exc
-        if exc.reason == "too_large":
-            raise ValueError(
-                f"Input source exceeds {effective_max_bytes} bytes: {source_path}"
-            ) from exc
-        raise ValueError(f"Input source changed while it was read: {source_path}") from exc
-    except OSError as exc:
-        raise ValueError(f"Input source is not a readable regular file: {source_path}") from exc
-    return payload
 
 
 __all__ = [
-    "MAX_INPUT_SNAPSHOT_BYTES",
+    "bind_direct_generation_owner",
     "canonical_input_snapshot_namespace",
     "cleanup_unowned_direct_generation_directory",
-    "read_stable_regular_file",
+    "require_direct_generation_owner",
 ]

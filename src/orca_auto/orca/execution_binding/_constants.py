@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from orca_auto.core.queue.engine.input_snapshot import MAX_INPUT_SNAPSHOT_BYTES
+from orca_auto.core.confined_io import MAX_INPUT_SNAPSHOT_BYTES
 
 ORCA_EXECUTION_SNAPSHOT_VERSION = 3
 

@@ -37,6 +37,23 @@ def test_new_config_default_is_the_home_path_in_every_installation_layout(
     assert discovery.resolve_shared_config_path(None) == str(expected)
 
 
+def test_default_config_path_prefers_env_then_home_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    home_default = fake_home / "orca_auto" / "config" / "orca_auto.yaml"
+
+    # The home default is the only implicit location, whether or not the
+    # file exists yet; no checkout-relative path is probed.
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.setenv(ORCA_AUTO_CONFIG_ENV_VAR, "")
+    assert discovery.default_shared_config_path() == str(home_default)
+
+    monkeypatch.setenv(ORCA_AUTO_CONFIG_ENV_VAR, "/tmp/env.yaml")
+    assert discovery.default_shared_config_path() == "/tmp/env.yaml"
+
+
 def test_checkout_config_is_not_discovered(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -126,7 +143,7 @@ def test_queue_list_and_cancel_use_the_same_discovered_config(
         return {"status": "cancelled"}
 
     # Verify discovery and target selection without cancelling or signalling a job.
-    monkeypatch.setattr(_cancel, "cancel_orca_target", cancel_stub)
+    monkeypatch.setattr(_cancel.direct_cancel, "cancel_target", cancel_stub)
     assert main(["queue", "cancel", target, "--json", *options]) == 0
     cancelled = json.loads(capsys.readouterr().out)
     assert cancelled["activity_id"] == target

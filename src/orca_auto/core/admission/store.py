@@ -11,7 +11,7 @@ the liveness-filtered reads).
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -285,6 +285,31 @@ def read_active_slot_count(root: str | Path) -> int:
 
 def get_slot(root: str | Path, token: str) -> AdmissionSlot | None:
     return next((slot for slot in list_all_slots(root) if slot.token == token), None)
+
+
+def live_queue_slot_keys_for_slots(
+    slots: Iterable[AdmissionSlot],
+) -> tuple[set[tuple[str, str]], set[str]]:
+    scoped_keys: set[tuple[str, str]] = set()
+    unscoped_ids: set[str] = set()
+    for slot in slots:
+        queue_id = str(slot.queue_id).strip()
+        if not queue_id:
+            continue
+        work_dir = _normalized_work_dir(slot.work_dir)
+        if work_dir:
+            scoped_keys.add((queue_id, work_dir))
+        else:
+            unscoped_ids.add(queue_id)
+    return scoped_keys, unscoped_ids
+
+
+def _normalized_work_dir(value: str) -> str:
+    # Unlike _normalize_work_dir, an unresolvable path raises OSError instead of keeping its text.
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return str(Path(text).expanduser().resolve())
 
 
 def reserve_slot(

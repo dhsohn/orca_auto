@@ -68,3 +68,7 @@ def effective_queue_status(entry: QueueEntry) -> str:
     if status == QueueStatus.RUNNING.value and bool(getattr(entry, "cancel_requested", False)):
         return STATUS_CANCEL_REQUESTED
     return status
+
+
+def entry_status_is_running(entry: QueueEntry | None) -> bool:
+    return entry is not None and entry.status == QueueStatus.RUNNING

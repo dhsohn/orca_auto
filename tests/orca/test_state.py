@@ -11,7 +11,7 @@ from typing import cast
 
 import pytest
 
-from orca_auto.core.queue.engine.input_snapshot import bind_direct_generation_owner
+from orca_auto.core.queue.generation_owner import bind_direct_generation_owner
 from orca_auto.core.utils.process_tracking import run_lock_is_held
 from orca_auto.orca import run_lock
 from orca_auto.orca import state as state_module

@@ -11,8 +11,7 @@ so a crash loop can never mint generations indefinitely.
 This module sits above the ``execution_binding`` package and uses only the
 names its ``__init__`` exports: it drives queue-row mutation and the
 snapshot-intent ledger, so the worker child imports it directly with the
-config it already loaded (``submission`` imports the package, and this module
-imports ``submission``).
+config it already loaded (``submission`` imports the package the same way).
 """
 
 from __future__ import annotations
@@ -21,28 +20,29 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from orca_auto.core.queue.child.process import entry_status_is_running
-from orca_auto.core.queue.engine.snapshot_intent import (
-    SNAPSHOT_INTENT_STATE_CREATING,
-    SNAPSHOT_INTENT_STATE_ENQUEUEING,
-    SNAPSHOT_INTENT_TOKEN_KEY,
-    transition_snapshot_intent,
-)
 from orca_auto.core.queue.generation import (
     is_visible_generation_name,
     new_visible_generation_name,
 )
-from orca_auto.core.queue.types import QueueEntry
+from orca_auto.core.queue.snapshot_intent import (
+    SNAPSHOT_INTENT_STATE_CREATING,
+    SNAPSHOT_INTENT_STATE_ENQUEUEING,
+    SNAPSHOT_INTENT_TOKEN_KEY,
+    mark_snapshot_intent_owned,
+    transition_snapshot_intent,
+)
+from orca_auto.core.queue.types import QueueEntry, entry_status_is_running
 from orca_auto.core.utils.persistence import timestamped_token, timestamped_token_pattern
 
 from .config import AppConfig
 from .execution import recover_crashed_state
 from .execution_binding import (
-    ORCA_EXECUTION_SNAPSHOT_VERSION,
+    STALE_RECOVERY_SNAPSHOT_ERROR,
     build_orca_execution_snapshot,
     cleanup_unowned_orca_execution_snapshot,
     orca_execution_snapshot_generation_dir,
     orca_execution_started_evidence,
+    require_current_snapshot_version,
     verify_orca_snapshot_executable,
 )
 from .output_adoption import completed_out_or_none
@@ -55,7 +55,6 @@ from .queue.adapter import (
 from .queue.entries import queue_entry_reaction_dir
 from .resource_directives import prepare_submission_resource_request
 from .run_lock import acquire_run_lock
-from .submission import mark_orca_snapshot_owned
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +76,7 @@ def _validated_recovery_rebind_claim(
     snapshot: dict[str, Any],
 ) -> tuple[int, dict[str, Any] | None]:
     """Validate the durable recovery budget and claim without performing I/O."""
-    if snapshot.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION or "max_retries" in snapshot:
-        raise ValueError("ORCA recovery requires a current execution snapshot; resubmit the job")
+    require_current_snapshot_version(snapshot, error=STALE_RECOVERY_SNAPSHOT_ERROR)
     raw_count = metadata.get(RECOVERY_REBIND_COUNT_METADATA_KEY, 0)
     if (
         isinstance(raw_count, bool)
@@ -220,7 +218,9 @@ def _publish_recovery_generation(
     except BaseException:
         cleanup_unowned_orca_execution_snapshot(reaction_dir, new_snapshot)
         raise
-    marker_warning = mark_orca_snapshot_owned(queue_root, intent_token)
+    marker_warning = mark_snapshot_intent_owned(
+        queue_root, intent_token, intent_label="queued ORCA snapshot"
+    )
     updated = get_entry_by_id(queue_root, str(entry.queue_id))
     updated_metadata = getattr(updated, "metadata", None)
     updated_snapshot = (
@@ -316,8 +316,11 @@ def maybe_rebind_recovery_generation(
     recorded_request = metadata.get("resource_request")
     with acquire_run_lock(reaction_dir):
         recover_crashed_state(reaction_dir, logger=logger)
+        # Plain read: build requires the crashed stable-read digest, which bounds size and tearing.
+        source_payload = Path(source_selected).read_bytes()
         prepared = prepare_submission_resource_request(
             Path(source_selected),
+            source_payload,
             default_max_cores=int(cfg.resources.max_cores_per_task),
             default_max_memory_gb=int(cfg.resources.max_memory_gb_per_task),
         )
@@ -335,7 +338,7 @@ def maybe_rebind_recovery_generation(
             snapshot_intent_token=intent_token,
             target_generation_name=target_generation_name,
             normalized_selected_payload=prepared.normalized_payload,
-            source_selected_sha256=prepared.source_sha256,
+            source_selected_payload=source_payload,
             recovery_from=snapshot,
         )
     return _publish_recovery_generation(

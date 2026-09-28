@@ -316,7 +316,7 @@ def test_cli_run_dir_json_success_carries_ok(
             status="submitted",
             stderr="",
             queued_result=SimpleNamespace(entry=entry, worker_info=worker),
-            context=SimpleNamespace(reaction_dir=job),
+            target=SimpleNamespace(reaction_dir=job),
         )
 
     monkeypatch.setattr(run_inp_command.submission, "submit_reaction_dir_to_queue", _fake_submit)

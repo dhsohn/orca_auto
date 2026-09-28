@@ -43,7 +43,7 @@ _QUEUE_CANCEL_ERRORS: tuple[type[Exception], ...] = (LookupError, *_QUEUE_STATE_
 
 @dataclass(frozen=True)
 class _QueueListRequest:
-    shared_config: str | None
+    config_path: str | None
     limit: int
     status_values: tuple[str, ...]
     json_output: bool
@@ -224,7 +224,7 @@ def _queue_list_request(args: Any) -> _QueueListRequest:
     return _QueueListRequest(
         # Resolve one effective config up front so activity rows and the global
         # active count use the same checkout and runtime roots.
-        shared_config=discovery.resolve_shared_config_path(explicit_config),
+        config_path=discovery.resolve_shared_config_path(explicit_config),
         limit=int(getattr(args, "limit", 0) or 0),
         status_values=normalize_activity_filter_values(getattr(args, "status", None)),
         json_output=bool(getattr(args, "json", False)),
@@ -242,7 +242,7 @@ def _emit_queue_list_clear(payload: dict[str, Any], *, json_output: bool) -> int
 
 def _missing_runs_root(request: _QueueListRequest) -> str | None:
     """The configured runs root when it is not a directory, else None."""
-    root = shared_runs_root_from_config(request.shared_config)
+    root = shared_runs_root_from_config(request.config_path)
     if not root:
         return None
     return None if Path(root).is_dir() else str(root)
@@ -365,7 +365,7 @@ def cmd_queue_list(args: Any) -> int:
             )
             return 1
         try:
-            clear_payload = clear_activities(orca_config=request.shared_config)
+            clear_payload = clear_activities(config_path=request.config_path)
         except _QUEUE_STATE_ERRORS as exc:
             emit_error(
                 exc,
@@ -385,7 +385,7 @@ def cmd_queue_list(args: Any) -> int:
             limit=request.limit,
             statuses=request.status_values,
             refresh=bool(getattr(args, "refresh", False)),
-            orca_config=request.shared_config,
+            config_path=request.config_path,
         )
     except _QUEUE_STATE_ERRORS as exc:
         emit_error(
@@ -429,13 +429,10 @@ def _emit_queue_cancel(payload: dict[str, Any], *, json_output: bool) -> int:
 
 
 def cmd_queue_cancel(args: Any) -> int:
-    shared_config = shared_config_text_from_args(args) or None
+    config_path = shared_config_text_from_args(args) or None
     json_output = bool(getattr(args, "json", False))
     try:
-        payload = cancel_activity(
-            target=args.target,
-            orca_config=shared_config,
-        )
+        payload = cancel_activity(target=args.target, config_path=config_path)
     except _QUEUE_CANCEL_ERRORS as exc:
         emit_error(
             exc,

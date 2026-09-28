@@ -171,6 +171,46 @@ in [docs/RELEASE.md](docs/RELEASE.md).
   job is still retained. `Failed to prepare or release cancelled job …` reads
   `Failed to settle or release cancelled job …`. The crash rebind's debug line
   `completed-output probe failed …` comes from `orca_auto.orca.output_adoption`.
+- The queued-record repair log lines keep their text but come from
+  `orca_auto.orca.queue.publication_repair` instead of
+  `orca_auto.orca.queue.enqueue_publication`:
+  `ORCA: repaired queued record publication …`,
+  `ORCA: queued record repair failed …` and `… claim failed …`,
+  `ORCA: cannot repair queue publication with invalid state …`,
+  `ORCA: queued record repair refused a changed queue generation …` and the
+  repair's `ORCA: failed to park queued record as repair pending …`.
+- The snapshot-intent log lines
+  `queued ORCA snapshot intent already retired by the worker; …` and
+  `queued ORCA snapshot ownership marker update failed; …` keep their text but
+  come from `orca_auto.core.queue.snapshot_intent` instead of
+  `orca_auto.core.queue.engine.snapshot_intent`.
+- `run-dir` reads the selected `.inp` once. The queue row's `job_type`,
+  `molecule_key`, `selected_input_xyz` and `resource_request`, the execution
+  snapshot's `source_inputs` digest and the bound input copy all describe
+  those bytes, so an edit saved while the submission runs yields one
+  consistent snapshot. Such an edit used to queue a row whose job type and
+  molecule key came from the earlier text while the generation held the
+  edited input, or to fail with
+  `ORCA selected input changed while submission resources were prepared`.
+  A selected `.inp` that cannot be read, for example without read permission
+  or because it was deleted after `run-dir` selected it, now fails as
+  `invalid_submission_input` with
+  `Input source is not a readable regular file: …` instead of
+  `queue_submission_failed` with the raw `PermissionError: …` or
+  `FileNotFoundError: …`; `run-dir` still exits 1. Crash recovery reads the
+  recorded source input once too and still refuses one that differs from the
+  crashed submission. Existing queue rows and generations are untouched.
+- A queued row whose execution snapshot records a `version` that is not a
+  scalar (a list or mapping) still fails at worker start and keeps its
+  snapshot intent. Its error is now a `ValueError`,
+  `snapshot intent finalization failed: Queued snapshot has no visible generation identity`,
+  instead of a `TypeError`,
+  `snapshot intent finalization failed: unhashable type: …`.
+- `Multiple ORCA .inp candidates found in …` comes from the
+  `orca_auto.orca.submission` logger instead of `orca_auto.orca.execution`,
+  and the `run-dir` run-lock probe's
+  `Cannot inspect … ownership; treating it as held` warning from
+  `orca_auto.orca.run_lock` instead of `orca_auto.orca.submission`.
 - Public contract: one generation identity now decides whether a queue row is
   still the generation a writer read
   ([ADR 0006](docs/adr/0006-one-generation-identity-for-token-and-fences.md)),

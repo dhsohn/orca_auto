@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import secrets
+import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from orca_auto.core.confined_io import require_confined_regular_file
-from orca_auto.core.queue.engine.input_snapshot import (
-    cleanup_unowned_direct_generation_directory,
-)
-from orca_auto.core.queue.engine.snapshot_intent import (
+from orca_auto.core.queue.snapshot_intent import (
     SNAPSHOT_INTENT_QUEUE_ROOT_KEY,
     SNAPSHOT_INTENT_TOKEN_KEY,
-    discard_snapshot_intent_if_generations_absent,
 )
 from orca_auto.orca import engine_runner as _engine_runner
 from orca_auto.orca.geometry_limits import MAX_ADMISSION_ATOMS, MAX_HESSIAN_ADMISSION_ATOMS
@@ -23,6 +19,7 @@ from .. import input_references
 from ..input_references import orca_input_requests_moread, orca_moinp_references
 from ..input_validation import validate_supported_xyz_geometry_syntax
 from ..resource_directives import resource_request_from_lines
+from ._cleanup import discard_unowned_generation
 from ._confinement import (
     _confined_reference_path,
     _payload_with_budget,
@@ -36,15 +33,16 @@ from ._confinement import (
 from ._constants import ORCA_EXECUTION_SNAPSHOT_VERSION
 from ._inputs import (
     _inline_geometry_atom_count,
-    _neb_preoptimizes_end_points,
-    _route_requests_hessian,
-    _route_requests_neb,
-    _route_writes_engrad,
-    _route_writes_same_stem_xyz,
+    _route_outputs,
     _validated_xyz_atom_count,
     _xyz_atom_lines,
 )
-from ._models import _BoundDependency, _MaterializedSnapshotInputs, _SelectedSnapshotInput
+from ._models import (
+    _BoundDependency,
+    _MaterializedSnapshotInputs,
+    _RecoveryPlan,
+    _SelectedSnapshotInput,
+)
 from ._recovery import (
     _recovery_seed_plan,
     _validated_recovery_checkpoint,
@@ -54,7 +52,14 @@ from ._recovery import (
 )
 from ._reservation import _reserve_execution_generation
 from ._rewrite import _write_bound_selected_snapshot
-from ._snapshot_identity import _file_identity, verify_orca_snapshot_executable
+from ._snapshot_identity import (
+    STALE_RECOVERY_SNAPSHOT_ERROR,
+    _file_identity,
+    dependency_role,
+    require_current_snapshot_version,
+    validated_resource_request,
+    verify_orca_snapshot_executable,
+)
 
 _XYZ_GEOMETRY_REFERENCE_KINDS = frozenset({"geometry", "neb_geometry"})
 
@@ -62,41 +67,32 @@ _XYZ_GEOMETRY_REFERENCE_KINDS = frozenset({"geometry", "neb_geometry"})
 def _load_selected_snapshot_input(
     source_selected: Path,
     *,
-    normalized_selected_payload: bytes | None,
-    source_selected_sha256: str | None,
-    recovery_from: Mapping[str, Any] | None,
-    recovery_selected_sha256: str,
+    normalized_selected_payload: bytes,
+    source_selected_payload: bytes,
+    recovery: _RecoveryPlan | None,
     resource_request: Mapping[str, int],
 ) -> _SelectedSnapshotInput:
     source_inputs: dict[str, dict[str, Any]] = {}
-    selected_descriptor, selected_payload, consumed_bytes = _source_with_budget(
+    # The caller read the source once and normalized its resources from those
+    # bytes, so the recorded digest describes exactly what the bound copy came from.
+    selected_descriptor, selected_payload, consumed_bytes = _payload_with_budget(
         source_selected,
+        source_selected_payload,
         role="selected_source",
         consumed_bytes=0,
     )
     source_inputs["selected_source"] = selected_descriptor
-    if (
-        source_selected_sha256 is not None
-        and str(selected_descriptor.get("sha256") or "") != source_selected_sha256
-    ):
-        raise ValueError("ORCA selected input changed while submission resources were prepared")
-    if recovery_from is not None and (
-        str(selected_descriptor.get("sha256") or "").strip().lower() != recovery_selected_sha256
+    if recovery is not None and (
+        str(selected_descriptor.get("sha256") or "").strip().lower() != recovery.selected_sha256
     ):
         raise ValueError("ORCA recovery source input changed since the crashed submission")
     try:
-        selected_text = (
-            normalized_selected_payload
-            if normalized_selected_payload is not None
-            else selected_payload
-        ).decode("utf-8", errors="strict")
+        selected_text = normalized_selected_payload.decode("utf-8", errors="strict")
     except UnicodeError as exc:
         raise ValueError("ORCA selected input must be UTF-8 text") from exc
     inline_atom_count = _inline_geometry_atom_count(selected_text)
     lines = selected_text.splitlines()
-    if normalized_selected_payload is not None and resource_request_from_lines(lines) != dict(
-        resource_request
-    ):
+    if resource_request_from_lines(lines) != dict(resource_request):
         raise ValueError("ORCA normalized selected input does not match its resource request")
     validate_supported_xyz_geometry_syntax(lines, label="ORCA selected input")
     requests_moread = orca_input_requests_moread(lines)
@@ -105,11 +101,9 @@ def _load_selected_snapshot_input(
             "ORCA MORead requires an explicit MOInp file so the checkpoint can be "
             "bound into the execution snapshot"
         )
-    engrad_is_output = _route_writes_engrad(lines)
-    hessian_requested = _route_requests_hessian(lines)
-    same_stem_xyz_is_output = _route_writes_same_stem_xyz(lines)
+    routes = _route_outputs(lines)
     if (
-        hessian_requested
+        routes.hessian_requested
         and inline_atom_count is not None
         and inline_atom_count > MAX_HESSIAN_ADMISSION_ATOMS
     ):
@@ -123,9 +117,7 @@ def _load_selected_snapshot_input(
         lines=lines,
         references=input_references.scan_orca_file_references(lines),
         requests_moread=requests_moread,
-        engrad_is_output=engrad_is_output,
-        hessian_requested=hessian_requested,
-        same_stem_xyz_is_output=same_stem_xyz_is_output,
+        routes=routes,
         consumed_bytes=consumed_bytes,
     )
 
@@ -135,11 +127,7 @@ def _plan_bound_dependencies(
     source_selected: Path,
     selected: _SelectedSnapshotInput,
     *,
-    recovery_from: Mapping[str, Any] | None,
-    recovery_seed_dir: Path | None,
-    recovery_seed_basenames: set[str],
-    recovery_seed_atom_signature: tuple[str, ...] | None,
-    recovery_submitted_dependency_identities: Mapping[str, Mapping[str, Any]],
+    recovery: _RecoveryPlan | None,
 ) -> tuple[list[_BoundDependency], set[Path]]:
     dependency_sources: set[Path] = set()
     geometry_dependencies: set[Path] = set()
@@ -149,11 +137,11 @@ def _plan_bound_dependencies(
             resolved_job_dir, source_selected, reference.value
         )
         may_use_recovery_geometry_seed = (
-            recovery_seed_dir is not None
-            and selected.same_stem_xyz_is_output
+            recovery is not None
+            and selected.routes.same_stem_xyz_is_output
             and reference.kind == "geometry"
             and prospective_dependency.name == source_selected.with_suffix(".xyz").name
-            and str(prospective_dependency) in recovery_submitted_dependency_identities
+            and str(prospective_dependency) in recovery.submitted_dependency_identities
         )
         dependency = (
             prospective_dependency
@@ -180,15 +168,16 @@ def _plan_bound_dependencies(
     )
 
     recovery_checkpoint_source: Path | None = None
-    if recovery_seed_dir is not None and not selected.requests_moread:
+    if recovery is not None and not selected.requests_moread:
         # Count dependencies twice: once for materialized copies and once for
         # possible inline-geometry expansion of the bound input.
+        submitted = recovery.submitted_dependency_identities
         estimated_source_bytes = (
             selected.consumed_bytes
             + 2
             * sum(
-                int(recovery_submitted_dependency_identities[str(dependency)]["size_bytes"])
-                if str(dependency) in recovery_submitted_dependency_identities
+                int(submitted[str(dependency)]["size_bytes"])
+                if str(dependency) in submitted
                 else dependency.stat().st_size
                 for dependency in dependencies
             )
@@ -196,58 +185,52 @@ def _plan_bound_dependencies(
         )
         recovery_checkpoint_source = _validated_recovery_checkpoint(
             job_dir=resolved_job_dir,
-            seed_dir=recovery_seed_dir,
+            seed_dir=recovery.seed_dir,
             source_selected=source_selected,
             scanned_dependencies=dependencies,
             estimated_source_bytes=estimated_source_bytes,
         )
 
-    neb_requested = _route_requests_neb(selected.lines)
-    neb_preopt_ends = _neb_preoptimizes_end_points(selected.lines)
     bound_dependencies: list[_BoundDependency] = []
     for dependency in dependencies:
         inline_same_stem_xyz = (
-            selected.same_stem_xyz_is_output
+            selected.routes.same_stem_xyz_is_output
             and dependency.name == source_selected.with_suffix(".xyz").name
             and dependency_reference_kinds.get(dependency) == {"geometry"}
         )
         _validate_dependency_basename(
             dependency,
             source_selected,
-            engrad_is_output=selected.engrad_is_output,
-            hessian_requested=selected.hessian_requested,
-            neb_requested=neb_requested,
-            neb_preopt_ends=neb_preopt_ends,
-            same_stem_xyz_is_output=selected.same_stem_xyz_is_output,
+            selected.routes,
             inline_same_stem_xyz=inline_same_stem_xyz,
         )
         seed_source: Path | None = None
         dependency_payload: bytes | None = None
         if (
-            recovery_seed_dir is not None
+            recovery is not None
             and inline_same_stem_xyz
-            and dependency.name in recovery_seed_basenames
+            and dependency.name in recovery.seed_basenames
         ):
-            if recovery_seed_atom_signature is None:
+            if recovery.seed_atom_signature is None:
                 raise ValueError("ORCA recovery mutable geometry has no bound atom signature")
             validated_seed = _validated_recovery_seed(
                 job_dir=resolved_job_dir,
-                seed_dir=recovery_seed_dir,
+                seed_dir=recovery.seed_dir,
                 basename=dependency.name,
-                expected_atom_signature=recovery_seed_atom_signature,
+                expected_atom_signature=recovery.seed_atom_signature,
                 max_atoms=(
                     MAX_HESSIAN_ADMISSION_ATOMS
-                    if selected.hessian_requested
+                    if selected.routes.hessian_requested
                     else MAX_ADMISSION_ATOMS
                 ),
             )
             if validated_seed is not None:
                 seed_source, dependency_payload = validated_seed
-        if seed_source is None and recovery_from is not None:
+        if seed_source is None and recovery is not None:
             dependency_payload = _validated_recovery_source_payload(
                 resolved_job_dir,
                 dependency,
-                recovery_submitted_dependency_identities,
+                recovery.submitted_dependency_identities,
             )
         bound_dependencies.append(
             _BoundDependency(
@@ -299,7 +282,7 @@ def _materialize_snapshot_inputs(
         inline_same_stem_xyz = dependency_plan.inline_same_stem_xyz
         private_override = dependency_plan.private_override
         source_payload = dependency_plan.source_payload
-        role = f"dependency_{index:06d}"
+        role = dependency_role(index)
         if source_payload is None:
             descriptor, dependency_payload, consumed_bytes = _source_with_budget(
                 effective_source,
@@ -322,7 +305,9 @@ def _materialize_snapshot_inputs(
             }
         if dependency in geometry_dependencies:
             geometry_limit = (
-                MAX_HESSIAN_ADMISSION_ATOMS if selected.hessian_requested else MAX_ADMISSION_ATOMS
+                MAX_HESSIAN_ADMISSION_ATOMS
+                if selected.routes.hessian_requested
+                else MAX_ADMISSION_ATOMS
             )
             if inline_same_stem_xyz:
                 inline_geometry_atoms[dependency] = _xyz_atom_lines(
@@ -376,6 +361,60 @@ def _materialize_snapshot_inputs(
     )
 
 
+def _snapshot_record(
+    *,
+    job_dir_stat: os.stat_result,
+    generation: tuple[str, Path, tuple[int, int]],
+    intent_token: str,
+    queue_root: Path,
+    source_selected: Path,
+    bound: tuple[Path, dict[str, Any]],
+    selected_input_xyz: str,
+    materialized: _MaterializedSnapshotInputs,
+    resource_request: Mapping[str, int],
+    executable: dict[str, Any],
+    recovery: _RecoveryPlan | None,
+) -> dict[str, Any]:
+    """The queue-metadata record of one built generation, in its stored key order."""
+
+    generation_name, execution_dir, generation_identity = generation
+    bound_selected, bound_identity = bound
+    snapshot: dict[str, Any] = {
+        "version": ORCA_EXECUTION_SNAPSHOT_VERSION,
+        "job_dir_identity": {
+            "device": int(job_dir_stat.st_dev),
+            "inode": int(job_dir_stat.st_ino),
+        },
+        "generation_name": generation_name,
+        "execution_dir_identity": {
+            "device": generation_identity[0],
+            "inode": generation_identity[1],
+        },
+        "execution_dir": str(execution_dir),
+        SNAPSHOT_INTENT_TOKEN_KEY: intent_token,
+        SNAPSHOT_INTENT_QUEUE_ROOT_KEY: str(queue_root),
+        "source_selected_inp": str(source_selected),
+        "selected_inp": str(bound_selected.resolve()),
+        "selected_input_xyz": str(selected_input_xyz or ""),
+        "dependency_paths": materialized.dependency_paths,
+        "source_inputs": materialized.source_inputs,
+        "materialized_inputs": materialized.materialized_inputs,
+        "runtime_mutable_input_roles": materialized.runtime_mutable_input_roles,
+        "bound_selected_identity": bound_identity,
+        "resource_request": dict(resource_request),
+        "executable_identities": {"orca": executable},
+    }
+    if recovery is not None:
+        snapshot["recovery"] = {
+            "previous_generation_name": recovery.previous_generation_name,
+            "previous_execution_dir": str(recovery.seed_dir),
+            "seeded_roles": materialized.seeded_roles,
+            "checkpoint_role": materialized.recovery_checkpoint_role,
+            "submitted_dependency_identities": recovery.submitted_dependency_identities,
+        }
+    return snapshot
+
+
 def build_orca_execution_snapshot(
     job_dir: str | Path,
     selected_inp: str | Path,
@@ -383,14 +422,18 @@ def build_orca_execution_snapshot(
     selected_input_xyz: str,
     resource_request: Mapping[str, int],
     orca_executable: str | Path,
-    queue_root: str | Path | None = None,
-    snapshot_intent_token: str | None = None,
+    queue_root: str | Path,
+    snapshot_intent_token: str,
+    normalized_selected_payload: bytes,
+    source_selected_payload: bytes,
     target_generation_name: str | None = None,
-    normalized_selected_payload: bytes | None = None,
-    source_selected_sha256: str | None = None,
     recovery_from: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one visible, immutable ORCA execution generation.
+
+    ``source_selected_payload`` is the selected input as the caller read it,
+    once, and ``normalized_selected_payload`` the resource-normalized text made
+    from those bytes; the recorded digest and the bound copy both come from them.
 
     With ``recovery_from`` (the crashed submission's snapshot), runtime-mutable
     geometry inputs are seeded from that frozen generation so the replacement
@@ -398,13 +441,9 @@ def build_orca_execution_snapshot(
     check stays byte-exact.
     """
 
-    if set(resource_request) != {"max_cores", "max_memory_gb"} or any(
-        isinstance(value, bool) or not isinstance(value, int) or value <= 0
-        for value in resource_request.values()
-    ):
-        raise ValueError("ORCA execution snapshot resources must be positive integers")
-    if (normalized_selected_payload is None) != (source_selected_sha256 is None):
-        raise ValueError("ORCA normalized selected input requires its bound source digest")
+    validated_resource_request(
+        resource_request, error="ORCA execution snapshot resources must be positive integers"
+    )
     raw_job_dir = Path(job_dir).expanduser()
     resolved_job_dir = raw_job_dir.resolve()
     if raw_job_dir.is_symlink() or not resolved_job_dir.is_dir():
@@ -418,59 +457,37 @@ def build_orca_execution_snapshot(
     if source_selected.suffix.lower() != ".inp":
         raise ValueError(f"ORCA selected input must be an .inp file: {source_selected}")
 
-    if recovery_from is not None and (
-        recovery_from.get("version") != ORCA_EXECUTION_SNAPSHOT_VERSION
-        or "max_retries" in recovery_from
-    ):
-        raise ValueError("ORCA recovery requires a current execution snapshot; resubmit the job")
     recovery_executable: str | None = None
+    recovery: _RecoveryPlan | None = None
     if recovery_from is not None:
+        require_current_snapshot_version(recovery_from, error=STALE_RECOVERY_SNAPSHOT_ERROR)
         recovery_executable = verify_orca_snapshot_executable(
             recovery_from,
             expected_executable=orca_executable,
         )
-
-    recovery_seed_dir: Path | None = None
-    recovery_selected_sha256 = ""
-    recovery_seed_basenames: set[str] = set()
-    recovery_seed_atom_signature: tuple[str, ...] | None = None
-    recovery_submitted_dependency_identities: dict[str, dict[str, Any]] = {}
-    if recovery_from is not None:
-        (
-            recovery_seed_dir,
-            recovery_selected_sha256,
-            recovery_seed_basenames,
-            recovery_seed_atom_signature,
-            recovery_submitted_dependency_identities,
-        ) = _recovery_seed_plan(resolved_job_dir, recovery_from)
+        recovery = _recovery_seed_plan(resolved_job_dir, recovery_from)
     selected = _load_selected_snapshot_input(
         source_selected,
         normalized_selected_payload=normalized_selected_payload,
-        source_selected_sha256=source_selected_sha256,
-        recovery_from=recovery_from,
-        recovery_selected_sha256=recovery_selected_sha256,
+        source_selected_payload=source_selected_payload,
+        recovery=recovery,
         resource_request=resource_request,
     )
-    resolved_queue_root = Path(queue_root or resolved_job_dir).expanduser().resolve()
-    resolved_intent_token = snapshot_intent_token or f"snapshot-{secrets.token_hex(16)}"
-    generation_name, execution_dir, generation_identity = _reserve_execution_generation(
+    resolved_queue_root = Path(queue_root).expanduser().resolve()
+    generation = _reserve_execution_generation(
         resolved_job_dir,
         queue_root=resolved_queue_root,
-        intent_token=resolved_intent_token,
+        intent_token=snapshot_intent_token,
         target_generation_name=target_generation_name,
     )
+    generation_name, execution_dir, generation_identity = generation
     try:
         bound_dependencies, geometry_dependencies = _plan_bound_dependencies(
             resolved_job_dir,
             source_selected,
             selected,
-            recovery_from=recovery_from,
-            recovery_seed_dir=recovery_seed_dir,
-            recovery_seed_basenames=recovery_seed_basenames,
-            recovery_seed_atom_signature=recovery_seed_atom_signature,
-            recovery_submitted_dependency_identities=(recovery_submitted_dependency_identities),
+            recovery=recovery,
         )
-
         materialized = _materialize_snapshot_inputs(
             resolved_job_dir,
             execution_dir,
@@ -479,7 +496,7 @@ def build_orca_execution_snapshot(
             bound_dependencies,
             geometry_dependencies,
         )
-        bound_selected, bound_identity = _write_bound_selected_snapshot(
+        bound = _write_bound_selected_snapshot(
             resolved_job_dir,
             execution_dir,
             source_selected,
@@ -501,53 +518,27 @@ def build_orca_execution_snapshot(
                     "ORCA crash recovery executable changed while the replacement snapshot "
                     "was built"
                 )
-        snapshot: dict[str, Any] = {
-            "version": ORCA_EXECUTION_SNAPSHOT_VERSION,
-            "job_dir_identity": {
-                "device": int(job_dir_stat.st_dev),
-                "inode": int(job_dir_stat.st_ino),
-            },
-            "generation_name": generation_name,
-            "execution_dir_identity": {
-                "device": generation_identity[0],
-                "inode": generation_identity[1],
-            },
-            "execution_dir": str(execution_dir),
-            SNAPSHOT_INTENT_TOKEN_KEY: resolved_intent_token,
-            SNAPSHOT_INTENT_QUEUE_ROOT_KEY: str(resolved_queue_root),
-            "source_selected_inp": str(source_selected),
-            "selected_inp": str(bound_selected.resolve()),
-            "selected_input_xyz": str(selected_input_xyz or ""),
-            "dependency_paths": materialized.dependency_paths,
-            "source_inputs": materialized.source_inputs,
-            "materialized_inputs": materialized.materialized_inputs,
-            "runtime_mutable_input_roles": materialized.runtime_mutable_input_roles,
-            "bound_selected_identity": bound_identity,
-            "resource_request": dict(resource_request),
-            "executable_identities": {"orca": executable},
-        }
-        if recovery_from is not None:
-            snapshot["recovery"] = {
-                "previous_generation_name": str(recovery_from.get("generation_name") or ""),
-                "previous_execution_dir": str(recovery_seed_dir),
-                "seeded_roles": materialized.seeded_roles,
-                "checkpoint_role": materialized.recovery_checkpoint_role,
-                "submitted_dependency_identities": (recovery_submitted_dependency_identities),
-            }
-        return snapshot
+        return _snapshot_record(
+            job_dir_stat=job_dir_stat,
+            generation=generation,
+            intent_token=snapshot_intent_token,
+            queue_root=resolved_queue_root,
+            source_selected=source_selected,
+            bound=bound,
+            selected_input_xyz=selected_input_xyz,
+            materialized=materialized,
+            resource_request=resource_request,
+            executable=executable,
+            recovery=recovery,
+        )
     except BaseException:
-        try:
-            cleanup_unowned_direct_generation_directory(
-                resolved_job_dir,
-                namespace=generation_name,
-                label="ORCA execution snapshot",
-                expected_job_identity=(job_dir_stat.st_dev, job_dir_stat.st_ino),
-                expected_generation_identity=generation_identity,
-                expected_owner_token=resolved_intent_token,
-            )
-        finally:
-            discard_snapshot_intent_if_generations_absent(
-                resolved_queue_root,
-                resolved_intent_token,
-            )
+        discard_unowned_generation(
+            resolved_job_dir,
+            generation_name=generation_name,
+            job_identity=(job_dir_stat.st_dev, job_dir_stat.st_ino),
+            generation_identity=generation_identity,
+            owner_token=snapshot_intent_token,
+            queue_root=resolved_queue_root,
+            discard_on_failure=True,
+        )
         raise

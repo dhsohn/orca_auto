@@ -50,7 +50,9 @@ def test_prepare_submission_resource_request_rejects_invalid_utf8(tmp_path: Path
     inp.write_bytes(payload)
 
     with pytest.raises(ValueError, match="UTF-8"):
-        prepare_submission_resource_request(inp, default_max_cores=2, default_max_memory_gb=2)
+        prepare_submission_resource_request(
+            inp, inp.read_bytes(), default_max_cores=2, default_max_memory_gb=2
+        )
 
     assert inp.read_bytes() == payload
 
@@ -60,7 +62,7 @@ def test_prepare_submission_resource_request_injects_missing_directives(tmp_path
     inp = _write_inp(tmp_path, source)
 
     prepared = prepare_submission_resource_request(
-        inp, default_max_cores=8, default_max_memory_gb=32
+        inp, inp.read_bytes(), default_max_cores=8, default_max_memory_gb=32
     )
     text = prepared.normalized_payload.decode("utf-8")
 
@@ -76,7 +78,7 @@ def test_prepare_submission_resource_request_preserves_existing_nprocs(tmp_path:
     inp = _write_inp(tmp_path, "! Opt\n%pal\n  nprocs 12\nend\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
 
     prepared = prepare_submission_resource_request(
-        inp, default_max_cores=8, default_max_memory_gb=32
+        inp, inp.read_bytes(), default_max_cores=8, default_max_memory_gb=32
     )
     text = prepared.normalized_payload.decode("utf-8")
 
@@ -93,7 +95,7 @@ def test_prepare_submission_resource_request_honors_pal_route_shorthand(tmp_path
     inp = _write_inp(tmp_path, "! Opt PAL4\n* xyz 0 1\nH 0 0 0\nH 0 0 0.74\n*\n")
 
     prepared = prepare_submission_resource_request(
-        inp, default_max_cores=8, default_max_memory_gb=32
+        inp, inp.read_bytes(), default_max_cores=8, default_max_memory_gb=32
     )
     text = prepared.normalized_payload.decode("utf-8")
 
@@ -121,7 +123,7 @@ def test_prepare_submission_resource_request_honors_nprocs_with_optional_equals(
     inp = _write_inp(tmp_path, source)
 
     prepared = prepare_submission_resource_request(
-        inp, default_max_cores=4, default_max_memory_gb=8
+        inp, inp.read_bytes(), default_max_cores=4, default_max_memory_gb=8
     )
 
     assert read_nprocs(source.splitlines()) == 16

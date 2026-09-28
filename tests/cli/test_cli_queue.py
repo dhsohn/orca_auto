@@ -559,7 +559,7 @@ def test_cmd_queue_list_reports_the_listing_active_count_not_the_page(
     assert payload["active_simulations"] == 7
     assert payload["activities"][0]["activity_id"] == "orca-opt-q-1"
     assert captured["limit"] == 1
-    assert captured["orca_config"] is None
+    assert captured["config_path"] is None
 
 
 def test_cmd_queue_list_forwards_limit_and_statuses_to_the_listing(
@@ -583,7 +583,7 @@ def test_cmd_queue_list_forwards_limit_and_statuses_to_the_listing(
         "limit": 1,
         "statuses": ("running", "failed"),
         "refresh": True,
-        "orca_config": None,
+        "config_path": None,
     }
     payload = json.loads(capsys.readouterr().out)
     assert payload["count"] == 0

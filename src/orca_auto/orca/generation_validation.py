@@ -5,10 +5,17 @@ Callers retain their identity decoding, owner-token, and content-hash policies.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from orca_auto.core.confined_io import require_confined_regular_file
 from orca_auto.core.queue.generation import is_visible_generation_name
+
+
+def is_retired_generation_marker(record: Mapping[str, Any]) -> bool:
+    """Whether an execution snapshot or state payload predates the retry removal (4.0)."""
+    return "max_retries" in record
 
 
 def require_bound_generation_directory(

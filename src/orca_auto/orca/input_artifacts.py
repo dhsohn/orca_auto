@@ -19,14 +19,6 @@ class OrcaSelectedInputArtifacts:
         return self.selected_input_xyz or self.selected_inp
 
 
-def selected_input_artifacts(selected_inp: str | Path | None) -> OrcaSelectedInputArtifacts:
-    selected_inp_text = _path_text(selected_inp)
-    return OrcaSelectedInputArtifacts(
-        selected_inp=selected_inp_text,
-        selected_input_xyz=derive_selected_input_xyz(selected_inp_text),
-    )
-
-
 def derive_selected_input_xyz(selected_inp: str | Path | None) -> str:
     inp_path = _resolve_existing_path(selected_inp)
     if inp_path is None or inp_path.is_dir():
@@ -35,10 +27,15 @@ def derive_selected_input_xyz(selected_inp: str | Path | None) -> str:
         text = inp_path.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return ""
-    for line in text.splitlines():
+    return xyzfile_input_path(text.splitlines(), inp_path.parent)
+
+
+def xyzfile_input_path(lines: list[str], inp_dir: Path) -> str:
+    """The resolved ``* xyzfile`` geometry path an input's ``lines`` name, or ``""``."""
+    for line in lines:
         xyz_ref = _xyzfile_reference(line)
         if xyz_ref:
-            return _resolve_artifact_path(xyz_ref, inp_path.parent)
+            return _resolve_artifact_path(xyz_ref, inp_dir)
     return ""
 
 
